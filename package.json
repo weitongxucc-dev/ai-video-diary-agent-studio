@@ -1,0 +1,15 @@
+{
+  "name": "ai-video-diary-agent-studio",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:web": "corepack pnpm --dir apps/web dev",
+    "build:web": "corepack pnpm --dir apps/web build",
+    "lint:web": "corepack pnpm --dir apps/web lint",
+    "test:web-contract": "node apps/web/scripts/workflow-contract-check.mjs",
+    "test:pixel-style": "node apps/web/scripts/pixel-style-contract-check.mjs",
+    "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
+    "dev:worker": "cd apps/api && uv run python -m app.automation",
+    "test:api": "cd apps/api && uv run pytest"
+  }
+}
