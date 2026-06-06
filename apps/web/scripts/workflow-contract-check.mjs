@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 const files = {
+  css: new URL("../src/app/globals.css", import.meta.url),
   topics: new URL("../src/app/topics/page.tsx", import.meta.url),
   script: new URL("../src/app/script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
@@ -12,11 +13,34 @@ const files = {
   video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
+  editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
+  voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
 };
 
-const [topicsPage, scriptPage, sectionEditor, topicCard, agentPanel, appShell, typesFile, homePage, videoPage, actionsFile, settingsPage] = await Promise.all(
-  Object.values(files).map((file) => readFile(file, "utf8")),
-);
+async function readOptional(file) {
+  try {
+    return await readFile(file, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+const [
+  css,
+  topicsPage,
+  scriptPage,
+  sectionEditor,
+  topicCard,
+  agentPanel,
+  appShell,
+  typesFile,
+  homePage,
+  videoPage,
+  actionsFile,
+  settingsPage,
+  editPlanPage,
+  voiceCommandConsole,
+] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
 
 const failures = [];
 
@@ -94,6 +118,47 @@ for (const route of ["/draft", "/knowledge", "/sources", "/learning", "/settings
   const navSlice = appShell.slice(routeIndex, nextRouteIndex === -1 ? routeIndex + 120 : nextRouteIndex);
   if (navSlice.includes("disabled: true")) {
     failures.push(`${route} must not be disabled in the sidebar.`);
+  }
+}
+
+const editPlanRoute = 'href: "/edit-plan"';
+const editPlanRouteIndex = appShell.indexOf(editPlanRoute);
+if (editPlanRouteIndex === -1) {
+  failures.push("AppShell must expose /edit-plan as the 2.0 visual edit plan route.");
+} else {
+  const nextRouteIndex = appShell.indexOf("},", editPlanRouteIndex);
+  const navSlice = appShell.slice(
+    editPlanRouteIndex,
+    nextRouteIndex === -1 ? editPlanRouteIndex + 120 : nextRouteIndex,
+  );
+  if (navSlice.includes("disabled: true")) {
+    failures.push("/edit-plan must not be disabled in the sidebar.");
+  }
+}
+
+if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceCommandConsole")) {
+  failures.push("AppShell must render the reusable VoiceCommandConsole.");
+}
+
+for (const required of ["语音指令", "COMMAND", "timeline_cut", "等待确认"]) {
+  if (!voiceCommandConsole.includes(required)) {
+    failures.push(`VoiceCommandConsole must include ${required}.`);
+  }
+}
+
+for (const required of ["剪辑计划", "视频浏览窗口", "原片标记", "剪辑计划时间轴", "语音定位结果", "剪映轨道预览"]) {
+  if (!editPlanPage.includes(required)) {
+    failures.push(`/edit-plan must include ${required}.`);
+  }
+}
+
+if (!editPlanPage.includes("timeline-action-chip")) {
+  failures.push("/edit-plan timeline segments must use compact Win95 action chips instead of full-color blocks.");
+}
+
+for (const required of [".voice-command-console", ".edit-plan-page", ".video-preview-window", ".source-marker-strip", ".edit-plan-timeline", ".timeline-action-chip"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define ${required}.`);
   }
 }
 

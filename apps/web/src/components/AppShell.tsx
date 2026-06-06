@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 import { RetroChrome } from "@/components/RetroChrome";
+import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
 
 type NavItem = {
   href: string;
@@ -17,6 +18,7 @@ const navItems: NavItem[] = [
   { href: "/topics", label: "选题池", icon: "note" },
   { href: "/script", label: "口播稿", icon: "script" },
   { href: "/video", label: "视频处理", icon: "video" },
+  { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
   { href: "/draft", label: "剪映草稿", icon: "clip" },
   { href: "/knowledge", label: "知识库", icon: "folder" },
   { href: "/sources", label: "信息源", icon: "link" },
@@ -118,6 +120,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </header>
             {children}
+            <VoiceCommandConsole contextLabel={currentNavItem.label} />
           </main>
         </div>
       </div>

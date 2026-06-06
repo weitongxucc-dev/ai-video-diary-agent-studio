@@ -26,6 +26,24 @@ if (css.includes("linear-gradient(")) {
   failures.push("globals.css uses gradients; pixel UI should use solid block colors.");
 }
 
+const terminalPalette = [
+  "#020403",
+  "#030503",
+  "#050705",
+  "#080b08",
+  "#090d09",
+  "#101610",
+  "#36d85f",
+  "#39db64",
+];
+
+const terminalPaletteHits = terminalPalette.filter((color) => css.includes(color));
+if (terminalPaletteHits.length > 0) {
+  failures.push(
+    `globals.css still uses terminal-style black/green colors: ${terminalPaletteHits.join(", ")}. Use Win95 panel colors instead.`,
+  );
+}
+
 const excessiveRadii = [...css.matchAll(/border-radius:\s*(\d+)px/g)]
   .map((match) => Number(match[1]))
   .filter((value) => value > 4);

@@ -2,7 +2,7 @@
 
 Local-first content production Agent for AI video diaries.
 
-Phase 1 delivers:
+Current build delivers:
 
 - Pixel-style Next.js workbench
 - FastAPI workflow API with a real LangGraph episode graph
@@ -24,12 +24,20 @@ Phase 1 delivers:
 - Jianying draft import adapter: creates traceable packages, can try a plaintext-compatible bridge into the draft root, and records every result in `manifest.json`
 - Local automation worker for daily topic scheduling and unattended pending-video processing
 - Human review flow
+- 2.0 beta UI foundation with a classic Windows 95/98 pixel shell
+- Visual edit-plan workbench at `/edit-plan`, including a video preview window, source markers, edit timeline, edit decision cards, voice定位结果, and Jianying track preview
+- Reusable bottom voice command console across the app
+- Root-level visual guide: `WINDOWS_PIXEL_UI_GUIDE.md`
+- UI contract checks that reject terminal-style black/green palettes, gradients, large radii, emoji icons, and missing 2.0 edit-plan entry points
 
 Not yet implemented:
 
 - Native Jianying 10.7 encrypted draft authoring without the compatibility bridge
 - Native watchdog event listener; current worker uses stable polling
 - COS/URL mode for Tencent ASR files larger than the local direct-upload limit
+- Real microphone capture and voice-command execution
+- Real persisted edit-plan data connected to processed videos
+- macOS desktop shell and DMG packaging
 
 ## Local Configuration
 
@@ -93,12 +101,14 @@ Run the local automation worker:
 corepack pnpm dev:worker
 ```
 
-## Phase 1 Verification
+## Verification
 
 Run verification:
 
 ```bash
 corepack pnpm test:api
+corepack pnpm test:web-contract
+corepack pnpm test:pixel-style
 corepack pnpm build:web
 corepack pnpm --dir apps/web exec tsc --noEmit
 corepack pnpm --dir apps/web lint
@@ -108,6 +118,8 @@ If `pnpm` is already on `PATH`, the equivalent shorter commands also work:
 
 ```bash
 pnpm test:api
+pnpm test:web-contract
+pnpm test:pixel-style
 pnpm build:web
 pnpm --dir apps/web exec tsc --noEmit
 pnpm --dir apps/web lint
@@ -131,7 +143,8 @@ Visit:
 - http://localhost:3000/topics
 - http://localhost:3000/script
 - http://localhost:3000/video
+- http://localhost:3000/edit-plan
 - http://localhost:3000/draft
 - http://localhost:3000/settings
 
-The UI should look like a pixel-style AI production workbench, not a generic SaaS dashboard.
+The UI should follow `WINDOWS_PIXEL_UI_GUIDE.md`: classic Windows 95/98 pixel desktop software, not a generic SaaS dashboard, terminal console, or decorative retro skin.

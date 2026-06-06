@@ -21,7 +21,7 @@ export function RetroChrome({ todayLabel }: RetroChromeProps) {
         <div className="system-title">
           <PixelIcon name="agent" />
           <strong>AI视频日记 Agent Studio</strong>
-          <span>v1.0.0</span>
+          <span>v2.0-beta</span>
         </div>
         <div className="window-controls" aria-label="窗口控制">
           <WindowButton label="-" title="最小化" />
