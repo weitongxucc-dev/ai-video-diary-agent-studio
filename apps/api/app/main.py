@@ -5,7 +5,7 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 
 from pathlib import Path
 
@@ -16,12 +16,11 @@ from app.asr import (
 )
 from app.config import Settings, runtime_env_file_path
 from app.comment_insights import extract_comment_insights
-from app.content_templates import get_content_template, list_content_templates
+from app.content_templates import get_content_template
 from app.creator_profile import (
     CreatorProfileRepository,
     creator_profile_prompt_payload,
 )
-from app.diagnostics import diagnostics_report_bytes, diagnostics_status
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
     apply_confirmed_edit_plan,
@@ -50,17 +49,18 @@ from app.preference_memory import (
     long_term_preference_events,
 )
 from app.repository import EpisodeRepository
-from app.runtime_health import runtime_health
-from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
+from app.routers import diagnostics as diagnostics_router
+from app.routers import settings as settings_router
+from app.routers import system as system_router
+from app.routers.context import AppContext
+from app.runtime_settings import is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
     CommentInsightsRequest,
     CommentInsightsResponse,
     ContentTemplateSelectRequest,
-    ContentTemplatesResponse,
     CreatorProfileResponse,
     CreatorProfileUpdateRequest,
-    DiagnosticsStatusResponse,
     DraftPackageRequest,
     DraftPackageResponse,
     EditPlanResponse,
@@ -86,21 +86,16 @@ from app.schemas import (
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
     RetakeReportResponse,
-    RuntimeSettingsResponse,
-    RuntimeSettingsUpdateRequest,
-    RuntimeHealthResponse,
     ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
     SourceItemsResponse,
     SourceItemResponse,
-    SystemStatusResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
     VoiceTranscriptionResponse,
-    WorkflowStatusResponse,
 )
 from app.services import EpisodeService
 from app.sources import ObsidianVault, TopicSourceItem
@@ -246,73 +241,6 @@ def _script_package_from_response(script) -> ScriptPackage:
     )
 
 
-@app.get("/api/system/status", response_model=SystemStatusResponse)
-def get_system_status() -> SystemStatusResponse:
-    return SystemStatusResponse.model_validate(settings.public_status())
-
-
-@app.get("/api/workflow/status", response_model=WorkflowStatusResponse)
-def get_workflow_status() -> WorkflowStatusResponse:
-    return WorkflowStatusResponse(
-        framework="LangGraph",
-        node_names=workflow.node_names(),
-        human_review_nodes=workflow.human_review_nodes(),
-    )
-
-
-@app.get("/api/content-templates", response_model=ContentTemplatesResponse)
-def get_content_templates() -> ContentTemplatesResponse:
-    return ContentTemplatesResponse.model_validate(
-        {"templates": list_content_templates()},
-        from_attributes=True,
-    )
-
-
-@app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
-def get_runtime_health() -> RuntimeHealthResponse:
-    return RuntimeHealthResponse.model_validate(runtime_health(settings))
-
-
-@app.get("/api/diagnostics/status", response_model=DiagnosticsStatusResponse)
-def get_diagnostics_status() -> DiagnosticsStatusResponse:
-    return DiagnosticsStatusResponse.model_validate(diagnostics_status(settings, repo))
-
-
-@app.get("/api/diagnostics/report")
-def download_diagnostics_report() -> Response:
-    return Response(
-        content=diagnostics_report_bytes(settings, repo),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": 'attachment; filename="ai-video-diary-diagnostics.zip"'
-        },
-    )
-
-
-@app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)
-def get_runtime_settings() -> RuntimeSettingsResponse:
-    return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
-
-
-@app.post("/api/settings/runtime", response_model=RuntimeSettingsResponse)
-def update_runtime_settings(
-    request: Request,
-    payload: RuntimeSettingsUpdateRequest,
-) -> RuntimeSettingsResponse:
-    client_host = request.client.host if request.client else None
-    if not is_local_client_host(client_host):
-        raise HTTPException(
-            status_code=403,
-            detail="runtime settings can only be updated from a local client",
-        )
-    apply_runtime_settings_update(
-        runtime_env_path,
-        payload.model_dump(),
-        _reload_runtime_dependencies,
-    )
-    return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
-
-
 def _reload_runtime_dependencies() -> None:
     global settings, repo, creator_profile_repo, preference_repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, voice_transcriber, service, workflow
 
@@ -334,6 +262,21 @@ def _reload_runtime_dependencies() -> None:
         topic_generator=topic_generator_from_settings(settings, vault),
     )
     workflow = LangGraphEpisodeWorkflow(service)
+
+
+def get_app_context() -> AppContext:
+    return AppContext(
+        settings=settings,
+        repo=repo,
+        workflow=workflow,
+        runtime_env_path=runtime_env_path,
+        reload_runtime_dependencies=_reload_runtime_dependencies,
+    )
+
+
+app.include_router(system_router.create_router(get_app_context))
+app.include_router(diagnostics_router.create_router(get_app_context))
+app.include_router(settings_router.create_router(get_app_context))
 
 
 @app.get("/api/creator-profile", response_model=CreatorProfileResponse)
