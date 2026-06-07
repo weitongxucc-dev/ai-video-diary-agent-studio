@@ -28,7 +28,11 @@ from app.jianying_template_writer import (
     add_legacy_main_video_segments,
     add_legacy_template_tracks,
 )
-from app.media_commands import read_media_duration_seconds, run_media_command
+from app.media_commands import (
+    build_extract_audio_command,
+    read_media_duration_seconds,
+    run_media_command,
+)
 from app.models import Episode, ScriptPackage
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
@@ -903,21 +907,7 @@ class DraftWorkspace:
         }
 
     def _extract_audio(self, video_path: Path, audio_path: Path) -> None:
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-acodec",
-            "pcm_s16le",
-            str(audio_path),
-        ]
-        self.runner(command)
+        self.runner(build_extract_audio_command(video_path, audio_path))
 
     def _script_to_srt(
         self,

@@ -11,7 +11,12 @@ from app.asr import (
     LocalWhisperTranscriber,
 )
 from app.config import Settings
-from app.media_commands import read_media_duration_seconds, run_media_command
+from app.media_commands import (
+    build_cut_video_command,
+    build_extract_audio_command,
+    read_media_duration_seconds,
+    run_media_command,
+)
 from app.retakes import RetakeDetection, RetakeDetector, retake_detection_payload
 from app.video import FfmpegVideoProcessor, ProcessedVideo
 
@@ -52,7 +57,7 @@ class RetakeVideoRefiner:
         try:
             with TemporaryDirectory(prefix="ai_video_dedup_") as temporary_dir:
                 audio_path = Path(temporary_dir) / f"{source_path.stem}.wav"
-                self.runner(self._build_extract_audio_command(source_path, audio_path))
+                self.runner(build_extract_audio_command(source_path, audio_path))
                 transcription = self.transcriber.transcribe(audio_path)
             detection = self.detector.detect(transcription.segments)
         except Exception as exc:
@@ -116,7 +121,7 @@ class RetakeVideoRefiner:
             keep_ranges,
         )
         try:
-            self.runner(self._build_cut_command(source_path, output_path, keep_ranges))
+            self.runner(build_cut_video_command(source_path, output_path, keep_ranges))
         except (OSError, CalledProcessError) as exc:
             self._write_report(
                 report_path,
@@ -231,70 +236,6 @@ class RetakeVideoRefiner:
         if cursor < duration:
             keep_ranges.append((round(cursor, 3), round(duration, 3)))
         return [(start, end) for start, end in keep_ranges if end > start]
-
-    def _build_extract_audio_command(
-        self,
-        source_path: Path,
-        audio_path: Path,
-    ) -> list[str]:
-        return [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source_path),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-acodec",
-            "pcm_s16le",
-            str(audio_path),
-        ]
-
-    def _build_cut_command(
-        self,
-        source_path: Path,
-        output_path: Path,
-        keep_ranges: list[tuple[float, float]],
-    ) -> list[str]:
-        trim_parts: list[str] = []
-        concat_inputs: list[str] = []
-        for index, (start, end) in enumerate(keep_ranges):
-            trim_parts.append(
-                f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
-            )
-            trim_parts.append(
-                f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
-            )
-            concat_inputs.append(f"[v{index}][a{index}]")
-        filter_complex = (
-            ";".join(trim_parts)
-            + ";"
-            + "".join(concat_inputs)
-            + f"concat=n={len(keep_ranges)}:v=1:a=1[v][a]"
-        )
-        return [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source_path),
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            str(output_path),
-        ]
 
 class VideoProcessingPipeline:
     def __init__(

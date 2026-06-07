@@ -2,6 +2,8 @@ from pathlib import Path
 import subprocess
 
 from app.media_commands import (
+    build_cut_video_command,
+    build_extract_audio_command,
     capture_media_command,
     read_media_duration_seconds,
     safe_file_under_root,
@@ -68,6 +70,77 @@ def test_read_media_duration_seconds_uses_ffprobe_command():
     ]
 
 
+def test_build_cut_video_command_creates_plain_trim_concat_command():
+    command = build_cut_video_command(
+        Path("/tmp/source.mp4"),
+        Path("/tmp/output.mp4"),
+        [(0.0, 1.2), (2.0, 5.0)],
+    )
+
+    joined = " ".join(command)
+    assert command[:4] == ["ffmpeg", "-y", "-i", "/tmp/source.mp4"]
+    assert "-filter_complex" in command
+    assert "trim=start=0.0:end=1.2" in joined
+    assert "concat=n=2:v=1:a=1[v][a]" in joined
+    assert "atempo=1.05" not in joined
+    assert "loudnorm" not in joined
+    assert command[command.index("-map") + 1] == "[v]"
+    assert command[-1] == "/tmp/output.mp4"
+
+
+def test_build_cut_video_command_can_apply_preview_speed_filters():
+    command = build_cut_video_command(
+        Path("/tmp/source.mp4"),
+        Path("/tmp/output.mp4"),
+        [(0.0, 1.2)],
+        speed=1.05,
+        normalize_audio=True,
+    )
+
+    joined = " ".join(command)
+    assert "concat=n=1:v=1:a=1[vcat][acat]" in joined
+    assert "[vcat]setpts=PTS/1.05[v]" in joined
+    assert "[acat]atempo=1.05,loudnorm[a]" in joined
+
+
+def test_build_cut_video_command_can_speed_full_video_without_ranges():
+    command = build_cut_video_command(
+        Path("/tmp/source.mp4"),
+        Path("/tmp/output.mp4"),
+        [],
+        speed=1.05,
+        normalize_audio=True,
+    )
+
+    assert "-filter:v" in command
+    assert "setpts=PTS/1.05" in command
+    assert "-filter:a" in command
+    assert "atempo=1.05,loudnorm" in command
+    assert "-filter_complex" not in command
+
+
+def test_build_extract_audio_command_creates_shared_16k_mono_wav_command():
+    command = build_extract_audio_command(
+        Path("/tmp/source.mp4"),
+        Path("/tmp/audio.wav"),
+    )
+
+    assert command == [
+        "ffmpeg",
+        "-y",
+        "-i",
+        "/tmp/source.mp4",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-acodec",
+        "pcm_s16le",
+        "/tmp/audio.wav",
+    ]
+
+
 def test_safe_child_file_path_rejects_traversal_and_unsupported_extensions(tmp_path):
     root = tmp_path / "inbox"
     root.mkdir()
@@ -127,3 +200,6 @@ def test_video_processing_modules_use_shared_media_command_runner():
     assert "from app.media_commands import" in pipeline_source
     assert "from app.media_commands import" in edit_plan_source
     assert "from app.media_commands import" in drafts_source
+    assert "def _build_cut_command" not in video_source
+    assert "def _build_cut_command" not in pipeline_source
+    assert "def _build_cut_command" not in edit_plan_source

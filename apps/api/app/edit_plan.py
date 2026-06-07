@@ -5,7 +5,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.media_commands import run_media_command, safe_file_under_root
+from app.media_commands import (
+    build_cut_video_command,
+    run_media_command,
+    safe_file_under_root,
+)
 from app.models import Episode, VideoJobStatus, utc_now
 
 
@@ -148,8 +152,8 @@ def apply_confirmed_edit_plan(
 
     output_path = root / f"{source_path.stem}_confirmed{source_path.suffix}"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    (runner or _run_cut_command)(
-        _build_cut_command(source_path, output_path, keep_ranges)
+    (runner or run_media_command)(
+        build_cut_video_command(source_path, output_path, keep_ranges)
     )
     payload["confirmed_output_video"] = str(output_path)
     payload["confirmed_keep_ranges"] = [
@@ -473,54 +477,6 @@ def _keep_ranges_after_removed_ranges(
     if cursor < duration:
         keep_ranges.append((round(cursor, 3), round(duration, 3)))
     return [(start, end) for start, end in keep_ranges if end > start]
-
-
-def _build_cut_command(
-    source_path: Path,
-    output_path: Path,
-    keep_ranges: list[tuple[float, float]],
-) -> list[str]:
-    trim_parts: list[str] = []
-    concat_inputs: list[str] = []
-    for index, (start, end) in enumerate(keep_ranges):
-        trim_parts.append(
-            f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
-        )
-        trim_parts.append(
-            f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
-        )
-        concat_inputs.append(f"[v{index}][a{index}]")
-    filter_complex = (
-        ";".join(trim_parts)
-        + ";"
-        + "".join(concat_inputs)
-        + f"concat=n={len(keep_ranges)}:v=1:a=1[v][a]"
-    )
-    return [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(source_path),
-        "-filter_complex",
-        filter_complex,
-        "-map",
-        "[v]",
-        "-map",
-        "[a]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        str(output_path),
-    ]
-
-
-def _run_cut_command(command: list[str]) -> None:
-    run_media_command(command)
 
 
 def _video_response(path_value: str | None, root: Path) -> dict[str, str] | None:

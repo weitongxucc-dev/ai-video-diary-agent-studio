@@ -4,102 +4,64 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 from pathlib import Path
 
-from app.asr import (
-    ASRConfigurationError,
-    ASRTranscriptionError,
-    asr_transcriber_from_settings,
-)
+from app.asr import asr_transcriber_from_settings
 from app.config import Settings, runtime_env_file_path
-from app.comment_insights import extract_comment_insights
-from app.content_templates import get_content_template
 from app.creator_profile import (
     CreatorProfileRepository,
     creator_profile_prompt_payload,
 )
 from app.drafts import DraftWorkspace
+from app import episode_media_flow
+from app import episode_workflow_flow
 from app.edit_plan import (
-    apply_confirmed_edit_plan,
     build_edit_plan_workspace,
     revert_edit_plan_segment_decision,
-    safe_processed_video_path,
     update_edit_plan_segment_decision,
 )
 from app.external_sources import HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
-from app.llm import LLMConfigurationError, LLMResponseError, script_generator_from_settings
+from app.llm import script_generator_from_settings
 from app.models import (
     Episode,
     EpisodeStatus,
-    FeedbackEvent,
-    FeedbackValue,
-    ScriptPackage,
-    ScriptSection,
     VideoJobStatus,
-    utc_now,
 )
 from app.preference_memory import (
     LongTermPreferenceRepository,
-    long_term_preference_events,
 )
 from app.repository import EpisodeRepository
 from app.routers import diagnostics as diagnostics_router
+from app.routers import drafts as drafts_router
+from app.routers import episode_media as episode_media_router
+from app.routers import episode_workflow as episode_workflow_router
+from app.routers import feedback as feedback_router
 from app.routers import preferences as preferences_router
 from app.routers import settings as settings_router
 from app.routers import sources as sources_router
 from app.routers import system as system_router
+from app.routers import videos as videos_router
 from app.routers.context import AppContext, AppState
 from app.runtime_settings import is_local_client_host
 from app.schemas import (
-    ApproveTopicRequest,
-    CommentInsightsRequest,
-    CommentInsightsResponse,
-    ContentTemplateSelectRequest,
     CreatorProfileResponse,
     CreatorProfileUpdateRequest,
-    DraftPackageRequest,
-    DraftPackageResponse,
     EditPlanResponse,
     EditPlanSegmentDecisionRequest,
-    DraftImportRequest,
-    DraftImportResponse,
-    DraftAssetResponse,
-    DraftEnvironmentResponse,
-    DraftStatusResponse,
     EpisodeResponse,
-    FeedbackRequest,
-    FeedbackRevertRequest,
     KnowledgeNoteResponse,
-    MarkPublishedRequest,
-    PendingVideoResponse,
-    ProcessedVideoResponse,
-    ProcessVideoBatchRequest,
-    ProcessVideoRequest,
     RetakeReportResponse,
-    ScriptRegenerateRequest,
-    ScriptSectionRegenerateRequest,
-    ScriptUpdateRequest,
-    ScriptVersionRevertRequest,
-    UploadVideoRequest,
-    VoiceCommandRequest,
-    VoiceCommandResponse,
-    VoiceTranscriptionResponse,
 )
 from app.services import EpisodeService
 from app.sources import ObsidianVault
 from app.topics import (
-    TopicGenerationConfigurationError,
-    TopicGenerationResponseError,
     topic_generator_from_settings,
 )
 from app.video import FfmpegVideoProcessor, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
-from app.voice_commands import VoiceCommandPlan, parse_voice_command
-from app.voice_transcription import transcribe_voice_audio
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
@@ -159,77 +121,14 @@ def creator_profile_response() -> CreatorProfileResponse:
 
 
 def recover_interrupted_video_job_if_needed(episode: Episode) -> Episode:
-    active_statuses = {VideoJobStatus.PROCESSING, VideoJobStatus.DRAFTING}
-    job_status = _video_job_status(episode.video_job_status)
-    if (
-        episode.status == EpisodeStatus.VIDEO_PROCESSING
-        and job_status in active_statuses
-        and not video_job_runner.is_active(episode.id)
-    ):
-        episode.status = EpisodeStatus.FAILED
-        episode.video_job_status = VideoJobStatus.INTERRUPTED
-        episode.video_job_message = "后台任务已中断"
-        episode.video_job_error = (
-            "API restarted or the worker stopped before the video job finished."
-        )
-        episode.video_job_finished_at = utc_now()
-        return repo.save(episode)
-    return episode
-
-
-def _video_job_status(value: object) -> VideoJobStatus:
-    try:
-        return value if isinstance(value, VideoJobStatus) else VideoJobStatus(str(value))
-    except ValueError:
-        return VideoJobStatus.IDLE
-
-
-def feedback_history_for(episode_id: str) -> list[FeedbackEvent]:
-    blocked_preference_keys = {
-        (preference.kind, preference.content)
-        for preference in preference_repo.all()
-        if preference.deleted or not preference.enabled
-    }
-    episode_feedback = [
-        event
-        for episode in repo.all()
-        if episode.id != episode_id
-        for event in episode.feedback_events
-        if event.active
-        and _feedback_preference_key(event) not in blocked_preference_keys
-    ][-30:]
-    return [
-        *episode_feedback,
-        *long_term_preference_events(preference_repo.active()),
-    ]
-
-
-def _feedback_preference_key(event: FeedbackEvent) -> tuple[str, str] | None:
-    if not event.reason:
-        return None
-    kind = "prefer" if event.value == FeedbackValue.UP else "avoid"
-    return (kind, event.reason.strip())
-
-
-def _script_package_from_response(script) -> ScriptPackage:
-    return ScriptPackage(
-        id=script.id,
-        hook=script.hook,
-        sections=[
-            ScriptSection(
-                id=section.id,
-                title=section.title,
-                estimated_seconds=section.estimated_seconds,
-                content=section.content,
-                feedback=section.feedback,
-            )
-            for section in script.sections
-        ],
-        title_options=[*script.title_options],
-        cover_copy=script.cover_copy,
-        publish_copy=script.publish_copy,
-        comment_prompt=script.comment_prompt,
+    return episode_media_flow.recover_interrupted_video_job_if_needed(
+        get_app_context(),
+        episode,
     )
+
+
+def feedback_history_for(episode_id: str):
+    return episode_workflow_flow.feedback_history_for(get_app_context(), episode_id)
 
 
 def _reload_runtime_dependencies() -> None:
@@ -259,13 +158,21 @@ def get_app_context() -> AppContext:
     return AppContext(
         settings=settings,
         repo=repo,
+        creator_profile_repo=creator_profile_repo,
         preference_repo=preference_repo,
+        service=service,
         workflow=workflow,
         manual_source_items=app_state.manual_source_items,
         hermes_source_client_factory=HermesRadarSourceClient,
         external_source_client_factory=HtmlPageSourceClient,
         runtime_env_path=runtime_env_path,
         reload_runtime_dependencies=_reload_runtime_dependencies,
+        video_inbox=video_inbox,
+        video_pipeline=video_pipeline,
+        draft_workspace=draft_workspace,
+        video_job_runner=video_job_runner,
+        edit_plan_apply_runner=edit_plan_apply_runner,
+        voice_transcriber=voice_transcriber,
     )
 
 
@@ -273,7 +180,12 @@ app.include_router(system_router.create_router(get_app_context))
 app.include_router(diagnostics_router.create_router(get_app_context))
 app.include_router(settings_router.create_router(get_app_context))
 app.include_router(sources_router.create_router(get_app_context))
+app.include_router(feedback_router.create_router(get_app_context))
 app.include_router(preferences_router.create_router(get_app_context))
+app.include_router(episode_workflow_router.create_router(get_app_context))
+app.include_router(videos_router.create_router(get_app_context))
+app.include_router(drafts_router.create_router(get_app_context))
+app.include_router(episode_media_router.create_router(get_app_context))
 
 
 @app.get("/api/creator-profile", response_model=CreatorProfileResponse)
@@ -312,126 +224,6 @@ def get_knowledge_notes(q: str | None = None, limit: int = 40) -> list[Knowledge
         KnowledgeNoteResponse.model_validate(note, from_attributes=True)
         for note in notes[: max(1, min(limit, 100))]
     ]
-
-
-@app.get("/api/videos/pending", response_model=list[PendingVideoResponse])
-def get_pending_videos() -> list[PendingVideoResponse]:
-    return [
-        PendingVideoResponse.model_validate(video, from_attributes=True)
-        for video in video_inbox.pending_videos()
-    ]
-
-
-@app.post("/api/videos/process", response_model=ProcessedVideoResponse)
-def process_video(request: ProcessVideoRequest) -> ProcessedVideoResponse:
-    try:
-        if not request.file_name:
-            raise ValueError("file_name is required")
-        processed = video_pipeline.process(request.file_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ProcessedVideoResponse.model_validate(processed, from_attributes=True)
-
-
-@app.get("/api/videos/processed/{file_name}")
-def get_processed_video(file_name: str) -> FileResponse:
-    try:
-        path = safe_processed_video_path(file_name, settings.video_output_path)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=404, detail="processed video not found") from exc
-    return FileResponse(path)
-
-
-@app.get("/api/drafts/status", response_model=DraftStatusResponse)
-def get_draft_status() -> DraftStatusResponse:
-    return DraftStatusResponse(
-        environment=DraftEnvironmentResponse.model_validate(
-            draft_workspace.environment(),
-            from_attributes=True,
-        ),
-        processed_videos=[
-            DraftAssetResponse.model_validate(
-                video,
-                from_attributes=True,
-            )
-            for video in draft_workspace.processed_videos()
-        ],
-        packages=[
-            DraftAssetResponse.model_validate(
-                package,
-                from_attributes=True,
-            )
-            for package in draft_workspace.packages()
-        ],
-    )
-
-
-@app.post("/api/drafts/package", response_model=DraftPackageResponse)
-def create_draft_package(request: DraftPackageRequest) -> DraftPackageResponse:
-    try:
-        package = draft_workspace.create_package(
-            video_file_name=request.video_file_name,
-            episode=repo.today(),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return DraftPackageResponse.model_validate(package, from_attributes=True)
-
-
-@app.post("/api/drafts/import", response_model=DraftImportResponse)
-def import_draft_package(request: DraftImportRequest) -> DraftImportResponse:
-    try:
-        result = draft_workspace.import_package_to_jianying(request.package_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return DraftImportResponse.model_validate(result, from_attributes=True)
-
-
-def _pending_video_by_name(file_name: str):
-    for video in video_inbox.pending_videos():
-        if video.file_name == file_name:
-            return video
-    raise ValueError("pending video not found")
-
-
-def _pending_videos_by_name(file_names: list[str]):
-    pending_by_name = {
-        video.file_name: video
-        for video in video_inbox.pending_videos()
-    }
-    try:
-        return [pending_by_name[file_name] for file_name in file_names]
-    except KeyError as exc:
-        raise ValueError("pending video not found") from exc
-
-
-@app.get("/api/episodes/today", response_model=EpisodeResponse)
-def get_today_episode() -> EpisodeResponse:
-    return episode_response(repo.today())
-
-
-@app.post("/api/episodes", response_model=EpisodeResponse)
-def create_episode() -> EpisodeResponse:
-    return episode_response(repo.create())
-
-
-@app.get("/api/episodes/{episode_id}", response_model=EpisodeResponse)
-def get_episode(episode_id: str) -> EpisodeResponse:
-    return episode_response(get_episode_or_404(episode_id))
-
-
-@app.post("/api/episodes/{episode_id}/content-template", response_model=EpisodeResponse)
-def select_episode_content_template(
-    episode_id: str,
-    request: ContentTemplateSelectRequest,
-) -> EpisodeResponse:
-    try:
-        get_content_template(request.template_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="content template not found") from exc
-    episode = get_episode_or_404(episode_id)
-    episode.content_template_id = request.template_id
-    return episode_response(repo.save(episode))
 
 
 @app.get("/api/episodes/{episode_id}/retake-report", response_model=RetakeReportResponse)
@@ -526,518 +318,37 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
         raise HTTPException(status_code=404, detail="retake report not found") from exc
 
 
-@app.post("/api/episodes/{episode_id}/generate-topics", response_model=EpisodeResponse)
-def generate_topics(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = get_episode_or_404(episode_id)
-        episode = workflow.run(
-            "generate_topics",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-            creator_profile=creator_profile_repo.load(),
-        )
-    except TopicGenerationConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except TopicGenerationResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/regenerate-topics", response_model=EpisodeResponse)
-def regenerate_topics(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = get_episode_or_404(episode_id)
-        episode = workflow.run(
-            "regenerate_topics",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-            creator_profile=creator_profile_repo.load(),
-        )
-    except TopicGenerationConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except TopicGenerationResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/approve-topic", response_model=EpisodeResponse)
-def approve_topic(episode_id: str, request: ApproveTopicRequest) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "approve_topic",
-            get_episode_or_404(episode_id),
-            topic_id=request.topic_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/generate-script", response_model=EpisodeResponse)
-def generate_script(episode_id: str) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    if episode.selected_topic_id is None:
-        raise HTTPException(status_code=400, detail="approve a topic first")
-    try:
-        episode = workflow.run(
-            "generate_script",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-            creator_profile=creator_profile_repo.load(),
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/script", response_model=EpisodeResponse)
-def update_episode_script(
-    episode_id: str,
-    request: ScriptUpdateRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "update_script",
-            get_episode_or_404(episode_id),
-            script=_script_package_from_response(request.script),
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/script/regenerate", response_model=EpisodeResponse)
-def regenerate_episode_script(
-    episode_id: str,
-    request: ScriptRegenerateRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "regenerate_script",
-            get_episode_or_404(episode_id),
-            feedback_history=feedback_history_for(episode_id),
-            reason=request.reason,
-            creator_profile=creator_profile_repo.load(),
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post(
-    "/api/episodes/{episode_id}/script/sections/{section_id}/regenerate",
-    response_model=EpisodeResponse,
-)
-def regenerate_episode_script_section(
-    episode_id: str,
-    section_id: str,
-    request: ScriptSectionRegenerateRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "regenerate_script_section",
-            get_episode_or_404(episode_id),
-            section_id=section_id,
-            feedback_history=feedback_history_for(episode_id),
-            reason=request.reason,
-            creator_profile=creator_profile_repo.load(),
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/script/revert", response_model=EpisodeResponse)
-def revert_episode_script_version(
-    episode_id: str,
-    request: ScriptVersionRevertRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "revert_script_version",
-            get_episode_or_404(episode_id),
-            version_id=request.version_id,
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
-async def transcribe_voice_command_audio(request: Request) -> VoiceTranscriptionResponse:
-    try:
-        transcription = transcribe_voice_audio(
-            await request.body(),
-            content_type=request.headers.get("content-type"),
-            transcriber=voice_transcriber,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ASRConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ASRTranscriptionError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return VoiceTranscriptionResponse.model_validate(transcription)
-
-
-@app.post(
-    "/api/episodes/{episode_id}/voice-command/preview",
-    response_model=VoiceCommandResponse,
-)
-def preview_voice_command(
-    episode_id: str,
-    request: VoiceCommandRequest,
-) -> VoiceCommandResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    plan = parse_voice_command(episode, request.transcript)
-    return _voice_command_response(plan)
-
-
-@app.post(
-    "/api/episodes/{episode_id}/voice-command/execute",
-    response_model=VoiceCommandResponse,
-)
-def execute_voice_command(
-    episode_id: str,
-    request: VoiceCommandRequest,
-) -> VoiceCommandResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    plan = parse_voice_command(episode, request.transcript)
-    if not plan.can_execute:
-        return _voice_command_response(plan)
-
-    try:
-        updated_episode, edit_plan_workspace = _execute_voice_command_plan(
-            episode,
-            plan,
-        )
-    except (
-        LLMConfigurationError,
-        TopicGenerationConfigurationError,
-    ) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (
-        LLMResponseError,
-        TopicGenerationResponseError,
-    ) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return _voice_command_response(
-        plan,
-        status="executed",
-        result_episode=updated_episode,
-        result_edit_plan=edit_plan_workspace,
-    )
-
-
-def _voice_command_response(
-    plan: VoiceCommandPlan,
-    *,
-    status: str | None = None,
-    result_episode: Episode | None = None,
-    result_edit_plan: dict[str, object] | None = None,
-) -> VoiceCommandResponse:
-    return VoiceCommandResponse.model_validate(
-        {
-            "status": status or plan.status,
-            "intent": plan.intent,
-            "summary": plan.summary,
-            "can_execute": plan.can_execute,
-            "next_url": plan.next_url,
-            "operations": [
-                {
-                    "kind": operation.kind,
-                    "label": operation.label,
-                    "params": operation.params,
-                }
-                for operation in plan.operations
-            ],
-            "result_episode": episode_response(result_episode)
-            if result_episode is not None
-            else None,
-            "result_edit_plan": result_edit_plan,
-        }
-    )
-
-
-def _execute_voice_command_plan(
-    episode: Episode,
-    plan: VoiceCommandPlan,
-) -> tuple[Episode, dict[str, object] | None]:
-    updated_episode = episode
-    edit_plan_workspace: dict[str, object] | None = None
-    for operation in plan.operations:
-        if operation.kind == "generate_topics":
-            updated_episode = workflow.run(
-                "generate_topics",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-                creator_profile=creator_profile_repo.load(),
-            )
-        elif operation.kind == "regenerate_topics":
-            updated_episode = workflow.run(
-                "regenerate_topics",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-                creator_profile=creator_profile_repo.load(),
-            )
-        elif operation.kind == "generate_script":
-            updated_episode = workflow.run(
-                "generate_script",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-                creator_profile=creator_profile_repo.load(),
-            )
-        elif operation.kind == "regenerate_script":
-            updated_episode = workflow.run(
-                "regenerate_script",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-                reason=_string_param(operation.params, "reason"),
-                creator_profile=creator_profile_repo.load(),
-            )
-        elif operation.kind == "regenerate_script_section":
-            updated_episode = workflow.run(
-                "regenerate_script_section",
-                updated_episode,
-                section_id=_required_string_param(operation.params, "section_id"),
-                feedback_history=feedback_history_for(updated_episode.id),
-                reason=_string_param(operation.params, "reason"),
-                creator_profile=creator_profile_repo.load(),
-            )
-        elif operation.kind == "approve_script":
-            updated_episode = workflow.run("approve_script", updated_episode)
-        elif operation.kind == "create_draft":
-            updated_episode = _create_draft_from_voice_command(updated_episode)
-        elif operation.kind == "edit_plan_segment_decision":
-            edit_plan_workspace = update_edit_plan_segment_decision(
-                updated_episode,
-                settings.video_output_path,
-                segment_id=_required_string_param(operation.params, "segment_id"),
-                action=_required_string_param(operation.params, "action"),
-                reason=_string_param(operation.params, "reason"),
-            )
-        else:
-            raise ValueError(f"unsupported voice command operation: {operation.kind}")
-    return repo.save(updated_episode), edit_plan_workspace
-
-
-def _create_draft_from_voice_command(episode: Episode) -> Episode:
-    if not episode.video_processed_file_name:
-        raise ValueError("process a video first")
-    confirmed_video = apply_confirmed_edit_plan(
-        episode,
-        draft_workspace.video_output_path,
-        runner=edit_plan_apply_runner,
-    )
-    if confirmed_video is not None:
-        episode.video_processed_file_name = confirmed_video["file_name"]
-        episode.video_processed_path = confirmed_video["path"]
-        episode = repo.save(episode)
-    package = draft_workspace.create_package(
-        video_file_name=episode.video_processed_file_name,
-        episode=episode,
-    )
-    return workflow.run(
-        "bind_draft_package",
-        episode,
-        package_name=package.package_name,
-        package_path=package.path,
-    )
-
-
-def _required_string_param(params: dict[str, object], key: str) -> str:
-    value = params.get(key)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"voice command operation missing param: {key}")
-    return value
-
-
-def _string_param(params: dict[str, object], key: str) -> str | None:
-    value = params.get(key)
-    return value if isinstance(value, str) and value else None
-
-
-@app.post("/api/episodes/{episode_id}/approve-script", response_model=EpisodeResponse)
-def approve_script(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = workflow.run("approve_script", get_episode_or_404(episode_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/upload-video", response_model=EpisodeResponse)
-def upload_video(episode_id: str, request: UploadVideoRequest) -> EpisodeResponse:
-    try:
-        video = _pending_video_by_name(request.file_name)
-        episode = workflow.run(
-            "bind_video",
-            get_episode_or_404(episode_id),
-            video=video,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/process-video", response_model=EpisodeResponse)
-def process_episode_video(
-    episode_id: str,
-    request: ProcessVideoRequest,
-) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    file_name = request.file_name or episode.video_source_file_name
-    if not file_name:
-        raise HTTPException(status_code=400, detail="bind or provide a video first")
-    try:
-        processed = video_pipeline.process(file_name)
-        episode = workflow.run("bind_processed_video", episode, video=processed)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/process-ad-hoc-video", response_model=EpisodeResponse)
-def process_ad_hoc_episode_video(
-    episode_id: str,
-    request: ProcessVideoRequest,
-) -> EpisodeResponse:
-    if not request.file_name:
-        raise HTTPException(status_code=400, detail="file_name is required")
-    if video_job_runner.is_active(episode_id):
-        return episode_response(get_episode_or_404(episode_id))
-    try:
-        episode = workflow.run(
-            "bind_ad_hoc_video",
-            get_episode_or_404(episode_id),
-            video=_pending_video_by_name(request.file_name),
-        )
-        _start_video_job(episode)
-        episode = repo.save(episode)
-        video_job_runner.submit(
-            episode_id,
-            lambda: _complete_ad_hoc_episode_video(episode_id, request.file_name),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.get(episode_id))
-
-
-@app.post(
-    "/api/episodes/{episode_id}/process-ad-hoc-video-batch",
-    response_model=EpisodeResponse,
-)
-def process_ad_hoc_episode_video_batch(
-    episode_id: str,
-    request: ProcessVideoBatchRequest,
-) -> EpisodeResponse:
-    if video_job_runner.is_active(episode_id):
-        return episode_response(get_episode_or_404(episode_id))
-    try:
-        videos = _pending_videos_by_name(request.file_names)
-        episode = workflow.run(
-            "bind_ad_hoc_video_batch",
-            get_episode_or_404(episode_id),
-            videos=videos,
-        )
-        _start_video_job(episode)
-        episode = repo.save(episode)
-        video_job_runner.submit(
-            episode_id,
-            lambda: _complete_ad_hoc_episode_video_batch(
-                episode_id,
-                request.file_names,
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.get(episode_id))
-
-
 def _complete_ad_hoc_episode_video(episode_id: str, file_name: str) -> None:
-    try:
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.PROCESSING,
-            "正在生成精剪视频",
-        )
-        processed = video_pipeline.process(file_name)
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.DRAFTING,
-            "正在生成草稿素材包",
-        )
-        _bind_processed_video_and_draft(episode_id, processed)
-        _mark_video_job_completed(episode_id)
-    except Exception as exc:
-        _mark_video_job_failed(episode_id, exc)
-        logger.exception("ad hoc video processing failed for %s", episode_id)
+    episode_media_flow.complete_ad_hoc_episode_video(
+        get_app_context,
+        episode_id,
+        file_name,
+        logger=logger,
+    )
 
 
 def _complete_ad_hoc_episode_video_batch(
     episode_id: str,
     file_names: list[str],
 ) -> None:
-    try:
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.PROCESSING,
-            "正在合并并精剪视频",
-        )
-        processed = video_pipeline.process_batch(file_names)
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.DRAFTING,
-            "正在生成草稿素材包",
-        )
-        _bind_processed_video_and_draft(episode_id, processed)
-        _mark_video_job_completed(episode_id)
-    except Exception as exc:
-        _mark_video_job_failed(episode_id, exc)
-        logger.exception("ad hoc video batch processing failed for %s", episode_id)
+    episode_media_flow.complete_ad_hoc_episode_video_batch(
+        get_app_context,
+        episode_id,
+        file_names,
+        logger=logger,
+    )
 
 
 def _bind_processed_video_and_draft(episode_id: str, processed) -> None:
-    episode = workflow.run(
-        "bind_processed_video",
-        get_episode_or_404(episode_id),
-        video=processed,
+    episode_media_flow.bind_processed_video_and_draft(
+        get_app_context(),
+        episode_id,
+        processed,
     )
-    package = draft_workspace.create_package(
-        video_file_name=processed.file_name,
-        episode=episode,
-    )
-    episode = workflow.run(
-        "bind_draft_package",
-        episode,
-        package_name=package.package_name,
-        package_path=package.path,
-    )
-    repo.save(episode)
 
 
 def _start_video_job(episode: Episode) -> None:
-    episode.status = EpisodeStatus.VIDEO_PROCESSING
-    episode.video_job_status = VideoJobStatus.PROCESSING
-    episode.video_job_message = "后台正在处理视频"
-    episode.video_job_error = None
-    episode.video_job_started_at = utc_now()
-    episode.video_job_finished_at = None
+    episode_media_flow.start_video_job(episode)
 
 
 def _mark_video_job_stage(
@@ -1045,167 +356,17 @@ def _mark_video_job_stage(
     status: VideoJobStatus,
     message: str,
 ) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.video_job_status = status
-    episode.video_job_message = message
-    episode.video_job_error = None
-    if episode.video_job_started_at is None:
-        episode.video_job_started_at = utc_now()
-    repo.save(episode)
+    episode_media_flow.mark_video_job_stage(
+        get_app_context(),
+        episode_id,
+        status,
+        message,
+    )
 
 
 def _mark_video_job_completed(episode_id: str) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.video_job_status = VideoJobStatus.COMPLETED
-    episode.video_job_message = "视频已处理，并已生成待确认的剪映草稿素材包"
-    episode.video_job_error = None
-    episode.video_job_finished_at = utc_now()
-    repo.save(episode)
+    episode_media_flow.mark_video_job_completed(get_app_context(), episode_id)
 
 
 def _mark_video_job_failed(episode_id: str, error: Exception) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.status = EpisodeStatus.FAILED
-    episode.video_job_status = VideoJobStatus.FAILED
-    episode.video_job_message = "视频处理失败"
-    episode.video_job_error = f"{type(error).__name__}: {error}"
-    episode.video_job_finished_at = utc_now()
-    repo.save(episode)
-
-
-@app.post("/api/episodes/{episode_id}/create-draft", response_model=EpisodeResponse)
-def create_episode_draft(episode_id: str) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    if not episode.video_processed_file_name:
-        raise HTTPException(status_code=400, detail="process a video first")
-    try:
-        confirmed_video = apply_confirmed_edit_plan(
-            episode,
-            draft_workspace.video_output_path,
-            runner=edit_plan_apply_runner,
-        )
-        if confirmed_video is not None:
-            episode.video_processed_file_name = confirmed_video["file_name"]
-            episode.video_processed_path = confirmed_video["path"]
-            episode = repo.save(episode)
-        package = draft_workspace.create_package(
-            video_file_name=episode.video_processed_file_name,
-            episode=episode,
-        )
-        episode = workflow.run(
-            "bind_draft_package",
-            episode,
-            package_name=package.package_name,
-            package_path=package.path,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/mark-published", response_model=EpisodeResponse)
-def mark_episode_published(
-    episode_id: str,
-    request: MarkPublishedRequest,
-) -> EpisodeResponse:
-    episode = workflow.run(
-        "mark_published",
-        get_episode_or_404(episode_id),
-        publish_url=request.publish_url,
-        play_count=request.play_count,
-        like_count=request.like_count,
-        comment_count=request.comment_count,
-        feedback_value=request.feedback_value,
-        feedback_reason=request.feedback_reason,
-    )
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/comment-insights", response_model=CommentInsightsResponse)
-def analyze_episode_comment_insights(
-    episode_id: str,
-    request: CommentInsightsRequest,
-) -> CommentInsightsResponse:
-    episode = get_episode_or_404(episode_id)
-    created_candidates: list[dict[str, object]] = []
-    for insight in extract_comment_insights(request.comments_text):
-        source_event_ids: list[str] = []
-        for source_comment in insight.source_comments:
-            if _has_comment_insight_event(episode, insight.content, source_comment):
-                continue
-            event = FeedbackEvent(
-                "published_comment_insight",
-                episode.id,
-                FeedbackValue.UP if insight.kind == "prefer" else FeedbackValue.DOWN,
-                insight.content,
-                before_snapshot={"source_comment": source_comment},
-                after_snapshot={"comment_insight": insight.content},
-            )
-            episode.feedback_events.append(event)
-            source_event_ids.append(event.id)
-        if not source_event_ids:
-            continue
-        created_candidates.append(
-            {
-                "kind": insight.kind,
-                "label": "偏好" if insight.kind == "prefer" else "避开",
-                "content": insight.content,
-                "source_event_ids": source_event_ids,
-                "evidence_count": len(source_event_ids),
-                "confidence": round(min(1.0, 0.35 + len(source_event_ids) * 0.15), 2),
-                "scope": "publish",
-                "confirmed": False,
-            }
-        )
-    saved = repo.save(episode) if created_candidates else episode
-    return CommentInsightsResponse(
-        episode=episode_response(saved),
-        created_candidates=created_candidates,
-    )
-
-
-def _has_comment_insight_event(
-    episode: Episode,
-    content: str,
-    source_comment: str,
-) -> bool:
-    for event in episode.feedback_events:
-        if event.target_type != "published_comment_insight" or event.reason != content:
-            continue
-        if not isinstance(event.before_snapshot, dict):
-            continue
-        if event.before_snapshot.get("source_comment") == source_comment:
-            return True
-    return False
-
-
-@app.post("/api/episodes/{episode_id}/feedback", response_model=EpisodeResponse)
-def apply_feedback(episode_id: str, request: FeedbackRequest) -> EpisodeResponse:
-    try:
-        episode = service.apply_feedback(
-            get_episode_or_404(episode_id),
-            request.target_type,
-            request.target_id,
-            request.value,
-            request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
-
-
-@app.post("/api/episodes/{episode_id}/feedback/revert", response_model=EpisodeResponse)
-def revert_episode_feedback(
-    episode_id: str,
-    request: FeedbackRevertRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "revert_feedback",
-            get_episode_or_404(episode_id),
-            feedback_event_id=request.feedback_event_id,
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
+    episode_media_flow.mark_video_job_failed(get_app_context(), episode_id, error)

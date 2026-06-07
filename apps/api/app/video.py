@@ -10,6 +10,7 @@ from subprocess import CalledProcessError
 
 from app.config import Settings
 from app.media_commands import (
+    build_cut_video_command,
     capture_media_command,
     read_media_duration_seconds,
     run_media_command,
@@ -130,7 +131,13 @@ class FfmpegVideoProcessor:
         silences = self._long_silences(input_path)
         keep_ranges = self._keep_ranges(silences, self._safe_duration(input_path))
         self._write_edit_plan(edit_plan_path, silences, keep_ranges, edit_plan_extra)
-        command = self._build_cut_command(input_path, output_file, keep_ranges)
+        command = build_cut_video_command(
+            input_path,
+            output_file,
+            keep_ranges,
+            speed=1.05,
+            normalize_audio=True,
+        )
         self.runner(command)
         return ProcessedVideo(
             file_name=output_file.name,
@@ -200,67 +207,6 @@ class FfmpegVideoProcessor:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-
-    def _build_cut_command(
-        self,
-        input_path: Path,
-        output_file: Path,
-        keep_ranges: list[tuple[float, float]],
-    ) -> list[str]:
-        base = ["ffmpeg", "-y", "-i", str(input_path)]
-        if not keep_ranges:
-            return [
-                *base,
-                "-filter:v",
-                "setpts=PTS/1.05",
-                "-filter:a",
-                "atempo=1.05,loudnorm",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "23",
-                "-c:a",
-                "aac",
-                str(output_file),
-            ]
-
-        trim_parts: list[str] = []
-        concat_inputs: list[str] = []
-        for index, (start, end) in enumerate(keep_ranges):
-            trim_parts.append(
-                f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
-            )
-            trim_parts.append(
-                f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
-            )
-            concat_inputs.append(f"[v{index}][a{index}]")
-        filter_complex = (
-            ";".join(trim_parts)
-            + ";"
-            + "".join(concat_inputs)
-            + f"concat=n={len(keep_ranges)}:v=1:a=1[vcat][acat];"
-            + "[vcat]setpts=PTS/1.05[v];[acat]atempo=1.05,loudnorm[a]"
-        )
-        return [
-            *base,
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            str(output_file),
-        ]
 
     def _build_batch_merge_command(
         self,
