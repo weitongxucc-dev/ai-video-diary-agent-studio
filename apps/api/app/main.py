@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections import Counter
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from pathlib import Path
 
-from app.config import Settings, runtime_env_file_path, write_dotenv_values
+from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
@@ -34,6 +34,7 @@ from app.models import (
 from app.preference_memory import build_preference_memory
 from app.repository import EpisodeRepository
 from app.runtime_health import runtime_health
+from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
     ContentTemplateSelectRequest,
@@ -224,45 +225,21 @@ def get_runtime_settings() -> RuntimeSettingsResponse:
 
 @app.post("/api/settings/runtime", response_model=RuntimeSettingsResponse)
 def update_runtime_settings(
-    request: RuntimeSettingsUpdateRequest,
+    request: Request,
+    payload: RuntimeSettingsUpdateRequest,
 ) -> RuntimeSettingsResponse:
-    updates = _runtime_settings_updates(request)
-    if updates:
-        write_dotenv_values(Path(runtime_env_path), updates)
-        _reload_runtime_dependencies()
+    client_host = request.client.host if request.client else None
+    if not is_local_client_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="runtime settings can only be updated from a local client",
+        )
+    apply_runtime_settings_update(
+        runtime_env_path,
+        payload.model_dump(),
+        _reload_runtime_dependencies,
+    )
     return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
-
-
-def _runtime_settings_updates(request: RuntimeSettingsUpdateRequest) -> dict[str, str]:
-    field_to_env = {
-        "deepseek_api_key": "DEEPSEEK_API_KEY",
-        "deepseek_model": "DEEPSEEK_MODEL",
-        "product_hunt_token": "PRODUCT_HUNT_TOKEN",
-        "tencentcloud_secret_id": "TENCENTCLOUD_SECRET_ID",
-        "tencentcloud_secret_key": "TENCENTCLOUD_SECRET_KEY",
-        "tencentcloud_asr_region": "TENCENTCLOUD_ASR_REGION",
-        "tencentcloud_asr_engine_model_type": "TENCENTCLOUD_ASR_ENGINE_MODEL_TYPE",
-        "local_whisper_python_path": "LOCAL_WHISPER_PYTHON_PATH",
-        "local_whisper_model_path": "LOCAL_WHISPER_MODEL_PATH",
-        "local_whisper_language": "LOCAL_WHISPER_LANGUAGE",
-        "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
-        "hermes_radar_path": "HERMES_RADAR_PATH",
-        "video_inbox_path": "VIDEO_INBOX_PATH",
-        "video_output_path": "VIDEO_OUTPUT_PATH",
-        "draft_output_path": "DRAFT_OUTPUT_PATH",
-        "jianying_draft_root_path": "JIANYING_DRAFT_ROOT_PATH",
-        "database_path": "DATABASE_PATH",
-    }
-    payload = request.model_dump()
-    updates: dict[str, str] = {}
-    for field, env_key in field_to_env.items():
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip():
-            updates[env_key] = value.strip()
-    if request.topic_source_urls is not None:
-        urls = [url.strip() for url in request.topic_source_urls if url.strip()]
-        updates["TOPIC_SOURCE_URLS"] = ",".join(urls)
-    return updates
 
 
 def _reload_runtime_dependencies() -> None:

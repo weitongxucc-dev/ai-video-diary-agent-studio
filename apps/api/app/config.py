@@ -4,6 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 
@@ -44,14 +45,30 @@ def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
         if key in updates:
             lines.append(f"{key}={updates[key]}")
             consumed.add(key)
-            os.environ[key] = updates[key]
         else:
             lines.append(raw_line)
     for key, value in updates.items():
         if key not in consumed:
             lines.append(f"{key}={value}")
-            os.environ[key] = value
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    payload = "\n".join(lines).rstrip() + "\n"
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(payload)
+            temporary_path = Path(temporary_file.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+    for key, value in updates.items():
+        os.environ[key] = value
 
 
 def _default_obsidian_vault_path() -> str | None:
