@@ -131,6 +131,11 @@ pnpm --dir apps/web exec tsc --noEmit
 pnpm --dir apps/web lint
 ```
 
+Git workflow:
+
+- Use short-lived `feature/`, `fix/`, or `chore/` branches instead of direct `main` commits.
+- See `docs/git-workflow.md` for branch naming, commit style, PR expectations, and verification rules.
+
 Run API:
 
 ```bash
