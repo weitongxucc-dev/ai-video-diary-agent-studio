@@ -229,7 +229,7 @@ export default async function LogsPage() {
 
           <div className="pixel-card side-note">
             <h2>内测定位</h2>
-            <p>报告包优先帮助定位依赖、任务、ASR、剪辑计划和剪映导入问题；桌面 Worker 日志会在 macOS 客户端阶段接入同一出口。</p>
+            <p>报告包优先帮助定位依赖、任务、ASR、剪辑计划和剪映导入问题；桌面 App 的 api.log、worker.log、web.log 位于 ~/Library/Logs/AI视频日记 Agent Studio。</p>
           </div>
         </aside>
       </div>

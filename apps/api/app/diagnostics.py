@@ -21,6 +21,7 @@ REPORT_FILE_NAMES = [
     "draft_manifest.json",
     "edit_plan.json",
 ]
+DESKTOP_LOG_DIR = "~/Library/Logs/AI视频日记 Agent Studio"
 
 EXCLUDED_ITEMS = [
     "API Key 明文",
@@ -130,7 +131,7 @@ def log_categories(
             "latest_message": (
                 f"当前有 {len(active_jobs)} 个后台视频任务运行中。"
                 if active_jobs
-                else "当前没有后台任务；桌面 Worker 进程日志会在 macOS 客户端阶段接入。"
+                else f"当前没有后台任务；桌面 App 的 worker.log 位于 {DESKTOP_LOG_DIR}。"
             ),
         },
         {

@@ -1,4 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 async function readText(path) {
   try {
@@ -27,6 +30,7 @@ const serviceManager = await readText("apps/desktop/src/service-manager.js");
 const pnpmShim = await readText("apps/desktop/scripts/with-pnpm-shim.mjs");
 const nextConfig = await readText("apps/web/next.config.mjs");
 const readmeBeta = await readText("README-beta.md");
+const serviceManagerModule = require("../src/service-manager.js");
 
 assert(
   rootPackage.scripts["test:desktop-contract"],
@@ -71,6 +75,9 @@ for (const required of [
   "BrowserWindow",
   "Tray",
   "Menu",
+  "checkDesktopDependencies",
+  "启动前检查未通过",
+  "依赖缺失",
   "globalShortcut.register",
   "shell.openPath",
   "shutdownChildProcesses",
@@ -82,6 +89,7 @@ for (const required of [
 
 for (const required of [
   "createServiceConfig",
+  "checkDesktopDependencies",
   "spawnManagedService",
   "shutdownChildProcesses",
   "waitForHttp",
@@ -95,6 +103,30 @@ for (const required of [
   );
 }
 
+const { checkDesktopDependencies } = serviceManagerModule;
+assert(
+  typeof checkDesktopDependencies === "function",
+  "Desktop service manager must export checkDesktopDependencies.",
+);
+const missingAllDependencies = checkDesktopDependencies({ commandExists: () => false });
+assert(
+  missingAllDependencies.ready === false,
+  "Desktop dependency preflight must fail when required commands are unavailable.",
+);
+assert(
+  missingAllDependencies.missing.some((item) => item.id === "uv"),
+  "Desktop dependency preflight must report missing uv.",
+);
+assert(
+  missingAllDependencies.missing.some((item) => item.id === "ffmpeg"),
+  "Desktop dependency preflight must report missing ffmpeg.",
+);
+const completeDependencies = checkDesktopDependencies({ commandExists: () => true });
+assert(
+  completeDependencies.ready === true && completeDependencies.missing.length === 0,
+  "Desktop dependency preflight must pass when all required commands are available.",
+);
+
 for (const required of ["corepack", ".desktop-bin", "pnpm"]) {
   assert(pnpmShim.includes(required), `Desktop pnpm shim must include ${required}.`);
 }
@@ -104,6 +136,7 @@ assert(nextConfig.includes('output: "standalone"'), "Next.js must use standalone
 for (const required of [
   "AI视频日记-Agent-Studio.dmg",
   "未签名",
+  "启动前检查",
   "uv",
   "ffmpeg",
   "API",

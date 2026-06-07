@@ -48,6 +48,28 @@ def test_diagnostics_status_redacts_settings_and_lists_recent_errors(tmp_path):
     assert "tc-key-secret" not in serialized
 
 
+def test_diagnostics_status_points_to_desktop_worker_logs(tmp_path):
+    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 7))
+    repo.today()
+    main_module.repo = repo
+    main_module.settings = Settings(
+        video_inbox_path=str(tmp_path / "inbox"),
+        video_output_path=str(tmp_path / "output"),
+        draft_output_path=str(tmp_path / "drafts"),
+        database_path=str(tmp_path / "agent.sqlite3"),
+    )
+
+    response = client.get("/api/diagnostics/status")
+
+    assert response.status_code == 200
+    worker_category = next(
+        item for item in response.json()["log_categories"] if item["id"] == "worker"
+    )
+    assert "macOS 客户端阶段接入" not in worker_category["latest_message"]
+    assert "worker.log" in worker_category["latest_message"]
+    assert "~/Library/Logs/AI视频日记 Agent Studio" in worker_category["latest_message"]
+
+
 def test_diagnostics_report_zip_contains_safe_structured_files(tmp_path):
     output = tmp_path / "output"
     drafts = tmp_path / "drafts"

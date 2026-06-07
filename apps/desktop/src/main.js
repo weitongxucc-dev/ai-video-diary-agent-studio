@@ -10,6 +10,7 @@ const {
   shell,
 } = require("electron");
 const {
+  checkDesktopDependencies,
   createServiceConfig,
   getDirectoryShortcuts,
   shutdownChildProcesses,
@@ -90,6 +91,12 @@ function startupDataUrl(message) {
 }
 
 async function startServices() {
+  const dependencyStatus = checkDesktopDependencies();
+  if (!dependencyStatus.ready) {
+    setAgentStatus("依赖缺失");
+    throw createDependencyError(dependencyStatus);
+  }
+
   const serviceConfig = createServiceConfig({
     appPath: process.execPath,
     isPackaged: app.isPackaged,
@@ -114,6 +121,18 @@ async function startServices() {
   await waitForHttp(serviceConfig.webUrl, 90000);
   setAgentStatus("空闲");
   return serviceConfig;
+}
+
+function createDependencyError(dependencyStatus) {
+  const missingNames = dependencyStatus.missing.map((dependency) => dependency.label).join("、");
+  const hints = dependencyStatus.missing
+    .map((dependency) => `${dependency.label}：${dependency.installHint}`)
+    .join(" ");
+  const error = new Error(
+    `启动前检查未通过：本机缺少 ${missingNames}。${hints}安装完成后请重启 App。`,
+  );
+  error.code = "DESKTOP_DEPENDENCIES_MISSING";
+  return error;
 }
 
 function createTray() {
@@ -259,10 +278,14 @@ app.whenReady().then(async () => {
     const serviceConfig = await startServices();
     await mainWindow.loadURL(serviceConfig.webUrl);
   } catch (error) {
-    setAgentStatus("启动失败");
+    const dependencyMissing = error?.code === "DESKTOP_DEPENDENCIES_MISSING";
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    setAgentStatus(dependencyMissing ? "依赖缺失" : "启动失败");
     await mainWindow.loadURL(
       startupDataUrl(
-        `本地服务启动失败：${error.message}。请打开日志目录查看 api.log、worker.log 和 web.log。`,
+        dependencyMissing
+          ? errorMessage
+          : `本地服务启动失败：${errorMessage}。请打开日志目录查看 api.log、worker.log 和 web.log。`,
       ),
     );
     showMainWindow();

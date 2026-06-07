@@ -19,6 +19,12 @@
 - `node` 不作为用户手动启动要求；打包后的 WebView 通过 Electron 启动 Next.js standalone 服务。
 - Whisper / 腾讯云 ASR 为可选能力，按 App 内配置向导填写。
 
+## 启动前检查
+
+App 启动时会先检查 `uv` 和 `ffmpeg` 是否可用，再启动 API、Worker 和 WebView。
+
+如果缺少依赖，主窗口会停在“启动前检查未通过”的提示页，并列出缺失命令。安装缺失命令后重启 App 即可继续；日志目录仍可从菜单栏或托盘菜单打开。
+
 ## App 会自动启动什么
 
 启动 App 后，桌面壳会启动：
