@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
 
 from app.asr import (
@@ -11,6 +11,7 @@ from app.asr import (
     LocalWhisperTranscriber,
 )
 from app.config import Settings
+from app.media_commands import read_media_duration_seconds, run_media_command
 from app.retakes import RetakeDetection, RetakeDetector, retake_detection_payload
 from app.video import FfmpegVideoProcessor, ProcessedVideo
 
@@ -27,8 +28,8 @@ class RetakeVideoRefiner:
         self.output_path = Path(output_path).expanduser()
         self.transcriber = transcriber
         self.detector = detector or RetakeDetector()
-        self.runner = runner or self._run_command
-        self.duration_reader = duration_reader or self._probe_duration
+        self.runner = runner or run_media_command
+        self.duration_reader = duration_reader or read_media_duration_seconds
 
     def refine(self, video: ProcessedVideo) -> ProcessedVideo:
         source_path = Path(video.output_path).expanduser()
@@ -79,7 +80,7 @@ class RetakeVideoRefiner:
 
         try:
             duration = self.duration_reader(source_path)
-        except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        except (OSError, CalledProcessError, ValueError) as exc:
             self._write_report(
                 report_path,
                 self._report_payload(
@@ -116,7 +117,7 @@ class RetakeVideoRefiner:
         )
         try:
             self.runner(self._build_cut_command(source_path, output_path, keep_ranges))
-        except (OSError, subprocess.CalledProcessError) as exc:
+        except (OSError, CalledProcessError) as exc:
             self._write_report(
                 report_path,
                 {
@@ -294,28 +295,6 @@ class RetakeVideoRefiner:
             "aac",
             str(output_path),
         ]
-
-    def _run_command(self, command: list[str]) -> None:
-        subprocess.run(command, check=True)
-
-    def _probe_duration(self, input_path: Path) -> float:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(input_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return float(result.stdout.strip())
-
 
 class VideoProcessingPipeline:
     def __init__(

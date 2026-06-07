@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
-import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from subprocess import CalledProcessError
 import textwrap
 from collections.abc import Callable
 from tempfile import TemporaryDirectory
@@ -28,6 +28,7 @@ from app.jianying_template_writer import (
     add_legacy_main_video_segments,
     add_legacy_template_tracks,
 )
+from app.media_commands import read_media_duration_seconds, run_media_command
 from app.models import Episode, ScriptPackage
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
@@ -102,7 +103,7 @@ class DraftWorkspace:
         self.draft_output_path = Path(settings.draft_output_path).expanduser()
         self.jianying_root_path = Path(settings.jianying_draft_root_path).expanduser()
         self.asr_transcriber = asr_transcriber or asr_transcriber_from_settings(settings)
-        self.runner = runner or self._run_command
+        self.runner = runner or run_media_command
         self.legacy_draft_writer = legacy_draft_writer or self._write_legacy_jianying_draft
 
     def environment(self) -> DraftEnvironment:
@@ -640,29 +641,8 @@ class DraftWorkspace:
 
     def _video_duration_microseconds(self, video_path: Path) -> int | None:
         try:
-            completed = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "default=nk=1:nw=1",
-                    str(video_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            return None
-        raw_duration = completed.stdout.strip()
-        if not raw_duration:
-            return None
-        try:
-            seconds = float(raw_duration)
-        except ValueError:
+            seconds = read_media_duration_seconds(video_path)
+        except (OSError, CalledProcessError, ValueError):
             return None
         if seconds <= 0:
             return None
@@ -1052,6 +1032,3 @@ class DraftWorkspace:
             if Path(candidate).exists():
                 return ImageFont.truetype(candidate, size=size)
         return ImageFont.load_default()
-
-    def _run_command(self, command: list[str]) -> None:
-        subprocess.run(command, check=True)

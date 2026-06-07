@@ -777,18 +777,11 @@ def test_video_duration_probe_prefers_ffprobe_output(tmp_path, monkeypatch):
     video_path.write_bytes(b"video")
     workspace = DraftWorkspace(Settings())
 
-    class Completed:
-        stdout = "1.234000\n"
+    def fake_duration_reader(path):
+        assert path == video_path
+        return 1.234
 
-    def fake_run(command, check, capture_output, text):
-        assert command[0] == "ffprobe"
-        assert str(video_path) in command
-        assert check is True
-        assert capture_output is True
-        assert text is True
-        return Completed()
-
-    monkeypatch.setattr("app.drafts.subprocess.run", fake_run)
+    monkeypatch.setattr("app.drafts.read_media_duration_seconds", fake_duration_reader)
 
     assert workspace._video_duration_microseconds(video_path) == 1_234_000
 

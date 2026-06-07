@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from app.media_commands import run_media_command, safe_file_under_root
 from app.models import Episode, VideoJobStatus, utc_now
 
 
@@ -520,7 +520,7 @@ def _build_cut_command(
 
 
 def _run_cut_command(command: list[str]) -> None:
-    subprocess.run(command, check=True)
+    run_media_command(command)
 
 
 def _video_response(path_value: str | None, root: Path) -> dict[str, str] | None:
@@ -594,10 +594,7 @@ def _user_decisions_payload(payload: dict[str, Any]) -> dict[str, dict[str, obje
 
 
 def _safe_file(path_value: str | Path, root: Path) -> Path:
-    path = Path(path_value).expanduser().resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        raise ValueError("file is outside the video output directory")
-    return path
+    return safe_file_under_root(path_value, root)
 
 
 def safe_processed_video_path(file_name: str, video_output_path: str | Path) -> Path:

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from subprocess import CalledProcessError
 
 from app.config import Settings
+from app.media_commands import (
+    capture_media_command,
+    read_media_duration_seconds,
+    run_media_command,
+    safe_child_file_path,
+)
 
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
 
@@ -66,9 +72,9 @@ class FfmpegVideoProcessor:
     ) -> None:
         self.inbox_path = Path(settings.video_inbox_path).expanduser()
         self.output_path = Path(settings.video_output_path).expanduser()
-        self.runner = runner or self._run_command
+        self.runner = runner or run_media_command
         self.silence_detector = silence_detector or self._detect_silences
-        self.duration_reader = duration_reader or self._probe_duration
+        self.duration_reader = duration_reader or read_media_duration_seconds
 
     def process(self, file_name: str) -> ProcessedVideo:
         input_path = self._validated_input_path(file_name)
@@ -104,15 +110,11 @@ class FfmpegVideoProcessor:
         )
 
     def _validated_input_path(self, file_name: str) -> Path:
-        if Path(file_name).name != file_name:
-            raise ValueError("invalid video file name")
-        if Path(file_name).suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
-            raise ValueError("unsupported video file")
-
-        input_path = self.inbox_path / file_name
-        if not input_path.exists() or not input_path.is_file():
-            raise ValueError("video file not found")
-        return input_path
+        return safe_child_file_path(
+            self.inbox_path,
+            file_name,
+            allowed_extensions=SUPPORTED_VIDEO_EXTENSIONS,
+        )
 
     def _process_input_path(
         self,
@@ -138,9 +140,6 @@ class FfmpegVideoProcessor:
             source_file_names=source_file_names,
         )
 
-    def _run_command(self, command: list[str]) -> None:
-        subprocess.run(command, check=True)
-
     def _long_silences(self, input_path: Path) -> list[tuple[float, float]]:
         return [
             (round(start, 3), round(end, 3))
@@ -151,7 +150,7 @@ class FfmpegVideoProcessor:
     def _safe_duration(self, input_path: Path) -> float:
         try:
             return self.duration_reader(input_path)
-        except (subprocess.CalledProcessError, ValueError):
+        except (CalledProcessError, ValueError):
             return 0.0
 
     def _keep_ranges(
@@ -323,7 +322,7 @@ class FfmpegVideoProcessor:
             "null",
             "-",
         ]
-        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        result = capture_media_command(command, check=False)
         output = f"{result.stdout}\n{result.stderr}"
         starts = [
             float(match.group(1))
@@ -334,17 +333,3 @@ class FfmpegVideoProcessor:
             for match in re.finditer(r"silence_end:\s*([0-9.]+)", output)
         ]
         return list(zip(starts, ends, strict=False))
-
-    def _probe_duration(self, input_path: Path) -> float:
-        command = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(input_path),
-        ]
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-        return float(result.stdout.strip())
