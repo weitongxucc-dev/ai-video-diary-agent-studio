@@ -1,5 +1,8 @@
 import type {
+  ContentTemplates,
   Episode,
+  EditPlan,
+  EditPlanSegmentDecisionAction,
   DraftImport,
   DraftPackage,
   DraftStatus,
@@ -11,15 +14,21 @@ import type {
   Preferences,
   ProcessedVideo,
   RetakeReport,
+  RuntimeHealth,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   ScriptPackage,
   SourceItems,
   SystemStatus,
+  VoiceCommandResponse,
   WorkflowStatus,
 } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -51,8 +60,38 @@ export function getWorkflowStatus(): Promise<WorkflowStatus> {
   return request<WorkflowStatus>("/api/workflow/status");
 }
 
+export function previewVoiceCommand(
+  episodeId: string,
+  transcript: string,
+): Promise<VoiceCommandResponse> {
+  return request<VoiceCommandResponse>(
+    `/api/episodes/${episodeId}/voice-command/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({ transcript }),
+    },
+  );
+}
+
+export function executeVoiceCommand(
+  episodeId: string,
+  transcript: string,
+): Promise<VoiceCommandResponse> {
+  return request<VoiceCommandResponse>(
+    `/api/episodes/${episodeId}/voice-command/execute`,
+    {
+      method: "POST",
+      body: JSON.stringify({ transcript }),
+    },
+  );
+}
+
 export function getRuntimeSettings(): Promise<RuntimeSettings> {
   return request<RuntimeSettings>("/api/settings/runtime");
+}
+
+export function getRuntimeHealth(): Promise<RuntimeHealth> {
+  return request<RuntimeHealth>("/api/runtime/health");
 }
 
 export function updateRuntimeSettings(
@@ -67,6 +106,20 @@ export function updateRuntimeSettings(
 export function getKnowledgeNotes(query?: string): Promise<KnowledgeNote[]> {
   const suffix = query ? `?q=${encodeURIComponent(query)}` : "";
   return request<KnowledgeNote[]>(`/api/knowledge/notes${suffix}`);
+}
+
+export function getContentTemplates(): Promise<ContentTemplates> {
+  return request<ContentTemplates>("/api/content-templates");
+}
+
+export function selectEpisodeContentTemplate(
+  episodeId: string,
+  templateId: string,
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/content-template`, {
+    method: "POST",
+    body: JSON.stringify({ template_id: templateId }),
+  });
 }
 
 export function getSourceItems(): Promise<SourceItems> {
@@ -116,6 +169,35 @@ export function getPendingVideos(): Promise<PendingVideo[]> {
 
 export function getEpisodeRetakeReport(episodeId: string): Promise<RetakeReport> {
   return request<RetakeReport>(`/api/episodes/${episodeId}/retake-report`);
+}
+
+export function getEpisodeEditPlan(episodeId: string): Promise<EditPlan> {
+  return request<EditPlan>(`/api/episodes/${episodeId}/edit-plan`);
+}
+
+export function updateEditPlanSegmentDecision(
+  episodeId: string,
+  segmentId: string,
+  action: EditPlanSegmentDecisionAction,
+  reason?: string,
+): Promise<EditPlan> {
+  return request<EditPlan>(
+    `/api/episodes/${episodeId}/edit-plan/segments/${segmentId}/decision`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action, reason: reason ?? null }),
+    },
+  );
+}
+
+export function revertEditPlanSegmentDecision(
+  episodeId: string,
+  segmentId: string,
+): Promise<EditPlan> {
+  return request<EditPlan>(
+    `/api/episodes/${episodeId}/edit-plan/segments/${segmentId}/revert`,
+    { method: "POST" },
+  );
 }
 
 export function getLatestRetakeReport(): Promise<RetakeReport> {

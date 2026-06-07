@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from app.content_templates import ContentTemplate, get_content_template
 from app.llm import ScriptGenerator, TemplateScriptGenerator
 from app.models import (
     Episode,
@@ -43,6 +44,7 @@ class EpisodeService:
         episode.topics = self._topic_generator.generate(
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
+            template=self._content_template(episode),
         )
         episode.status = EpisodeStatus.TOPICS_READY
         return episode
@@ -57,6 +59,12 @@ class EpisodeService:
         if selected is None:
             raise ValueError("selected topic not found")
         return selected
+
+    def _content_template(self, episode: Episode) -> ContentTemplate:
+        try:
+            return get_content_template(episode.content_template_id)
+        except KeyError:
+            return get_content_template("video_diary")
 
     def _active_feedback(
         self,
@@ -101,6 +109,7 @@ class EpisodeService:
         episode.topics = self._topic_generator.generate(
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
+            template=self._content_template(episode),
         )
         episode.selected_topic_id = None
         episode.script = None
@@ -135,6 +144,7 @@ class EpisodeService:
             selected,
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
+            template=self._content_template(episode),
         )
         self._record_script_version(
             episode,
@@ -184,6 +194,7 @@ class EpisodeService:
             selected,
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
+            template=self._content_template(episode),
         )
         return self._record_script_version(
             episode,
@@ -211,6 +222,7 @@ class EpisodeService:
             section_id,
             reason=reason,
             feedback_events=self._active_feedback(episode, feedback_history),
+            template=self._content_template(episode),
         )
         sections: list[ScriptSection] = [
             replacement if section.id == section_id else deepcopy(section)

@@ -1,96 +1,138 @@
 import Link from "next/link";
+import {
+  confirmEditPlanAction,
+  revertEditPlanSegmentDecisionAction,
+  updateEditPlanSegmentDecisionAction,
+} from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
 import { PixelMascot } from "@/components/PixelMascot";
+import { apiUrl, getEpisodeEditPlan, getTodayEpisode } from "@/lib/api";
+import type { EditPlan, EditPlanDecision, EditPlanSegment, Episode } from "@/lib/types";
 
-const timelineSegments = [
-  {
-    id: "seg-01",
-    label: "开头",
-    time: "00:00-00:07",
-    action: "删除",
-    tone: "cut",
-    note: "寒暄和找状态，信息密度低。",
-    width: "12%",
-  },
-  {
-    id: "seg-02",
-    label: "冲突",
-    time: "00:07-00:28",
-    action: "保留",
-    tone: "keep",
-    note: "提出客户想要锤子、自己却用螺丝刀的核心矛盾。",
-    width: "24%",
-  },
-  {
-    id: "seg-03",
-    label: "案例",
-    time: "00:28-00:52",
-    action: "保留",
-    tone: "keep",
-    note: "真实项目经历，适合做主体口播。",
-    width: "28%",
-  },
-  {
-    id: "seg-04",
-    label: "卡顿",
-    time: "00:52-01:02",
-    action: "复核",
-    tone: "review",
-    note: "疑似重复表达，等待人工确认是否删除。",
-    width: "14%",
-  },
-  {
-    id: "seg-05",
-    label: "结尾",
-    time: "01:02-01:20",
-    action: "字幕",
-    tone: "effect",
-    note: "加重点字幕和封面标题候选。",
-    width: "22%",
-  },
-];
+export const dynamic = "force-dynamic";
 
-const editDecisions = [
-  {
-    title: "删除开场停顿",
-    command: "timeline_cut",
-    range: "00:00-00:07",
-    confidence: "92%",
-    reason: "无关寒暄，进入主题较慢。",
-  },
-  {
-    title: "保留核心冲突",
-    command: "keep_segment",
-    range: "00:07-00:28",
-    confidence: "88%",
-    reason: "有明确观点和用户痛点。",
-  },
-  {
-    title: "复核疑似重录",
-    command: "manual_review",
-    range: "00:52-01:02",
-    confidence: "64%",
-    reason: "重复语义相近，但语气更自然。",
-  },
-  {
-    title: "添加剪映效果",
-    command: "jianying_effect",
-    range: "01:02-01:20",
-    confidence: "76%",
-    reason: "结尾适合加重点字幕和轻微推近。",
-  },
-];
+type EditPlanLoadState = {
+  episode: Episode | null;
+  editPlan: EditPlan | null;
+  offline: boolean;
+};
 
-const previewMarkers = [
-  { label: "开头", time: "00:00", memo: "原片起点" },
-  { label: "冲突", time: "00:07", memo: "观点出现" },
-  { label: "案例", time: "00:28", memo: "当前画面" },
-  { label: "卡顿", time: "00:52", memo: "需试听" },
-  { label: "结尾", time: "01:02", memo: "收束段" },
-];
+async function loadEditPlanState(): Promise<EditPlanLoadState> {
+  try {
+    const episode = await getTodayEpisode();
+    const editPlan = await getEpisodeEditPlan(episode.id);
+    return { episode, editPlan, offline: false };
+  } catch {
+    return { episode: null, editPlan: null, offline: true };
+  }
+}
 
-export default function EditPlanPage() {
+function formatTimeline(seconds: number): string {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = (safeSeconds % 60).toFixed(1).padStart(4, "0");
+  return `${String(minutes).padStart(2, "0")}:${remainingSeconds}`;
+}
+
+function formatSegmentRange(segment: EditPlanSegment): string {
+  return `${formatTimeline(segment.start)}-${formatTimeline(segment.end)}`;
+}
+
+function segmentFlexBasis(segment: EditPlanSegment, totalSeconds: number): string {
+  if (!totalSeconds || totalSeconds <= 0) {
+    return "128px";
+  }
+  return `${Math.max(10, Math.round((segment.duration / totalSeconds) * 100))}%`;
+}
+
+function actionLabel(action: EditPlanSegment["action"]): string {
+  const labels: Record<EditPlanSegment["action"], string> = {
+    cut_silence: "删静音",
+    keep: "保留",
+    manual_review: "复核",
+    remove_retake: "删重录",
+  };
+  return labels[action];
+}
+
+function actionTone(action: EditPlanSegment["action"]): string {
+  if (action === "keep") {
+    return "keep";
+  }
+  if (action === "manual_review") {
+    return "review";
+  }
+  return "cut";
+}
+
+function commandLabel(command: EditPlanDecision["command"]): string {
+  const labels: Record<EditPlanDecision["command"], string> = {
+    cut_silence: "timeline_cut_silence",
+    keep_segment: "keep_segment",
+    manual_review: "manual_review",
+    remove_retake: "timeline_cut_retake",
+  };
+  return labels[command];
+}
+
+function confidenceLabel(value: number | null): string {
+  return value === null ? "--" : `${Math.round(value * 100)}%`;
+}
+
+function userDecisionLabel(
+  action: NonNullable<EditPlanSegment["user_decision"]>["action"],
+): string {
+  const labels: Record<NonNullable<EditPlanSegment["user_decision"]>["action"], string> = {
+    keep: "人工保留",
+    remove: "人工删除",
+    review: "人工复核",
+  };
+  return labels[action];
+}
+
+function getCurrentSegment(editPlan: EditPlan | null): EditPlanSegment | null {
+  return (
+    editPlan?.segments.find((segment) => segment.status === "kept") ??
+    editPlan?.segments[0] ??
+    null
+  );
+}
+
+function getPrimaryDecision(editPlan: EditPlan | null): EditPlanDecision | null {
+  return (
+    editPlan?.decisions.find((decision) => decision.command !== "keep_segment") ??
+    editPlan?.decisions[0] ??
+    null
+  );
+}
+
+function countSegments(
+  editPlan: EditPlan | null,
+  predicate: (segment: EditPlanSegment) => boolean,
+): number {
+  return editPlan?.segments.filter(predicate).length ?? 0;
+}
+
+export default async function EditPlanPage() {
+  const { episode, editPlan, offline } = await loadEditPlanState();
+  const currentSegment = getCurrentSegment(editPlan);
+  const primaryDecision = getPrimaryDecision(editPlan);
+  const keptCount = countSegments(editPlan, (segment) => segment.status === "kept");
+  const removedCount = countSegments(
+    editPlan,
+    (segment) => segment.status === "auto_removed",
+  );
+  const reviewCount = countSegments(
+    editPlan,
+    (segment) => segment.status === "manual_review",
+  );
+  const segmentsById = new Map(
+    editPlan?.segments.map((segment) => [segment.id, segment]) ?? [],
+  );
+  const canConfirm =
+    Boolean(editPlan?.available) && editPlan?.jianying.status !== "draft_ready";
+
   return (
     <AppShell>
       <div className="edit-plan-page">
@@ -100,7 +142,10 @@ export default function EditPlanPage() {
               <span className="section-kicker">剪辑计划</span>
               <h1>自动剪辑可视化控制台</h1>
               <p>
-                Agent 先把口播转写、重录检测、剪辑动作和剪映草稿导入计划摆出来，再等待人工确认。
+                {offline
+                  ? "暂时无法连接本地 API。"
+                  : editPlan?.message ??
+                    "Agent 会把口播转写、重录检测、剪辑动作和剪映草稿导入计划摆出来。"}
               </p>
             </div>
             <Link className="pixel-button secondary" href="/video">
@@ -109,56 +154,101 @@ export default function EditPlanPage() {
           </div>
 
           <div className="edit-plan-status-grid" aria-label="自动剪辑阶段">
-            <div className="edit-plan-status active">
+            <div className={`edit-plan-status ${editPlan?.available ? "active" : ""}`}>
               <PixelIcon name="script" />
               <strong>1 转写对齐</strong>
-              <span>字幕与语义片段已匹配</span>
+              <span>{editPlan?.available ? "剪辑计划已读取" : "等待处理视频"}</span>
             </div>
-            <div className="edit-plan-status active">
+            <div className={`edit-plan-status ${removedCount + reviewCount > 0 ? "active" : ""}`}>
               <PixelIcon name="clip" />
               <strong>2 重录检测</strong>
-              <span>发现 1 个待复核片段</span>
+              <span>
+                {removedCount + reviewCount > 0
+                  ? `${removedCount} 段自动剪 / ${reviewCount} 段复核`
+                  : "暂无重录动作"}
+              </span>
             </div>
-            <div className="edit-plan-status">
+            <div className={`edit-plan-status ${editPlan?.available ? "active" : ""}`}>
               <PixelIcon name="spark" />
               <strong>3 效果建议</strong>
-              <span>字幕、推近、封面候选</span>
+              <span>{editPlan?.available ? "等待下一阶段生成" : "未开始"}</span>
             </div>
-            <div className="edit-plan-status">
+            <div className={`edit-plan-status ${editPlan?.jianying.status === "draft_ready" ? "active" : ""}`}>
               <PixelIcon name="publish" />
               <strong>4 草稿导入</strong>
-              <span>确认后写入剪映草稿箱</span>
+              <span>
+                {editPlan?.jianying.status === "draft_ready" ? "已进入剪映流程" : "等待确认"}
+              </span>
             </div>
           </div>
 
           <section className="video-preview-window" aria-label="视频浏览窗口">
             <div className="pixel-window-title">
               <strong>视频浏览窗口</strong>
-              <span>原片预览 · 01:20 · 9:16</span>
+              <span>
+                {editPlan?.output_video?.file_name ??
+                  editPlan?.source_video?.file_name ??
+                  "等待处理后视频"}
+              </span>
             </div>
             <div className="video-preview-body">
               <div className="video-preview-screen" aria-label="当前视频画面">
                 <div className="video-scanline" />
                 <span className="preview-rec">PREVIEW</span>
-                <span className="preview-timecode">00:28.4</span>
-                <div className="preview-frame-card">
-                  <PixelIcon name="video" />
-                  <strong>当前帧：真实案例段</strong>
-                  <p>用户在这里讲项目经历，Agent 建议保留为主体内容。</p>
-                </div>
+                <span className="preview-timecode">
+                  {currentSegment ? formatTimeline(currentSegment.start) : "--:--"}
+                </span>
+                {editPlan?.output_video ? (
+                  <video
+                    className="video-preview-player"
+                    controls
+                    preload="metadata"
+                    src={apiUrl(editPlan.output_video.url)}
+                  >
+                    当前浏览器无法播放这个视频。
+                  </video>
+                ) : (
+                  <div className="preview-frame-card">
+                    <PixelIcon name="video" />
+                    <strong>{offline ? "API 未连接" : "还没有可浏览的视频"}</strong>
+                    <p>
+                      {editPlan?.message ??
+                        "处理视频后，这里会直接加载本地生成的 preview 或 dedup 成片。"}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="video-preview-inspector">
                 <strong>当前片段</strong>
                 <dl>
-                  <div><dt>动作</dt><dd>保留</dd></div>
-                  <div><dt>范围</dt><dd>00:28-00:52</dd></div>
-                  <div><dt>来源</dt><dd>本地录制</dd></div>
+                  <div>
+                    <dt>动作</dt>
+                    <dd>{currentSegment ? actionLabel(currentSegment.action) : "--"}</dd>
+                  </div>
+                  <div>
+                    <dt>范围</dt>
+                    <dd>{currentSegment ? formatSegmentRange(currentSegment) : "--"}</dd>
+                  </div>
+                  <div>
+                    <dt>来源</dt>
+                    <dd>{editPlan?.source_files.join(" / ") || "本地录制"}</dd>
+                  </div>
+                  <div>
+                    <dt>策略</dt>
+                    <dd>{editPlan?.strategy ?? "--"}</dd>
+                  </div>
                 </dl>
                 <div className="video-preview-controls" aria-label="视频浏览控制">
-                  <button className="pixel-button secondary" type="button">上一段</button>
-                  <button className="pixel-button" type="button">播放/暂停</button>
-                  <button className="pixel-button secondary" type="button">下一段</button>
+                  <button className="pixel-button secondary" disabled type="button">
+                    上一段
+                  </button>
+                  <button className="pixel-button" disabled type="button">
+                    使用视频控件播放
+                  </button>
+                  <button className="pixel-button secondary" disabled type="button">
+                    下一段
+                  </button>
                 </div>
               </div>
             </div>
@@ -168,14 +258,18 @@ export default function EditPlanPage() {
                 <span>只用于浏览跳转，不代表剪辑动作</span>
               </div>
               <div className="source-marker-list">
-                {previewMarkers.map((marker, index) => (
-                  <button className="source-marker" key={marker.label} type="button">
-                    <span>M{index + 1}</span>
-                    <strong>{marker.time}</strong>
-                    <em>{marker.label}</em>
-                    <small>跳转 · {marker.memo}</small>
-                  </button>
-                ))}
+                {editPlan?.markers.length ? (
+                  editPlan.markers.map((marker, index) => (
+                    <button className="source-marker" key={marker.segment_id} type="button">
+                      <span>M{index + 1}</span>
+                      <strong>{marker.time}</strong>
+                      <em>{marker.label}</em>
+                      <small>跳转 · {marker.memo}</small>
+                    </button>
+                  ))
+                ) : (
+                  <div className="source-marker empty">等待剪辑计划生成</div>
+                )}
               </div>
             </div>
           </section>
@@ -183,63 +277,141 @@ export default function EditPlanPage() {
           <section className="pixel-window-panel" aria-label="剪辑计划时间轴">
             <div className="pixel-window-title">
               <strong>剪辑计划时间轴</strong>
-              <span>VID_20260605_1031_preview.mp4</span>
+              <span>{editPlan?.output_video?.file_name ?? "无可用计划"}</span>
             </div>
             <div className="edit-plan-timeline">
-              {timelineSegments.map((segment) => (
-                <div
-                  className="timeline-segment"
-                  key={segment.id}
-                  style={{ flexBasis: segment.width }}
-                >
-                  <strong>{segment.label}</strong>
-                  <span>{segment.time}</span>
-                  <small>{segment.note}</small>
-                  <em className={`timeline-action-chip ${segment.tone}`}>{segment.action}</em>
+              {editPlan?.segments.length ? (
+                editPlan.segments.map((segment) => (
+                  <div
+                    className="timeline-segment"
+                    key={segment.id}
+                    style={{ flexBasis: segmentFlexBasis(segment, editPlan.duration_seconds) }}
+                  >
+                    <strong>{segment.label}</strong>
+                    <span>{formatSegmentRange(segment)}</span>
+                    <small>{segment.reason}</small>
+                    <em className={`timeline-action-chip ${actionTone(segment.action)}`}>
+                      {actionLabel(segment.action)}
+                    </em>
+                  </div>
+                ))
+              ) : (
+                <div className="timeline-segment">
+                  <strong>等待计划</strong>
+                  <span>--</span>
+                  <small>先在视频处理页生成 preview 或完整包。</small>
+                  <em className="timeline-action-chip review">待处理</em>
                 </div>
-              ))}
+              )}
             </div>
             <div className="timeline-ruler">
               <span>00:00</span>
-              <span>00:20</span>
-              <span>00:40</span>
-              <span>01:00</span>
-              <span>01:20</span>
+              <span>{formatTimeline((editPlan?.duration_seconds ?? 0) * 0.25)}</span>
+              <span>{formatTimeline((editPlan?.duration_seconds ?? 0) * 0.5)}</span>
+              <span>{formatTimeline((editPlan?.duration_seconds ?? 0) * 0.75)}</span>
+              <span>{formatTimeline(editPlan?.duration_seconds ?? 0)}</span>
             </div>
           </section>
 
           <section className="edit-decision-grid" aria-label="剪辑动作清单">
-            {editDecisions.map((decision) => (
-              <article className="edit-decision-card" key={decision.title}>
+            {editPlan?.decisions.length ? (
+              editPlan.decisions.map((decision) => {
+                const segment = segmentsById.get(decision.segment_id);
+                const decisionReason = `用户在剪辑计划工作台调整 ${decision.range}`;
+
+                return (
+                  <article className="edit-decision-card" key={decision.segment_id}>
+                    <div>
+                      <PixelIcon
+                        name={
+                          decision.command === "remove_retake" ||
+                          decision.command === "cut_silence"
+                            ? "thumb-down"
+                            : decision.command === "manual_review"
+                              ? "note"
+                              : "check"
+                        }
+                      />
+                      <strong>{decision.title}</strong>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>动作</dt>
+                        <dd>{commandLabel(decision.command)}</dd>
+                      </div>
+                      <div>
+                        <dt>范围</dt>
+                        <dd>{decision.range}</dd>
+                      </div>
+                      <div>
+                        <dt>置信度</dt>
+                        <dd>{confidenceLabel(decision.confidence)}</dd>
+                      </div>
+                    </dl>
+                    <p>{decision.reason}</p>
+                    {segment?.user_decision ? (
+                      <div className="edit-decision-override">
+                        <strong>{userDecisionLabel(segment.user_decision.action)}</strong>
+                        <span>{segment.user_decision.reason ?? "未填写原因"}</span>
+                      </div>
+                    ) : (
+                      <div className="edit-decision-override pending">
+                        <strong>沿用自动判断</strong>
+                        <span>可在这里覆盖 Agent 的剪辑动作。</span>
+                      </div>
+                    )}
+                    {episode && segment ? (
+                      <div className="edit-decision-actions">
+                        <form action={updateEditPlanSegmentDecisionAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input name="segment_id" type="hidden" value={segment.id} />
+                          <input name="action" type="hidden" value="keep" />
+                          <input name="reason" type="hidden" value={decisionReason} />
+                          <button className="pixel-button secondary compact" type="submit">
+                            保留
+                          </button>
+                        </form>
+                        <form action={updateEditPlanSegmentDecisionAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input name="segment_id" type="hidden" value={segment.id} />
+                          <input name="action" type="hidden" value="remove" />
+                          <input name="reason" type="hidden" value={decisionReason} />
+                          <button className="pixel-button danger compact" type="submit">
+                            删除
+                          </button>
+                        </form>
+                        <form action={updateEditPlanSegmentDecisionAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input name="segment_id" type="hidden" value={segment.id} />
+                          <input name="action" type="hidden" value="review" />
+                          <input name="reason" type="hidden" value={decisionReason} />
+                          <button className="pixel-button compact" type="submit">
+                            复核
+                          </button>
+                        </form>
+                        {segment.user_decision ? (
+                          <form action={revertEditPlanSegmentDecisionAction}>
+                            <input name="episode_id" type="hidden" value={episode.id} />
+                            <input name="segment_id" type="hidden" value={segment.id} />
+                            <button className="pixel-button secondary compact" type="submit">
+                              撤销
+                            </button>
+                          </form>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })
+            ) : (
+              <article className="edit-decision-card">
                 <div>
-                  <PixelIcon
-                    name={
-                      decision.command === "timeline_cut"
-                        ? "thumb-down"
-                        : decision.command === "manual_review"
-                          ? "note"
-                          : "check"
-                    }
-                  />
-                  <strong>{decision.title}</strong>
+                  <PixelIcon name="note" />
+                  <strong>暂无剪辑动作</strong>
                 </div>
-                <dl>
-                  <div>
-                    <dt>动作</dt>
-                    <dd>{decision.command}</dd>
-                  </div>
-                  <div>
-                    <dt>范围</dt>
-                    <dd>{decision.range}</dd>
-                  </div>
-                  <div>
-                    <dt>置信度</dt>
-                    <dd>{decision.confidence}</dd>
-                  </div>
-                </dl>
-                <p>{decision.reason}</p>
+                <p>处理视频后，Agent 会在这里列出保留、删除、复核和剪映导入动作。</p>
               </article>
-            ))}
+            )}
           </section>
         </section>
 
@@ -250,11 +422,20 @@ export default function EditPlanPage() {
             </div>
             <div>
               <h2>Agent 下一步</h2>
-              <p>等待你确认复核片段。确认后会生成 preview，并自动进入剪映草稿导入流程。</p>
+              <p>{editPlan?.jianying.message ?? "等待视频处理完成后生成剪辑计划。"}</p>
             </div>
-            <button className="pixel-button" type="button">
-              确认剪辑计划
-            </button>
+            {episode && canConfirm ? (
+              <form action={confirmEditPlanAction}>
+                <input name="episode_id" type="hidden" value={episode.id} />
+                <button className="pixel-button" type="submit">
+                  确认剪辑计划
+                </button>
+              </form>
+            ) : (
+              <button className="pixel-button" disabled type="button">
+                {editPlan?.jianying.status === "draft_ready" ? "已生成草稿" : "等待剪辑计划"}
+              </button>
+            )}
           </section>
 
           <section className="pixel-card edit-side-panel">
@@ -266,15 +447,15 @@ export default function EditPlanPage() {
               </div>
               <div>
                 <dt>命中片段</dt>
-                <dd>00:00-00:07</dd>
+                <dd>{primaryDecision?.range ?? "--"}</dd>
               </div>
               <div>
                 <dt>解析动作</dt>
-                <dd>timeline_cut</dd>
+                <dd>{primaryDecision ? commandLabel(primaryDecision.command) : "timeline_cut"}</dd>
               </div>
               <div>
                 <dt>风险等级</dt>
-                <dd>低</dd>
+                <dd>{primaryDecision?.command === "manual_review" ? "中" : "低"}</dd>
               </div>
             </dl>
           </section>
@@ -282,10 +463,14 @@ export default function EditPlanPage() {
           <section className="pixel-card edit-side-panel">
             <h2>剪映轨道预览</h2>
             <ul className="track-preview">
-              <li><span>V1</span><strong>主视频</strong><em>4 段</em></li>
-              <li><span>S1</span><strong>字幕</strong><em>自动生成</em></li>
-              <li><span>E1</span><strong>效果</strong><em>轻微推近</em></li>
-              <li><span>C1</span><strong>封面</strong><em>待确认</em></li>
+              <li><span>V1</span><strong>主视频</strong><em>{keptCount || 0} 段</em></li>
+              <li><span>S1</span><strong>字幕</strong><em>等待 ASR</em></li>
+              <li><span>E1</span><strong>剪辑动作</strong><em>{removedCount + reviewCount} 个</em></li>
+              <li>
+                <span>C1</span>
+                <strong>草稿</strong>
+                <em>{editPlan?.jianying.status === "draft_ready" ? "已导入" : "待确认"}</em>
+              </li>
             </ul>
           </section>
         </aside>

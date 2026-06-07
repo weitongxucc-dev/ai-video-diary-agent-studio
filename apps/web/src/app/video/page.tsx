@@ -304,6 +304,17 @@ export default async function VideoPage() {
               ) : null}
             </section>
           ) : null}
+          {episode?.video_edit_plan_path ? (
+            <div className="video-batch-toolbar">
+              <div>
+                <strong>可视化剪辑计划已生成</strong>
+                <span>进入工作台浏览视频、查看片段、确认剪映草稿导入。</span>
+              </div>
+              <Link className="pixel-button" href="/edit-plan">
+                查看剪辑计划
+              </Link>
+            </div>
+          ) : null}
 
           <div className="video-list" aria-label="待处理视频列表">
             {videos.length > 0 ? (

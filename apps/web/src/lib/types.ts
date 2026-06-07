@@ -99,6 +99,7 @@ export type Episode = {
   episode_date: string;
   status: EpisodeStatus;
   intake_mode: EpisodeIntakeMode;
+  content_template_id: string;
   topics: TopicCandidate[];
   selected_topic_id: string | null;
   script: ScriptPackage | null;
@@ -180,6 +181,49 @@ export type SystemStatus = {
   };
 };
 
+export type ContentTemplate = {
+  template_id: string;
+  name: string;
+  scenario: string;
+  recommended_duration: string;
+  topic_structure: string[];
+  script_structure: string[];
+  material_requirements: string[];
+  jianying_style: string;
+  subtitle_style: string;
+  title_rules: string[];
+  cover_copy_rules: string[];
+  publish_copy_rules: string[];
+  default_feedback_dimensions: string[];
+};
+
+export type ContentTemplates = {
+  templates: ContentTemplate[];
+};
+
+export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
+
+export type RuntimeHealthItem = {
+  id: string;
+  label: string;
+  status: RuntimeHealthStatus;
+  reason: string;
+  impact: string;
+  repair_action: string;
+  last_checked_at: string;
+};
+
+export type RuntimeHealth = {
+  summary: {
+    total: number;
+    ready: number;
+    missing: number;
+    degraded: number;
+    invalid: number;
+  };
+  items: RuntimeHealthItem[];
+};
+
 export type PendingVideo = {
   file_name: string;
   path: string;
@@ -210,6 +254,74 @@ export type RetakeReport = {
   auto_removed: RetakeCandidate[];
   review_only: RetakeCandidate[];
   message: string | null;
+};
+
+export type EditPlanVideo = {
+  file_name: string;
+  path: string;
+  url: string;
+};
+
+export type EditPlanSegmentDecisionAction = "keep" | "remove" | "review";
+
+export type EditPlanUserDecision = {
+  action: EditPlanSegmentDecisionAction;
+  reason: string | null;
+  created_at: string;
+};
+
+export type EditPlanSegment = {
+  id: string;
+  label: string;
+  start: number;
+  end: number;
+  duration: number;
+  action: "keep" | "cut_silence" | "remove_retake" | "manual_review";
+  status: "kept" | "auto_removed" | "manual_review";
+  reason: string;
+  confidence: number | null;
+  source: string;
+  user_decision: EditPlanUserDecision | null;
+};
+
+export type EditPlanDecision = {
+  segment_id: string;
+  title: string;
+  command: "keep_segment" | "cut_silence" | "remove_retake" | "manual_review";
+  range: string;
+  confidence: number | null;
+  reason: string;
+};
+
+export type EditPlanMarker = {
+  segment_id: string;
+  label: string;
+  time: string;
+  memo: string;
+};
+
+export type EditPlanJianying = {
+  status: "not_ready" | "waiting_confirmation" | "draft_ready";
+  package_name: string | null;
+  package_path: string | null;
+  auto_imported: boolean;
+  message: string;
+};
+
+export type EditPlan = {
+  episode_id: string;
+  available: boolean;
+  status: "missing" | "processing" | "failed" | "ready";
+  message: string;
+  strategy: string | null;
+  duration_seconds: number;
+  source_files: string[];
+  source_video: EditPlanVideo | null;
+  output_video: EditPlanVideo | null;
+  segments: EditPlanSegment[];
+  decisions: EditPlanDecision[];
+  markers: EditPlanMarker[];
+  jianying: EditPlanJianying;
 };
 
 export type KnowledgeNote = {
@@ -346,4 +458,21 @@ export type WorkflowStatus = {
   framework: string;
   node_names: string[];
   human_review_nodes: string[];
+};
+
+export type VoiceCommandOperation = {
+  kind: string;
+  label: string;
+  params: Record<string, unknown>;
+};
+
+export type VoiceCommandResponse = {
+  status: "ready" | "blocked" | "unknown" | "executed";
+  intent: string;
+  summary: string;
+  can_execute: boolean;
+  next_url: string | null;
+  operations: VoiceCommandOperation[];
+  result_episode: Episode | null;
+  result_edit_plan: EditPlan | null;
 };

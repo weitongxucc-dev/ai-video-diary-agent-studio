@@ -81,6 +81,7 @@ class EpisodeResponse(BaseModel):
     episode_date: date
     status: EpisodeStatus
     intake_mode: EpisodeIntakeMode
+    content_template_id: str
     topics: list[TopicCandidateResponse]
     selected_topic_id: str | None
     script: ScriptPackageResponse | None
@@ -110,6 +111,10 @@ class EpisodeResponse(BaseModel):
 
 class ApproveTopicRequest(BaseModel):
     topic_id: str
+
+
+class ContentTemplateSelectRequest(BaseModel):
+    template_id: str
 
 
 class FeedbackRequest(BaseModel):
@@ -218,6 +223,49 @@ class WorkflowStatusResponse(BaseModel):
     human_review_nodes: list[str]
 
 
+class ContentTemplateResponse(BaseModel):
+    template_id: str
+    name: str
+    scenario: str
+    recommended_duration: str
+    topic_structure: list[str]
+    script_structure: list[str]
+    material_requirements: list[str]
+    jianying_style: str
+    subtitle_style: str
+    title_rules: list[str]
+    cover_copy_rules: list[str]
+    publish_copy_rules: list[str]
+    default_feedback_dimensions: list[str]
+
+
+class ContentTemplatesResponse(BaseModel):
+    templates: list[ContentTemplateResponse]
+
+
+class RuntimeHealthSummaryResponse(BaseModel):
+    total: int
+    ready: int
+    missing: int
+    degraded: int
+    invalid: int
+
+
+class RuntimeHealthItemResponse(BaseModel):
+    id: str
+    label: str
+    status: Literal["ready", "missing", "degraded", "invalid"]
+    reason: str
+    impact: str
+    repair_action: str
+    last_checked_at: datetime
+
+
+class RuntimeHealthResponse(BaseModel):
+    summary: RuntimeHealthSummaryResponse
+    items: list[RuntimeHealthItemResponse]
+
+
 class PendingVideoResponse(BaseModel):
     file_name: str
     path: str
@@ -261,6 +309,77 @@ class RetakeReportResponse(BaseModel):
     auto_removed: list[RetakeCandidateResponse]
     review_only: list[RetakeCandidateResponse]
     message: str | None = None
+
+
+class EditPlanVideoResponse(BaseModel):
+    file_name: str
+    path: str
+    url: str
+
+
+class EditPlanSegmentDecisionRequest(BaseModel):
+    action: Literal["keep", "remove", "review"]
+    reason: str | None = None
+
+
+class EditPlanUserDecisionResponse(BaseModel):
+    action: Literal["keep", "remove", "review"]
+    reason: str | None
+    created_at: datetime
+
+
+class EditPlanSegmentResponse(BaseModel):
+    id: str
+    label: str
+    start: float
+    end: float
+    duration: float
+    action: Literal["keep", "cut_silence", "remove_retake", "manual_review"]
+    status: Literal["kept", "auto_removed", "manual_review"]
+    reason: str
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    source: str
+    user_decision: EditPlanUserDecisionResponse | None = None
+
+
+class EditPlanDecisionResponse(BaseModel):
+    segment_id: str
+    title: str
+    command: Literal["keep_segment", "cut_silence", "remove_retake", "manual_review"]
+    range: str
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    reason: str
+
+
+class EditPlanMarkerResponse(BaseModel):
+    segment_id: str
+    label: str
+    time: str
+    memo: str
+
+
+class EditPlanJianyingResponse(BaseModel):
+    status: Literal["not_ready", "waiting_confirmation", "draft_ready"]
+    package_name: str | None
+    package_path: str | None
+    auto_imported: bool
+    message: str
+
+
+class EditPlanResponse(BaseModel):
+    episode_id: str
+    available: bool
+    status: Literal["missing", "processing", "failed", "ready"]
+    message: str
+    strategy: str | None
+    duration_seconds: float
+    source_files: list[str]
+    source_video: EditPlanVideoResponse | None
+    output_video: EditPlanVideoResponse | None
+    segments: list[EditPlanSegmentResponse]
+    decisions: list[EditPlanDecisionResponse]
+    markers: list[EditPlanMarkerResponse]
+    jianying: EditPlanJianyingResponse
 
 
 class KnowledgeNoteResponse(BaseModel):
@@ -412,3 +531,24 @@ class MarkPublishedRequest(BaseModel):
     play_count: int | None = Field(default=None, ge=0)
     like_count: int | None = Field(default=None, ge=0)
     comment_count: int | None = Field(default=None, ge=0)
+
+
+class VoiceCommandRequest(BaseModel):
+    transcript: str = Field(min_length=1)
+
+
+class VoiceCommandOperationResponse(BaseModel):
+    kind: str
+    label: str
+    params: dict[str, object] = Field(default_factory=dict)
+
+
+class VoiceCommandResponse(BaseModel):
+    status: Literal["ready", "blocked", "unknown", "executed"]
+    intent: str
+    summary: str
+    can_execute: bool
+    next_url: str | None = None
+    operations: list[VoiceCommandOperationResponse]
+    result_episode: EpisodeResponse | None = None
+    result_edit_plan: EditPlanResponse | None = None

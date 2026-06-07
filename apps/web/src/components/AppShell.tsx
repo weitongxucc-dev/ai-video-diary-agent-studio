@@ -15,6 +15,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { href: "/", label: "今日工作台", icon: "desk" },
+  { href: "/templates", label: "内容模板", icon: "product" },
   { href: "/topics", label: "选题池", icon: "note" },
   { href: "/script", label: "口播稿", icon: "script" },
   { href: "/video", label: "视频处理", icon: "video" },
@@ -23,6 +24,7 @@ const navItems: NavItem[] = [
   { href: "/knowledge", label: "知识库", icon: "folder" },
   { href: "/sources", label: "信息源", icon: "link" },
   { href: "/learning", label: "反馈学习", icon: "spark" },
+  { href: "/health", label: "运行健康", icon: "check" },
   { href: "/settings", label: "设置", icon: "settings" }
 ];
 

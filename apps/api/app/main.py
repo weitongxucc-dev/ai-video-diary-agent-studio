@@ -5,11 +5,20 @@ import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from pathlib import Path
 
 from app.config import Settings, runtime_env_file_path, write_dotenv_values
+from app.content_templates import get_content_template, list_content_templates
 from app.drafts import DraftWorkspace
+from app.edit_plan import (
+    apply_confirmed_edit_plan,
+    build_edit_plan_workspace,
+    revert_edit_plan_segment_decision,
+    safe_processed_video_path,
+    update_edit_plan_segment_decision,
+)
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import LLMConfigurationError, LLMResponseError, script_generator_from_settings
@@ -22,11 +31,17 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
+from app.preference_memory import build_preference_memory
 from app.repository import EpisodeRepository
+from app.runtime_health import runtime_health
 from app.schemas import (
     ApproveTopicRequest,
+    ContentTemplateSelectRequest,
+    ContentTemplatesResponse,
     DraftPackageRequest,
     DraftPackageResponse,
+    EditPlanResponse,
+    EditPlanSegmentDecisionRequest,
     DraftImportRequest,
     DraftImportResponse,
     DraftAssetResponse,
@@ -49,6 +64,7 @@ from app.schemas import (
     RetakeReportResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
+    RuntimeHealthResponse,
     ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
@@ -57,6 +73,8 @@ from app.schemas import (
     SourceItemResponse,
     SystemStatusResponse,
     UploadVideoRequest,
+    VoiceCommandRequest,
+    VoiceCommandResponse,
     WorkflowStatusResponse,
 )
 from app.services import EpisodeService
@@ -69,6 +87,7 @@ from app.topics import (
 from app.video import FfmpegVideoProcessor, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
+from app.voice_commands import VoiceCommandPlan, parse_voice_command
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
@@ -76,7 +95,7 @@ logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,6 +115,7 @@ service = EpisodeService(
 )
 workflow = LangGraphEpisodeWorkflow(service)
 video_job_runner = VideoJobRunner()
+edit_plan_apply_runner = None
 manual_source_items: list[TopicSourceItem] = []
 
 
@@ -182,6 +202,19 @@ def get_workflow_status() -> WorkflowStatusResponse:
         node_names=workflow.node_names(),
         human_review_nodes=workflow.human_review_nodes(),
     )
+
+
+@app.get("/api/content-templates", response_model=ContentTemplatesResponse)
+def get_content_templates() -> ContentTemplatesResponse:
+    return ContentTemplatesResponse.model_validate(
+        {"templates": list_content_templates()},
+        from_attributes=True,
+    )
+
+
+@app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
+def get_runtime_health() -> RuntimeHealthResponse:
+    return RuntimeHealthResponse.model_validate(runtime_health(settings))
 
 
 @app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)
@@ -350,24 +383,19 @@ def get_preferences() -> PreferencesResponse:
         for event in episode.feedback_events
         if event.reason and event.active
     ]
-    grouped: dict[tuple[str, str], int] = {}
-    for event in events:
-        label = "偏好" if event.value == "up" else "避开"
-        key = (label, event.reason or "")
-        grouped[key] = grouped.get(key, 0) + 1
-
+    memory = build_preference_memory(events, limit=20)
     preferences = [
         PreferenceItemResponse(
             label=label,
-            signal=signal,
-            evidence_count=count,
-            confidence=round(min(1.0, 0.35 + count * 0.15), 2),
+            signal=signal.signal,
+            evidence_count=signal.evidence_count,
+            confidence=signal.confidence,
         )
-        for (label, signal), count in sorted(
-            grouped.items(),
-            key=lambda item: item[1],
-            reverse=True,
+        for label, signals in (
+            ("偏好", memory.prefer),
+            ("避开", memory.avoid),
         )
+        for signal in signals
     ]
     return PreferencesResponse(
         total_feedback_count=len(events),
@@ -392,6 +420,15 @@ def process_video(request: ProcessVideoRequest) -> ProcessedVideoResponse:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProcessedVideoResponse.model_validate(processed, from_attributes=True)
+
+
+@app.get("/api/videos/processed/{file_name}")
+def get_processed_video(file_name: str) -> FileResponse:
+    try:
+        path = safe_processed_video_path(file_name, settings.video_output_path)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="processed video not found") from exc
+    return FileResponse(path)
 
 
 @app.get("/api/drafts/status", response_model=DraftStatusResponse)
@@ -472,9 +509,78 @@ def get_episode(episode_id: str) -> EpisodeResponse:
     return episode_response(get_episode_or_404(episode_id))
 
 
+@app.post("/api/episodes/{episode_id}/content-template", response_model=EpisodeResponse)
+def select_episode_content_template(
+    episode_id: str,
+    request: ContentTemplateSelectRequest,
+) -> EpisodeResponse:
+    try:
+        get_content_template(request.template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="content template not found") from exc
+    episode = get_episode_or_404(episode_id)
+    episode.content_template_id = request.template_id
+    return episode_response(repo.save(episode))
+
+
 @app.get("/api/episodes/{episode_id}/retake-report", response_model=RetakeReportResponse)
 def get_episode_retake_report(episode_id: str) -> RetakeReportResponse:
     return _read_retake_report(get_episode_or_404(episode_id))
+
+
+@app.get("/api/episodes/{episode_id}/edit-plan", response_model=EditPlanResponse)
+def get_episode_edit_plan(episode_id: str) -> EditPlanResponse:
+    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    return EditPlanResponse.model_validate(
+        build_edit_plan_workspace(episode, settings.video_output_path)
+    )
+
+
+@app.post(
+    "/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/decision",
+    response_model=EditPlanResponse,
+)
+def update_episode_edit_plan_segment_decision(
+    episode_id: str,
+    segment_id: str,
+    request: EditPlanSegmentDecisionRequest,
+) -> EditPlanResponse:
+    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    try:
+        workspace = update_edit_plan_segment_decision(
+            episode,
+            settings.video_output_path,
+            segment_id=segment_id,
+            action=request.action,
+            reason=request.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EditPlanResponse.model_validate(workspace)
+
+
+@app.post(
+    "/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/revert",
+    response_model=EditPlanResponse,
+)
+def revert_episode_edit_plan_segment_decision(
+    episode_id: str,
+    segment_id: str,
+) -> EditPlanResponse:
+    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    try:
+        workspace = revert_edit_plan_segment_decision(
+            episode,
+            settings.video_output_path,
+            segment_id=segment_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EditPlanResponse.model_validate(workspace)
 
 
 @app.get("/api/retake-reports/latest", response_model=RetakeReportResponse)
@@ -651,6 +757,181 @@ def revert_episode_script_version(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return episode_response(repo.save(episode))
+
+
+@app.post(
+    "/api/episodes/{episode_id}/voice-command/preview",
+    response_model=VoiceCommandResponse,
+)
+def preview_voice_command(
+    episode_id: str,
+    request: VoiceCommandRequest,
+) -> VoiceCommandResponse:
+    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    plan = parse_voice_command(episode, request.transcript)
+    return _voice_command_response(plan)
+
+
+@app.post(
+    "/api/episodes/{episode_id}/voice-command/execute",
+    response_model=VoiceCommandResponse,
+)
+def execute_voice_command(
+    episode_id: str,
+    request: VoiceCommandRequest,
+) -> VoiceCommandResponse:
+    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    plan = parse_voice_command(episode, request.transcript)
+    if not plan.can_execute:
+        return _voice_command_response(plan)
+
+    try:
+        updated_episode, edit_plan_workspace = _execute_voice_command_plan(
+            episode,
+            plan,
+        )
+    except (
+        LLMConfigurationError,
+        TopicGenerationConfigurationError,
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (
+        LLMResponseError,
+        TopicGenerationResponseError,
+    ) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _voice_command_response(
+        plan,
+        status="executed",
+        result_episode=updated_episode,
+        result_edit_plan=edit_plan_workspace,
+    )
+
+
+def _voice_command_response(
+    plan: VoiceCommandPlan,
+    *,
+    status: str | None = None,
+    result_episode: Episode | None = None,
+    result_edit_plan: dict[str, object] | None = None,
+) -> VoiceCommandResponse:
+    return VoiceCommandResponse.model_validate(
+        {
+            "status": status or plan.status,
+            "intent": plan.intent,
+            "summary": plan.summary,
+            "can_execute": plan.can_execute,
+            "next_url": plan.next_url,
+            "operations": [
+                {
+                    "kind": operation.kind,
+                    "label": operation.label,
+                    "params": operation.params,
+                }
+                for operation in plan.operations
+            ],
+            "result_episode": episode_response(result_episode)
+            if result_episode is not None
+            else None,
+            "result_edit_plan": result_edit_plan,
+        }
+    )
+
+
+def _execute_voice_command_plan(
+    episode: Episode,
+    plan: VoiceCommandPlan,
+) -> tuple[Episode, dict[str, object] | None]:
+    updated_episode = episode
+    edit_plan_workspace: dict[str, object] | None = None
+    for operation in plan.operations:
+        if operation.kind == "generate_topics":
+            updated_episode = workflow.run(
+                "generate_topics",
+                updated_episode,
+                feedback_history=feedback_history_for(updated_episode.id),
+            )
+        elif operation.kind == "regenerate_topics":
+            updated_episode = workflow.run(
+                "regenerate_topics",
+                updated_episode,
+                feedback_history=feedback_history_for(updated_episode.id),
+            )
+        elif operation.kind == "generate_script":
+            updated_episode = workflow.run(
+                "generate_script",
+                updated_episode,
+                feedback_history=feedback_history_for(updated_episode.id),
+            )
+        elif operation.kind == "regenerate_script":
+            updated_episode = workflow.run(
+                "regenerate_script",
+                updated_episode,
+                feedback_history=feedback_history_for(updated_episode.id),
+                reason=_string_param(operation.params, "reason"),
+            )
+        elif operation.kind == "regenerate_script_section":
+            updated_episode = workflow.run(
+                "regenerate_script_section",
+                updated_episode,
+                section_id=_required_string_param(operation.params, "section_id"),
+                feedback_history=feedback_history_for(updated_episode.id),
+                reason=_string_param(operation.params, "reason"),
+            )
+        elif operation.kind == "approve_script":
+            updated_episode = workflow.run("approve_script", updated_episode)
+        elif operation.kind == "create_draft":
+            updated_episode = _create_draft_from_voice_command(updated_episode)
+        elif operation.kind == "edit_plan_segment_decision":
+            edit_plan_workspace = update_edit_plan_segment_decision(
+                updated_episode,
+                settings.video_output_path,
+                segment_id=_required_string_param(operation.params, "segment_id"),
+                action=_required_string_param(operation.params, "action"),
+                reason=_string_param(operation.params, "reason"),
+            )
+        else:
+            raise ValueError(f"unsupported voice command operation: {operation.kind}")
+    return repo.save(updated_episode), edit_plan_workspace
+
+
+def _create_draft_from_voice_command(episode: Episode) -> Episode:
+    if not episode.video_processed_file_name:
+        raise ValueError("process a video first")
+    confirmed_video = apply_confirmed_edit_plan(
+        episode,
+        draft_workspace.video_output_path,
+        runner=edit_plan_apply_runner,
+    )
+    if confirmed_video is not None:
+        episode.video_processed_file_name = confirmed_video["file_name"]
+        episode.video_processed_path = confirmed_video["path"]
+        episode = repo.save(episode)
+    package = draft_workspace.create_package_and_import_to_jianying(
+        video_file_name=episode.video_processed_file_name,
+        episode=episode,
+    )
+    return workflow.run(
+        "bind_draft_package",
+        episode,
+        package_name=package.package_name,
+        package_path=package.path,
+    )
+
+
+def _required_string_param(params: dict[str, object], key: str) -> str:
+    value = params.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"voice command operation missing param: {key}")
+    return value
+
+
+def _string_param(params: dict[str, object], key: str) -> str | None:
+    value = params.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 @app.post("/api/episodes/{episode_id}/approve-script", response_model=EpisodeResponse)
@@ -860,6 +1141,15 @@ def create_episode_draft(episode_id: str) -> EpisodeResponse:
     if not episode.video_processed_file_name:
         raise HTTPException(status_code=400, detail="process a video first")
     try:
+        confirmed_video = apply_confirmed_edit_plan(
+            episode,
+            draft_workspace.video_output_path,
+            runner=edit_plan_apply_runner,
+        )
+        if confirmed_video is not None:
+            episode.video_processed_file_name = confirmed_video["file_name"]
+            episode.video_processed_path = confirmed_video["path"]
+            episode = repo.save(episode)
         package = draft_workspace.create_package_and_import_to_jianying(
             video_file_name=episode.video_processed_file_name,
             episode=episode,

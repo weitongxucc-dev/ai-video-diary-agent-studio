@@ -125,6 +125,7 @@ class EpisodeRepository:
             "episode_date": episode.episode_date.isoformat(),
             "status": episode.status.value,
             "intake_mode": episode.intake_mode.value,
+            "content_template_id": episode.content_template_id,
             "topics": [
                 {
                     "id": topic.id,
@@ -226,6 +227,7 @@ class EpisodeRepository:
             episode_date=date.fromisoformat(str(data["episode_date"])),
             status=EpisodeStatus(str(data["status"])),
             intake_mode=EpisodeIntakeMode(str(data.get("intake_mode") or "planned")),
+            content_template_id=str(data.get("content_template_id") or "video_diary"),
             topics=[
                 TopicCandidate(
                     id=str(topic["id"]),

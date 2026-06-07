@@ -26,8 +26,15 @@ Current build delivers:
 - Human review flow
 - 2.0 beta UI foundation with a classic Windows 95/98 pixel shell
 - Visual edit-plan workbench at `/edit-plan`, including a video preview window, source markers, edit timeline, edit decision cards, voice定位结果, and Jianying track preview
-- Reusable bottom voice command console across the app
+- 2.0 content templates for 视频日记、AI 工具测评 and 教程演示, with Episode-level template selection
+- Content-template-aware Agent prompts for topic generation, script generation, and section regeneration
+- Preference-memory-aware Agent prompts: active thumbs feedback is summarized into prefer / avoid signals for future topic, script and section prompts
+- Runtime health diagnostics page for DeepSeek, Obsidian, ffmpeg, Whisper, video directories, draft output, Jianying and external sources
+- Persisted edit-plan segment decisions for 保留 / 删除 / 复核 with rollback
+- Confirmed edit-plan execution: user 保留 / 删除 overrides generate a second-pass `_confirmed` preview before Jianying draft packaging
+- Reusable bottom voice command console across the app, with command preview and execution for continuing the flow, regenerating topics/scripts, rewriting script sections, draft creation, and edit-plan segment decisions
 - Root-level visual guide: `WINDOWS_PIXEL_UI_GUIDE.md`
+- Agent prompt and content intelligence upgrade guide: `docs/ai-video-diary-agent-prompt-strategy.md`
 - UI contract checks that reject terminal-style black/green palettes, gradients, large radii, emoji icons, and missing 2.0 edit-plan entry points
 
 Not yet implemented:
@@ -35,8 +42,7 @@ Not yet implemented:
 - Native Jianying 10.7 encrypted draft authoring without the compatibility bridge
 - Native watchdog event listener; current worker uses stable polling
 - COS/URL mode for Tencent ASR files larger than the local direct-upload limit
-- Real microphone capture and voice-command execution
-- Real persisted edit-plan data connected to processed videos
+- Real microphone capture; the current command console executes typed text or already-transcribed voice text
 - macOS desktop shell and DMG packaging
 
 ## Local Configuration
@@ -140,11 +146,13 @@ corepack pnpm dev:web
 Visit:
 
 - http://localhost:3000
+- http://localhost:3000/templates
 - http://localhost:3000/topics
 - http://localhost:3000/script
 - http://localhost:3000/video
 - http://localhost:3000/edit-plan
 - http://localhost:3000/draft
+- http://localhost:3000/health
 - http://localhost:3000/settings
 
 The UI should follow `WINDOWS_PIXEL_UI_GUIDE.md`: classic Windows 95/98 pixel desktop software, not a generic SaaS dashboard, terminal console, or decorative retro skin.

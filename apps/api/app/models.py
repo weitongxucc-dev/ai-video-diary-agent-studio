@@ -129,6 +129,7 @@ class Episode:
     episode_date: date
     status: EpisodeStatus
     intake_mode: EpisodeIntakeMode = EpisodeIntakeMode.PLANNED
+    content_template_id: str = "video_diary"
     topics: list[TopicCandidate] = field(default_factory=list)
     selected_topic_id: str | None = None
     script: ScriptPackage | None = None

@@ -9,9 +9,11 @@ from uuid import uuid4
 import httpx
 
 from app.config import Settings
+from app.content_templates import ContentTemplate
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.models import FeedbackEvent, SourceRef, TopicCandidate
+from app.preference_memory import preference_memory_payload
 from app.product_hunt import (
     ProductHuntClient,
     ProductHuntConfigurationError,
@@ -33,6 +35,7 @@ class TopicGenerator(Protocol):
         self,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> list[TopicCandidate]:
         ...
 
@@ -42,6 +45,7 @@ class MissingTopicGenerator:
         self,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> list[TopicCandidate]:
         raise TopicGenerationConfigurationError("DeepSeek and at least one topic source must be configured")
 
@@ -51,6 +55,7 @@ class TemplateTopicGenerator:
         self,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> list[TopicCandidate]:
         return [
             TopicCandidate(
@@ -115,6 +120,7 @@ class DeepSeekTopicGenerator:
         self,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> list[TopicCandidate]:
         if not self._settings.deepseek_api_key:
             raise TopicGenerationConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -126,8 +132,8 @@ class DeepSeekTopicGenerator:
         payload = {
             "model": self._settings.deepseek_model,
             "messages": [
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._user_prompt(day_number, source_items, feedback_events or [])},
+                {"role": "system", "content": self._system_prompt(template)},
+                {"role": "user", "content": self._user_prompt(day_number, source_items, feedback_events or [], template)},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
@@ -152,11 +158,25 @@ class DeepSeekTopicGenerator:
 
         return self._topics_from_json(data, source_items)
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, template: ContentTemplate | None = None) -> str:
+        template_context = ""
+        if template is not None:
+            template_context = (
+                f"本次内容栏目：{template.name}。"
+                f"场景定义：{template.scenario}"
+                f"推荐时长：{template.recommended_duration}。"
+                f"选题结构：{' -> '.join(template.topic_structure)}。"
+                f"标题规则：{'；'.join(template.title_rules)}。"
+            )
         return (
-            "你是一个中文 AI 视频日记选题 Agent。只输出 JSON，不要 Markdown，不要解释。"
+            "你是一个中文 AI 视频日记选题 Agent，服务于技术型个人创作者。"
+            "只输出 JSON，不要 Markdown，不要解释。"
             "JSON 顶层必须是 {\"topics\": [...]}。"
             "每个 topic 必须包含 title、core_viewpoint、reason、audience、outline、score、source_refs。"
+            f"{template_context}"
+            "每个选题必须有真实场景、真实案例或真实数据支撑，观点要有判断、有立场。"
+            "4 个选题之间必须有明显不同的切入角度，禁止同义反复。"
+            "score 评分标准：真实案例支撑度 30 分、观点鲜明度 30 分、口播转化度 20 分、与近期偏好匹配度 20 分。"
             "source_refs 只能使用用户提供 source_items 里的 source_type、title、ref，不能编造不存在的来源。"
         )
 
@@ -165,10 +185,12 @@ class DeepSeekTopicGenerator:
         day_number: int,
         source_items: list[TopicSourceItem],
         feedback_events: list[FeedbackEvent],
+        template: ContentTemplate | None = None,
     ) -> str:
         return json.dumps(
             {
                 "day_number": day_number,
+                "content_template": _content_template_payload(template),
                 "source_items": [
                     {
                         "source_type": item.source_type,
@@ -186,8 +208,12 @@ class DeepSeekTopicGenerator:
                     }
                     for event in feedback_events[-10:]
                 ],
+                "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
                     "生成 4 个适合 2-3 分钟 AI 视频日记的候选选题。",
+                    "每个选题必须符合 content_template 的场景、选题结构和标题规则。",
+                    "优先遵守 preference_memory",
+                    "preference_memory.prefer 用来放大选题方向，preference_memory.avoid 用来避开低分表达。",
                     "优先选择有真实项目经验、Agent、AI产品、工作流、个人IP、内容生产相关的素材。",
                     "每个选题要有清晰观点、目标观众、三段口播结构。",
                     "source_refs 至少 1 个，且 ref 必须完全等于 source_items 里的 ref。",
@@ -330,6 +356,23 @@ class DeepSeekTopicGenerator:
         cjk_bigrams = {cjk[index : index + 2] for index in range(max(0, len(cjk) - 1))}
         cjk_trigrams = {cjk[index : index + 3] for index in range(max(0, len(cjk) - 2))}
         return ascii_tokens | cjk_bigrams | cjk_trigrams
+
+
+def _content_template_payload(template: ContentTemplate | None) -> dict[str, object] | None:
+    if template is None:
+        return None
+    return {
+        "template_id": template.template_id,
+        "name": template.name,
+        "scenario": template.scenario,
+        "recommended_duration": template.recommended_duration,
+        "topic_structure": [*template.topic_structure],
+        "script_structure": [*template.script_structure],
+        "title_rules": [*template.title_rules],
+        "cover_copy_rules": [*template.cover_copy_rules],
+        "publish_copy_rules": [*template.publish_copy_rules],
+        "default_feedback_dimensions": [*template.default_feedback_dimensions],
+    }
 
 
 def topic_generator_from_settings(settings: Settings, vault: ObsidianVault) -> TopicGenerator:

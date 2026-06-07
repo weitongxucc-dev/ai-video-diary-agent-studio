@@ -17,15 +17,23 @@ import {
   regenerateEpisodeScript,
   regenerateEpisodeScriptSection,
   regenerateTopics,
+  revertEditPlanSegmentDecision,
   revertEpisodeScriptVersion,
   revertFeedbackEvent,
   sendFeedback,
+  selectEpisodeContentTemplate,
   syncSourceItems,
+  updateEditPlanSegmentDecision,
   updateEpisodeScript,
   uploadEpisodeVideo,
   updateRuntimeSettings,
 } from "@/lib/api";
-import type { FeedbackValue, RuntimeSettingsUpdate, ScriptPackage } from "@/lib/types";
+import type {
+  EditPlanSegmentDecisionAction,
+  FeedbackValue,
+  RuntimeSettingsUpdate,
+  ScriptPackage,
+} from "@/lib/types";
 
 function requiredString(formData: FormData, key: string): string {
   const value = formData.get(key);
@@ -59,6 +67,16 @@ function optionalString(formData: FormData, key: string): string | undefined {
   const value = formData.get(key);
 
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function editPlanSegmentDecisionAction(
+  formData: FormData,
+): EditPlanSegmentDecisionAction {
+  const action = requiredString(formData, "action");
+  if (action !== "keep" && action !== "remove" && action !== "review") {
+    throw new Error("Invalid edit plan segment decision");
+  }
+  return action;
 }
 
 function scriptFromFormData(formData: FormData): ScriptPackage {
@@ -101,6 +119,14 @@ export async function approveTopicAndGenerateScript(formData: FormData) {
   await approveTopic(episodeId, topicId);
   await generateScript(episodeId);
   redirect("/script");
+}
+
+export async function selectContentTemplateAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+  const templateId = requiredString(formData, "template_id");
+
+  await selectEpisodeContentTemplate(episodeId, templateId);
+  redirect("/templates");
 }
 
 export async function generateTopicsAction(formData: FormData) {
@@ -265,6 +291,34 @@ export async function createDraftPackageAction(formData: FormData) {
 
   await createDraftPackage(fileName);
   redirect("/draft");
+}
+
+export async function confirmEditPlanAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  await createEpisodeDraft(episodeId);
+  redirect("/draft");
+}
+
+export async function updateEditPlanSegmentDecisionAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+  const segmentId = requiredString(formData, "segment_id");
+
+  await updateEditPlanSegmentDecision(
+    episodeId,
+    segmentId,
+    editPlanSegmentDecisionAction(formData),
+    optionalString(formData, "reason"),
+  );
+  redirect("/edit-plan");
+}
+
+export async function revertEditPlanSegmentDecisionAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+  const segmentId = requiredString(formData, "segment_id");
+
+  await revertEditPlanSegmentDecision(episodeId, segmentId);
+  redirect("/edit-plan");
 }
 
 export async function importDraftPackageAction(formData: FormData) {

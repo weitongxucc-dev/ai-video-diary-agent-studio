@@ -7,7 +7,9 @@ from uuid import uuid4
 import httpx
 
 from app.config import Settings
+from app.content_templates import ContentTemplate
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
+from app.preference_memory import preference_memory_payload
 
 
 class LLMConfigurationError(RuntimeError):
@@ -24,6 +26,7 @@ class ScriptGenerator(Protocol):
         topic: TopicCandidate,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptPackage:
         ...
 
@@ -34,6 +37,7 @@ class ScriptGenerator(Protocol):
         section_id: str,
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptSection:
         ...
 
@@ -44,6 +48,7 @@ class MissingScriptGenerator:
         topic: TopicCandidate,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptPackage:
         raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
 
@@ -54,6 +59,7 @@ class MissingScriptGenerator:
         section_id: str,
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptSection:
         raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
 
@@ -64,6 +70,7 @@ class TemplateScriptGenerator:
         topic: TopicCandidate,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptPackage:
         return ScriptPackage(
             id=f"script_{uuid4().hex[:6]}",
@@ -89,6 +96,7 @@ class TemplateScriptGenerator:
         section_id: str,
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptSection:
         current = next(
             section for section in current_script.sections if section.id == section_id
@@ -122,6 +130,7 @@ class DeepSeekScriptGenerator:
         topic: TopicCandidate,
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptPackage:
         if not self._settings.deepseek_api_key:
             raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -129,8 +138,8 @@ class DeepSeekScriptGenerator:
         payload = {
             "model": self._settings.deepseek_model,
             "messages": [
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._user_prompt(topic, day_number, feedback_events or [])},
+                {"role": "system", "content": self._system_prompt(template)},
+                {"role": "user", "content": self._user_prompt(topic, day_number, feedback_events or [], template)},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
@@ -162,6 +171,7 @@ class DeepSeekScriptGenerator:
         section_id: str,
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
     ) -> ScriptSection:
         if not self._settings.deepseek_api_key:
             raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -172,7 +182,7 @@ class DeepSeekScriptGenerator:
         payload = {
             "model": self._settings.deepseek_model,
             "messages": [
-                {"role": "system", "content": self._section_system_prompt()},
+                {"role": "system", "content": self._section_system_prompt(template)},
                 {
                     "role": "user",
                     "content": self._section_user_prompt(
@@ -181,6 +191,7 @@ class DeepSeekScriptGenerator:
                         current,
                         reason,
                         feedback_events or [],
+                        template,
                     ),
                 },
             ],
@@ -213,20 +224,40 @@ class DeepSeekScriptGenerator:
             feedback=current.feedback,
         )
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, template: ContentTemplate | None = None) -> str:
+        template_context = ""
+        if template is not None:
+            template_context = (
+                f"本次栏目：{template.name}。"
+                f"场景：{template.scenario}"
+                f"推荐时长：{template.recommended_duration}。"
+                f"脚本结构：{' -> '.join(template.script_structure)}。"
+                f"标题规则：{'；'.join(template.title_rules)}。"
+                f"封面文案规则：{'；'.join(template.cover_copy_rules)}。"
+                f"发布文案规则：{'；'.join(template.publish_copy_rules)}。"
+            )
         return (
-            "你是一个中文 AI 视频日记口播编导。只输出 JSON，不要 Markdown，不要解释。"
+            "你是一个中文 AI 视频日记口播编导，服务于技术型个人创作者。"
+            "只输出 JSON，不要 Markdown，不要解释。"
             "JSON 字段必须包含 hook、sections、title_options、cover_copy、publish_copy、comment_prompt。"
             "sections 至少 5 段，每段包含 id、title、estimated_seconds、content。"
+            f"{template_context}"
+            "hook 必须作为独立字段输出，不要放入 sections。"
+            "sections 要承接 hook 之后的正文结构，并尽量对齐本次栏目的脚本结构和 topic.outline。"
+            "estimated_seconds 按约 180 字/分钟估算。"
             "口播要像真人日记：直接、具体、有判断，不要营销腔。"
             "不要使用动物、怪物、玄幻、热血鸡汤类比。"
         )
 
-    def _section_system_prompt(self) -> str:
+    def _section_system_prompt(self, template: ContentTemplate | None = None) -> str:
+        template_context = f"本次栏目：{template.name}。" if template is not None else ""
         return (
-            "你是一个中文 AI 视频日记口播编导。只输出 JSON，不要 Markdown，不要解释。"
+            "你是一个中文 AI 视频日记口播编导。"
+            f"{template_context}"
+            "只输出 JSON，不要 Markdown，不要解释。"
             "JSON 字段必须包含 id、title、estimated_seconds、content。"
-            "只重写用户指定段落，保持真人日记感，不要营销腔。"
+            "只重写用户指定段落，保持 id 和 title 不变，保持真人日记感，不要营销腔。"
+            "重写后的段落必须与上一段和下一段自然衔接。"
         )
 
     def _user_prompt(
@@ -234,6 +265,7 @@ class DeepSeekScriptGenerator:
         topic: TopicCandidate,
         day_number: int,
         feedback_events: list[FeedbackEvent],
+        template: ContentTemplate | None = None,
     ) -> str:
         sources = [
             {"type": source.source_type, "title": source.title, "ref": source.ref}
@@ -250,6 +282,7 @@ class DeepSeekScriptGenerator:
         return json.dumps(
             {
                 "day_number": day_number,
+                "content_template": _content_template_payload(template),
                 "topic": {
                     "title": topic.title,
                     "core_viewpoint": topic.core_viewpoint,
@@ -259,9 +292,14 @@ class DeepSeekScriptGenerator:
                     "sources": sources,
                 },
                 "recent_feedback": feedback,
+                "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
-                    "生成 2 到 3 分钟中文口播稿。",
+                    f"生成总时长 {template.recommended_duration if template else '2 到 3 分钟'} 的中文口播稿。",
+                    "hook 是独立字段",
                     "开头 3 秒要有明确冲突或判断。",
+                    "sections 要与 topic.outline 或 content_template.script_structure 对齐。",
+                    "优先遵守 preference_memory：prefer 是应该强化的表达方式，avoid 是应该避开的表达方式。",
+                    "estimated_seconds 按约 180 字/分钟估算。",
                     "保留三段核心原因，每段都要有一句可直接口播的内容。",
                     "生成 3 个标题候选、1 条封面文案、1 条发布文案、1 条评论引导。",
                 ],
@@ -276,33 +314,55 @@ class DeepSeekScriptGenerator:
         current_section: ScriptSection,
         reason: str | None,
         feedback_events: list[FeedbackEvent],
+        template: ContentTemplate | None = None,
     ) -> str:
+        section_index = next(
+            (
+                index
+                for index, section in enumerate(current_script.sections)
+                if section.id == current_section.id
+            ),
+            -1,
+        )
+        previous_section = (
+            current_script.sections[section_index - 1]
+            if section_index > 0
+            else None
+        )
+        next_section = (
+            current_script.sections[section_index + 1]
+            if 0 <= section_index < len(current_script.sections) - 1
+            else None
+        )
         return json.dumps(
             {
+                "content_template": _content_template_payload(template),
                 "topic": {
                     "title": topic.title,
                     "core_viewpoint": topic.core_viewpoint,
                     "reason": topic.reason,
                     "outline": topic.outline,
                 },
-                "current_script": {
+                "script_context": {
                     "hook": current_script.hook,
-                    "sections": [
-                        {
-                            "id": section.id,
-                            "title": section.title,
-                            "content": section.content,
-                        }
-                        for section in current_script.sections
-                    ],
+                    "prev_section_tail": previous_section.content[-120:]
+                    if previous_section is not None
+                    else None,
+                    "next_section_head": next_section.content[:120]
+                    if next_section is not None
+                    else None,
                 },
                 "target_section": {
                     "id": current_section.id,
                     "title": current_section.title,
+                    "role_in_script": _section_role(
+                        section_index,
+                        len(current_script.sections),
+                    ),
                     "estimated_seconds": current_section.estimated_seconds,
                     "content": current_section.content,
                 },
-                "rewrite_reason": reason,
+                "rewrite_reason": reason or "优化表达",
                 "recent_feedback": [
                     {
                         "target_type": event.target_type,
@@ -311,6 +371,12 @@ class DeepSeekScriptGenerator:
                     }
                     for event in feedback_events[-10:]
                     if event.active
+                ],
+                "preference_memory": preference_memory_payload(feedback_events),
+                "requirements": [
+                    "优先遵守 preference_memory，保留用户偏好的表达，避开用户明确踩过的方向。",
+                    "只重写 target_section，不要改 hook、标题候选、封面文案和发布文案。",
+                    "不要让重写段落和上下文断裂。",
                 ],
             },
             ensure_ascii=False,
@@ -346,6 +412,32 @@ class DeepSeekScriptGenerator:
             publish_copy=str(data["publish_copy"]),
             comment_prompt=str(data["comment_prompt"]),
         )
+
+
+def _content_template_payload(template: ContentTemplate | None) -> dict[str, object] | None:
+    if template is None:
+        return None
+    return {
+        "template_id": template.template_id,
+        "name": template.name,
+        "scenario": template.scenario,
+        "recommended_duration": template.recommended_duration,
+        "topic_structure": [*template.topic_structure],
+        "script_structure": [*template.script_structure],
+        "subtitle_style": template.subtitle_style,
+        "title_rules": [*template.title_rules],
+        "cover_copy_rules": [*template.cover_copy_rules],
+        "publish_copy_rules": [*template.publish_copy_rules],
+        "default_feedback_dimensions": [*template.default_feedback_dimensions],
+    }
+
+
+def _section_role(index: int, total: int) -> str:
+    if index <= 0:
+        return "背景或第一段正文"
+    if index >= total - 1:
+        return "结尾行动建议"
+    return f"核心论证第 {index} 段"
 
 
 def script_generator_from_settings(settings: Settings) -> ScriptGenerator:

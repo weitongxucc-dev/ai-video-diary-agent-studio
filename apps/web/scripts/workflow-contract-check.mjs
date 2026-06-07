@@ -8,8 +8,11 @@ const files = {
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
   agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
+  api: new URL("../src/lib/api.ts", import.meta.url),
   types: new URL("../src/lib/types.ts", import.meta.url),
   home: new URL("../src/app/page.tsx", import.meta.url),
+  templates: new URL("../src/app/templates/page.tsx", import.meta.url),
+  health: new URL("../src/app/health/page.tsx", import.meta.url),
   video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
@@ -33,8 +36,11 @@ const [
   topicCard,
   agentPanel,
   appShell,
+  apiFile,
   typesFile,
   homePage,
+  templatesPage,
+  healthPage,
   videoPage,
   actionsFile,
   settingsPage,
@@ -107,7 +113,7 @@ if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar"
   failures.push("Agent panel must show real Hermes radar ingestion counts.");
 }
 
-for (const route of ["/draft", "/knowledge", "/sources", "/learning", "/settings"]) {
+for (const route of ["/templates", "/draft", "/knowledge", "/sources", "/learning", "/health", "/settings"]) {
   const routeBlock = `href: "${route}"`;
   const routeIndex = appShell.indexOf(routeBlock);
   if (routeIndex === -1) {
@@ -140,7 +146,7 @@ if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceComma
   failures.push("AppShell must render the reusable VoiceCommandConsole.");
 }
 
-for (const required of ["语音指令", "COMMAND", "timeline_cut", "等待确认"]) {
+for (const required of ["语音指令", "COMMAND", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
   if (!voiceCommandConsole.includes(required)) {
     failures.push(`VoiceCommandConsole must include ${required}.`);
   }
@@ -170,8 +176,80 @@ if (!actionsFile.includes("processVideoAndPackageAction")) {
   failures.push("Server actions must expose one command that processes a video and creates a draft package.");
 }
 
+if (!apiFile.includes("getContentTemplates")) {
+  failures.push("API client must load 2.0 content templates.");
+}
+
+if (!apiFile.includes("selectEpisodeContentTemplate")) {
+  failures.push("API client must select an episode content template.");
+}
+
+if (!apiFile.includes("getRuntimeHealth")) {
+  failures.push("API client must load runtime health diagnostics.");
+}
+
+if (!actionsFile.includes("selectContentTemplateAction")) {
+  failures.push("Server actions must submit content template selection.");
+}
+
+for (const required of ["getContentTemplates", "selectContentTemplateAction", "tool_review", "tutorial_demo", "video_diary"]) {
+  if (!templatesPage.includes(required)) {
+    failures.push(`/templates must include ${required}.`);
+  }
+}
+
+for (const required of ["getRuntimeHealth", "运行健康", "修复动作", "DeepSeek", "ffmpeg"]) {
+  if (!healthPage.includes(required)) {
+    failures.push(`/health must include ${required}.`);
+  }
+}
+
+if (!actionsFile.includes("confirmEditPlanAction")) {
+  failures.push("Server actions must expose a real edit-plan confirmation action.");
+}
+
+if (!apiFile.includes("updateEditPlanSegmentDecision")) {
+  failures.push("API client must expose edit-plan segment decision updates.");
+}
+
+if (!apiFile.includes("revertEditPlanSegmentDecision")) {
+  failures.push("API client must expose edit-plan segment decision revert.");
+}
+
+if (!actionsFile.includes("updateEditPlanSegmentDecisionAction")) {
+  failures.push("Server actions must submit edit-plan segment decisions.");
+}
+
+if (!actionsFile.includes("revertEditPlanSegmentDecisionAction")) {
+  failures.push("Server actions must submit edit-plan segment decision reverts.");
+}
+
 if (!videoPage.includes("processVideoAndPackageAction")) {
   failures.push("/video must let the user process a video into a complete draft artifact package.");
+}
+
+if (!editPlanPage.includes("getEpisodeEditPlan")) {
+  failures.push("/edit-plan must load the real episode edit plan from the API.");
+}
+
+if (!editPlanPage.includes("<video")) {
+  failures.push("/edit-plan video browser must render a real video element, not only a mock preview.");
+}
+
+if (!editPlanPage.includes("confirmEditPlanAction")) {
+  failures.push("/edit-plan must submit confirmation to the draft creation flow.");
+}
+
+if (!editPlanPage.includes("updateEditPlanSegmentDecisionAction")) {
+  failures.push("/edit-plan must render actionable segment decision controls.");
+}
+
+if (!editPlanPage.includes("revertEditPlanSegmentDecisionAction")) {
+  failures.push("/edit-plan must render segment decision rollback controls.");
+}
+
+if (!editPlanPage.includes("user_decision")) {
+  failures.push("/edit-plan must show persisted user segment decisions.");
 }
 
 if (!typesFile.includes("subtitle_path") || !typesFile.includes("cover_path")) {
