@@ -63,7 +63,12 @@ class ScriptVersionResponse(BaseModel):
 class FeedbackEventResponse(BaseModel):
     episode_id: str | None = None
     id: str
-    target_type: Literal["topic", "script_section", "published_episode"]
+    target_type: Literal[
+        "topic",
+        "script_section",
+        "published_episode",
+        "published_comment_insight",
+    ]
     target_id: str
     value: FeedbackValue
     reason: str | None
@@ -497,6 +502,26 @@ class PreferenceConfirmRequest(BaseModel):
     source_event_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0, le=1)
     scope: str = "general"
+
+
+class CommentInsightCandidateResponse(BaseModel):
+    kind: Literal["prefer", "avoid"]
+    label: str
+    content: str
+    source_event_ids: list[str]
+    evidence_count: int
+    confidence: float = Field(ge=0, le=1)
+    scope: str = "publish"
+    confirmed: bool = False
+
+
+class CommentInsightsRequest(BaseModel):
+    comments_text: str = ""
+
+
+class CommentInsightsResponse(BaseModel):
+    episode: EpisodeResponse
+    created_candidates: list[CommentInsightCandidateResponse]
 
 
 class CreatorProfileResponse(BaseModel):

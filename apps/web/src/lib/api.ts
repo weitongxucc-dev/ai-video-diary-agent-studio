@@ -1,4 +1,5 @@
 import type {
+  CommentInsightsResponse,
   ContentTemplates,
   CreatorProfile,
   CreatorProfileUpdate,
@@ -204,6 +205,16 @@ export function restorePreference(preferenceId: string): Promise<Preferences> {
 export function deletePreference(preferenceId: string): Promise<Preferences> {
   return request<Preferences>(`/api/preferences/${preferenceId}/delete`, {
     method: "POST",
+  });
+}
+
+export function analyzeCommentInsights(
+  episodeId: string,
+  commentsText: string,
+): Promise<CommentInsightsResponse> {
+  return request<CommentInsightsResponse>(`/api/episodes/${episodeId}/comment-insights`, {
+    method: "POST",
+    body: JSON.stringify({ comments_text: commentsText }),
   });
 }
 

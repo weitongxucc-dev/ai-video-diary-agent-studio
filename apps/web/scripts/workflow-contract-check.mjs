@@ -512,6 +512,26 @@ for (const required of ["markPublishedAction", "publish_url", "play_count", "fee
   }
 }
 
+for (const required of ["analyzeCommentInsights", "CommentInsightsResponse"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must expose publish comment insight function/type ${required}.`);
+  }
+}
+
+if (!actionsFile.includes("analyzeCommentInsightsAction")) {
+  failures.push("Server actions must expose a publish comment insight action.");
+}
+
+for (const required of ["评论洞察", "comments_text", "analyzeCommentInsightsAction"]) {
+  if (!draftPage.includes(required)) {
+    failures.push(`/draft must include publish comment insight field/action ${required}.`);
+  }
+}
+
+if (!learningPage.includes("published_comment_insight") || !learningPage.includes("评论洞察")) {
+  failures.push("/learning must label publish comment insight feedback separately.");
+}
+
 if (
   draftPage.includes("生成并导入") ||
   draftPage.includes("2 自动导入剪映") ||

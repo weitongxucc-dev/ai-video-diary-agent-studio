@@ -3924,7 +3924,9 @@ textarea {
 }
 
 .draft-publish-section,
-.draft-publish-form {
+.draft-publish-tools,
+.draft-publish-form,
+.draft-comment-insights-form {
   display: grid;
   gap: 12px;
 }
@@ -3947,6 +3949,41 @@ textarea {
   background: #d8d4c8;
   padding: 12px;
   box-shadow: var(--shadow-hard-small);
+}
+
+.draft-comment-insights-form {
+  border: 2px solid var(--border-strong);
+  background: #cfd6d1;
+  padding: 12px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.draft-comment-insights-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.draft-comment-insights-head h3 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.draft-comment-insights-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.draft-comment-insights-form textarea {
+  min-height: 132px;
+  max-height: 176px;
+  overflow: auto;
+  resize: vertical;
 }
 
 .draft-publish-metrics,
@@ -5289,6 +5326,10 @@ textarea {
   }
 
   .draft-publish-head {
+    display: grid;
+  }
+
+  .draft-comment-insights-head {
     display: grid;
   }
 

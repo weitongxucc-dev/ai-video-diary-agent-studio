@@ -325,7 +325,7 @@ def _scope_for_target_type(target_type: str) -> str:
         return "topic"
     if target_type == "script_section":
         return "script"
-    if target_type == "published_episode":
+    if target_type in {"published_episode", "published_comment_insight"}:
         return "publish"
     return "general"
 

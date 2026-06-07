@@ -49,6 +49,10 @@ function feedbackTargetLabel(targetType: string): string {
     return "发布反馈";
   }
 
+  if (targetType === "published_comment_insight") {
+    return "评论洞察";
+  }
+
   return "口播段落反馈";
 }
 

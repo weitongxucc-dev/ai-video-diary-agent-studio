@@ -15,6 +15,7 @@ from app.asr import (
     asr_transcriber_from_settings,
 )
 from app.config import Settings, runtime_env_file_path
+from app.comment_insights import extract_comment_insights
 from app.content_templates import get_content_template, list_content_templates
 from app.creator_profile import (
     CreatorProfileRepository,
@@ -53,6 +54,8 @@ from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
+    CommentInsightsRequest,
+    CommentInsightsResponse,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
     CreatorProfileResponse,
@@ -1354,6 +1357,64 @@ def mark_episode_published(
         feedback_reason=request.feedback_reason,
     )
     return episode_response(repo.save(episode))
+
+
+@app.post("/api/episodes/{episode_id}/comment-insights", response_model=CommentInsightsResponse)
+def analyze_episode_comment_insights(
+    episode_id: str,
+    request: CommentInsightsRequest,
+) -> CommentInsightsResponse:
+    episode = get_episode_or_404(episode_id)
+    created_candidates: list[dict[str, object]] = []
+    for insight in extract_comment_insights(request.comments_text):
+        source_event_ids: list[str] = []
+        for source_comment in insight.source_comments:
+            if _has_comment_insight_event(episode, insight.content, source_comment):
+                continue
+            event = FeedbackEvent(
+                "published_comment_insight",
+                episode.id,
+                FeedbackValue.UP if insight.kind == "prefer" else FeedbackValue.DOWN,
+                insight.content,
+                before_snapshot={"source_comment": source_comment},
+                after_snapshot={"comment_insight": insight.content},
+            )
+            episode.feedback_events.append(event)
+            source_event_ids.append(event.id)
+        if not source_event_ids:
+            continue
+        created_candidates.append(
+            {
+                "kind": insight.kind,
+                "label": "偏好" if insight.kind == "prefer" else "避开",
+                "content": insight.content,
+                "source_event_ids": source_event_ids,
+                "evidence_count": len(source_event_ids),
+                "confidence": round(min(1.0, 0.35 + len(source_event_ids) * 0.15), 2),
+                "scope": "publish",
+                "confirmed": False,
+            }
+        )
+    saved = repo.save(episode) if created_candidates else episode
+    return CommentInsightsResponse(
+        episode=episode_response(saved),
+        created_candidates=created_candidates,
+    )
+
+
+def _has_comment_insight_event(
+    episode: Episode,
+    content: str,
+    source_comment: str,
+) -> bool:
+    for event in episode.feedback_events:
+        if event.target_type != "published_comment_insight" or event.reason != content:
+            continue
+        if not isinstance(event.before_snapshot, dict):
+            continue
+        if event.before_snapshot.get("source_comment") == source_comment:
+            return True
+    return False
 
 
 @app.post("/api/episodes/{episode_id}/feedback", response_model=EpisodeResponse)

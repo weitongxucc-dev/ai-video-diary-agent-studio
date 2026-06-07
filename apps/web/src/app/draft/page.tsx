@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  analyzeCommentInsightsAction,
   createDraftPackageAction,
   importDraftPackageAction,
   markPublishedAction,
@@ -258,98 +259,122 @@ export default async function DraftPage() {
               </Link>
             </div>
             {episode ? (
-              <form action={markPublishedAction} className="draft-publish-form">
-                <input name="episode_id" type="hidden" value={episode.id} />
-                <label className="settings-field wide">
-                  <span>发布链接</span>
-                  <input
-                    defaultValue={episode.publish_url ?? ""}
-                    name="publish_url"
-                    placeholder="https://..."
-                    type="url"
-                  />
-                </label>
-                <div className="draft-publish-metrics">
-                  <label className="settings-field">
-                    <span>播放量</span>
+              <div className="draft-publish-tools">
+                <form action={markPublishedAction} className="draft-publish-form">
+                  <input name="episode_id" type="hidden" value={episode.id} />
+                  <label className="settings-field wide">
+                    <span>发布链接</span>
                     <input
-                      defaultValue={episode.play_count ?? ""}
-                      min="0"
-                      name="play_count"
-                      type="number"
+                      defaultValue={episode.publish_url ?? ""}
+                      name="publish_url"
+                      placeholder="https://..."
+                      type="url"
                     />
                   </label>
-                  <label className="settings-field">
-                    <span>点赞数</span>
-                    <input
-                      defaultValue={episode.like_count ?? ""}
-                      min="0"
-                      name="like_count"
-                      type="number"
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span>评论数</span>
-                    <input
-                      defaultValue={episode.comment_count ?? ""}
-                      min="0"
-                      name="comment_count"
-                      type="number"
-                    />
-                  </label>
-                </div>
-                <div className="draft-feedback-grid">
-                  <fieldset className="draft-feedback-choice">
-                    <legend>发布判断</legend>
-                    <label>
+                  <div className="draft-publish-metrics">
+                    <label className="settings-field">
+                      <span>播放量</span>
                       <input
-                        defaultChecked={activePublishFeedbackValue === "up"}
-                        name="feedback_value"
-                        type="radio"
-                        value="up"
+                        defaultValue={episode.play_count ?? ""}
+                        min="0"
+                        name="play_count"
+                        type="number"
                       />
-                      <span>值得延续</span>
                     </label>
-                    <label>
+                    <label className="settings-field">
+                      <span>点赞数</span>
                       <input
-                        defaultChecked={activePublishFeedbackValue === "down"}
-                        name="feedback_value"
-                        type="radio"
-                        value="down"
+                        defaultValue={episode.like_count ?? ""}
+                        min="0"
+                        name="like_count"
+                        type="number"
                       />
-                      <span>需要调整</span>
                     </label>
-                    <label>
+                    <label className="settings-field">
+                      <span>评论数</span>
                       <input
-                        defaultChecked={activePublishFeedbackValue === ""}
-                        name="feedback_value"
-                        type="radio"
-                        value=""
+                        defaultValue={episode.comment_count ?? ""}
+                        min="0"
+                        name="comment_count"
+                        type="number"
                       />
-                      <span>只登记数据</span>
                     </label>
-                  </fieldset>
+                  </div>
+                  <div className="draft-feedback-grid">
+                    <fieldset className="draft-feedback-choice">
+                      <legend>发布判断</legend>
+                      <label>
+                        <input
+                          defaultChecked={activePublishFeedbackValue === "up"}
+                          name="feedback_value"
+                          type="radio"
+                          value="up"
+                        />
+                        <span>值得延续</span>
+                      </label>
+                      <label>
+                        <input
+                          defaultChecked={activePublishFeedbackValue === "down"}
+                          name="feedback_value"
+                          type="radio"
+                          value="down"
+                        />
+                        <span>需要调整</span>
+                      </label>
+                      <label>
+                        <input
+                          defaultChecked={activePublishFeedbackValue === ""}
+                          name="feedback_value"
+                          type="radio"
+                          value=""
+                        />
+                        <span>只登记数据</span>
+                      </label>
+                    </fieldset>
+                    <label className="settings-field">
+                      <span>反馈原因</span>
+                      <textarea
+                        defaultValue={activePublishFeedback?.reason ?? ""}
+                        name="feedback_reason"
+                        placeholder="例如：开头直接抛冲突，评论区更容易接话。"
+                        rows={4}
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-actions">
+                    <button className="pixel-button" type="submit">
+                      登记发布反馈
+                    </button>
+                    <span>
+                      {episode.published_at
+                        ? `已发布 · ${formatDate(episode.published_at)}`
+                        : `当前状态 · ${episode.status}`}
+                    </span>
+                  </div>
+                </form>
+
+                <form action={analyzeCommentInsightsAction} className="draft-comment-insights-form">
+                  <input name="episode_id" type="hidden" value={episode.id} />
+                  <div className="draft-comment-insights-head">
+                    <div>
+                      <h3>评论洞察</h3>
+                      <span>发布域 · 待确认</span>
+                    </div>
+                    <button className="pixel-button secondary compact" type="submit">
+                      生成评论洞察
+                    </button>
+                  </div>
                   <label className="settings-field">
-                    <span>反馈原因</span>
+                    <span>评论原文</span>
                     <textarea
-                      defaultValue={activePublishFeedback?.reason ?? ""}
-                      name="feedback_reason"
-                      placeholder="例如：开头直接抛冲突，评论区更容易接话。"
-                      rows={4}
+                      maxLength={2400}
+                      name="comments_text"
+                      placeholder={"开头真实经历很抓人\n这个教程步骤很清楚\n这条太官方了，像广告"}
+                      rows={7}
                     />
                   </label>
-                </div>
-                <div className="settings-actions">
-                  <button className="pixel-button" type="submit">
-                    登记发布反馈
-                  </button>
-                  <span>
-                    {episode.published_at
-                      ? `已发布 · ${formatDate(episode.published_at)}`
-                      : `当前状态 · ${episode.status}`}
-                  </span>
-                </div>
-              </form>
+                </form>
+              </div>
             ) : (
               <div className="workspace-empty">
                 <PixelIcon name="publish" />

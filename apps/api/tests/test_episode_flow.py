@@ -256,6 +256,7 @@ def test_feedback_event_response_target_type_is_documented_as_enum():
         "topic",
         "script_section",
         "published_episode",
+        "published_comment_insight",
     ]
 
 

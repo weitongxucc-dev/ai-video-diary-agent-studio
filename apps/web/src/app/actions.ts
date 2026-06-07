@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import {
+  analyzeCommentInsights,
   approveScript,
   approveTopic,
   confirmPreference,
@@ -418,6 +419,14 @@ export async function markPublishedAction(formData: FormData) {
     feedback_value: optionalFeedbackValueField(formData, "feedback_value"),
     feedback_reason: optionalString(formData, "feedback_reason"),
   });
+  redirect("/learning");
+}
+
+export async function analyzeCommentInsightsAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+  const commentsText = textField(formData, "comments_text");
+
+  await analyzeCommentInsights(episodeId, commentsText);
   redirect("/learning");
 }
 
