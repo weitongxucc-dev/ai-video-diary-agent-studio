@@ -3955,6 +3955,7 @@ textarea {
 
 .voice-command-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
@@ -3962,6 +3963,29 @@ textarea {
 .voice-command-actions .pixel-button {
   min-height: 30px;
   padding: 0 8px;
+}
+
+.voice-command-actions .pixel-button.active,
+.voice-command-actions .pixel-button.active:hover {
+  background: #fff5ef;
+}
+
+.voice-recording-indicator {
+  display: inline-grid;
+  min-height: 30px;
+  align-items: center;
+  border: 2px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--muted);
+  padding: 0 7px;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.voice-recording-indicator.active {
+  background: #fff5ef;
+  color: var(--danger);
 }
 
 .edit-plan-page {

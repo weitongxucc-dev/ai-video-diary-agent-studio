@@ -529,6 +529,16 @@ export type VoiceCommandOperation = {
   params: Record<string, unknown>;
 };
 
+export type VoiceTranscription = {
+  provider: string;
+  transcript: string;
+  segments: Array<{
+    start_ms: number;
+    end_ms: number;
+    text: string;
+  }>;
+};
+
 export type VoiceCommandResponse = {
   status: "ready" | "blocked" | "unknown" | "executed";
   intent: string;

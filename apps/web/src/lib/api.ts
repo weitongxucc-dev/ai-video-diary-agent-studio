@@ -23,6 +23,7 @@ import type {
   ScriptPackage,
   SourceItems,
   SystemStatus,
+  VoiceTranscription,
   VoiceCommandResponse,
   WorkflowStatus,
 } from "./types";
@@ -103,6 +104,24 @@ export function getDiagnosticsStatus(): Promise<DiagnosticsStatus> {
 
 export function diagnosticsReportUrl(): string {
   return apiUrl("/api/diagnostics/report");
+}
+
+export async function transcribeVoiceAudio(audio: Blob): Promise<VoiceTranscription> {
+  const response = await fetch(apiUrl("/api/voice/transcribe"), {
+    body: audio,
+    cache: "no-store",
+    headers: {
+      "Content-Type": audio.type || "application/octet-stream",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<VoiceTranscription>;
 }
 
 export function updateRuntimeSettings(

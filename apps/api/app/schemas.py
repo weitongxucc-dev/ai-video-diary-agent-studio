@@ -596,6 +596,18 @@ class VoiceCommandRequest(BaseModel):
     transcript: str = Field(min_length=1)
 
 
+class VoiceTranscriptionSegmentResponse(BaseModel):
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    provider: str
+    transcript: str
+    segments: list[VoiceTranscriptionSegmentResponse]
+
+
 class VoiceCommandOperationResponse(BaseModel):
     kind: str
     label: str

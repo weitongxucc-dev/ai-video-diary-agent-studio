@@ -189,6 +189,12 @@ for (const required of ["语音指令", "COMMAND", "previewVoiceCommand", "execu
   }
 }
 
+for (const required of ["MediaRecorder", "transcribeVoiceAudio", "开始录音", "停止录音", "recording"]) {
+  if (!voiceCommandConsole.includes(required)) {
+    failures.push(`VoiceCommandConsole must implement microphone recording with ${required}.`);
+  }
+}
+
 for (const required of ["剪辑计划", "视频浏览窗口", "原片标记", "剪辑计划时间轴", "语音定位结果", "剪映轨道预览"]) {
   if (!editPlanPage.includes(required)) {
     failures.push(`/edit-plan must include ${required}.`);
@@ -203,6 +209,10 @@ for (const required of [".voice-command-console", ".edit-plan-page", ".video-pre
   if (!css.includes(required)) {
     failures.push(`globals.css must define ${required}.`);
   }
+}
+
+if (!css.includes(".voice-recording-indicator")) {
+  failures.push("globals.css must define .voice-recording-indicator.");
 }
 
 for (const required of [
@@ -273,8 +283,16 @@ if (!apiFile.includes("diagnosticsReportUrl")) {
   failures.push("API client must expose a diagnostics report download URL.");
 }
 
+if (!apiFile.includes("transcribeVoiceAudio")) {
+  failures.push("API client must upload recorded voice audio for ASR.");
+}
+
 if (!typesFile.includes("DiagnosticsStatus")) {
   failures.push("Types must expose DiagnosticsStatus.");
+}
+
+if (!typesFile.includes("VoiceTranscription")) {
+  failures.push("Types must expose VoiceTranscription.");
 }
 
 if (!actionsFile.includes("selectContentTemplateAction")) {

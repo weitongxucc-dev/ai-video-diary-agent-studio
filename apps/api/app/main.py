@@ -9,6 +9,11 @@ from fastapi.responses import FileResponse, Response
 
 from pathlib import Path
 
+from app.asr import (
+    ASRConfigurationError,
+    ASRTranscriptionError,
+    asr_transcriber_from_settings,
+)
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
 from app.creator_profile import (
@@ -84,6 +89,7 @@ from app.schemas import (
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
+    VoiceTranscriptionResponse,
     WorkflowStatusResponse,
 )
 from app.services import EpisodeService
@@ -97,6 +103,7 @@ from app.video import FfmpegVideoProcessor, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
+from app.voice_transcription import transcribe_voice_audio
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
@@ -118,6 +125,7 @@ video_inbox = VideoInbox(settings.video_inbox_path)
 video_processor = FfmpegVideoProcessor(settings)
 video_pipeline = video_processing_pipeline_from_settings(settings, processor=video_processor)
 draft_workspace = DraftWorkspace(settings)
+voice_transcriber = asr_transcriber_from_settings(settings)
 runtime_env_path = runtime_env_file_path()
 service = EpisodeService(
     script_generator=script_generator_from_settings(settings),
@@ -278,7 +286,7 @@ def update_runtime_settings(
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, creator_profile_repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, service, workflow
+    global settings, repo, creator_profile_repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, voice_transcriber, service, workflow
 
     settings = Settings.from_env()
     repo = EpisodeRepository(database_path=settings.database_path)
@@ -291,6 +299,7 @@ def _reload_runtime_dependencies() -> None:
         processor=video_processor,
     )
     draft_workspace = DraftWorkspace(settings)
+    voice_transcriber = asr_transcriber_from_settings(settings)
     service = EpisodeService(
         script_generator=script_generator_from_settings(settings),
         topic_generator=topic_generator_from_settings(settings, vault),
@@ -795,6 +804,23 @@ def revert_episode_script_version(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return episode_response(repo.save(episode))
+
+
+@app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def transcribe_voice_command_audio(request: Request) -> VoiceTranscriptionResponse:
+    try:
+        transcription = transcribe_voice_audio(
+            await request.body(),
+            content_type=request.headers.get("content-type"),
+            transcriber=voice_transcriber,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ASRConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ASRTranscriptionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return VoiceTranscriptionResponse.model_validate(transcription)
 
 
 @app.post(
