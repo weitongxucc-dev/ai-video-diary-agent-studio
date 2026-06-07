@@ -2,6 +2,7 @@ import type {
   ContentTemplates,
   CreatorProfile,
   CreatorProfileUpdate,
+  DiagnosticsStatus,
   Episode,
   EditPlan,
   EditPlanSegmentDecisionAction,
@@ -94,6 +95,14 @@ export function getRuntimeSettings(): Promise<RuntimeSettings> {
 
 export function getRuntimeHealth(): Promise<RuntimeHealth> {
   return request<RuntimeHealth>("/api/runtime/health");
+}
+
+export function getDiagnosticsStatus(): Promise<DiagnosticsStatus> {
+  return request<DiagnosticsStatus>("/api/diagnostics/status");
+}
+
+export function diagnosticsReportUrl(): string {
+  return apiUrl("/api/diagnostics/report");
 }
 
 export function updateRuntimeSettings(

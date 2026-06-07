@@ -8,6 +8,7 @@ const files = {
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
   agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
+  retroChrome: new URL("../src/components/RetroChrome.tsx", import.meta.url),
   api: new URL("../src/lib/api.ts", import.meta.url),
   types: new URL("../src/lib/types.ts", import.meta.url),
   home: new URL("../src/app/page.tsx", import.meta.url),
@@ -19,6 +20,7 @@ const files = {
   profile: new URL("../src/app/profile/page.tsx", import.meta.url),
   draft: new URL("../src/app/draft/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
+  logs: new URL("../src/app/logs/page.tsx", import.meta.url),
   voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
 };
 
@@ -38,6 +40,7 @@ const [
   topicCard,
   agentPanel,
   appShell,
+  retroChrome,
   apiFile,
   typesFile,
   homePage,
@@ -49,6 +52,7 @@ const [
   profilePage,
   draftPage,
   editPlanPage,
+  logsPage,
   voiceCommandConsole,
 ] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
 
@@ -117,7 +121,7 @@ if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar"
   failures.push("Agent panel must show real Hermes radar ingestion counts.");
 }
 
-for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/settings"]) {
+for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/logs", "/settings"]) {
   const routeBlock = `href: "${route}"`;
   const routeIndex = appShell.indexOf(routeBlock);
   if (routeIndex === -1) {
@@ -150,6 +154,32 @@ if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceComma
   failures.push("AppShell must render the reusable VoiceCommandConsole.");
 }
 
+for (const fakeMenu of ["文件(F)", "编辑(E)", "视图(V)", "工具(T)", "帮助(H)"]) {
+  if (retroChrome.includes(fakeMenu)) {
+    failures.push(`RetroChrome must not keep fake disabled menu item ${fakeMenu}.`);
+  }
+}
+
+for (const required of [
+  "chromeMenuGroups",
+  "内容",
+  "画像",
+  "运行",
+  "设置",
+  "system-menu-popover",
+  "menu-panel-edit",
+  "menu-panel-link",
+  'href: "/templates"',
+  'href: "/profile"',
+  'href: "/video"',
+  'href: "/logs"',
+  'href: "/settings"',
+]) {
+  if (!retroChrome.includes(required)) {
+    failures.push(`RetroChrome must expose real top menu surface ${required}.`);
+  }
+}
+
 for (const required of ["语音指令", "COMMAND", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
   if (!voiceCommandConsole.includes(required)) {
     failures.push(`VoiceCommandConsole must include ${required}.`);
@@ -169,6 +199,46 @@ if (!editPlanPage.includes("timeline-action-chip")) {
 for (const required of [".voice-command-console", ".edit-plan-page", ".video-preview-window", ".source-marker-strip", ".edit-plan-timeline", ".timeline-action-chip"]) {
   if (!css.includes(required)) {
     failures.push(`globals.css must define ${required}.`);
+  }
+}
+
+for (const required of [
+  ".system-menu-popover",
+  ".menu-panel-edit",
+  ".bounded-list",
+  ".video-list.bounded-list",
+  ".edit-decision-grid.bounded-list",
+  ".source-marker-list.bounded-list",
+  ".video-file-row code",
+  ".edit-decision-card p",
+]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define compact overflow guard ${required}.`);
+  }
+}
+
+for (const required of [
+  "bounded-list",
+  "visibleVideos",
+  "MAX_VISIBLE_PENDING_VIDEOS",
+  "还有",
+]) {
+  if (!videoPage.includes(required)) {
+    failures.push(`/video must cap visible pending videos and use bounded-list guard ${required}.`);
+  }
+}
+
+for (const required of [
+  "bounded-list",
+  "visibleSegments",
+  "visibleDecisions",
+  "visibleMarkers",
+  "MAX_VISIBLE_EDIT_SEGMENTS",
+  "MAX_VISIBLE_EDIT_DECISIONS",
+  "MAX_VISIBLE_MARKERS",
+]) {
+  if (!editPlanPage.includes(required)) {
+    failures.push(`/edit-plan must cap timeline/decision/marker surfaces with ${required}.`);
   }
 }
 
@@ -192,6 +262,18 @@ if (!apiFile.includes("getRuntimeHealth")) {
   failures.push("API client must load runtime health diagnostics.");
 }
 
+if (!apiFile.includes("getDiagnosticsStatus")) {
+  failures.push("API client must load diagnostics status.");
+}
+
+if (!apiFile.includes("diagnosticsReportUrl")) {
+  failures.push("API client must expose a diagnostics report download URL.");
+}
+
+if (!typesFile.includes("DiagnosticsStatus")) {
+  failures.push("Types must expose DiagnosticsStatus.");
+}
+
 if (!actionsFile.includes("selectContentTemplateAction")) {
   failures.push("Server actions must submit content template selection.");
 }
@@ -205,6 +287,18 @@ for (const required of ["getContentTemplates", "selectContentTemplateAction", "t
 for (const required of ["getRuntimeHealth", "运行健康", "修复动作", "DeepSeek", "ffmpeg"]) {
   if (!healthPage.includes(required)) {
     failures.push(`/health must include ${required}.`);
+  }
+}
+
+for (const required of ["getDiagnosticsStatus", "diagnosticsReportUrl", "内测日志", "错误报告包", "脱敏配置", "最近错误"]) {
+  if (!logsPage.includes(required)) {
+    failures.push(`/logs must include ${required}.`);
+  }
+}
+
+for (const required of [".logs-page", ".log-category-grid", ".diagnostic-file-list", ".redacted-settings-grid"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define diagnostics surface ${required}.`);
   }
 }
 

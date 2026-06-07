@@ -1,6 +1,59 @@
-import { PixelIcon } from "@/components/PixelIcon";
+import Link from "next/link";
+import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 
-const menuItems = ["文件(F)", "编辑(E)", "视图(V)", "工具(T)", "帮助(H)"];
+type ChromeMenuLink = {
+  href: string;
+  label: string;
+  note: string;
+  icon: PixelIconName;
+};
+
+type ChromeMenuGroup = {
+  label: string;
+  summary: string;
+  links: ChromeMenuLink[];
+};
+
+const chromeMenuGroups: ChromeMenuGroup[] = [
+  {
+    label: "内容",
+    summary: "模板、选题、口播稿和素材入口",
+    links: [
+      { href: "/templates", label: "内容模板", note: "选择视频日记、工具测评或教程演示", icon: "product" },
+      { href: "/topics", label: "选题池", note: "生成、筛选和反馈候选选题", icon: "note" },
+      { href: "/script", label: "口播稿", note: "编辑 hook、段落、标题和发布文案", icon: "script" },
+      { href: "/sources", label: "信息源", note: "同步外部素材和手动链接", icon: "link" },
+    ],
+  },
+  {
+    label: "画像",
+    summary: "创作者声音、偏好和反馈记忆",
+    links: [
+      { href: "/profile", label: "创作者画像", note: "编辑长期口吻、边界和样本", icon: "person" },
+      { href: "/learning", label: "反馈学习", note: "查看 thumbs 反馈形成的偏好记忆", icon: "spark" },
+      { href: "/knowledge", label: "知识库", note: "浏览本地 Obsidian 知识上下文", icon: "folder" },
+    ],
+  },
+  {
+    label: "运行",
+    summary: "视频、剪辑、草稿和运行状态",
+    links: [
+      { href: "/video", label: "视频处理", note: "处理待录制视频和重复口播检查", icon: "video" },
+      { href: "/edit-plan", label: "剪辑计划", note: "复核剪辑动作、片段和草稿确认", icon: "clip" },
+      { href: "/draft", label: "剪映草稿", note: "生成素材包并导入剪映草稿", icon: "archive" },
+      { href: "/health", label: "运行健康", note: "检查 DeepSeek、ffmpeg、路径和来源", icon: "check" },
+      { href: "/logs", label: "内测日志", note: "查看最近错误并导出问题报告包", icon: "code" },
+    ],
+  },
+  {
+    label: "设置",
+    summary: "本地路径、密钥和生产参数",
+    links: [
+      { href: "/settings", label: "运行设置", note: "编辑 API key、本地路径和视频输出目录", icon: "settings" },
+      { href: "/", label: "今日工作台", note: "回到当前 Episode 总览", icon: "desk" },
+    ],
+  },
+];
 
 type RetroChromeProps = {
   todayLabel: string;
@@ -31,10 +84,32 @@ export function RetroChrome({ todayLabel }: RetroChromeProps) {
       </header>
 
       <nav className="system-menubar" aria-label="系统菜单">
-        {menuItems.map((item) => (
-          <button key={item} type="button" disabled>
-            {item}
-          </button>
+        {chromeMenuGroups.map((group) => (
+          <details className="system-menu-group" key={group.label} name="system-menu">
+            <summary>{group.label}</summary>
+            <div className="system-menu-popover" role="menu">
+              <div className="menu-panel-edit">
+                <strong>{group.label}工作区</strong>
+                <span>{group.summary}</span>
+              </div>
+              <div className="menu-panel-links">
+                {group.links.map((link) => (
+                  <Link
+                    className="menu-panel-link"
+                    href={link.href}
+                    key={link.href}
+                    role="menuitem"
+                  >
+                    <PixelIcon name={link.icon} />
+                    <span>
+                      <strong>{link.label}</strong>
+                      <em>{link.note}</em>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </details>
         ))}
       </nav>
 

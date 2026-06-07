@@ -12,6 +12,10 @@ import type { EditPlan, EditPlanDecision, EditPlanSegment, Episode } from "@/lib
 
 export const dynamic = "force-dynamic";
 
+const MAX_VISIBLE_EDIT_SEGMENTS = 12;
+const MAX_VISIBLE_EDIT_DECISIONS = 6;
+const MAX_VISIBLE_MARKERS = 10;
+
 type EditPlanLoadState = {
   episode: Episode | null;
   editPlan: EditPlan | null;
@@ -132,6 +136,22 @@ export default async function EditPlanPage() {
   );
   const canConfirm =
     Boolean(editPlan?.available) && editPlan?.jianying.status !== "draft_ready";
+  const visibleSegments = editPlan?.segments.slice(0, MAX_VISIBLE_EDIT_SEGMENTS) ?? [];
+  const hiddenSegmentCount = Math.max(
+    0,
+    (editPlan?.segments.length ?? 0) - visibleSegments.length,
+  );
+  const visibleDecisions =
+    editPlan?.decisions.slice(0, MAX_VISIBLE_EDIT_DECISIONS) ?? [];
+  const hiddenDecisionCount = Math.max(
+    0,
+    (editPlan?.decisions.length ?? 0) - visibleDecisions.length,
+  );
+  const visibleMarkers = editPlan?.markers.slice(0, MAX_VISIBLE_MARKERS) ?? [];
+  const hiddenMarkerCount = Math.max(
+    0,
+    (editPlan?.markers.length ?? 0) - visibleMarkers.length,
+  );
 
   return (
     <AppShell>
@@ -257,16 +277,23 @@ export default async function EditPlanPage() {
                 <strong>原片标记</strong>
                 <span>只用于浏览跳转，不代表剪辑动作</span>
               </div>
-              <div className="source-marker-list">
-                {editPlan?.markers.length ? (
-                  editPlan.markers.map((marker, index) => (
+              <div className="source-marker-list bounded-list">
+                {visibleMarkers.length ? (
+                  <>
+                    {visibleMarkers.map((marker, index) => (
                     <button className="source-marker" key={marker.segment_id} type="button">
                       <span>M{index + 1}</span>
                       <strong>{marker.time}</strong>
                       <em>{marker.label}</em>
                       <small>跳转 · {marker.memo}</small>
                     </button>
-                  ))
+                    ))}
+                    {hiddenMarkerCount > 0 ? (
+                      <div className="bounded-list-note">
+                        还有 {hiddenMarkerCount} 个标记已收起。
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   <div className="source-marker empty">等待剪辑计划生成</div>
                 )}
@@ -279,13 +306,19 @@ export default async function EditPlanPage() {
               <strong>剪辑计划时间轴</strong>
               <span>{editPlan?.output_video?.file_name ?? "无可用计划"}</span>
             </div>
-            <div className="edit-plan-timeline">
-              {editPlan?.segments.length ? (
-                editPlan.segments.map((segment) => (
+            <div className="edit-plan-timeline bounded-list">
+              {visibleSegments.length ? (
+                <>
+                  {visibleSegments.map((segment) => (
                   <div
                     className="timeline-segment"
                     key={segment.id}
-                    style={{ flexBasis: segmentFlexBasis(segment, editPlan.duration_seconds) }}
+                    style={{
+                      flexBasis: segmentFlexBasis(
+                        segment,
+                        editPlan?.duration_seconds ?? 0,
+                      ),
+                    }}
                   >
                     <strong>{segment.label}</strong>
                     <span>{formatSegmentRange(segment)}</span>
@@ -294,7 +327,16 @@ export default async function EditPlanPage() {
                       {actionLabel(segment.action)}
                     </em>
                   </div>
-                ))
+                  ))}
+                  {hiddenSegmentCount > 0 ? (
+                    <div className="timeline-segment timeline-summary">
+                      <strong>已收起</strong>
+                      <span>{hiddenSegmentCount} 段</span>
+                      <small>保持时间轴紧凑，完整计划仍保存在本地。</small>
+                      <em className="timeline-action-chip review">更多</em>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="timeline-segment">
                   <strong>等待计划</strong>
@@ -313,9 +355,10 @@ export default async function EditPlanPage() {
             </div>
           </section>
 
-          <section className="edit-decision-grid" aria-label="剪辑动作清单">
-            {editPlan?.decisions.length ? (
-              editPlan.decisions.map((decision) => {
+          <section className="edit-decision-grid bounded-list" aria-label="剪辑动作清单">
+            {visibleDecisions.length ? (
+              <>
+                {visibleDecisions.map((decision) => {
                 const segment = segmentsById.get(decision.segment_id);
                 const decisionReason = `用户在剪辑计划工作台调整 ${decision.range}`;
 
@@ -402,7 +445,17 @@ export default async function EditPlanPage() {
                     ) : null}
                   </article>
                 );
-              })
+                })}
+                {hiddenDecisionCount > 0 ? (
+                  <article className="edit-decision-card compact-note">
+                    <div>
+                      <PixelIcon name="archive" />
+                      <strong>还有 {hiddenDecisionCount} 个动作已收起</strong>
+                    </div>
+                    <p>为保持工作台紧凑，只显示最需要处理的前几项。</p>
+                  </article>
+                ) : null}
+              </>
             ) : (
               <article className="edit-decision-card">
                 <div>

@@ -266,6 +266,41 @@ class RuntimeHealthResponse(BaseModel):
     items: list[RuntimeHealthItemResponse]
 
 
+class DiagnosticsSummaryResponse(BaseModel):
+    health_total: int
+    health_ready: int
+    health_missing: int
+    health_degraded: int
+    health_invalid: int
+    recent_error_count: int
+    report_file_count: int
+
+
+class DiagnosticsLogCategoryResponse(BaseModel):
+    id: str
+    label: str
+    status: Literal["available", "empty", "degraded"]
+    entry_count: int
+    latest_message: str
+
+
+class DiagnosticsRecentErrorResponse(BaseModel):
+    source: str
+    episode_id: str | None
+    message: str
+    created_at: datetime | None
+
+
+class DiagnosticsStatusResponse(BaseModel):
+    generated_at: datetime
+    summary: DiagnosticsSummaryResponse
+    log_categories: list[DiagnosticsLogCategoryResponse]
+    recent_errors: list[DiagnosticsRecentErrorResponse]
+    settings_snapshot: dict[str, dict[str, object]]
+    report_files: list[str]
+    excluded_items: list[str]
+
+
 class PendingVideoResponse(BaseModel):
     file_name: str
     path: str

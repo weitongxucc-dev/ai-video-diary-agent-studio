@@ -5,7 +5,7 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from app.creator_profile import (
     CreatorProfileRepository,
     creator_profile_prompt_payload,
 )
+from app.diagnostics import diagnostics_report_bytes, diagnostics_status
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
     apply_confirmed_edit_plan,
@@ -45,6 +46,7 @@ from app.schemas import (
     ContentTemplatesResponse,
     CreatorProfileResponse,
     CreatorProfileUpdateRequest,
+    DiagnosticsStatusResponse,
     DraftPackageRequest,
     DraftPackageResponse,
     EditPlanResponse,
@@ -233,6 +235,22 @@ def get_content_templates() -> ContentTemplatesResponse:
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
 def get_runtime_health() -> RuntimeHealthResponse:
     return RuntimeHealthResponse.model_validate(runtime_health(settings))
+
+
+@app.get("/api/diagnostics/status", response_model=DiagnosticsStatusResponse)
+def get_diagnostics_status() -> DiagnosticsStatusResponse:
+    return DiagnosticsStatusResponse.model_validate(diagnostics_status(settings, repo))
+
+
+@app.get("/api/diagnostics/report")
+def download_diagnostics_report() -> Response:
+    return Response(
+        content=diagnostics_report_bytes(settings, repo),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="ai-video-diary-diagnostics.zip"'
+        },
+    )
 
 
 @app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)

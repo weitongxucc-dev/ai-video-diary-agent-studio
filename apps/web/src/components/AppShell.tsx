@@ -26,6 +26,7 @@ const navItems: NavItem[] = [
   { href: "/sources", label: "信息源", icon: "link" },
   { href: "/learning", label: "反馈学习", icon: "spark" },
   { href: "/health", label: "运行健康", icon: "check" },
+  { href: "/logs", label: "内测日志", icon: "code" },
   { href: "/settings", label: "设置", icon: "settings" }
 ];
 

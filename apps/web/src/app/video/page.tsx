@@ -19,6 +19,8 @@ import type { Episode, PendingVideo, RetakeReport, SystemStatus } from "@/lib/ty
 
 export const dynamic = "force-dynamic";
 
+const MAX_VISIBLE_PENDING_VIDEOS = 8;
+
 type VideoLoadState = {
   videos: PendingVideo[];
   systemStatus: SystemStatus | null;
@@ -166,6 +168,8 @@ export default async function VideoPage() {
   const canCreateFullPackage = canProcess && Boolean(episode?.script);
   const episodeId = episode?.id;
   const canCreateAdHocPackage = canProcess && Boolean(episodeId);
+  const visibleVideos = videos.slice(0, MAX_VISIBLE_PENDING_VIDEOS);
+  const hiddenVideoCount = Math.max(0, videos.length - visibleVideos.length);
 
   return (
     <AppShell>
@@ -316,9 +320,10 @@ export default async function VideoPage() {
             </div>
           ) : null}
 
-          <div className="video-list" aria-label="待处理视频列表">
-            {videos.length > 0 ? (
-              videos.map((video, index) => (
+          <div className="video-list bounded-list" aria-label="待处理视频列表">
+            {visibleVideos.length > 0 ? (
+              <>
+                {visibleVideos.map((video, index) => (
                 <article className="video-file-row" key={video.file_name}>
                   <label className="video-batch-picker" title="加入组合视频">
                     <input
@@ -398,7 +403,13 @@ export default async function VideoPage() {
                     </form>
                   </div>
                 </article>
-              ))
+                ))}
+                {hiddenVideoCount > 0 ? (
+                  <div className="bounded-list-note">
+                    还有 {hiddenVideoCount} 个待处理视频未显示，处理或移走当前文件后会继续出现。
+                  </div>
+                ) : null}
+              </>
             ) : (
               <div className="video-empty-state">
                 <PixelIcon name="upload" />

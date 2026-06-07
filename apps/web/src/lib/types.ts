@@ -224,6 +224,47 @@ export type RuntimeHealth = {
   items: RuntimeHealthItem[];
 };
 
+export type DiagnosticsLogStatus = "available" | "empty" | "degraded";
+
+export type DiagnosticsLogCategory = {
+  id: string;
+  label: string;
+  status: DiagnosticsLogStatus;
+  entry_count: number;
+  latest_message: string;
+};
+
+export type DiagnosticsRecentError = {
+  source: string;
+  episode_id: string | null;
+  message: string;
+  created_at: string | null;
+};
+
+export type DiagnosticsSettingSnapshot = {
+  configured: boolean;
+  value: string | null;
+  redacted: boolean;
+};
+
+export type DiagnosticsStatus = {
+  generated_at: string;
+  summary: {
+    health_total: number;
+    health_ready: number;
+    health_missing: number;
+    health_degraded: number;
+    health_invalid: number;
+    recent_error_count: number;
+    report_file_count: number;
+  };
+  log_categories: DiagnosticsLogCategory[];
+  recent_errors: DiagnosticsRecentError[];
+  settings_snapshot: Record<string, DiagnosticsSettingSnapshot>;
+  report_files: string[];
+  excluded_items: string[];
+};
+
 export type PendingVideo = {
   file_name: string;
   path: string;
