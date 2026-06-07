@@ -649,8 +649,8 @@ def _jianying_state(episode: Episode) -> dict[str, object]:
             "status": "draft_ready",
             "package_name": episode.draft_package_name,
             "package_path": episode.draft_package_path,
-            "auto_imported": True,
-            "message": "已生成剪映素材包，并已自动尝试导入剪映草稿箱。",
+            "auto_imported": False,
+            "message": "已生成剪映素材包，等待在草稿页确认轨道结构后导入。",
         }
     if episode.video_processed_file_name:
         return {
@@ -658,7 +658,7 @@ def _jianying_state(episode: Episode) -> dict[str, object]:
             "package_name": None,
             "package_path": None,
             "auto_imported": False,
-            "message": "剪辑计划可复核，确认后会生成并导入剪映草稿。",
+            "message": "剪辑计划可复核，确认后会生成剪映草稿素材包。",
         }
     return {
         "status": "not_ready",

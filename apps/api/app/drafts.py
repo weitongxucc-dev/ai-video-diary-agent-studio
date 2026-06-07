@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import textwrap
@@ -23,6 +23,11 @@ from app.asr import (
     transcription_to_srt,
 )
 from app.config import Settings
+from app.draft_templates import build_draft_template_manifest
+from app.jianying_template_writer import (
+    add_legacy_main_video_segments,
+    add_legacy_template_tracks,
+)
 from app.models import Episode, ScriptPackage
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
@@ -36,6 +41,12 @@ class DraftAsset:
     import_status: str | None = None
     import_message: str | None = None
     draft_path: str | None = None
+    template_id: str | None = None
+    template_name: str | None = None
+    track_count: int | None = None
+    effect_count: int | None = None
+    track_preview: list[str] = field(default_factory=list)
+    effect_preview: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -140,6 +151,11 @@ class DraftWorkspace:
         package_dir = self.draft_output_path / package_name
         package_dir.mkdir(parents=True, exist_ok=False)
         artifacts = self._write_script_artifacts(package_dir, episode, video)
+        template_effects = build_draft_template_manifest(
+            episode=episode,
+            artifacts=artifacts,
+            video_path=video.path,
+        )
 
         manifest = {
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -151,6 +167,7 @@ class DraftWorkspace:
             },
             "episode": self._episode_summary(episode),
             "artifacts": artifacts,
+            "template_effects": template_effects,
             "draft_tool": asdict(self.draft_tool_status()),
             "jianying_import": {
                 "root_path": str(self.jianying_root_path),
@@ -380,6 +397,7 @@ class DraftWorkspace:
             VideoSegment,
             trange,
         )
+        import pyJianYingDraft as draft_api  # type: ignore
 
         video_path = manifest["video"]["path"]
         draft_name = str(manifest["package_name"])
@@ -398,16 +416,34 @@ class DraftWorkspace:
                 fps=30,
                 allow_replace=False,
             )
-            script.add_track(TrackType.video)
+            try:
+                script.add_track(TrackType.video, "主视频")
+            except NameError:
+                pass
             material = VideoMaterial(video_path)
             duration = self._legacy_video_segment_duration_microseconds(
                 Path(video_path),
                 material,
             )
-            script.add_segment(VideoSegment(material, trange(0, duration)))
+            add_legacy_main_video_segments(
+                script,
+                material,
+                duration,
+                manifest,
+                draft_api,
+                trange,
+                VideoSegment,
+            )
             subtitle_path = manifest.get("artifacts", {}).get("subtitle_path")
             if subtitle_path:
-                script.import_srt(subtitle_path, "subtitle")
+                script.import_srt(subtitle_path, "字幕")
+            add_legacy_template_tracks(
+                script,
+                manifest,
+                duration,
+                draft_api,
+                trange,
+            )
             script.save()
 
             staging_path = staging_root / draft_name
@@ -698,6 +734,8 @@ class DraftWorkspace:
         import_result = manifest.get("jianying_import", {})
         if not isinstance(import_result, dict):
             return asset
+        template_effects = manifest.get("template_effects", {})
+        template_summary = self._template_summary(template_effects)
         return DraftAsset(
             file_name=asset.file_name,
             path=asset.path,
@@ -714,7 +752,45 @@ class DraftWorkspace:
             draft_path=str(import_result["draft_path"])
             if import_result.get("draft_path")
             else None,
+            **template_summary,
         )
+
+    def _template_summary(self, template_effects: object) -> dict[str, object]:
+        if not isinstance(template_effects, dict):
+            return {}
+        tracks = template_effects.get("tracks")
+        effects = template_effects.get("effects")
+        track_preview = self._track_preview(tracks)
+        effect_preview = [
+            str(effect["label"])
+            for effect in effects
+            if isinstance(effect, dict) and effect.get("label")
+        ][:10] if isinstance(effects, list) else []
+        return {
+            "template_id": str(template_effects["template_id"])
+            if template_effects.get("template_id")
+            else None,
+            "template_name": str(template_effects["template_name"])
+            if template_effects.get("template_name")
+            else None,
+            "track_count": len(tracks) if isinstance(tracks, list) else None,
+            "effect_count": len(effects) if isinstance(effects, list) else None,
+            "track_preview": track_preview,
+            "effect_preview": effect_preview,
+        }
+
+    def _track_preview(self, tracks: object) -> list[str]:
+        if not isinstance(tracks, list):
+            return []
+        preview: list[str] = []
+        for track in tracks[:6]:
+            if not isinstance(track, dict):
+                continue
+            number = track.get("number")
+            label = track.get("label")
+            if number and label:
+                preview.append(f"轨道 {number}：{label}")
+        return preview
 
     def _package_dirs(self) -> list[Path]:
         if not self.draft_output_path.exists() or not self.draft_output_path.is_dir():

@@ -437,6 +437,32 @@ if (!typesFile.includes("subtitle_path") || !typesFile.includes("cover_path")) {
   failures.push("DraftPackage types must expose generated subtitle and cover paths.");
 }
 
+for (const required of ["template_id", "template_name", "track_preview", "effect_preview"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`DraftAsset types must expose Jianying template preview field ${required}.`);
+  }
+}
+
+for (const required of ["剪映轨道结构", "基础模板元素", "track_preview", "effect_preview", "标题卡", "章节字幕条", "关键词高亮", "背景音乐"]) {
+  if (!draftPage.includes(required)) {
+    failures.push(`/draft must show Jianying template preview ${required}.`);
+  }
+}
+
+for (const required of [".draft-template-preview", ".draft-track-preview", ".draft-effect-chip"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define Jianying template preview surface ${required}.`);
+  }
+}
+
+const draftTrackPreviewBlock = css.slice(
+  css.indexOf(".draft-track-preview {"),
+  css.indexOf(".draft-track-preview li"),
+);
+if (draftTrackPreviewBlock.includes("max-height") || draftTrackPreviewBlock.includes("overflow: hidden")) {
+  failures.push("Draft track preview must not crop the required six Jianying tracks.");
+}
+
 if (!actionsFile.includes("updateRuntimeSettingsAction")) {
   failures.push("Server actions must expose a runtime settings update action.");
 }
@@ -483,6 +509,20 @@ if (!actionsFile.includes("markPublishedAction")) {
 for (const required of ["markPublishedAction", "publish_url", "play_count", "feedback_reason"]) {
   if (!draftPage.includes(required)) {
     failures.push(`/draft must include publish feedback field/action ${required}.`);
+  }
+}
+
+if (
+  draftPage.includes("生成并导入") ||
+  draftPage.includes("2 自动导入剪映") ||
+  draftPage.includes("已自动导入")
+) {
+  failures.push("/draft must show template structure before import, not a create-and-import flow.");
+}
+
+for (const required of ["生成素材包", "确认轨道结构", "确认导入剪映"]) {
+  if (!draftPage.includes(required)) {
+    failures.push(`/draft must expose pre-import confirmation copy ${required}.`);
   }
 }
 

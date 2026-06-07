@@ -568,6 +568,12 @@ class DraftAssetResponse(BaseModel):
     import_status: str | None = None
     import_message: str | None = None
     draft_path: str | None = None
+    template_id: str | None = None
+    template_name: str | None = None
+    track_count: int | None = None
+    effect_count: int | None = None
+    track_preview: list[str] = Field(default_factory=list)
+    effect_preview: list[str] = Field(default_factory=list)
 
 
 class DraftEnvironmentResponse(BaseModel):

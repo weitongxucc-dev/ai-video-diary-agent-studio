@@ -65,6 +65,101 @@ def test_draft_package_creates_script_subtitle_and_cover_artifacts(tmp_path):
         assert cover.size == (1200, 900)
 
 
+def test_draft_package_manifest_includes_template_track_preview(tmp_path):
+    video_output = tmp_path / "processed"
+    draft_output = tmp_path / "drafts"
+    video_output.mkdir()
+    (video_output / "tool_review.mp4").write_bytes(b"processed video")
+    episode = Episode(
+        id="ep_tool_review",
+        day_number=3,
+        episode_date=date(2026, 6, 8),
+        status=EpisodeStatus.SCRIPT_READY,
+        content_template_id="tool_review",
+        script=ScriptPackage(
+            id="script_tool_review",
+            hook="结论先讲，这个 AI 工具能省粗剪时间，但不能替代审美判断。",
+            sections=[
+                ScriptSection("s1", "结论", 20, "适合标准化口播，不适合复杂叙事。"),
+                ScriptSection("s2", "实测", 40, "字幕、封面和 B-roll 插入点都需要可检查。"),
+            ],
+            title_options=["AI 粗剪工具，真实省时间吗？"],
+            cover_copy="AI粗剪工具\n真实测评",
+            publish_copy="今天测一个真实粗剪工作流。",
+            comment_prompt="你会把粗剪交给 AI 吗？",
+        ),
+    )
+    workspace = DraftWorkspace(
+        Settings(video_output_path=str(video_output), draft_output_path=str(draft_output))
+    )
+
+    package = workspace.create_package("tool_review.mp4", episode)
+
+    manifest = json.loads(Path(package.manifest_path).read_text(encoding="utf-8"))
+    template_effects = manifest["template_effects"]
+    assert template_effects["content_template_id"] == "tool_review"
+    assert template_effects["template_id"] == "tool_review"
+    assert [track["label"] for track in template_effects["tracks"]] == [
+        "主视频",
+        "字幕",
+        "标题贴纸",
+        "关键词高亮",
+        "背景音乐",
+        "封面",
+    ]
+    assert {effect["kind"] for effect in template_effects["effects"]} >= {
+        "title_card",
+        "chapter_bar",
+        "keyword_highlight",
+        "background_music",
+    }
+    assert template_effects["import_preview"][0]["track"] == "轨道 1：主视频"
+
+
+def test_draft_package_status_exposes_template_preview(tmp_path):
+    video_output = tmp_path / "processed"
+    draft_output = tmp_path / "drafts"
+    video_output.mkdir()
+    (video_output / "tool_review.mp4").write_bytes(b"processed video")
+    episode = Episode(
+        id="ep_tool_review",
+        day_number=3,
+        episode_date=date(2026, 6, 8),
+        status=EpisodeStatus.SCRIPT_READY,
+        content_template_id="tool_review",
+        script=ScriptPackage(
+            id="script_tool_review",
+            hook="结论先讲，这个 AI 工具能省粗剪时间。",
+            sections=[ScriptSection("s1", "结论", 20, "适合标准化口播。")],
+            title_options=["AI 粗剪工具，真实省时间吗？"],
+            cover_copy="AI粗剪工具\n真实测评",
+            publish_copy="今天测一个真实粗剪工作流。",
+            comment_prompt="你会把粗剪交给 AI 吗？",
+        ),
+    )
+    workspace = DraftWorkspace(
+        Settings(video_output_path=str(video_output), draft_output_path=str(draft_output))
+    )
+
+    workspace.create_package("tool_review.mp4", episode)
+    package_asset = workspace.packages()[0]
+
+    assert package_asset.template_id == "tool_review"
+    assert package_asset.template_name == "AI 工具测评剪映模板"
+    assert package_asset.track_count == 6
+    assert package_asset.effect_count == 10
+    assert package_asset.track_preview == [
+        "轨道 1：主视频",
+        "轨道 2：字幕",
+        "轨道 3：标题贴纸",
+        "轨道 4：关键词高亮",
+        "轨道 5：背景音乐",
+        "轨道 6：封面",
+    ]
+    assert "标题卡" in package_asset.effect_preview
+    assert "背景音乐音量" in package_asset.effect_preview
+
+
 class FakeASRTranscriber:
     configured = True
 
@@ -402,13 +497,15 @@ def test_legacy_draft_writer_caps_segment_to_material_duration(tmp_path, monkeyp
             self.root = root
             self.name = name
 
-        def add_track(self, track_type) -> None:
+        def add_track(self, track_type, track_name=None, **kwargs) -> None:
             captured["track_type"] = track_type
+            captured["track_name"] = track_name
 
-        def add_segment(self, segment) -> None:
+        def add_segment(self, segment, track_name=None) -> None:
             captured["segment"] = segment
+            captured["segment_track_name"] = track_name
 
-        def import_srt(self, subtitle_path, track_name) -> None:
+        def import_srt(self, subtitle_path, track_name, **kwargs) -> None:
             captured["subtitle"] = (subtitle_path, track_name)
 
         def save(self) -> None:
@@ -467,6 +564,212 @@ def test_legacy_draft_writer_caps_segment_to_material_duration(tmp_path, monkeyp
     )
 
     assert captured["trange"] == (0, 264_134_000)
+    assert captured["track_name"] == "主视频"
+    assert captured["segment_track_name"] == "主视频"
+
+
+def test_legacy_draft_writer_adds_template_text_cover_and_audio_tracks(
+    tmp_path,
+    monkeypatch,
+):
+    video_path = tmp_path / "talk_preview.mp4"
+    video_path.write_bytes(b"video")
+    cover_path = tmp_path / "cover.png"
+    Image.new("RGB", (1200, 900), "#2563eb").save(cover_path)
+    subtitle_path = tmp_path / "subtitle.srt"
+    subtitle_path.write_text("1\n00:00:00,000 --> 00:00:02,000\n字幕\n", encoding="utf-8")
+    episode = Episode(
+        id="ep_tool_review",
+        day_number=3,
+        episode_date=date(2026, 6, 8),
+        status=EpisodeStatus.SCRIPT_READY,
+        content_template_id="tool_review",
+        script=ScriptPackage(
+            id="script_tool_review",
+            hook="结论先讲，这个 AI 工具能省粗剪时间。",
+            sections=[ScriptSection("s1", "结论", 20, "适合标准化口播。")],
+            title_options=["AI 粗剪工具，真实省时间吗？"],
+            cover_copy="AI粗剪工具\n真实测评",
+            publish_copy="今天测一个真实粗剪工作流。",
+            comment_prompt="你会把粗剪交给 AI 吗？",
+        ),
+    )
+    workspace = DraftWorkspace(Settings())
+    template_effects = {
+        "content_template_id": "tool_review",
+        "template_id": "tool_review",
+        "template_name": "AI 工具测评剪映模板",
+        "tracks": [
+            {"number": 1, "label": "主视频"},
+            {"number": 2, "label": "字幕"},
+            {"number": 3, "label": "标题贴纸"},
+            {"number": 4, "label": "关键词高亮"},
+            {"number": 5, "label": "背景音乐"},
+            {"number": 6, "label": "封面"},
+        ],
+        "effects": [
+            {"kind": "title_card", "label": "标题卡", "payload": {"text": "AI 粗剪工具，真实省时间吗？"}},
+            {"kind": "chapter_bar", "label": "章节字幕条", "payload": {"chapters": ["结论"]}},
+            {"kind": "keyword_highlight", "label": "关键词高亮", "payload": {"keywords": ["AI 粗剪工具", "结论"]}},
+            {"kind": "key_sentence_sticker", "label": "重点句大字贴纸", "payload": {"text": "结论先讲，这个 AI 工具能省粗剪时间。"}},
+            {"kind": "cover", "label": "封面", "payload": {"asset_ref": str(cover_path)}},
+            {"kind": "b_roll_insert", "label": "B-roll 插入点", "payload": {"insert_points": ["结论"]}},
+            {"kind": "transition", "label": "简单转场", "payload": {"style": "章节硬切"}},
+            {"kind": "background_music", "label": "背景音乐音量", "payload": {"volume_db": -20}},
+            {"kind": "intro", "label": "片头", "payload": {"text": "结论先行"}},
+            {"kind": "outro", "label": "片尾", "payload": {"text": "你会把粗剪交给 AI 吗？"}},
+        ],
+    }
+    captured: dict[str, list] = {"tracks": [], "segments": [], "subtitles": []}
+
+    class FakeDraftFolder:
+        def __init__(self, root: str) -> None:
+            self.root = Path(root)
+
+        def create_draft(self, name, width, height, fps, allow_replace):
+            return FakeScript(self.root, name)
+
+    class FakeTrackType:
+        video = "video"
+        text = "text"
+        audio = "audio"
+
+    class FakeVideoMaterial:
+        def __init__(self, path: str, material_name=None) -> None:
+            self.path = path
+            self.material_name = material_name
+            self.duration = 12_000_000
+
+    class FakeVideoSegment:
+        def __init__(self, material, timerange, **kwargs) -> None:
+            self.material = material
+            self.timerange = timerange
+            self.kwargs = kwargs
+            self.transition = None
+
+        def add_background_filling(self, *args, **kwargs):
+            return self
+
+        def add_transition(self, transition_type, **kwargs):
+            self.transition = (transition_type, kwargs)
+            return self
+
+    class FakeTextSegment:
+        def __init__(self, text, timerange, **kwargs) -> None:
+            self.text = text
+            self.timerange = timerange
+            self.kwargs = kwargs
+
+        def add_animation(self, *args, **kwargs):
+            return self
+
+    class FakeTextStyle:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeTextBackground:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeTextBorder:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeClipSettings:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeTextIntro:
+        向上滑动 = "text_intro_up"
+
+    class FakeTextOutro:
+        渐隐 = "text_outro_fade"
+
+    class FakeTransitionType:
+        叠加 = "transition_overlay"
+
+    class FakeScript:
+        def __init__(self, root: Path, name: str) -> None:
+            self.root = root
+            self.name = name
+
+        def add_track(self, track_type, track_name=None, **kwargs) -> None:
+            captured["tracks"].append((track_type, track_name, kwargs))
+
+        def add_segment(self, segment, track_name=None) -> None:
+            captured["segments"].append((segment.__class__.__name__, track_name, segment))
+
+        def import_srt(self, subtitle_path, track_name, **kwargs) -> None:
+            captured["subtitles"].append((subtitle_path, track_name))
+
+        def save(self) -> None:
+            draft_path = self.root / self.name
+            draft_path.mkdir(parents=True)
+            (draft_path / "draft_content.json").write_text(
+                json.dumps({"duration": 12_000_000, "materials": {}, "tracks": []}),
+                encoding="utf-8",
+            )
+            (draft_path / "draft_meta_info.json").write_text("{}", encoding="utf-8")
+
+    def fake_trange(start: int, duration: int):
+        return {"start": start, "duration": duration}
+
+    fake_module = ModuleType("pyJianYingDraft")
+    fake_module.DraftFolder = FakeDraftFolder
+    fake_module.TrackType = FakeTrackType
+    fake_module.VideoMaterial = FakeVideoMaterial
+    fake_module.VideoSegment = FakeVideoSegment
+    fake_module.TextSegment = FakeTextSegment
+    fake_module.TextStyle = FakeTextStyle
+    fake_module.TextBackground = FakeTextBackground
+    fake_module.TextBorder = FakeTextBorder
+    fake_module.ClipSettings = FakeClipSettings
+    fake_module.TextIntro = FakeTextIntro
+    fake_module.TextOutro = FakeTextOutro
+    fake_module.TransitionType = FakeTransitionType
+    fake_module.trange = fake_trange
+    monkeypatch.setitem(__import__("sys").modules, "pyJianYingDraft", fake_module)
+    monkeypatch.setattr(workspace, "_video_duration_microseconds", lambda path: 12_000_000)
+
+    workspace._write_legacy_jianying_draft(
+        tmp_path / "package",
+        tmp_path / "jianying",
+        {
+            "package_name": "AI视频日记_测试模板轨道",
+            "video": {"path": str(video_path)},
+            "artifacts": {
+                "cover_path": str(cover_path),
+                "subtitle_path": str(subtitle_path),
+            },
+            "episode": {"id": episode.id},
+            "template_effects": template_effects,
+        },
+    )
+
+    track_names = [track_name for _, track_name, _ in captured["tracks"]]
+    assert "主视频" in track_names
+    assert "标题贴纸" in track_names
+    assert "关键词高亮" in track_names
+    assert "背景音乐" in track_names
+    assert "封面" in track_names
+    assert captured["subtitles"] == [(str(subtitle_path), "字幕")]
+    text_segments = [
+        segment
+        for class_name, _, segment in captured["segments"]
+        if class_name == "FakeTextSegment"
+    ]
+    assert any("AI 粗剪工具" in segment.text for segment in text_segments)
+    assert any("B-roll" in segment.text for segment in text_segments)
+    assert any(
+        class_name == "FakeVideoSegment" and track_name == "封面"
+        for class_name, track_name, _ in captured["segments"]
+    )
+    assert any(
+        class_name == "FakeVideoSegment"
+        and track_name == "主视频"
+        and segment.transition is not None
+        for class_name, track_name, segment in captured["segments"]
+    )
 
 
 def test_video_duration_probe_prefers_ffprobe_output(tmp_path, monkeypatch):

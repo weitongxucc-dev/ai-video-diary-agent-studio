@@ -226,6 +226,8 @@ def test_draft_package_endpoint_creates_real_manifest(tmp_path):
     assert manifest["video"]["file_name"] == "talk_preview.mp4"
     assert isinstance(manifest["draft_tool"]["available"], bool)
     assert "pyJianYingDraft" in manifest["draft_tool"]["checked_modules"]
+    assert manifest["jianying_import"]["status"] == "not_attempted"
+    assert body["status"] == "草稿素材包已生成，尚未写入剪映草稿箱"
 
 
 def test_draft_import_endpoint_uses_bridge_for_jianying_10_7(tmp_path):

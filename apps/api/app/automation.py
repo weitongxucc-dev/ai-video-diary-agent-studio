@@ -70,7 +70,7 @@ class AgentAutomationWorker:
             episode = self.workflow.run("bind_video", episode, video=video)
             processed = self.video_processor.process(video.file_name)
             episode = self.workflow.run("bind_processed_video", episode, video=processed)
-            package = self.draft_workspace.create_package_and_import_to_jianying(
+            package = self.draft_workspace.create_package(
                 video_file_name=processed.file_name,
                 episode=episode,
             )

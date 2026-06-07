@@ -604,7 +604,7 @@ def get_draft_status() -> DraftStatusResponse:
 @app.post("/api/drafts/package", response_model=DraftPackageResponse)
 def create_draft_package(request: DraftPackageRequest) -> DraftPackageResponse:
     try:
-        package = draft_workspace.create_package_and_import_to_jianying(
+        package = draft_workspace.create_package(
             video_file_name=request.video_file_name,
             episode=repo.today(),
         )
@@ -1083,7 +1083,7 @@ def _create_draft_from_voice_command(episode: Episode) -> Episode:
         episode.video_processed_file_name = confirmed_video["file_name"]
         episode.video_processed_path = confirmed_video["path"]
         episode = repo.save(episode)
-    package = draft_workspace.create_package_and_import_to_jianying(
+    package = draft_workspace.create_package(
         video_file_name=episode.video_processed_file_name,
         episode=episode,
     )
@@ -1253,7 +1253,7 @@ def _bind_processed_video_and_draft(episode_id: str, processed) -> None:
         get_episode_or_404(episode_id),
         video=processed,
     )
-    package = draft_workspace.create_package_and_import_to_jianying(
+    package = draft_workspace.create_package(
         video_file_name=processed.file_name,
         episode=episode,
     )
@@ -1292,7 +1292,7 @@ def _mark_video_job_stage(
 def _mark_video_job_completed(episode_id: str) -> None:
     episode = get_episode_or_404(episode_id)
     episode.video_job_status = VideoJobStatus.COMPLETED
-    episode.video_job_message = "视频已处理，并已自动尝试导入剪映草稿箱"
+    episode.video_job_message = "视频已处理，并已生成待确认的剪映草稿素材包"
     episode.video_job_error = None
     episode.video_job_finished_at = utc_now()
     repo.save(episode)
@@ -1323,7 +1323,7 @@ def create_episode_draft(episode_id: str) -> EpisodeResponse:
             episode.video_processed_file_name = confirmed_video["file_name"]
             episode.video_processed_path = confirmed_video["path"]
             episode = repo.save(episode)
-        package = draft_workspace.create_package_and_import_to_jianying(
+        package = draft_workspace.create_package(
             video_file_name=episode.video_processed_file_name,
             episode=episode,
         )

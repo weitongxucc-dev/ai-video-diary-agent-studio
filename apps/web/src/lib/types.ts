@@ -508,6 +508,12 @@ export type DraftAsset = {
   import_status: string | null;
   import_message: string | null;
   draft_path: string | null;
+  template_id: string | null;
+  template_name: string | null;
+  track_count: number | null;
+  effect_count: number | null;
+  track_preview: string[];
+  effect_preview: string[];
 };
 
 export type DraftEnvironment = {

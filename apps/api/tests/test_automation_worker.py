@@ -198,6 +198,6 @@ def test_automation_worker_processes_bound_episode_video_to_draft(tmp_path, monk
             encoding="utf-8",
         )
     )
-    assert manifest["jianying_import"]["status"] == "imported"
-    assert manifest["jianying_import"]["draft_path"] == str(imported_paths[0])
+    assert manifest["jianying_import"]["status"] == "not_attempted"
+    assert imported_paths == []
     assert updated.status == EpisodeStatus.DRAFT_READY

@@ -8,7 +8,7 @@ import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
 import { getDraftStatus, getTodayEpisode } from "@/lib/api";
-import type { DraftStatus, Episode } from "@/lib/types";
+import type { DraftAsset, DraftStatus, Episode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +46,58 @@ function formatFileSize(sizeBytes: number): string {
   return `${(sizeBytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const BASE_TEMPLATE_EFFECT_LABELS = [
+  "标题卡",
+  "章节字幕条",
+  "关键词高亮",
+  "重点句大字贴纸",
+  "封面",
+  "B-roll 插入点",
+  "简单转场",
+  "背景音乐",
+  "片头",
+  "片尾",
+];
+
+function DraftTemplatePreview({ item }: { item: DraftAsset }) {
+  const hasPreview =
+    item.template_id !== null ||
+    item.track_preview.length > 0 ||
+    item.effect_preview.length > 0;
+  if (!hasPreview) {
+    return null;
+  }
+
+  const effects =
+    item.effect_preview.length > 0
+      ? item.effect_preview
+      : BASE_TEMPLATE_EFFECT_LABELS;
+
+  return (
+    <div className="draft-template-preview">
+      <div className="draft-template-head">
+        <strong>剪映轨道结构</strong>
+        <span>{item.template_name ?? item.template_id ?? "模板预览"}</span>
+      </div>
+      <ol className="draft-track-preview">
+        {item.track_preview.slice(0, 6).map((track) => (
+          <li key={track}>{track}</li>
+        ))}
+      </ol>
+      <div className="draft-effect-list">
+        <strong>基础模板元素</strong>
+        <div className="draft-effect-chips">
+          {effects.slice(0, 10).map((effect) => (
+            <span className="draft-effect-chip" key={effect}>
+              {effect}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default async function DraftPage() {
   const { draft, episode, offline } = await loadDraftPage();
   const env = draft?.environment;
@@ -72,7 +124,7 @@ export default async function DraftPage() {
                 {offline
                   ? "暂时无法连接本地 API。"
                   : bridgeReady
-                    ? "视频剪好后会自动生成剪映兼容草稿并登记到草稿箱，仍需打开剪映人工验证。"
+                    ? "视频剪好后先生成剪映素材包，确认轨道结构后再写入草稿箱。"
                     : toolAvailable
                       ? "已安装草稿工具，请先配置剪映草稿目录。"
                     : "当前未检测到剪映草稿工具，只生成真实可追溯的本地素材包。"}
@@ -89,12 +141,12 @@ export default async function DraftPage() {
               <span>从预处理视频生成可追溯素材。</span>
             </div>
             <div className="draft-flow-step">
-              <strong>2 自动导入剪映</strong>
-              <span>剪好后自动写入草稿箱，失败时保留重试。</span>
+              <strong>2 确认轨道结构</strong>
+              <span>先看主视频、字幕、标题贴纸、关键词和封面轨道。</span>
             </div>
             <div className="draft-flow-step">
-              <strong>3 打开剪映验证</strong>
-              <span>刷新草稿箱，人工确认可编辑。</span>
+              <strong>3 导入剪映验证</strong>
+              <span>确认后写入草稿箱，再打开剪映人工验证。</span>
             </div>
           </div>
 
@@ -110,7 +162,7 @@ export default async function DraftPage() {
                 <form action={createDraftPackageAction}>
                   <input name="video_file_name" type="hidden" value={video.file_name} />
                   <button className="pixel-button" type="submit">
-                    生成并导入
+                    生成素材包
                   </button>
                 </form>
               </article>
@@ -139,14 +191,15 @@ export default async function DraftPage() {
                     <code>{item.path}</code>
                     {item.import_message ? <p>{item.import_message}</p> : null}
                     {item.draft_path ? <code>{item.draft_path}</code> : null}
+                    <DraftTemplatePreview item={item} />
                   </div>
                   {item.import_status === "imported" ? (
-                    <span className="step-state done">已自动导入</span>
+                    <span className="step-state done">已导入</span>
                   ) : (
                     <form action={importDraftPackageAction}>
                       <input name="package_name" type="hidden" value={item.file_name} />
                       <button className="pixel-button secondary" type="submit">
-                        重试导入剪映
+                        {item.import_status === "not_attempted" ? "确认导入剪映" : "重试导入剪映"}
                       </button>
                     </form>
                   )}
@@ -175,14 +228,15 @@ export default async function DraftPage() {
                         </span>
                         <code>{item.path}</code>
                         {item.draft_path ? <code>{item.draft_path}</code> : null}
+                        <DraftTemplatePreview item={item} />
                       </div>
                       {item.import_status === "imported" ? (
-                        <span className="step-state done">已自动导入</span>
+                        <span className="step-state done">已导入</span>
                       ) : (
                         <form action={importDraftPackageAction}>
                           <input name="package_name" type="hidden" value={item.file_name} />
                           <button className="pixel-button secondary" type="submit">
-                            重试导入剪映
+                            {item.import_status === "not_attempted" ? "确认导入剪映" : "重试导入剪映"}
                           </button>
                         </form>
                       )}
@@ -313,7 +367,7 @@ export default async function DraftPage() {
             <h2>草稿工具</h2>
             <p>{toolAvailable ? env?.draft_tool.tool_name : "未安装"}</p>
             <code>{env?.draft_tool.checked_modules.join(" / ") ?? "--"}</code>
-            <span>{env?.editable_draft_supported ? "自动兼容桥接，需人工验证" : "当前只能生成素材包 fallback"}</span>
+            <span>{env?.editable_draft_supported ? "兼容桥接可用，需确认导入" : "当前只能生成素材包 fallback"}</span>
           </div>
           <div className="pixel-card side-note">
             <h2>剪映目录</h2>
