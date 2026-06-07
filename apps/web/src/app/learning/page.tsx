@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { revertFeedbackAction } from "@/app/actions";
+import {
+  confirmPreferenceAction,
+  deletePreferenceAction,
+  disablePreferenceAction,
+  restorePreferenceAction,
+  revertFeedbackAction,
+} from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
@@ -53,6 +59,8 @@ export default async function LearningPage() {
   const down = summary?.down_count ?? 0;
   const recentEvents = summary?.recent_events ?? [];
   const preferenceItems = preferences?.preferences ?? [];
+  const longTermPreferences = preferences?.long_term_preferences ?? [];
+  const candidates = preferences?.candidates ?? [];
 
   return (
     <AppShell>
@@ -80,6 +88,106 @@ export default async function LearningPage() {
             <MetricCard icon="thumb-down" value={String(down)} label="踩" tone="orange" />
             <MetricCard icon="spark" value={String(total)} label="有效反馈" tone="purple" />
           </div>
+
+          <section className="workspace-subsection" data-contract="long_term_preferences">
+            <div className="script-section-header compact">
+              <div>
+                <span className="section-kicker">长期记忆</span>
+                <strong>长期偏好记忆</strong>
+              </div>
+            </div>
+            <div className="preference-control-grid">
+              {longTermPreferences.length > 0 ? (
+                longTermPreferences.map((preference) => (
+                  <article
+                    className={`preference-memory-card${preference.enabled ? "" : " disabled"}${preference.deleted ? " deleted" : ""}`}
+                    key={preference.id}
+                  >
+                    <div>
+                      <PixelIcon name={preference.kind === "prefer" ? "thumb-up" : "thumb-down"} />
+                      <strong>{preference.label}：{preference.content}</strong>
+                    </div>
+                    <p>
+                      影响范围 {preference.scope} · 来源 {preference.source_event_ids.length} 条 ·
+                      置信度 {Math.round(preference.confidence * 100)}%
+                    </p>
+                    <span>{preference.deleted ? "已删除" : preference.enabled ? "启用中" : "已禁用"}</span>
+                    <div className="preference-actions">
+                      {!preference.deleted && preference.enabled ? (
+                        <form action={disablePreferenceAction}>
+                          <input name="preference_id" type="hidden" value={preference.id} />
+                          <button className="pixel-button secondary compact" type="submit">
+                            禁用
+                          </button>
+                        </form>
+                      ) : null}
+                      {!preference.deleted && !preference.enabled ? (
+                        <form action={restorePreferenceAction}>
+                          <input name="preference_id" type="hidden" value={preference.id} />
+                          <button className="pixel-button secondary compact" type="submit">
+                            恢复
+                          </button>
+                        </form>
+                      ) : null}
+                      {!preference.deleted ? (
+                        <form action={deletePreferenceAction}>
+                          <input name="preference_id" type="hidden" value={preference.id} />
+                          <button className="pixel-button danger compact" type="submit">
+                            删除
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="workspace-empty compact">
+                  <PixelIcon name="spark" />
+                  <strong>还没有确认的长期偏好</strong>
+                  <p>把下方候选确认后，Agent 会在下一次生成时优先读取。</p>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="workspace-subsection" data-contract="candidates">
+            <div className="script-section-header compact">
+              <div>
+                <span className="section-kicker">候选记忆</span>
+                <strong>候选偏好</strong>
+              </div>
+            </div>
+            <div className="preference-candidate-grid">
+              {candidates.map((candidate) => (
+                <article className="preference-memory-card candidate" key={`${candidate.kind}-${candidate.content}`}>
+                  <div>
+                    <PixelIcon name={candidate.kind === "prefer" ? "thumb-up" : "thumb-down"} />
+                    <strong>{candidate.label}：{candidate.content}</strong>
+                  </div>
+                  <p>
+                    影响范围 {candidate.scope} · 证据 {candidate.evidence_count} 条 ·
+                    置信度 {Math.round(candidate.confidence * 100)}%
+                  </p>
+                  {candidate.confirmed ? (
+                    <span>已进入长期记忆</span>
+                  ) : (
+                    <form action={confirmPreferenceAction} className="preference-confirm-form">
+                      <input name="kind" type="hidden" value={candidate.kind} />
+                      <input name="content" type="hidden" value={candidate.content} />
+                      <input name="confidence" type="hidden" value={candidate.confidence} />
+                      <input name="scope" type="hidden" value={candidate.scope} />
+                      {candidate.source_event_ids.map((eventId) => (
+                        <input key={eventId} name="source_event_id" type="hidden" value={eventId} />
+                      ))}
+                      <button className="pixel-button compact" type="submit">
+                        确认进入长期记忆
+                      </button>
+                    </form>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
 
           <div className="workspace-list">
             {preferenceItems.map((preference) => (

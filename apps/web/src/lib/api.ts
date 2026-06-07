@@ -15,6 +15,7 @@ import type {
   KnowledgeNote,
   PendingVideo,
   Preferences,
+  PreferenceKind,
   ProcessedVideo,
   RetakeReport,
   RuntimeHealth,
@@ -173,6 +174,37 @@ export function getFeedbackSummary(): Promise<FeedbackSummary> {
 
 export function getPreferences(): Promise<Preferences> {
   return request<Preferences>("/api/preferences");
+}
+
+export function confirmPreference(payload: {
+  kind: PreferenceKind;
+  content: string;
+  source_event_ids: string[];
+  confidence: number;
+  scope: string;
+}): Promise<Preferences> {
+  return request<Preferences>("/api/preferences/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function disablePreference(preferenceId: string): Promise<Preferences> {
+  return request<Preferences>(`/api/preferences/${preferenceId}/disable`, {
+    method: "POST",
+  });
+}
+
+export function restorePreference(preferenceId: string): Promise<Preferences> {
+  return request<Preferences>(`/api/preferences/${preferenceId}/restore`, {
+    method: "POST",
+  });
+}
+
+export function deletePreference(preferenceId: string): Promise<Preferences> {
+  return request<Preferences>(`/api/preferences/${preferenceId}/delete`, {
+    method: "POST",
+  });
 }
 
 export function getCreatorProfile(): Promise<CreatorProfile> {

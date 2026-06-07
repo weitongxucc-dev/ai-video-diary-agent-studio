@@ -404,9 +404,39 @@ export type PreferenceItem = {
   confidence: number;
 };
 
+export type PreferenceKind = "prefer" | "avoid";
+
+export type PreferenceCandidate = {
+  kind: PreferenceKind;
+  label: string;
+  content: string;
+  source_event_ids: string[];
+  evidence_count: number;
+  confidence: number;
+  scope: string;
+  confirmed: boolean;
+};
+
+export type LongTermPreference = {
+  id: string;
+  kind: PreferenceKind;
+  label: string;
+  content: string;
+  source_event_ids: string[];
+  confidence: number;
+  scope: string;
+  enabled: boolean;
+  deleted: boolean;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+};
+
 export type Preferences = {
   total_feedback_count: number;
   preferences: PreferenceItem[];
+  candidates: PreferenceCandidate[];
+  long_term_preferences: LongTermPreference[];
 };
 
 export type CreatorProfile = {

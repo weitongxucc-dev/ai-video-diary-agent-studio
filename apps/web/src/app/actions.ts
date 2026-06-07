@@ -4,8 +4,11 @@ import { redirect } from "next/navigation";
 import {
   approveScript,
   approveTopic,
+  confirmPreference,
   createEpisodeDraft,
   createDraftPackage,
+  deletePreference,
+  disablePreference,
   generateTopics,
   generateScript,
   ingestManualLink,
@@ -21,6 +24,7 @@ import {
   revertEditPlanSegmentDecision,
   revertEpisodeScriptVersion,
   revertFeedbackEvent,
+  restorePreference,
   sendFeedback,
   selectEpisodeContentTemplate,
   syncSourceItems,
@@ -33,6 +37,7 @@ import {
 import type {
   EditPlanSegmentDecisionAction,
   FeedbackValue,
+  PreferenceKind,
   RuntimeSettingsUpdate,
   ScriptPackage,
 } from "@/lib/types";
@@ -120,6 +125,14 @@ function optionalFeedbackValueField(
   }
 
   return value;
+}
+
+function preferenceKind(formData: FormData): PreferenceKind {
+  const kind = requiredString(formData, "kind");
+  if (kind !== "prefer" && kind !== "avoid") {
+    throw new Error("Invalid preference kind");
+  }
+  return kind;
 }
 
 function editPlanSegmentDecisionAction(
@@ -277,6 +290,34 @@ export async function revertFeedbackAction(formData: FormData) {
     feedbackEventId,
     optionalString(formData, "reason"),
   );
+  redirect("/learning");
+}
+
+export async function confirmPreferenceAction(formData: FormData) {
+  await confirmPreference({
+    kind: preferenceKind(formData),
+    content: requiredString(formData, "content"),
+    source_event_ids: formData
+      .getAll("source_event_id")
+      .filter((value): value is string => typeof value === "string"),
+    confidence: Number(requiredString(formData, "confidence")),
+    scope: requiredString(formData, "scope"),
+  });
+  redirect("/learning");
+}
+
+export async function disablePreferenceAction(formData: FormData) {
+  await disablePreference(requiredString(formData, "preference_id"));
+  redirect("/learning");
+}
+
+export async function restorePreferenceAction(formData: FormData) {
+  await restorePreference(requiredString(formData, "preference_id"));
+  redirect("/learning");
+}
+
+export async function deletePreferenceAction(formData: FormData) {
+  await deletePreference(requiredString(formData, "preference_id"));
   redirect("/learning");
 }
 

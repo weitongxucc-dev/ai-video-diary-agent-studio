@@ -3703,6 +3703,68 @@ textarea {
   min-width: 160px;
 }
 
+.preference-control-grid,
+.preference-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preference-memory-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+  padding: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.preference-memory-card.disabled {
+  background: var(--panel-quiet);
+}
+
+.preference-memory-card.deleted {
+  opacity: 0.72;
+}
+
+.preference-memory-card > div:first-child {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.preference-memory-card strong,
+.preference-memory-card p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preference-memory-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.preference-memory-card > span {
+  width: fit-content;
+  border: 2px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--blue);
+  padding: 3px 6px;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.preference-actions,
+.preference-confirm-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .settings-row code {
   color: var(--blue);
 }
@@ -4964,7 +5026,9 @@ textarea {
   .log-category-grid,
   .diagnostic-file-list,
   .setup-step-grid,
-  .setup-field-grid {
+  .setup-field-grid,
+  .preference-control-grid,
+  .preference-candidate-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -5158,7 +5222,9 @@ textarea {
   .recent-error-row,
   .setup-progress-panel,
   .setup-step-grid,
-  .setup-field-grid {
+  .setup-field-grid,
+  .preference-control-grid,
+  .preference-candidate-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

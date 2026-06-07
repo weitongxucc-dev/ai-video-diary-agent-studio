@@ -14,6 +14,7 @@ const files = {
   home: new URL("../src/app/page.tsx", import.meta.url),
   templates: new URL("../src/app/templates/page.tsx", import.meta.url),
   health: new URL("../src/app/health/page.tsx", import.meta.url),
+  learning: new URL("../src/app/learning/page.tsx", import.meta.url),
   video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
@@ -47,6 +48,7 @@ const [
   homePage,
   templatesPage,
   healthPage,
+  learningPage,
   videoPage,
   actionsFile,
   settingsPage,
@@ -287,6 +289,12 @@ if (!apiFile.includes("transcribeVoiceAudio")) {
   failures.push("API client must upload recorded voice audio for ASR.");
 }
 
+for (const required of ["confirmPreference", "disablePreference", "restorePreference", "deletePreference"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must expose long-term preference action ${required}.`);
+  }
+}
+
 if (!typesFile.includes("DiagnosticsStatus")) {
   failures.push("Types must expose DiagnosticsStatus.");
 }
@@ -295,12 +303,24 @@ if (!typesFile.includes("VoiceTranscription")) {
   failures.push("Types must expose VoiceTranscription.");
 }
 
+for (const required of ["PreferenceCandidate", "LongTermPreference"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`Types must expose ${required}.`);
+  }
+}
+
 if (!actionsFile.includes("selectContentTemplateAction")) {
   failures.push("Server actions must submit content template selection.");
 }
 
 if (!actionsFile.includes("redirect_to")) {
   failures.push("Server actions must let setup wizard return to /setup after saving.");
+}
+
+for (const required of ["confirmPreferenceAction", "disablePreferenceAction", "restorePreferenceAction", "deletePreferenceAction"]) {
+  if (!actionsFile.includes(required)) {
+    failures.push(`Server actions must expose long-term preference action ${required}.`);
+  }
 }
 
 for (const required of ["getContentTemplates", "selectContentTemplateAction", "tool_review", "tutorial_demo", "video_diary"]) {
@@ -338,6 +358,18 @@ if (!homePage.includes("setupRequired") || !homePage.includes("/setup")) {
 for (const required of [".setup-page", ".setup-step-grid", ".setup-step-card", ".setup-health-list"]) {
   if (!css.includes(required)) {
     failures.push(`globals.css must define setup wizard surface ${required}.`);
+  }
+}
+
+for (const required of ["long_term_preferences", "candidates", "确认进入长期记忆", "禁用", "恢复", "删除"]) {
+  if (!learningPage.includes(required)) {
+    failures.push(`/learning must expose long-term preference control ${required}.`);
+  }
+}
+
+for (const required of [".preference-control-grid", ".preference-memory-card", ".preference-candidate-grid"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define long-term preference surface ${required}.`);
   }
 }
 

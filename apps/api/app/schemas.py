@@ -458,9 +458,45 @@ class PreferenceItemResponse(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class PreferenceCandidateResponse(BaseModel):
+    kind: Literal["prefer", "avoid"]
+    label: str
+    content: str
+    source_event_ids: list[str]
+    evidence_count: int
+    confidence: float = Field(ge=0, le=1)
+    scope: str
+    confirmed: bool
+
+
+class LongTermPreferenceResponse(BaseModel):
+    id: str
+    kind: Literal["prefer", "avoid"]
+    label: str
+    content: str
+    source_event_ids: list[str]
+    confidence: float = Field(ge=0, le=1)
+    scope: str
+    enabled: bool
+    deleted: bool
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None
+
+
 class PreferencesResponse(BaseModel):
     total_feedback_count: int
     preferences: list[PreferenceItemResponse]
+    candidates: list[PreferenceCandidateResponse] = Field(default_factory=list)
+    long_term_preferences: list[LongTermPreferenceResponse] = Field(default_factory=list)
+
+
+class PreferenceConfirmRequest(BaseModel):
+    kind: Literal["prefer", "avoid"]
+    content: str = Field(min_length=1)
+    source_event_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    scope: str = "general"
 
 
 class CreatorProfileResponse(BaseModel):
