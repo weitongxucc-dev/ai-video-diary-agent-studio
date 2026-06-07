@@ -20,6 +20,19 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
         "settings.py": [
             '"/api/settings/runtime"',
         ],
+        "sources.py": [
+            '"/api/sources/items"',
+            '"/api/sources/sync"',
+            '"/api/sources/links"',
+        ],
+        "preferences.py": [
+            '"/api/feedback/summary"',
+            '"/api/preferences"',
+            '"/api/preferences/confirm"',
+            '"/api/preferences/{preference_id}/disable"',
+            '"/api/preferences/{preference_id}/restore"',
+            '"/api/preferences/{preference_id}/delete"',
+        ],
     }
 
     for module_name, route_literals in expected_modules.items():
@@ -30,3 +43,11 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
 
     assert "include_router" in main_source
     assert "get_app_context" in main_source
+
+
+def test_manual_source_items_state_is_not_owned_by_main_module():
+    main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+    context_source = (APP_ROOT / "routers" / "context.py").read_text(encoding="utf-8")
+
+    assert "manual_source_items:" not in main_source
+    assert "manual_source_items" in context_source

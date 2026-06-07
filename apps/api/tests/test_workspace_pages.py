@@ -10,6 +10,7 @@ from app.config import Settings
 from app.models import EpisodeStatus, FeedbackEvent, FeedbackValue, ScriptPackage, ScriptSection
 from app.repository import EpisodeRepository
 from app.services import EpisodeService
+from app.sources import TopicSourceItem
 from app.video import FfmpegVideoProcessor, VideoInbox
 
 
@@ -18,7 +19,7 @@ client = TestClient(main_module.app)
 
 @pytest.fixture(autouse=True)
 def reset_manual_sources():
-    main_module.manual_source_items = []
+    main_module.app_state.manual_source_items.clear()
 
 
 def test_knowledge_endpoint_lists_real_obsidian_notes(tmp_path):
@@ -106,7 +107,7 @@ def test_sources_links_endpoint_converts_url_to_material(monkeypatch):
 
         def fetch_items(self):
             return [
-                main_module.TopicSourceItem(
+                TopicSourceItem(
                     source_type="外链",
                     title="AI 产品观察",
                     ref=self.urls[0],

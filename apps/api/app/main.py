@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 import logging
 
 from fastapi import FastAPI, HTTPException, Request
@@ -29,7 +28,7 @@ from app.edit_plan import (
     safe_processed_video_path,
     update_edit_plan_segment_decision,
 )
-from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
+from app.external_sources import HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import LLMConfigurationError, LLMResponseError, script_generator_from_settings
 from app.models import (
@@ -44,15 +43,15 @@ from app.models import (
 )
 from app.preference_memory import (
     LongTermPreferenceRepository,
-    build_preference_candidates,
-    build_preference_memory,
     long_term_preference_events,
 )
 from app.repository import EpisodeRepository
 from app.routers import diagnostics as diagnostics_router
+from app.routers import preferences as preferences_router
 from app.routers import settings as settings_router
+from app.routers import sources as sources_router
 from app.routers import system as system_router
-from app.routers.context import AppContext
+from app.routers.context import AppContext, AppState
 from app.runtime_settings import is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
@@ -72,16 +71,10 @@ from app.schemas import (
     DraftStatusResponse,
     EpisodeResponse,
     FeedbackRequest,
-    FeedbackEventResponse,
     FeedbackRevertRequest,
-    FeedbackSummaryResponse,
     KnowledgeNoteResponse,
     MarkPublishedRequest,
-    ManualLinkRequest,
     PendingVideoResponse,
-    PreferencesResponse,
-    PreferenceConfirmRequest,
-    PreferenceItemResponse,
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
@@ -90,15 +83,13 @@ from app.schemas import (
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
-    SourceItemsResponse,
-    SourceItemResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
     VoiceTranscriptionResponse,
 )
 from app.services import EpisodeService
-from app.sources import ObsidianVault, TopicSourceItem
+from app.sources import ObsidianVault
 from app.topics import (
     TopicGenerationConfigurationError,
     TopicGenerationResponseError,
@@ -140,7 +131,7 @@ service = EpisodeService(
 workflow = LangGraphEpisodeWorkflow(service)
 video_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
-manual_source_items: list[TopicSourceItem] = []
+app_state = AppState()
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
@@ -268,7 +259,11 @@ def get_app_context() -> AppContext:
     return AppContext(
         settings=settings,
         repo=repo,
+        preference_repo=preference_repo,
         workflow=workflow,
+        manual_source_items=app_state.manual_source_items,
+        hermes_source_client_factory=HermesRadarSourceClient,
+        external_source_client_factory=HtmlPageSourceClient,
         runtime_env_path=runtime_env_path,
         reload_runtime_dependencies=_reload_runtime_dependencies,
     )
@@ -277,6 +272,8 @@ def get_app_context() -> AppContext:
 app.include_router(system_router.create_router(get_app_context))
 app.include_router(diagnostics_router.create_router(get_app_context))
 app.include_router(settings_router.create_router(get_app_context))
+app.include_router(sources_router.create_router(get_app_context))
+app.include_router(preferences_router.create_router(get_app_context))
 
 
 @app.get("/api/creator-profile", response_model=CreatorProfileResponse)
@@ -315,184 +312,6 @@ def get_knowledge_notes(q: str | None = None, limit: int = 40) -> list[Knowledge
         KnowledgeNoteResponse.model_validate(note, from_attributes=True)
         for note in notes[: max(1, min(limit, 100))]
     ]
-
-
-@app.get("/api/sources/items", response_model=SourceItemsResponse)
-def get_source_items() -> SourceItemsResponse:
-    items = [
-        *HermesRadarSourceClient(settings.hermes_radar_path).fetch_items(),
-        *manual_source_items,
-    ]
-    return _source_items_response(items)
-
-
-def _source_items_response(items: list[TopicSourceItem]) -> SourceItemsResponse:
-    counts = Counter(item.source_type for item in items)
-    return SourceItemsResponse(
-        items=[SourceItemResponse.model_validate(item, from_attributes=True) for item in items],
-        total_count=len(items),
-        source_counts=dict(counts),
-    )
-
-
-@app.post("/api/sources/sync", response_model=SourceItemsResponse)
-def sync_source_items() -> SourceItemsResponse:
-    items = [
-        *HermesRadarSourceClient(settings.hermes_radar_path).fetch_items(),
-        *manual_source_items,
-    ]
-    if settings.topic_source_urls:
-        try:
-            items.extend(HtmlPageSourceClient(settings.topic_source_urls).fetch_items())
-        except ExternalSourceResponseError:
-            pass
-    return _source_items_response(items)
-
-
-@app.post("/api/sources/links", response_model=SourceItemsResponse)
-def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
-    url = request.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
-    try:
-        items = HtmlPageSourceClient([url]).fetch_items()
-    except ExternalSourceResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    manual_source_items.extend(items)
-    return _source_items_response(manual_source_items)
-
-
-@app.get("/api/feedback/summary", response_model=FeedbackSummaryResponse)
-def get_feedback_summary() -> FeedbackSummaryResponse:
-    all_event_pairs = [
-        (episode.id, event)
-        for episode in repo.all()
-        for event in episode.feedback_events
-    ]
-    all_event_pairs = sorted(
-        all_event_pairs,
-        key=lambda item: item[1].created_at,
-        reverse=True,
-    )
-    active_events = [event for _, event in all_event_pairs if event.active]
-    counts = Counter(event.value for event in active_events)
-    return FeedbackSummaryResponse(
-        total_count=len(active_events),
-        up_count=counts.get("up", 0),
-        down_count=counts.get("down", 0),
-        recent_events=[
-            FeedbackEventResponse.model_validate(
-                {**event.__dict__, "episode_id": episode_id}
-            )
-            for episode_id, event in all_event_pairs[:20]
-        ],
-    )
-
-
-@app.get("/api/preferences", response_model=PreferencesResponse)
-def get_preferences() -> PreferencesResponse:
-    events = [
-        event
-        for episode in repo.all()
-        for event in episode.feedback_events
-        if event.reason and event.active
-    ]
-    long_term_preferences = preference_repo.all()
-    active_memory_events = long_term_preference_events(preference_repo.active())
-    memory = build_preference_memory([*events, *active_memory_events], limit=20)
-    confirmed_keys = {
-        (preference.kind, preference.content)
-        for preference in long_term_preferences
-        if not preference.deleted
-    }
-    candidates = build_preference_candidates(events, limit=20)
-    preferences = [
-        PreferenceItemResponse(
-            label=label,
-            signal=signal.signal,
-            evidence_count=signal.evidence_count,
-            confidence=signal.confidence,
-        )
-        for label, signals in (
-            ("偏好", memory.prefer),
-            ("避开", memory.avoid),
-        )
-        for signal in signals
-    ]
-    return PreferencesResponse(
-        total_feedback_count=len(events),
-        preferences=preferences[:20],
-        candidates=[
-            {
-                **candidate.__dict__,
-                "confirmed": (candidate.kind, candidate.content) in confirmed_keys,
-            }
-            for candidate in candidates
-        ],
-        long_term_preferences=[
-            _long_term_preference_response(preference)
-            for preference in long_term_preferences
-        ],
-    )
-
-
-@app.post("/api/preferences/confirm", response_model=PreferencesResponse)
-def confirm_preference(request: PreferenceConfirmRequest) -> PreferencesResponse:
-    try:
-        preference_repo.confirm(
-            kind=request.kind,
-            content=request.content,
-            source_event_ids=request.source_event_ids,
-            confidence=request.confidence,
-            scope=request.scope,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return get_preferences()
-
-
-@app.post("/api/preferences/{preference_id}/disable", response_model=PreferencesResponse)
-def disable_preference(preference_id: str) -> PreferencesResponse:
-    try:
-        preference_repo.disable(preference_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="preference not found") from exc
-    return get_preferences()
-
-
-@app.post("/api/preferences/{preference_id}/restore", response_model=PreferencesResponse)
-def restore_preference(preference_id: str) -> PreferencesResponse:
-    try:
-        preference_repo.restore(preference_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="preference not found") from exc
-    return get_preferences()
-
-
-@app.post("/api/preferences/{preference_id}/delete", response_model=PreferencesResponse)
-def delete_preference(preference_id: str) -> PreferencesResponse:
-    try:
-        preference_repo.delete(preference_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="preference not found") from exc
-    return get_preferences()
-
-
-def _long_term_preference_response(preference) -> dict[str, object]:
-    return {
-        "id": preference.id,
-        "kind": preference.kind,
-        "label": "偏好" if preference.kind == "prefer" else "避开",
-        "content": preference.content,
-        "source_event_ids": preference.source_event_ids,
-        "confidence": preference.confidence,
-        "scope": preference.scope,
-        "enabled": preference.enabled,
-        "deleted": preference.deleted,
-        "created_at": preference.created_at,
-        "updated_at": preference.updated_at,
-        "last_used_at": preference.last_used_at,
-    }
 
 
 @app.get("/api/videos/pending", response_model=list[PendingVideoResponse])
