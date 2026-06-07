@@ -6,18 +6,18 @@
 
 ## 0. 当前实现状态
 
-截至 2026-06-07，阶段 1 已进入代码实现：
+截至 2026-06-07，阶段 1-4 的核心能力已进入代码实现：
 
 - `Episode.content_template_id` 已传入选题生成、口播稿生成和段落重写。
 - DeepSeek 选题 prompt 已包含内容模板、选题结构、标题规则和 `score` 评分 rubric。
 - DeepSeek 口播稿 prompt 已包含内容模板、脚本结构、标题/封面/发布规则，并明确 `hook` 是独立字段。
 - DeepSeek 段落重写 prompt 已包含内容模板、前后段衔接上下文和目标段落角色。
 - `PreferenceSummary` 第一版已实现为 `preference_memory`：active feedback 会聚合成 `prefer` / `avoid` 信号，并进入选题、整篇口播稿和单段重写 prompt。
+- `Creator Profile` 第一版已实现为可编辑的创作者画像：身份定位、内容领域、表达风格、偏好表达、禁用表达、好/差样本会以短摘要进入选题、整篇口播稿和单段重写 prompt。
 - 底部指令台已支持 typed / transcribed command 的预览与执行，包括继续流程、重生成选题/口播稿、重写段落、生成草稿、更新剪辑计划片段决策。
 
 仍未实现：
 
-- `Creator Profile`。
 - 抖音发布数据和评论洞察闭环。
 - 语义检索式长期记忆。
 - 真实麦克风录音和本地 ASR 到指令台的接入。
@@ -391,6 +391,8 @@ Prompt 中应明确：
 - 反馈撤销后不再进入摘要。
 
 ### 阶段 4：Creator Profile
+
+当前状态：v1 已实现。用户可以在 UI 中查看和编辑 Creator Profile，后端会把短版 `creator_profile` 注入选题、口播稿和段落重写 prompt。
 
 目标：
 

@@ -1,5 +1,7 @@
 import type {
   ContentTemplates,
+  CreatorProfile,
+  CreatorProfileUpdate,
   Episode,
   EditPlan,
   EditPlanSegmentDecisionAction,
@@ -143,6 +145,19 @@ export function getFeedbackSummary(): Promise<FeedbackSummary> {
 
 export function getPreferences(): Promise<Preferences> {
   return request<Preferences>("/api/preferences");
+}
+
+export function getCreatorProfile(): Promise<CreatorProfile> {
+  return request<CreatorProfile>("/api/creator-profile");
+}
+
+export function updateCreatorProfile(
+  payload: CreatorProfileUpdate,
+): Promise<CreatorProfile> {
+  return request<CreatorProfile>("/api/creator-profile", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getDraftStatus(): Promise<DraftStatus> {

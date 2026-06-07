@@ -8,6 +8,7 @@ import httpx
 
 from app.config import Settings
 from app.content_templates import ContentTemplate
+from app.creator_profile import CreatorProfile, creator_profile_prompt_payload
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
 from app.preference_memory import preference_memory_payload
 
@@ -27,6 +28,7 @@ class ScriptGenerator(Protocol):
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptPackage:
         ...
 
@@ -38,6 +40,7 @@ class ScriptGenerator(Protocol):
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptSection:
         ...
 
@@ -49,6 +52,7 @@ class MissingScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptPackage:
         raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
 
@@ -60,6 +64,7 @@ class MissingScriptGenerator:
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptSection:
         raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
 
@@ -71,6 +76,7 @@ class TemplateScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptPackage:
         return ScriptPackage(
             id=f"script_{uuid4().hex[:6]}",
@@ -97,6 +103,7 @@ class TemplateScriptGenerator:
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptSection:
         current = next(
             section for section in current_script.sections if section.id == section_id
@@ -131,6 +138,7 @@ class DeepSeekScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptPackage:
         if not self._settings.deepseek_api_key:
             raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -139,7 +147,16 @@ class DeepSeekScriptGenerator:
             "model": self._settings.deepseek_model,
             "messages": [
                 {"role": "system", "content": self._system_prompt(template)},
-                {"role": "user", "content": self._user_prompt(topic, day_number, feedback_events or [], template)},
+                {
+                    "role": "user",
+                    "content": self._user_prompt(
+                        topic,
+                        day_number,
+                        feedback_events or [],
+                        template,
+                        creator_profile,
+                    ),
+                },
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
@@ -172,6 +189,7 @@ class DeepSeekScriptGenerator:
         reason: str | None = None,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> ScriptSection:
         if not self._settings.deepseek_api_key:
             raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -192,6 +210,7 @@ class DeepSeekScriptGenerator:
                         reason,
                         feedback_events or [],
                         template,
+                        creator_profile,
                     ),
                 },
             ],
@@ -266,6 +285,7 @@ class DeepSeekScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent],
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> str:
         sources = [
             {"type": source.source_type, "title": source.title, "ref": source.ref}
@@ -283,6 +303,7 @@ class DeepSeekScriptGenerator:
             {
                 "day_number": day_number,
                 "content_template": _content_template_payload(template),
+                "creator_profile": creator_profile_prompt_payload(creator_profile),
                 "topic": {
                     "title": topic.title,
                     "core_viewpoint": topic.core_viewpoint,
@@ -299,6 +320,8 @@ class DeepSeekScriptGenerator:
                     "开头 3 秒要有明确冲突或判断。",
                     "sections 要与 topic.outline 或 content_template.script_structure 对齐。",
                     "优先遵守 preference_memory：prefer 是应该强化的表达方式，avoid 是应该避开的表达方式。",
+                    "优先遵守 creator_profile",
+                    "creator_profile 用来稳定口播语气、标题、封面和发布文案边界，不要把 profile 当作事实来源。",
                     "estimated_seconds 按约 180 字/分钟估算。",
                     "保留三段核心原因，每段都要有一句可直接口播的内容。",
                     "生成 3 个标题候选、1 条封面文案、1 条发布文案、1 条评论引导。",
@@ -315,6 +338,7 @@ class DeepSeekScriptGenerator:
         reason: str | None,
         feedback_events: list[FeedbackEvent],
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> str:
         section_index = next(
             (
@@ -337,6 +361,7 @@ class DeepSeekScriptGenerator:
         return json.dumps(
             {
                 "content_template": _content_template_payload(template),
+                "creator_profile": creator_profile_prompt_payload(creator_profile),
                 "topic": {
                     "title": topic.title,
                     "core_viewpoint": topic.core_viewpoint,
@@ -375,6 +400,8 @@ class DeepSeekScriptGenerator:
                 "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
                     "优先遵守 preference_memory，保留用户偏好的表达，避开用户明确踩过的方向。",
+                    "优先遵守 creator_profile",
+                    "creator_profile 用来保持重写段落的口吻边界，但只改 target_section。",
                     "只重写 target_section，不要改 hook、标题候选、封面文案和发布文案。",
                     "不要让重写段落和上下文断裂。",
                 ],

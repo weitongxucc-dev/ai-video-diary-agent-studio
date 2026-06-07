@@ -82,8 +82,8 @@ For frontend contract or visual-system changes:
 npm run test:web-contract
 npm run test:pixel-style
 npm run build:web
-npm --dir apps/web exec tsc --noEmit
-npm --dir apps/web lint
+npm run typecheck:web
+npm run lint:web
 ```
 
 For docs-only changes:

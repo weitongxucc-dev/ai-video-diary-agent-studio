@@ -164,12 +164,19 @@ def test_generate_topics_receives_cross_episode_feedback_history():
         def __init__(self) -> None:
             self.feedback_events = []
 
-        def generate(self, day_number, feedback_events=None, template=None):
+        def generate(
+            self,
+            day_number,
+            feedback_events=None,
+            template=None,
+            creator_profile=None,
+        ):
             self.feedback_events = feedback_events or []
             return TemplateTopicGenerator().generate(
                 day_number,
                 feedback_events,
                 template=template,
+                creator_profile=creator_profile,
             )
 
     repo = EpisodeRepository(today_provider=lambda: date(2026, 5, 28))
@@ -257,12 +264,19 @@ def test_feedback_can_be_reverted_and_is_excluded_from_future_generation():
         def __init__(self) -> None:
             self.feedback_events = []
 
-        def generate(self, day_number, feedback_events=None, template=None):
+        def generate(
+            self,
+            day_number,
+            feedback_events=None,
+            template=None,
+            creator_profile=None,
+        ):
             self.feedback_events = feedback_events or []
             return TemplateTopicGenerator().generate(
                 day_number,
                 feedback_events,
                 template=template,
+                creator_profile=creator_profile,
             )
 
     generator = CapturingTopicGenerator()

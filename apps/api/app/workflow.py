@@ -4,6 +4,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.creator_profile import CreatorProfile
 from app.models import Episode, FeedbackEvent, FeedbackValue
 from app.services import EpisodeService
 
@@ -32,6 +33,7 @@ class EpisodeWorkflowState(TypedDict, total=False):
     episode: Episode
     topic_id: str
     feedback_history: list[FeedbackEvent]
+    creator_profile: CreatorProfile
     script: Any
     section_id: str
     version_id: str
@@ -124,6 +126,7 @@ class LangGraphEpisodeWorkflow:
             "episode": self._service.generate_topics(
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
+                creator_profile=state.get("creator_profile"),
             )
         }
 
@@ -132,6 +135,7 @@ class LangGraphEpisodeWorkflow:
             "episode": self._service.regenerate_topics(
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
+                creator_profile=state.get("creator_profile"),
             )
         }
 
@@ -148,6 +152,7 @@ class LangGraphEpisodeWorkflow:
             "episode": self._service.generate_script(
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
+                creator_profile=state.get("creator_profile"),
             )
         }
 
@@ -166,6 +171,7 @@ class LangGraphEpisodeWorkflow:
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
                 reason=state.get("reason"),
+                creator_profile=state.get("creator_profile"),
             )
         }
 
@@ -179,6 +185,7 @@ class LangGraphEpisodeWorkflow:
                 state["section_id"],
                 feedback_history=state.get("feedback_history"),
                 reason=state.get("reason"),
+                creator_profile=state.get("creator_profile"),
             )
         }
 

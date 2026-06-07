@@ -5,6 +5,7 @@ from pathlib import Path
 import app.automation as automation_module
 from app.automation import AgentAutomationWorker
 from app.config import Settings
+from app.creator_profile import CreatorProfile, CreatorProfileRepository
 from app.drafts import DraftToolStatus, DraftWorkspace
 from app.llm import TemplateScriptGenerator
 from app.models import EpisodeStatus, ScriptPackage, ScriptSection
@@ -54,12 +55,48 @@ def test_automation_worker_generates_daily_topics_once():
     assert len(repo.today().topics) == 4
 
 
+def test_automation_worker_passes_creator_profile_to_scheduled_topics():
+    class CapturingWorkflow:
+        def __init__(self) -> None:
+            self.action = None
+            self.creator_profile = None
+
+        def run(self, action, episode, **kwargs):
+            self.action = action
+            self.creator_profile = kwargs.get("creator_profile")
+            episode.status = EpisodeStatus.TOPICS_READY
+            return episode
+
+    repo = EpisodeRepository(today_provider=lambda: date(2026, 5, 28))
+    profile = CreatorProfile(
+        identity="技术型个人创作者",
+        content_domains=["AI 产品"],
+        tone_keywords=["直接"],
+    )
+    workflow = CapturingWorkflow()
+    worker = AgentAutomationWorker(
+        repo=repo,
+        workflow=workflow,
+        creator_profile_provider=lambda: profile,
+        daily_topic_time=time(7, 0),
+    )
+
+    result = worker.run_scheduled_topics_once(datetime(2026, 5, 28, 7, 1))
+
+    assert result is True
+    assert workflow.action == "generate_topics"
+    assert workflow.creator_profile is profile
+
+
 def test_build_worker_from_env_uses_video_processing_pipeline(tmp_path, monkeypatch):
     settings = Settings(
         database_path=str(tmp_path / "agent.sqlite3"),
         video_inbox_path=str(tmp_path / "inbox"),
         video_output_path=str(tmp_path / "processed"),
         draft_output_path=str(tmp_path / "drafts"),
+    )
+    CreatorProfileRepository(settings.database_path).save(
+        {"identity": "定时 worker 画像"}
     )
     pipeline = CapturingVideoPipeline(
         ProcessedVideo("raw_preview.mp4", "/tmp/raw_preview.mp4", "raw.mov")
@@ -77,6 +114,9 @@ def test_build_worker_from_env_uses_video_processing_pipeline(tmp_path, monkeypa
 
     assert captured_settings == [settings]
     assert worker.video_processor is pipeline
+    assert worker.creator_profile_provider is not None
+    assert worker.creator_profile_provider().identity == "定时 worker 画像"
+
 
 
 def test_automation_worker_processes_bound_episode_video_to_draft(tmp_path, monkeypatch):

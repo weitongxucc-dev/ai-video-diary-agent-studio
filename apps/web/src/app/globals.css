@@ -3001,6 +3001,22 @@ textarea {
   gap: 10px;
 }
 
+.profile-page .settings-field textarea {
+  min-height: 92px;
+  overflow: auto;
+  resize: vertical;
+  text-overflow: clip;
+  white-space: pre-wrap;
+}
+
+.profile-page .side-note span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .workspace-empty {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);

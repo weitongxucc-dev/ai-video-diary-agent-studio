@@ -16,6 +16,7 @@ const files = {
   video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
+  profile: new URL("../src/app/profile/page.tsx", import.meta.url),
   draft: new URL("../src/app/draft/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
   voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
@@ -45,6 +46,7 @@ const [
   videoPage,
   actionsFile,
   settingsPage,
+  profilePage,
   draftPage,
   editPlanPage,
   voiceCommandConsole,
@@ -115,7 +117,7 @@ if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar"
   failures.push("Agent panel must show real Hermes radar ingestion counts.");
 }
 
-for (const route of ["/templates", "/draft", "/knowledge", "/sources", "/learning", "/health", "/settings"]) {
+for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/settings"]) {
   const routeBlock = `href: "${route}"`;
   const routeIndex = appShell.indexOf(routeBlock);
   if (routeIndex === -1) {
@@ -260,6 +262,41 @@ if (!typesFile.includes("subtitle_path") || !typesFile.includes("cover_path")) {
 
 if (!actionsFile.includes("updateRuntimeSettingsAction")) {
   failures.push("Server actions must expose a runtime settings update action.");
+}
+
+for (const required of ["getCreatorProfile", "updateCreatorProfile"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must expose creator profile function ${required}.`);
+  }
+}
+
+for (const required of ["CreatorProfile", "CreatorProfileUpdate"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`Types must expose ${required}.`);
+  }
+}
+
+if (!actionsFile.includes("updateCreatorProfileAction")) {
+  failures.push("Server actions must expose a creator profile update action.");
+}
+
+for (const required of [
+  "AppShell",
+  "workspace-page",
+  "settings-form",
+  "settings-field",
+  "创作者画像",
+  "identity",
+  "content_domains",
+  "tone_keywords",
+  "preferred_phrases",
+  "banned_phrases",
+  "good_examples",
+  "bad_examples",
+]) {
+  if (!profilePage.includes(required)) {
+    failures.push(`/profile must include creator profile field/surface ${required}.`);
+  }
 }
 
 if (!actionsFile.includes("markPublishedAction")) {

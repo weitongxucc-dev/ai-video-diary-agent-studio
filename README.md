@@ -29,6 +29,7 @@ Current build delivers:
 - 2.0 content templates for 视频日记、AI 工具测评 and 教程演示, with Episode-level template selection
 - Content-template-aware Agent prompts for topic generation, script generation, and section regeneration
 - Preference-memory-aware Agent prompts: active thumbs feedback is summarized into prefer / avoid signals for future topic, script and section prompts
+- Creator Profile v1: editable creator voice, content domains, preferred phrases, banned phrases, good examples and bad examples, injected into topic/script/section prompts as a compact profile summary
 - Runtime health diagnostics page for DeepSeek, Obsidian, ffmpeg, Whisper, video directories, draft output, Jianying and external sources
 - Persisted edit-plan segment decisions for 保留 / 删除 / 复核 with rollback
 - Confirmed edit-plan execution: user 保留 / 删除 overrides generate a second-pass `_confirmed` preview before Jianying draft packaging
@@ -116,8 +117,8 @@ corepack pnpm test:api
 corepack pnpm test:web-contract
 corepack pnpm test:pixel-style
 corepack pnpm build:web
-corepack pnpm --dir apps/web exec tsc --noEmit
-corepack pnpm --dir apps/web lint
+corepack pnpm typecheck:web
+corepack pnpm lint:web
 ```
 
 If `pnpm` is already on `PATH`, the equivalent shorter commands also work:
@@ -127,8 +128,8 @@ pnpm test:api
 pnpm test:web-contract
 pnpm test:pixel-style
 pnpm build:web
-pnpm --dir apps/web exec tsc --noEmit
-pnpm --dir apps/web lint
+pnpm typecheck:web
+pnpm lint:web
 ```
 
 Git workflow:
@@ -152,6 +153,7 @@ Visit:
 
 - http://localhost:3000
 - http://localhost:3000/templates
+- http://localhost:3000/profile
 - http://localhost:3000/topics
 - http://localhost:3000/script
 - http://localhost:3000/video

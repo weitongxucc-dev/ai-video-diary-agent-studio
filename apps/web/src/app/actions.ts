@@ -24,6 +24,7 @@ import {
   sendFeedback,
   selectEpisodeContentTemplate,
   syncSourceItems,
+  updateCreatorProfile,
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
   uploadEpisodeVideo,
@@ -68,6 +69,24 @@ function optionalString(formData: FormData, key: string): string | undefined {
   const value = formData.get(key);
 
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function textField(formData: FormData, key: string): string {
+  const value = formData.get(key);
+
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function multilineField(formData: FormData, key: string): string[] {
+  const value = formData.get(key);
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function optionalNonNegativeInteger(
@@ -259,6 +278,19 @@ export async function revertFeedbackAction(formData: FormData) {
     optionalString(formData, "reason"),
   );
   redirect("/learning");
+}
+
+export async function updateCreatorProfileAction(formData: FormData) {
+  await updateCreatorProfile({
+    identity: textField(formData, "identity"),
+    content_domains: multilineField(formData, "content_domains"),
+    tone_keywords: multilineField(formData, "tone_keywords"),
+    preferred_phrases: multilineField(formData, "preferred_phrases"),
+    banned_phrases: multilineField(formData, "banned_phrases"),
+    good_examples: multilineField(formData, "good_examples"),
+    bad_examples: multilineField(formData, "bad_examples"),
+  });
+  redirect("/profile");
 }
 
 export async function approveScriptAction(formData: FormData) {

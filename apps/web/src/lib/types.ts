@@ -368,6 +368,28 @@ export type Preferences = {
   preferences: PreferenceItem[];
 };
 
+export type CreatorProfile = {
+  identity: string;
+  content_domains: string[];
+  tone_keywords: string[];
+  preferred_phrases: string[];
+  banned_phrases: string[];
+  good_examples: string[];
+  bad_examples: string[];
+  prompt_payload: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type CreatorProfileUpdate = {
+  identity: string;
+  content_domains: string[];
+  tone_keywords: string[];
+  preferred_phrases: string[];
+  banned_phrases: string[];
+  good_examples: string[];
+  bad_examples: string[];
+};
+
 export type RuntimeSettingItem = {
   name: string;
   configured: boolean;

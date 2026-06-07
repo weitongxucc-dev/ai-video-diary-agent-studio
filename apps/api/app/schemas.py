@@ -428,6 +428,28 @@ class PreferencesResponse(BaseModel):
     preferences: list[PreferenceItemResponse]
 
 
+class CreatorProfileResponse(BaseModel):
+    identity: str
+    content_domains: list[str]
+    tone_keywords: list[str]
+    preferred_phrases: list[str]
+    banned_phrases: list[str]
+    good_examples: list[str]
+    bad_examples: list[str]
+    prompt_payload: dict[str, object]
+    updated_at: datetime
+
+
+class CreatorProfileUpdateRequest(BaseModel):
+    identity: str | None = None
+    content_domains: list[str] | None = None
+    tone_keywords: list[str] | None = None
+    preferred_phrases: list[str] | None = None
+    banned_phrases: list[str] | None = None
+    good_examples: list[str] | None = None
+    bad_examples: list[str] | None = None
+
+
 class RuntimeSettingItemResponse(BaseModel):
     name: str
     configured: bool

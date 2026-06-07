@@ -10,6 +10,7 @@ import httpx
 
 from app.config import Settings
 from app.content_templates import ContentTemplate
+from app.creator_profile import CreatorProfile, creator_profile_prompt_payload
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.models import FeedbackEvent, SourceRef, TopicCandidate
@@ -36,6 +37,7 @@ class TopicGenerator(Protocol):
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> list[TopicCandidate]:
         ...
 
@@ -46,6 +48,7 @@ class MissingTopicGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> list[TopicCandidate]:
         raise TopicGenerationConfigurationError("DeepSeek and at least one topic source must be configured")
 
@@ -56,6 +59,7 @@ class TemplateTopicGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> list[TopicCandidate]:
         return [
             TopicCandidate(
@@ -121,6 +125,7 @@ class DeepSeekTopicGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> list[TopicCandidate]:
         if not self._settings.deepseek_api_key:
             raise TopicGenerationConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -133,7 +138,16 @@ class DeepSeekTopicGenerator:
             "model": self._settings.deepseek_model,
             "messages": [
                 {"role": "system", "content": self._system_prompt(template)},
-                {"role": "user", "content": self._user_prompt(day_number, source_items, feedback_events or [], template)},
+                {
+                    "role": "user",
+                    "content": self._user_prompt(
+                        day_number,
+                        source_items,
+                        feedback_events or [],
+                        template,
+                        creator_profile,
+                    ),
+                },
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
@@ -186,11 +200,13 @@ class DeepSeekTopicGenerator:
         source_items: list[TopicSourceItem],
         feedback_events: list[FeedbackEvent],
         template: ContentTemplate | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> str:
         return json.dumps(
             {
                 "day_number": day_number,
                 "content_template": _content_template_payload(template),
+                "creator_profile": creator_profile_prompt_payload(creator_profile),
                 "source_items": [
                     {
                         "source_type": item.source_type,
@@ -213,7 +229,9 @@ class DeepSeekTopicGenerator:
                     "生成 4 个适合 2-3 分钟 AI 视频日记的候选选题。",
                     "每个选题必须符合 content_template 的场景、选题结构和标题规则。",
                     "优先遵守 preference_memory",
+                    "优先遵守 creator_profile",
                     "preference_memory.prefer 用来放大选题方向，preference_memory.avoid 用来避开低分表达。",
+                    "creator_profile 用来稳定创作者口吻和长期内容边界，但 source_refs 仍必须来自 source_items。",
                     "优先选择有真实项目经验、Agent、AI产品、工作流、个人IP、内容生产相关的素材。",
                     "每个选题要有清晰观点、目标观众、三段口播结构。",
                     "source_refs 至少 1 个，且 ref 必须完全等于 source_items 里的 ref。",

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 import time as time_module
-from typing import Protocol
+from typing import Callable, Protocol
 
 from app.config import Settings
+from app.creator_profile import CreatorProfile, CreatorProfileRepository
 from app.drafts import DraftWorkspace
 from app.llm import script_generator_from_settings
 from app.repository import EpisodeRepository
@@ -31,6 +32,7 @@ class AgentAutomationWorker:
         video_processor: VideoProcessor | None = None,
         draft_workspace: DraftWorkspace | None = None,
         daily_topic_time: time = time(7, 0),
+        creator_profile_provider: Callable[[], CreatorProfile] | None = None,
     ) -> None:
         self.repo = repo
         self.workflow = workflow
@@ -38,6 +40,7 @@ class AgentAutomationWorker:
         self.video_processor = video_processor
         self.draft_workspace = draft_workspace
         self.daily_topic_time = daily_topic_time
+        self.creator_profile_provider = creator_profile_provider
         self._topic_runs: set[date] = set()
 
     def run_scheduled_topics_once(self, now: datetime | None = None) -> bool:
@@ -46,7 +49,10 @@ class AgentAutomationWorker:
         if now.time() < self.daily_topic_time or today in self._topic_runs:
             return False
         episode = self.repo.today()
-        episode = self.workflow.run("generate_topics", episode)
+        workflow_kwargs = {}
+        if self.creator_profile_provider is not None:
+            workflow_kwargs["creator_profile"] = self.creator_profile_provider()
+        episode = self.workflow.run("generate_topics", episode, **workflow_kwargs)
         self.repo.save(episode)
         self._topic_runs.add(today)
         return True
@@ -88,6 +94,7 @@ class AgentAutomationWorker:
 def build_worker_from_env() -> AgentAutomationWorker:
     settings = Settings.from_env()
     vault = ObsidianVault(settings.obsidian_vault_path)
+    creator_profile_repo = CreatorProfileRepository(settings.database_path)
     service = EpisodeService(
         script_generator=script_generator_from_settings(settings),
         topic_generator=topic_generator_from_settings(settings, vault),
@@ -98,6 +105,7 @@ def build_worker_from_env() -> AgentAutomationWorker:
         video_inbox=VideoInbox(settings.video_inbox_path),
         video_processor=video_processing_pipeline_from_settings(settings),
         draft_workspace=DraftWorkspace(settings),
+        creator_profile_provider=creator_profile_repo.load,
     )
 
 

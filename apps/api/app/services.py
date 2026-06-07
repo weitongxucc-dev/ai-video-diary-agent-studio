@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from app.content_templates import ContentTemplate, get_content_template
+from app.creator_profile import CreatorProfile
 from app.llm import ScriptGenerator, TemplateScriptGenerator
 from app.models import (
     Episode,
@@ -35,6 +36,7 @@ class EpisodeService:
         self,
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> Episode:
         if episode.topics:
             if episode.status in {EpisodeStatus.CREATED, EpisodeStatus.SOURCES_INGESTING}:
@@ -45,6 +47,7 @@ class EpisodeService:
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            creator_profile=creator_profile,
         )
         episode.status = EpisodeStatus.TOPICS_READY
         return episode
@@ -105,11 +108,13 @@ class EpisodeService:
         self,
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> Episode:
         episode.topics = self._topic_generator.generate(
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            creator_profile=creator_profile,
         )
         episode.selected_topic_id = None
         episode.script = None
@@ -128,6 +133,7 @@ class EpisodeService:
         self,
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> Episode:
         if episode.script is not None:
             if episode.status in {
@@ -145,6 +151,7 @@ class EpisodeService:
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            creator_profile=creator_profile,
         )
         self._record_script_version(
             episode,
@@ -188,6 +195,7 @@ class EpisodeService:
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
         reason: str | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> Episode:
         selected = self._selected_topic(episode)
         script = self._script_generator.generate(
@@ -195,6 +203,7 @@ class EpisodeService:
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            creator_profile=creator_profile,
         )
         return self._record_script_version(
             episode,
@@ -209,6 +218,7 @@ class EpisodeService:
         section_id: str,
         feedback_history: list[FeedbackEvent] | None = None,
         reason: str | None = None,
+        creator_profile: CreatorProfile | None = None,
     ) -> Episode:
         if episode.script is None:
             raise ValueError("generate a script first")
@@ -223,6 +233,7 @@ class EpisodeService:
             reason=reason,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            creator_profile=creator_profile,
         )
         sections: list[ScriptSection] = [
             replacement if section.id == section_id else deepcopy(section)

@@ -11,6 +11,10 @@ from pathlib import Path
 
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
+from app.creator_profile import (
+    CreatorProfileRepository,
+    creator_profile_prompt_payload,
+)
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
     apply_confirmed_edit_plan,
@@ -39,6 +43,8 @@ from app.schemas import (
     ApproveTopicRequest,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
+    CreatorProfileResponse,
+    CreatorProfileUpdateRequest,
     DraftPackageRequest,
     DraftPackageResponse,
     EditPlanResponse,
@@ -104,6 +110,7 @@ app.add_middleware(
 
 settings = Settings.from_env()
 repo = EpisodeRepository(database_path=settings.database_path)
+creator_profile_repo = CreatorProfileRepository(settings.database_path)
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
 video_processor = FfmpegVideoProcessor(settings)
@@ -131,6 +138,16 @@ def episode_response(episode: Episode) -> EpisodeResponse:
     return EpisodeResponse.model_validate(
         recover_interrupted_video_job_if_needed(episode),
         from_attributes=True,
+    )
+
+
+def creator_profile_response() -> CreatorProfileResponse:
+    profile = creator_profile_repo.load()
+    return CreatorProfileResponse.model_validate(
+        {
+            **profile.__dict__,
+            "prompt_payload": creator_profile_prompt_payload(profile),
+        }
     )
 
 
@@ -243,10 +260,11 @@ def update_runtime_settings(
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, service, workflow
+    global settings, repo, creator_profile_repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, service, workflow
 
     settings = Settings.from_env()
     repo = EpisodeRepository(database_path=settings.database_path)
+    creator_profile_repo = CreatorProfileRepository(settings.database_path)
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)
     video_processor = FfmpegVideoProcessor(settings)
@@ -260,6 +278,26 @@ def _reload_runtime_dependencies() -> None:
         topic_generator=topic_generator_from_settings(settings, vault),
     )
     workflow = LangGraphEpisodeWorkflow(service)
+
+
+@app.get("/api/creator-profile", response_model=CreatorProfileResponse)
+def get_creator_profile() -> CreatorProfileResponse:
+    return creator_profile_response()
+
+
+@app.post("/api/creator-profile", response_model=CreatorProfileResponse)
+def update_creator_profile(
+    request: Request,
+    payload: CreatorProfileUpdateRequest,
+) -> CreatorProfileResponse:
+    client_host = request.client.host if request.client else None
+    if not is_local_client_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="creator profile can only be updated from a local client",
+        )
+    creator_profile_repo.save(payload.model_dump(exclude_none=True))
+    return creator_profile_response()
 
 
 @app.get("/api/knowledge/notes", response_model=list[KnowledgeNoteResponse])
@@ -600,6 +638,7 @@ def generate_topics(episode_id: str) -> EpisodeResponse:
             "generate_topics",
             episode,
             feedback_history=feedback_history_for(episode_id),
+            creator_profile=creator_profile_repo.load(),
         )
     except TopicGenerationConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -616,6 +655,7 @@ def regenerate_topics(episode_id: str) -> EpisodeResponse:
             "regenerate_topics",
             episode,
             feedback_history=feedback_history_for(episode_id),
+            creator_profile=creator_profile_repo.load(),
         )
     except TopicGenerationConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -647,6 +687,7 @@ def generate_script(episode_id: str) -> EpisodeResponse:
             "generate_script",
             episode,
             feedback_history=feedback_history_for(episode_id),
+            creator_profile=creator_profile_repo.load(),
         )
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -683,6 +724,7 @@ def regenerate_episode_script(
             get_episode_or_404(episode_id),
             feedback_history=feedback_history_for(episode_id),
             reason=request.reason,
+            creator_profile=creator_profile_repo.load(),
         )
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -709,6 +751,7 @@ def regenerate_episode_script_section(
             section_id=section_id,
             feedback_history=feedback_history_for(episode_id),
             reason=request.reason,
+            creator_profile=creator_profile_repo.load(),
         )
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -830,18 +873,21 @@ def _execute_voice_command_plan(
                 "generate_topics",
                 updated_episode,
                 feedback_history=feedback_history_for(updated_episode.id),
+                creator_profile=creator_profile_repo.load(),
             )
         elif operation.kind == "regenerate_topics":
             updated_episode = workflow.run(
                 "regenerate_topics",
                 updated_episode,
                 feedback_history=feedback_history_for(updated_episode.id),
+                creator_profile=creator_profile_repo.load(),
             )
         elif operation.kind == "generate_script":
             updated_episode = workflow.run(
                 "generate_script",
                 updated_episode,
                 feedback_history=feedback_history_for(updated_episode.id),
+                creator_profile=creator_profile_repo.load(),
             )
         elif operation.kind == "regenerate_script":
             updated_episode = workflow.run(
@@ -849,6 +895,7 @@ def _execute_voice_command_plan(
                 updated_episode,
                 feedback_history=feedback_history_for(updated_episode.id),
                 reason=_string_param(operation.params, "reason"),
+                creator_profile=creator_profile_repo.load(),
             )
         elif operation.kind == "regenerate_script_section":
             updated_episode = workflow.run(
@@ -857,6 +904,7 @@ def _execute_voice_command_plan(
                 section_id=_required_string_param(operation.params, "section_id"),
                 feedback_history=feedback_history_for(updated_episode.id),
                 reason=_string_param(operation.params, "reason"),
+                creator_profile=creator_profile_repo.load(),
             )
         elif operation.kind == "approve_script":
             updated_episode = workflow.run("approve_script", updated_episode)
