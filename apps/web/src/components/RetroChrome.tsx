@@ -49,6 +49,7 @@ const chromeMenuGroups: ChromeMenuGroup[] = [
     label: "设置",
     summary: "本地路径、密钥和生产参数",
     links: [
+      { href: "/setup", label: "配置向导", note: "首次配置依赖、路径和模型能力", icon: "settings" },
       { href: "/settings", label: "运行设置", note: "编辑 API key、本地路径和视频输出目录", icon: "settings" },
       { href: "/", label: "今日工作台", note: "回到当前 Episode 总览", icon: "desk" },
     ],

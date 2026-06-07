@@ -3554,6 +3554,144 @@ textarea {
   font-size: 11px;
 }
 
+.setup-page {
+  align-items: start;
+}
+
+.setup-progress-panel {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+  padding: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.setup-progress-panel > div {
+  display: grid;
+  gap: 2px;
+}
+
+.setup-progress-panel strong,
+.setup-progress-panel span,
+.setup-step-head span,
+.setup-health-item span,
+.setup-health-item em {
+  font-family: var(--font-pixel);
+}
+
+.setup-progress-panel strong {
+  color: var(--blue);
+  font-size: 20px;
+}
+
+.setup-progress-panel span,
+.setup-step-head span,
+.setup-health-item em {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.setup-step-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.setup-step-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+  padding: 12px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.setup-step-card.wide {
+  grid-column: 1 / -1;
+}
+
+.setup-step-head {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border-bottom: 2px solid var(--border-strong);
+  padding-bottom: 8px;
+}
+
+.setup-step-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.setup-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.setup-health-list {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.setup-health-item {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line-subtle);
+  background: #fffdf0;
+  padding: 8px;
+}
+
+.setup-health-item.missing,
+.setup-health-item.invalid {
+  background: #fff5ef;
+}
+
+.setup-health-item.degraded {
+  background: #fff8dd;
+}
+
+.setup-health-item.ready {
+  background: #f5fff6;
+}
+
+.setup-health-item > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.setup-health-item strong,
+.setup-health-item p,
+.setup-health-item em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setup-health-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.setup-health-item span {
+  border: 2px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--blue);
+  padding: 3px 6px;
+  font-size: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
 .source-counts,
 .learning-summary {
   display: flex;
@@ -4800,7 +4938,9 @@ textarea {
   }
 
   .log-category-grid,
-  .diagnostic-file-list {
+  .diagnostic-file-list,
+  .setup-step-grid,
+  .setup-field-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -4991,7 +5131,10 @@ textarea {
   .diagnostic-summary-grid,
   .log-category-grid,
   .diagnostic-file-list,
-  .recent-error-row {
+  .recent-error-row,
+  .setup-progress-panel,
+  .setup-step-grid,
+  .setup-field-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

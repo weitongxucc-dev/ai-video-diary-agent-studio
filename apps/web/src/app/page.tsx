@@ -37,12 +37,27 @@ export default async function HomePage() {
   const materialCount =
     (systemStatus?.obsidian.markdown_count ?? 0) +
     (systemStatus?.hermes_radar.total_count ?? 0);
-  const primaryFlowHref = topicForWorkbench && hasApprovedTopic ? "/script" : "/topics";
+  const setupRequired = Boolean(
+    !systemStatus?.llm.configured ||
+    !systemStatus?.obsidian.exists ||
+    !systemStatus?.video.inbox_exists ||
+    !systemStatus?.video.output_exists ||
+    !systemStatus?.video.ffmpeg_available,
+  );
+  const primaryFlowHref = setupRequired
+    ? "/setup"
+    : topicForWorkbench && hasApprovedTopic
+      ? "/script"
+      : "/topics";
   const primaryFlowLabel = topicForWorkbench
-    ? hasApprovedTopic
+    ? setupRequired
+      ? "进入配置向导"
+      : hasApprovedTopic
       ? "查看口播稿 →"
       : "继续今天的流程 →"
-    : "去生成今日选题";
+    : setupRequired
+      ? "进入配置向导"
+      : "去生成今日选题";
 
   return (
     <AppShell>

@@ -21,6 +21,7 @@ const files = {
   draft: new URL("../src/app/draft/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
   logs: new URL("../src/app/logs/page.tsx", import.meta.url),
+  setup: new URL("../src/app/setup/page.tsx", import.meta.url),
   voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
 };
 
@@ -53,6 +54,7 @@ const [
   draftPage,
   editPlanPage,
   logsPage,
+  setupPage,
   voiceCommandConsole,
 ] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
 
@@ -121,7 +123,7 @@ if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar"
   failures.push("Agent panel must show real Hermes radar ingestion counts.");
 }
 
-for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/logs", "/settings"]) {
+for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/logs", "/setup", "/settings"]) {
   const routeBlock = `href: "${route}"`;
   const routeIndex = appShell.indexOf(routeBlock);
   if (routeIndex === -1) {
@@ -173,6 +175,7 @@ for (const required of [
   'href: "/profile"',
   'href: "/video"',
   'href: "/logs"',
+  'href: "/setup"',
   'href: "/settings"',
 ]) {
   if (!retroChrome.includes(required)) {
@@ -278,6 +281,10 @@ if (!actionsFile.includes("selectContentTemplateAction")) {
   failures.push("Server actions must submit content template selection.");
 }
 
+if (!actionsFile.includes("redirect_to")) {
+  failures.push("Server actions must let setup wizard return to /setup after saving.");
+}
+
 for (const required of ["getContentTemplates", "selectContentTemplateAction", "tool_review", "tutorial_demo", "video_diary"]) {
   if (!templatesPage.includes(required)) {
     failures.push(`/templates must include ${required}.`);
@@ -287,6 +294,32 @@ for (const required of ["getContentTemplates", "selectContentTemplateAction", "t
 for (const required of ["getRuntimeHealth", "运行健康", "修复动作", "DeepSeek", "ffmpeg"]) {
   if (!healthPage.includes(required)) {
     failures.push(`/health must include ${required}.`);
+  }
+}
+
+for (const required of [
+  "getRuntimeSettings",
+  "getRuntimeHealth",
+  "updateRuntimeSettingsAction",
+  "首次配置向导",
+  "DeepSeek API Key",
+  "Obsidian Vault",
+  "Video Inbox",
+  "Local Whisper Python",
+  "redirect_to",
+]) {
+  if (!setupPage.includes(required)) {
+    failures.push(`/setup must implement first-run wizard surface ${required}.`);
+  }
+}
+
+if (!homePage.includes("setupRequired") || !homePage.includes("/setup")) {
+  failures.push("The workbench must route first-run users to /setup before production flow.");
+}
+
+for (const required of [".setup-page", ".setup-step-grid", ".setup-step-card", ".setup-health-list"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define setup wizard surface ${required}.`);
   }
 }
 

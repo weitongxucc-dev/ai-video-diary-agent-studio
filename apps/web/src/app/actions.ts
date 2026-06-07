@@ -460,5 +460,6 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   }
 
   await updateRuntimeSettings(payload);
-  redirect("/settings");
+  const redirectTo = formData.get("redirect_to");
+  redirect(redirectTo === "/setup" ? "/setup" : "/settings");
 }
