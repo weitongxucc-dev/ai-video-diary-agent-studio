@@ -10,6 +10,7 @@ import {
   generateScript,
   ingestManualLink,
   importDraftPackage,
+  markEpisodePublished,
   processAdHocEpisodeVideo,
   processAdHocEpisodeVideoBatch,
   processEpisodeVideo,
@@ -67,6 +68,39 @@ function optionalString(formData: FormData, key: string): string | undefined {
   const value = formData.get(key);
 
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalNonNegativeInteger(
+  formData: FormData,
+  key: string,
+): number | undefined {
+  const value = optionalString(formData, key);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid number field: ${key}`);
+  }
+
+  return parsed;
+}
+
+function optionalFeedbackValueField(
+  formData: FormData,
+  key: string,
+): FeedbackValue | undefined {
+  const value = optionalString(formData, key);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value !== "up" && value !== "down") {
+    throw new Error(`Invalid feedback field: ${key}`);
+  }
+
+  return value;
 }
 
 function editPlanSegmentDecisionAction(
@@ -298,6 +332,20 @@ export async function confirmEditPlanAction(formData: FormData) {
 
   await createEpisodeDraft(episodeId);
   redirect("/draft");
+}
+
+export async function markPublishedAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  await markEpisodePublished(episodeId, {
+    publish_url: optionalString(formData, "publish_url"),
+    play_count: optionalNonNegativeInteger(formData, "play_count"),
+    like_count: optionalNonNegativeInteger(formData, "like_count"),
+    comment_count: optionalNonNegativeInteger(formData, "comment_count"),
+    feedback_value: optionalFeedbackValueField(formData, "feedback_value"),
+    feedback_reason: optionalString(formData, "feedback_reason"),
+  });
+  redirect("/learning");
 }
 
 export async function updateEditPlanSegmentDecisionAction(formData: FormData) {

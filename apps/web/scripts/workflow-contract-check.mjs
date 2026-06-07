@@ -16,6 +16,7 @@ const files = {
   video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
+  draft: new URL("../src/app/draft/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
   voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
 };
@@ -44,6 +45,7 @@ const [
   videoPage,
   actionsFile,
   settingsPage,
+  draftPage,
   editPlanPage,
   voiceCommandConsole,
 ] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
@@ -258,6 +260,16 @@ if (!typesFile.includes("subtitle_path") || !typesFile.includes("cover_path")) {
 
 if (!actionsFile.includes("updateRuntimeSettingsAction")) {
   failures.push("Server actions must expose a runtime settings update action.");
+}
+
+if (!actionsFile.includes("markPublishedAction")) {
+  failures.push("Server actions must expose a publish feedback action.");
+}
+
+for (const required of ["markPublishedAction", "publish_url", "play_count", "feedback_reason"]) {
+  if (!draftPage.includes(required)) {
+    failures.push(`/draft must include publish feedback field/action ${required}.`);
+  }
 }
 
 if (!settingsPage.includes("updateRuntimeSettingsAction")) {

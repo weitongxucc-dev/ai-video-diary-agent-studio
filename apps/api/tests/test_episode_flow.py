@@ -245,7 +245,11 @@ def test_feedback_event_response_target_type_is_documented_as_enum():
         "properties"
     ]["target_type"]
 
-    assert target_type_schema["enum"] == ["topic", "script_section"]
+    assert target_type_schema["enum"] == [
+        "topic",
+        "script_section",
+        "published_episode",
+    ]
 
 
 def test_feedback_can_be_reverted_and_is_excluded_from_future_generation():
@@ -551,6 +555,35 @@ def test_episode_video_to_draft_to_publish_flow_updates_episode_state(tmp_path):
     assert published["publish_url"] == "https://www.douyin.com/video/1"
     assert published["play_count"] == 128
     assert published["published_at"]
+
+
+def test_mark_published_records_feedback_memory():
+    episode = client.post("/api/episodes").json()
+
+    published = client.post(
+        f"/api/episodes/{episode['id']}/mark-published",
+        json={
+            "publish_url": "https://www.douyin.com/video/1",
+            "play_count": 128,
+            "like_count": 12,
+            "comment_count": 3,
+            "feedback_value": "up",
+            "feedback_reason": "开头直接讲冲突，观众更容易停留",
+        },
+    ).json()
+
+    assert published["status"] == "published"
+    assert published["feedback_events"][0]["target_type"] == "published_episode"
+    assert published["feedback_events"][0]["value"] == "up"
+    assert published["feedback_events"][0]["reason"] == "开头直接讲冲突，观众更容易停留"
+
+    preferences = client.get("/api/preferences").json()
+    assert preferences["preferences"][0] == {
+        "label": "偏好",
+        "signal": "开头直接讲冲突，观众更容易停留",
+        "evidence_count": 1,
+        "confidence": 0.5,
+    }
 
 
 def test_ad_hoc_video_can_skip_topic_and_script_and_create_draft(tmp_path):

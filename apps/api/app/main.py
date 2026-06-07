@@ -1154,6 +1154,8 @@ def mark_episode_published(
         play_count=request.play_count,
         like_count=request.like_count,
         comment_count=request.comment_count,
+        feedback_value=request.feedback_value,
+        feedback_reason=request.feedback_reason,
     )
     return episode_response(repo.save(episode))
 

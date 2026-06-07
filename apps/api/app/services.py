@@ -412,12 +412,23 @@ class EpisodeService:
         play_count: int | None = None,
         like_count: int | None = None,
         comment_count: int | None = None,
+        feedback_value: FeedbackValue | None = None,
+        feedback_reason: str | None = None,
     ) -> Episode:
         episode.publish_url = publish_url
         episode.play_count = play_count
         episode.like_count = like_count
         episode.comment_count = comment_count
         episode.published_at = utc_now()
+        if feedback_value is not None and feedback_reason and feedback_reason.strip():
+            episode.feedback_events.append(
+                FeedbackEvent(
+                    "published_episode",
+                    episode.id,
+                    feedback_value,
+                    feedback_reason.strip(),
+                )
+            )
         episode.status = EpisodeStatus.PUBLISHED
         return episode
 

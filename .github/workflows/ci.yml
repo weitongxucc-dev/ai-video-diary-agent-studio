@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - uses: astral-sh/setup-uv@v5
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: npm run test:api
+      - run: npm run test:web-contract
+      - run: npm run test:pixel-style
+      - run: npm run build:web
+      - run: npm run typecheck:web
+      - run: npm run lint:web

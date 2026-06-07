@@ -270,6 +270,8 @@ export function markEpisodePublished(
     play_count?: number;
     like_count?: number;
     comment_count?: number;
+    feedback_value?: FeedbackValue;
+    feedback_reason?: string;
   },
 ): Promise<Episode> {
   return request<Episode>(`/api/episodes/${episodeId}/mark-published`, {

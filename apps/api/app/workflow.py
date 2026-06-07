@@ -4,7 +4,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.models import Episode, FeedbackEvent
+from app.models import Episode, FeedbackEvent, FeedbackValue
 from app.services import EpisodeService
 
 WorkflowAction = Literal[
@@ -45,6 +45,8 @@ class EpisodeWorkflowState(TypedDict, total=False):
     play_count: int | None
     like_count: int | None
     comment_count: int | None
+    feedback_value: FeedbackValue | None
+    feedback_reason: str | None
 
 
 class LangGraphEpisodeWorkflow:
@@ -256,5 +258,7 @@ class LangGraphEpisodeWorkflow:
                 play_count=state.get("play_count"),
                 like_count=state.get("like_count"),
                 comment_count=state.get("comment_count"),
+                feedback_value=state.get("feedback_value"),
+                feedback_reason=state.get("feedback_reason"),
             )
         }

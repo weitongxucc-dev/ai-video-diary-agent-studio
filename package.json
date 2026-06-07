@@ -5,6 +5,7 @@
   "scripts": {
     "dev:web": "corepack pnpm --dir apps/web dev",
     "build:web": "corepack pnpm --dir apps/web build",
+    "typecheck:web": "corepack pnpm --dir apps/web exec tsc --noEmit",
     "lint:web": "corepack pnpm --dir apps/web lint",
     "test:web-contract": "node apps/web/scripts/workflow-contract-check.mjs",
     "test:pixel-style": "node apps/web/scripts/pixel-style-contract-check.mjs",

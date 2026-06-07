@@ -34,6 +34,18 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function feedbackTargetLabel(targetType: string): string {
+  if (targetType === "topic") {
+    return "选题反馈";
+  }
+
+  if (targetType === "published_episode") {
+    return "发布反馈";
+  }
+
+  return "口播段落反馈";
+}
+
 export default async function LearningPage() {
   const { summary, preferences, offline } = await loadLearning();
   const total = summary?.total_count ?? 0;
@@ -85,7 +97,7 @@ export default async function LearningPage() {
               <article className="workspace-row" key={event.id}>
                 <PixelIcon name={event.value === "up" ? "thumb-up" : "thumb-down"} />
                 <div>
-                  <strong>{event.target_type === "topic" ? "选题反馈" : "口播段落反馈"}</strong>
+                  <strong>{feedbackTargetLabel(event.target_type)}</strong>
                   <span>
                     {event.value === "up" ? "喜欢" : "不喜欢"} · {formatDate(event.created_at)}
                     {event.active ? "" : " · 已撤销"}

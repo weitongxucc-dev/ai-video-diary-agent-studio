@@ -23,7 +23,7 @@ export type EpisodeIntakeMode = "planned" | "ad_hoc_video" | "ad_hoc_video_batch
 
 export type FeedbackValue = "up" | "down";
 
-export type FeedbackTargetType = "topic" | "script_section";
+export type FeedbackTargetType = "topic" | "script_section" | "published_episode";
 
 export type ScriptVersionSource =
   | "ai_generated"

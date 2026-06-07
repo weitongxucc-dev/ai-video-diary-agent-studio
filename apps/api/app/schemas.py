@@ -63,7 +63,7 @@ class ScriptVersionResponse(BaseModel):
 class FeedbackEventResponse(BaseModel):
     episode_id: str | None = None
     id: str
-    target_type: Literal["topic", "script_section"]
+    target_type: Literal["topic", "script_section", "published_episode"]
     target_id: str
     value: FeedbackValue
     reason: str | None
@@ -531,6 +531,8 @@ class MarkPublishedRequest(BaseModel):
     play_count: int | None = Field(default=None, ge=0)
     like_count: int | None = Field(default=None, ge=0)
     comment_count: int | None = Field(default=None, ge=0)
+    feedback_value: FeedbackValue | None = None
+    feedback_reason: str | None = None
 
 
 class VoiceCommandRequest(BaseModel):
