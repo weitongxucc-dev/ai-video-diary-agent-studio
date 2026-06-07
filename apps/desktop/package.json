@@ -1,0 +1,90 @@
+{
+  "name": "@ai-video-diary/desktop",
+  "version": "2.0.0-beta.1",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack:mac": "node scripts/with-pnpm-shim.mjs electron-builder --mac dir --publish never",
+    "dist:mac": "node scripts/with-pnpm-shim.mjs electron-builder --mac dmg --publish never"
+  },
+  "build": {
+    "appId": "studio.aivideodiary.agent",
+    "productName": "AI视频日记 Agent Studio",
+    "artifactName": "AI视频日记-Agent-Studio-${version}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "package.json",
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../../apps/api",
+        "to": "api",
+        "filter": [
+          "app/**/*",
+          "pyproject.toml",
+          "uv.lock"
+        ]
+      },
+      {
+        "from": "../../apps/web/.next/standalone",
+        "to": "web-standalone",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../apps/web/.next/standalone/node_modules",
+        "to": "web-standalone/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../apps/web/.next/static",
+        "to": "web-standalone/apps/web/.next/static",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../apps/web/public",
+        "to": "web-standalone/apps/web/public",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "target": [
+        "dmg"
+      ]
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.0"
+  }
+}

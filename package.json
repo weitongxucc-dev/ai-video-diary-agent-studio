@@ -9,8 +9,11 @@
     "lint:web": "corepack pnpm --dir apps/web lint",
     "test:web-contract": "node apps/web/scripts/workflow-contract-check.mjs",
     "test:pixel-style": "node apps/web/scripts/pixel-style-contract-check.mjs",
+    "test:desktop-contract": "node apps/desktop/scripts/desktop-contract-check.mjs",
     "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
     "dev:worker": "cd apps/api && uv run python -m app.automation",
-    "test:api": "cd apps/api && uv run pytest"
+    "test:api": "cd apps/api && uv run pytest",
+    "build:desktop": "corepack pnpm build:web && corepack pnpm --dir apps/desktop pack:mac",
+    "dist:mac": "corepack pnpm build:web && corepack pnpm --dir apps/desktop dist:mac"
   }
 }

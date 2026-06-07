@@ -46,12 +46,13 @@ AI视频日记 Agent Studio 2.0 要从“视频日记 Web 原型”升级为“�
 - 长期偏好记忆已支持从反馈候选中人工确认，确认后写入本地 SQLite；用户可以禁用、恢复、删除，并查看来源证据数、影响范围和置信度。禁用/删除的偏好会在后续 prompt history 中被过滤。
 - 剪映模板和基础特效结构已进入草稿素材包 manifest：导入前展示主视频、背景音乐、封面、标题贴纸、关键词高亮、字幕等轨道，以及标题卡、章节条、关键词高亮、B-roll 插入点、背景音乐、片头片尾等模板元素；用户确认后才导入剪映。
 - 发布评论洞察已接入：用户可在草稿页粘贴发布评论，系统把可解释信号转换为发布域待确认偏好候选，仍需用户在学习页确认后才进入长期记忆。
+- macOS 内测桌面壳已接入 Electron beta：可打包 `.app` / `.dmg`，启动本地 API、Worker 和 Next.js WebView，提供菜单栏/托盘状态、日志/视频/输出/剪映目录入口、退出时子进程清理和 `Command + Shift + Space` 唤起主窗口。当前内测包未签名、未 notarize，API / Worker 仍依赖本机 `uv` 环境。
 
 仍未完成的 2.0 关键项：
 
-- 全局快捷键唤起语音指令台仍需在 macOS 桌面壳阶段实现。
 - 原生剪映 10.7 加密草稿结构写入。
-- macOS 桌面壳、后台 API/Worker 进程管理和 DMG 内测包。
+- 桌面端尚未内置独立 Python runtime，首个内测包仍要求本机安装 `uv`、`ffmpeg` 等依赖。
+- macOS App 尚未签名和 notarize。
 
 ## 1.2 当前交付优先级（2026-06-08）
 
@@ -60,9 +61,9 @@ DMG 是 2.0 的最后交付动作，不应早于核心功能闭环。
 当前后续优先级：
 
 1. P2：攻克或降级处理剪映 10.7 原生加密草稿写入。
-2. P2：补齐 macOS 桌面壳的 API / Worker 进程管理、菜单栏状态、日志/目录入口和崩溃恢复。
-3. P2：补齐全局快捷键唤起语音指令台。
-4. Final：完成 README-beta、签名前检查和 DMG 内测包。
+2. P2：将桌面端 API / Worker 从本机 `uv` 依赖升级为更完整的内置 runtime 或明确的安装检查。
+3. P2：补齐签名、notarize 和更新机制。
+4. Final：继续验证 DMG 在其他同事机器上的首次安装体验。
 
 ## 2. 升级背景
 
@@ -1356,7 +1357,7 @@ updated_at
 ```text
 apps/web       Next.js 前端 UI
 apps/api       FastAPI 本地 API
-apps/desktop   Tauri macOS 客户端
+apps/desktop   macOS 客户端（当前 beta 使用 Electron，Tauri 可作为后续替换方案）
 apps/worker    可选：独立后台任务入口
 ```
 
