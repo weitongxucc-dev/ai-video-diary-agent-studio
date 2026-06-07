@@ -8,7 +8,7 @@
 2. 将 `AI视频日记 Agent Studio.app` 拖入 `Applications`。
 3. 首次打开如果提示来自未验证开发者，请在系统设置里允许打开，或在 Finder 中右键 App 后选择打开。
 
-当前 beta 未签名、未 notarize，所以 macOS Gatekeeper 拦截是预期行为。
+当前 beta 使用本地 ad-hoc 签名，但未使用 Apple Developer ID，也未 notarize，所以 macOS Gatekeeper 拦截仍是预期行为。
 
 ## 本机依赖
 
@@ -61,6 +61,6 @@ App 启动时会先检查 `uv` 和 `ffmpeg` 是否可用，再启动 API、Worke
 ## 已知限制
 
 - 当前 beta 使用本机 `uv` 环境启动 API / Worker，暂未内置独立 Python runtime。
-- 当前 beta 未签名、未 notarize。
+- 当前 beta 只有本地 ad-hoc 签名，未做 Apple Developer ID 签名和 notarize。
 - 剪映 10.7 原生加密草稿写入仍为后续项；当前仍以兼容桥和可追溯素材包为主。
-- 如启动失败，请先查看日志目录中的 `api.log`、`worker.log`、`web.log`。
+- 如启动失败，请先查看日志目录中的 `main.log`、`api.log`、`worker.log`、`web.log`。

@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const path = require("node:path");
 const {
   app,
   BrowserWindow,
@@ -15,6 +16,7 @@ const {
   getDirectoryShortcuts,
   shutdownChildProcesses,
   spawnManagedService,
+  WEB_PORT,
   waitForHttp,
 } = require("./service-manager");
 
@@ -24,6 +26,17 @@ let agentStatus = "启动中";
 let isQuitting = false;
 const childProcesses = [];
 let directoryShortcuts = getDirectoryShortcuts();
+let mainLogPath = path.join(directoryShortcuts.logs, "main.log");
+
+writeMainLog("main process boot");
+process.on("uncaughtException", (error) => {
+  writeMainLog(`uncaughtException: ${formatError(error)}`);
+  showStartupFailure(`桌面主进程异常：${error.message}`);
+});
+process.on("unhandledRejection", (reason) => {
+  writeMainLog(`unhandledRejection: ${formatError(reason)}`);
+  showStartupFailure(`桌面主进程异步异常：${formatError(reason)}`);
+});
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -41,6 +54,7 @@ function createWindow() {
     width: 1280,
   });
 
+  installNavigationGuards(window);
   window.once("ready-to-show", () => window.show());
   window.on("close", (event) => {
     if (!isQuitting) {
@@ -58,6 +72,7 @@ function startupDataUrl(message) {
     <html lang="zh-CN">
       <head>
         <meta charset="utf-8" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
         <title>AI视频日记 Agent Studio</title>
         <style>
           body {
@@ -91,6 +106,7 @@ function startupDataUrl(message) {
 }
 
 async function startServices() {
+  writeMainLog("running dependency preflight");
   const dependencyStatus = checkDesktopDependencies();
   if (!dependencyStatus.ready) {
     setAgentStatus("依赖缺失");
@@ -103,9 +119,11 @@ async function startServices() {
     resourcesPath: process.resourcesPath,
   });
   directoryShortcuts = getDirectoryShortcuts();
+  mainLogPath = path.join(directoryShortcuts.logs, "main.log");
   fs.mkdirSync(serviceConfig.logsDir, { recursive: true });
 
   for (const service of serviceConfig.services) {
+    writeMainLog(`starting ${service.name}: ${service.command} ${service.args.join(" ")}`);
     const child = spawnManagedService(service, console);
     child.on("exit", () => {
       if (!isQuitting) {
@@ -116,9 +134,11 @@ async function startServices() {
   }
 
   setAgentStatus("等待 API");
-  await waitForHttp(`${serviceConfig.apiUrl}/api/runtime/health`, 90000);
+  await waitForHttp(`${serviceConfig.apiUrl}/api/runtime/health`, 90000, {
+    children: childProcesses,
+  });
   setAgentStatus("等待 WebView");
-  await waitForHttp(serviceConfig.webUrl, 90000);
+  await waitForHttp(serviceConfig.webUrl, 90000, { children: childProcesses });
   setAgentStatus("空闲");
   return serviceConfig;
 }
@@ -208,12 +228,89 @@ function directoryMenuItems() {
 }
 
 function setAgentStatus(status) {
+  writeMainLog(`status: ${status}`);
   agentStatus = status;
   if (tray) {
     tray.setToolTip(`AI视频日记 Agent Studio · ${agentStatus}`);
     tray.setContextMenu(buildTrayMenu());
   }
   Menu.setApplicationMenu(buildApplicationMenu());
+}
+
+function installNavigationGuards(window) {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfNeeded(url);
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isTrustedNavigationUrl(url)) {
+      return;
+    }
+    event.preventDefault();
+    openExternalIfNeeded(url);
+  });
+}
+
+function isTrustedNavigationUrl(url) {
+  try {
+    const parsedUrl = new URL(url);
+    return (
+      parsedUrl.protocol === "data:"
+      || (
+        parsedUrl.protocol === "http:"
+        && parsedUrl.hostname === "127.0.0.1"
+        && parsedUrl.port === WEB_PORT
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function openExternalIfNeeded(url) {
+  try {
+    const parsedUrl = new URL(url);
+    if (
+      ["http:", "https:"].includes(parsedUrl.protocol)
+      && !isTrustedNavigationUrl(url)
+    ) {
+      shell.openExternal(url);
+    }
+  } catch {
+    // Invalid URLs are denied by the navigation guard.
+  }
+}
+
+function showStartupFailure(message) {
+  setAgentStatus("启动失败");
+  if (!mainWindow) {
+    dialog.showErrorBox("AI视频日记 Agent Studio 启动失败", message);
+    return;
+  }
+  mainWindow.loadURL(
+    startupDataUrl(`${message}。请打开日志目录查看 main.log、api.log、worker.log 和 web.log。`),
+  );
+  showMainWindow();
+}
+
+function writeMainLog(message) {
+  try {
+    fs.mkdirSync(path.dirname(mainLogPath), { recursive: true });
+    fs.appendFileSync(
+      mainLogPath,
+      `[${new Date().toISOString()}] ${message}\n`,
+      "utf8",
+    );
+  } catch {
+    // Logging must never prevent the app from starting.
+  }
+}
+
+function formatError(error) {
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+  return String(error);
 }
 
 function showMainWindow() {
@@ -264,9 +361,7 @@ app.on("before-quit", async (event) => {
   app.exit(0);
 });
 
-app.on("window-all-closed", (event) => {
-  event.preventDefault();
-});
+app.on("window-all-closed", () => {});
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildApplicationMenu());
@@ -285,7 +380,7 @@ app.whenReady().then(async () => {
       startupDataUrl(
         dependencyMissing
           ? errorMessage
-          : `本地服务启动失败：${errorMessage}。请打开日志目录查看 api.log、worker.log 和 web.log。`,
+          : `本地服务启动失败：${errorMessage}。请打开日志目录查看 main.log、api.log、worker.log 和 web.log。`,
       ),
     );
     showMainWindow();

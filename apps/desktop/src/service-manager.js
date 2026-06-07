@@ -137,10 +137,7 @@ function createServiceConfig({
           API_PORT,
         ],
         cwd: apiCwd,
-        env: {
-          ...env,
-          PYTHONUNBUFFERED: "1",
-        },
+        env: pythonServiceEnv(env),
         logPath: path.join(logsDir, "api.log"),
       },
       {
@@ -148,10 +145,7 @@ function createServiceConfig({
         command: "uv",
         args: ["run", "python", "-m", "app.automation"],
         cwd: apiCwd,
-        env: {
-          ...env,
-          PYTHONUNBUFFERED: "1",
-        },
+        env: pythonServiceEnv(env),
         logPath: path.join(logsDir, "worker.log"),
       },
       webServiceConfig({
@@ -164,6 +158,19 @@ function createServiceConfig({
         webStandalone,
       }),
     ],
+  };
+}
+
+function pythonServiceEnv(env = process.env) {
+  const {
+    ELECTRON_RUN_AS_NODE,
+    NODE_OPTIONS,
+    ...serviceEnv
+  } = env;
+  return {
+    ...serviceEnv,
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONUNBUFFERED: "1",
   };
 }
 
@@ -234,6 +241,7 @@ function spawnManagedService(service, logger = console) {
   });
 
   child.serviceName = service.name;
+  child.serviceLogPath = service.logPath;
   return child;
 }
 
@@ -272,15 +280,44 @@ async function shutdownChildProcesses(children, timeoutMs = 5000) {
   );
 }
 
-async function waitForHttp(url, timeoutMs = 90000) {
+async function waitForHttp(url, timeoutMs = 90000, { children = [] } = {}) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
+    const exitedChildren = exitedChildSummaries(children);
+    if (exitedChildren.length > 0) {
+      throw new Error(
+        `Timed out waiting for ${url}; ${exitedChildren.join("; ")}`,
+      );
+    }
     if (await canConnect(url)) {
       return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 750));
   }
-  throw new Error(`Timed out waiting for ${url}`);
+  const exitedChildren = exitedChildSummaries(children);
+  const exitDetail = exitedChildren.length > 0
+    ? `; ${exitedChildren.join("; ")}`
+    : "";
+  throw new Error(`Timed out waiting for ${url}${exitDetail}`);
+}
+
+function exitedChildSummaries(children) {
+  return children
+    .filter((child) => {
+      if (!child) {
+        return false;
+      }
+      const exitCode = child.exitCode ?? null;
+      const signalCode = child.signalCode ?? null;
+      return exitCode !== null || signalCode !== null;
+    })
+    .map((child) => {
+      const name = child.serviceName || "Service";
+      const code = child.exitCode ?? "null";
+      const signal = child.signalCode ?? "null";
+      const logPath = child.serviceLogPath ? ` log=${child.serviceLogPath}` : "";
+      return `${name} exited early code=${code} signal=${signal}${logPath}`;
+    });
 }
 
 function canConnect(url) {

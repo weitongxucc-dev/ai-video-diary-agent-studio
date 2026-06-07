@@ -16,6 +16,7 @@
       "buildResources": "assets",
       "output": "dist"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "package.json",
       "src/**/*",
@@ -27,6 +28,8 @@
         "to": "api",
         "filter": [
           "app/**/*",
+          "!app/**/__pycache__/**",
+          "!app/**/*.pyc",
           "pyproject.toml",
           "uv.lock"
         ]
