@@ -40,6 +40,10 @@ type ScriptLoadState = {
   script: ScriptPackage | null;
 };
 
+type ScriptPageProps = {
+  searchParams?: Promise<{ script_error?: string }>;
+};
+
 async function loadScriptEpisode(): Promise<ScriptLoadState> {
   let episode: Episode;
 
@@ -146,6 +150,20 @@ function EmptyScriptState({
   );
 }
 
+function ScriptActionErrorBanner({ scriptError }: { scriptError?: string }) {
+  if (scriptError !== "section_rewrite_failed") {
+    return null;
+  }
+
+  return (
+    <section className="script-error-banner pixel-card" role="status">
+      <span className="section-kicker">重写未完成</span>
+      <strong>模型返回格式异常，已保留当前口播稿。</strong>
+      <p>可以再点一次快捷重写，或在“补充要求”里写得更具体一点。</p>
+    </section>
+  );
+}
+
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     day: "2-digit",
@@ -181,7 +199,8 @@ function episodeScriptStatusLabel(status: Episode["status"]): string {
   return labels[status] ?? "编辑中";
 }
 
-export default async function ScriptPage() {
+export default async function ScriptPage({ searchParams }: ScriptPageProps) {
+  const params = await searchParams;
   const { episode, error, script } = await loadScriptEpisode();
   const rewriteIntents = script ? await loadScriptRewriteIntents() : [];
   const scriptFormId = episode ? `script-edit-form-${episode.id}` : undefined;
@@ -198,6 +217,7 @@ export default async function ScriptPage() {
   return (
     <AppShell>
       <div className="script-page">
+        <ScriptActionErrorBanner scriptError={params?.script_error} />
         {script && episode && scriptFormId ? (
           <>
             <form action={saveScriptAction} className="script-edit-owner" id={scriptFormId}>

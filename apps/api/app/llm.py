@@ -174,10 +174,10 @@ class DeepSeekScriptGenerator:
         except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise LLMResponseError("DeepSeek did not return a valid chat completion") from exc
 
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise LLMResponseError("DeepSeek response content was not valid JSON") from exc
+        data = _json_object_from_content(
+            content,
+            "DeepSeek response content was not valid JSON",
+        )
 
         return self._script_from_json(data)
 
@@ -227,12 +227,17 @@ class DeepSeekScriptGenerator:
         try:
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
-            data = json.loads(content)
         except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise LLMResponseError("DeepSeek did not return valid section JSON") from exc
 
+        data = _json_object_from_content(
+            content,
+            "DeepSeek did not return valid section JSON",
+        )
         if not isinstance(data, dict):
             raise LLMResponseError("DeepSeek section JSON must be an object")
+        if "content" not in data:
+            raise LLMResponseError("DeepSeek section JSON must contain content")
         return ScriptSection(
             id=str(data.get("id") or current.id),
             title=str(data.get("title") or current.title),
@@ -457,6 +462,25 @@ def _content_template_payload(template: ContentTemplate | None) -> dict[str, obj
         "publish_copy_rules": [*template.publish_copy_rules],
         "default_feedback_dimensions": [*template.default_feedback_dimensions],
     }
+
+
+def _json_object_from_content(content: object, error_message: str) -> object:
+    if not isinstance(content, str):
+        raise LLMResponseError(error_message)
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(content):
+            if char != "{":
+                continue
+            try:
+                data, _ = decoder.raw_decode(content[index:])
+            except json.JSONDecodeError:
+                continue
+            return data
+    raise LLMResponseError(error_message)
 
 
 def _section_role(index: int, total: int) -> str:

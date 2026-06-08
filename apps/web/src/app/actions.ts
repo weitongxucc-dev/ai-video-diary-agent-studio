@@ -77,6 +77,10 @@ function optionalString(formData: FormData, key: string): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function scriptActionFailureRedirect(error: "section_rewrite_failed"): never {
+  redirect(`/script?script_error=${error}`);
+}
+
 function textField(formData: FormData, key: string): string {
   const value = formData.get(key);
 
@@ -262,16 +266,20 @@ export async function regenerateScriptSectionAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const sectionId = requiredString(formData, "section_id");
 
-  await regenerateEpisodeScriptSection(
-    episodeId,
-    sectionId,
-    {
-      reason: optionalString(formData, "reason"),
-      rewrite_intent_id: optionalString(formData, "rewrite_intent_id"),
-      rewrite_section_title: optionalString(formData, "rewrite_section_title"),
-      rewrite_user_note: optionalString(formData, "rewrite_user_note"),
-    },
-  );
+  try {
+    await regenerateEpisodeScriptSection(
+      episodeId,
+      sectionId,
+      {
+        reason: optionalString(formData, "reason"),
+        rewrite_intent_id: optionalString(formData, "rewrite_intent_id"),
+        rewrite_section_title: optionalString(formData, "rewrite_section_title"),
+        rewrite_user_note: optionalString(formData, "rewrite_user_note"),
+      },
+    );
+  } catch {
+    scriptActionFailureRedirect("section_rewrite_failed");
+  }
   redirect("/script");
 }
 

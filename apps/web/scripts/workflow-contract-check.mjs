@@ -6,6 +6,7 @@ const files = {
   script: new URL("../src/app/script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
   scriptQuickRewritePanel: new URL("../src/components/ScriptQuickRewritePanel.tsx", import.meta.url),
+  scriptQuickRewriteButton: new URL("../src/components/ScriptQuickRewriteButton.tsx", import.meta.url),
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
   agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
@@ -41,6 +42,7 @@ const [
   scriptPage,
   sectionEditor,
   scriptQuickRewritePanel,
+  scriptQuickRewriteButton,
   topicCard,
   agentPanel,
   appShell,
@@ -112,15 +114,34 @@ if (!scriptPage.includes("ScriptQuickRewritePanel")) {
   failures.push("/script must render ScriptQuickRewritePanel for each script section.");
 }
 
+for (const required of ["searchParams", "script_error", "script-error-banner"]) {
+  if (!scriptPage.includes(required)) {
+    failures.push(`/script must show recoverable script action errors with ${required}.`);
+  }
+}
+
 for (const required of [
   "ScriptQuickRewritePanel",
-  "rewrite_intent_id",
   "rewrite_section_title",
   "rewrite_user_note",
   "regenerateScriptSectionAction",
+  "ScriptQuickRewriteButton",
 ]) {
   if (!scriptQuickRewritePanel.includes(required)) {
     failures.push(`ScriptQuickRewritePanel must include ${required}.`);
+  }
+}
+
+if (
+  !scriptQuickRewritePanel.includes("rewrite_intent_id")
+  && !scriptQuickRewriteButton.includes("rewrite_intent_id")
+) {
+  failures.push("ScriptQuickRewritePanel must submit rewrite_intent_id through its button.");
+}
+
+for (const required of ["useFormStatus", "pending", "disabled={pending}", "rewrite_intent_id"]) {
+  if (!scriptQuickRewriteButton.includes(required)) {
+    failures.push(`ScriptQuickRewriteButton must prevent duplicate submits with ${required}.`);
   }
 }
 
@@ -239,6 +260,10 @@ for (const required of [".script-quick-rewrite-panel", ".script-quick-rewrite-gr
   if (!css.includes(required)) {
     failures.push(`globals.css must define script quick rewrite surface ${required}.`);
   }
+}
+
+if (!css.includes(".script-error-banner")) {
+  failures.push("globals.css must define .script-error-banner.");
 }
 
 if (!css.includes(".voice-recording-indicator")) {
@@ -374,6 +399,12 @@ for (const required of ["confirmPreferenceAction", "disablePreferenceAction", "r
 for (const required of ["rewrite_intent_id", "rewrite_section_title", "rewrite_user_note"]) {
   if (!actionsFile.includes(required)) {
     failures.push(`Server actions must accept structured script rewrite field ${required}.`);
+  }
+}
+
+for (const required of ["script_error", "section_rewrite_failed", "catch"]) {
+  if (!actionsFile.includes(required)) {
+    failures.push(`Server actions must redirect script rewrite failures with ${required}.`);
   }
 }
 

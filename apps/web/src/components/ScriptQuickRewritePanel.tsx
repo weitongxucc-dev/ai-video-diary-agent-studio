@@ -1,4 +1,5 @@
 import { regenerateScriptSectionAction } from "@/app/actions";
+import { ScriptQuickRewriteButton } from "@/components/ScriptQuickRewriteButton";
 import type { ScriptRewriteIntent } from "@/lib/types";
 
 export function ScriptQuickRewritePanel({
@@ -27,16 +28,12 @@ export function ScriptQuickRewritePanel({
       </div>
       <div className="script-quick-rewrite-grid" aria-label={`${sectionTitle} 快捷重写`}>
         {intents.map((intent) => (
-          <button
-            className="pixel-button compact secondary"
+          <ScriptQuickRewriteButton
+            description={intent.description}
+            intentId={intent.id}
             key={intent.id}
-            name="rewrite_intent_id"
-            title={intent.description}
-            type="submit"
-            value={intent.id}
-          >
-            {intent.label}
-          </button>
+            label={intent.label}
+          />
         ))}
       </div>
       <input

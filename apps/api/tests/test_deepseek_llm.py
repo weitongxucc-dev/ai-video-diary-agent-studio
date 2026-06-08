@@ -3,7 +3,7 @@ import json
 import httpx
 
 from app.config import Settings
-from app.llm import DeepSeekScriptGenerator
+from app.llm import DeepSeekScriptGenerator, LLMResponseError
 from app.models import ScriptPackage, ScriptSection, SourceRef, TopicCandidate
 
 
@@ -166,3 +166,99 @@ def test_deepseek_script_generator_regenerates_one_section():
     assert section.content == "这是重新生成后的单段内容。"
     assert "只输出 JSON" in captured["payload"]["messages"][0]["content"]
     assert "更像日记" in captured["payload"]["messages"][1]["content"]
+
+
+def test_deepseek_script_generator_recovers_fenced_section_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "```json\n"
+                                '{"id":"point_1","title":"原因 1",'
+                                '"estimated_seconds":24,'
+                                '"content":"保留真实例子，但表达更短。"}'
+                                "\n```"
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    generator = DeepSeekScriptGenerator(
+        Settings(deepseek_api_key="secret", deepseek_model="deepseek-v4-flash"),
+        transport=httpx.MockTransport(handler),
+    )
+    current_script = ScriptPackage(
+        id="script_1",
+        hook="旧开头",
+        sections=[ScriptSection("point_1", "原因 1", 36, "旧内容")],
+        title_options=["标题"],
+        cover_copy="封面",
+        publish_copy="发布",
+        comment_prompt="评论",
+    )
+
+    section = generator.regenerate_section(
+        TopicCandidate(
+            id="topic_1",
+            title="AI 工具为什么越多越难用？",
+            core_viewpoint="选择成本和流程断裂才是核心问题。",
+            reason="来自真实知识库证据。",
+            audience="AI 创作者",
+            outline=["选择成本", "流程断裂", "回到任务"],
+            score=90,
+            source_refs=[],
+        ),
+        current_script,
+        "point_1",
+    )
+
+    assert section.content == "保留真实例子，但表达更短。"
+    assert section.estimated_seconds == 24
+
+
+def test_deepseek_script_generator_wraps_incomplete_section_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"id":"point_1"}'}}]},
+        )
+
+    generator = DeepSeekScriptGenerator(
+        Settings(deepseek_api_key="secret", deepseek_model="deepseek-v4-flash"),
+        transport=httpx.MockTransport(handler),
+    )
+    current_script = ScriptPackage(
+        id="script_1",
+        hook="旧开头",
+        sections=[ScriptSection("point_1", "原因 1", 36, "旧内容")],
+        title_options=["标题"],
+        cover_copy="封面",
+        publish_copy="发布",
+        comment_prompt="评论",
+    )
+
+    try:
+        generator.regenerate_section(
+            TopicCandidate(
+                id="topic_1",
+                title="AI 工具为什么越多越难用？",
+                core_viewpoint="选择成本和流程断裂才是核心问题。",
+                reason="来自真实知识库证据。",
+                audience="AI 创作者",
+                outline=["选择成本", "流程断裂", "回到任务"],
+                score=90,
+                source_refs=[],
+            ),
+            current_script,
+            "point_1",
+        )
+    except LLMResponseError as exc:
+        assert "DeepSeek section JSON must contain content" in str(exc)
+    else:
+        raise AssertionError("incomplete section JSON should raise LLMResponseError")
