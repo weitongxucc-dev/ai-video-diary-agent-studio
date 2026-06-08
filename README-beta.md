@@ -57,6 +57,7 @@ App 启动时会先检查 `uv` 和 `ffmpeg` 是否可用，再启动 API 和 Web
 
 - 日志：`~/Library/Logs/AI视频日记 Agent Studio`
 - 桌面数据库：`~/Library/Application Support/AI视频日记 Agent Studio/agent.sqlite3`
+- 桌面运行时配置：`~/Library/Application Support/AI视频日记 Agent Studio/.env`
 - 待处理视频：`~/Movies/AI视频日记/01_待处理视频`
 - 待发布成片：`~/Movies/AI视频日记/06_待发布成片`
 - 草稿输出：`~/Movies/AI视频日记/05_剪映草稿`

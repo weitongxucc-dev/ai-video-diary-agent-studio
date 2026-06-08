@@ -195,6 +195,11 @@ assert(
     "/Users/example/Library/Application Support/AI视频日记 Agent Studio/agent.sqlite3",
   "Desktop API must use an Application Support database path by default.",
 );
+assert(
+  apiService.env.AI_VIDEO_DIARY_RUNTIME_ENV_PATH ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/.env",
+  "Desktop API must use an Application Support runtime env path by default.",
+);
 for (const service of [apiService]) {
   assert(
     service.env.PYTHONDONTWRITEBYTECODE === "1",
@@ -259,6 +264,11 @@ assert(
   enabledWorkerService.env.DATABASE_PATH ===
     "/Users/example/Library/Application Support/AI视频日记 Agent Studio/agent.sqlite3",
   "Desktop opt-in Worker must use the Application Support database path by default.",
+);
+assert(
+  enabledWorkerService.env.AI_VIDEO_DIARY_RUNTIME_ENV_PATH ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/.env",
+  "Desktop opt-in Worker must use the Application Support runtime env path by default.",
 );
 assert(
   enabledWorkerService.env.PATH.includes("/opt/homebrew/bin"),

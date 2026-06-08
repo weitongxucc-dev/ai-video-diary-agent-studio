@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app import config
-from app.config import write_dotenv_values
+from app.config import load_dotenv_files, runtime_env_file_path, write_dotenv_values
 
 
 def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
@@ -44,3 +44,29 @@ def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
         "UNCHANGED=yes\n"
         "DEEPSEEK_API_KEY=secret\n"
     )
+
+
+def test_runtime_env_file_path_can_be_overridden(tmp_path, monkeypatch):
+    env_path = tmp_path / "runtime.env"
+
+    monkeypatch.setenv("AI_VIDEO_DIARY_RUNTIME_ENV_PATH", str(env_path))
+
+    assert runtime_env_file_path() == env_path
+
+
+def test_load_dotenv_files_reads_runtime_env_override(tmp_path, monkeypatch):
+    env_path = tmp_path / "runtime.env"
+    env_path.write_text(
+        "DEEPSEEK_API_KEY=runtime-secret\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_VIDEO_DIARY_RUNTIME_ENV_PATH", str(env_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+
+    load_dotenv_files()
+
+    assert config.os.environ["DEEPSEEK_API_KEY"] == "runtime-secret"
+    assert config.os.environ["DEEPSEEK_MODEL"] == "deepseek-v4-flash"

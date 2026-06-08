@@ -13,11 +13,24 @@ def _repo_root() -> Path:
 
 
 def runtime_env_file_path() -> Path:
+    override = os.getenv("AI_VIDEO_DIARY_RUNTIME_ENV_PATH")
+    if override:
+        return Path(override).expanduser()
     return _repo_root() / ".env"
 
 
 def load_dotenv_files() -> None:
-    for path in (_repo_root() / ".env", _repo_root() / "apps/api/.env"):
+    dotenv_paths = [
+        runtime_env_file_path(),
+        _repo_root() / ".env",
+        _repo_root() / "apps/api/.env",
+    ]
+    seen: set[Path] = set()
+    for path in dotenv_paths:
+        path = path.expanduser()
+        if path in seen:
+            continue
+        seen.add(path)
         if not path.exists():
             continue
         for raw_line in path.read_text(encoding="utf-8").splitlines():

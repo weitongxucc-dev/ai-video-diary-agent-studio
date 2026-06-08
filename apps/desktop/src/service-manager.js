@@ -30,6 +30,7 @@ const PYTHON_APP_ENV_KEYS = [
   "DEEPSEEK_API_KEY",
   "DEEPSEEK_BASE_URL",
   "DEEPSEEK_MODEL",
+  "AI_VIDEO_DIARY_RUNTIME_ENV_PATH",
   "OBSIDIAN_VAULT_PATH",
   "PRODUCT_HUNT_TOKEN",
   "PRODUCT_HUNT_API_URL",
@@ -163,6 +164,7 @@ function createServiceConfig({
   const directoryShortcuts = getDirectoryShortcuts(homeDir);
   const logsDir = directoryShortcuts.logs;
   const databasePath = path.join(directoryShortcuts.appSupport, "agent.sqlite3");
+  const runtimeEnvPath = path.join(directoryShortcuts.appSupport, ".env");
   const apiBase = `http://127.0.0.1:${API_PORT}`;
 
   const services = [
@@ -179,7 +181,7 @@ function createServiceConfig({
         API_PORT,
       ],
       cwd: apiCwd,
-      env: pythonServiceEnv(env, homeDir, { databasePath }),
+      env: pythonServiceEnv(env, homeDir, { databasePath, runtimeEnvPath }),
       logPath: path.join(logsDir, "api.log"),
     },
   ];
@@ -189,7 +191,7 @@ function createServiceConfig({
       command: "uv",
       args: ["run", "python", "-m", "app.automation"],
       cwd: apiCwd,
-      env: pythonServiceEnv(env, homeDir, { databasePath }),
+      env: pythonServiceEnv(env, homeDir, { databasePath, runtimeEnvPath }),
       logPath: path.join(logsDir, "worker.log"),
     });
   }
@@ -221,7 +223,7 @@ function shouldAutostartWorker(env = process.env) {
 function pythonServiceEnv(
   env = process.env,
   homeDir = os.homedir(),
-  { databasePath = null } = {},
+  { databasePath = null, runtimeEnvPath = null } = {},
 ) {
   const serviceEnv = {};
   for (const key of [...PYTHON_BASE_ENV_KEYS, ...PYTHON_APP_ENV_KEYS]) {
@@ -231,6 +233,9 @@ function pythonServiceEnv(
   }
   if (!serviceEnv.DATABASE_PATH && databasePath) {
     serviceEnv.DATABASE_PATH = databasePath;
+  }
+  if (!serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH && runtimeEnvPath) {
+    serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH = runtimeEnvPath;
   }
   return {
     ...serviceEnv,
