@@ -1694,6 +1694,36 @@ textarea {
   padding: 12px;
 }
 
+.topic-error-banner {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border-color: #8a1f1f;
+  background: #fff1d6;
+  padding: 10px 12px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.topic-error-banner div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.topic-error-banner strong,
+.topic-error-banner p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.topic-error-banner strong {
+  color: #8a1f1f;
+  font-family: var(--font-readable);
+}
+
 .topic-list {
   display: grid;
   min-width: 0;

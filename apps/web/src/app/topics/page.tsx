@@ -14,7 +14,7 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 type TopicsPageProps = {
-  searchParams?: Promise<{ topic_id?: string }>;
+  searchParams?: Promise<{ topic_id?: string; topics_error?: string }>;
 };
 
 type TopicLoadState = {
@@ -76,6 +76,26 @@ function topicFeedbackLabel(feedback: string | null) {
   return "待复核";
 }
 
+function topicActionErrorCopy(error?: string) {
+  if (error === "configuration") {
+    return {
+      title: "选题生成需要先完成配置",
+      description: "请先配置 DeepSeek，并至少保留一个可用素材源。配置完成后再生成今日选题。",
+      actionHref: "/settings",
+      actionLabel: "打开设置",
+    };
+  }
+  if (error === "generation_failed") {
+    return {
+      title: "选题生成暂时失败",
+      description: "服务已经运行，但这次生成没有完成。检查日志或稍后重新生成即可。",
+      actionHref: "/logs",
+      actionLabel: "查看日志",
+    };
+  }
+  return null;
+}
+
 export default async function TopicsPage({ searchParams }: TopicsPageProps) {
   const params = await searchParams;
   const { episode, error } = await loadTopicEpisode();
@@ -83,10 +103,22 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
   const activeTopicId = params?.topic_id ?? episode?.selected_topic_id ?? topics[0]?.id;
   const selected =
     topics.find((topic) => topic.id === activeTopicId) ?? topics[0] ?? null;
+  const actionError = topicActionErrorCopy(params?.topics_error);
 
   return (
     <AppShell>
       <div className="topic-page">
+        {actionError ? (
+          <section className="topic-error-banner pixel-card">
+            <div>
+              <strong>{actionError.title}</strong>
+              <p>{actionError.description}</p>
+            </div>
+            <Link className="pixel-button secondary" href={actionError.actionHref}>
+              {actionError.actionLabel}
+            </Link>
+          </section>
+        ) : null}
         <section className="topic-list" aria-label="候选选题">
           {episode && topics.length > 0 ? (
             <form action={regenerateTopicsAction} className="topic-regenerate-form">

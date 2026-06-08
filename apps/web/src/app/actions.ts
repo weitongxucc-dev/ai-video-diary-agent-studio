@@ -82,6 +82,18 @@ function scriptActionFailureRedirect(error: "section_rewrite_failed"): never {
   redirect(`/script?script_error=${error}`);
 }
 
+function topicActionFailureRedirect(error: unknown): never {
+  const message = error instanceof Error ? error.message : "";
+  const code = message.includes("DeepSeek and at least one topic source must be configured")
+    ? "configuration"
+    : "generation_failed";
+
+  if (code === "configuration") {
+    redirect("/topics?topics_error=configuration");
+  }
+  redirect("/topics?topics_error=generation_failed");
+}
+
 function textField(formData: FormData, key: string): string {
   const value = formData.get(key);
 
@@ -204,7 +216,11 @@ export async function selectContentTemplateAction(formData: FormData) {
 export async function generateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await generateTopics(episodeId);
+  try {
+    await generateTopics(episodeId);
+  } catch (error) {
+    topicActionFailureRedirect(error);
+  }
   redirect("/topics");
 }
 
@@ -226,7 +242,11 @@ export async function sendTopicFeedbackAction(formData: FormData) {
 export async function regenerateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await regenerateTopics(episodeId);
+  try {
+    await regenerateTopics(episodeId);
+  } catch (error) {
+    topicActionFailureRedirect(error);
+  }
   redirect("/topics");
 }
 

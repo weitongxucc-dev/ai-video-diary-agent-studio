@@ -88,6 +88,18 @@ if (!topicsPage.includes("generateTopicsAction")) {
   failures.push("/topics must expose an explicit generate topics action.");
 }
 
+for (const required of ["topics_error", "topic-error-banner", "配置"]) {
+  if (!topicsPage.includes(required)) {
+    failures.push(`/topics must show recoverable topic generation errors with ${required}.`);
+  }
+}
+
+for (const required of ["topicActionFailureRedirect", "topics_error=configuration"]) {
+  if (!actionsFile.includes(required)) {
+    failures.push(`topic generation server actions must redirect recoverable errors with ${required}.`);
+  }
+}
+
 if (topicsPage.includes("await generateTopics(")) {
   failures.push("/topics must not call the model automatically during page load.");
 }
