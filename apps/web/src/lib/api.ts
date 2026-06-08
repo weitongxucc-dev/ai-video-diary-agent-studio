@@ -1,6 +1,7 @@
 import type {
   CommentInsightsResponse,
   ContentTemplates,
+  CoverDraft,
   CreatorProfile,
   CreatorProfileUpdate,
   DiagnosticsStatus,
@@ -147,6 +148,25 @@ export function getContentTemplates(): Promise<ContentTemplates> {
 
 export function getScriptRewriteIntents(): Promise<ScriptRewriteIntents> {
   return request<ScriptRewriteIntents>("/api/script/rewrite-intents");
+}
+
+export function getEpisodeCover(episodeId: string): Promise<CoverDraft> {
+  return request<CoverDraft>(`/api/episodes/${episodeId}/cover`);
+}
+
+export function updateEpisodeCover(
+  episodeId: string,
+  payload: {
+    headline: string;
+    subline: string;
+    tag: string;
+    template_id: string;
+  },
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/cover`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function selectEpisodeContentTemplate(

@@ -3880,6 +3880,132 @@ textarea {
   padding: 8px 10px;
 }
 
+.cover-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 304px;
+  gap: 16px;
+  align-items: start;
+  padding: 16px;
+}
+
+.cover-preview-panel,
+.cover-editor {
+  grid-column: 1;
+}
+
+.cover-page .workspace-side {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.cover-preview-panel,
+.cover-editor {
+  min-width: 0;
+  padding: 14px;
+}
+
+.cover-preview-frame {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  border: 4px solid var(--border-strong);
+  background: #fffaf0;
+  box-shadow: var(--shadow-hard);
+  color: var(--ink);
+}
+
+.cover-preview-top,
+.cover-preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 3px solid var(--border-strong);
+  background: #e8f1ff;
+  margin: 18px;
+  padding: 10px 14px;
+  font-family: var(--font-pixel);
+}
+
+.cover-preview-copy {
+  display: grid;
+  align-content: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 18px 28px;
+}
+
+.cover-preview-copy h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.cover-preview-copy p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #374151;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.cover-preview-footer {
+  background: #2563eb;
+  color: #fff;
+}
+
+.cover-editor-form {
+  display: grid;
+  gap: 12px;
+}
+
+.cover-template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  padding: 10px;
+}
+
+.cover-template-grid legend {
+  padding: 0 6px;
+  font-family: var(--font-pixel);
+}
+
+.cover-template-option {
+  display: grid;
+  grid-template-columns: auto 16px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  background: var(--bg-panel);
+  padding: 8px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.cover-template-option span {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-strong);
+  background: var(--cover-accent, #1d4ed8);
+}
+
+.cover-template-option strong,
+.cover-template-option em {
+  grid-column: 3;
+  overflow-wrap: anywhere;
+}
+
+.cover-template-option em {
+  color: var(--muted);
+  font-style: normal;
+  line-height: 1.4;
+}
+
 .draft-template-preview {
   display: grid;
   gap: 8px;
@@ -5138,6 +5264,7 @@ textarea {
   .script-page,
   .video-page,
   .workspace-page,
+  .cover-page,
   .edit-plan-page {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5160,6 +5287,13 @@ textarea {
   .edit-plan-side,
   .agent-panel {
     position: static;
+  }
+
+  .cover-preview-panel,
+  .cover-editor,
+  .cover-page .workspace-side {
+    grid-column: auto;
+    grid-row: auto;
   }
 }
 

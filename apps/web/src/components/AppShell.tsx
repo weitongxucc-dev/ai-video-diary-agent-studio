@@ -19,6 +19,7 @@ const navItems: NavItem[] = [
   { href: "/profile", label: "创作者画像", icon: "person" },
   { href: "/topics", label: "选题池", icon: "note" },
   { href: "/script", label: "口播稿", icon: "script" },
+  { href: "/cover", label: "封面", icon: "cover" },
   { href: "/video", label: "视频处理", icon: "video" },
   { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
   { href: "/draft", label: "剪映草稿", icon: "clip" },

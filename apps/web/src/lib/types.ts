@@ -216,6 +216,24 @@ export type ScriptRewriteIntents = {
   intents: ScriptRewriteIntent[];
 };
 
+export type CoverTemplate = {
+  template_id: string;
+  name: string;
+  description: string;
+  accent: string;
+};
+
+export type CoverDraft = {
+  episode_id: string;
+  headline: string;
+  subline: string;
+  tag: string;
+  template_id: string;
+  preview_aspect_ratio: string;
+  cover_copy: string;
+  templates: CoverTemplate[];
+};
+
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
 
 export type RuntimeHealthItem = {

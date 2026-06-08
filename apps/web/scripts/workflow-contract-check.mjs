@@ -22,6 +22,7 @@ const files = {
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
   profile: new URL("../src/app/profile/page.tsx", import.meta.url),
   draft: new URL("../src/app/draft/page.tsx", import.meta.url),
+  cover: new URL("../src/app/cover/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
   logs: new URL("../src/app/logs/page.tsx", import.meta.url),
   setup: new URL("../src/app/setup/page.tsx", import.meta.url),
@@ -58,6 +59,7 @@ const [
   settingsPage,
   profilePage,
   draftPage,
+  coverPage,
   editPlanPage,
   logsPage,
   setupPage,
@@ -197,6 +199,21 @@ if (editPlanRouteIndex === -1) {
   }
 }
 
+const coverRoute = 'href: "/cover"';
+const coverRouteIndex = appShell.indexOf(coverRoute);
+if (coverRouteIndex === -1) {
+  failures.push("AppShell must expose /cover as the 2.1 cover editor route.");
+} else {
+  const nextRouteIndex = appShell.indexOf("},", coverRouteIndex);
+  const navSlice = appShell.slice(
+    coverRouteIndex,
+    nextRouteIndex === -1 ? coverRouteIndex + 120 : nextRouteIndex,
+  );
+  if (navSlice.includes("disabled: true")) {
+    failures.push("/cover must not be disabled in the sidebar.");
+  }
+}
+
 if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceCommandConsole")) {
   failures.push("AppShell must render the reusable VoiceCommandConsole.");
 }
@@ -330,6 +347,12 @@ if (!apiFile.includes("getScriptRewriteIntents")) {
   failures.push("API client must load script quick rewrite intents.");
 }
 
+for (const required of ["getEpisodeCover", "updateEpisodeCover", "/api/episodes/${episodeId}/cover"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must expose cover editor API ${required}.`);
+  }
+}
+
 if (!apiFile.includes("/api/script/rewrite-intents")) {
   failures.push("API client must call the script quick rewrite intents route.");
 }
@@ -382,8 +405,18 @@ for (const required of ["ScriptRewriteIntent", "ScriptRewriteIntents"]) {
   }
 }
 
+for (const required of ["CoverDraft", "CoverTemplate"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`Types must expose ${required}.`);
+  }
+}
+
 if (!actionsFile.includes("selectContentTemplateAction")) {
   failures.push("Server actions must submit content template selection.");
+}
+
+if (!actionsFile.includes("updateCoverAction")) {
+  failures.push("Server actions must expose a cover update action.");
 }
 
 if (!actionsFile.includes("redirect_to")) {
@@ -412,6 +445,26 @@ for (const required of ["getContentTemplates", "selectContentTemplateAction", "t
   if (!templatesPage.includes(required)) {
     failures.push(`/templates must include ${required}.`);
   }
+}
+
+for (const required of [
+  "getEpisodeCover",
+  "updateCoverAction",
+  "cover-preview-frame",
+  "cover-editor-form",
+  "cover-template-grid",
+  "headline",
+  "subline",
+  "tag",
+  "template_id",
+]) {
+  if (!coverPage.includes(required)) {
+    failures.push(`/cover must implement cover editor field/surface ${required}.`);
+  }
+}
+
+if (!draftPage.includes('href="/cover"')) {
+  failures.push("/draft must link to the cover editor before package generation.");
 }
 
 for (const required of ["getRuntimeHealth", "运行健康", "修复动作", "DeepSeek", "ffmpeg"]) {
@@ -537,6 +590,12 @@ for (const required of ["剪映轨道结构", "基础模板元素", "track_previ
 for (const required of [".draft-template-preview", ".draft-track-preview", ".draft-effect-chip"]) {
   if (!css.includes(required)) {
     failures.push(`globals.css must define Jianying template preview surface ${required}.`);
+  }
+}
+
+for (const required of [".cover-page", ".cover-preview-frame", ".cover-editor-form", ".cover-template-grid", ".cover-template-option"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define cover editor surface ${required}.`);
   }
 }
 

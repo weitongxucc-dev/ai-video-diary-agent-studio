@@ -262,6 +262,31 @@ class ContentTemplatesResponse(BaseModel):
     templates: list[ContentTemplateResponse]
 
 
+class CoverTemplateResponse(BaseModel):
+    template_id: str
+    name: str
+    description: str
+    accent: str
+
+
+class CoverDraftResponse(BaseModel):
+    episode_id: str
+    headline: str
+    subline: str
+    tag: str
+    template_id: str
+    preview_aspect_ratio: str
+    cover_copy: str
+    templates: list[CoverTemplateResponse]
+
+
+class CoverUpdateRequest(BaseModel):
+    headline: str
+    subline: str = ""
+    tag: str = ""
+    template_id: str = "pixel_diary"
+
+
 class RuntimeHealthSummaryResponse(BaseModel):
     total: int
     ready: int

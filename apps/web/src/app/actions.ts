@@ -29,6 +29,7 @@ import {
   sendFeedback,
   selectEpisodeContentTemplate,
   syncSourceItems,
+  updateEpisodeCover,
   updateCreatorProfile,
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
@@ -293,6 +294,18 @@ export async function revertScriptVersionAction(formData: FormData) {
     optionalString(formData, "reason"),
   );
   redirect("/script");
+}
+
+export async function updateCoverAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  await updateEpisodeCover(episodeId, {
+    headline: requiredString(formData, "headline"),
+    subline: textField(formData, "subline"),
+    tag: textField(formData, "tag"),
+    template_id: requiredString(formData, "template_id"),
+  });
+  redirect("/cover");
 }
 
 export async function revertFeedbackAction(formData: FormData) {

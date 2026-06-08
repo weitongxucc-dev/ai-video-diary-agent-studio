@@ -75,6 +75,9 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
             '"/api/episodes/{episode_id}/feedback"',
             '"/api/episodes/{episode_id}/feedback/revert"',
         ],
+        "cover.py": [
+            '"/api/episodes/{episode_id}/cover"',
+        ],
     }
 
     for module_name, route_literals in expected_modules.items():

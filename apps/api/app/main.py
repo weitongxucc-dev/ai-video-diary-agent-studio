@@ -34,6 +34,7 @@ from app.preference_memory import (
 )
 from app.repository import EpisodeRepository
 from app.routers import diagnostics as diagnostics_router
+from app.routers import cover as cover_router
 from app.routers import drafts as drafts_router
 from app.routers import episode_media as episode_media_router
 from app.routers import episode_workflow as episode_workflow_router
@@ -183,6 +184,7 @@ app.include_router(sources_router.create_router(get_app_context))
 app.include_router(feedback_router.create_router(get_app_context))
 app.include_router(preferences_router.create_router(get_app_context))
 app.include_router(episode_workflow_router.create_router(get_app_context))
+app.include_router(cover_router.create_router(get_app_context))
 app.include_router(videos_router.create_router(get_app_context))
 app.include_router(drafts_router.create_router(get_app_context))
 app.include_router(episode_media_router.create_router(get_app_context))

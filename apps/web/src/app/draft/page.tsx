@@ -134,6 +134,9 @@ export default async function DraftPage() {
             <Link className="pixel-button secondary" href="/video">
               去处理视频
             </Link>
+            <Link className="pixel-button secondary" href="/cover">
+              编辑封面
+            </Link>
           </div>
 
           <div className="draft-flow" aria-label="剪映草稿流程">
