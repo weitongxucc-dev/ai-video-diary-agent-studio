@@ -22,6 +22,7 @@ import type {
   RuntimeHealth,
   RuntimeSettings,
   RuntimeSettingsUpdate,
+  ScriptRewriteIntents,
   ScriptPackage,
   SourceItems,
   SystemStatus,
@@ -142,6 +143,10 @@ export function getKnowledgeNotes(query?: string): Promise<KnowledgeNote[]> {
 
 export function getContentTemplates(): Promise<ContentTemplates> {
   return request<ContentTemplates>("/api/content-templates");
+}
+
+export function getScriptRewriteIntents(): Promise<ScriptRewriteIntents> {
+  return request<ScriptRewriteIntents>("/api/script/rewrite-intents");
 }
 
 export function selectEpisodeContentTemplate(
@@ -419,16 +424,33 @@ export function regenerateEpisodeScript(
   });
 }
 
+export type ScriptSectionRegenerateInput = {
+  reason?: string;
+  rewrite_intent_id?: string;
+  rewrite_section_title?: string;
+  rewrite_user_note?: string;
+};
+
 export function regenerateEpisodeScriptSection(
   episodeId: string,
   sectionId: string,
-  reason?: string,
+  input?: string | ScriptSectionRegenerateInput,
 ): Promise<Episode> {
+  const payload =
+    typeof input === "string"
+      ? { reason: input }
+      : {
+          reason: input?.reason ?? null,
+          rewrite_intent_id: input?.rewrite_intent_id ?? null,
+          rewrite_section_title: input?.rewrite_section_title ?? null,
+          rewrite_user_note: input?.rewrite_user_note ?? null,
+        };
+
   return request<Episode>(
     `/api/episodes/${episodeId}/script/sections/${sectionId}/regenerate`,
     {
       method: "POST",
-      body: JSON.stringify({ reason: reason ?? null }),
+      body: JSON.stringify(payload),
     },
   );
 }

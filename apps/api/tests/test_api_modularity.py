@@ -53,6 +53,7 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
             '"/api/episodes/{episode_id}/create-draft"',
         ],
         "episode_workflow.py": [
+            '"/api/script/rewrite-intents"',
             '"/api/episodes/today"',
             '"/api/episodes"',
             '"/api/episodes/{episode_id}"',

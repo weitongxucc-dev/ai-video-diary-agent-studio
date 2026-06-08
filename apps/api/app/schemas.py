@@ -140,6 +140,20 @@ class ScriptRegenerateRequest(BaseModel):
 
 class ScriptSectionRegenerateRequest(BaseModel):
     reason: str | None = None
+    rewrite_intent_id: str | None = None
+    rewrite_section_title: str | None = None
+    rewrite_user_note: str | None = None
+
+
+class ScriptRewriteIntentResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    prompt_hint: str
+
+
+class ScriptRewriteIntentsResponse(BaseModel):
+    intents: list[ScriptRewriteIntentResponse]
 
 
 class ScriptVersionRevertRequest(BaseModel):

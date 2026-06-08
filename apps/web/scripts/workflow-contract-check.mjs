@@ -5,6 +5,7 @@ const files = {
   topics: new URL("../src/app/topics/page.tsx", import.meta.url),
   script: new URL("../src/app/script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
+  scriptQuickRewritePanel: new URL("../src/components/ScriptQuickRewritePanel.tsx", import.meta.url),
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
   agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
@@ -39,6 +40,7 @@ const [
   topicsPage,
   scriptPage,
   sectionEditor,
+  scriptQuickRewritePanel,
   topicCard,
   agentPanel,
   appShell,
@@ -100,6 +102,26 @@ if (!topicsPage.includes("searchParams") || !topicsPage.includes("topic_id")) {
 
 if (!topicsPage.includes("activeTopicId")) {
   failures.push("/topics must pass the active topic id into candidate cards.");
+}
+
+if (!scriptPage.includes("getScriptRewriteIntents")) {
+  failures.push("/script must load script quick rewrite intents.");
+}
+
+if (!scriptPage.includes("ScriptQuickRewritePanel")) {
+  failures.push("/script must render ScriptQuickRewritePanel for each script section.");
+}
+
+for (const required of [
+  "ScriptQuickRewritePanel",
+  "rewrite_intent_id",
+  "rewrite_section_title",
+  "rewrite_user_note",
+  "regenerateScriptSectionAction",
+]) {
+  if (!scriptQuickRewritePanel.includes(required)) {
+    failures.push(`ScriptQuickRewritePanel must include ${required}.`);
+  }
 }
 
 if (!topicCard.includes("topic_id=${encodeURIComponent(topic.id)}")) {
@@ -213,6 +235,12 @@ for (const required of [".voice-command-console", ".edit-plan-page", ".video-pre
   }
 }
 
+for (const required of [".script-quick-rewrite-panel", ".script-quick-rewrite-grid", ".script-quick-rewrite-note"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define script quick rewrite surface ${required}.`);
+  }
+}
+
 if (!css.includes(".voice-recording-indicator")) {
   failures.push("globals.css must define .voice-recording-indicator.");
 }
@@ -273,6 +301,20 @@ if (!apiFile.includes("selectEpisodeContentTemplate")) {
   failures.push("API client must select an episode content template.");
 }
 
+if (!apiFile.includes("getScriptRewriteIntents")) {
+  failures.push("API client must load script quick rewrite intents.");
+}
+
+if (!apiFile.includes("/api/script/rewrite-intents")) {
+  failures.push("API client must call the script quick rewrite intents route.");
+}
+
+for (const required of ["ScriptSectionRegenerateInput", "rewrite_intent_id", "rewrite_section_title", "rewrite_user_note"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must submit structured script rewrite field ${required}.`);
+  }
+}
+
 if (!apiFile.includes("getRuntimeHealth")) {
   failures.push("API client must load runtime health diagnostics.");
 }
@@ -309,6 +351,12 @@ for (const required of ["PreferenceCandidate", "LongTermPreference"]) {
   }
 }
 
+for (const required of ["ScriptRewriteIntent", "ScriptRewriteIntents"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`Types must expose ${required}.`);
+  }
+}
+
 if (!actionsFile.includes("selectContentTemplateAction")) {
   failures.push("Server actions must submit content template selection.");
 }
@@ -320,6 +368,12 @@ if (!actionsFile.includes("redirect_to")) {
 for (const required of ["confirmPreferenceAction", "disablePreferenceAction", "restorePreferenceAction", "deletePreferenceAction"]) {
   if (!actionsFile.includes(required)) {
     failures.push(`Server actions must expose long-term preference action ${required}.`);
+  }
+}
+
+for (const required of ["rewrite_intent_id", "rewrite_section_title", "rewrite_user_note"]) {
+  if (!actionsFile.includes(required)) {
+    failures.push(`Server actions must accept structured script rewrite field ${required}.`);
   }
 }
 

@@ -2361,6 +2361,48 @@ textarea {
   box-shadow: var(--shadow-hard-small);
 }
 
+.script-quick-rewrite-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(180px, 260px);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  border-top: 0;
+  background: #f4efd8;
+  padding: 8px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.script-quick-rewrite-head {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.script-quick-rewrite-head strong {
+  overflow-wrap: anywhere;
+  font-family: var(--font-pixel);
+  font-size: 13px;
+}
+
+.script-quick-rewrite-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.script-quick-rewrite-note {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 0;
+  background: #fff;
+  padding: 7px 8px;
+  color: var(--ink);
+}
+
 .section-regenerate-form,
 .script-control-form,
 .feedback-revert-form {
@@ -5410,6 +5452,7 @@ textarea {
   }
 
   .script-section-tools,
+  .script-quick-rewrite-panel,
   .section-regenerate-form,
   .script-control-form,
   .feedback-revert-form,
@@ -5439,6 +5482,7 @@ textarea {
   }
 
   .section-regenerate-form input,
+  .script-quick-rewrite-note,
   .script-control-form input,
   .section-regenerate-form .pixel-button,
   .script-control-form .pixel-button,

@@ -205,6 +205,17 @@ export type ContentTemplates = {
   templates: ContentTemplate[];
 };
 
+export type ScriptRewriteIntent = {
+  id: string;
+  label: string;
+  description: string;
+  prompt_hint: string;
+};
+
+export type ScriptRewriteIntents = {
+  intents: ScriptRewriteIntent[];
+};
+
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
 
 export type RuntimeHealthItem = {

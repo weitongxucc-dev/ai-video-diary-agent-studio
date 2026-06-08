@@ -22,12 +22,14 @@ from app.schemas import (
     MarkPublishedRequest,
     ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
+    ScriptRewriteIntentsResponse,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
     VoiceTranscriptionResponse,
 )
+from app.script_rewrite_intents import script_rewrite_intents, script_rewrite_reason
 from app.topics import TopicGenerationConfigurationError, TopicGenerationResponseError
 from app.voice_commands import parse_voice_command
 from app.voice_transcription import transcribe_voice_audio
@@ -35,6 +37,10 @@ from app.voice_transcription import transcribe_voice_audio
 
 def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/script/rewrite-intents", response_model=ScriptRewriteIntentsResponse)
+    def get_script_rewrite_intents() -> ScriptRewriteIntentsResponse:
+        return ScriptRewriteIntentsResponse(intents=script_rewrite_intents())
 
     @router.get("/api/episodes/today", response_model=EpisodeResponse)
     def get_today_episode() -> EpisodeResponse:
@@ -222,6 +228,7 @@ def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
     ) -> EpisodeResponse:
         context = get_context()
         try:
+            reason = _script_section_regenerate_reason(request)
             episode = context.workflow.run(
                 "regenerate_script_section",
                 _episode_or_404(context, episode_id),
@@ -230,9 +237,11 @@ def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
                     context,
                     episode_id,
                 ),
-                reason=request.reason,
+                reason=reason,
                 creator_profile=context.creator_profile_repo.load(),
             )
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except LLMConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except LLMResponseError as exc:
@@ -482,3 +491,15 @@ def _episode_or_404(context: AppContext, episode_id: str):
         return episode_media_flow.get_episode(context, episode_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="episode not found") from exc
+
+
+def _script_section_regenerate_reason(
+    request: ScriptSectionRegenerateRequest,
+) -> str | None:
+    if not request.rewrite_intent_id:
+        return request.reason
+    return script_rewrite_reason(
+        request.rewrite_intent_id,
+        section_title=request.rewrite_section_title or "当前段落",
+        user_note=request.rewrite_user_note,
+    )

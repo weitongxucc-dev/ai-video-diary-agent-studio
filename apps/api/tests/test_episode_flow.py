@@ -493,6 +493,34 @@ def test_script_section_regeneration_replaces_only_target_section():
     assert body["script_versions"][-1]["changed_section_ids"] == [section_id]
 
 
+def test_script_section_regeneration_accepts_structured_quick_rewrite_reason():
+    episode = client.post("/api/episodes").json()
+    topics = client.post(f"/api/episodes/{episode['id']}/generate-topics").json()["topics"]
+    client.post(
+        f"/api/episodes/{episode['id']}/approve-topic",
+        json={"topic_id": topics[0]["id"]},
+    )
+    generated = client.post(f"/api/episodes/{episode['id']}/generate-script").json()
+    section_id = generated["script"]["sections"][0]["id"]
+
+    response = client.post(
+        f"/api/episodes/{episode['id']}/script/sections/{section_id}/regenerate",
+        json={
+            "rewrite_intent_id": "shorter",
+            "rewrite_section_title": "工具坑点",
+            "rewrite_user_note": "保留真实案例",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["script_versions"][-1]["reason"] == (
+        "快捷重写：工具坑点 -> 更短；"
+        "压缩到更短、更紧凑，删掉重复解释，保留关键判断。"
+        "补充要求：保留真实案例"
+    )
+
+
 def test_episode_video_to_draft_to_publish_flow_updates_episode_state(tmp_path):
     inbox = tmp_path / "inbox"
     processed = tmp_path / "processed"

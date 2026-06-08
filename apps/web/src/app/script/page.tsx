@@ -9,9 +9,20 @@ import {
 } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
+import { ScriptQuickRewritePanel } from "@/components/ScriptQuickRewritePanel";
 import { ScriptSectionEditor } from "@/components/ScriptSectionEditor";
-import { generateScript, generateTopics, getTodayEpisode } from "@/lib/api";
-import type { Episode, ScriptPackage, ScriptVersionSource } from "@/lib/types";
+import {
+  generateScript,
+  generateTopics,
+  getScriptRewriteIntents,
+  getTodayEpisode,
+} from "@/lib/api";
+import type {
+  Episode,
+  ScriptPackage,
+  ScriptRewriteIntent,
+  ScriptVersionSource,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +78,14 @@ async function loadScriptEpisode(): Promise<ScriptLoadState> {
   }
 
   return { episode, error: null, script: episode.script };
+}
+
+async function loadScriptRewriteIntents(): Promise<ScriptRewriteIntent[]> {
+  try {
+    return (await getScriptRewriteIntents()).intents;
+  } catch {
+    return [];
+  }
 }
 
 function EmptyScriptState({
@@ -164,6 +183,7 @@ function episodeScriptStatusLabel(status: Episode["status"]): string {
 
 export default async function ScriptPage() {
   const { episode, error, script } = await loadScriptEpisode();
+  const rewriteIntents = script ? await loadScriptRewriteIntents() : [];
   const scriptFormId = episode ? `script-edit-form-${episode.id}` : undefined;
   const titleOptions = script?.title_options.length ? script.title_options : [""];
   const versions = episode ? [...episode.script_versions].reverse() : [];
@@ -236,6 +256,12 @@ export default async function ScriptPage() {
               {script.sections.map((section) => (
                 <div className="script-section-stack" key={section.id}>
                   <ScriptSectionEditor formId={scriptFormId} section={section} />
+                  <ScriptQuickRewritePanel
+                    episodeId={episode.id}
+                    intents={rewriteIntents}
+                    sectionId={section.id}
+                    sectionTitle={section.title}
+                  />
                   <div className="script-section-tools">
                     <div className="feedback-actions" aria-label={`${section.title} 反馈操作`}>
                       <form action={sendScriptSectionFeedbackAction}>

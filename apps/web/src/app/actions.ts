@@ -265,7 +265,12 @@ export async function regenerateScriptSectionAction(formData: FormData) {
   await regenerateEpisodeScriptSection(
     episodeId,
     sectionId,
-    optionalString(formData, "reason"),
+    {
+      reason: optionalString(formData, "reason"),
+      rewrite_intent_id: optionalString(formData, "rewrite_intent_id"),
+      rewrite_section_title: optionalString(formData, "rewrite_section_title"),
+      rewrite_user_note: optionalString(formData, "rewrite_user_note"),
+    },
   );
   redirect("/script");
 }
