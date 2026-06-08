@@ -58,6 +58,71 @@ tags:
     assert "双链：剪映草稿自动化" in source.excerpt
 
 
+def test_public_status_tolerates_interrupted_obsidian_markdown_scan(
+    tmp_path,
+    monkeypatch,
+):
+    vault_path = tmp_path / "vault"
+    vault_path.mkdir()
+
+    def interrupted_rglob(self, pattern):
+        raise InterruptedError("scan interrupted")
+
+    monkeypatch.setattr("app.config.Path.rglob", interrupted_rglob)
+
+    status = Settings(
+        obsidian_vault_path=str(vault_path),
+        hermes_radar_path=None,
+    ).public_status()
+
+    assert status["obsidian"]["exists"] is True
+    assert status["obsidian"]["markdown_count"] == 0
+
+
+def test_public_status_does_not_count_obsidian_notes_during_status_check(
+    tmp_path,
+    monkeypatch,
+):
+    vault_path = tmp_path / "vault"
+    vault_path.mkdir()
+    for index in range(20):
+        (vault_path / f"note-{index}.md").write_text("note", encoding="utf-8")
+
+    def fail_rglob(self, pattern):
+        raise AssertionError("system status should not scan Obsidian markdown files")
+
+    monkeypatch.setattr("app.config.Path.rglob", fail_rglob)
+
+    status = Settings(
+        obsidian_vault_path=str(vault_path),
+        hermes_radar_path=None,
+    ).public_status()
+
+    assert status["obsidian"]["exists"] is True
+    assert status["obsidian"]["markdown_count"] == 0
+
+
+def test_public_status_does_not_scan_video_inbox_for_pending_count(
+    tmp_path,
+    monkeypatch,
+):
+    video_inbox = tmp_path / "videos"
+    video_inbox.mkdir()
+
+    def fail_iterdir(self):
+        raise AssertionError("system status should not scan video directories")
+
+    monkeypatch.setattr("app.config.Path.iterdir", fail_iterdir)
+
+    status = Settings(
+        hermes_radar_path=None,
+        video_inbox_path=str(video_inbox),
+    ).public_status()
+
+    assert status["video"]["inbox_exists"] is True
+    assert status["video"]["pending_count"] == 0
+
+
 def test_deepseek_topic_generator_uses_real_obsidian_notes_and_json_completion(tmp_path):
     vault = tmp_path / "vault"
     notes_dir = vault / "AI工程"
@@ -297,5 +362,5 @@ def test_settings_status_reports_obsidian_without_note_content(tmp_path):
     assert status["obsidian"]["configured"] is True
     assert status["obsidian"]["exists"] is True
     assert status["obsidian"]["path"] == str(vault)
-    assert status["obsidian"]["markdown_count"] == 1
+    assert status["obsidian"]["markdown_count"] == 0
     assert "私密笔记" not in json.dumps(status, ensure_ascii=False)

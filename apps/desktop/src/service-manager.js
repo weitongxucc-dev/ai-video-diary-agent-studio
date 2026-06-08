@@ -7,6 +7,50 @@ const { spawn } = require("node:child_process");
 
 const API_PORT = "8000";
 const WEB_PORT = "3000";
+const PYTHON_BASE_ENV_KEYS = [
+  "HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "SSL_CERT_FILE",
+  "REQUESTS_CA_BUNDLE",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+];
+const PYTHON_APP_ENV_KEYS = [
+  "DEEPSEEK_API_KEY",
+  "DEEPSEEK_BASE_URL",
+  "DEEPSEEK_MODEL",
+  "OBSIDIAN_VAULT_PATH",
+  "PRODUCT_HUNT_TOKEN",
+  "PRODUCT_HUNT_API_URL",
+  "TOPIC_SOURCE_URLS",
+  "HERMES_RADAR_PATH",
+  "VIDEO_INBOX_PATH",
+  "VIDEO_OUTPUT_PATH",
+  "DRAFT_OUTPUT_PATH",
+  "JIANYING_DRAFT_ROOT_PATH",
+  "DATABASE_PATH",
+  "TENCENTCLOUD_SECRET_ID",
+  "TENCENTCLOUD_SECRET_KEY",
+  "TENCENTCLOUD_ASR_REGION",
+  "TENCENTCLOUD_ASR_ENGINE_MODEL_TYPE",
+  "TENCENTCLOUD_ASR_MAX_WAIT_SECONDS",
+  "TENCENTCLOUD_ASR_POLL_INTERVAL_SECONDS",
+  "TENCENTCLOUD_ASR_MAX_LOCAL_AUDIO_BYTES",
+  "LOCAL_WHISPER_PYTHON_PATH",
+  "LOCAL_WHISPER_MODEL_PATH",
+  "LOCAL_WHISPER_LANGUAGE",
+];
 const REQUIRED_DESKTOP_DEPENDENCIES = [
   {
     id: "uv",
@@ -116,62 +160,90 @@ function createServiceConfig({
     ? path.join(resourcesPath, "web-standalone", "apps", "web", "server.js")
     : path.join(repoRoot(), "apps", "web", ".next", "standalone", "apps", "web", "server.js");
   const webDevCwd = path.join(repoRoot(), "apps", "web");
-  const logsDir = getDirectoryShortcuts(homeDir).logs;
+  const directoryShortcuts = getDirectoryShortcuts(homeDir);
+  const logsDir = directoryShortcuts.logs;
+  const databasePath = path.join(directoryShortcuts.appSupport, "agent.sqlite3");
   const apiBase = `http://127.0.0.1:${API_PORT}`;
+
+  const services = [
+    {
+      name: "API",
+      command: "uv",
+      args: [
+        "run",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        API_PORT,
+      ],
+      cwd: apiCwd,
+      env: pythonServiceEnv(env, homeDir, { databasePath }),
+      logPath: path.join(logsDir, "api.log"),
+    },
+  ];
+  if (shouldAutostartWorker(env)) {
+    services.push({
+      name: "Worker",
+      command: "uv",
+      args: ["run", "python", "-m", "app.automation"],
+      cwd: apiCwd,
+      env: pythonServiceEnv(env, homeDir, { databasePath }),
+      logPath: path.join(logsDir, "worker.log"),
+    });
+  }
+  services.push(
+    webServiceConfig({
+      apiBase,
+      appPath,
+      env,
+      isPackaged,
+      logPath: path.join(logsDir, "web.log"),
+      webDevCwd,
+      webStandalone,
+    }),
+  );
 
   return {
     apiUrl: apiBase,
+    apiReadinessUrl: `${apiBase}/api/runtime/ping`,
     webUrl: `http://127.0.0.1:${WEB_PORT}`,
     logsDir,
-    services: [
-      {
-        name: "API",
-        command: "uv",
-        args: [
-          "run",
-          "uvicorn",
-          "app.main:app",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          API_PORT,
-        ],
-        cwd: apiCwd,
-        env: pythonServiceEnv(env),
-        logPath: path.join(logsDir, "api.log"),
-      },
-      {
-        name: "Worker",
-        command: "uv",
-        args: ["run", "python", "-m", "app.automation"],
-        cwd: apiCwd,
-        env: pythonServiceEnv(env),
-        logPath: path.join(logsDir, "worker.log"),
-      },
-      webServiceConfig({
-        apiBase,
-        appPath,
-        env,
-        isPackaged,
-        logPath: path.join(logsDir, "web.log"),
-        webDevCwd,
-        webStandalone,
-      }),
-    ],
+    services,
   };
 }
 
-function pythonServiceEnv(env = process.env) {
-  const {
-    ELECTRON_RUN_AS_NODE,
-    NODE_OPTIONS,
-    ...serviceEnv
-  } = env;
+function shouldAutostartWorker(env = process.env) {
+  return env.AI_VIDEO_DIARY_DESKTOP_AUTOSTART_WORKER === "1";
+}
+
+function pythonServiceEnv(
+  env = process.env,
+  homeDir = os.homedir(),
+  { databasePath = null } = {},
+) {
+  const serviceEnv = {};
+  for (const key of [...PYTHON_BASE_ENV_KEYS, ...PYTHON_APP_ENV_KEYS]) {
+    if (env[key] !== undefined && env[key] !== null && env[key] !== "") {
+      serviceEnv[key] = env[key];
+    }
+  }
+  if (!serviceEnv.DATABASE_PATH && databasePath) {
+    serviceEnv.DATABASE_PATH = databasePath;
+  }
   return {
     ...serviceEnv,
+    HOME: serviceEnv.HOME ?? homeDir,
+    LANG: serviceEnv.LANG ?? "C.UTF-8",
+    PATH: serviceSearchPath(env, homeDir),
     PYTHONDONTWRITEBYTECODE: "1",
     PYTHONUNBUFFERED: "1",
   };
+}
+
+function serviceSearchPath(env = process.env, homeDir = os.homedir()) {
+  return commandSearchPaths(env, homeDir).join(path.delimiter);
 }
 
 function webServiceConfig({
@@ -337,6 +409,7 @@ function canConnect(url) {
 
 function getDirectoryShortcuts(homeDir = os.homedir()) {
   return {
+    appSupport: path.join(homeDir, "Library", "Application Support", "AI视频日记 Agent Studio"),
     logs: path.join(homeDir, "Library", "Logs", "AI视频日记 Agent Studio"),
     videoInbox: path.join(homeDir, "Movies", "AI视频日记", "01_待处理视频"),
     videoOutput: path.join(homeDir, "Movies", "AI视频日记", "06_待发布成片"),

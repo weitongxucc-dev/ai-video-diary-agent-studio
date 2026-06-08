@@ -59,17 +59,43 @@ class HermesRadarSourceClient:
         report = self._report_path(None)
         return report.name if report else None
 
-    def status(self) -> HermesRadarStatus:
-        items = self.fetch_items()
+    def status(self, *, include_report_counts: bool = False) -> HermesRadarStatus:
+        exists = self._report_dir_exists()
+        if not include_report_counts:
+            return HermesRadarStatus(
+                configured=self.report_dir is not None,
+                exists=exists,
+                path=str(self.report_dir) if self.report_dir else None,
+                latest_report=None,
+                total_count=0,
+                product_hunt_count=0,
+                watcha_count=0,
+            )
+        try:
+            items = self.fetch_items()
+            latest_report = self.latest_report_name()
+        except OSError:
+            items = []
+            latest_report = None
         return HermesRadarStatus(
             configured=self.report_dir is not None,
-            exists=bool(self.report_dir and self.report_dir.exists() and self.report_dir.is_dir()),
+            exists=exists,
             path=str(self.report_dir) if self.report_dir else None,
-            latest_report=self.latest_report_name(),
+            latest_report=latest_report,
             total_count=len(items),
             product_hunt_count=len([item for item in items if item.source_type == "Product Hunt"]),
             watcha_count=len([item for item in items if item.source_type == "观猹"]),
         )
+
+    def _report_dir_exists(self) -> bool:
+        try:
+            return bool(
+                self.report_dir
+                and self.report_dir.exists()
+                and self.report_dir.is_dir()
+            )
+        except OSError:
+            return False
 
     def _report_path(self, report_date: date | None) -> Path | None:
         if self.report_dir is None:

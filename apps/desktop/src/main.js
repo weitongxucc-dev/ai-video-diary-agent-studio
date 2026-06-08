@@ -134,7 +134,7 @@ async function startServices() {
   }
 
   setAgentStatus("等待 API");
-  await waitForHttp(`${serviceConfig.apiUrl}/api/runtime/health`, 90000, {
+  await waitForHttp(serviceConfig.apiReadinessUrl, 90000, {
     children: childProcesses,
   });
   setAgentStatus("等待 WebView");

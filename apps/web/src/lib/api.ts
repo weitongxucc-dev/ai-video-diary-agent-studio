@@ -38,30 +38,47 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+type ApiRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  const { timeoutMs, ...fetchInit } = init ?? {};
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...fetchInit,
+      headers: {
+        "Content-Type": "application/json",
+        ...(fetchInit.headers ?? {}),
+      },
+      cache: "no-store",
+      signal: fetchInit.signal ?? controller?.signal,
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Request failed: ${response.status}`);
+    }
+
+    return response.json() as Promise<T>;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
-
-  return response.json() as Promise<T>;
 }
 
-export function getTodayEpisode(): Promise<Episode> {
-  return request<Episode>("/api/episodes/today");
+export function getTodayEpisode(init?: ApiRequestInit): Promise<Episode> {
+  return request<Episode>("/api/episodes/today", init);
 }
 
-export function getSystemStatus(): Promise<SystemStatus> {
-  return request<SystemStatus>("/api/system/status");
+export function getSystemStatus(init?: ApiRequestInit): Promise<SystemStatus> {
+  return request<SystemStatus>("/api/system/status", init);
 }
 
 export function getWorkflowStatus(): Promise<WorkflowStatus> {

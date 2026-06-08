@@ -92,6 +92,7 @@ for (const required of [
   "checkDesktopDependencies",
   "启动前检查未通过",
   "依赖缺失",
+  "apiReadinessUrl",
   "globalShortcut.register",
   "shell.openPath",
   "shutdownChildProcesses",
@@ -107,8 +108,9 @@ for (const required of [
   "spawnManagedService",
   "shutdownChildProcesses",
   "waitForHttp",
+  "PYTHON_APP_ENV_KEYS",
   "PYTHONDONTWRITEBYTECODE",
-  "NODE_OPTIONS",
+  "/api/runtime/ping",
   "uvicorn",
   "app.automation",
   "ELECTRON_RUN_AS_NODE",
@@ -166,9 +168,13 @@ assert(
 const serviceConfig = createServiceConfig({
   appPath: "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio",
   env: {
+    CODEX_THREAD_ID: "unexpected",
     ELECTRON_RUN_AS_NODE: "1",
     NODE_OPTIONS: "--require ./unexpected",
     PATH: "/usr/bin:/bin",
+    UV_RUN_RECURSION_DEPTH: "1",
+    VIRTUAL_ENV: "/tmp/unexpected-venv",
+    VSCODE_PID: "123",
   },
   homeDir: "/Users/example",
   isPackaged: true,
@@ -177,10 +183,19 @@ const serviceConfig = createServiceConfig({
 const apiService = serviceConfig.services.find((service) => service.name === "API");
 const workerService = serviceConfig.services.find((service) => service.name === "Worker");
 const webService = serviceConfig.services.find((service) => service.name === "Web");
+assert(
+  serviceConfig.apiReadinessUrl === "http://127.0.0.1:8000/api/runtime/ping",
+  "Desktop startup readiness must use lightweight runtime ping.",
+);
 assert(apiService, "Desktop service config must include API.");
-assert(workerService, "Desktop service config must include Worker.");
+assert(!workerService, "Desktop service config must not autostart Worker by default.");
 assert(webService, "Desktop service config must include Web.");
-for (const service of [apiService, workerService]) {
+assert(
+  apiService.env.DATABASE_PATH ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/agent.sqlite3",
+  "Desktop API must use an Application Support database path by default.",
+);
+for (const service of [apiService]) {
   assert(
     service.env.PYTHONDONTWRITEBYTECODE === "1",
     `${service.name} must disable Python bytecode writes inside the packaged app.`,
@@ -193,10 +208,61 @@ for (const service of [apiService, workerService]) {
     service.env.NODE_OPTIONS === undefined,
     `${service.name} must not inherit NODE_OPTIONS from the desktop shell.`,
   );
+  assert(
+    service.env.CODEX_THREAD_ID === undefined,
+    `${service.name} must not inherit IDE agent environment from the desktop shell.`,
+  );
+  assert(
+    service.env.UV_RUN_RECURSION_DEPTH === undefined,
+    `${service.name} must not inherit uv recursion environment from the desktop shell.`,
+  );
+  assert(
+    service.env.VIRTUAL_ENV === undefined,
+    `${service.name} must let uv choose the packaged virtual environment.`,
+  );
+  assert(
+    service.env.VSCODE_PID === undefined,
+    `${service.name} must not inherit VS Code extension host environment.`,
+  );
+  assert(
+    service.env.PATH.includes("/opt/homebrew/bin"),
+    `${service.name} must include Homebrew commands in PATH when launched from Finder.`,
+  );
+  assert(
+    service.env.PATH.includes("/Users/example/.local/bin"),
+    `${service.name} must include user-local commands in PATH when launched from Finder.`,
+  );
 }
 assert(
   webService.env.ELECTRON_RUN_AS_NODE === "1",
   "Desktop Web service must still run the packaged Electron executable as Node.",
+);
+
+const workerEnabledServiceConfig = createServiceConfig({
+  appPath: "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio",
+  env: {
+    AI_VIDEO_DIARY_DESKTOP_AUTOSTART_WORKER: "1",
+    PATH: "/usr/bin:/bin",
+  },
+  homeDir: "/Users/example",
+  isPackaged: true,
+  resourcesPath: "/Applications/Agent Studio.app/Contents/Resources",
+});
+const enabledWorkerService = workerEnabledServiceConfig.services.find(
+  (service) => service.name === "Worker",
+);
+assert(
+  enabledWorkerService?.args?.join(" ").includes("app.automation"),
+  "Desktop service config must support opt-in Worker autostart.",
+);
+assert(
+  enabledWorkerService.env.DATABASE_PATH ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/agent.sqlite3",
+  "Desktop opt-in Worker must use the Application Support database path by default.",
+);
+assert(
+  enabledWorkerService.env.PATH.includes("/opt/homebrew/bin"),
+  "Desktop opt-in Worker must include Homebrew commands in PATH.",
 );
 
 let earlyExitError = null;

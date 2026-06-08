@@ -134,34 +134,11 @@ def _topic_source_urls_from_env() -> tuple[str, ...]:
 
 
 def _markdown_count(path: str | None) -> int:
-    if not path:
-        return 0
-    vault = Path(path).expanduser()
-    if not vault.exists() or not vault.is_dir():
-        return 0
-    return len(
-        [
-            note
-            for note in vault.rglob("*.md")
-            if not any(part.startswith(".") for part in note.relative_to(vault).parts)
-        ]
-    )
+    return 0
 
 
 def _pending_video_count(path: str | None) -> int:
-    if not path:
-        return 0
-    inbox = Path(path).expanduser()
-    if not inbox.exists() or not inbox.is_dir():
-        return 0
-    supported_extensions = {".mp4", ".mov", ".m4v"}
-    return len(
-        [
-            item
-            for item in inbox.iterdir()
-            if item.is_file() and item.suffix.lower() in supported_extensions
-        ]
-    )
+    return 0
 
 
 def _hermes_radar_status(path: str | None) -> dict[str, Any]:

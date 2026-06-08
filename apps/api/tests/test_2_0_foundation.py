@@ -80,3 +80,10 @@ def test_runtime_health_endpoint_explains_status_and_repair_actions(tmp_path):
     assert items["video_inbox"]["status"] == "ready"
     assert items["video_output"]["status"] == "ready"
     assert "last_checked_at" in items["deepseek"]
+
+
+def test_runtime_ping_endpoint_is_lightweight_liveness_check():
+    response = client.get("/api/runtime/ping")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"

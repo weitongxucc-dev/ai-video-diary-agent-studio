@@ -3,6 +3,7 @@ from datetime import date
 
 import httpx
 
+from app import hermes_radar as hermes_radar_module
 from app.config import Settings
 from app.hermes_radar import HermesRadarSourceClient
 from app.schemas import SystemStatusResponse
@@ -111,6 +112,22 @@ def test_hermes_radar_status_counts_latest_report_without_exposing_content(tmp_p
     report_dir = tmp_path / "daily-reports"
     report_dir.mkdir()
     (report_dir / "2026-05-27.md").write_text(SAMPLE_REPORT, encoding="utf-8")
+
+    status = HermesRadarSourceClient(report_dir).status(include_report_counts=True)
+
+    assert status.configured is True
+    assert status.exists is True
+    assert status.path == str(report_dir)
+    assert status.latest_report == "2026-05-27.md"
+    assert status.total_count == 4
+    assert status.product_hunt_count == 2
+    assert status.watcha_count == 2
+
+
+def test_public_status_reports_hermes_presence_without_reading_report_content(tmp_path):
+    report_dir = tmp_path / "daily-reports"
+    report_dir.mkdir()
+    (report_dir / "2026-05-27.md").write_text(SAMPLE_REPORT, encoding="utf-8")
     settings = Settings(hermes_radar_path=str(report_dir))
 
     status = SystemStatusResponse.model_validate(settings.public_status())
@@ -118,11 +135,33 @@ def test_hermes_radar_status_counts_latest_report_without_exposing_content(tmp_p
     assert status.hermes_radar.configured is True
     assert status.hermes_radar.exists is True
     assert status.hermes_radar.path == str(report_dir)
-    assert status.hermes_radar.latest_report == "2026-05-27.md"
-    assert status.hermes_radar.total_count == 4
-    assert status.hermes_radar.product_hunt_count == 2
-    assert status.hermes_radar.watcha_count == 2
+    assert status.hermes_radar.latest_report is None
+    assert status.hermes_radar.total_count == 0
+    assert status.hermes_radar.product_hunt_count == 0
+    assert status.hermes_radar.watcha_count == 0
     assert "AI筛选面试" not in status.model_dump_json()
+
+
+def test_hermes_radar_status_tolerates_interrupted_directory_scan(
+    tmp_path,
+    monkeypatch,
+):
+    report_dir = tmp_path / "daily-reports"
+    report_dir.mkdir()
+
+    def interrupted_glob(self, pattern):
+        raise InterruptedError("scan interrupted")
+
+    monkeypatch.setattr(hermes_radar_module.Path, "glob", interrupted_glob)
+
+    status = SystemStatusResponse.model_validate(
+        Settings(hermes_radar_path=str(report_dir)).public_status()
+    )
+
+    assert status.hermes_radar.configured is True
+    assert status.hermes_radar.exists is True
+    assert status.hermes_radar.latest_report is None
+    assert status.hermes_radar.total_count == 0
 
 
 def test_external_topic_sources_include_hermes_report_without_product_hunt_token(tmp_path):

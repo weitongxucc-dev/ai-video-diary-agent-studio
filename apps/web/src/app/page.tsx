@@ -7,9 +7,11 @@ import { PixelAgentPanel } from "@/components/PixelAgentPanel";
 import { getSystemStatus, getTodayEpisode } from "@/lib/api";
 import type { Episode, SystemStatus } from "@/lib/types";
 
+const HOME_API_TIMEOUT_MS = 4000;
+
 async function safelyGetTodayEpisode(): Promise<Episode | null> {
   try {
-    return await getTodayEpisode();
+    return await getTodayEpisode({ timeoutMs: HOME_API_TIMEOUT_MS });
   } catch {
     return null;
   }
@@ -17,7 +19,7 @@ async function safelyGetTodayEpisode(): Promise<Episode | null> {
 
 async function safelyGetSystemStatus(): Promise<SystemStatus | null> {
   try {
-    return await getSystemStatus();
+    return await getSystemStatus({ timeoutMs: HOME_API_TIMEOUT_MS });
   } catch {
     return null;
   }

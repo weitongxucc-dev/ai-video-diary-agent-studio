@@ -11,6 +11,7 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
             '"/api/system/status"',
             '"/api/workflow/status"',
             '"/api/content-templates"',
+            '"/api/runtime/ping"',
             '"/api/runtime/health"',
         ],
         "diagnostics.py": [

@@ -310,6 +310,10 @@ class RuntimeHealthResponse(BaseModel):
     items: list[RuntimeHealthItemResponse]
 
 
+class RuntimePingResponse(BaseModel):
+    status: Literal["ok"]
+
+
 class DiagnosticsSummaryResponse(BaseModel):
     health_total: int
     health_ready: int

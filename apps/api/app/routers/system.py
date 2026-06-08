@@ -10,6 +10,7 @@ from app.runtime_health import runtime_health
 from app.schemas import (
     ContentTemplatesResponse,
     RuntimeHealthResponse,
+    RuntimePingResponse,
     SystemStatusResponse,
     WorkflowStatusResponse,
 )
@@ -38,6 +39,10 @@ def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
             {"templates": list_content_templates()},
             from_attributes=True,
         )
+
+    @router.get("/api/runtime/ping", response_model=RuntimePingResponse)
+    def get_runtime_ping() -> RuntimePingResponse:
+        return RuntimePingResponse(status="ok")
 
     @router.get("/api/runtime/health", response_model=RuntimeHealthResponse)
     def get_runtime_health() -> RuntimeHealthResponse:

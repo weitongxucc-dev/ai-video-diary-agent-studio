@@ -331,6 +331,18 @@ if (!homePage.includes("primaryFlowHref") || !homePage.includes("href={primaryFl
   failures.push("The workbench primary CTA must route by approved/unapproved state.");
 }
 
+for (const required of ["AbortController", "timeoutMs"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must support bounded server fetches with ${required}.`);
+  }
+}
+
+for (const required of ["HOME_API_TIMEOUT_MS", "timeoutMs: HOME_API_TIMEOUT_MS"]) {
+  if (!homePage.includes(required)) {
+    failures.push(`The workbench must bound first-screen API waits with ${required}.`);
+  }
+}
+
 if (!actionsFile.includes("processVideoAndPackageAction")) {
   failures.push("Server actions must expose one command that processes a video and creates a draft package.");
 }
