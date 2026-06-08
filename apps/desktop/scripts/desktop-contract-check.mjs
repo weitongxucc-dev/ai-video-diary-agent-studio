@@ -98,6 +98,11 @@ for (const required of [
   "shutdownChildProcesses",
   "waitForHttp",
   "CommandOrControl+Shift+Space",
+  "编辑",
+  'role: "copy"',
+  'role: "paste"',
+  'role: "cut"',
+  'role: "selectAll"',
 ]) {
   assert(main.includes(required), `Desktop main process must include ${required}.`);
 }
