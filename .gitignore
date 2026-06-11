@@ -3,6 +3,9 @@ node_modules/
 dist/
 __pycache__/
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 .venv/
 .env
 .env.*

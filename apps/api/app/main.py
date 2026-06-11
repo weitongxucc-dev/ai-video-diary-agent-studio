@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+from types import ModuleType
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +47,7 @@ from app.routers import sources as sources_router
 from app.routers import system as system_router
 from app.routers import videos as videos_router
 from app.routers.context import AppContext, AppState
+from app.runtime import RUNTIME_DEPENDENCY_NAMES, RuntimeContainer, create_runtime
 from app.runtime_settings import is_local_client_host
 from app.schemas import (
     CreatorProfileResponse,
@@ -76,30 +79,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-settings = Settings.from_env()
-repo = EpisodeRepository(database_path=settings.database_path)
-creator_profile_repo = CreatorProfileRepository(settings.database_path)
-preference_repo = LongTermPreferenceRepository(settings.database_path)
-vault = ObsidianVault(settings.obsidian_vault_path)
-video_inbox = VideoInbox(settings.video_inbox_path)
-video_processor = FfmpegVideoProcessor(settings)
-video_pipeline = video_processing_pipeline_from_settings(settings, processor=video_processor)
-draft_workspace = DraftWorkspace(settings)
-voice_transcriber = asr_transcriber_from_settings(settings)
-runtime_env_path = runtime_env_file_path()
-service = EpisodeService(
-    script_generator=script_generator_from_settings(settings),
-    topic_generator=topic_generator_from_settings(settings, vault),
-)
-workflow = LangGraphEpisodeWorkflow(service)
-video_job_runner = VideoJobRunner()
-edit_plan_apply_runner = None
-app_state = AppState()
+
+def _install_runtime(runtime: RuntimeContainer | None = None) -> RuntimeContainer:
+    runtime = runtime or create_runtime()
+    app.state.runtime = runtime
+    return runtime
+
+
+def get_app_runtime() -> RuntimeContainer:
+    return app.state.runtime
+
+
+def set_runtime_dependency(name: str, value) -> RuntimeContainer:
+    runtime = get_app_runtime().with_dependency(name, value)
+    app.state.runtime = runtime
+    return runtime
+
+
+_install_runtime()
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
     try:
-        return repo.get(episode_id)
+        return get_app_context().repo.get(episode_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="episode not found") from exc
 
@@ -112,7 +114,7 @@ def episode_response(episode: Episode) -> EpisodeResponse:
 
 
 def creator_profile_response() -> CreatorProfileResponse:
-    profile = creator_profile_repo.load()
+    profile = get_app_context().creator_profile_repo.load()
     return CreatorProfileResponse.model_validate(
         {
             **profile.__dict__,
@@ -133,47 +135,37 @@ def feedback_history_for(episode_id: str):
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, creator_profile_repo, preference_repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, voice_transcriber, service, workflow
-
-    settings = Settings.from_env()
-    repo = EpisodeRepository(database_path=settings.database_path)
-    creator_profile_repo = CreatorProfileRepository(settings.database_path)
-    preference_repo = LongTermPreferenceRepository(settings.database_path)
-    vault = ObsidianVault(settings.obsidian_vault_path)
-    video_inbox = VideoInbox(settings.video_inbox_path)
-    video_processor = FfmpegVideoProcessor(settings)
-    video_pipeline = video_processing_pipeline_from_settings(
-        settings,
-        processor=video_processor,
+    current_runtime = get_app_runtime()
+    _install_runtime(
+        create_runtime(
+            runtime_env_path=current_runtime.runtime_env_path,
+            app_state=current_runtime.app_state,
+            video_job_runner=current_runtime.video_job_runner,
+            edit_plan_apply_runner=current_runtime.edit_plan_apply_runner,
+        )
     )
-    draft_workspace = DraftWorkspace(settings)
-    voice_transcriber = asr_transcriber_from_settings(settings)
-    service = EpisodeService(
-        script_generator=script_generator_from_settings(settings),
-        topic_generator=topic_generator_from_settings(settings, vault),
-    )
-    workflow = LangGraphEpisodeWorkflow(service)
 
 
 def get_app_context() -> AppContext:
+    runtime = get_app_runtime()
     return AppContext(
-        settings=settings,
-        repo=repo,
-        creator_profile_repo=creator_profile_repo,
-        preference_repo=preference_repo,
-        service=service,
-        workflow=workflow,
-        manual_source_items=app_state.manual_source_items,
+        settings=runtime.settings,
+        repo=runtime.repo,
+        creator_profile_repo=runtime.creator_profile_repo,
+        preference_repo=runtime.preference_repo,
+        service=runtime.service,
+        workflow=runtime.workflow,
+        manual_source_items=runtime.app_state.manual_source_items,
         hermes_source_client_factory=HermesRadarSourceClient,
         external_source_client_factory=HtmlPageSourceClient,
-        runtime_env_path=runtime_env_path,
+        runtime_env_path=runtime.runtime_env_path,
         reload_runtime_dependencies=_reload_runtime_dependencies,
-        video_inbox=video_inbox,
-        video_pipeline=video_pipeline,
-        draft_workspace=draft_workspace,
-        video_job_runner=video_job_runner,
-        edit_plan_apply_runner=edit_plan_apply_runner,
-        voice_transcriber=voice_transcriber,
+        video_inbox=runtime.video_inbox,
+        video_pipeline=runtime.video_pipeline,
+        draft_workspace=runtime.draft_workspace,
+        video_job_runner=runtime.video_job_runner,
+        edit_plan_apply_runner=runtime.edit_plan_apply_runner,
+        voice_transcriber=runtime.voice_transcriber,
     )
 
 
@@ -206,13 +198,13 @@ def update_creator_profile(
             status_code=403,
             detail="creator profile can only be updated from a local client",
         )
-    creator_profile_repo.save(payload.model_dump(exclude_none=True))
+    get_app_context().creator_profile_repo.save(payload.model_dump(exclude_none=True))
     return creator_profile_response()
 
 
 @app.get("/api/knowledge/notes", response_model=list[KnowledgeNoteResponse])
 def get_knowledge_notes(q: str | None = None, limit: int = 40) -> list[KnowledgeNoteResponse]:
-    notes = vault.recent_notes(limit=200)
+    notes = get_app_runtime().vault.recent_notes(limit=200)
     if q:
         query = q.lower()
         notes = [
@@ -235,9 +227,10 @@ def get_episode_retake_report(episode_id: str) -> RetakeReportResponse:
 
 @app.get("/api/episodes/{episode_id}/edit-plan", response_model=EditPlanResponse)
 def get_episode_edit_plan(episode_id: str) -> EditPlanResponse:
+    context = get_app_context()
     episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
     return EditPlanResponse.model_validate(
-        build_edit_plan_workspace(episode, settings.video_output_path)
+        build_edit_plan_workspace(episode, context.settings.video_output_path)
     )
 
 
@@ -250,11 +243,12 @@ def update_episode_edit_plan_segment_decision(
     segment_id: str,
     request: EditPlanSegmentDecisionRequest,
 ) -> EditPlanResponse:
+    context = get_app_context()
     episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
     try:
         workspace = update_edit_plan_segment_decision(
             episode,
-            settings.video_output_path,
+            context.settings.video_output_path,
             segment_id=segment_id,
             action=request.action,
             reason=request.reason,
@@ -274,11 +268,12 @@ def revert_episode_edit_plan_segment_decision(
     episode_id: str,
     segment_id: str,
 ) -> EditPlanResponse:
+    context = get_app_context()
     episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
     try:
         workspace = revert_edit_plan_segment_decision(
             episode,
-            settings.video_output_path,
+            context.settings.video_output_path,
             segment_id=segment_id,
         )
     except KeyError as exc:
@@ -291,7 +286,11 @@ def revert_episode_edit_plan_segment_decision(
 @app.get("/api/retake-reports/latest", response_model=RetakeReportResponse)
 def get_latest_retake_report() -> RetakeReportResponse:
     episodes_with_reports = sorted(
-        (episode for episode in repo.all() if episode.video_dedup_report_path),
+        (
+            episode
+            for episode in get_app_context().repo.all()
+            if episode.video_dedup_report_path
+        ),
         key=lambda episode: episode.updated_at,
         reverse=True,
     )
@@ -307,7 +306,9 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
     if not episode.video_dedup_report_path:
         raise HTTPException(status_code=404, detail="retake report not found")
     try:
-        report_root = Path(settings.video_output_path).expanduser().resolve()
+        report_root = (
+            Path(get_app_context().settings.video_output_path).expanduser().resolve()
+        )
         report_path = Path(episode.video_dedup_report_path).expanduser().resolve()
         if not report_path.is_relative_to(report_root) or not report_path.is_file():
             raise HTTPException(status_code=404, detail="retake report not found")
@@ -372,3 +373,19 @@ def _mark_video_job_completed(episode_id: str) -> None:
 
 def _mark_video_job_failed(episode_id: str, error: Exception) -> None:
     episode_media_flow.mark_video_job_failed(get_app_context(), episode_id, error)
+
+
+class _RuntimeBackedModule(ModuleType):
+    def __getattr__(self, name: str):
+        if name in RUNTIME_DEPENDENCY_NAMES:
+            return getattr(get_app_runtime(), name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in RUNTIME_DEPENDENCY_NAMES:
+            set_runtime_dependency(name, value)
+            return
+        super().__setattr__(name, value)
+
+
+sys.modules[__name__].__class__ = _RuntimeBackedModule

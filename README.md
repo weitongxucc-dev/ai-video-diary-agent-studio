@@ -90,6 +90,13 @@ For longer videos, use COS/URL mode in a later iteration instead of pretending t
 
 It does not claim native encrypted Jianying 10.7 draft authoring. Jianying 10.7 stores current drafts with encrypted metadata, so this project treats the bridge result as a compatibility import that must be opened and verified manually. The source package remains the reliable fallback.
 
+SQLite databases initialized by the API include a `schema_meta` table with the current schema version. Before risky manual edits or beta upgrades, create a recoverable SQLite backup with:
+
+```bash
+cd apps/api
+uv run python -c "from app.database import backup_sqlite_database; print(backup_sqlite_database('/path/to/agent.sqlite3'))"
+```
+
 Run API:
 
 ```bash

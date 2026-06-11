@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from app.database import ensure_database_schema_metadata
 from app.models import FeedbackEvent, FeedbackValue, new_id, utc_now
 
 
@@ -151,6 +152,7 @@ class LongTermPreferenceRepository:
 
     def _init_database(self) -> None:
         with sqlite3.connect(self._database_path) as conn:
+            ensure_database_schema_metadata(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS preference_items (

@@ -114,4 +114,27 @@ def test_media_router_dependencies_are_supplied_by_app_context():
         "voice_transcriber",
     ):
         assert f"{dependency_name}:" in context_source
-        assert f"{dependency_name}={dependency_name}" in main_source
+        assert f"{dependency_name}=runtime.{dependency_name}" in main_source
+
+
+def test_runtime_dependencies_are_owned_by_runtime_container():
+    main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+
+    for assignment in (
+        "settings = Settings.from_env()",
+        "repo = EpisodeRepository(",
+        "creator_profile_repo = CreatorProfileRepository(",
+        "preference_repo = LongTermPreferenceRepository(",
+        "vault = ObsidianVault(",
+        "video_inbox = VideoInbox(",
+        "video_processor = FfmpegVideoProcessor(",
+        "video_pipeline = video_processing_pipeline_from_settings(",
+        "draft_workspace = DraftWorkspace(",
+        "voice_transcriber = asr_transcriber_from_settings(",
+        "service = EpisodeService(",
+        "workflow = LangGraphEpisodeWorkflow(",
+    ):
+        assert assignment not in main_source
+
+    assert "create_runtime(" in main_source
+    assert "app.state.runtime" in main_source

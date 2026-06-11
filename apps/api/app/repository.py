@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
+from app.database import ensure_database_schema_metadata
 from app.models import (
     Episode,
     EpisodeIntakeMode,
@@ -79,6 +80,7 @@ class EpisodeRepository:
     def _init_database(self) -> None:
         assert self._database_path is not None
         with sqlite3.connect(self._database_path) as conn:
+            ensure_database_schema_metadata(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS episodes (

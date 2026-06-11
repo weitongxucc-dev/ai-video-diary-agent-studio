@@ -17,9 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
-      - run: npm run test:api
+      - run: npm run test:api:coverage
       - run: npm run test:web-contract
       - run: npm run test:pixel-style
+      - run: npm run test:desktop-contract
       - run: npm run build:web
       - run: npm run typecheck:web
       - run: npm run lint:web

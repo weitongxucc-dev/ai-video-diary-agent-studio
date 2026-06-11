@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 from typing import Mapping
 
+from app.database import ensure_database_schema_metadata
 from app.models import utc_now
 
 PROFILE_ROW_ID = "default"
@@ -114,6 +115,7 @@ class CreatorProfileRepository:
 
     def _init_database(self) -> None:
         with sqlite3.connect(self._database_path) as conn:
+            ensure_database_schema_metadata(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS creator_profile (

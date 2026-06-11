@@ -13,6 +13,7 @@
     "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
     "dev:worker": "cd apps/api && uv run python -m app.automation",
     "test:api": "cd apps/api && uv run pytest",
+    "test:api:coverage": "cd apps/api && uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=80",
     "build:desktop": "corepack pnpm build:web && corepack pnpm --dir apps/desktop pack:mac",
     "dist:mac": "corepack pnpm build:web && corepack pnpm --dir apps/desktop dist:mac"
   }
