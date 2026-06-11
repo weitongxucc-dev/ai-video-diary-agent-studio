@@ -99,6 +99,7 @@ def runtime_context(
         repo=runtime.repo,
         creator_profile_repo=runtime.creator_profile_repo,
         preference_repo=runtime.preference_repo,
+        vault=runtime.vault,
         service=runtime.service,
         workflow=runtime.workflow,
         manual_source_items=runtime.app_state.manual_source_items,

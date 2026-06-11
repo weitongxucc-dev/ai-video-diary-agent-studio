@@ -26,6 +26,21 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
             '"/api/sources/sync"',
             '"/api/sources/links"',
         ],
+        "creator_profile.py": [
+            '"/api/creator-profile"',
+        ],
+        "knowledge.py": [
+            '"/api/knowledge/notes"',
+        ],
+        "retake_reports.py": [
+            '"/api/episodes/{episode_id}/retake-report"',
+            '"/api/retake-reports/latest"',
+        ],
+        "edit_plan.py": [
+            '"/api/episodes/{episode_id}/edit-plan"',
+            '"/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/decision"',
+            '"/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/revert"',
+        ],
         "feedback.py": [
             '"/api/feedback/summary"',
         ],

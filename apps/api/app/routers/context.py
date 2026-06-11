@@ -17,6 +17,7 @@ class AppContext:
     repo: Any | None = None
     creator_profile_repo: Any | None = None
     preference_repo: Any | None = None
+    vault: Any | None = None
     service: Any | None = None
     workflow: Any | None = None
     manual_source_items: list[Any] = field(default_factory=list)
