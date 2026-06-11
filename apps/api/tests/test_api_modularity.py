@@ -6,6 +6,7 @@ APP_ROOT = Path(__file__).resolve().parents[1] / "app"
 
 def test_system_diagnostics_and_settings_routes_are_split_from_main():
     main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+    factory_source = (APP_ROOT / "app_factory.py").read_text(encoding="utf-8")
     expected_modules = {
         "system.py": [
             '"/api/system/status"',
@@ -102,8 +103,8 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
             assert route_literal in router_source
             assert route_literal not in main_source
 
-    assert "include_router" in main_source
-    assert "get_app_context" in main_source
+    assert "include_router" in factory_source
+    assert "get_app_context" in factory_source
 
 
 def test_manual_source_items_state_is_not_owned_by_main_module():
@@ -115,7 +116,7 @@ def test_manual_source_items_state_is_not_owned_by_main_module():
 
 
 def test_media_router_dependencies_are_supplied_by_app_context():
-    main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+    factory_source = (APP_ROOT / "app_factory.py").read_text(encoding="utf-8")
     context_source = (APP_ROOT / "routers" / "context.py").read_text(encoding="utf-8")
 
     for dependency_name in (
@@ -129,11 +130,11 @@ def test_media_router_dependencies_are_supplied_by_app_context():
         "voice_transcriber",
     ):
         assert f"{dependency_name}:" in context_source
-        assert f"{dependency_name}=runtime.{dependency_name}" in main_source
+        assert f"{dependency_name}=runtime.{dependency_name}" in factory_source
 
 
 def test_runtime_dependencies_are_owned_by_runtime_container():
-    main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+    factory_source = (APP_ROOT / "app_factory.py").read_text(encoding="utf-8")
 
     for assignment in (
         "settings = Settings.from_env()",
@@ -149,7 +150,24 @@ def test_runtime_dependencies_are_owned_by_runtime_container():
         "service = EpisodeService(",
         "workflow = LangGraphEpisodeWorkflow(",
     ):
-        assert assignment not in main_source
+        assert assignment not in factory_source
 
-    assert "create_runtime(" in main_source
-    assert "app.state.runtime" in main_source
+    assert "create_runtime(" in factory_source
+    assert "app.state.runtime" in factory_source
+
+
+def test_main_module_is_only_the_asgi_entrypoint():
+    main_source = (APP_ROOT / "main.py").read_text(encoding="utf-8")
+
+    assert "create_app(" in main_source
+    assert "include_router" not in main_source
+    assert "@app." not in main_source
+    for forbidden in (
+        "EpisodeRepository",
+        "CreatorProfileRepository",
+        "LongTermPreferenceRepository",
+        "FfmpegVideoProcessor",
+        "LangGraphEpisodeWorkflow",
+        "episode_media_flow",
+    ):
+        assert forbidden not in main_source
