@@ -20,6 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
       - run: npm run test:api:coverage
       - run: npm run test:web-contract
       - run: npm run test:pixel-style
