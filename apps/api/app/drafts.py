@@ -23,6 +23,13 @@ from app.asr import (
     transcription_to_srt,
 )
 from app.config import Settings
+from app.draft_index import (
+    asset_from_path,
+    episode_source_mode,
+    episode_summary,
+    package_asset_from_path,
+    package_dirs,
+)
 from app.draft_models import (
     DraftAsset,
     DraftEnvironment,
@@ -60,7 +67,7 @@ class DraftWorkspace:
         self.legacy_draft_writer = legacy_draft_writer or self._write_legacy_jianying_draft
 
     def environment(self) -> DraftEnvironment:
-        packages = self._package_dirs()
+        packages = package_dirs(self.draft_output_path)
         draft_tool = self.draft_tool_status()
         jianying_10_7_detected = self._jianying_10_7_detected()
         root_exists = self.jianying_root_path.exists() and self.jianying_root_path.is_dir()
@@ -85,14 +92,14 @@ class DraftWorkspace:
         if not self.video_output_path.exists() or not self.video_output_path.is_dir():
             return []
         videos = [
-            self._asset_from_path(path)
+            asset_from_path(path)
             for path in self.video_output_path.iterdir()
             if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
         ]
         return sorted(videos, key=lambda asset: asset.modified_at, reverse=True)
 
     def packages(self) -> list[DraftAsset]:
-        return [self._package_asset_from_path(path) for path in self._package_dirs()]
+        return [package_asset_from_path(path) for path in package_dirs(self.draft_output_path)]
 
     def create_package(
         self,
@@ -114,12 +121,12 @@ class DraftWorkspace:
         manifest = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "package_name": package_name,
-            "source_mode": self._episode_source_mode(episode),
+            "source_mode": episode_source_mode(episode),
             "video": {
                 **asdict(video),
                 "modified_at": video.modified_at.isoformat(),
             },
-            "episode": self._episode_summary(episode),
+            "episode": episode_summary(episode),
             "artifacts": artifacts,
             "template_effects": template_effects,
             "draft_tool": asdict(self.draft_tool_status()),
@@ -309,7 +316,7 @@ class DraftWorkspace:
         return "已通过旧式草稿工具写入剪映草稿目录，请打开剪映验证是否可编辑。"
 
     def _resolve_package_dir(self, package_name: str | None) -> Path:
-        packages = self._package_dirs()
+        packages = package_dirs(self.draft_output_path)
         if not packages:
             raise ValueError("no draft package available")
         if package_name is None:
@@ -645,122 +652,6 @@ class DraftWorkspace:
             if video.file_name == video_file_name:
                 return video
         raise ValueError("processed video not found")
-
-    def _asset_from_path(self, path: Path) -> DraftAsset:
-        stat = path.stat()
-        return DraftAsset(
-            file_name=path.name,
-            path=str(path),
-            size_bytes=stat.st_size,
-            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-        )
-
-    def _package_asset_from_path(self, path: Path) -> DraftAsset:
-        asset = self._asset_from_path(path)
-        manifest_path = path / "manifest.json"
-        if not manifest_path.exists():
-            return asset
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return asset
-        import_result = manifest.get("jianying_import", {})
-        if not isinstance(import_result, dict):
-            return asset
-        template_effects = manifest.get("template_effects", {})
-        template_summary = self._template_summary(template_effects)
-        return DraftAsset(
-            file_name=asset.file_name,
-            path=asset.path,
-            size_bytes=asset.size_bytes,
-            modified_at=asset.modified_at,
-            import_status=str(import_result["status"])
-            if import_result.get("status")
-            else None,
-            import_message=str(import_result["message"])
-            if import_result.get("message")
-            else str(import_result["blocker"])
-            if import_result.get("blocker")
-            else None,
-            draft_path=str(import_result["draft_path"])
-            if import_result.get("draft_path")
-            else None,
-            **template_summary,
-        )
-
-    def _template_summary(self, template_effects: object) -> dict[str, object]:
-        if not isinstance(template_effects, dict):
-            return {}
-        tracks = template_effects.get("tracks")
-        effects = template_effects.get("effects")
-        track_preview = self._track_preview(tracks)
-        effect_preview = [
-            str(effect["label"])
-            for effect in effects
-            if isinstance(effect, dict) and effect.get("label")
-        ][:10] if isinstance(effects, list) else []
-        return {
-            "template_id": str(template_effects["template_id"])
-            if template_effects.get("template_id")
-            else None,
-            "template_name": str(template_effects["template_name"])
-            if template_effects.get("template_name")
-            else None,
-            "track_count": len(tracks) if isinstance(tracks, list) else None,
-            "effect_count": len(effects) if isinstance(effects, list) else None,
-            "track_preview": track_preview,
-            "effect_preview": effect_preview,
-        }
-
-    def _track_preview(self, tracks: object) -> list[str]:
-        if not isinstance(tracks, list):
-            return []
-        preview: list[str] = []
-        for track in tracks[:6]:
-            if not isinstance(track, dict):
-                continue
-            number = track.get("number")
-            label = track.get("label")
-            if number and label:
-                preview.append(f"轨道 {number}：{label}")
-        return preview
-
-    def _package_dirs(self) -> list[Path]:
-        if not self.draft_output_path.exists() or not self.draft_output_path.is_dir():
-            return []
-        return sorted(
-            [
-                path
-                for path in self.draft_output_path.iterdir()
-                if path.is_dir() and (path / "manifest.json").exists()
-            ],
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-
-    def _episode_summary(self, episode: Episode | None) -> dict[str, object] | None:
-        if episode is None:
-            return None
-        selected_topic = next(
-            (topic for topic in episode.topics if topic.id == episode.selected_topic_id),
-            None,
-        )
-        return {
-            "id": episode.id,
-            "day_number": episode.day_number,
-            "episode_date": episode.episode_date.isoformat(),
-            "intake_mode": self._episode_source_mode(episode),
-            "selected_topic": selected_topic.title if selected_topic else None,
-            "script_ready": episode.script is not None,
-            "cover_copy": episode.script.cover_copy if episode.script else None,
-            "video_source_file_names": episode.video_source_file_names,
-        }
-
-    def _episode_source_mode(self, episode: Episode | None) -> str:
-        if episode is None:
-            return "standalone_video"
-        intake_mode = getattr(episode, "intake_mode", "planned")
-        return getattr(intake_mode, "value", str(intake_mode))
 
     def _write_script_artifacts(
         self,

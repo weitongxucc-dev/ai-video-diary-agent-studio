@@ -27,6 +27,7 @@ const rootPackage = await readJson("package.json");
 const desktopPackage = await readJson("apps/desktop/package.json");
 const main = await readText("apps/desktop/src/main.js");
 const episodeJobNotifier = await readText("apps/desktop/src/episode-job-notifier.js");
+const desktopDependencies = await readText("apps/desktop/src/desktop-dependencies.js");
 const serviceManager = await readText("apps/desktop/src/service-manager.js");
 const afterPack = await readText("apps/desktop/scripts/after-pack.cjs");
 const pnpmShim = await readText("apps/desktop/scripts/with-pnpm-shim.mjs");
@@ -34,6 +35,7 @@ const nextConfig = await readText("apps/web/next.config.mjs");
 const readmeBeta = await readText("README-beta.md");
 const serviceManagerModule = require("../src/service-manager.js");
 const episodeJobNotifierModule = require("../src/episode-job-notifier.js");
+const desktopDependenciesModule = require("../src/desktop-dependencies.js");
 
 assert(
   rootPackage.scripts["test:desktop-contract"],
@@ -149,7 +151,6 @@ for (const required of [
 
 for (const required of [
   "createServiceConfig",
-  "checkDesktopDependencies",
   "spawnManagedService",
   "shutdownChildProcesses",
   "waitForHttp",
@@ -167,6 +168,23 @@ for (const required of [
 }
 
 for (const required of [
+  "checkDesktopDependencies",
+  "REQUIRED_DESKTOP_DEPENDENCIES",
+  "commandSearchPaths",
+  "defaultCommandExists",
+]) {
+  assert(
+    desktopDependencies.includes(required),
+    `Desktop dependency preflight module must include ${required}.`,
+  );
+}
+
+assert(
+  !serviceManager.includes("const REQUIRED_DESKTOP_DEPENDENCIES"),
+  "Desktop service manager must not own dependency preflight constants.",
+);
+
+for (const required of [
   "codesign",
   "--deep",
   "--sign",
@@ -182,6 +200,10 @@ const { waitForHttp } = serviceManagerModule;
 assert(
   typeof episodeJobNotifierModule.startEpisodeJobNotifier === "function",
   "Desktop episode job notifier must export startEpisodeJobNotifier.",
+);
+assert(
+  typeof desktopDependenciesModule.checkDesktopDependencies === "function",
+  "Desktop dependency preflight module must export checkDesktopDependencies.",
 );
 assert(
   typeof checkDesktopDependencies === "function",

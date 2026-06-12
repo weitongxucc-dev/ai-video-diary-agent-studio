@@ -187,3 +187,27 @@ def test_draft_data_models_are_split_from_workspace_facade():
         assert f"class {model_name}" in draft_models_source
         assert f"from app.draft_models import" in drafts_source
         assert f"class {model_name}" not in drafts_source
+
+
+def test_draft_index_projection_is_split_from_workspace_facade():
+    draft_index_source = (APP_ROOT / "draft_index.py").read_text(encoding="utf-8")
+    drafts_source = (APP_ROOT / "drafts.py").read_text(encoding="utf-8")
+
+    for helper_name in (
+        "asset_from_path",
+        "package_asset_from_path",
+        "package_dirs",
+        "episode_summary",
+        "episode_source_mode",
+    ):
+        assert f"def {helper_name}" in draft_index_source
+        assert helper_name in drafts_source
+
+    for former_method in (
+        "def _package_asset_from_path",
+        "def _template_summary",
+        "def _track_preview",
+        "def _episode_summary",
+        "def _episode_source_mode",
+    ):
+        assert former_method not in drafts_source
