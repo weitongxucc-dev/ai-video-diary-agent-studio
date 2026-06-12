@@ -9,6 +9,7 @@ from app.models import (
     EpisodeIntakeMode,
     EpisodeStatus,
     FeedbackValue,
+    GenerationJobStatus,
     ScriptVersionSource,
     VideoJobStatus,
 )
@@ -80,6 +81,12 @@ class FeedbackEventResponse(BaseModel):
     created_at: datetime
 
 
+class WorkflowPhaseResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
 class EpisodeResponse(BaseModel):
     id: str
     day_number: int
@@ -102,6 +109,12 @@ class EpisodeResponse(BaseModel):
     video_job_error: str | None
     video_job_started_at: datetime | None
     video_job_finished_at: datetime | None
+    topic_job_status: GenerationJobStatus
+    topic_job_message: str | None
+    topic_job_error: str | None
+    topic_job_started_at: datetime | None
+    topic_job_finished_at: datetime | None
+    workflow_phase: WorkflowPhaseResponse
     draft_package_name: str | None
     draft_package_path: str | None
     publish_url: str | None

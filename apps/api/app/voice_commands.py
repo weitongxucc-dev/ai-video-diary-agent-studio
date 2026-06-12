@@ -8,6 +8,10 @@ from app.models import Episode, EpisodeStatus, ScriptSection
 
 
 VoiceCommandStatus = Literal["ready", "blocked", "unknown"]
+NEGATED_REMOVE_PATTERNS = ("不要删除", "别删除", "不要删", "别删", "不要剪掉", "别剪掉")
+KEEP_PATTERNS = ("保留", "留下", "不要删", "不要删除", "别删", "别删除", "不要剪掉", "别剪掉")
+REMOVE_PATTERNS = ("删除", "剪掉", "去掉", "删掉")
+REVIEW_PATTERNS = ("复核", "待确认", "人工看")
 
 
 @dataclass
@@ -223,13 +227,7 @@ def _parse_edit_plan_decision(text: str) -> VoiceCommandPlan | None:
     match = re.search(r"\b(?P<segment>(?:retake|keep|silence|review)-\d+)\b", text)
     if match is None:
         return None
-    action = None
-    if _matches(text, "保留", "留下", "不要删"):
-        action = "keep"
-    elif _matches(text, "删除", "剪掉", "去掉", "删掉"):
-        action = "remove"
-    elif _matches(text, "复核", "待确认", "人工看"):
-        action = "review"
+    action = _edit_plan_action_from_text(text)
     if action is None:
         return _blocked("找到了片段编号，但没有识别出保留、删除或复核动作。", "/edit-plan")
     segment_id = match.group("segment")
@@ -248,6 +246,18 @@ def _parse_edit_plan_decision(text: str) -> VoiceCommandPlan | None:
             )
         ],
     )
+
+
+def _edit_plan_action_from_text(text: str) -> str | None:
+    if _matches(text, *KEEP_PATTERNS):
+        return "keep"
+    if _matches(text, *NEGATED_REMOVE_PATTERNS):
+        return "keep"
+    if _matches(text, *REMOVE_PATTERNS):
+        return "remove"
+    if _matches(text, *REVIEW_PATTERNS):
+        return "review"
+    return None
 
 
 def _reason_after_because(text: str) -> str | None:

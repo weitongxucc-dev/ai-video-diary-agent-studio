@@ -67,5 +67,5 @@ App 启动时会先检查 `uv` 和 `ffmpeg` 是否可用，再启动 API 和 Web
 
 - 当前 beta 使用本机 `uv` 环境启动 API / 可选 Worker，暂未内置独立 Python runtime。
 - 当前 beta 只有本地 ad-hoc 签名，未做 Apple Developer ID 签名和 notarize。
-- 剪映 10.7 原生加密草稿写入仍为后续项；当前仍以兼容桥和可追溯素材包为主。
+- 剪映草稿导出当前保证生成素材包、manifest、4:3 cover 和可导入资产。剪映 10.7 原生加密草稿写入暂不作为 2.0 内测承诺；如果本机桥接导入失败，素材包仍可手动导入剪映。
 - 如启动失败，请先查看日志目录中的 `main.log`、`api.log`、`worker.log`、`web.log`。

@@ -39,6 +39,7 @@ class RuntimeContainer:
     service: EpisodeService
     workflow: LangGraphEpisodeWorkflow
     video_job_runner: VideoJobRunner
+    topic_job_runner: VideoJobRunner
     edit_plan_apply_runner: Any
     app_state: AppState
 
@@ -57,6 +58,7 @@ def create_runtime(
     runtime_env_path: str | Path | None = None,
     app_state: AppState | None = None,
     video_job_runner: VideoJobRunner | None = None,
+    topic_job_runner: VideoJobRunner | None = None,
     edit_plan_apply_runner: Any = None,
 ) -> RuntimeContainer:
     settings = settings or Settings.from_env()
@@ -84,6 +86,7 @@ def create_runtime(
         service=service,
         workflow=LangGraphEpisodeWorkflow(service),
         video_job_runner=video_job_runner or VideoJobRunner(),
+        topic_job_runner=topic_job_runner or VideoJobRunner(),
         edit_plan_apply_runner=edit_plan_apply_runner,
         app_state=app_state or AppState(),
     )
@@ -111,6 +114,7 @@ def runtime_context(
         video_pipeline=runtime.video_pipeline,
         draft_workspace=runtime.draft_workspace,
         video_job_runner=runtime.video_job_runner,
+        topic_job_runner=runtime.topic_job_runner,
         edit_plan_apply_runner=runtime.edit_plan_apply_runner,
         voice_transcriber=runtime.voice_transcriber,
     )

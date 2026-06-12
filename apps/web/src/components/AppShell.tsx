@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { GlobalSearchBox } from "@/components/GlobalSearchBox";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 import { RetroChrome } from "@/components/RetroChrome";
 import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
@@ -13,31 +14,37 @@ type NavItem = {
   disabled?: boolean;
 };
 
-const navItems: NavItem[] = [
+const taskNavItems: NavItem[] = [
   { href: "/", label: "今日工作台", icon: "desk" },
-  { href: "/templates", label: "内容模板", icon: "product" },
-  { href: "/profile", label: "创作者画像", icon: "person" },
   { href: "/topics", label: "选题池", icon: "note" },
   { href: "/script", label: "口播稿", icon: "script" },
   { href: "/cover", label: "封面", icon: "cover" },
   { href: "/video", label: "视频处理", icon: "video" },
   { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
-  { href: "/draft", label: "剪映草稿", icon: "clip" },
+  { href: "/draft", label: "剪映草稿", icon: "archive" },
+  { href: "/publish-feedback", label: "发布反馈", icon: "publish" },
+];
+
+const managementRoutes: NavItem[] = [
+  { href: "/templates", label: "内容模板", icon: "product" },
+  { href: "/profile", label: "创作者画像", icon: "person" },
   { href: "/knowledge", label: "知识库", icon: "folder" },
   { href: "/sources", label: "信息源", icon: "link" },
   { href: "/learning", label: "反馈学习", icon: "spark" },
   { href: "/health", label: "运行健康", icon: "check" },
   { href: "/logs", label: "内测日志", icon: "code" },
   { href: "/setup", label: "配置向导", icon: "settings" },
-  { href: "/settings", label: "设置", icon: "settings" }
+  { href: "/settings", label: "设置", icon: "settings" },
 ];
+
+const routeItems = [...taskNavItems, ...managementRoutes];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const currentNavItem =
-    navItems.find((item) =>
+    routeItems.find((item) =>
       item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
-    ) ?? navItems[0];
+    ) ?? taskNavItems[0];
   const todayLabel = new Intl.DateTimeFormat("zh-CN", {
     day: "2-digit",
     month: "2-digit",
@@ -62,7 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
             <nav>
-              {navItems.map((item) => {
+              {taskNavItems.map((item) => {
                 const active =
                   item.href === "/"
                     ? pathname === "/"
@@ -110,13 +117,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span>今日 · {todayLabel}</span>
               </div>
               <div className="topbar-actions">
-                <input
-                  className="search-box"
-                  type="search"
-                  placeholder="搜索 Episode、选题、素材..."
-                  aria-label="搜索 Episode、选题、素材"
-                  disabled
-                />
+                <GlobalSearchBox />
                 <button className="icon-button" type="button" aria-label="通知" disabled>
                   <PixelIcon name="bell" />
                 </button>
@@ -125,8 +126,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </span>
               </div>
             </header>
-            {children}
-            <VoiceCommandConsole contextLabel={currentNavItem.label} />
+            <div className="main-scroll">
+              {children}
+            </div>
+            <div className="voice-command-dock">
+              <VoiceCommandConsole contextLabel={currentNavItem.label} />
+            </div>
           </main>
         </div>
       </div>

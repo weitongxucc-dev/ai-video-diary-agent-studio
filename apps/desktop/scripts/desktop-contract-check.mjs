@@ -80,6 +80,7 @@ for (const required of [
 
 for (const required of [
   "BrowserWindow",
+  "Notification",
   "Tray",
   "Menu",
   "main.log",
@@ -98,6 +99,10 @@ for (const required of [
   "shutdownChildProcesses",
   "waitForHttp",
   "CommandOrControl+Shift+Space",
+  "requestSingleInstanceLock",
+  "second-instance",
+  'app.on("activate"',
+  "app.focus({ steal: true })",
   "编辑",
   'role: "copy"',
   'role: "paste"',
@@ -106,6 +111,11 @@ for (const required of [
 ]) {
   assert(main.includes(required), `Desktop main process must include ${required}.`);
 }
+
+assert(
+  main.includes("function notify(") && main.includes("Notification.isSupported()"),
+  "Desktop main process must wrap Electron Notification behind a support check.",
+);
 
 for (const required of [
   "createServiceConfig",
@@ -205,6 +215,11 @@ assert(
     "/Users/example/Library/Application Support/AI视频日记 Agent Studio/.env",
   "Desktop API must use an Application Support runtime env path by default.",
 );
+assert(
+  apiService.env.UV_PROJECT_ENVIRONMENT ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/api-venv",
+  "Desktop API must keep its uv virtual environment outside the signed app bundle.",
+);
 for (const service of [apiService]) {
   assert(
     service.env.PYTHONDONTWRITEBYTECODE === "1",
@@ -274,6 +289,11 @@ assert(
   enabledWorkerService.env.AI_VIDEO_DIARY_RUNTIME_ENV_PATH ===
     "/Users/example/Library/Application Support/AI视频日记 Agent Studio/.env",
   "Desktop opt-in Worker must use the Application Support runtime env path by default.",
+);
+assert(
+  enabledWorkerService.env.UV_PROJECT_ENVIRONMENT ===
+    "/Users/example/Library/Application Support/AI视频日记 Agent Studio/api-venv",
+  "Desktop opt-in Worker must keep its uv virtual environment outside the signed app bundle.",
 );
 assert(
   enabledWorkerService.env.PATH.includes("/opt/homebrew/bin"),

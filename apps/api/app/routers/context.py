@@ -29,5 +29,6 @@ class AppContext:
     video_pipeline: Any | None = None
     draft_workspace: Any | None = None
     video_job_runner: Any | None = None
+    topic_job_runner: Any | None = None
     edit_plan_apply_runner: Callable[[list[str]], None] | None = None
     voice_transcriber: Any | None = None

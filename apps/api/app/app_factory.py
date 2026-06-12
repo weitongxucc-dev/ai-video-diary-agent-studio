@@ -17,7 +17,7 @@ from app.drafts import DraftWorkspace
 from app.external_sources import HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import script_generator_from_settings
-from app.models import Episode, EpisodeStatus, VideoJobStatus
+from app.models import Episode, EpisodeStatus, GenerationJobStatus, VideoJobStatus
 from app.preference_memory import LongTermPreferenceRepository
 from app.repository import EpisodeRepository
 from app.routers import cover as cover_router
@@ -94,6 +94,7 @@ def reload_runtime_dependencies(app: FastAPI) -> None:
             runtime_env_path=current_runtime.runtime_env_path,
             app_state=current_runtime.app_state,
             video_job_runner=current_runtime.video_job_runner,
+            topic_job_runner=current_runtime.topic_job_runner,
             edit_plan_apply_runner=current_runtime.edit_plan_apply_runner,
         ),
     )
@@ -126,6 +127,7 @@ def get_app_context(app: FastAPI) -> AppContext:
         video_pipeline=runtime.video_pipeline,
         draft_workspace=runtime.draft_workspace,
         video_job_runner=runtime.video_job_runner,
+        topic_job_runner=runtime.topic_job_runner,
         edit_plan_apply_runner=runtime.edit_plan_apply_runner,
         voice_transcriber=runtime.voice_transcriber,
     )
@@ -327,6 +329,7 @@ _COMPATIBILITY_EXPORTS = {
     "DraftWorkspace": DraftWorkspace,
     "Episode": Episode,
     "EpisodeStatus": EpisodeStatus,
+    "GenerationJobStatus": GenerationJobStatus,
     "VideoJobStatus": VideoJobStatus,
     "LongTermPreferenceRepository": LongTermPreferenceRepository,
     "EpisodeRepository": EpisodeRepository,

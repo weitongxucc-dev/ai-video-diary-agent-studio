@@ -12,8 +12,6 @@ import { PixelIcon } from "@/components/PixelIcon";
 import { ScriptQuickRewritePanel } from "@/components/ScriptQuickRewritePanel";
 import { ScriptSectionEditor } from "@/components/ScriptSectionEditor";
 import {
-  generateScript,
-  generateTopics,
   getScriptRewriteIntents,
   getTodayEpisode,
 } from "@/lib/api";
@@ -54,27 +52,11 @@ async function loadScriptEpisode(): Promise<ScriptLoadState> {
   }
 
   if (episode.topics.length === 0) {
-    try {
-      episode = await generateTopics(episode.id);
-    } catch {
-      return { episode, error: "topics_failed", script: null };
-    }
-  }
-
-  if (episode.topics.length === 0) {
     return { episode, error: "no_topics", script: null };
   }
 
   if (!episode.selected_topic_id) {
     return { episode, error: "needs_topic_review", script: null };
-  }
-
-  if (!episode.script) {
-    try {
-      episode = await generateScript(episode.id);
-    } catch {
-      return { episode, error: "script_failed", script: null };
-    }
   }
 
   if (!episode.script) {
@@ -257,6 +239,34 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
                 </nav>
               </section>
 
+              <section className="script-primary-actions pixel-card" aria-label="口播稿主操作">
+                <div>
+                  <span className="section-kicker">写稿操作</span>
+                  <strong>先保存，再确认录制</strong>
+                  <p>发布素材和历史记录已收进右侧面板，正文区只保留当前写稿动作。</p>
+                </div>
+                <button className="pixel-button" form={scriptFormId} type="submit">
+                  保存口播稿修改
+                </button>
+                <form action={regenerateScriptAction} className="script-control-form">
+                  <input name="episode_id" type="hidden" value={episode.id} />
+                  <input
+                    name="reason"
+                    placeholder="更犀利、更像自己、少概念"
+                    type="text"
+                  />
+                  <button className="pixel-button secondary" type="submit">
+                    重新生成整篇
+                  </button>
+                </form>
+                <form action={approveScriptAction}>
+                  <input name="episode_id" type="hidden" value={episode.id} />
+                  <button className="pixel-button" type="submit">
+                    确认脚本，等待录制视频
+                  </button>
+                </form>
+              </section>
+
               <section className="script-hook pixel-card" id="script-hook">
                 <div className="script-section-header compact">
                   <div>
@@ -276,68 +286,81 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
               {script.sections.map((section) => (
                 <div className="script-section-stack" key={section.id}>
                   <ScriptSectionEditor formId={scriptFormId} section={section} />
-                  <ScriptQuickRewritePanel
-                    episodeId={episode.id}
-                    intents={rewriteIntents}
-                    sectionId={section.id}
-                    sectionTitle={section.title}
-                  />
-                  <div className="script-section-tools">
-                    <div className="feedback-actions" aria-label={`${section.title} 反馈操作`}>
-                      <form action={sendScriptSectionFeedbackAction}>
+                  <details className="script-section-drawer">
+                    <summary>
+                      <span>本段校准</span>
+                      <strong>快捷重写 / 反馈</strong>
+                    </summary>
+                    <ScriptQuickRewritePanel
+                      episodeId={episode.id}
+                      intents={rewriteIntents}
+                      sectionId={section.id}
+                      sectionTitle={section.title}
+                    />
+                    <div className="script-section-tools">
+                      <div className="feedback-actions" aria-label={`${section.title} 反馈操作`}>
+                        <form action={sendScriptSectionFeedbackAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input name="section_id" type="hidden" value={section.id} />
+                          <input name="reason" type="hidden" value="这一段可以保留这种表达" />
+                          <button
+                            className={`feedback-button${section.feedback === "up" ? " active" : ""}`}
+                            type="submit"
+                            name="value"
+                            value="up"
+                            aria-label="点赞反馈"
+                          >
+                            <PixelIcon name="thumb-up" />
+                            <span>赞</span>
+                          </button>
+                        </form>
+                        <form action={sendScriptSectionFeedbackAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input name="section_id" type="hidden" value={section.id} />
+                          <input name="reason" type="hidden" value="这一段需要重新调整表达" />
+                          <button
+                            className={`feedback-button${section.feedback === "down" ? " active" : ""}`}
+                            type="submit"
+                            name="value"
+                            value="down"
+                            aria-label="点踩反馈"
+                          >
+                            <PixelIcon name="thumb-down" />
+                            <span>踩</span>
+                          </button>
+                        </form>
+                      </div>
+                      <form
+                        action={regenerateScriptSectionAction}
+                        className="section-regenerate-form"
+                      >
                         <input name="episode_id" type="hidden" value={episode.id} />
                         <input name="section_id" type="hidden" value={section.id} />
-                        <input name="reason" type="hidden" value="这一段可以保留这种表达" />
-                        <button
-                          className={`feedback-button${section.feedback === "up" ? " active" : ""}`}
-                          type="submit"
-                          name="value"
-                          value="up"
-                          aria-label="点赞反馈"
-                        >
-                          <PixelIcon name="thumb-up" />
-                          <span>赞</span>
-                        </button>
-                      </form>
-                      <form action={sendScriptSectionFeedbackAction}>
-                        <input name="episode_id" type="hidden" value={episode.id} />
-                        <input name="section_id" type="hidden" value={section.id} />
-                        <input name="reason" type="hidden" value="这一段需要重新调整表达" />
-                        <button
-                          className={`feedback-button${section.feedback === "down" ? " active" : ""}`}
-                          type="submit"
-                          name="value"
-                          value="down"
-                          aria-label="点踩反馈"
-                        >
-                          <PixelIcon name="thumb-down" />
-                          <span>踩</span>
+                        <input
+                          name="reason"
+                          placeholder="更像日记、少一点营销感"
+                          type="text"
+                        />
+                        <button className="pixel-button secondary" type="submit">
+                          重写本段
                         </button>
                       </form>
                     </div>
-                    <form
-                      action={regenerateScriptSectionAction}
-                      className="section-regenerate-form"
-                    >
-                      <input name="episode_id" type="hidden" value={episode.id} />
-                      <input name="section_id" type="hidden" value={section.id} />
-                      <input
-                        name="reason"
-                        placeholder="更像日记、少一点营销感"
-                        type="text"
-                      />
-                      <button className="pixel-button secondary" type="submit">
-                        重写本段
-                      </button>
-                    </form>
-                  </div>
+                  </details>
                 </div>
               ))}
             </section>
 
             <aside className="script-side pixel-card">
-              <section className="script-side-panel">
-                <h2>发布素材</h2>
+              <details className="script-side-panel script-secondary-drawer script-publish-summary">
+                <summary>
+                  <span>发布素材</span>
+                  <strong>{titleOptions.length}</strong>
+                </summary>
+                <div className="script-publish-preview">
+                  <p>{titleOptions[0] || "等待标题候选"}</p>
+                  <span>{script.cover_copy}</span>
+                </div>
                 <h3>标题候选</h3>
                 {titleOptions.map((title, index) => (
                   <input
@@ -369,33 +392,9 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
                   form={scriptFormId}
                   name="comment_prompt"
                 />
-              </section>
+              </details>
 
-              <section className="script-side-panel script-side-actions">
-                <h2>操作</h2>
-                <button className="pixel-button" form={scriptFormId} type="submit">
-                  保存口播稿修改
-                </button>
-                <form action={regenerateScriptAction} className="script-control-form">
-                  <input name="episode_id" type="hidden" value={episode.id} />
-                  <input
-                    name="reason"
-                    placeholder="更犀利、更像自己、少概念"
-                    type="text"
-                  />
-                  <button className="pixel-button secondary" type="submit">
-                    重新生成整篇
-                  </button>
-                </form>
-                <form action={approveScriptAction}>
-                  <input name="episode_id" type="hidden" value={episode.id} />
-                  <button className="pixel-button" type="submit">
-                    确认脚本，等待录制视频
-                  </button>
-                </form>
-              </section>
-
-              <details className="script-side-panel script-history-panel">
+              <details className="script-side-panel script-secondary-drawer script-history-panel">
                 <summary>
                   <span>版本历史</span>
                   <strong>{versions.length}</strong>

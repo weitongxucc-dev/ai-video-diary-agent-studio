@@ -418,8 +418,20 @@ export function generateTopics(episodeId: string): Promise<Episode> {
   });
 }
 
+export function startGenerateTopics(episodeId: string): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/start-generate-topics`, {
+    method: "POST",
+  });
+}
+
 export function regenerateTopics(episodeId: string): Promise<Episode> {
   return request<Episode>(`/api/episodes/${episodeId}/regenerate-topics`, {
+    method: "POST",
+  });
+}
+
+export function startRegenerateTopics(episodeId: string): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/start-regenerate-topics`, {
     method: "POST",
   });
 }

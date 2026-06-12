@@ -42,8 +42,14 @@ function stepState(stepKey: string, completed: Set<string>): "done" | "active" |
 
 export function EpisodeProgress({ episode = null }: { episode?: Episode | null }) {
   const completed = completedSteps(episode);
+  const phaseLabel = episode?.workflow_phase.label ?? "今日工作台";
+  const phaseDescription = episode?.workflow_phase.description ?? "等待开始今日流程。";
   return (
-    <section className="episode-progress pixel-card" aria-label="今日视频日记进度">
+    <section className="episode-progress pixel-card" aria-label={`今日视频日记进度：${phaseLabel}`}>
+      <div className="episode-phase-summary">
+        <strong>{phaseLabel}</strong>
+        <span>{phaseDescription}</span>
+      </div>
       <div className="episode-progress-flow" role="list">
         {steps.map((step, index) => {
           const state = stepState(step.key, completed);
@@ -52,7 +58,7 @@ export function EpisodeProgress({ episode = null }: { episode?: Episode | null }
           <div className={`progress-step ${state}`} key={step.label} role="listitem">
             <span className="progress-step-card">
               <span className="stage-code">STAGE {String(index + 1).padStart(2, "0")}</span>
-              <span className="step-icon">
+              <span className="step-icon pixel-icon-slot">
                 <PixelIcon name={step.icon} />
               </span>
               <strong>{step.label}</strong>

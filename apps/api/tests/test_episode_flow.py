@@ -84,6 +84,7 @@ def reset_repository():
     main_module.service = EpisodeService(script_generator=TemplateScriptGenerator())
     main_module.workflow = main_module.LangGraphEpisodeWorkflow(main_module.service)
     main_module.video_job_runner = InlineVideoJobRunner()
+    main_module.topic_job_runner = InlineVideoJobRunner()
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
 
 
@@ -381,6 +382,54 @@ def test_force_regenerating_topics_replaces_candidates_and_clears_script():
     assert updated_episode["script"] is None
     assert updated_episode["status"] == "topics_ready"
     assert len(updated_episode["topics"]) == 4
+
+
+def test_start_regenerating_topics_returns_processing_episode_and_finishes_in_background():
+    episode = client.post("/api/episodes").json()
+    first_topics = client.post(f"/api/episodes/{episode['id']}/generate-topics").json()["topics"]
+    client.post(
+        f"/api/episodes/{episode['id']}/approve-topic",
+        json={"topic_id": first_topics[0]["id"]},
+    )
+    client.post(f"/api/episodes/{episode['id']}/generate-script")
+    runner = CapturingVideoJobRunner()
+    main_module.topic_job_runner = runner
+
+    response = client.post(f"/api/episodes/{episode['id']}/start-regenerate-topics")
+
+    assert response.status_code == 200
+    processing_episode = response.json()
+    assert processing_episode["topic_job_status"] == "processing"
+    assert processing_episode["topic_job_message"] == "正在重新生成候选选题"
+    assert [topic["id"] for topic in processing_episode["topics"]] == [
+        topic["id"] for topic in first_topics
+    ]
+    assert len(runner.jobs) == 1
+
+    runner.jobs[0]()
+    updated_episode = client.get(f"/api/episodes/{episode['id']}").json()
+
+    assert updated_episode["topic_job_status"] == "completed"
+    assert updated_episode["topic_job_error"] is None
+    assert [topic["id"] for topic in updated_episode["topics"]] != [
+        topic["id"] for topic in first_topics
+    ]
+    assert updated_episode["selected_topic_id"] is None
+    assert updated_episode["script"] is None
+    assert updated_episode["status"] == "topics_ready"
+
+
+def test_episode_response_exposes_derived_workflow_phase_for_topic_job():
+    episode = client.post("/api/episodes").json()
+    runner = CapturingVideoJobRunner()
+    main_module.topic_job_runner = runner
+
+    response = client.post(f"/api/episodes/{episode['id']}/start-generate-topics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflow_phase"]["id"] == "topics_generating"
+    assert "选题" in body["workflow_phase"]["label"]
 
 
 def test_generating_script_twice_preserves_script():

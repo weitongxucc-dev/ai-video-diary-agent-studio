@@ -13,6 +13,26 @@ function getFeedbackLabel(feedback: TopicCandidate["feedback"]) {
   return "待复核";
 }
 
+function sourceShortLabel(sourceType: string): string {
+  const normalized = sourceType.trim().toLowerCase();
+  if (normalized === "obsidian") {
+    return "OB";
+  }
+  if (normalized === "product hunt") {
+    return "PH";
+  }
+  if (sourceType.includes("观猹")) {
+    return "观";
+  }
+  if (sourceType.includes("外链")) {
+    return "EXT";
+  }
+  if (sourceType.includes("示例")) {
+    return "DEMO";
+  }
+  return sourceType.slice(0, 4).toUpperCase();
+}
+
 export function TopicCandidateCard({
   active,
   topic,
@@ -26,18 +46,24 @@ export function TopicCandidateCard({
       href={`/topics?topic_id=${encodeURIComponent(topic.id)}`}
     >
       <div className="topic-card-header">
-        <span className="score-badge">{topic.score}</span>
+        <div className="topic-card-meta">
+          <span className="score-badge">{topic.score}</span>
+          <span className="source-badge-list" aria-label="来源依据">
+            {topic.source_refs.slice(0, 3).map((source) => (
+              <span
+                key={`${source.source_type}-${source.ref}`}
+                className="source-badge"
+                title={`${source.source_type} · ${source.title}`}
+              >
+                {sourceShortLabel(source.source_type)}
+              </span>
+            ))}
+          </span>
+        </div>
         <span className="topic-card-status">{getFeedbackLabel(topic.feedback)}</span>
       </div>
       <h2>{topic.title}</h2>
       <p>{topic.core_viewpoint}</p>
-      <div className="source-row">
-        {topic.source_refs.map((source) => (
-          <span key={`${source.source_type}-${source.ref}`} className="source-badge">
-            {source.source_type}
-          </span>
-        ))}
-      </div>
     </Link>
   );
 }

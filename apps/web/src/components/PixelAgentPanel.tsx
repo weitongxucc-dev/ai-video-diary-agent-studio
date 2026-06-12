@@ -30,6 +30,7 @@ export function PixelAgentPanel({ episode, systemStatus }: PixelAgentPanelProps)
   const scriptReady = Boolean(episode?.script);
   const processedVideoReady = Boolean(episode?.video_processed_file_name);
   const draftReady = Boolean(episode?.draft_package_name);
+  const workflowPhase = episode?.workflow_phase;
   const tasks: AgentTask[] = [
     { label: "DeepSeek 文案", progress: llmConfigured ? 100 : 0, icon: "agent", status: llmConfigured ? systemStatus?.llm.model ?? "已配置" : "未配置" },
     { label: "Obsidian 索引", progress: obsidianReady ? 100 : 0, icon: "folder", status: obsidianReady ? `${obsidianCount} 篇` : "未配置" },
@@ -49,6 +50,9 @@ export function PixelAgentPanel({ episode, systemStatus }: PixelAgentPanelProps)
         <PixelMascot />
       </div>
       <p className="agent-copy">
+        当前阶段：<strong>{workflowPhase?.label ?? "等待 Episode"}</strong>。
+        {workflowPhase?.description ? ` ${workflowPhase.description}` : ""}
+        {" "}
         DeepSeek 文案生成已{llmConfigured ? "接通" : "待配置"}。
         Obsidian 已发现 <strong>{obsidianCount}</strong> 篇笔记。
         Hermes 雷达已读取 <strong>{hermesCount}</strong> 条素材。
@@ -66,7 +70,9 @@ export function PixelAgentPanel({ episode, systemStatus }: PixelAgentPanelProps)
         {tasks.map((task) => (
           <div className="agent-task" key={task.label}>
             <span className="agent-module">
-              <PixelIcon name={task.icon} />
+              <span className="pixel-icon-slot">
+                <PixelIcon name={task.icon} />
+              </span>
               <span>{task.label}</span>
             </span>
             <strong>{task.status}</strong>

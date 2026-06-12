@@ -14,6 +14,7 @@ from app.models import (
     EpisodeStatus,
     FeedbackEvent,
     FeedbackValue,
+    GenerationJobStatus,
     ScriptPackage,
     ScriptSection,
     ScriptVersion,
@@ -170,6 +171,15 @@ class EpisodeRepository:
             "video_job_finished_at": episode.video_job_finished_at.isoformat()
             if episode.video_job_finished_at
             else None,
+            "topic_job_status": _enum_value(episode.topic_job_status),
+            "topic_job_message": episode.topic_job_message,
+            "topic_job_error": episode.topic_job_error,
+            "topic_job_started_at": episode.topic_job_started_at.isoformat()
+            if episode.topic_job_started_at
+            else None,
+            "topic_job_finished_at": episode.topic_job_finished_at.isoformat()
+            if episode.topic_job_finished_at
+            else None,
             "draft_package_name": episode.draft_package_name,
             "draft_package_path": episode.draft_package_path,
             "publish_url": episode.publish_url,
@@ -308,6 +318,25 @@ class EpisodeRepository:
                 str(data["video_job_finished_at"])
             )
             if data.get("video_job_finished_at")
+            else None,
+            topic_job_status=GenerationJobStatus(
+                str(data.get("topic_job_status") or "idle")
+            ),
+            topic_job_message=str(data["topic_job_message"])
+            if data.get("topic_job_message")
+            else None,
+            topic_job_error=str(data["topic_job_error"])
+            if data.get("topic_job_error")
+            else None,
+            topic_job_started_at=datetime.fromisoformat(
+                str(data["topic_job_started_at"])
+            )
+            if data.get("topic_job_started_at")
+            else None,
+            topic_job_finished_at=datetime.fromisoformat(
+                str(data["topic_job_finished_at"])
+            )
+            if data.get("topic_job_finished_at")
             else None,
             draft_package_name=str(data["draft_package_name"])
             if data.get("draft_package_name")

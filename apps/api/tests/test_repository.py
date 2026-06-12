@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import json
 import sqlite3
 
 from app.models import (
     FeedbackEvent,
     FeedbackValue,
+    GenerationJobStatus,
     ScriptPackage,
     ScriptSection,
     ScriptVersion,
@@ -82,6 +83,28 @@ def test_sqlite_repository_persists_episode_state(tmp_path):
     assert today.topics[0].source_refs[0].ref == "notes/loop.md"
     assert today.feedback_events[0].value == FeedbackValue.UP
     assert today.video_dedup_report_path == "/tmp/raw_preview_dedup_report.json"
+
+
+def test_sqlite_repository_persists_topic_job_state(tmp_path):
+    db_path = tmp_path / "episodes.sqlite3"
+    repo = EpisodeRepository(database_path=db_path)
+    episode = repo.create()
+    job_time = datetime(2026, 6, 11, 9, 30, tzinfo=timezone.utc)
+    episode.topic_job_status = GenerationJobStatus.PROCESSING
+    episode.topic_job_message = "正在重新生成候选选题"
+    episode.topic_job_error = "previous error"
+    episode.topic_job_started_at = job_time
+    episode.topic_job_finished_at = job_time
+    repo.save(episode)
+
+    reloaded = EpisodeRepository(database_path=db_path)
+    restored = reloaded.get(episode.id)
+
+    assert restored.topic_job_status == GenerationJobStatus.PROCESSING
+    assert restored.topic_job_message == "正在重新生成候选选题"
+    assert restored.topic_job_error == "previous error"
+    assert restored.topic_job_started_at == job_time
+    assert restored.topic_job_finished_at == job_time
 
 
 def test_sqlite_repository_restores_missing_video_dedup_report_path_as_none(tmp_path):

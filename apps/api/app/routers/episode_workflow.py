@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app import episode_media_flow, episode_workflow_flow
+from app import episode_media_flow, episode_workflow_flow, topic_jobs
 from app.asr import ASRConfigurationError, ASRTranscriptionError
 from app.comment_insights import extract_comment_insights
 from app.content_templates import get_content_template
@@ -33,6 +34,8 @@ from app.script_rewrite_intents import script_rewrite_intents, script_rewrite_re
 from app.topics import TopicGenerationConfigurationError, TopicGenerationResponseError
 from app.voice_commands import parse_voice_command
 from app.voice_transcription import transcribe_voice_audio
+
+logger = logging.getLogger(__name__)
 
 
 def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
@@ -125,6 +128,30 @@ def create_router(get_context: Callable[[], AppContext]) -> APIRouter:
         except TopicGenerationResponseError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return episode_media_flow.episode_response(context, context.repo.save(episode))
+
+    @router.post(
+        "/api/episodes/{episode_id}/start-generate-topics",
+        response_model=EpisodeResponse,
+    )
+    def start_generate_topics(episode_id: str) -> EpisodeResponse:
+        return _start_topic_generation(
+            get_context,
+            episode_id,
+            force=False,
+            message="正在生成今日候选选题",
+        )
+
+    @router.post(
+        "/api/episodes/{episode_id}/start-regenerate-topics",
+        response_model=EpisodeResponse,
+    )
+    def start_regenerate_topics(episode_id: str) -> EpisodeResponse:
+        return _start_topic_generation(
+            get_context,
+            episode_id,
+            force=True,
+            message="正在重新生成候选选题",
+        )
 
     @router.post(
         "/api/episodes/{episode_id}/approve-topic",
@@ -491,6 +518,34 @@ def _episode_or_404(context: AppContext, episode_id: str):
         return episode_media_flow.get_episode(context, episode_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="episode not found") from exc
+
+
+def _start_topic_generation(
+    get_context: Callable[[], AppContext],
+    episode_id: str,
+    *,
+    force: bool,
+    message: str,
+) -> EpisodeResponse:
+    context = get_context()
+    if context.topic_job_runner.is_active(episode_id):
+        return episode_media_flow.episode_response(
+            context,
+            _episode_or_404(context, episode_id),
+        )
+    episode = _episode_or_404(context, episode_id)
+    episode = topic_jobs.start_topic_job(episode, message)
+    context.repo.save(episode)
+    context.topic_job_runner.submit(
+        episode_id,
+        lambda: topic_jobs.complete_topic_generation(
+            get_context,
+            episode_id,
+            force=force,
+            logger=logger,
+        ),
+    )
+    return episode_media_flow.episode_response(context, context.repo.get(episode_id))
 
 
 def _script_section_regenerate_reason(

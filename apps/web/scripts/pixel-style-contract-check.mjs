@@ -8,6 +8,7 @@ const tsxFiles = globSync("src/**/*.{ts,tsx}", {
   cwd: new URL("../", import.meta.url),
 });
 
+const sourceByFile = new Map();
 const css = await readFile(
   new URL("../src/app/globals.css", import.meta.url),
   "utf8",
@@ -17,6 +18,7 @@ const failures = [];
 
 for (const file of tsxFiles) {
   const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+  sourceByFile.set(file, source);
   if (emojiPattern.test(source)) {
     failures.push(`${file} contains emoji characters; use PixelIcon assets instead.`);
   }
@@ -60,6 +62,27 @@ if (!css.includes("--pixel-shadow")) {
 
 if (!css.includes(".pixel-sprite")) {
   failures.push("globals.css must define reusable .pixel-sprite icons.");
+}
+
+for (const required of [
+  ".pixel-icon-slot",
+  "overflow: hidden",
+  ".pixel-icon-slot .pixel-sprite",
+]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define a clipped small icon slot with ${required}.`);
+  }
+}
+
+for (const [file, required] of [
+  ["src/components/EpisodeProgress.tsx", "pixel-icon-slot"],
+  ["src/components/PixelAgentPanel.tsx", "pixel-icon-slot"],
+  ["src/app/topics/page.tsx", "pixel-icon-slot"],
+  ["src/app/edit-plan/page.tsx", "pixel-icon-slot"],
+]) {
+  if (!sourceByFile.get(file)?.includes(required)) {
+    failures.push(`${file} must wrap small PixelIcon instances in .pixel-icon-slot.`);
+  }
 }
 
 if (!css.includes("--font-pixel")) {

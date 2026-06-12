@@ -8,6 +8,7 @@ const files = {
   scriptQuickRewritePanel: new URL("../src/components/ScriptQuickRewritePanel.tsx", import.meta.url),
   scriptQuickRewriteButton: new URL("../src/components/ScriptQuickRewriteButton.tsx", import.meta.url),
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
+  publishFeedbackPanel: new URL("../src/components/PublishFeedbackPanel.tsx", import.meta.url),
   agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
   retroChrome: new URL("../src/components/RetroChrome.tsx", import.meta.url),
@@ -22,6 +23,7 @@ const files = {
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
   profile: new URL("../src/app/profile/page.tsx", import.meta.url),
   draft: new URL("../src/app/draft/page.tsx", import.meta.url),
+  publishFeedback: new URL("../src/app/publish-feedback/page.tsx", import.meta.url),
   cover: new URL("../src/app/cover/page.tsx", import.meta.url),
   editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
   logs: new URL("../src/app/logs/page.tsx", import.meta.url),
@@ -45,6 +47,7 @@ const [
   scriptQuickRewritePanel,
   scriptQuickRewriteButton,
   topicCard,
+  publishFeedbackPanel,
   agentPanel,
   appShell,
   retroChrome,
@@ -59,6 +62,7 @@ const [
   settingsPage,
   profilePage,
   draftPage,
+  publishFeedbackPage,
   coverPage,
   editPlanPage,
   logsPage,
@@ -67,6 +71,7 @@ const [
 ] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
 
 const failures = [];
+const publishFeedbackSurface = `${publishFeedbackPage}\n${publishFeedbackPanel}`;
 
 if (scriptPage.includes("approveTopic(") || scriptPage.includes("approveTopic,")) {
   failures.push("/script must not approve a topic automatically.");
@@ -88,6 +93,12 @@ if (!topicsPage.includes("generateTopicsAction")) {
   failures.push("/topics must expose an explicit generate topics action.");
 }
 
+for (const required of ["topic_job_status", "ProcessingRefresh", "topic-job-banner"]) {
+  if (!topicsPage.includes(required)) {
+    failures.push(`/topics must show asynchronous topic generation progress with ${required}.`);
+  }
+}
+
 for (const required of ["topics_error", "topic-error-banner", "配置"]) {
   if (!topicsPage.includes(required)) {
     failures.push(`/topics must show recoverable topic generation errors with ${required}.`);
@@ -100,8 +111,22 @@ for (const required of ["topicActionFailureRedirect", "topics_error=configuratio
   }
 }
 
+for (const required of ["startGenerateTopics", "startRegenerateTopics"]) {
+  if (!actionsFile.includes(required) || !apiFile.includes(required)) {
+    failures.push(`topic generation server actions must start background work with ${required}.`);
+  }
+}
+
+if (actionsFile.includes("await generateTopics(episodeId)") || actionsFile.includes("await regenerateTopics(episodeId)")) {
+  failures.push("topic generation server actions must not wait for full topic generation.");
+}
+
 if (topicsPage.includes("await generateTopics(")) {
   failures.push("/topics must not call the model automatically during page load.");
+}
+
+if (scriptPage.includes("generateTopics") || scriptPage.includes("generateScript,")) {
+  failures.push("/script must not trigger topic or script generation during page load.");
 }
 
 if (topicsPage.includes('href="/script"')) {
@@ -126,6 +151,12 @@ if (!scriptPage.includes("getScriptRewriteIntents")) {
 
 if (!scriptPage.includes("ScriptQuickRewritePanel")) {
   failures.push("/script must render ScriptQuickRewritePanel for each script section.");
+}
+
+for (const required of ["script-primary-actions", "script-secondary-drawer", "script-publish-summary"]) {
+  if (!scriptPage.includes(required)) {
+    failures.push(`/script must separate primary writing work from secondary panels with ${required}.`);
+  }
 }
 
 for (const required of ["searchParams", "script_error", "script-error-banner"]) {
@@ -182,17 +213,40 @@ if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar"
   failures.push("Agent panel must show real Hermes radar ingestion counts.");
 }
 
-for (const route of ["/templates", "/profile", "/draft", "/knowledge", "/sources", "/learning", "/health", "/logs", "/setup", "/settings"]) {
+if (appShell.includes('className="search-box"') && appShell.includes("disabled")) {
+  failures.push("Global search must not render as a disabled fake affordance.");
+}
+
+if (
+  retroChrome.includes('placeholder="搜索 Episode、选题、素材..."') &&
+  retroChrome.includes("disabled")
+) {
+  failures.push("RetroChrome search must not render as a disabled fake affordance.");
+}
+
+const taskNavStart = appShell.indexOf("const taskNavItems");
+const taskNavEnd = appShell.indexOf("const managementRoutes");
+const taskNavSlice =
+  taskNavStart === -1 || taskNavEnd === -1
+    ? ""
+    : appShell.slice(taskNavStart, taskNavEnd);
+const managementNavSlice =
+  taskNavEnd === -1 ? "" : appShell.slice(taskNavEnd, appShell.indexOf("const routeItems"));
+
+for (const route of ["/", "/topics", "/script", "/cover", "/video", "/edit-plan", "/draft", "/publish-feedback"]) {
   const routeBlock = `href: "${route}"`;
-  const routeIndex = appShell.indexOf(routeBlock);
-  if (routeIndex === -1) {
-    failures.push(`AppShell must expose ${route} as a real navigation route.`);
-    continue;
+  if (!taskNavSlice.includes(routeBlock)) {
+    failures.push(`The left sidebar task navigation must expose ${route}.`);
   }
-  const nextRouteIndex = appShell.indexOf("},", routeIndex);
-  const navSlice = appShell.slice(routeIndex, nextRouteIndex === -1 ? routeIndex + 120 : nextRouteIndex);
-  if (navSlice.includes("disabled: true")) {
-    failures.push(`${route} must not be disabled in the sidebar.`);
+}
+
+for (const route of ["/templates", "/profile", "/knowledge", "/sources", "/learning", "/health", "/logs", "/setup", "/settings"]) {
+  const routeBlock = `href: "${route}"`;
+  if (taskNavSlice.includes(routeBlock)) {
+    failures.push(`${route} belongs in the top management chrome, not the left task sidebar.`);
+  }
+  if (!managementNavSlice.includes(routeBlock)) {
+    failures.push(`AppShell must keep ${route} in route label metadata for breadcrumbs.`);
   }
 }
 
@@ -230,6 +284,22 @@ if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceComma
   failures.push("AppShell must render the reusable VoiceCommandConsole.");
 }
 
+for (const required of ["main-scroll", "voice-command-dock"]) {
+  if (!appShell.includes(required)) {
+    failures.push(`AppShell must keep page content scrollable above the persistent voice dock with ${required}.`);
+  }
+}
+
+if (appShell.indexOf("main-scroll") > appShell.indexOf("voice-command-dock")) {
+  failures.push("AppShell must render scrollable page content before the persistent voice dock.");
+}
+
+for (const required of ["sourceShortLabel", "topic-card-meta", "source-badge-list", "OB", "PH"]) {
+  if (!topicCard.includes(required)) {
+    failures.push(`Topic candidate cards must colocate compact source badges with the score using ${required}.`);
+  }
+}
+
 for (const fakeMenu of ["文件(F)", "编辑(E)", "视图(V)", "工具(T)", "帮助(H)"]) {
   if (retroChrome.includes(fakeMenu)) {
     failures.push(`RetroChrome must not keep fake disabled menu item ${fakeMenu}.`);
@@ -238,7 +308,7 @@ for (const fakeMenu of ["文件(F)", "编辑(E)", "视图(V)", "工具(T)", "帮
 
 for (const required of [
   "chromeMenuGroups",
-  "内容",
+  "内容库",
   "画像",
   "运行",
   "设置",
@@ -247,13 +317,22 @@ for (const required of [
   "menu-panel-link",
   'href: "/templates"',
   'href: "/profile"',
-  'href: "/video"',
+  'href: "/knowledge"',
+  'href: "/sources"',
+  'href: "/learning"',
+  'href: "/health"',
   'href: "/logs"',
   'href: "/setup"',
   'href: "/settings"',
 ]) {
   if (!retroChrome.includes(required)) {
     failures.push(`RetroChrome must expose real top menu surface ${required}.`);
+  }
+}
+
+for (const route of ['href: "/topics"', 'href: "/script"', 'href: "/cover"', 'href: "/video"', 'href: "/edit-plan"', 'href: "/draft"', 'href: "/publish-feedback"']) {
+  if (retroChrome.includes(route)) {
+    failures.push(`RetroChrome must not duplicate task route ${route}; task work belongs in the left sidebar.`);
   }
 }
 
@@ -282,6 +361,18 @@ if (!editPlanPage.includes("timeline-action-chip")) {
 for (const required of [".voice-command-console", ".edit-plan-page", ".video-preview-window", ".source-marker-strip", ".edit-plan-timeline", ".timeline-action-chip"]) {
   if (!css.includes(required)) {
     failures.push(`globals.css must define ${required}.`);
+  }
+}
+
+for (const required of [".main-area", ".main-scroll", ".voice-command-dock", "grid-template-rows: auto minmax(0, 1fr) auto"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define one-screen shell layout with ${required}.`);
+  }
+}
+
+for (const required of [".topic-card-meta", ".source-badge-list", "max-width: 44px"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define compact topic source metadata with ${required}.`);
   }
 }
 
@@ -474,9 +565,22 @@ for (const required of ["getContentTemplates", "selectContentTemplateAction", "t
 for (const required of [
   "getEpisodeCover",
   "updateCoverAction",
+  "deriveCoverCandidates",
   "cover-preview-frame",
+  "cover-workbench",
+  "cover-primary-stage",
+  "cover-candidate-list",
+  "cover-source-stack",
+  "cover-export-status",
+  "cover-secondary-drawer",
+  "cover-summary-strip",
   "cover-editor-form",
   "cover-template-grid",
+  "封面工位",
+  "生成封面候选",
+  "换一版文案",
+  "封面文案来源",
+  "导出状态",
   "headline",
   "subline",
   "tag",
@@ -617,9 +721,23 @@ for (const required of [".draft-template-preview", ".draft-track-preview", ".dra
   }
 }
 
-for (const required of [".cover-page", ".cover-preview-frame", ".cover-editor-form", ".cover-template-grid", ".cover-template-option"]) {
+for (const required of [
+  ".cover-page",
+  ".cover-workbench",
+  ".cover-workbench-grid",
+  ".cover-primary-stage",
+  ".cover-preview-frame",
+  ".cover-candidate-list",
+  ".cover-source-stack",
+  ".cover-export-status",
+  ".cover-secondary-drawer",
+  ".cover-summary-strip",
+  ".cover-editor-form",
+  ".cover-template-grid",
+  ".cover-template-option",
+]) {
   if (!css.includes(required)) {
-    failures.push(`globals.css must define cover editor surface ${required}.`);
+    failures.push(`globals.css must define cover workbench surface ${required}.`);
   }
 }
 
@@ -675,8 +793,8 @@ if (!actionsFile.includes("markPublishedAction")) {
 }
 
 for (const required of ["markPublishedAction", "publish_url", "play_count", "feedback_reason"]) {
-  if (!draftPage.includes(required)) {
-    failures.push(`/draft must include publish feedback field/action ${required}.`);
+  if (!publishFeedbackSurface.includes(required)) {
+    failures.push(`/publish-feedback must include publish feedback field/action ${required}.`);
   }
 }
 
@@ -691,9 +809,17 @@ if (!actionsFile.includes("analyzeCommentInsightsAction")) {
 }
 
 for (const required of ["评论洞察", "comments_text", "analyzeCommentInsightsAction"]) {
-  if (!draftPage.includes(required)) {
-    failures.push(`/draft must include publish comment insight field/action ${required}.`);
+  if (!publishFeedbackSurface.includes(required)) {
+    failures.push(`/publish-feedback must include publish comment insight field/action ${required}.`);
   }
+}
+
+if (!publishFeedbackPage.includes("PublishFeedbackPanel")) {
+  failures.push("/publish-feedback must mount the dedicated PublishFeedbackPanel surface.");
+}
+
+if (draftPage.includes("PublishFeedbackPanel")) {
+  failures.push("/draft must not mount PublishFeedbackPanel now that /publish-feedback is a dedicated task route.");
 }
 
 if (!learningPage.includes("published_comment_insight") || !learningPage.includes("评论洞察")) {

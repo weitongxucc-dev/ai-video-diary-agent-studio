@@ -37,6 +37,14 @@ class VideoJobStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class GenerationJobStatus(StrEnum):
+    IDLE = "idle"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
 class EpisodeIntakeMode(StrEnum):
     PLANNED = "planned"
     AD_HOC_VIDEO = "ad_hoc_video"
@@ -145,6 +153,11 @@ class Episode:
     video_job_error: str | None = None
     video_job_started_at: datetime | None = None
     video_job_finished_at: datetime | None = None
+    topic_job_status: GenerationJobStatus = GenerationJobStatus.IDLE
+    topic_job_message: str | None = None
+    topic_job_error: str | None = None
+    topic_job_started_at: datetime | None = None
+    topic_job_finished_at: datetime | None = None
     draft_package_name: str | None = None
     draft_package_path: str | None = None
     publish_url: str | None = None

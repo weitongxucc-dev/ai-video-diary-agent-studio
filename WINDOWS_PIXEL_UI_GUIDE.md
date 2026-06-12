@@ -48,6 +48,13 @@
 --border-strong: #111111;
 --shadow-hard: 4px 4px 0 #111111;
 --shadow-hard-small: 2px 2px 0 #111111;
+--win-face: #c8c4b8;
+--win-face-light: #f4efd8;
+--win-highlight: #ffffff;
+--win-shadow: #7f7f7f;
+--win-dark-shadow: #404040;
+--win-sunken: #fffdf0;
+--win-title: #0f3d91;
 --font-pixel: ...;
 --font-readable: ...;
 ```
@@ -79,19 +86,27 @@ border-radius: 0;
 
 ### 3.2 阴影
 
-使用硬阴影：
+页面外框和重点面板可以使用硬阴影：
 
 ```css
 box-shadow: var(--shadow-hard);
 box-shadow: var(--shadow-hard-small);
 ```
 
-凹凸控件使用 Windows 风格内阴影：
+常规控件优先使用 Windows 95 凸起 / 凹陷内阴影。凸起控件：
 
 ```css
 box-shadow:
-  inset 2px 2px 0 #ffffff,
-  inset -2px -2px 0 #7f7f7f;
+  inset 2px 2px 0 var(--win-highlight),
+  inset -2px -2px 0 var(--win-shadow);
+```
+
+凹陷控件：
+
+```css
+box-shadow:
+  inset 2px 2px 0 var(--win-shadow),
+  inset -2px -2px 0 var(--win-highlight);
 ```
 
 ### 3.3 字体
@@ -135,18 +150,55 @@ box-shadow:
 - `system-menubar`：文件 / 编辑 / 视图 / 工具 / 帮助。
 - `system-toolbar`：返回、前进、主页、地址栏、搜索、日期。
 - `sidebar`：功能导航。
-- `main-area`：当前页面内容。
-- `VoiceCommandConsole`：底部语音命令控制台。
+- `main-area`：三行结构，包含页面标题栏、可滚动内容区、底部命令 dock。
+- `main-scroll`：当前页面内容，必须独立滚动。
+- `VoiceCommandConsole`：底部语音命令控制台，必须固定在窗口内部底部 dock，不进入页面内容流。
 
 ### 4.2 导航
 
-左侧导航是桌面软件功能树，不是网站菜单。
+左侧导航是“完成当前内容任务”的生产流程，不是全站 sitemap。
+
+左侧只放跟一条内容推进直接相关的页面：
+
+- 今日工作台
+- 选题池
+- 口播稿
+- 封面
+- 视频处理
+- 剪辑计划
+- 剪映草稿
+- 发布反馈
+
+顶部菜单承接配置、资源、画像和诊断类入口：
+
+- 内容模板
+- 创作者画像
+- 知识库
+- 信息源
+- 反馈学习
+- 运行健康
+- 内测日志
+- 配置向导
+- 设置
+
+禁止左侧和顶部重复放同一个入口；如果一个页面不是“推进当前 Episode 的下一步”，默认放到顶部。
 
 规则：
 
 - 当前页面使用 Windows 蓝色选中态。
 - 图标使用 `PixelIcon`。
 - 不使用现代 tab pill、圆角按钮、透明悬浮态。
+
+### 4.3 顶部菜单
+
+顶部菜单必须像桌面软件菜单，而不是网页导航。
+
+规则：
+
+- 菜单项按职责分组，如“内容库 / 画像 / 运行 / 设置”。
+- 打开菜单时使用 Windows 蓝底白字选中态。
+- 菜单面板使用凸起外框，说明区使用凹陷面板。
+- 顶部不放选题、脚本、视频处理、剪辑计划、草稿这类任务流入口。
 
 ## 5. 组件规范
 
@@ -209,6 +261,9 @@ box-shadow:
 
 规则：
 
+- 必须常驻当前窗口底部，一屏内可见。
+- 页面内容在 `main-scroll` 内滚动，不能把语音命令栏推到页面底部。
+- 命令栏属于 Windows 窗口内部 dock，不使用网页式 floating bar。
 - 使用灰色 Windows 工具栏。
 - 输入区域是凹陷白色框。
 - `COMMAND` 使用蓝色系统强调。
@@ -310,6 +365,9 @@ box-shadow:
 - 左侧：选题标题、说明、操作按钮。
 - 右侧：选题元信息 / checklist。
 - 不只是展示一段文字。
+- 候选选题卡片里的来源依据必须贴近分数展示，不单独占一整行。
+- 来源名称使用短码节省空间：`Obsidian` → `OB`，`Product Hunt` → `PH`，`观猹` → `观`，外链 → `EXT`。
+- 完整来源名称和标题通过 `title` 或详情区展示。
 
 ## 8. 响应式规则
 

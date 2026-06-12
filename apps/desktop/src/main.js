@@ -4,6 +4,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Notification,
   Tray,
   dialog,
   globalShortcut,
@@ -27,6 +28,7 @@ let isQuitting = false;
 const childProcesses = [];
 let directoryShortcuts = getDirectoryShortcuts();
 let mainLogPath = path.join(directoryShortcuts.logs, "main.log");
+let serviceReadyNotificationSent = false;
 
 writeMainLog("main process boot");
 process.on("uncaughtException", (error) => {
@@ -55,7 +57,7 @@ function createWindow() {
   });
 
   installNavigationGuards(window);
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => showMainWindow({ stealFocus: true }));
   window.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -120,6 +122,7 @@ async function startServices() {
   });
   directoryShortcuts = getDirectoryShortcuts();
   mainLogPath = path.join(directoryShortcuts.logs, "main.log");
+  fs.mkdirSync(serviceConfig.appSupportDir, { recursive: true });
   fs.mkdirSync(serviceConfig.logsDir, { recursive: true });
 
   for (const service of serviceConfig.services) {
@@ -140,6 +143,7 @@ async function startServices() {
   setAgentStatus("等待 WebView");
   await waitForHttp(serviceConfig.webUrl, 90000, { children: childProcesses });
   setAgentStatus("空闲");
+  notifyServiceReady();
   return serviceConfig;
 }
 
@@ -185,7 +189,7 @@ function buildApplicationMenu() {
       submenu: [
         { enabled: false, label: `Agent 状态：${agentStatus}` },
         { type: "separator" },
-        { click: showMainWindow, label: "打开工作台" },
+        { click: () => showMainWindow({ stealFocus: true }), label: "打开工作台" },
         { click: () => openDirectory(directoryShortcuts.logs), label: "打开日志目录" },
         { type: "separator" },
         { role: "quit", label: "退出并关闭本地服务" },
@@ -215,7 +219,7 @@ function buildApplicationMenu() {
       submenu: [
         { role: "minimize", label: "最小化" },
         { role: "zoom", label: "缩放" },
-        { click: showMainWindow, label: "显示主窗口" },
+        { click: () => showMainWindow({ stealFocus: true }), label: "显示主窗口" },
       ],
     },
   ]);
@@ -225,7 +229,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { enabled: false, label: `状态：${agentStatus}` },
     { type: "separator" },
-    { click: showMainWindow, label: "打开工作台" },
+    { click: () => showMainWindow({ stealFocus: true }), label: "打开工作台" },
     ...directoryMenuItems(),
     { type: "separator" },
     { role: "quit", label: "退出并关闭本地服务" },
@@ -250,6 +254,21 @@ function setAgentStatus(status) {
     tray.setContextMenu(buildTrayMenu());
   }
   Menu.setApplicationMenu(buildApplicationMenu());
+}
+
+function notify(title, body) {
+  if (!Notification.isSupported()) {
+    return;
+  }
+  new Notification({ title, body }).show();
+}
+
+function notifyServiceReady() {
+  if (serviceReadyNotificationSent) {
+    return;
+  }
+  serviceReadyNotificationSent = true;
+  notify("AI视频日记 Agent Studio", "本地 API 和 WebView 已就绪，可以继续今天的流程。");
 }
 
 function installNavigationGuards(window) {
@@ -328,7 +347,7 @@ function formatError(error) {
   return String(error);
 }
 
-function showMainWindow() {
+function showMainWindow({ stealFocus = false } = {}) {
   if (!mainWindow) {
     return;
   }
@@ -336,6 +355,9 @@ function showMainWindow() {
     mainWindow.restore();
   }
   mainWindow.show();
+  if (stealFocus) {
+    app.focus({ steal: true });
+  }
   mainWindow.focus();
 }
 
@@ -349,7 +371,7 @@ async function openDirectory(directoryPath) {
 
 function registerGlobalShortcut() {
   globalShortcut.register("CommandOrControl+Shift+Space", () => {
-    showMainWindow();
+    showMainWindow({ stealFocus: true });
     if (mainWindow) {
       mainWindow.webContents.send("desktop:focus-voice-command");
     }
@@ -364,40 +386,53 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-app.on("before-quit", async (event) => {
-  if (isQuitting) {
-    return;
-  }
-  event.preventDefault();
-  isQuitting = true;
-  setAgentStatus("正在退出");
-  globalShortcut.unregisterAll();
-  await shutdownChildProcesses(childProcesses);
-  app.exit(0);
-});
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    showMainWindow({ stealFocus: true });
+  });
 
-app.on("window-all-closed", () => {});
+  app.on("activate", () => {
+    showMainWindow({ stealFocus: true });
+  });
 
-app.whenReady().then(async () => {
-  Menu.setApplicationMenu(buildApplicationMenu());
-  tray = createTray();
-  mainWindow = createWindow();
-  registerGlobalShortcut();
+  app.on("before-quit", async (event) => {
+    if (isQuitting) {
+      return;
+    }
+    event.preventDefault();
+    isQuitting = true;
+    setAgentStatus("正在退出");
+    globalShortcut.unregisterAll();
+    await shutdownChildProcesses(childProcesses);
+    app.exit(0);
+  });
 
-  try {
-    const serviceConfig = await startServices();
-    await mainWindow.loadURL(serviceConfig.webUrl);
-  } catch (error) {
-    const dependencyMissing = error?.code === "DESKTOP_DEPENDENCIES_MISSING";
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    setAgentStatus(dependencyMissing ? "依赖缺失" : "启动失败");
-    await mainWindow.loadURL(
-      startupDataUrl(
-        dependencyMissing
-          ? errorMessage
-          : `本地服务启动失败：${errorMessage}。请打开日志目录查看 main.log、api.log、worker.log 和 web.log。`,
-      ),
-    );
-    showMainWindow();
-  }
-});
+  app.on("window-all-closed", () => {});
+
+  app.whenReady().then(async () => {
+    Menu.setApplicationMenu(buildApplicationMenu());
+    tray = createTray();
+    mainWindow = createWindow();
+    registerGlobalShortcut();
+
+    try {
+      const serviceConfig = await startServices();
+      await mainWindow.loadURL(serviceConfig.webUrl);
+      showMainWindow({ stealFocus: true });
+    } catch (error) {
+      const dependencyMissing = error?.code === "DESKTOP_DEPENDENCIES_MISSING";
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setAgentStatus(dependencyMissing ? "依赖缺失" : "启动失败");
+      await mainWindow.loadURL(
+        startupDataUrl(
+          dependencyMissing
+            ? errorMessage
+            : `本地服务启动失败：${errorMessage}。请打开日志目录查看 main.log、api.log、worker.log 和 web.log。`,
+        ),
+      );
+      showMainWindow({ stealFocus: true });
+    }
+  });
+}

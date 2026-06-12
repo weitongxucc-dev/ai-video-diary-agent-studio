@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.edit_plan import apply_confirmed_edit_plan
-from app.models import Episode, EpisodeStatus, VideoJobStatus, utc_now
+from app.models import Episode, EpisodeStatus, GenerationJobStatus, VideoJobStatus, utc_now
 from app.routers.context import AppContext
 from app.schemas import EpisodeResponse
 
@@ -33,10 +33,61 @@ def get_episode(context: AppContext, episode_id: str) -> Episode:
 
 
 def episode_response(context: AppContext, episode: Episode) -> EpisodeResponse:
-    return EpisodeResponse.model_validate(
+    episode = recover_interrupted_topic_job_if_needed(
+        context,
         recover_interrupted_video_job_if_needed(context, episode),
+    )
+    episode.workflow_phase = workflow_phase_for_episode(episode)
+    return EpisodeResponse.model_validate(
+        episode,
         from_attributes=True,
     )
+
+
+def workflow_phase_for_episode(episode: Episode) -> dict[str, str]:
+    if episode.topic_job_status == GenerationJobStatus.PROCESSING:
+        return {
+            "id": "topics_generating",
+            "label": "选题生成中",
+            "description": episode.topic_job_message or "后台正在生成候选选题。",
+        }
+    if episode.video_job_status in {VideoJobStatus.PROCESSING, VideoJobStatus.DRAFTING}:
+        return {
+            "id": "video_processing",
+            "label": "视频处理中",
+            "description": episode.video_job_message or "后台正在处理视频。",
+        }
+    if episode.topic_job_status == GenerationJobStatus.FAILED:
+        return {
+            "id": "topics_failed",
+            "label": "选题生成失败",
+            "description": episode.topic_job_error or episode.topic_job_message or "请检查配置后重试。",
+        }
+    if episode.video_job_status in {VideoJobStatus.FAILED, VideoJobStatus.INTERRUPTED}:
+        return {
+            "id": "video_failed",
+            "label": "视频处理异常",
+            "description": episode.video_job_error or episode.video_job_message or "请检查视频处理日志。",
+        }
+    return _status_workflow_phase(episode.status)
+
+
+def _status_workflow_phase(status: EpisodeStatus) -> dict[str, str]:
+    labels: dict[EpisodeStatus, tuple[str, str]] = {
+        EpisodeStatus.CREATED: ("今日工作台", "等待信息接入或生成候选选题。"),
+        EpisodeStatus.SOURCES_INGESTING: ("信息接入中", "正在汇总素材来源。"),
+        EpisodeStatus.TOPICS_READY: ("选题待确认", "候选选题已生成，等待人工复核。"),
+        EpisodeStatus.TOPIC_APPROVED: ("选题已确认", "可以生成口播稿。"),
+        EpisodeStatus.SCRIPT_READY: ("口播稿待确认", "脚本已生成，等待修改或确认。"),
+        EpisodeStatus.SCRIPT_APPROVED: ("等待录制", "脚本已确认，可以录制视频。"),
+        EpisodeStatus.WAITING_VIDEO: ("等待视频", "等待上传或处理原始视频。"),
+        EpisodeStatus.VIDEO_PROCESSING: ("视频处理中", "后台正在处理视频。"),
+        EpisodeStatus.DRAFT_READY: ("剪映草稿待确认", "草稿素材包已生成，等待确认和发布。"),
+        EpisodeStatus.PUBLISHED: ("已发布", "等待登记发布反馈。"),
+        EpisodeStatus.FAILED: ("流程异常", "请查看运行健康或内测日志。"),
+    }
+    label, description = labels.get(status, (status.value, "当前 Episode 主状态。"))
+    return {"id": status.value, "label": label, "description": description}
 
 
 def recover_interrupted_video_job_if_needed(
@@ -66,6 +117,26 @@ def video_job_status(value: object) -> VideoJobStatus:
         return value if isinstance(value, VideoJobStatus) else VideoJobStatus(str(value))
     except ValueError:
         return VideoJobStatus.IDLE
+
+
+def recover_interrupted_topic_job_if_needed(
+    context: AppContext,
+    episode: Episode,
+) -> Episode:
+    runner = getattr(context, "topic_job_runner", None)
+    if (
+        episode.topic_job_status == GenerationJobStatus.PROCESSING
+        and runner is not None
+        and not runner.is_active(episode.id)
+    ):
+        episode.topic_job_status = GenerationJobStatus.INTERRUPTED
+        episode.topic_job_message = "后台任务已中断"
+        episode.topic_job_error = (
+            "API restarted or the worker stopped before topic generation finished."
+        )
+        episode.topic_job_finished_at = utc_now()
+        return context.repo.save(episode)
+    return episode
 
 
 def create_draft_for_episode(context: AppContext, episode: Episode) -> Episode:

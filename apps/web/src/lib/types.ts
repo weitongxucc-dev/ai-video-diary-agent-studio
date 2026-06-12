@@ -19,6 +19,13 @@ export type VideoJobStatus =
   | "failed"
   | "interrupted";
 
+export type GenerationJobStatus =
+  | "idle"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "interrupted";
+
 export type EpisodeIntakeMode = "planned" | "ad_hoc_video" | "ad_hoc_video_batch";
 
 export type FeedbackValue = "up" | "down";
@@ -97,6 +104,12 @@ export type FeedbackEvent = {
   created_at: string;
 };
 
+export type WorkflowPhase = {
+  id: string;
+  label: string;
+  description: string;
+};
+
 export type Episode = {
   id: string;
   day_number: number;
@@ -119,6 +132,12 @@ export type Episode = {
   video_job_error: string | null;
   video_job_started_at: string | null;
   video_job_finished_at: string | null;
+  topic_job_status: GenerationJobStatus;
+  topic_job_message: string | null;
+  topic_job_error: string | null;
+  topic_job_started_at: string | null;
+  topic_job_finished_at: string | null;
+  workflow_phase: WorkflowPhase;
   draft_package_name: string | null;
   draft_package_path: string | null;
   publish_url: string | null;

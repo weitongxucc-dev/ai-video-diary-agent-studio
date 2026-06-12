@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
+import { ProcessingRefresh } from "@/components/ProcessingRefresh";
 import { TopicCandidateCard } from "@/components/TopicCandidateCard";
 import {
   approveTopicAndGenerateScript,
@@ -14,7 +15,7 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 type TopicsPageProps = {
-  searchParams?: Promise<{ topic_id?: string; topics_error?: string }>;
+  searchParams?: Promise<{ topic_id?: string; topics_error?: string; topics_job?: string }>;
 };
 
 type TopicLoadState = {
@@ -33,9 +34,11 @@ async function loadTopicEpisode(): Promise<TopicLoadState> {
 function EmptyTopicState({
   episode,
   error,
+  isTopicProcessing,
 }: {
   episode: Episode | null;
   error: TopicLoadState["error"];
+  isTopicProcessing: boolean;
 }) {
   const copy =
     error === "offline"
@@ -57,8 +60,8 @@ function EmptyTopicState({
         {episode ? (
           <form action={generateTopicsAction}>
             <input name="episode_id" type="hidden" value={episode.id} />
-            <button className="pixel-button" type="submit">
-              生成今日选题
+            <button className="pixel-button" disabled={isTopicProcessing} type="submit">
+              {isTopicProcessing ? "生成中" : "生成今日选题"}
             </button>
           </form>
         ) : null}
@@ -68,6 +71,49 @@ function EmptyTopicState({
       </div>
     </section>
   );
+}
+
+function TopicJobBanner({ episode }: { episode: Episode | null }) {
+  if (!episode) {
+    return null;
+  }
+
+  const topic_job_status = episode.topic_job_status;
+
+  if (topic_job_status === "processing") {
+    return (
+      <section className="topic-job-banner pixel-card" role="status">
+        <div>
+          <span className="section-kicker">后台生成</span>
+          <strong>{episode.topic_job_message ?? "正在生成候选选题"}</strong>
+          <p>你可以继续查看当前候选；新候选生成完成后会自动刷新。</p>
+        </div>
+        <ProcessingRefresh label="候选选题正在后台生成，页面会自动刷新。" />
+      </section>
+    );
+  }
+
+  if (topic_job_status === "failed" || topic_job_status === "interrupted") {
+    return (
+      <section className="topic-job-banner failed pixel-card" role="status">
+        <div>
+          <span className="section-kicker">生成未完成</span>
+          <strong>
+            {topic_job_status === "interrupted" ? "后台生成已中断" : "候选生成失败"}
+          </strong>
+          <p>{episode.topic_job_error ?? "检查配置或稍后重新生成即可。"}</p>
+        </div>
+        <form action={regenerateTopicsAction}>
+          <input name="episode_id" type="hidden" value={episode.id} />
+          <button className="pixel-button secondary" type="submit">
+            重试生成
+          </button>
+        </form>
+      </section>
+    );
+  }
+
+  return null;
 }
 
 function topicFeedbackLabel(feedback: string | null) {
@@ -100,6 +146,7 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
   const params = await searchParams;
   const { episode, error } = await loadTopicEpisode();
   const topics = episode?.topics ?? [];
+  const isTopicProcessing = episode?.topic_job_status === "processing";
   const activeTopicId = params?.topic_id ?? episode?.selected_topic_id ?? topics[0]?.id;
   const selected =
     topics.find((topic) => topic.id === activeTopicId) ?? topics[0] ?? null;
@@ -119,19 +166,20 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
             </Link>
           </section>
         ) : null}
+        <TopicJobBanner episode={episode} />
         <section className="topic-list" aria-label="候选选题">
           {episode && topics.length > 0 ? (
             <form action={regenerateTopicsAction} className="topic-regenerate-form">
               <input name="episode_id" type="hidden" value={episode.id} />
-              <button className="pixel-button secondary" type="submit">
-                重新生成候选
+              <button className="pixel-button secondary" disabled={isTopicProcessing} type="submit">
+                {isTopicProcessing ? "后台生成中" : "重新生成候选"}
               </button>
             </form>
           ) : episode ? (
             <form action={generateTopicsAction} className="topic-regenerate-form">
               <input name="episode_id" type="hidden" value={episode.id} />
-              <button className="pixel-button" type="submit">
-                生成今日选题
+              <button className="pixel-button" disabled={isTopicProcessing} type="submit">
+                {isTopicProcessing ? "后台生成中" : "生成今日选题"}
               </button>
             </form>
           ) : null}
@@ -218,10 +266,30 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
                 <section className="topic-audit-card">
                   <h3>复核清单</h3>
                   <ul>
-                    <li><PixelIcon name="check" /> 有真实案例支撑</li>
-                    <li><PixelIcon name="check" /> 适合 60 秒口播</li>
-                    <li><PixelIcon name="note" /> 冲突观点需再锐化</li>
-                    <li><PixelIcon name="note" /> 可作为今日发布</li>
+                    <li>
+                      <span className="pixel-icon-slot">
+                        <PixelIcon name="check" />
+                      </span>
+                      有真实案例支撑
+                    </li>
+                    <li>
+                      <span className="pixel-icon-slot">
+                        <PixelIcon name="check" />
+                      </span>
+                      适合 60 秒口播
+                    </li>
+                    <li>
+                      <span className="pixel-icon-slot">
+                        <PixelIcon name="note" />
+                      </span>
+                      冲突观点需再锐化
+                    </li>
+                    <li>
+                      <span className="pixel-icon-slot">
+                        <PixelIcon name="note" />
+                      </span>
+                      可作为今日发布
+                    </li>
                   </ul>
                 </section>
 
@@ -283,7 +351,11 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
             </div>
           </section>
         ) : (
-          <EmptyTopicState episode={episode} error={error} />
+          <EmptyTopicState
+            episode={episode}
+            error={error}
+            isTopicProcessing={isTopicProcessing}
+          />
         )}
       </div>
     </AppShell>

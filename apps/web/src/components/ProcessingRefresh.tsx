@@ -3,7 +3,13 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-export function ProcessingRefresh() {
+type ProcessingRefreshProps = {
+  label?: string;
+};
+
+export function ProcessingRefresh({
+  label = "正在后台处理，页面会自动刷新。",
+}: ProcessingRefreshProps) {
   const router = useRouter();
 
   useEffect(() => {
@@ -11,5 +17,5 @@ export function ProcessingRefresh() {
     return () => window.clearInterval(timer);
   }, [router]);
 
-  return <span className="video-processing-note">正在后台处理，页面会自动刷新。</span>;
+  return <span className="video-processing-note">{label}</span>;
 }

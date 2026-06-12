@@ -119,20 +119,11 @@ def _default_database_path() -> str:
 
 
 def _default_local_whisper_python_path() -> str | None:
-    candidate = Path.home() / "Documents" / "声迹" / ".venv-whisper" / "bin" / "python"
-    return str(candidate) if candidate.exists() else None
+    return None
 
 
 def _default_local_whisper_model_path() -> str | None:
-    candidate = (
-        Path.home()
-        / "Documents"
-        / "声迹"
-        / "infra"
-        / "local-whisper-models"
-        / "small.pt"
-    )
-    return str(candidate) if candidate.exists() else None
+    return None
 
 
 def _default_hermes_radar_path() -> str:

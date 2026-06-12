@@ -10,7 +10,6 @@ import {
   createDraftPackage,
   deletePreference,
   disablePreference,
-  generateTopics,
   generateScript,
   ingestManualLink,
   importDraftPackage,
@@ -21,13 +20,14 @@ import {
   processVideo,
   regenerateEpisodeScript,
   regenerateEpisodeScriptSection,
-  regenerateTopics,
   revertEditPlanSegmentDecision,
   revertEpisodeScriptVersion,
   revertFeedbackEvent,
   restorePreference,
   sendFeedback,
   selectEpisodeContentTemplate,
+  startGenerateTopics,
+  startRegenerateTopics,
   syncSourceItems,
   updateEpisodeCover,
   updateCreatorProfile,
@@ -217,11 +217,11 @@ export async function generateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
   try {
-    await generateTopics(episodeId);
+    await startGenerateTopics(episodeId);
   } catch (error) {
     topicActionFailureRedirect(error);
   }
-  redirect("/topics");
+  redirect("/topics?topics_job=started");
 }
 
 export async function sendTopicFeedbackAction(formData: FormData) {
@@ -243,11 +243,11 @@ export async function regenerateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
   try {
-    await regenerateTopics(episodeId);
+    await startRegenerateTopics(episodeId);
   } catch (error) {
     topicActionFailureRedirect(error);
   }
-  redirect("/topics");
+  redirect("/topics?topics_job=started");
 }
 
 export async function sendScriptSectionFeedbackAction(formData: FormData) {

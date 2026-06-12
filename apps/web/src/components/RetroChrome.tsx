@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GlobalSearchBox } from "@/components/GlobalSearchBox";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 
 type ChromeMenuLink = {
@@ -16,12 +17,11 @@ type ChromeMenuGroup = {
 
 const chromeMenuGroups: ChromeMenuGroup[] = [
   {
-    label: "内容",
-    summary: "模板、选题、口播稿和素材入口",
+    label: "内容库",
+    summary: "内容模板、知识库和外部信息源",
     links: [
-      { href: "/templates", label: "内容模板", note: "选择视频日记、工具测评或教程演示", icon: "product" },
-      { href: "/topics", label: "选题池", note: "生成、筛选和反馈候选选题", icon: "note" },
-      { href: "/script", label: "口播稿", note: "编辑 hook、段落、标题和发布文案", icon: "script" },
+      { href: "/templates", label: "内容模板", note: "维护视频日记、工具测评和教程演示模板", icon: "product" },
+      { href: "/knowledge", label: "知识库", note: "浏览本地 Obsidian 知识上下文", icon: "folder" },
       { href: "/sources", label: "信息源", note: "同步外部素材和手动链接", icon: "link" },
     ],
   },
@@ -31,16 +31,12 @@ const chromeMenuGroups: ChromeMenuGroup[] = [
     links: [
       { href: "/profile", label: "创作者画像", note: "编辑长期口吻、边界和样本", icon: "person" },
       { href: "/learning", label: "反馈学习", note: "查看 thumbs 反馈形成的偏好记忆", icon: "spark" },
-      { href: "/knowledge", label: "知识库", note: "浏览本地 Obsidian 知识上下文", icon: "folder" },
     ],
   },
   {
     label: "运行",
-    summary: "视频、剪辑、草稿和运行状态",
+    summary: "依赖健康、内测日志和问题报告",
     links: [
-      { href: "/video", label: "视频处理", note: "处理待录制视频和重复口播检查", icon: "video" },
-      { href: "/edit-plan", label: "剪辑计划", note: "复核剪辑动作、片段和草稿确认", icon: "clip" },
-      { href: "/draft", label: "剪映草稿", note: "生成素材包并导入剪映草稿", icon: "archive" },
       { href: "/health", label: "运行健康", note: "检查 DeepSeek、ffmpeg、路径和来源", icon: "check" },
       { href: "/logs", label: "内测日志", note: "查看最近错误并导出问题报告包", icon: "code" },
     ],
@@ -51,7 +47,6 @@ const chromeMenuGroups: ChromeMenuGroup[] = [
     links: [
       { href: "/setup", label: "配置向导", note: "首次配置依赖、路径和模型能力", icon: "settings" },
       { href: "/settings", label: "运行设置", note: "编辑 API key、本地路径和视频输出目录", icon: "settings" },
-      { href: "/", label: "今日工作台", note: "回到当前 Episode 总览", icon: "desk" },
     ],
   },
 ];
@@ -132,10 +127,12 @@ export function RetroChrome({ todayLabel }: RetroChromeProps) {
           <button type="button" aria-label="展开地址" disabled>▾</button>
         </div>
 
-        <label className="toolbar-search">
-          <PixelIcon name="search" />
-          <input disabled placeholder="搜索 Episode、选题、素材..." />
-        </label>
+        <GlobalSearchBox
+          className="toolbar-search"
+          inputClassName="toolbar-search-input"
+          placeholder="搜索页面、选题、素材..."
+          showIcon
+        />
 
         <div className="toolbar-date">
           <PixelIcon name="calendar" />

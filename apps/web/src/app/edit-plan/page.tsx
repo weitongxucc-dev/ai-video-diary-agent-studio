@@ -175,12 +175,16 @@ export default async function EditPlanPage() {
 
           <div className="edit-plan-status-grid" aria-label="自动剪辑阶段">
             <div className={`edit-plan-status ${editPlan?.available ? "active" : ""}`}>
-              <PixelIcon name="script" />
+              <span className="pixel-icon-slot">
+                <PixelIcon name="script" />
+              </span>
               <strong>1 转写对齐</strong>
               <span>{editPlan?.available ? "剪辑计划已读取" : "等待处理视频"}</span>
             </div>
             <div className={`edit-plan-status ${removedCount + reviewCount > 0 ? "active" : ""}`}>
-              <PixelIcon name="clip" />
+              <span className="pixel-icon-slot">
+                <PixelIcon name="clip" />
+              </span>
               <strong>2 重录检测</strong>
               <span>
                 {removedCount + reviewCount > 0
@@ -189,12 +193,16 @@ export default async function EditPlanPage() {
               </span>
             </div>
             <div className={`edit-plan-status ${editPlan?.available ? "active" : ""}`}>
-              <PixelIcon name="spark" />
+              <span className="pixel-icon-slot">
+                <PixelIcon name="spark" />
+              </span>
               <strong>3 效果建议</strong>
               <span>{editPlan?.available ? "等待下一阶段生成" : "未开始"}</span>
             </div>
             <div className={`edit-plan-status ${editPlan?.jianying.status === "draft_ready" ? "active" : ""}`}>
-              <PixelIcon name="publish" />
+              <span className="pixel-icon-slot">
+                <PixelIcon name="publish" />
+              </span>
               <strong>4 草稿导入</strong>
               <span>
                 {editPlan?.jianying.status === "draft_ready" ? "已进入剪映流程" : "等待确认"}

@@ -165,6 +165,7 @@ function createServiceConfig({
   const logsDir = directoryShortcuts.logs;
   const databasePath = path.join(directoryShortcuts.appSupport, "agent.sqlite3");
   const runtimeEnvPath = path.join(directoryShortcuts.appSupport, ".env");
+  const apiVirtualEnvPath = path.join(directoryShortcuts.appSupport, "api-venv");
   const apiBase = `http://127.0.0.1:${API_PORT}`;
 
   const services = [
@@ -181,7 +182,11 @@ function createServiceConfig({
         API_PORT,
       ],
       cwd: apiCwd,
-      env: pythonServiceEnv(env, homeDir, { databasePath, runtimeEnvPath }),
+      env: pythonServiceEnv(env, homeDir, {
+        databasePath,
+        runtimeEnvPath,
+        virtualEnvPath: apiVirtualEnvPath,
+      }),
       logPath: path.join(logsDir, "api.log"),
     },
   ];
@@ -191,7 +196,11 @@ function createServiceConfig({
       command: "uv",
       args: ["run", "python", "-m", "app.automation"],
       cwd: apiCwd,
-      env: pythonServiceEnv(env, homeDir, { databasePath, runtimeEnvPath }),
+      env: pythonServiceEnv(env, homeDir, {
+        databasePath,
+        runtimeEnvPath,
+        virtualEnvPath: apiVirtualEnvPath,
+      }),
       logPath: path.join(logsDir, "worker.log"),
     });
   }
@@ -210,6 +219,7 @@ function createServiceConfig({
   return {
     apiUrl: apiBase,
     apiReadinessUrl: `${apiBase}/api/runtime/ping`,
+    appSupportDir: directoryShortcuts.appSupport,
     webUrl: `http://127.0.0.1:${WEB_PORT}`,
     logsDir,
     services,
@@ -223,7 +233,7 @@ function shouldAutostartWorker(env = process.env) {
 function pythonServiceEnv(
   env = process.env,
   homeDir = os.homedir(),
-  { databasePath = null, runtimeEnvPath = null } = {},
+  { databasePath = null, runtimeEnvPath = null, virtualEnvPath = null } = {},
 ) {
   const serviceEnv = {};
   for (const key of [...PYTHON_BASE_ENV_KEYS, ...PYTHON_APP_ENV_KEYS]) {
@@ -236,6 +246,9 @@ function pythonServiceEnv(
   }
   if (!serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH && runtimeEnvPath) {
     serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH = runtimeEnvPath;
+  }
+  if (virtualEnvPath) {
+    serviceEnv.UV_PROJECT_ENVIRONMENT = virtualEnvPath;
   }
   return {
     ...serviceEnv,
