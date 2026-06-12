@@ -1,4 +1,6 @@
 const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
 const path = require("node:path");
 const {
   app,
@@ -29,6 +31,11 @@ const childProcesses = [];
 let directoryShortcuts = getDirectoryShortcuts();
 let mainLogPath = path.join(directoryShortcuts.logs, "main.log");
 let serviceReadyNotificationSent = false;
+let episodeJobNotifierTimer = null;
+const desktopBootTime = new Date();
+const observedActiveEpisodeJobs = new Set();
+const notifiedEpisodeJobs = new Set();
+const EPISODE_JOB_POLL_INTERVAL_MS = 5000;
 
 writeMainLog("main process boot");
 process.on("uncaughtException", (error) => {
@@ -144,6 +151,7 @@ async function startServices() {
   await waitForHttp(serviceConfig.webUrl, 90000, { children: childProcesses });
   setAgentStatus("空闲");
   notifyServiceReady();
+  startEpisodeJobNotifier(serviceConfig.apiUrl);
   return serviceConfig;
 }
 
@@ -269,6 +277,130 @@ function notifyServiceReady() {
   }
   serviceReadyNotificationSent = true;
   notify("AI视频日记 Agent Studio", "本地 API 和 WebView 已就绪，可以继续今天的流程。");
+}
+
+function startEpisodeJobNotifier(apiUrl) {
+  stopEpisodeJobNotifier();
+  const poll = () => {
+    pollEpisodeJobStatus(apiUrl).catch((error) => {
+      writeMainLog(`episode job notifier skipped: ${formatError(error)}`);
+    });
+  };
+  poll();
+  episodeJobNotifierTimer = setInterval(poll, EPISODE_JOB_POLL_INTERVAL_MS);
+  if (typeof episodeJobNotifierTimer.unref === "function") {
+    episodeJobNotifierTimer.unref();
+  }
+}
+
+function stopEpisodeJobNotifier() {
+  if (episodeJobNotifierTimer) {
+    clearInterval(episodeJobNotifierTimer);
+    episodeJobNotifierTimer = null;
+  }
+}
+
+async function pollEpisodeJobStatus(apiUrl) {
+  const episode = await getJson(`${apiUrl}/api/episodes/today`);
+  notifyTerminalEpisodeJob(episode, {
+    activeStatuses: new Set(["processing"]),
+    error: episode.topic_job_error,
+    finished_at: episode.topic_job_finished_at,
+    message: episode.topic_job_message,
+    status: episode.topic_job_status,
+    title: "选题生成",
+    type: "topic",
+  });
+  notifyTerminalEpisodeJob(episode, {
+    activeStatuses: new Set(["processing", "drafting"]),
+    error: episode.video_job_error,
+    finished_at: episode.video_job_finished_at,
+    message: episode.video_job_message,
+    status: episode.video_job_status,
+    title: "视频处理",
+    type: "video",
+  });
+}
+
+function notifyTerminalEpisodeJob(episode, job) {
+  if (!episode?.id || !job.status) {
+    return;
+  }
+  const activeKey = `${episode.id}:${job.type}`;
+  if (job.activeStatuses.has(job.status)) {
+    observedActiveEpisodeJobs.add(activeKey);
+    return;
+  }
+  if (!["completed", "failed", "interrupted"].includes(job.status)) {
+    return;
+  }
+  const finishedAt = job.finished_at || "";
+  if (!observedActiveEpisodeJobs.has(activeKey) && !isRecentJobFinish(finishedAt)) {
+    return;
+  }
+  const notificationKey = `${activeKey}:${job.status}:${finishedAt}`;
+  if (notifiedEpisodeJobs.has(notificationKey)) {
+    return;
+  }
+  notifiedEpisodeJobs.add(notificationKey);
+  notify(
+    `AI视频日记 · ${job.title}${episodeJobStatusLabel(job.status)}`,
+    episodeJobNotificationBody(job),
+  );
+}
+
+function isRecentJobFinish(finishedAt) {
+  if (!finishedAt) {
+    return false;
+  }
+  const finishedDate = new Date(finishedAt);
+  return !Number.isNaN(finishedDate.getTime()) && finishedDate >= desktopBootTime;
+}
+
+function episodeJobStatusLabel(status) {
+  return {
+    completed: "完成",
+    failed: "失败",
+    interrupted: "中断",
+  }[status] || status;
+}
+
+function episodeJobNotificationBody(job) {
+  const message = job.message || episodeJobStatusLabel(job.status);
+  const error = job.error ? `：${truncateText(job.error, 120)}` : "";
+  return `${message}${error}`;
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const client = parsedUrl.protocol === "https:" ? https : http;
+    const request = client.get(parsedUrl, (response) => {
+      let payload = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        payload += chunk;
+      });
+      response.on("end", () => {
+        if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+          reject(new Error(`GET ${url} returned ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(payload));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.setTimeout(4000, () => request.destroy(new Error(`GET ${url} timed out`)));
+    request.on("error", reject);
+  });
 }
 
 function installNavigationGuards(window) {
@@ -404,6 +536,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     isQuitting = true;
     setAgentStatus("正在退出");
+    stopEpisodeJobNotifier();
     globalShortcut.unregisterAll();
     await shutdownChildProcesses(childProcesses);
     app.exit(0);

@@ -118,6 +118,23 @@ assert(
 );
 
 for (const required of [
+  "startEpisodeJobNotifier",
+  "/api/episodes/today",
+  "topic_job_status",
+  "video_job_status",
+  "completed",
+  "failed",
+  "interrupted",
+  "finished_at",
+  "clearInterval",
+]) {
+  assert(
+    main.includes(required),
+    `Desktop main process must notify background job transitions with ${required}.`,
+  );
+}
+
+for (const required of [
   "createServiceConfig",
   "checkDesktopDependencies",
   "spawnManagedService",

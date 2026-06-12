@@ -4,7 +4,7 @@ import importlib.util
 import json
 import shutil
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CalledProcessError
@@ -23,6 +23,13 @@ from app.asr import (
     transcription_to_srt,
 )
 from app.config import Settings
+from app.draft_models import (
+    DraftAsset,
+    DraftEnvironment,
+    DraftImportResult,
+    DraftPackage,
+    DraftToolStatus,
+)
 from app.draft_templates import build_draft_template_manifest
 from app.jianying_template_writer import (
     add_legacy_main_video_segments,
@@ -35,64 +42,6 @@ from app.media_commands import (
 )
 from app.models import Episode, ScriptPackage
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
-
-
-@dataclass(frozen=True)
-class DraftAsset:
-    file_name: str
-    path: str
-    size_bytes: int
-    modified_at: datetime
-    import_status: str | None = None
-    import_message: str | None = None
-    draft_path: str | None = None
-    template_id: str | None = None
-    template_name: str | None = None
-    track_count: int | None = None
-    effect_count: int | None = None
-    track_preview: list[str] = field(default_factory=list)
-    effect_preview: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class DraftToolStatus:
-    available: bool
-    tool_name: str | None
-    checked_modules: list[str]
-
-
-@dataclass(frozen=True)
-class DraftEnvironment:
-    output_path: str
-    output_exists: bool
-    processed_video_count: int
-    package_count: int
-    draft_tool: DraftToolStatus
-    jianying_root_path: str
-    jianying_root_exists: bool
-    jianying_10_7_detected: bool
-    editable_draft_supported: bool
-    jianying_blocker: str | None
-
-
-@dataclass(frozen=True)
-class DraftPackage:
-    package_name: str
-    path: str
-    manifest_path: str
-    video_path: str
-    subtitle_path: str | None
-    cover_path: str | None
-    status: str
-
-
-@dataclass(frozen=True)
-class DraftImportResult:
-    package_name: str
-    status: str
-    message: str
-    draft_path: str | None
-    manifest_path: str
 
 
 class DraftWorkspace:

@@ -171,3 +171,19 @@ def test_main_module_is_only_the_asgi_entrypoint():
         "episode_media_flow",
     ):
         assert forbidden not in main_source
+
+
+def test_draft_data_models_are_split_from_workspace_facade():
+    draft_models_source = (APP_ROOT / "draft_models.py").read_text(encoding="utf-8")
+    drafts_source = (APP_ROOT / "drafts.py").read_text(encoding="utf-8")
+
+    for model_name in (
+        "DraftAsset",
+        "DraftToolStatus",
+        "DraftEnvironment",
+        "DraftPackage",
+        "DraftImportResult",
+    ):
+        assert f"class {model_name}" in draft_models_source
+        assert f"from app.draft_models import" in drafts_source
+        assert f"class {model_name}" not in drafts_source

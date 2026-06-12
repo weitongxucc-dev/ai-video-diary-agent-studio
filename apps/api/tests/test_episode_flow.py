@@ -922,6 +922,23 @@ def test_interrupted_video_processing_is_recovered_on_episode_read():
     assert body["video_job_finished_at"]
 
 
+def test_interrupted_topic_generation_is_recovered_on_episode_read():
+    episode = main_module.repo.create()
+    episode.topic_job_status = main_module.GenerationJobStatus.PROCESSING
+    episode.topic_job_message = "正在生成今日候选选题"
+    main_module.repo.save(episode)
+    main_module.topic_job_runner = CapturingVideoJobRunner()
+
+    response = client.get(f"/api/episodes/{episode.id}")
+
+    body = response.json()
+    assert body["topic_job_status"] == "interrupted"
+    assert body["topic_job_message"] == "后台任务已中断"
+    assert "API restarted" in body["topic_job_error"]
+    assert body["topic_job_finished_at"]
+    assert body["workflow_phase"]["id"] == "created"
+
+
 def test_episode_upload_video_rejects_missing_pending_video(tmp_path):
     main_module.video_inbox = main_module.VideoInbox(tmp_path / "inbox")
     episode = client.post("/api/episodes").json()

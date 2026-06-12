@@ -27,8 +27,8 @@ export function PublishFeedbackPanel({ episode }: PublishFeedbackPanelProps) {
   const activePublishFeedbackValue = activePublishFeedback?.value ?? "";
 
   return (
-    <div className="workspace-subsection draft-publish-section">
-      <div className="draft-publish-head">
+    <div className="workspace-subsection publish-feedback-section">
+      <div className="publish-feedback-head">
         <div>
           <h2>发布反馈</h2>
           <p>发布后登记链接、首轮数据和明确赞踩原因，下一轮选题与口播会读取这批偏好。</p>
@@ -38,8 +38,8 @@ export function PublishFeedbackPanel({ episode }: PublishFeedbackPanelProps) {
         </Link>
       </div>
       {episode ? (
-        <div className="draft-publish-tools">
-          <form action={markPublishedAction} className="draft-publish-form">
+        <div className="publish-feedback-tools">
+          <form action={markPublishedAction} className="publish-feedback-form">
             <input name="episode_id" type="hidden" value={episode.id} />
             <label className="settings-field wide">
               <span>发布链接</span>
@@ -50,7 +50,7 @@ export function PublishFeedbackPanel({ episode }: PublishFeedbackPanelProps) {
                 type="url"
               />
             </label>
-            <div className="draft-publish-metrics">
+            <div className="publish-feedback-metrics">
               <label className="settings-field">
                 <span>播放量</span>
                 <input
@@ -79,8 +79,8 @@ export function PublishFeedbackPanel({ episode }: PublishFeedbackPanelProps) {
                 />
               </label>
             </div>
-            <div className="draft-feedback-grid">
-              <fieldset className="draft-feedback-choice">
+            <div className="publish-feedback-grid">
+              <fieldset className="publish-feedback-choice">
                 <legend>发布判断</legend>
                 <label>
                   <input
@@ -132,9 +132,9 @@ export function PublishFeedbackPanel({ episode }: PublishFeedbackPanelProps) {
             </div>
           </form>
 
-          <form action={analyzeCommentInsightsAction} className="draft-comment-insights-form">
+          <form action={analyzeCommentInsightsAction} className="publish-comment-insights-form">
             <input name="episode_id" type="hidden" value={episode.id} />
-            <div className="draft-comment-insights-head">
+            <div className="publish-comment-insights-head">
               <div>
                 <h3>评论洞察</h3>
                 <span>发布域 · 待确认</span>

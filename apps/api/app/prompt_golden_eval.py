@@ -26,6 +26,8 @@ class PromptGoldenCase:
     user_prompt: str
     required_system_terms: tuple[str, ...] = field(default_factory=tuple)
     required_user_terms: tuple[str, ...] = field(default_factory=tuple)
+    required_system_term_groups: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
+    required_user_term_groups: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -49,11 +51,25 @@ def evaluate_prompt_golden_case(case: PromptGoldenCase) -> PromptGoldenResult:
     for term in case.required_user_terms:
         if term not in case.user_prompt:
             failures.append(f"missing user term: {term}")
+    for term_group in case.required_system_term_groups:
+        if not _contains_any(case.system_prompt, term_group):
+            failures.append(f"missing system term group: {_format_term_group(term_group)}")
+    for term_group in case.required_user_term_groups:
+        if not _contains_any(case.user_prompt, term_group):
+            failures.append(f"missing user term group: {_format_term_group(term_group)}")
     return PromptGoldenResult(
         name=case.name,
         passed=not failures,
         failures=tuple(failures),
     )
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _format_term_group(terms: tuple[str, ...]) -> str:
+    return " / ".join(terms)
 
 
 def build_ai_video_diary_golden_cases() -> list[PromptGoldenCase]:
@@ -96,6 +112,17 @@ def build_ai_video_diary_golden_cases() -> list[PromptGoldenCase]:
                 "tool_review",
                 "source_refs",
             ),
+            required_system_term_groups=(
+                ("真实场景", "真实案例", "真实数据"),
+                ("判断", "立场"),
+                ("score 评分标准", "真实案例支撑度"),
+            ),
+            required_user_term_groups=(
+                ("preference_memory.prefer", "偏好学习"),
+                ("preference_memory.avoid", "避开低分表达"),
+                ("creator_profile 用来稳定", "创作者口吻"),
+                ("source_refs 至少 1 个", "ref 必须完全等于 source_items"),
+            ),
         ),
         PromptGoldenCase(
             name="script_generation_creator_voice",
@@ -121,6 +148,17 @@ def build_ai_video_diary_golden_cases() -> list[PromptGoldenCase]:
                 "太像营销文案",
                 "封面文案",
                 "发布文案",
+            ),
+            required_system_term_groups=(
+                ("estimated_seconds", "时长"),
+                ("真人日记", "直接、具体、有判断"),
+                ("不要营销腔", "广告感"),
+            ),
+            required_user_term_groups=(
+                ("开头 3 秒", "明确冲突", "明确判断"),
+                ("creator_profile 用来稳定口播语气", "不要把 profile 当作事实来源"),
+                ("preference_memory：prefer", "avoid 是应该避开"),
+                ("estimated_seconds", "180 字/分钟"),
             ),
         ),
         PromptGoldenCase(
@@ -148,6 +186,16 @@ def build_ai_video_diary_golden_cases() -> list[PromptGoldenCase]:
                 "只重写 target_section",
                 "先讲真实问题",
                 "家人们",
+            ),
+            required_system_term_groups=(
+                ("只重写用户指定段落", "保持 id 和 title 不变"),
+                ("真人日记感", "不要营销腔"),
+            ),
+            required_user_term_groups=(
+                ("target_section", "只改 target_section"),
+                ("preference_memory", "保留用户偏好的表达"),
+                ("creator_profile 用来保持重写段落的口吻边界", "口吻边界"),
+                ("不要改 hook", "不要让重写段落和上下文断裂"),
             ),
         ),
     ]
