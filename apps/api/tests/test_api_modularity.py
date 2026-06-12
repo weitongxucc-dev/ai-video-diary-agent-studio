@@ -211,3 +211,25 @@ def test_draft_index_projection_is_split_from_workspace_facade():
         "def _episode_source_mode",
     ):
         assert former_method not in drafts_source
+
+
+def test_draft_artifact_generation_is_split_from_workspace_facade():
+    draft_artifacts_source = (APP_ROOT / "draft_artifacts.py").read_text(encoding="utf-8")
+    drafts_source = (APP_ROOT / "drafts.py").read_text(encoding="utf-8")
+
+    for helper_name in (
+        "write_script_artifacts",
+        "write_asr_subtitle_if_available",
+        "script_to_srt",
+        "write_cover",
+    ):
+        assert f"def {helper_name}" in draft_artifacts_source
+
+    assert "from app.draft_artifacts import" in drafts_source
+    for implementation_detail in (
+        "Image.new(",
+        "transcription_to_srt",
+        "build_extract_audio_command",
+        "textwrap.wrap",
+    ):
+        assert implementation_detail not in drafts_source
