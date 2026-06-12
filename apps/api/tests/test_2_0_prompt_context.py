@@ -199,6 +199,63 @@ def test_deepseek_topic_prompt_includes_content_template_context(tmp_path):
     assert "推荐判断" in user_prompt["content_template"]["default_feedback_dimensions"]
 
 
+def test_deepseek_topic_generator_requests_and_accepts_five_candidates(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def topic_payload(index: int) -> dict[str, object]:
+        return {
+            "title": f"真实项目里的 Agent 复盘 {index}",
+            "core_viewpoint": "工作流比模型参数更重要。",
+            "reason": "来自 Agent 复盘笔记。",
+            "audience": "AI 产品经理",
+            "outline": ["现场", "判断", "方法"],
+            "score": 90 - index,
+            "source_refs": [
+                {
+                    "source_type": "Obsidian",
+                    "title": "Agent 复盘",
+                    "ref": "agent.md",
+                }
+            ],
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"topics": [topic_payload(index) for index in range(6)]},
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    system_prompt = captured["payload"]["messages"][0]["content"]
+    user_prompt = json.loads(captured["payload"]["messages"][1]["content"])
+    assert len(topics) == 5
+    assert "5 个选题之间必须有明显不同的切入角度" in system_prompt
+    assert "生成 5 个适合 2-3 分钟 AI 视频日记的候选选题。" in user_prompt["requirements"]
+
+
 def test_deepseek_topic_prompt_includes_preference_memory(tmp_path):
     vault = tmp_path / "vault"
     vault.mkdir()

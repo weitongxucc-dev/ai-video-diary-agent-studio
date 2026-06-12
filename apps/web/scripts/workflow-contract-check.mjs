@@ -101,6 +101,10 @@ for (const required of ["topic_job_status", "ProcessingRefresh", "topic-job-bann
   }
 }
 
+if (!/\.topic-job-banner\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/.test(css)) {
+  failures.push("/topics background generation banner must span the full topic page grid.");
+}
+
 for (const required of ["topics_error", "topic-error-banner", "配置"]) {
   if (!topicsPage.includes(required)) {
     failures.push(`/topics must show recoverable topic generation errors with ${required}.`);

@@ -208,7 +208,7 @@ def test_today_episode_flow_generates_topics_and_script():
     topics_response = client.post(f"/api/episodes/{today['id']}/generate-topics")
     assert topics_response.status_code == 200
     topics = topics_response.json()["topics"]
-    assert len(topics) == 4
+    assert len(topics) == 5
     assert topics[0]["source_refs"]
 
     approved = client.post(
@@ -359,7 +359,7 @@ def test_regenerating_topics_preserves_selected_topic_and_script():
     assert updated_episode["selected_topic_id"] == topics[0]["id"]
     assert updated_episode["script"]["id"] == script["id"]
     assert updated_episode["status"] == "script_ready"
-    assert len(updated_episode["topics"]) == 4
+    assert len(updated_episode["topics"]) == 5
 
 
 def test_force_regenerating_topics_replaces_candidates_and_clears_script():
@@ -381,7 +381,7 @@ def test_force_regenerating_topics_replaces_candidates_and_clears_script():
     assert updated_episode["selected_topic_id"] is None
     assert updated_episode["script"] is None
     assert updated_episode["status"] == "topics_ready"
-    assert len(updated_episode["topics"]) == 4
+    assert len(updated_episode["topics"]) == 5
 
 
 def test_start_regenerating_topics_returns_processing_episode_and_finishes_in_background():

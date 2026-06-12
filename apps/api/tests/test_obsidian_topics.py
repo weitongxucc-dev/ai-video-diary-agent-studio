@@ -351,6 +351,80 @@ def test_deepseek_topic_generator_repairs_invalid_source_ref_by_note_similarity(
     assert topics[0].source_refs[0].ref == "rag.md"
 
 
+def test_deepseek_topic_prompt_includes_older_valuable_obsidian_notes(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for index in range(18):
+        note = vault / f"today-{index}.md"
+        note.write_text(
+            f"# 今日输入 {index}\n\n今天的新输入，只是一条临时记录 {index}。",
+            encoding="utf-8",
+        )
+        os.utime(note, (1_800_000_000 + index, 1_800_000_000 + index))
+    valuable = vault / "evergreen-agent-workflow.md"
+    valuable.write_text(
+        """---
+tags: [AI产品, 工作流, 复盘]
+---
+# Agent 工作流长期复盘
+
+过去沉淀下来的真实项目经验：Agent 产品最有价值的是可复用工作流和人工复核节点。
+关联 [[剪映草稿自动化]] 和 https://watcha.cn/products/agent-workflow
+""",
+        encoding="utf-8",
+    )
+    os.utime(valuable, (1_600_000_000, 1_600_000_000))
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "topics": [
+                                        {
+                                            "title": "Agent 工作流长期复盘",
+                                            "core_viewpoint": "过去沉淀的项目经验也应该进入今日选题池。",
+                                            "reason": "来自历史沉淀笔记。",
+                                            "audience": "AI 产品经理",
+                                            "outline": ["旧经验", "新场景", "可复用方法"],
+                                            "score": 91,
+                                            "source_refs": [
+                                                {
+                                                    "source_type": "Obsidian",
+                                                    "title": "Agent 工作流长期复盘",
+                                                    "ref": "evergreen-agent-workflow.md",
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=1)
+
+    user_prompt = json.loads(captured["payload"]["messages"][1]["content"])
+    refs = [item["ref"] for item in user_prompt["source_items"]]
+    excerpts = "\n".join(item["excerpt"] for item in user_prompt["source_items"])
+    assert "evergreen-agent-workflow.md" in refs
+    assert "历史沉淀" in excerpts
+
+
 def test_settings_status_reports_obsidian_without_note_content(tmp_path):
     vault = tmp_path / "vault"
     vault.mkdir()

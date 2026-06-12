@@ -63,6 +63,89 @@ class ObsidianVault:
         )
         return [self._note_from_file(path) for path in files[:limit]]
 
+    def topic_source_items(
+        self,
+        recent_limit: int = 12,
+        evergreen_limit: int = 8,
+    ) -> list[TopicSourceItem]:
+        files = sorted(
+            self._markdown_files(),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        selected_refs: set[str] = set()
+        sources: list[TopicSourceItem] = []
+
+        for path in files[:recent_limit]:
+            note = self._note_from_file(path)
+            sources.append(self._topic_source_with_context(note, "近期输入"))
+            selected_refs.add(note.ref)
+
+        evergreen_notes = [
+            (self._evergreen_score(note), note)
+            for note in (self._note_from_file(path) for path in files[recent_limit:])
+            if note.ref not in selected_refs
+        ]
+        evergreen_notes = [
+            (score, note)
+            for score, note in evergreen_notes
+            if score > 0
+        ]
+        evergreen_notes.sort(
+            key=lambda scored_note: (
+                scored_note[0],
+                scored_note[1].modified_at,
+            ),
+            reverse=True,
+        )
+        for _, note in evergreen_notes[:evergreen_limit]:
+            sources.append(self._topic_source_with_context(note, "历史沉淀"))
+            selected_refs.add(note.ref)
+
+        return sources
+
+    def _topic_source_with_context(
+        self,
+        note: ObsidianNote,
+        context_label: str,
+    ) -> TopicSourceItem:
+        source = note.to_topic_source()
+        return TopicSourceItem(
+            source_type=source.source_type,
+            title=source.title,
+            ref=source.ref,
+            excerpt=f"素材定位：{context_label}\n{source.excerpt}",
+        )
+
+    def _evergreen_score(self, note: ObsidianNote) -> int:
+        text = "\n".join(
+            [
+                note.title,
+                note.excerpt,
+                " ".join(note.tags),
+                " ".join(note.wikilinks),
+                " ".join(note.outlinks),
+            ]
+        ).lower()
+        keywords = (
+            "复盘",
+            "案例",
+            "沉淀",
+            "长期",
+            "经验",
+            "工作流",
+            "ai产品",
+            "agent",
+            "选题",
+        )
+        score = sum(1 for keyword in keywords if keyword in text)
+        score += min(len(note.tags), 3)
+        if note.wikilinks:
+            score += 1
+        if note.outlinks:
+            score += 1
+        return score
+
     def _markdown_files(self) -> list[Path]:
         if not self.exists or self.path is None:
             return []

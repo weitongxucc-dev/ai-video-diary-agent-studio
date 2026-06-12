@@ -23,6 +23,9 @@ from app.product_hunt import (
 from app.sources import ObsidianVault, TopicSourceItem
 
 
+DEFAULT_TOPIC_CANDIDATE_COUNT = 5
+
+
 class TopicGenerationConfigurationError(RuntimeError):
     pass
 
@@ -102,6 +105,16 @@ class TemplateTopicGenerator:
                 score=82,
                 source_refs=[SourceRef("示例", "Phase 1 mock topic", "demo:topic")],
             ),
+            TopicCandidate(
+                id=f"topic_{uuid4().hex[:6]}",
+                title="旧笔记里的真实复盘，往往比今天的新鲜输入更有价值",
+                core_viewpoint="选题池应该同时看今天的新输入和过去沉淀下来的高价值经验。",
+                reason="示例数据：正式运行时会混合 Obsidian 近期输入和历史沉淀。",
+                audience="技术型个人创作者、AI 产品经理",
+                outline=["今天输入负责新鲜度", "历史复盘负责厚度", "组合后形成判断"],
+                score=80,
+                source_refs=[SourceRef("示例", "Phase 1 mock topic", "demo:topic")],
+            ),
         ]
 
 
@@ -129,8 +142,7 @@ class DeepSeekTopicGenerator:
     ) -> list[TopicCandidate]:
         if not self._settings.deepseek_api_key:
             raise TopicGenerationConfigurationError("DEEPSEEK_API_KEY is not configured")
-        notes = self._vault.recent_notes(limit=16)
-        source_items = [note.to_topic_source() for note in notes] + self._external_source_provider()
+        source_items = self._vault.topic_source_items() + self._external_source_provider()
         if not source_items:
             raise TopicGenerationConfigurationError("No topic sources are available")
 
@@ -151,7 +163,7 @@ class DeepSeekTopicGenerator:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
-            "max_tokens": 3200,
+            "max_tokens": 4200,
         }
         url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
@@ -189,7 +201,7 @@ class DeepSeekTopicGenerator:
             "每个 topic 必须包含 title、core_viewpoint、reason、audience、outline、score、source_refs。"
             f"{template_context}"
             "每个选题必须有真实场景、真实案例或真实数据支撑，观点要有判断、有立场。"
-            "4 个选题之间必须有明显不同的切入角度，禁止同义反复。"
+            f"{DEFAULT_TOPIC_CANDIDATE_COUNT} 个选题之间必须有明显不同的切入角度，禁止同义反复。"
             "score 评分标准：真实案例支撑度 30 分、观点鲜明度 30 分、口播转化度 20 分、与近期偏好匹配度 20 分。"
             "source_refs 只能使用用户提供 source_items 里的 source_type、title、ref，不能编造不存在的来源。"
         )
@@ -226,12 +238,14 @@ class DeepSeekTopicGenerator:
                 ],
                 "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
-                    "生成 4 个适合 2-3 分钟 AI 视频日记的候选选题。",
+                    f"生成 {DEFAULT_TOPIC_CANDIDATE_COUNT} 个适合 2-3 分钟 AI 视频日记的候选选题。",
                     "每个选题必须符合 content_template 的场景、选题结构和标题规则。",
                     "优先遵守 preference_memory",
                     "优先遵守 creator_profile",
                     "preference_memory.prefer 用来放大选题方向，preference_memory.avoid 用来避开低分表达。",
                     "creator_profile 用来稳定创作者口吻和长期内容边界，但 source_refs 仍必须来自 source_items。",
+                    "候选池要同时参考素材定位为“近期输入”和“历史沉淀”的 source_items；历史沉淀中有价值的复盘、案例、工作流经验可以被推荐。",
+                    "近期输入代表今天的新鲜度，历史沉淀代表长期判断；两者都不能完全压过另一方。",
                     "优先选择有真实项目经验、Agent、AI产品、工作流、个人IP、内容生产相关的素材。",
                     "每个选题要有清晰观点、目标观众、三段口播结构。",
                     "source_refs 至少 1 个，且 ref 必须完全等于 source_items 里的 ref。",
@@ -277,7 +291,7 @@ class DeepSeekTopicGenerator:
             raise TopicGenerationResponseError("DeepSeek topic JSON must contain a topics list")
         sources_by_ref = {item.ref: item for item in source_items}
         topics: list[TopicCandidate] = []
-        for raw_topic in data["topics"][:4]:
+        for raw_topic in data["topics"][:DEFAULT_TOPIC_CANDIDATE_COUNT]:
             if not isinstance(raw_topic, dict):
                 raise TopicGenerationResponseError("DeepSeek topic item must be an object")
             source_refs = self._source_refs(raw_topic, sources_by_ref)

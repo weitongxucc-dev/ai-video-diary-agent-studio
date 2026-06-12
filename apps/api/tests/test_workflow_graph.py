@@ -21,7 +21,7 @@ def test_langgraph_workflow_generates_topics_and_waits_for_human_approval():
     updated = workflow.run("generate_topics", episode)
 
     assert updated.status == EpisodeStatus.TOPICS_READY
-    assert len(updated.topics) == 4
+    assert len(updated.topics) == 5
     assert "generate_topics" in workflow.node_names()
     assert "approve_topic" in workflow.node_names()
     assert workflow.human_review_nodes() == ["approve_topic", "approve_script", "mark_published"]

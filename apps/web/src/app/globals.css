@@ -1858,6 +1858,7 @@ textarea {
 
 .topic-job-banner {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
@@ -1865,6 +1866,15 @@ textarea {
   border-color: var(--accent-blue);
   background: #eef5ff;
   padding: 10px 12px;
+}
+
+.topic-job-banner > div,
+.topic-job-banner .video-processing-note {
+  min-width: 0;
+}
+
+.topic-job-banner .video-processing-note {
+  margin-bottom: 0;
 }
 
 .topic-job-banner.failed {

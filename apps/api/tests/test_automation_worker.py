@@ -52,7 +52,7 @@ def test_automation_worker_generates_daily_topics_once():
     assert first is True
     assert second is False
     assert repo.today().status == EpisodeStatus.TOPICS_READY
-    assert len(repo.today().topics) == 4
+    assert len(repo.today().topics) == 5
 
 
 def test_automation_worker_passes_creator_profile_to_scheduled_topics():

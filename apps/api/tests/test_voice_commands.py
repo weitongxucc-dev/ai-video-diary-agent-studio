@@ -83,7 +83,7 @@ def test_voice_command_execute_continue_flow_generates_topics(tmp_path):
     assert body["intent"] == "continue_flow"
     assert body["next_url"] == "/topics"
     assert body["result_episode"]["status"] == "topics_ready"
-    assert len(body["result_episode"]["topics"]) == 4
+    assert len(body["result_episode"]["topics"]) == 5
     assert main_module.repo.get(episode.id).status == EpisodeStatus.TOPICS_READY
 
 
