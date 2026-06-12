@@ -26,12 +26,14 @@ function assert(condition, message) {
 const rootPackage = await readJson("package.json");
 const desktopPackage = await readJson("apps/desktop/package.json");
 const main = await readText("apps/desktop/src/main.js");
+const episodeJobNotifier = await readText("apps/desktop/src/episode-job-notifier.js");
 const serviceManager = await readText("apps/desktop/src/service-manager.js");
 const afterPack = await readText("apps/desktop/scripts/after-pack.cjs");
 const pnpmShim = await readText("apps/desktop/scripts/with-pnpm-shim.mjs");
 const nextConfig = await readText("apps/web/next.config.mjs");
 const readmeBeta = await readText("README-beta.md");
 const serviceManagerModule = require("../src/service-manager.js");
+const episodeJobNotifierModule = require("../src/episode-job-notifier.js");
 
 assert(
   rootPackage.scripts["test:desktop-contract"],
@@ -119,6 +121,17 @@ assert(
 
 for (const required of [
   "startEpisodeJobNotifier",
+  "stopEpisodeJobNotifier",
+  "episodeJobNotifier",
+]) {
+  assert(
+    main.includes(required),
+    `Desktop main process must delegate background job notifications with ${required}.`,
+  );
+}
+
+for (const required of [
+  "startEpisodeJobNotifier",
   "/api/episodes/today",
   "topic_job_status",
   "video_job_status",
@@ -129,8 +142,8 @@ for (const required of [
   "clearInterval",
 ]) {
   assert(
-    main.includes(required),
-    `Desktop main process must notify background job transitions with ${required}.`,
+    episodeJobNotifier.includes(required),
+    `Desktop episode job notifier must handle background job transitions with ${required}.`,
   );
 }
 
@@ -166,6 +179,10 @@ for (const required of [
 const { checkDesktopDependencies } = serviceManagerModule;
 const { createServiceConfig } = serviceManagerModule;
 const { waitForHttp } = serviceManagerModule;
+assert(
+  typeof episodeJobNotifierModule.startEpisodeJobNotifier === "function",
+  "Desktop episode job notifier must export startEpisodeJobNotifier.",
+);
 assert(
   typeof checkDesktopDependencies === "function",
   "Desktop service manager must export checkDesktopDependencies.",

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const files = {
   css: new URL("../src/app/globals.css", import.meta.url),
+  publishFeedbackCss: new URL("../src/app/styles/publish-feedback.css", import.meta.url),
   topics: new URL("../src/app/topics/page.tsx", import.meta.url),
   script: new URL("../src/app/script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
@@ -41,6 +42,7 @@ async function readOptional(file) {
 
 const [
   css,
+  publishFeedbackCss,
   topicsPage,
   scriptPage,
   sectionEditor,
@@ -816,6 +818,20 @@ for (const required of ["评论洞察", "comments_text", "analyzeCommentInsights
 
 if (!publishFeedbackPage.includes("PublishFeedbackPanel")) {
   failures.push("/publish-feedback must mount the dedicated PublishFeedbackPanel surface.");
+}
+
+if (!css.startsWith('@import "./styles/publish-feedback.css";')) {
+  failures.push("globals.css must import publish-feedback styles as a page-specific CSS module.");
+}
+
+if (css.includes(".publish-feedback-section")) {
+  failures.push("globals.css must not own publish-feedback page-specific selectors.");
+}
+
+for (const required of [".publish-feedback-section", ".publish-feedback-form", ".publish-comment-insights-form"]) {
+  if (!publishFeedbackCss.includes(required)) {
+    failures.push(`publish-feedback.css must define ${required}.`);
+  }
 }
 
 if (draftPage.includes("PublishFeedbackPanel")) {

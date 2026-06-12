@@ -1,0 +1,116 @@
+.publish-feedback-section,
+.publish-feedback-tools,
+.publish-feedback-form,
+.publish-comment-insights-form {
+  display: grid;
+  gap: 12px;
+}
+
+.publish-feedback-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.publish-feedback-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.publish-feedback-form {
+  border: 2px solid var(--border-strong);
+  background: #d8d4c8;
+  padding: 12px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.publish-comment-insights-form {
+  border: 2px solid var(--border-strong);
+  background: #cfd6d1;
+  padding: 12px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.publish-comment-insights-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.publish-comment-insights-head h3 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.publish-comment-insights-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.publish-comment-insights-form textarea {
+  min-height: 132px;
+  max-height: 176px;
+  overflow: auto;
+  resize: vertical;
+}
+
+.publish-feedback-metrics,
+.publish-feedback-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.publish-feedback-grid {
+  grid-template-columns: minmax(180px, 0.75fr) minmax(0, 1.25fr);
+}
+
+.publish-feedback-choice {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 2px solid var(--border-strong);
+  background: var(--bg-inset);
+  padding: 10px;
+  box-shadow: inset 2px 2px 0 #c8bea0;
+}
+
+.publish-feedback-choice legend,
+.publish-feedback-choice span {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+}
+
+.publish-feedback-choice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.publish-feedback-choice input {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .publish-feedback-head {
+    display: grid;
+  }
+
+  .publish-comment-insights-head {
+    display: grid;
+  }
+
+  .publish-feedback-metrics,
+  .publish-feedback-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
