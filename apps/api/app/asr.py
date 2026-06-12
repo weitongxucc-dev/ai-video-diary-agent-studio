@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 
 from app.config import Settings
+from app.local_whisper_security import local_whisper_path_status
 
 
 class ASRConfigurationError(RuntimeError):
@@ -170,37 +171,43 @@ class LocalWhisperTranscriber:
         self,
         settings: Settings,
         runner: Callable[[list[str]], None] | None = None,
+        allowed_roots: list[str | Path] | None = None,
     ) -> None:
         self._settings = settings
         self._runner = runner or self._run_command
+        self._allowed_roots = allowed_roots
 
     @property
     def configured(self) -> bool:
-        python_path = self._settings.local_whisper_python_path
-        model_path = self._settings.local_whisper_model_path
-        return bool(
-            python_path
-            and Path(python_path).expanduser().is_file()
-            and model_path
-            and Path(model_path).expanduser().is_file()
+        return local_whisper_path_status(
+            self._settings.local_whisper_python_path,
+            self._settings.local_whisper_model_path,
+            self._allowed_roots,
+        ).configured
+
+    def _validated_paths(self) -> tuple[Path, Path]:
+        status = local_whisper_path_status(
+            self._settings.local_whisper_python_path,
+            self._settings.local_whisper_model_path,
+            self._allowed_roots,
         )
+        if not status.configured or status.python_path is None or status.model_path is None:
+            raise ASRConfigurationError(status.reason)
+        return status.python_path, status.model_path
 
     def transcribe(self, audio_path: str | Path) -> ASRTranscription:
-        if not self.configured:
-            raise ASRConfigurationError("Local Whisper is not configured")
+        python_path, model_path = self._validated_paths()
         path = Path(audio_path).expanduser()
         if not path.is_file():
             raise ASRTranscriptionError("local audio file not found")
-        python_path = str(Path(self._settings.local_whisper_python_path or "").expanduser())
-        model_path = str(Path(self._settings.local_whisper_model_path or "").expanduser())
         with TemporaryDirectory(prefix="ai_video_whisper_") as output_dir:
             command = [
-                python_path,
+                str(python_path),
                 "-m",
                 "whisper",
                 str(path),
                 "--model",
-                model_path,
+                str(model_path),
                 "--output_dir",
                 output_dir,
                 "--output_format",

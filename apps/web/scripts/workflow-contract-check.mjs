@@ -207,6 +207,10 @@ if (!homePage.includes("selected_topic_id")) {
   failures.push("The workbench must distinguish unapproved topics from approved scripts.");
 }
 
+if (homePage.includes("今日新增 12 条")) {
+  failures.push("The workbench must not show hardcoded fake daily material counts.");
+}
+
 if (!typesFile.includes("hermes_radar")) {
   failures.push("SystemStatus must expose Hermes radar source status.");
 }

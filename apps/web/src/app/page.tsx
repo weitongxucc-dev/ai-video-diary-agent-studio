@@ -36,9 +36,15 @@ export default async function HomePage() {
   );
   const topicForWorkbench = selectedTopic ?? currentTopic;
   const hasApprovedTopic = Boolean(episode?.selected_topic_id);
+  const obsidianMaterialCount = systemStatus?.obsidian.markdown_count ?? 0;
+  const radarMaterialCount = systemStatus?.hermes_radar.total_count ?? 0;
   const materialCount =
-    (systemStatus?.obsidian.markdown_count ?? 0) +
-    (systemStatus?.hermes_radar.total_count ?? 0);
+    obsidianMaterialCount +
+    radarMaterialCount;
+  const materialDetail = systemStatus
+    ? `知识库 ${obsidianMaterialCount} 篇 · 雷达 ${radarMaterialCount} 条`
+    : "等待连接本地素材";
+  const materialProgress = materialCount > 0 ? 100 : 0;
   const setupRequired = Boolean(
     !systemStatus?.llm.configured ||
     !systemStatus?.obsidian.exists ||
@@ -99,7 +105,7 @@ export default async function HomePage() {
           </section>
 
           <section className="metric-grid">
-            <MetricCard icon="folder" value={String(materialCount)} label="真实素材" tone="blue" detail="今日新增 12 条" progress={75} />
+            <MetricCard icon="folder" value={String(materialCount)} label="真实素材" tone="blue" detail={materialDetail} progress={materialProgress} />
             <MetricCard icon="spark" value={String(episode?.topics.length ?? 0)} label="生成选题" tone="green" detail={`待复核 ${episode?.topics.length ?? 0} 个`} progress={50} />
             <MetricCard icon="check" value={hasApprovedTopic ? "1" : "0"} label="已确认" tone="purple" detail={hasApprovedTopic ? "已通过人工确认" : "等待人工确认"} progress={hasApprovedTopic ? 100 : 0} />
             <MetricCard icon="clip" value={String(systemStatus?.video.pending_count ?? 0)} label="待处理视频" tone="orange" detail={hasApprovedTopic ? "等待录制素材" : "等待口播稿"} progress={25} />

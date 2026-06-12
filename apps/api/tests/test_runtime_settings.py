@@ -81,3 +81,20 @@ def test_local_whisper_defaults_are_not_user_specific(tmp_path, monkeypatch):
 
     assert settings.local_whisper_python_path is None
     assert settings.local_whisper_model_path is None
+
+
+def test_public_status_rejects_unsafe_local_whisper_path(tmp_path):
+    venv_root = tmp_path / ".venv-whisper"
+    python_path = venv_root / "bin" / "python"
+    model_path = tmp_path / "small.pt"
+    python_path.parent.mkdir(parents=True)
+    (venv_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    python_path.write_text("", encoding="utf-8")
+    model_path.write_bytes(b"model")
+
+    status = Settings(
+        local_whisper_python_path=str(python_path),
+        local_whisper_model_path=str(model_path),
+    ).public_status()
+
+    assert status["asr"]["local_whisper_configured"] is False

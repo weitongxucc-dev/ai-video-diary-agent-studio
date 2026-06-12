@@ -7,6 +7,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from app.local_whisper_security import local_whisper_path_status
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -306,12 +308,10 @@ class Settings:
                     self.tencentcloud_asr_max_local_audio_bytes / 1_000_000,
                     2,
                 ),
-                "local_whisper_configured": bool(
-                    self.local_whisper_python_path
-                    and Path(self.local_whisper_python_path).expanduser().is_file()
-                    and self.local_whisper_model_path
-                    and Path(self.local_whisper_model_path).expanduser().is_file()
-                ),
+                "local_whisper_configured": local_whisper_path_status(
+                    self.local_whisper_python_path,
+                    self.local_whisper_model_path,
+                ).configured,
                 "local_whisper_python_path": self.local_whisper_python_path,
                 "local_whisper_model_path": self.local_whisper_model_path,
             },

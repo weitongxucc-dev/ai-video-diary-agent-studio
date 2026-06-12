@@ -2,6 +2,11 @@
   "name": "ai-video-diary-agent-studio",
   "private": true,
   "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "overrides": {
+      "postcss": "8.5.10"
+    }
+  },
   "scripts": {
     "dev:web": "corepack pnpm --dir apps/web dev",
     "build:web": "corepack pnpm --dir apps/web build",
@@ -14,6 +19,7 @@
     "dev:worker": "cd apps/api && uv run python -m app.automation",
     "test:api": "cd apps/api && uv run pytest",
     "test:api:coverage": "cd apps/api && uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=80",
+    "test:e2e-smoke": "cd apps/api && uv run python scripts/beta_happy_path_smoke.py",
     "test:prompt-golden": "cd apps/api && uv run pytest tests/test_prompt_golden_eval.py",
     "build:desktop": "corepack pnpm build:web && corepack pnpm --dir apps/desktop pack:mac",
     "dist:mac": "corepack pnpm build:web && corepack pnpm --dir apps/desktop dist:mac"

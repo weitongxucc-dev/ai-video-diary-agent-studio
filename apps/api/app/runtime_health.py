@@ -5,6 +5,7 @@ import shutil
 from typing import Any
 
 from app.config import Settings
+from app.local_whisper_security import local_whisper_path_status
 from app.models import utc_now
 
 
@@ -136,22 +137,26 @@ def _ffmpeg_item(checked_at) -> dict[str, Any]:
 
 
 def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
-    python_ok = bool(
+    path_status = local_whisper_path_status(
+        settings.local_whisper_python_path,
+        settings.local_whisper_model_path,
+    )
+    python_present = bool(
         settings.local_whisper_python_path
         and Path(settings.local_whisper_python_path).expanduser().is_file()
     )
-    model_ok = bool(
+    model_present = bool(
         settings.local_whisper_model_path
         and Path(settings.local_whisper_model_path).expanduser().is_file()
     )
-    if python_ok and model_ok:
+    if path_status.configured:
         status = "ready"
         reason = "本地 Whisper Python 和模型均可访问。"
         repair_action = "无需处理。"
-    elif python_ok or model_ok:
+    elif python_present or model_present:
         status = "invalid"
-        reason = "本地 Whisper Python 或模型路径不完整。"
-        repair_action = "在设置页同时配置 Python 路径和模型文件路径。"
+        reason = path_status.reason
+        repair_action = "在设置页配置用户目录内的 Whisper 虚拟环境 Python 和 .pt 模型文件。"
     else:
         status = "missing"
         reason = "未配置本地 Whisper。"

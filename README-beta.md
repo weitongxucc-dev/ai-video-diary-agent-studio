@@ -18,6 +18,7 @@
 - `ffmpeg`：用于视频处理。
 - `node` 不作为用户手动启动要求；打包后的 WebView 通过 Electron 启动 Next.js standalone 服务。
 - Whisper / 腾讯云 ASR 为可选能力，按 App 内配置向导填写。
+- 本地 Whisper 的 Python 路径需要指向用户目录或项目目录内的虚拟环境解释器（例如 `.venv-whisper/bin/python`），且模型路径需要指向 `.pt` 文件；这能避免误把任意本机可执行文件配置为转写入口。
 
 ## 启动前检查
 
