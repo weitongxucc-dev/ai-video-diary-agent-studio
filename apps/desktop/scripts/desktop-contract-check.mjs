@@ -319,6 +319,31 @@ assert(
   "Desktop Web service must still run the packaged Electron executable as Node.",
 );
 
+const sourceServiceConfig = createServiceConfig({
+  appPath: "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+  env: {
+    ELECTRON_RUN_AS_NODE: "1",
+    PATH: "/usr/bin:/bin",
+  },
+  homeDir: "/Users/example",
+  isPackaged: false,
+  resourcesPath: "/repo/node_modules/electron/dist/Electron.app/Contents/Resources",
+});
+const sourceWebService = sourceServiceConfig.services.find((service) => service.name === "Web");
+assert(sourceWebService, "Desktop source service config must include Web.");
+assert(
+  sourceWebService.command === "corepack",
+  "Desktop source mode must use the Next dev server instead of stale standalone output.",
+);
+assert(
+  sourceWebService.args.join(" ") === "pnpm dev",
+  "Desktop source mode must start web with pnpm dev.",
+);
+assert(
+  sourceWebService.env.ELECTRON_RUN_AS_NODE === undefined,
+  "Desktop source Web service must not inherit ELECTRON_RUN_AS_NODE.",
+);
+
 const workerEnabledServiceConfig = createServiceConfig({
   appPath: "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio",
   env: {

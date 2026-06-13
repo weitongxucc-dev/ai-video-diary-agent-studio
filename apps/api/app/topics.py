@@ -163,24 +163,33 @@ class DeepSeekTopicGenerator:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
-            "max_tokens": 4200,
+            "max_tokens": 8000,
         }
         url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
 
-        with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
-            response = client.post(url, json=payload, headers=headers)
+        data: object | None = None
+        parse_error: TopicGenerationResponseError | None = None
+        for attempt in range(2):
+            request_payload = dict(payload)
+            if attempt > 0:
+                request_payload["temperature"] = 0.35
+            with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
+                response = client.post(url, json=request_payload, headers=headers)
 
-        try:
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise TopicGenerationResponseError("DeepSeek did not return valid topic JSON") from exc
+            try:
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                raise TopicGenerationResponseError("DeepSeek did not return valid topic JSON") from exc
 
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise TopicGenerationResponseError("DeepSeek topic content was not valid JSON") from exc
+            try:
+                data = self._json_from_content(content)
+                break
+            except TopicGenerationResponseError as exc:
+                parse_error = exc
+                if attempt == 1:
+                    raise parse_error
 
         return self._topics_from_json(data, source_items)
 
@@ -302,14 +311,117 @@ class DeepSeekTopicGenerator:
                     core_viewpoint=str(raw_topic["core_viewpoint"]),
                     reason=str(raw_topic["reason"]),
                     audience=str(raw_topic["audience"]),
-                    outline=[str(item) for item in raw_topic["outline"]][:3],
-                    score=max(0, min(100, int(raw_topic["score"]))),
+                    outline=self._outline(raw_topic.get("outline")),
+                    score=self._score(raw_topic.get("score")),
                     source_refs=source_refs,
                 )
             )
         if not topics:
             raise TopicGenerationResponseError("DeepSeek returned no topic candidates")
         return topics
+
+    def _json_from_content(self, content: object) -> object:
+        if not isinstance(content, str):
+            raise TopicGenerationResponseError("DeepSeek topic content was not valid JSON")
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            json_text = self._extract_json_object(content)
+            if json_text is None:
+                raise TopicGenerationResponseError("DeepSeek topic content was not valid JSON")
+            try:
+                return json.loads(json_text)
+            except json.JSONDecodeError as exc:
+                raise TopicGenerationResponseError("DeepSeek topic content was not valid JSON") from exc
+
+    def _extract_json_object(self, content: str) -> str | None:
+        start = content.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(content)):
+            char = content[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start : index + 1]
+        return None
+
+    def _outline(self, raw_outline: object) -> list[str]:
+        if isinstance(raw_outline, list):
+            outline = [str(item).strip() for item in raw_outline if str(item).strip()]
+            if len(outline) == 1:
+                split_outline = self._split_outline_text(outline[0])
+                if len(split_outline) > 1:
+                    outline = split_outline
+        elif isinstance(raw_outline, str):
+            outline = self._split_outline_text(raw_outline)
+        else:
+            raise TopicGenerationResponseError("DeepSeek topic outline must be a list or text")
+        if not outline:
+            raise TopicGenerationResponseError("DeepSeek topic outline must not be empty")
+        return outline[:3]
+
+    def _split_outline_text(self, text: str) -> list[str]:
+        normalized = text.strip()
+        if not normalized:
+            return []
+        parts = re.split(r"(?:^|\n)\s*(?:\d+|[一二三四五六七八九十])[\.\)、）:：]\s*", normalized)
+        outline = [part.strip() for part in parts if part.strip()]
+        if len(outline) >= 2:
+            return [self._trim_outline_sentence(part) for part in outline]
+        labeled_parts = re.split(
+            r"\s*(?=(?:开头3秒|主要经历|观点反思|行动建议|方法建议|结尾)[：:])",
+            normalized,
+        )
+        outline = [part.strip() for part in labeled_parts if part.strip()]
+        if len(outline) >= 2:
+            return [self._trim_outline_sentence(part) for part in outline]
+        return [self._trim_outline_sentence(line.strip()) for line in normalized.splitlines() if line.strip()]
+
+    def _trim_outline_sentence(self, text: str) -> str:
+        return text.strip().rstrip("。；;")
+
+    def _score(self, raw_score: object) -> int:
+        if isinstance(raw_score, dict):
+            values = [self._score_value(value) for value in raw_score.values()]
+            numeric_values = [value for value in values if value is not None]
+            if not numeric_values:
+                raise TopicGenerationResponseError("DeepSeek topic score must be numeric")
+            return max(0, min(100, round(sum(numeric_values))))
+        score = self._score_value(raw_score)
+        if score is None:
+            raise TopicGenerationResponseError("DeepSeek topic score must be numeric")
+        return max(0, min(100, round(score)))
+
+    def _score_value(self, value: object) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            try:
+                return float(normalized)
+            except ValueError:
+                return None
+        return None
 
     def _source_refs(
         self,
@@ -320,6 +432,11 @@ class DeepSeekTopicGenerator:
         refs: list[SourceRef] = []
         if isinstance(raw_refs, list):
             for raw_ref in raw_refs:
+                if isinstance(raw_ref, str):
+                    source = sources_by_ref.get(raw_ref)
+                    if source:
+                        refs.append(SourceRef(source.source_type, source.title, source.ref))
+                    continue
                 if not isinstance(raw_ref, dict):
                     continue
                 ref = str(raw_ref.get("ref", ""))

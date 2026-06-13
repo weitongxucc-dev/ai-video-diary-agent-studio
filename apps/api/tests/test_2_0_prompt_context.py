@@ -256,6 +256,278 @@ def test_deepseek_topic_generator_requests_and_accepts_five_candidates(tmp_path)
     assert "生成 5 个适合 2-3 分钟 AI 视频日记的候选选题。" in user_prompt["requirements"]
 
 
+def test_deepseek_topic_generator_accepts_score_breakdown_object(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "topics": [
+                                        {
+                                            "title": "真实项目里的 Agent 复盘",
+                                            "core_viewpoint": "工作流比模型参数更重要。",
+                                            "reason": "来自 Agent 复盘笔记。",
+                                            "audience": "AI 产品经理",
+                                            "outline": ["现场", "判断", "方法"],
+                                            "score": {
+                                                "真实案例支撑度": 28,
+                                                "观点鲜明度": 29,
+                                                "口播转化度": 18,
+                                                "近期偏好匹配度": 17,
+                                            },
+                                            "source_refs": [
+                                                {
+                                                    "source_type": "Obsidian",
+                                                    "title": "Agent 复盘",
+                                                    "ref": "agent.md",
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    assert topics[0].score == 92
+
+
+def test_deepseek_topic_generator_splits_numbered_outline_string(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "topics": [
+                                        {
+                                            "title": "真实项目里的 Agent 复盘",
+                                            "core_viewpoint": "工作流比模型参数更重要。",
+                                            "reason": "来自 Agent 复盘笔记。",
+                                            "audience": "AI 产品经理",
+                                            "outline": "1.【现场】先讲 Agent 跑断的真实场景\n2.【判断】再讲不是模型差，是护栏缺失\n3.【方法】最后给出检查清单",
+                                            "score": 92,
+                                            "source_refs": [
+                                                {
+                                                    "source_type": "Obsidian",
+                                                    "title": "Agent 复盘",
+                                                    "ref": "agent.md",
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    assert topics[0].outline == [
+        "【现场】先讲 Agent 跑断的真实场景",
+        "【判断】再讲不是模型差，是护栏缺失",
+        "【方法】最后给出检查清单",
+    ]
+
+
+def test_deepseek_topic_generator_splits_single_item_outline_list(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "topics": [
+                                        {
+                                            "title": "真实项目里的 Agent 复盘",
+                                            "core_viewpoint": "工作流比模型参数更重要。",
+                                            "reason": "来自 Agent 复盘笔记。",
+                                            "audience": "AI 产品经理",
+                                            "outline": [
+                                                "开头3秒：先讲 Agent 跑断的真实场景。主要经历：再讲不是模型差，是护栏缺失。行动建议：最后给出检查清单。"
+                                            ],
+                                            "score": 92,
+                                            "source_refs": [
+                                                {
+                                                    "source_type": "Obsidian",
+                                                    "title": "Agent 复盘",
+                                                    "ref": "agent.md",
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    assert topics[0].outline == [
+        "开头3秒：先讲 Agent 跑断的真实场景",
+        "主要经历：再讲不是模型差，是护栏缺失",
+        "行动建议：最后给出检查清单",
+    ]
+
+
+def test_deepseek_topic_generator_extracts_json_from_markdown_content(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+
+    content = json.dumps(
+        {
+            "topics": [
+                {
+                    "title": "真实项目里的 Agent 复盘",
+                    "core_viewpoint": "工作流比模型参数更重要。",
+                    "reason": "来自 Agent 复盘笔记。",
+                    "audience": "AI 产品经理",
+                    "outline": ["现场", "判断", "方法"],
+                    "score": 92,
+                    "source_refs": [
+                        {
+                            "source_type": "Obsidian",
+                            "title": "Agent 复盘",
+                            "ref": "agent.md",
+                        }
+                    ],
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": f"```json\n{content}\n```"
+                        }
+                    }
+                ]
+            },
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    assert topics[0].title == "真实项目里的 Agent 复盘"
+
+
+def test_deepseek_topic_generator_retries_once_after_invalid_json(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "agent.md").write_text(
+        "# Agent 复盘\n\n真实项目里的 Agent 工作流比模型参数更重要。",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            content = '{"topics": ['
+        else:
+            content = json.dumps(
+                {
+                    "topics": [
+                        {
+                            "title": "真实项目里的 Agent 复盘",
+                            "core_viewpoint": "工作流比模型参数更重要。",
+                            "reason": "来自 Agent 复盘笔记。",
+                            "audience": "AI 产品经理",
+                            "outline": ["现场", "判断", "方法"],
+                            "score": 92,
+                            "source_refs": ["agent.md"],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    topics = DeepSeekTopicGenerator(
+        Settings(deepseek_api_key="secret", obsidian_vault_path=str(vault)),
+        ObsidianVault(vault),
+        transport=httpx.MockTransport(handler),
+    ).generate(day_number=7)
+
+    assert topics[0].title == "真实项目里的 Agent 复盘"
+    assert topics[0].source_refs[0].ref == "agent.md"
+    assert len(calls) == 2
+    assert calls[1]["temperature"] < calls[0]["temperature"]
+
+
 def test_deepseek_topic_prompt_includes_preference_memory(tmp_path):
     vault = tmp_path / "vault"
     vault.mkdir()

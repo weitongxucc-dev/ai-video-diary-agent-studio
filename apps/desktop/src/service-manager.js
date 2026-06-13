@@ -190,7 +190,7 @@ function webServiceConfig({
   webDevCwd,
   webStandalone,
 }) {
-  if (isPackaged || fs.existsSync(webStandalone)) {
+  if (isPackaged) {
     return {
       name: "Web",
       command: appPath,
@@ -213,12 +213,21 @@ function webServiceConfig({
     args: ["pnpm", "dev"],
     cwd: webDevCwd,
     env: {
-      ...env,
+      ...webServiceEnv(env),
       NEXT_PUBLIC_API_BASE: apiBase,
       PORT: WEB_PORT,
     },
     logPath,
   };
+}
+
+function webServiceEnv(env = process.env) {
+  const serviceEnv = { ...env };
+  delete serviceEnv.ELECTRON_RUN_AS_NODE;
+  delete serviceEnv.NODE_OPTIONS;
+  delete serviceEnv.CODEX_THREAD_ID;
+  delete serviceEnv.VSCODE_PID;
+  return serviceEnv;
 }
 
 function spawnManagedService(service, logger = console) {

@@ -34,6 +34,7 @@ Current build delivers:
 - Persisted edit-plan segment decisions for 保留 / 删除 / 复核 with rollback
 - Confirmed edit-plan execution: user 保留 / 删除 overrides generate a second-pass `_confirmed` preview before Jianying draft packaging
 - Reusable bottom voice command console across the app, with command preview and execution for continuing the flow, regenerating topics/scripts, rewriting script sections, draft creation, and edit-plan segment decisions
+- macOS Electron desktop shell and beta DMG packaging, with local API/WebView service management and beta troubleshooting guide in `README-beta.md`
 - Root-level visual guide: `WINDOWS_PIXEL_UI_GUIDE.md`
 - Agent prompt and content intelligence upgrade guide: `docs/ai-video-diary-agent-prompt-strategy.md`
 - UI contract checks that reject terminal-style black/green palettes, gradients, large radii, emoji icons, and missing 2.0 edit-plan entry points
@@ -44,7 +45,7 @@ Not yet implemented:
 - Native watchdog event listener; current worker uses stable polling
 - COS/URL mode for Tencent ASR files larger than the local direct-upload limit
 - Real microphone capture; the current command console executes typed text or already-transcribed voice text
-- macOS desktop shell and DMG packaging
+- Apple Developer ID signing / notarization and an embedded Python runtime for the macOS beta
 
 ## Local Configuration
 
