@@ -1878,9 +1878,15 @@ textarea {
   width: 100%;
 }
 
+.topic-main-column {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
 .topic-job-banner {
   display: grid;
-  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;

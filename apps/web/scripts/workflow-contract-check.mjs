@@ -101,8 +101,17 @@ for (const required of ["topic_job_status", "ProcessingRefresh", "topic-job-bann
   }
 }
 
-if (!/\.topic-job-banner\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/.test(css)) {
-  failures.push("/topics background generation banner must span the full topic page grid.");
+if (!topicsPage.includes("topic-main-column")) {
+  failures.push("/topics must keep status banners inside a dedicated right-side topic main column.");
+}
+
+const topicJobBannerRule = css.match(/\.topic-job-banner\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (topicJobBannerRule.includes("grid-column: 1 / -1")) {
+  failures.push("/topics background generation banner must not span the full topic page grid.");
+}
+
+if (!/\.topic-main-column\s*\{[\s\S]*?display:\s*grid/.test(css)) {
+  failures.push("/topics right-side main column must stack status and detail panels with CSS grid.");
 }
 
 if (!/\.topic-page\s*\{[\s\S]*?align-items:\s*start/.test(css)) {

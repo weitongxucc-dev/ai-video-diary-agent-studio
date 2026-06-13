@@ -166,7 +166,6 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
             </Link>
           </section>
         ) : null}
-        <TopicJobBanner episode={episode} />
         <section className="topic-list" aria-label="候选选题">
           {episode && topics.length > 0 ? (
             <form action={regenerateTopicsAction} className="topic-regenerate-form">
@@ -203,160 +202,163 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
           )}
         </section>
 
-        {selected ? (
-          <section className="topic-detail pixel-card">
-            <header className="topic-detail-header">
-              <div>
-                <span className="section-kicker">推荐选题</span>
-                <h1>{selected.title}</h1>
-                <p>{selected.reason}</p>
-              </div>
-              <div className="topic-detail-status" aria-label="选题状态">
-                <span>分数</span>
-                <strong>{selected.score}</strong>
-                <em>{topicFeedbackLabel(selected.feedback)}</em>
-              </div>
-            </header>
+        <div className="topic-main-column">
+          <TopicJobBanner episode={episode} />
+          {selected ? (
+            <section className="topic-detail pixel-card">
+              <header className="topic-detail-header">
+                <div>
+                  <span className="section-kicker">推荐选题</span>
+                  <h1>{selected.title}</h1>
+                  <p>{selected.reason}</p>
+                </div>
+                <div className="topic-detail-status" aria-label="选题状态">
+                  <span>分数</span>
+                  <strong>{selected.score}</strong>
+                  <em>{topicFeedbackLabel(selected.feedback)}</em>
+                </div>
+              </header>
 
-            <div className="topic-review-workbench">
-              <div className="topic-detail-main">
-                <section className="topic-console-panel">
-                  <h3>3 分钟结构</h3>
-                  <ol>
-                    {selected.outline.map((item, index) => (
-                      <li key={item}>
-                        <span>{String(index + 1).padStart(2, "0")}</span>
-                        <strong>{item}</strong>
+              <div className="topic-review-workbench">
+                <div className="topic-detail-main">
+                  <section className="topic-console-panel">
+                    <h3>3 分钟结构</h3>
+                    <ol>
+                      {selected.outline.map((item, index) => (
+                        <li key={item}>
+                          <span>{String(index + 1).padStart(2, "0")}</span>
+                          <strong>{item}</strong>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+
+                  <section className="topic-console-panel">
+                    <h3>核心观点</h3>
+                    <p>{selected.core_viewpoint}</p>
+                    <dl className="topic-mini-meta">
+                      <div><dt>受众</dt><dd>{selected.audience}</dd></div>
+                      <div><dt>选题类型</dt><dd>技术反思</dd></div>
+                    </dl>
+                  </section>
+
+                  <section className="topic-console-panel evidence-console">
+                    <h3>来源依据</h3>
+                    <div className="evidence-list">
+                      {selected.source_refs.map((source) => (
+                        <div className="evidence-item" key={`${source.source_type}-${source.ref}`}>
+                          <strong>{source.source_type}</strong>
+                          <span>{source.title}</span>
+                          <code>{source.ref}</code>
+                        </div>
+                      ))}
+                      {selected.source_refs.length === 0 ? (
+                        <div className="evidence-item empty">
+                          <strong>--</strong>
+                          <span>暂无来源，建议补充 1 条真实案例</span>
+                          <code>waiting/source</code>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
+
+                <aside className="topic-review-aside">
+                  <section className="topic-audit-card">
+                    <h3>复核清单</h3>
+                    <ul>
+                      <li>
+                        <span className="pixel-icon-slot">
+                          <PixelIcon name="check" />
+                        </span>
+                        有真实案例支撑
                       </li>
-                    ))}
-                  </ol>
-                </section>
+                      <li>
+                        <span className="pixel-icon-slot">
+                          <PixelIcon name="check" />
+                        </span>
+                        适合 60 秒口播
+                      </li>
+                      <li>
+                        <span className="pixel-icon-slot">
+                          <PixelIcon name="note" />
+                        </span>
+                        冲突观点需再锐化
+                      </li>
+                      <li>
+                        <span className="pixel-icon-slot">
+                          <PixelIcon name="note" />
+                        </span>
+                        可作为今日发布
+                      </li>
+                    </ul>
+                  </section>
 
-                <section className="topic-console-panel">
-                  <h3>核心观点</h3>
-                  <p>{selected.core_viewpoint}</p>
-                  <dl className="topic-mini-meta">
-                    <div><dt>受众</dt><dd>{selected.audience}</dd></div>
-                    <div><dt>选题类型</dt><dd>技术反思</dd></div>
-                  </dl>
-                </section>
+                  <section className="topic-audit-card">
+                    <h3>选题元信息</h3>
+                    <dl>
+                      <div><dt>素材真实性</dt><dd>{selected.source_refs.length} 条来源</dd></div>
+                      <div><dt>冲突感</dt><dd>中</dd></div>
+                      <div><dt>发布优先级</dt><dd>{selected.score >= 8 ? "高" : "中"}</dd></div>
+                      <div><dt>风险</dt><dd>案例可更具体</dd></div>
+                    </dl>
+                  </section>
 
-                <section className="topic-console-panel evidence-console">
-                  <h3>来源依据</h3>
-                  <div className="evidence-list">
-                    {selected.source_refs.map((source) => (
-                      <div className="evidence-item" key={`${source.source_type}-${source.ref}`}>
-                        <strong>{source.source_type}</strong>
-                        <span>{source.title}</span>
-                        <code>{source.ref}</code>
-                      </div>
-                    ))}
-                    {selected.source_refs.length === 0 ? (
-                      <div className="evidence-item empty">
-                        <strong>--</strong>
-                        <span>暂无来源，建议补充 1 条真实案例</span>
-                        <code>waiting/source</code>
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
+                  <section className="topic-agent-terminal">
+                    <h3>Agent 判断</h3>
+                    <p>推荐原因：技术人自省类选题与近期偏好匹配</p>
+                    <p>风险：案例不够具体</p>
+                    <p>建议：加入一次真实项目决策场景</p>
+                  </section>
+                </aside>
               </div>
 
-              <aside className="topic-review-aside">
-                <section className="topic-audit-card">
-                  <h3>复核清单</h3>
-                  <ul>
-                    <li>
-                      <span className="pixel-icon-slot">
-                        <PixelIcon name="check" />
-                      </span>
-                      有真实案例支撑
-                    </li>
-                    <li>
-                      <span className="pixel-icon-slot">
-                        <PixelIcon name="check" />
-                      </span>
-                      适合 60 秒口播
-                    </li>
-                    <li>
-                      <span className="pixel-icon-slot">
-                        <PixelIcon name="note" />
-                      </span>
-                      冲突观点需再锐化
-                    </li>
-                    <li>
-                      <span className="pixel-icon-slot">
-                        <PixelIcon name="note" />
-                      </span>
-                      可作为今日发布
-                    </li>
-                  </ul>
-                </section>
-
-                <section className="topic-audit-card">
-                  <h3>选题元信息</h3>
-                  <dl>
-                    <div><dt>素材真实性</dt><dd>{selected.source_refs.length} 条来源</dd></div>
-                    <div><dt>冲突感</dt><dd>中</dd></div>
-                    <div><dt>发布优先级</dt><dd>{selected.score >= 8 ? "高" : "中"}</dd></div>
-                    <div><dt>风险</dt><dd>案例可更具体</dd></div>
-                  </dl>
-                </section>
-
-                <section className="topic-agent-terminal">
-                  <h3>Agent 判断</h3>
-                  <p>推荐原因：技术人自省类选题与近期偏好匹配</p>
-                  <p>风险：案例不够具体</p>
-                  <p>建议：加入一次真实项目决策场景</p>
-                </section>
-              </aside>
-            </div>
-
-            <div className="topic-action-dock">
-              <div>
-                <strong>操作台</strong>
-                <span>确认后将进入口播稿生成流程</span>
+              <div className="topic-action-dock">
+                <div>
+                  <strong>操作台</strong>
+                  <span>确认后将进入口播稿生成流程</span>
+                </div>
+                <form action={approveTopicAndGenerateScript}>
+                  <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
+                  <input name="topic_id" type="hidden" value={selected.id} />
+                  <button className="pixel-button" type="submit">
+                    通过并生成口播稿
+                  </button>
+                </form>
+                <form action={sendTopicFeedbackAction}>
+                  <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
+                  <input name="topic_id" type="hidden" value={selected.id} />
+                  <input name="reason" type="hidden" value="这个方向值得继续强化" />
+                  <button className="pixel-button secondary" name="value" type="submit" value="up">
+                    赞这个选题
+                  </button>
+                </form>
+                <form action={sendTopicFeedbackAction}>
+                  <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
+                  <input name="topic_id" type="hidden" value={selected.id} />
+                  <input name="reason" type="hidden" value="这个方向暂时不够具体" />
+                  <button className="pixel-button secondary" name="value" type="submit" value="down">
+                    踩这个选题
+                  </button>
+                </form>
+                <form action={sendTopicFeedbackAction}>
+                  <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
+                  <input name="topic_id" type="hidden" value={selected.id} />
+                  <input name="reason" type="hidden" value="想换成更贴近日记感的角度" />
+                  <button className="pixel-button secondary" name="value" type="submit" value="down">
+                    换一个角度
+                  </button>
+                </form>
               </div>
-              <form action={approveTopicAndGenerateScript}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <button className="pixel-button" type="submit">
-                  通过并生成口播稿
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="这个方向值得继续强化" />
-                <button className="pixel-button secondary" name="value" type="submit" value="up">
-                  赞这个选题
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="这个方向暂时不够具体" />
-                <button className="pixel-button secondary" name="value" type="submit" value="down">
-                  踩这个选题
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="想换成更贴近日记感的角度" />
-                <button className="pixel-button secondary" name="value" type="submit" value="down">
-                  换一个角度
-                </button>
-              </form>
-            </div>
-          </section>
-        ) : (
-          <EmptyTopicState
-            episode={episode}
-            error={error}
-            isTopicProcessing={isTopicProcessing}
-          />
-        )}
+            </section>
+          ) : (
+            <EmptyTopicState
+              episode={episode}
+              error={error}
+              isTopicProcessing={isTopicProcessing}
+            />
+          )}
+        </div>
       </div>
     </AppShell>
   );
