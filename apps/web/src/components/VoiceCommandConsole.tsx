@@ -2,13 +2,12 @@
 
 import type { KeyboardEvent } from "react";
 import { useRef, useState } from "react";
-import { PixelIcon } from "@/components/PixelIcon";
 import {
-  executeVoiceCommand,
-  getTodayEpisode,
-  previewVoiceCommand,
-  transcribeVoiceAudio,
-} from "@/lib/api";
+  executeVoiceCommandAction,
+  previewVoiceCommandAction,
+  transcribeVoiceAudioAction,
+} from "@/app/actions";
+import { PixelIcon } from "@/components/PixelIcon";
 import type { VoiceCommandResponse } from "@/lib/types";
 
 type VoiceCommandConsoleProps = {
@@ -32,11 +31,6 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  async function currentEpisodeId(): Promise<string> {
-    const episode = await getTodayEpisode();
-    return episode.id;
-  }
-
   async function runCommand(mode: "preview" | "execute") {
     const normalized = transcript.trim();
     if (!normalized) {
@@ -48,11 +42,10 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
     setBusy(true);
     setError(null);
     try {
-      const episodeId = await currentEpisodeId();
       const response =
         mode === "preview"
-          ? await previewVoiceCommand(episodeId, normalized)
-          : await executeVoiceCommand(episodeId, normalized);
+          ? await previewVoiceCommandAction(normalized)
+          : await executeVoiceCommandAction(normalized);
       setResult(response);
       if (mode === "execute" && response.status === "executed" && response.next_url) {
         window.location.assign(response.next_url);
@@ -114,7 +107,9 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
     }
     setTranscribing(true);
     try {
-      const transcription = await transcribeVoiceAudio(audio);
+      const formData = new FormData();
+      formData.set("audio", audio, "voice-command.webm");
+      const transcription = await transcribeVoiceAudioAction(formData);
       setTranscript(transcription.transcript.trim());
       setResult(null);
       setError(null);

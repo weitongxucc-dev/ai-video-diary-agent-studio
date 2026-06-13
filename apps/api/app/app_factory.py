@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 import sys
 from collections.abc import Callable
 from types import ModuleType
@@ -50,6 +52,8 @@ from app.workflow import LangGraphEpisodeWorkflow
 
 logger = logging.getLogger(__name__)
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+API_TOKEN_ENV = "AI_VIDEO_DIARY_API_TOKEN"
+API_TOKEN_HEADER = "X-AI-Video-Diary-Token"
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -76,13 +80,21 @@ def create_app(runtime: RuntimeContainer | None = None) -> FastAPI:
 def install_api_security_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def api_security_middleware(request: Request, call_next):
-        if _requires_local_client(request) and not _is_local_request(request):
-            return _with_security_headers(
-                JSONResponse(
-                    status_code=403,
-                    content={"detail": "API write requests require a local client"},
+        if _requires_local_client(request):
+            if not _is_local_request(request):
+                return _with_security_headers(
+                    JSONResponse(
+                        status_code=403,
+                        content={"detail": "API write requests require a local client"},
+                    )
                 )
-            )
+            if not _has_valid_api_token(request):
+                return _with_security_headers(
+                    JSONResponse(
+                        status_code=403,
+                        content={"detail": "API write requests require a valid token"},
+                    )
+                )
 
         response = await call_next(request)
         return _with_security_headers(response)
@@ -95,6 +107,19 @@ def _requires_local_client(request: Request) -> bool:
 def _is_local_request(request: Request) -> bool:
     client_host = request.client.host if request.client else None
     return is_local_client_host(client_host)
+
+
+def _has_valid_api_token(request: Request) -> bool:
+    expected_token = _configured_api_token()
+    if expected_token is None:
+        return True
+    provided_token = request.headers.get(API_TOKEN_HEADER, "")
+    return secrets.compare_digest(provided_token, expected_token)
+
+
+def _configured_api_token() -> str | None:
+    token = os.getenv(API_TOKEN_ENV, "").strip()
+    return token or None
 
 
 def _with_security_headers(response: Response) -> Response:

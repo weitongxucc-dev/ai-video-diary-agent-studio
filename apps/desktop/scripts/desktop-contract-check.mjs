@@ -276,6 +276,19 @@ assert(
     "/Users/example/Library/Application Support/AI视频日记 Agent Studio/api-venv",
   "Desktop API must keep its uv virtual environment outside the signed app bundle.",
 );
+assert(
+  typeof apiService.env.AI_VIDEO_DIARY_API_TOKEN === "string" &&
+    apiService.env.AI_VIDEO_DIARY_API_TOKEN.length >= 32,
+  "Desktop API must receive a generated local API token.",
+);
+assert(
+  webService.env.AI_VIDEO_DIARY_API_TOKEN === apiService.env.AI_VIDEO_DIARY_API_TOKEN,
+  "Desktop Web service must receive the same server-only local API token as the API service.",
+);
+assert(
+  webService.env.NEXT_PUBLIC_AI_VIDEO_DIARY_API_TOKEN === undefined,
+  "Desktop Web service must not expose the local API token through NEXT_PUBLIC env.",
+);
 for (const service of [apiService]) {
   assert(
     service.env.PYTHONDONTWRITEBYTECODE === "1",
@@ -342,6 +355,15 @@ assert(
 assert(
   sourceWebService.env.ELECTRON_RUN_AS_NODE === undefined,
   "Desktop source Web service must not inherit ELECTRON_RUN_AS_NODE.",
+);
+assert(
+  sourceServiceConfig.services.find((service) => service.name === "API").env
+    .AI_VIDEO_DIARY_API_TOKEN === sourceWebService.env.AI_VIDEO_DIARY_API_TOKEN,
+  "Desktop source mode must share the generated server-only local API token between API and Web.",
+);
+assert(
+  sourceWebService.env.NEXT_PUBLIC_AI_VIDEO_DIARY_API_TOKEN === undefined,
+  "Desktop source mode must not expose the local API token through NEXT_PUBLIC env.",
 );
 
 const workerEnabledServiceConfig = createServiceConfig({

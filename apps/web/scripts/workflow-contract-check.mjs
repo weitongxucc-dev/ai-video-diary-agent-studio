@@ -365,15 +365,25 @@ for (const route of ['href: "/topics"', 'href: "/script"', 'href: "/cover"', 'hr
   }
 }
 
-for (const required of ["语音指令", "COMMAND", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
+for (const required of ["语音指令", "COMMAND", "previewVoiceCommandAction", "executeVoiceCommandAction", "等待确认"]) {
   if (!voiceCommandConsole.includes(required)) {
     failures.push(`VoiceCommandConsole must include ${required}.`);
   }
 }
 
-for (const required of ["MediaRecorder", "transcribeVoiceAudio", "开始录音", "停止录音", "recording"]) {
+for (const required of ["MediaRecorder", "transcribeVoiceAudioAction", "开始录音", "停止录音", "recording"]) {
   if (!voiceCommandConsole.includes(required)) {
     failures.push(`VoiceCommandConsole must implement microphone recording with ${required}.`);
+  }
+}
+
+for (const required of [
+  "previewVoiceCommandAction",
+  "executeVoiceCommandAction",
+  "transcribeVoiceAudioAction",
+]) {
+  if (!actionsFile.includes(required)) {
+    failures.push(`Server actions must proxy voice command API calls with ${required}.`);
   }
 }
 
@@ -467,6 +477,19 @@ for (const required of ["AbortController", "timeoutMs"]) {
   if (!apiFile.includes(required)) {
     failures.push(`API client must support bounded server fetches with ${required}.`);
   }
+}
+
+for (const required of [
+  "AI_VIDEO_DIARY_API_TOKEN",
+  "X-AI-Video-Diary-Token",
+  "apiRequestHeaders",
+]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must attach local API token headers with ${required}.`);
+  }
+}
+if (apiFile.includes("NEXT_PUBLIC_AI_VIDEO_DIARY_API_TOKEN")) {
+  failures.push("API client must keep the local API token server-only, not in NEXT_PUBLIC env.");
 }
 
 for (const required of ["HOME_API_TIMEOUT_MS", "timeoutMs: HOME_API_TIMEOUT_MS"]) {

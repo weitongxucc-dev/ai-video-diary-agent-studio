@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const http = require("node:http");
 const https = require("node:https");
 const os = require("node:os");
@@ -11,6 +12,7 @@ const {
 
 const API_PORT = "8000";
 const WEB_PORT = "3000";
+const API_TOKEN_ENV = "AI_VIDEO_DIARY_API_TOKEN";
 const PYTHON_BASE_ENV_KEYS = [
   "HOME",
   "TMPDIR",
@@ -84,6 +86,7 @@ function createServiceConfig({
   const runtimeEnvPath = path.join(directoryShortcuts.appSupport, ".env");
   const apiVirtualEnvPath = path.join(directoryShortcuts.appSupport, "api-venv");
   const apiBase = `http://127.0.0.1:${API_PORT}`;
+  const apiToken = localApiToken(env);
 
   const services = [
     {
@@ -100,6 +103,7 @@ function createServiceConfig({
       ],
       cwd: apiCwd,
       env: pythonServiceEnv(env, homeDir, {
+        apiToken,
         databasePath,
         runtimeEnvPath,
         virtualEnvPath: apiVirtualEnvPath,
@@ -124,6 +128,7 @@ function createServiceConfig({
   services.push(
     webServiceConfig({
       apiBase,
+      apiToken,
       appPath,
       env,
       isPackaged,
@@ -150,7 +155,12 @@ function shouldAutostartWorker(env = process.env) {
 function pythonServiceEnv(
   env = process.env,
   homeDir = os.homedir(),
-  { databasePath = null, runtimeEnvPath = null, virtualEnvPath = null } = {},
+  {
+    apiToken = null,
+    databasePath = null,
+    runtimeEnvPath = null,
+    virtualEnvPath = null,
+  } = {},
 ) {
   const serviceEnv = {};
   for (const key of [...PYTHON_BASE_ENV_KEYS, ...PYTHON_APP_ENV_KEYS]) {
@@ -163,6 +173,9 @@ function pythonServiceEnv(
   }
   if (!serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH && runtimeEnvPath) {
     serviceEnv.AI_VIDEO_DIARY_RUNTIME_ENV_PATH = runtimeEnvPath;
+  }
+  if (apiToken) {
+    serviceEnv[API_TOKEN_ENV] = apiToken;
   }
   if (virtualEnvPath) {
     serviceEnv.UV_PROJECT_ENVIRONMENT = virtualEnvPath;
@@ -183,6 +196,7 @@ function serviceSearchPath(env = process.env, homeDir = os.homedir()) {
 
 function webServiceConfig({
   apiBase,
+  apiToken,
   appPath,
   env,
   isPackaged,
@@ -200,6 +214,7 @@ function webServiceConfig({
         ...env,
         ELECTRON_RUN_AS_NODE: "1",
         HOSTNAME: "127.0.0.1",
+        [API_TOKEN_ENV]: apiToken,
         NEXT_PUBLIC_API_BASE: apiBase,
         PORT: WEB_PORT,
       },
@@ -214,6 +229,7 @@ function webServiceConfig({
     cwd: webDevCwd,
     env: {
       ...webServiceEnv(env),
+      [API_TOKEN_ENV]: apiToken,
       NEXT_PUBLIC_API_BASE: apiBase,
       PORT: WEB_PORT,
     },
@@ -228,6 +244,22 @@ function webServiceEnv(env = process.env) {
   delete serviceEnv.CODEX_THREAD_ID;
   delete serviceEnv.VSCODE_PID;
   return serviceEnv;
+}
+
+function localApiToken(env = process.env) {
+  return firstNonEmptyString(env[API_TOKEN_ENV]) ?? createLocalApiToken();
+}
+
+function firstNonEmptyString(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const token = String(value).trim();
+  return token || null;
+}
+
+function createLocalApiToken() {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 function spawnManagedService(service, logger = console) {

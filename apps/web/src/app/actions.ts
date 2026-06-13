@@ -10,10 +10,13 @@ import {
   createDraftPackage,
   deletePreference,
   disablePreference,
+  executeVoiceCommand,
   generateScript,
+  getTodayEpisode,
   ingestManualLink,
   importDraftPackage,
   markEpisodePublished,
+  previewVoiceCommand,
   processAdHocEpisodeVideo,
   processAdHocEpisodeVideoBatch,
   processEpisodeVideo,
@@ -29,6 +32,7 @@ import {
   startGenerateTopics,
   startRegenerateTopics,
   syncSourceItems,
+  transcribeVoiceAudio,
   updateEpisodeCover,
   updateCreatorProfile,
   updateEditPlanSegmentDecision,
@@ -42,6 +46,8 @@ import type {
   PreferenceKind,
   RuntimeSettingsUpdate,
   ScriptPackage,
+  VoiceCommandResponse,
+  VoiceTranscription,
 } from "@/lib/types";
 
 function requiredString(formData: FormData, key: string): string {
@@ -558,4 +564,28 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   await updateRuntimeSettings(payload);
   const redirectTo = formData.get("redirect_to");
   redirect(redirectTo === "/setup" ? "/setup" : "/settings");
+}
+
+export async function previewVoiceCommandAction(
+  transcript: string,
+): Promise<VoiceCommandResponse> {
+  const episode = await getTodayEpisode();
+  return previewVoiceCommand(episode.id, transcript);
+}
+
+export async function executeVoiceCommandAction(
+  transcript: string,
+): Promise<VoiceCommandResponse> {
+  const episode = await getTodayEpisode();
+  return executeVoiceCommand(episode.id, transcript);
+}
+
+export async function transcribeVoiceAudioAction(
+  formData: FormData,
+): Promise<VoiceTranscription> {
+  const audio = formData.get("audio");
+  if (!(audio instanceof Blob) || audio.size === 0) {
+    throw new Error("Missing audio");
+  }
+  return transcribeVoiceAudio(audio);
 }

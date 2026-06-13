@@ -34,3 +34,57 @@ def test_mutating_api_requests_reject_non_local_clients(tmp_path, monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "API write requests require a local client"
     assert main_module.repo.all() == []
+
+
+def test_mutating_api_requests_require_configured_local_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_VIDEO_DIARY_API_TOKEN", "local-secret")
+    monkeypatch.setattr(
+        main_module,
+        "repo",
+        EpisodeRepository(database_path=tmp_path / "agent.sqlite3"),
+    )
+    client = TestClient(main_module.app)
+
+    response = client.post("/api/episodes")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "API write requests require a valid token"
+    assert main_module.repo.all() == []
+
+
+def test_mutating_api_requests_reject_wrong_local_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_VIDEO_DIARY_API_TOKEN", "local-secret")
+    monkeypatch.setattr(
+        main_module,
+        "repo",
+        EpisodeRepository(database_path=tmp_path / "agent.sqlite3"),
+    )
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/api/episodes",
+        headers={"X-AI-Video-Diary-Token": "wrong-secret"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "API write requests require a valid token"
+    assert main_module.repo.all() == []
+
+
+def test_mutating_api_requests_accept_configured_local_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_VIDEO_DIARY_API_TOKEN", "local-secret")
+    monkeypatch.setattr(
+        main_module,
+        "repo",
+        EpisodeRepository(database_path=tmp_path / "agent.sqlite3"),
+    )
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/api/episodes",
+        headers={"X-AI-Video-Diary-Token": "local-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"]
+    assert len(main_module.repo.all()) == 1

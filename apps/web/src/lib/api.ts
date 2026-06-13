@@ -33,6 +33,8 @@ import type {
 } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+export const API_TOKEN = process.env.AI_VIDEO_DIARY_API_TOKEN ?? "";
+export const API_TOKEN_HEADER = "X-AI-Video-Diary-Token";
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
@@ -41,6 +43,20 @@ export function apiUrl(path: string): string {
 type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
 };
+
+function apiRequestHeaders(
+  headers?: HeadersInit,
+  contentType = "application/json",
+): Headers {
+  const requestHeaders = new Headers(headers);
+  if (contentType && !requestHeaders.has("Content-Type")) {
+    requestHeaders.set("Content-Type", contentType);
+  }
+  if (API_TOKEN) {
+    requestHeaders.set(API_TOKEN_HEADER, API_TOKEN);
+  }
+  return requestHeaders;
+}
 
 async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
   const { timeoutMs, ...fetchInit } = init ?? {};
@@ -52,10 +68,7 @@ async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...fetchInit,
-      headers: {
-        "Content-Type": "application/json",
-        ...(fetchInit.headers ?? {}),
-      },
+      headers: apiRequestHeaders(fetchInit.headers),
       cache: "no-store",
       signal: fetchInit.signal ?? controller?.signal,
     });
@@ -131,9 +144,7 @@ export async function transcribeVoiceAudio(audio: Blob): Promise<VoiceTranscript
   const response = await fetch(apiUrl("/api/voice/transcribe"), {
     body: audio,
     cache: "no-store",
-    headers: {
-      "Content-Type": audio.type || "application/octet-stream",
-    },
+    headers: apiRequestHeaders(undefined, audio.type || "application/octet-stream"),
     method: "POST",
   });
 
