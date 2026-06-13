@@ -4,7 +4,7 @@ import os
 import httpx
 
 from app.config import Settings
-from app.external_sources import HtmlPageSourceClient
+from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.sources import ObsidianVault, TopicSourceItem
 from app.topics import DeepSeekTopicGenerator
 
@@ -290,6 +290,49 @@ def test_html_page_source_client_fetches_watcha_page_as_topic_source():
     assert items[0].title == "观猹 - AI 产品的大众点评"
     assert items[0].ref == "https://watcha.cn/"
     assert "今日热门 AI 产品" in items[0].excerpt
+
+
+def test_html_page_source_client_rejects_private_network_urls():
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, html="<title>Local metadata</title>")
+
+    client = HtmlPageSourceClient(
+        urls=["http://127.0.0.1:8000/admin"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        client.fetch_items()
+    except ExternalSourceResponseError as exc:
+        assert "private network" in str(exc)
+    else:
+        raise AssertionError("private network URL should be rejected")
+    assert requests == []
+
+
+def test_html_page_source_client_rejects_redirects_to_private_network():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://example.com/source":
+            return httpx.Response(
+                302,
+                headers={"location": "http://localhost:8000/internal"},
+            )
+        return httpx.Response(200, html="<title>Local metadata</title>")
+
+    client = HtmlPageSourceClient(
+        urls=["https://example.com/source"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        client.fetch_items()
+    except ExternalSourceResponseError as exc:
+        assert "private network" in str(exc)
+    else:
+        raise AssertionError("private network redirect should be rejected")
 
 
 def test_deepseek_topic_generator_repairs_invalid_source_ref_by_note_similarity(tmp_path):

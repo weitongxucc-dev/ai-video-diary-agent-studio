@@ -167,6 +167,24 @@ def test_safe_child_file_path_rejects_traversal_and_unsupported_extensions(tmp_p
         raise AssertionError("unsupported extension should be rejected")
 
 
+def test_safe_child_file_path_rejects_symlink_escape(tmp_path):
+    root = tmp_path / "inbox"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "secret.mov"
+    target.write_bytes(b"secret")
+    symlink = root / "linked.mov"
+    symlink.symlink_to(target)
+
+    try:
+        safe_child_file_path(root, "linked.mov", allowed_extensions={".mov"})
+    except ValueError as exc:
+        assert "outside" in str(exc)
+    else:
+        raise AssertionError("symlink escape should be rejected")
+
+
 def test_safe_file_under_root_rejects_external_files(tmp_path):
     root = tmp_path / "output"
     root.mkdir()

@@ -179,7 +179,10 @@ def safe_child_file_path(
     if allowed_extensions and Path(file_name).suffix.lower() not in allowed_extensions:
         raise ValueError("unsupported video file")
 
-    path = Path(root).expanduser() / file_name
+    resolved_root = Path(root).expanduser().resolve()
+    path = (resolved_root / file_name).resolve()
+    if not path.is_relative_to(resolved_root):
+        raise ValueError("video file is outside the video directory")
     if must_exist and (not path.exists() or not path.is_file()):
         raise ValueError("video file not found")
     return path

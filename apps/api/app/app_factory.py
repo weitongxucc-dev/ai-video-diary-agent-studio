@@ -6,8 +6,9 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 
 from app import episode_media_flow, episode_workflow_flow
 from app.asr import asr_transcriber_from_settings
@@ -37,6 +38,7 @@ from app.routers import system as system_router
 from app.routers import videos as videos_router
 from app.routers.context import AppContext, AppState
 from app.runtime import RUNTIME_DEPENDENCY_NAMES, RuntimeContainer, create_runtime
+from app.runtime_settings import is_local_client_host
 from app.services import EpisodeService
 from app.sources import ObsidianVault
 from app.topics import topic_generator_from_settings
@@ -47,6 +49,13 @@ from app.workflow import LangGraphEpisodeWorkflow
 
 
 logger = logging.getLogger(__name__)
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
 
 
 def create_app(runtime: RuntimeContainer | None = None) -> FastAPI:
@@ -58,9 +67,40 @@ def create_app(runtime: RuntimeContainer | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    install_api_security_middleware(app)
     install_runtime(app, runtime)
     include_routers(app)
     return app
+
+
+def install_api_security_middleware(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def api_security_middleware(request: Request, call_next):
+        if _requires_local_client(request) and not _is_local_request(request):
+            return _with_security_headers(
+                JSONResponse(
+                    status_code=403,
+                    content={"detail": "API write requests require a local client"},
+                )
+            )
+
+        response = await call_next(request)
+        return _with_security_headers(response)
+
+
+def _requires_local_client(request: Request) -> bool:
+    return request.method.upper() in WRITE_METHODS and request.url.path.startswith("/api/")
+
+
+def _is_local_request(request: Request) -> bool:
+    client_host = request.client.host if request.client else None
+    return is_local_client_host(client_host)
+
+
+def _with_security_headers(response: Response) -> Response:
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
 def install_runtime(
