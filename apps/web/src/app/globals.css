@@ -1807,6 +1807,7 @@ textarea {
 .topic-page {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
   gap: 12px;
   padding: 12px;
 }
@@ -1843,9 +1844,30 @@ textarea {
 
 .topic-list {
   display: grid;
+  position: sticky;
+  top: 12px;
+  align-self: start;
+  max-height: calc(100vh - 260px);
   min-width: 0;
   gap: 7px;
   align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+}
+
+.topic-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.topic-list::-webkit-scrollbar-track {
+  border: 2px solid var(--border-strong);
+  background: var(--win-face);
+}
+
+.topic-list::-webkit-scrollbar-thumb {
+  border: 2px solid var(--border-strong);
+  background: var(--win-face-light);
 }
 
 .topic-regenerate-form {
@@ -5891,6 +5913,13 @@ textarea {
   .current-topic,
   .topic-page {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .topic-list {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .topic-review-workbench {

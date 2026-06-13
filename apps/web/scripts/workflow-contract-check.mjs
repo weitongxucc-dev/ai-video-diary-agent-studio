@@ -105,6 +105,25 @@ if (!/\.topic-job-banner\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/.test(css)) {
   failures.push("/topics background generation banner must span the full topic page grid.");
 }
 
+if (!/\.topic-page\s*\{[\s\S]*?align-items:\s*start/.test(css)) {
+  failures.push("/topics layout must keep the candidate list from stretching to the detail panel height.");
+}
+
+const topicListRule = css.match(/\.topic-list\s*\{[\s\S]*?\}/)?.[0] ?? "";
+for (const required of [
+  "position: sticky",
+  "max-height: calc(100vh - 260px)",
+  "overflow-y: auto",
+]) {
+  if (!topicListRule.includes(required)) {
+    failures.push(`/topics candidate list must be an independently scrollable rail with ${required}.`);
+  }
+}
+
+if (!/@media \(max-width:\s*1180px\)\s*\{[\s\S]*?\.topic-list\s*\{[\s\S]*?position:\s*static[\s\S]*?max-height:\s*none[\s\S]*?overflow:\s*visible/.test(css)) {
+  failures.push("/topics candidate list must return to normal document flow on narrow screens.");
+}
+
 for (const required of ["topics_error", "topic-error-banner", "配置"]) {
   if (!topicsPage.includes(required)) {
     failures.push(`/topics must show recoverable topic generation errors with ${required}.`);
