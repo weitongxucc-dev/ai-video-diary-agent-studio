@@ -564,6 +564,12 @@ for (const required of ["getEpisodeCover", "updateEpisodeCover", "/api/episodes/
   }
 }
 
+for (const required of ["generateEpisodeCover", "/api/episodes/${episodeId}/cover/generate"]) {
+  if (!apiFile.includes(required)) {
+    failures.push(`API client must expose real cover generation API ${required}.`);
+  }
+}
+
 if (!apiFile.includes("/api/script/rewrite-intents")) {
   failures.push("API client must call the script quick rewrite intents route.");
 }
@@ -630,6 +636,10 @@ if (!actionsFile.includes("updateCoverAction")) {
   failures.push("Server actions must expose a cover update action.");
 }
 
+if (!actionsFile.includes("generateCoverAction")) {
+  failures.push("Server actions must expose a cover generation action.");
+}
+
 if (!actionsFile.includes("redirect_to")) {
   failures.push("Server actions must let setup wizard return to /setup after saving.");
 }
@@ -660,8 +670,12 @@ for (const required of ["getContentTemplates", "selectContentTemplateAction", "t
 
 for (const required of [
   "getEpisodeCover",
+  "generateCoverAction",
   "updateCoverAction",
   "deriveCoverCandidates",
+  "cover-rendered-frame",
+  "cover-generate-form",
+  "preview_url",
   "cover-preview-frame",
   "cover-workbench",
   "cover-primary-stage",
@@ -684,6 +698,12 @@ for (const required of [
 ]) {
   if (!coverPage.includes(required)) {
     failures.push(`/cover must implement cover editor field/surface ${required}.`);
+  }
+}
+
+for (const required of ["CoverArtifact", "preview_url", "cover_path", "cover_source"]) {
+  if (!typesFile.includes(required)) {
+    failures.push(`Types must expose generated cover artifact field ${required}.`);
   }
 }
 
@@ -823,6 +843,8 @@ for (const required of [
   ".cover-workbench-grid",
   ".cover-primary-stage",
   ".cover-preview-frame",
+  ".cover-rendered-frame",
+  ".cover-generate-form",
   ".cover-candidate-list",
   ".cover-source-stack",
   ".cover-export-status",

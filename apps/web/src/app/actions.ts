@@ -13,6 +13,7 @@ import {
   executeVoiceCommand,
   generateScript,
   getTodayEpisode,
+  generateEpisodeCover,
   ingestManualLink,
   importDraftPackage,
   markEpisodePublished,
@@ -331,6 +332,13 @@ export async function updateCoverAction(formData: FormData) {
     tag: textField(formData, "tag"),
     template_id: requiredString(formData, "template_id"),
   });
+  redirect("/cover");
+}
+
+export async function generateCoverAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  await generateEpisodeCover(episodeId);
   redirect("/cover");
 }
 

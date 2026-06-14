@@ -251,6 +251,20 @@ export type CoverDraft = {
   preview_aspect_ratio: string;
   cover_copy: string;
   templates: CoverTemplate[];
+  cover_path: string | null;
+  preview_url: string | null;
+  cover_source: string;
+  width: number | null;
+  height: number | null;
+};
+
+export type CoverArtifact = {
+  episode_id: string;
+  cover_path: string;
+  preview_url: string;
+  cover_source: string;
+  width: number;
+  height: number;
 };
 
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";

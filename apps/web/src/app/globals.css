@@ -4378,6 +4378,23 @@ textarea {
   color: var(--ink);
 }
 
+.cover-rendered-frame {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  border: 4px solid var(--border-strong);
+  background: #fffaf0;
+  box-shadow: var(--shadow-hard);
+}
+
+.cover-rendered-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
 .cover-preview-top,
 .cover-preview-footer {
   display: flex;
@@ -4424,6 +4441,34 @@ textarea {
   align-content: start;
   gap: 12px;
   min-width: 0;
+}
+
+.cover-generate-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 2px solid var(--border-strong);
+  background: var(--blue-soft);
+  padding: 10px;
+  box-shadow: var(--bevel-raised);
+}
+
+.cover-generate-form div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cover-generate-form strong,
+.cover-generate-form span {
+  overflow-wrap: anywhere;
+}
+
+.cover-generate-form span {
+  color: var(--muted);
+  font-family: var(--font-readable);
+  line-height: 1.45;
 }
 
 .cover-candidate-list,
@@ -5871,9 +5916,14 @@ textarea {
   }
 
   .cover-workbench-grid,
+  .cover-generate-form,
   .cover-summary-strip,
   .cover-prereq-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cover-generate-form .pixel-button {
+    justify-self: start;
   }
 }
 

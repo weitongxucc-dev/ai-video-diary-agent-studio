@@ -94,6 +94,8 @@ def test_system_diagnostics_and_settings_routes_are_split_from_main():
         ],
         "cover.py": [
             '"/api/episodes/{episode_id}/cover"',
+            '"/api/episodes/{episode_id}/cover/generate"',
+            '"/api/episodes/{episode_id}/cover/image"',
         ],
     }
 

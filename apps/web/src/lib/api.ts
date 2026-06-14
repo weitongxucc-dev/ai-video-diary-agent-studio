@@ -1,5 +1,6 @@
 import type {
   CommentInsightsResponse,
+  CoverArtifact,
   ContentTemplates,
   CoverDraft,
   CreatorProfile,
@@ -194,6 +195,12 @@ export function updateEpisodeCover(
   return request<Episode>(`/api/episodes/${episodeId}/cover`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function generateEpisodeCover(episodeId: string): Promise<CoverArtifact> {
+  return request<CoverArtifact>(`/api/episodes/${episodeId}/cover/generate`, {
+    method: "POST",
   });
 }
 

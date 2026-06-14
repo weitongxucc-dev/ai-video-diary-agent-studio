@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import { updateCoverAction } from "@/app/actions";
+import { generateCoverAction, updateCoverAction } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getEpisodeCover, getTodayEpisode } from "@/lib/api";
+import { apiUrl, getEpisodeCover, getTodayEpisode } from "@/lib/api";
 import type { CoverDraft, Episode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -157,26 +157,37 @@ function CoverEmptyState({
 
 function CoverPreview({ cover, episode }: { cover: CoverDraft; episode: Episode }) {
   const template = cover.templates.find((item) => item.template_id === cover.template_id) ?? cover.templates[0];
+  const renderedCoverUrl = cover.preview_url ? apiUrl(cover.preview_url) : null;
 
   return (
     <section className="cover-preview-panel" aria-label="封面预览">
-      <div
-        className="cover-preview-frame"
-        style={{ "--cover-accent": template?.accent ?? "#1d4ed8" } as CSSProperties}
-      >
-        <div className="cover-preview-top">
-          <span>AI VIDEO DIARY</span>
-          <strong>DAY {episode.day_number}</strong>
+      {renderedCoverUrl ? (
+        <div className="cover-rendered-frame">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt={`${cover.headline} 封面图`}
+            src={renderedCoverUrl}
+          />
         </div>
-        <div className="cover-preview-copy">
-          <h1>{cover.headline}</h1>
-          <p>{cover.subline || "今天的AI产品观察"}</p>
+      ) : (
+        <div
+          className="cover-preview-frame"
+          style={{ "--cover-accent": template?.accent ?? "#1d4ed8" } as CSSProperties}
+        >
+          <div className="cover-preview-top">
+            <span>AI VIDEO DIARY</span>
+            <strong>DAY {episode.day_number}</strong>
+          </div>
+          <div className="cover-preview-copy">
+            <h1>{cover.headline}</h1>
+            <p>{cover.subline || "今天的AI产品观察"}</p>
+          </div>
+          <div className="cover-preview-footer">
+            <strong>{cover.tag || "待导入剪映"}</strong>
+            <span>{cover.preview_aspect_ratio}</span>
+          </div>
         </div>
-        <div className="cover-preview-footer">
-          <strong>{cover.tag || "待导入剪映"}</strong>
-          <span>{cover.preview_aspect_ratio}</span>
-        </div>
-      </div>
+      )}
     </section>
   );
 }
@@ -206,12 +217,24 @@ export default async function CoverPage() {
               <div className="cover-summary-strip" aria-label="封面当前状态">
                 <span>当前文案 · {compactText(cover.cover_copy, cover.headline, 28)}</span>
                 <span>候选 · {candidates.length}</span>
-                <span>导出 · 4:3 cover.png</span>
+                <span>{cover.preview_url ? "已生成 · cover.png" : "待生成 · cover.png"}</span>
               </div>
 
               <div className="cover-workbench-grid">
                 <CoverPreview cover={cover} episode={episode} />
                 <div className="cover-decision-panel">
+                  <form action={generateCoverAction} className="cover-generate-form">
+                    <input name="episode_id" type="hidden" value={episode.id} />
+                    <div>
+                      <strong>{cover.preview_url ? "重新生成封面图" : "生成真实封面图"}</strong>
+                      <span>
+                        使用当前文案和模板生成 1200x900 PNG，草稿素材包会复用这张封面。
+                      </span>
+                    </div>
+                    <button className="pixel-button" type="submit">
+                      {cover.preview_url ? "重新生成封面图" : "生成封面图"}
+                    </button>
+                  </form>
                   <section className="cover-candidate-list" aria-label="封面候选">
                     <div className="cover-panel-title">
                       <span>生成封面候选</span>
@@ -338,8 +361,12 @@ export default async function CoverPage() {
           <div className="pixel-card side-note cover-export-status">
             <PixelIcon name="cover" />
             <h2>导出状态</h2>
-            <p>{cover ? "待生成素材包" : "等待脚本"}</p>
-            <span>保存后回到剪映草稿，生成素材包时写入 4:3 cover.png。</span>
+            <p>{cover?.preview_url ? "已生成封面图" : cover ? "待生成封面图" : "等待脚本"}</p>
+            <span>
+              {cover?.preview_url
+                ? `PNG 已生成：${cover.width}x${cover.height}`
+                : "点击生成封面图后，草稿素材包会写入 4:3 cover.png。"}
+            </span>
           </div>
           <div className="pixel-card side-note">
             <h2>下一步</h2>

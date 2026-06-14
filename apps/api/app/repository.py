@@ -129,6 +129,7 @@ class EpisodeRepository:
             "status": episode.status.value,
             "intake_mode": episode.intake_mode.value,
             "content_template_id": episode.content_template_id,
+            "cover_template_id": episode.cover_template_id,
             "topics": [
                 {
                     "id": topic.id,
@@ -240,6 +241,7 @@ class EpisodeRepository:
             status=EpisodeStatus(str(data["status"])),
             intake_mode=EpisodeIntakeMode(str(data.get("intake_mode") or "planned")),
             content_template_id=str(data.get("content_template_id") or "video_diary"),
+            cover_template_id=str(data.get("cover_template_id") or "pixel_diary"),
             topics=[
                 TopicCandidate(
                     id=str(topic["id"]),

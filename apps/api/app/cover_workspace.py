@@ -31,6 +31,13 @@ def cover_templates() -> list[dict[str, str]]:
     return [dict(item) for item in _COVER_TEMPLATES]
 
 
+def cover_template(template_id: str) -> dict[str, str]:
+    for template in _COVER_TEMPLATES:
+        if template["template_id"] == template_id:
+            return dict(template)
+    raise ValueError("unknown cover template")
+
+
 def cover_copy_from_fields(headline: str, subline: str, tag: str) -> str:
     lines = [headline.strip(), subline.strip(), tag.strip()]
     return "\n".join(line for line in lines if line)
@@ -47,7 +54,7 @@ def cover_draft_from_episode(episode: Episode) -> dict[str, object]:
     headline = lines[0] if len(lines) > 0 else episode.script.title_options[0]
     subline = lines[1] if len(lines) > 1 else "今天的AI产品观察"
     tag = lines[2] if len(lines) > 2 else f"DAY {episode.day_number}"
-    template = cover_templates()[0]
+    template = cover_template(episode.cover_template_id)
     return {
         "episode_id": episode.id,
         "headline": headline,

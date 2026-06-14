@@ -291,6 +291,20 @@ class CoverDraftResponse(BaseModel):
     preview_aspect_ratio: str
     cover_copy: str
     templates: list[CoverTemplateResponse]
+    cover_path: str | None = None
+    preview_url: str | None = None
+    cover_source: str = "none"
+    width: int | None = None
+    height: int | None = None
+
+
+class CoverArtifactResponse(BaseModel):
+    episode_id: str
+    cover_path: str
+    preview_url: str
+    cover_source: str
+    width: int
+    height: int
 
 
 class CoverUpdateRequest(BaseModel):

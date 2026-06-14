@@ -4,8 +4,6 @@ import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
-
 from app.asr import (
     ASRConfigurationError,
     ASRTimeoutError,
@@ -13,6 +11,7 @@ from app.asr import (
     ASRTranscriptionError,
     transcription_to_srt,
 )
+from app.cover_artifacts import write_cover as write_cover_artifact
 from app.draft_models import DraftAsset
 from app.media_commands import build_extract_audio_command
 from app.models import Episode, ScriptPackage
@@ -201,47 +200,4 @@ def format_srt_time(milliseconds: int) -> str:
 
 
 def write_cover(cover_path: Path, episode: Episode) -> None:
-    image = Image.new("RGB", (1200, 900), "#fffaf0")
-    draw = ImageDraw.Draw(image)
-    title_font = font(68)
-    body_font = font(38)
-    small_font = font(28)
-
-    draw.rectangle((0, 0, 1200, 900), fill="#fffaf0")
-    draw.rectangle((42, 42, 1158, 858), outline="#111827", width=6)
-    draw.rectangle((64, 64, 1136, 132), fill="#e8f1ff", outline="#111827", width=4)
-    draw.text((86, 82), "AI VIDEO DIARY", font=small_font, fill="#1d4ed8")
-    draw.text((898, 82), f"DAY {episode.day_number}", font=small_font, fill="#111827")
-
-    cover_lines = (
-        episode.script.cover_copy.splitlines()
-        if episode.script and episode.script.cover_copy
-        else [f"AI视频日记 第{episode.day_number}天"]
-    )
-    headline = cover_lines[0]
-    subline = cover_lines[1] if len(cover_lines) > 1 else "今天的AI产品观察"
-    for index, line in enumerate(textwrap.wrap(headline, width=13)[:2]):
-        draw.text((92, 210 + index * 84), line, font=title_font, fill="#111827")
-    for index, line in enumerate(textwrap.wrap(subline, width=22)[:3]):
-        draw.text((96, 430 + index * 52), line, font=body_font, fill="#374151")
-
-    draw.rectangle((94, 680, 420, 760), fill="#2563eb", outline="#111827", width=4)
-    draw.text((128, 704), "待导入剪映", font=body_font, fill="#ffffff")
-    draw.rectangle((804, 600, 1036, 790), fill="#dbeafe", outline="#111827", width=5)
-    draw.rectangle((850, 640, 990, 720), fill="#ffffff", outline="#111827", width=4)
-    draw.rectangle((884, 670, 902, 690), fill="#2563eb")
-    draw.rectangle((936, 670, 954, 690), fill="#2563eb")
-    draw.rectangle((910, 742, 958, 758), fill="#111827")
-    image.save(cover_path)
-
-
-def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-    ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return ImageFont.truetype(candidate, size=size)
-    return ImageFont.load_default()
+    write_cover_artifact(cover_path, episode)
