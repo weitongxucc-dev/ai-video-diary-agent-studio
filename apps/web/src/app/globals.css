@@ -2351,35 +2351,111 @@ textarea {
 
 .script-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 304px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
-  padding: 12px;
+  padding: 10px 12px 24px;
+  padding-bottom: 24px;
 }
 
 .script-edit-owner {
   display: contents;
 }
 
-.script-main {
+.script-main,
+.script-editor-shell {
   display: grid;
   min-width: 0;
+  gap: 10px;
+}
+
+.script-editor-toolbar {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  background: #e5dfc7;
+}
+
+.script-editor-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 324px;
   gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.script-copy-column {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-bottom: 18px;
+}
+
+.script-inspector {
+  position: sticky;
+  top: 10px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+  max-height: calc(100vh - 368px);
+  overflow-y: auto;
+  padding: 10px;
+  border-color: var(--line);
+  background: var(--panel-quiet);
+}
+
+.script-inspector-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 2px solid var(--border-strong);
+  background: var(--bg-inset);
+  padding: 10px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.script-inspector-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 2px solid var(--border-strong);
+  padding-bottom: 8px;
+  font-family: var(--font-pixel);
+  font-weight: 900;
+}
+
+.script-inspector-head span {
+  color: var(--blue);
+}
+
+.script-inspector-head strong {
+  display: inline-grid;
+  min-width: 26px;
+  height: 22px;
+  place-items: center;
+  border: 2px solid var(--border-strong);
+  background: var(--blue-soft);
+  box-shadow: var(--shadow-hard-small);
 }
 
 .script-dashboard {
   display: grid;
-  grid-template-columns: repeat(4, minmax(118px, 1fr));
-  gap: 8px;
-  padding: 10px;
+  grid-template-columns: repeat(4, minmax(76px, 1fr));
+  gap: 6px;
+  min-width: 0;
 }
 
 .script-dashboard-stat {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   border: 2px solid var(--border-strong);
   background: var(--bg-inset);
-  padding: 8px;
+  padding: 6px;
   box-shadow: var(--shadow-hard-small);
 }
 
@@ -2393,7 +2469,7 @@ textarea {
 .script-dashboard-stat strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2401,11 +2477,11 @@ textarea {
 
 .script-primary-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(220px, 320px) auto;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(180px, 260px) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  padding: 10px;
+  padding: 0;
 }
 
 .script-primary-actions > div {
@@ -2423,8 +2499,8 @@ textarea {
 .script-primary-actions p {
   color: var(--muted);
   font-family: var(--font-readable);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .script-primary-actions .script-control-form {
@@ -2433,13 +2509,21 @@ textarea {
   align-items: center;
 }
 
+.script-confirm-form {
+  display: contents;
+}
+
 .script-section-nav {
   display: flex;
-  grid-column: 1 / -1;
   gap: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
   overflow-x: auto;
-  border-top: 2px solid var(--border-strong);
-  padding-top: 8px;
+  border: 2px solid var(--border-strong);
+  background: #d8d0be;
+  padding: 6px;
+  box-shadow: var(--shadow-hard-small);
 }
 
 .script-section-nav a {
@@ -2500,6 +2584,7 @@ textarea {
   background: #fffdf9;
   box-shadow: var(--shadow-hard-small);
   scroll-margin-top: 120px;
+  scroll-margin-bottom: 112px;
 }
 
 .script-section-header {
@@ -5881,6 +5966,17 @@ textarea {
 
   .script-side {
     width: 100%;
+  }
+
+  .script-editor-toolbar,
+  .script-editor-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .script-inspector {
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .script-dashboard {

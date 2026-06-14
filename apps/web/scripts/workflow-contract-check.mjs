@@ -193,6 +193,51 @@ for (const required of ["script-primary-actions", "script-secondary-drawer", "sc
   }
 }
 
+for (const required of [
+  "script-editor-shell",
+  "script-editor-toolbar",
+  "script-copy-column",
+  "script-inspector",
+  "script-confirm-form",
+]) {
+  if (!scriptPage.includes(required)) {
+    failures.push(`/script must use an editor-first layout with ${required}.`);
+  }
+}
+
+for (const required of [
+  "script-editor-shell",
+  "script-editor-toolbar",
+  "script-copy-column",
+  "script-inspector",
+]) {
+  if (!css.includes(`.${required}`)) {
+    failures.push(`/script editor-first layout must style ${required}.`);
+  }
+}
+
+const scriptPageRule = css.match(/\.script-page\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (!scriptPageRule.includes("padding-bottom: 24px")) {
+  failures.push("/script page must leave safe space above the command dock.");
+}
+
+const scriptInspectorRule = css.match(/\.script-inspector\s*\{[\s\S]*?\}/)?.[0] ?? "";
+for (const required of ["position: sticky", "max-height: calc(100vh - 368px)", "overflow-y: auto"]) {
+  if (!scriptInspectorRule.includes(required)) {
+    failures.push(`/script inspector must stay usable beside long scripts with ${required}.`);
+  }
+}
+
+const scriptCopyColumnRule = css.match(/\.script-copy-column\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (!scriptCopyColumnRule.includes("padding-bottom: 18px")) {
+  failures.push("/script copy column must add bottom space so the command dock does not obscure the final section.");
+}
+
+const scriptSectionRule = css.match(/\.script-section\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (!scriptSectionRule.includes("scroll-margin-bottom: 112px")) {
+  failures.push("/script sections must leave scroll margin above the command dock.");
+}
+
 for (const required of ["searchParams", "script_error", "script-error-banner"]) {
   if (!scriptPage.includes(required)) {
     failures.push(`/script must show recoverable script action errors with ${required}.`);
