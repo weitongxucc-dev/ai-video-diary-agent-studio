@@ -40,10 +40,14 @@ export function TopicCandidateCard({
   active: boolean;
   topic: TopicCandidate;
 }) {
+  const feedbackLabel = getFeedbackLabel(topic.feedback);
+
   return (
     <Link
       className={`topic-card pixel-card${active ? " selected" : ""}`}
       href={`/topics?topic_id=${encodeURIComponent(topic.id)}`}
+      aria-current={active ? "true" : undefined}
+      aria-label={`${active ? "当前选题" : "候选选题"}：${topic.title}，评分 ${topic.score}，${feedbackLabel}`}
     >
       <div className="topic-card-header">
         <div className="topic-card-meta">
@@ -60,7 +64,7 @@ export function TopicCandidateCard({
             ))}
           </span>
         </div>
-        <span className="topic-card-status">{getFeedbackLabel(topic.feedback)}</span>
+        <span className="topic-card-status">{feedbackLabel}</span>
       </div>
       <h2>{topic.title}</h2>
       <p>{topic.core_viewpoint}</p>

@@ -235,6 +235,10 @@ if (
   failures.push("Script sections must submit feedback to the API.");
 }
 
+if (!scriptPage.includes("aria-pressed")) {
+  failures.push("Script section feedback buttons must expose their pressed state with aria-pressed.");
+}
+
 if (!homePage.includes("selected_topic_id")) {
   failures.push("The workbench must distinguish unapproved topics from approved scripts.");
 }
@@ -332,9 +336,28 @@ if (appShell.indexOf("main-scroll") > appShell.indexOf("voice-command-dock")) {
   failures.push("AppShell must render scrollable page content before the persistent voice dock.");
 }
 
+for (const required of [
+  "skip-link",
+  'href="#main-content"',
+  'id="main-content"',
+  'role="status"',
+  'aria-live="polite"',
+  'aria-atomic="true"',
+]) {
+  if (!appShell.includes(required)) {
+    failures.push(`AppShell must expose baseline accessibility affordance ${required}.`);
+  }
+}
+
 for (const required of ["sourceShortLabel", "topic-card-meta", "source-badge-list", "OB", "PH"]) {
   if (!topicCard.includes(required)) {
     failures.push(`Topic candidate cards must colocate compact source badges with the score using ${required}.`);
+  }
+}
+
+for (const required of ["aria-current", "aria-label", "当前选题"]) {
+  if (!topicCard.includes(required)) {
+    failures.push(`Topic candidate cards must expose the active selection semantically with ${required}.`);
   }
 }
 
@@ -365,6 +388,12 @@ for (const required of [
 ]) {
   if (!retroChrome.includes(required)) {
     failures.push(`RetroChrome must expose real top menu surface ${required}.`);
+  }
+}
+
+for (const required of ['"use client"', "onKeyDown", "Escape", "querySelector", "open = false"]) {
+  if (!retroChrome.includes(required)) {
+    failures.push(`RetroChrome system menus must support keyboard dismissal with ${required}.`);
   }
 }
 
@@ -415,6 +444,12 @@ for (const required of [".voice-command-console", ".edit-plan-page", ".video-pre
 for (const required of [".main-area", ".main-scroll", ".voice-command-dock", "grid-template-rows: auto minmax(0, 1fr) auto"]) {
   if (!css.includes(required)) {
     failures.push(`globals.css must define one-screen shell layout with ${required}.`);
+  }
+}
+
+for (const required of [".skip-link", ".skip-link:focus", ".sr-only", ":focus-visible"]) {
+  if (!css.includes(required)) {
+    failures.push(`globals.css must define baseline accessibility affordance ${required}.`);
   }
 }
 

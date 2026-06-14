@@ -169,6 +169,45 @@ textarea {
   letter-spacing: 0;
 }
 
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  border: 2px solid var(--line);
+  background: var(--yellow);
+  color: var(--ink);
+  padding: 0 12px;
+  box-shadow: var(--pixel-shadow-small);
+  font-family: var(--font-pixel);
+  font-weight: 900;
+  text-decoration: none;
+  transform: translateY(-160%);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
 .pixel-card {
   border: 2px solid var(--line);
   border-radius: 0;

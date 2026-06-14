@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import type { KeyboardEvent } from "react";
 import { GlobalSearchBox } from "@/components/GlobalSearchBox";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 
@@ -63,6 +66,23 @@ function WindowButton({ label, title }: { label: string; title: string }) {
   );
 }
 
+function closeOpenSystemMenu(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== "Escape") {
+    return;
+  }
+
+  const openMenu = event.currentTarget.querySelector<HTMLDetailsElement>(
+    ".system-menu-group[open]"
+  );
+  if (!openMenu) {
+    return;
+  }
+
+  event.preventDefault();
+  openMenu.open = false;
+  openMenu.querySelector<HTMLElement>("summary")?.focus();
+}
+
 export function RetroChrome({ todayLabel }: RetroChromeProps) {
   return (
     <>
@@ -79,7 +99,7 @@ export function RetroChrome({ todayLabel }: RetroChromeProps) {
         </div>
       </header>
 
-      <nav className="system-menubar" aria-label="系统菜单">
+      <nav className="system-menubar" aria-label="系统菜单" onKeyDown={closeOpenSystemMenu}>
         {chromeMenuGroups.map((group) => (
           <details className="system-menu-group" key={group.label} name="system-menu">
             <summary>{group.label}</summary>

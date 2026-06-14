@@ -55,6 +55,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="retro-desktop-shell">
+      <a className="skip-link" href="#main-content">
+        跳到主内容
+      </a>
       <div className="retro-window-frame">
         <RetroChrome todayLabel={todayLabel} />
         <div className="app-shell">
@@ -109,7 +112,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </aside>
 
-          <main className="main-area">
+          <main className="main-area" id="main-content" tabIndex={-1}>
+            <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+              当前页面：{currentNavItem.label}
+            </div>
             <header className="topbar">
               <div className="breadcrumb">{currentNavItem.label}</div>
               <div className="topbar-center" suppressHydrationWarning>

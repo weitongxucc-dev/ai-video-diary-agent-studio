@@ -309,6 +309,7 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
                             name="value"
                             value="up"
                             aria-label="点赞反馈"
+                            aria-pressed={section.feedback === "up"}
                           >
                             <PixelIcon name="thumb-up" />
                             <span>赞</span>
@@ -324,6 +325,7 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
                             name="value"
                             value="down"
                             aria-label="点踩反馈"
+                            aria-pressed={section.feedback === "down"}
                           >
                             <PixelIcon name="thumb-down" />
                             <span>踩</span>
