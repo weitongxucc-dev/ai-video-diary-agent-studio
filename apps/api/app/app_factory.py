@@ -35,6 +35,7 @@ from app.routers import knowledge as knowledge_router
 from app.routers import preferences as preferences_router
 from app.routers import retake_reports as retake_reports_router
 from app.routers import settings as settings_router
+from app.routers import same_style as same_style_router
 from app.routers import sources as sources_router
 from app.routers import system as system_router
 from app.routers import videos as videos_router
@@ -203,6 +204,7 @@ def include_routers(app: FastAPI) -> None:
     app.include_router(system_router.create_router(get_context))
     app.include_router(diagnostics_router.create_router(get_context))
     app.include_router(settings_router.create_router(get_context))
+    app.include_router(same_style_router.create_router(get_context))
     app.include_router(sources_router.create_router(get_context))
     app.include_router(creator_profile_router.create_router(get_context))
     app.include_router(knowledge_router.create_router(get_context))

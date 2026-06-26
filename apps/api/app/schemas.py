@@ -275,6 +275,283 @@ class ContentTemplatesResponse(BaseModel):
     templates: list[ContentTemplateResponse]
 
 
+SameStyleStageStatus = Literal["ready", "partial", "missing"]
+
+
+class SameStyleCapabilityResponse(BaseModel):
+    id: str
+    label: str
+    status: SameStyleStageStatus
+    detail: str
+
+
+class SameStyleWorkflowSectionResponse(BaseModel):
+    id: str
+    label: str
+    status: SameStyleStageStatus
+    engine: str
+    module_name: str
+    description: str
+    inputs: list[str]
+    outputs: list[str]
+    primary_action: str
+
+
+class SameStyleWorkflowResponse(BaseModel):
+    title: str
+    summary: str
+    sections: list[SameStyleWorkflowSectionResponse]
+    capabilities: list[SameStyleCapabilityResponse]
+    safety_rules: list[str]
+
+
+class SameStyleReferenceJobRequest(BaseModel):
+    reference_url: str
+    product_name: str = ""
+    product_brief: str = ""
+    product_image_path: str = ""
+    aspect_ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
+    rewrite_mode: Literal["auto", "custom", "shot"] = "auto"
+
+
+class SameStyleShotManifestItemResponse(BaseModel):
+    start_ms: int
+    end_ms: int
+    text: str
+    purpose: str
+
+
+class SameStyleReferenceFrameResponse(BaseModel):
+    index: int
+    path: str
+    purpose: str
+
+
+class SameStyleScriptDraftSectionResponse(BaseModel):
+    title: str
+    estimated_seconds: int
+    content: str
+
+
+class SameStyleScriptDraftResponse(BaseModel):
+    hook: str
+    sections: list[SameStyleScriptDraftSectionResponse]
+    title_options: list[str]
+    cover_copy: str
+    publish_copy: str
+    comment_prompt: str
+
+
+class SameStyleReferenceJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["download_required", "audio_ready", "transcribed", "failed"]
+    message: str
+    source_type: Literal["external_url", "local_video"]
+    reference_url: str
+    local_video_path: str | None = None
+    workspace_path: str | None = None
+    audio_path: str | None = None
+    subtitle_path: str | None = None
+    reference_grid_path: str | None = None
+    product_image_path: str | None = None
+    product_reference_grid_path: str | None = None
+    manifest_path: str | None = None
+    transcript: str | None = None
+    shot_manifest: list[SameStyleShotManifestItemResponse] = Field(default_factory=list)
+    reference_frames: list[SameStyleReferenceFrameResponse] = Field(default_factory=list)
+    script_draft: SameStyleScriptDraftResponse | None = None
+
+
+class SameStyleVideoJobRequest(BaseModel):
+    reference_job_id: str
+    prompt: str = ""
+    aspect_ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
+    duration_seconds: int = Field(default=5, ge=3, le=15)
+
+
+class SameStyleVideoJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["configuration_required", "submitted", "completed", "failed"]
+    message: str
+    reference_job_id: str
+    reference_grid_path: str | None = None
+    prompt: str
+    aspect_ratio: Literal["9:16", "1:1", "16:9"]
+    duration_seconds: int
+    provider_job_id: str | None = None
+    video_path: str | None = None
+    manifest_path: str
+
+
+class SameStyleAudioJobRequest(BaseModel):
+    reference_job_id: str
+    text: str = ""
+    voice_id: str = ""
+    reference_audio_path: str = ""
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+class SameStyleAudioJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["configuration_required", "submitted", "completed", "failed"]
+    message: str
+    reference_job_id: str
+    text: str
+    voice_id: str
+    reference_audio_path: str | None = None
+    speed: float
+    provider_job_id: str | None = None
+    audio_path: str | None = None
+    duration_seconds: float | None = None
+    manifest_path: str
+
+
+class SameStyleDigitalHumanJobRequest(BaseModel):
+    audio_job_id: str
+    avatar_id: str = ""
+    aspect_ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
+
+
+class SameStyleDigitalHumanJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["configuration_required", "submitted", "completed", "failed"]
+    message: str
+    audio_job_id: str
+    audio_path: str | None = None
+    avatar_id: str
+    aspect_ratio: Literal["9:16", "1:1", "16:9"]
+    provider_job_id: str | None = None
+    video_path: str | None = None
+    manifest_path: str
+
+
+class SameStyleSubtitleJobRequest(BaseModel):
+    reference_job_id: str
+    audio_job_id: str = ""
+    style: str = "douyin_clear"
+    font_name: str = "PingFang SC"
+    font_color: str = "#fff4d8"
+    outline_color: str = "#111111"
+    max_duration_seconds: int = Field(default=60, ge=5, le=600)
+
+
+class SameStyleSubtitleJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["completed", "failed"]
+    message: str
+    reference_job_id: str
+    audio_job_id: str | None = None
+    subtitle_path: str | None = None
+    subtitle_source: str
+    style: str
+    font_name: str
+    font_color: str
+    outline_color: str
+    max_duration_seconds: int
+    manifest_path: str
+
+
+class SameStyleBgmJobRequest(BaseModel):
+    digital_human_job_id: str = ""
+    video_job_id: str = ""
+    strategy: Literal["none", "upload", "library"] = "none"
+    bgm_path: str = ""
+    volume: float = Field(default=0.18, ge=0.0, le=1.0)
+
+
+class SameStyleBgmJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["completed", "failed"]
+    message: str
+    digital_human_job_id: str | None = None
+    video_job_id: str | None = None
+    source_video_path: str | None = None
+    bgm_source: str
+    bgm_path: str | None = None
+    mixed_video_path: str | None = None
+    strategy: Literal["none", "upload", "library"]
+    volume: float
+    manifest_path: str
+
+
+class SameStylePublishCopyJobRequest(BaseModel):
+    reference_job_id: str
+    platform: str = "douyin"
+    audience: str = ""
+
+
+class SameStylePublishCopyJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["completed", "failed"]
+    message: str
+    reference_job_id: str
+    platform: str
+    audience: str
+    title_options: list[str]
+    tags: list[str]
+    publish_copy: str
+    cover_copy: str
+    comment_prompt: str
+    manifest_path: str
+
+
+class SameStyleCoverJobRequest(BaseModel):
+    reference_job_id: str
+    publish_copy_job_id: str = ""
+    template_id: str = "pixel_diary"
+
+
+class SameStyleCoverJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["completed", "failed"]
+    message: str
+    reference_job_id: str
+    publish_copy_job_id: str | None = None
+    cover_path: str | None = None
+    cover_source: str
+    cover_copy: str
+    template_id: str
+    width: int | None = None
+    height: int | None = None
+    manifest_path: str
+
+
+class SameStylePublishJobRequest(BaseModel):
+    bgm_job_id: str = ""
+    subtitle_job_id: str = ""
+    cover_job_id: str = ""
+    publish_copy_job_id: str = ""
+    platforms: list[str] = Field(default_factory=list)
+    auto_submit: bool = False
+
+
+class SameStylePublishJobResponse(BaseModel):
+    id: str
+    module_name: str
+    status: Literal["ready_for_review", "submitted", "published", "failed"]
+    message: str
+    bgm_job_id: str | None = None
+    subtitle_job_id: str | None = None
+    cover_job_id: str | None = None
+    publish_copy_job_id: str | None = None
+    final_video_path: str | None = None
+    provider_job_id: str | None = None
+    cover_path: str | None = None
+    title: str
+    publish_copy: str
+    tags: list[str]
+    platforms: list[str]
+    manifest_path: str
+
+
 class CoverTemplateResponse(BaseModel):
     template_id: str
     name: str
@@ -631,6 +908,23 @@ class RuntimeSettingsResponse(BaseModel):
 class RuntimeSettingsUpdateRequest(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None
+    seedance_api_key: str | None = None
+    seedance_base_url: str | None = None
+    seedance_status_url_template: str | None = None
+    seedance_model: str | None = None
+    cosyvoice_api_key: str | None = None
+    cosyvoice_base_url: str | None = None
+    cosyvoice_status_url_template: str | None = None
+    cosyvoice_model: str | None = None
+    cosyvoice_voice_id: str | None = None
+    heygem_api_key: str | None = None
+    heygem_base_url: str | None = None
+    heygem_status_url_template: str | None = None
+    heygem_avatar_id: str | None = None
+    social_auto_upload_api_key: str | None = None
+    social_auto_upload_base_url: str | None = None
+    social_auto_upload_status_url_template: str | None = None
+    yt_dlp_cookies_path: str | None = None
     product_hunt_token: str | None = None
     tencentcloud_secret_id: str | None = None
     tencentcloud_secret_key: str | None = None
@@ -644,6 +938,7 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     video_inbox_path: str | None = None
     video_output_path: str | None = None
     draft_output_path: str | None = None
+    bgm_library_path: str | None = None
     jianying_draft_root_path: str | None = None
     database_path: str | None = None
     topic_source_urls: list[str] | None = None

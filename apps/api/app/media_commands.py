@@ -144,6 +144,97 @@ def build_extract_audio_command(source_path: Path, audio_path: Path) -> list[str
     ]
 
 
+def build_extract_reference_frames_command(
+    source_path: Path,
+    output_pattern: Path,
+    *,
+    fps: int = 1,
+) -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        f"fps={fps},scale=720:-2:force_original_aspect_ratio=decrease",
+        "-q:v",
+        "3",
+        str(output_pattern),
+    ]
+
+
+def build_mix_bgm_command(
+    source_video_path: Path,
+    bgm_path: Path,
+    output_path: Path,
+    *,
+    bgm_volume: float,
+) -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_video_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(bgm_path),
+        "-filter_complex",
+        (
+            f"[1:a]volume={bgm_volume}[bgm];"
+            "[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]"
+        ),
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-shortest",
+        *DEFAULT_VIDEO_CODEC_ARGS,
+        str(output_path),
+    ]
+
+
+def build_burn_subtitle_command(
+    source_video_path: Path,
+    subtitle_path: Path,
+    output_path: Path,
+    *,
+    font_name: str = "PingFang SC",
+    font_color: str = "#fff4d8",
+    outline_color: str = "#111111",
+) -> list[str]:
+    force_style = (
+        f"FontName={font_name},"
+        f"PrimaryColour={_ass_color(font_color)},"
+        f"OutlineColour={_ass_color(outline_color)},"
+        "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=70"
+    )
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_video_path),
+        "-vf",
+        f"subtitles={_ffmpeg_filter_path(subtitle_path)}:force_style='{force_style}'",
+        *DEFAULT_VIDEO_CODEC_ARGS,
+        str(output_path),
+    ]
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def _ass_color(hex_color: str) -> str:
+    value = hex_color.strip().lstrip("#")
+    if len(value) != 6:
+        value = "ffffff"
+    red = value[0:2]
+    green = value[2:4]
+    blue = value[4:6]
+    return f"&H00{blue}{green}{red}"
+
+
 def _optional_simple_filters(
     *,
     speed: float | None,

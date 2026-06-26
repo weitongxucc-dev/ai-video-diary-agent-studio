@@ -26,6 +26,274 @@ export type GenerationJobStatus =
   | "failed"
   | "interrupted";
 
+export type SameStyleStageStatus = "ready" | "partial" | "missing";
+
+export type SameStyleCapability = {
+  id: string;
+  label: string;
+  status: SameStyleStageStatus;
+  detail: string;
+};
+
+export type SameStyleWorkflowSection = {
+  id: string;
+  label: string;
+  status: SameStyleStageStatus;
+  engine: string;
+  module_name: string;
+  description: string;
+  inputs: string[];
+  outputs: string[];
+  primary_action: string;
+};
+
+export type SameStyleWorkflow = {
+  title: string;
+  summary: string;
+  sections: SameStyleWorkflowSection[];
+  capabilities: SameStyleCapability[];
+  safety_rules: string[];
+};
+
+export type SameStyleReferenceJobRequest = {
+  reference_url: string;
+  product_name?: string;
+  product_brief?: string;
+  product_image_path?: string;
+  aspect_ratio?: "9:16" | "1:1" | "16:9";
+  rewrite_mode?: "auto" | "custom" | "shot";
+};
+
+export type SameStyleReferenceJob = {
+  id: string;
+  module_name: string;
+  status: "download_required" | "audio_ready" | "transcribed" | "failed";
+  message: string;
+  source_type: "external_url" | "local_video";
+  reference_url: string;
+  local_video_path: string | null;
+  workspace_path: string | null;
+  audio_path: string | null;
+  subtitle_path: string | null;
+  reference_grid_path: string | null;
+  product_image_path: string | null;
+  product_reference_grid_path: string | null;
+  manifest_path: string | null;
+  transcript: string | null;
+  shot_manifest: Array<{
+    start_ms: number;
+    end_ms: number;
+    text: string;
+    purpose: string;
+  }>;
+  reference_frames: Array<{
+    index: number;
+    path: string;
+    purpose: string;
+  }>;
+  script_draft: {
+    hook: string;
+    sections: Array<{
+      title: string;
+      estimated_seconds: number;
+      content: string;
+    }>;
+    title_options: string[];
+    cover_copy: string;
+    publish_copy: string;
+    comment_prompt: string;
+  } | null;
+};
+
+export type SameStyleVideoJobRequest = {
+  reference_job_id: string;
+  prompt?: string;
+  aspect_ratio?: "9:16" | "1:1" | "16:9";
+  duration_seconds?: number;
+};
+
+export type SameStyleVideoJob = {
+  id: string;
+  module_name: string;
+  status: "configuration_required" | "submitted" | "completed" | "failed";
+  message: string;
+  reference_job_id: string;
+  reference_grid_path: string | null;
+  prompt: string;
+  aspect_ratio: "9:16" | "1:1" | "16:9";
+  duration_seconds: number;
+  provider_job_id: string | null;
+  video_path: string | null;
+  manifest_path: string;
+};
+
+export type SameStyleAudioJobRequest = {
+  reference_job_id: string;
+  text?: string;
+  voice_id?: string;
+  reference_audio_path?: string;
+  speed?: number;
+};
+
+export type SameStyleAudioJob = {
+  id: string;
+  module_name: string;
+  status: "configuration_required" | "submitted" | "completed" | "failed";
+  message: string;
+  reference_job_id: string;
+  text: string;
+  voice_id: string;
+  reference_audio_path: string | null;
+  speed: number;
+  provider_job_id: string | null;
+  audio_path: string | null;
+  duration_seconds: number | null;
+  manifest_path: string;
+};
+
+export type SameStyleDigitalHumanJobRequest = {
+  audio_job_id: string;
+  avatar_id?: string;
+  aspect_ratio?: "9:16" | "1:1" | "16:9";
+};
+
+export type SameStyleDigitalHumanJob = {
+  id: string;
+  module_name: string;
+  status: "configuration_required" | "submitted" | "completed" | "failed";
+  message: string;
+  audio_job_id: string;
+  audio_path: string | null;
+  avatar_id: string;
+  aspect_ratio: "9:16" | "1:1" | "16:9";
+  provider_job_id: string | null;
+  video_path: string | null;
+  manifest_path: string;
+};
+
+export type SameStyleSubtitleJobRequest = {
+  reference_job_id: string;
+  audio_job_id?: string;
+  style?: string;
+  font_name?: string;
+  font_color?: string;
+  outline_color?: string;
+  max_duration_seconds?: number;
+};
+
+export type SameStyleSubtitleJob = {
+  id: string;
+  module_name: string;
+  status: "completed" | "failed";
+  message: string;
+  reference_job_id: string;
+  audio_job_id: string | null;
+  subtitle_path: string | null;
+  subtitle_source: string;
+  style: string;
+  font_name: string;
+  font_color: string;
+  outline_color: string;
+  max_duration_seconds: number;
+  manifest_path: string;
+};
+
+export type SameStyleBgmJobRequest = {
+  digital_human_job_id?: string;
+  video_job_id?: string;
+  strategy?: "none" | "upload" | "library";
+  bgm_path?: string;
+  volume?: number;
+};
+
+export type SameStyleBgmJob = {
+  id: string;
+  module_name: string;
+  status: "completed" | "failed";
+  message: string;
+  digital_human_job_id: string | null;
+  video_job_id: string | null;
+  source_video_path: string | null;
+  bgm_source: string;
+  bgm_path: string | null;
+  mixed_video_path: string | null;
+  strategy: "none" | "upload" | "library";
+  volume: number;
+  manifest_path: string;
+};
+
+export type SameStylePublishCopyJobRequest = {
+  reference_job_id: string;
+  platform?: string;
+  audience?: string;
+};
+
+export type SameStylePublishCopyJob = {
+  id: string;
+  module_name: string;
+  status: "completed" | "failed";
+  message: string;
+  reference_job_id: string;
+  platform: string;
+  audience: string;
+  title_options: string[];
+  tags: string[];
+  publish_copy: string;
+  cover_copy: string;
+  comment_prompt: string;
+  manifest_path: string;
+};
+
+export type SameStyleCoverJobRequest = {
+  reference_job_id: string;
+  publish_copy_job_id?: string;
+  template_id?: string;
+};
+
+export type SameStyleCoverJob = {
+  id: string;
+  module_name: string;
+  status: "completed" | "failed";
+  message: string;
+  reference_job_id: string;
+  publish_copy_job_id: string | null;
+  cover_path: string | null;
+  cover_source: string;
+  cover_copy: string;
+  template_id: string;
+  width: number | null;
+  height: number | null;
+  manifest_path: string;
+};
+
+export type SameStylePublishJobRequest = {
+  bgm_job_id?: string;
+  subtitle_job_id?: string;
+  cover_job_id?: string;
+  publish_copy_job_id?: string;
+  platforms?: string[];
+  auto_submit?: boolean;
+};
+
+export type SameStylePublishJob = {
+  id: string;
+  module_name: string;
+  status: "ready_for_review" | "submitted" | "published" | "failed";
+  message: string;
+  bgm_job_id: string | null;
+  subtitle_job_id: string | null;
+  cover_job_id: string | null;
+  publish_copy_job_id: string | null;
+  final_video_path: string | null;
+  provider_job_id: string | null;
+  cover_path: string | null;
+  title: string;
+  publish_copy: string;
+  tags: string[];
+  platforms: string[];
+  manifest_path: string;
+};
+
 export type EpisodeIntakeMode = "planned" | "ad_hoc_video" | "ad_hoc_video_batch";
 
 export type FeedbackValue = "up" | "down";
@@ -547,6 +815,23 @@ export type RuntimeSettings = {
 export type RuntimeSettingsUpdate = {
   deepseek_api_key?: string;
   deepseek_model?: string;
+  seedance_api_key?: string;
+  seedance_base_url?: string;
+  seedance_status_url_template?: string;
+  seedance_model?: string;
+  cosyvoice_api_key?: string;
+  cosyvoice_base_url?: string;
+  cosyvoice_status_url_template?: string;
+  cosyvoice_model?: string;
+  cosyvoice_voice_id?: string;
+  heygem_api_key?: string;
+  heygem_base_url?: string;
+  heygem_status_url_template?: string;
+  heygem_avatar_id?: string;
+  social_auto_upload_api_key?: string;
+  social_auto_upload_base_url?: string;
+  social_auto_upload_status_url_template?: string;
+  yt_dlp_cookies_path?: string;
   product_hunt_token?: string;
   tencentcloud_secret_id?: string;
   tencentcloud_secret_key?: string;
@@ -560,6 +845,7 @@ export type RuntimeSettingsUpdate = {
   video_inbox_path?: string;
   video_output_path?: string;
   draft_output_path?: string;
+  bgm_library_path?: string;
   jianying_draft_root_path?: string;
   database_path?: string;
   topic_source_urls?: string[];

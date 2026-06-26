@@ -7,6 +7,7 @@ import { PixelIcon } from "@/components/PixelIcon";
 const routeByKeyword: Array<[string[], string]> = [
   [["工作台", "today", "home"], "/"],
   [["选题", "topic"], "/topics"],
+  [["同款", "爆款", "复刻", "same style"], "/same-style-script"],
   [["口播", "脚本", "script"], "/script"],
   [["封面", "cover"], "/cover"],
   [["视频", "video"], "/video"],

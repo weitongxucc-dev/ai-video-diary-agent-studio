@@ -6,6 +6,15 @@ import {
   approveScript,
   approveTopic,
   confirmPreference,
+  createSameStyleAudioJob,
+  createSameStyleBgmJob,
+  createSameStyleCoverJob,
+  createSameStyleDigitalHumanJob,
+  createSameStylePublishCopyJob,
+  createSameStylePublishJob,
+  createSameStyleReferenceJob,
+  createSameStyleSubtitleJob,
+  createSameStyleVideoJob,
   createEpisodeDraft,
   createDraftPackage,
   deletePreference,
@@ -105,6 +114,30 @@ function textField(formData: FormData, key: string): string {
   const value = formData.get(key);
 
   return typeof value === "string" ? value.trim() : "";
+}
+
+function sameStyleAspectRatio(formData: FormData): "9:16" | "1:1" | "16:9" {
+  const value = textField(formData, "aspect_ratio");
+  if (value === "1:1" || value === "16:9") {
+    return value;
+  }
+  return "9:16";
+}
+
+function sameStyleRewriteMode(formData: FormData): "auto" | "custom" | "shot" {
+  const value = textField(formData, "rewrite_mode");
+  if (value === "custom" || value === "shot") {
+    return value;
+  }
+  return "auto";
+}
+
+function sameStyleBgmStrategy(formData: FormData): "none" | "upload" | "library" {
+  const value = textField(formData, "bgm_strategy");
+  if (value === "upload" || value === "library") {
+    return value;
+  }
+  return "none";
 }
 
 function multilineField(formData: FormData, key: string): string[] {
@@ -229,6 +262,332 @@ export async function generateTopicsAction(formData: FormData) {
     topicActionFailureRedirect(error);
   }
   redirect("/topics?topics_job=started");
+}
+
+export async function startSameStyleReferenceJobAction(formData: FormData) {
+  let redirectUrl = "/same-style-script?reference_status=failed";
+  try {
+    const job = await createSameStyleReferenceJob({
+      reference_url: requiredString(formData, "reference_url"),
+      product_name: textField(formData, "product_name"),
+      product_brief: textField(formData, "product_brief"),
+      product_image_path: textField(formData, "product_image_path"),
+      aspect_ratio: sameStyleAspectRatio(formData),
+      rewrite_mode: sameStyleRewriteMode(formData),
+    });
+    redirectUrl = `/same-style-script?reference_job=${encodeURIComponent(job.id)}&reference_status=${job.status}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    redirectUrl = `/same-style-script?reference_status=failed&reference_error=${encodeURIComponent(message.slice(0, 120))}`;
+  }
+  redirect(redirectUrl);
+}
+
+export async function startSameStyleAudioJobAction(formData: FormData) {
+  const referenceJobId = requiredString(formData, "reference_job_id");
+  let redirectUrl = `/same-style-script?reference_job=${encodeURIComponent(referenceJobId)}&audio_status=failed`;
+  try {
+    const speed = Number(textField(formData, "speed") || "1");
+    const job = await createSameStyleAudioJob({
+      reference_job_id: referenceJobId,
+      text: textField(formData, "audio_text"),
+      voice_id: textField(formData, "voice_id"),
+      reference_audio_path: textField(formData, "reference_audio_path"),
+      speed: Number.isFinite(speed) ? speed : 1,
+    });
+    redirectUrl = `/same-style-script?reference_job=${encodeURIComponent(referenceJobId)}&audio_job=${encodeURIComponent(job.id)}&audio_status=${job.status}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    redirectUrl = `/same-style-script?reference_job=${encodeURIComponent(referenceJobId)}&audio_status=failed&audio_error=${encodeURIComponent(message.slice(0, 120))}`;
+  }
+  redirect(redirectUrl);
+}
+
+export async function startSameStyleDigitalHumanJobAction(formData: FormData) {
+  const referenceJobId = textField(formData, "reference_job_id");
+  const audioJobId = requiredString(formData, "audio_job_id");
+  const query = new URLSearchParams();
+  if (referenceJobId) {
+    query.set("reference_job", referenceJobId);
+  }
+  query.set("audio_job", audioJobId);
+  query.set("digital_human_status", "failed");
+
+  try {
+    const job = await createSameStyleDigitalHumanJob({
+      audio_job_id: audioJobId,
+      avatar_id: textField(formData, "avatar_id"),
+      aspect_ratio: sameStyleAspectRatio(formData),
+    });
+    query.set("digital_human_job", job.id);
+    query.set("digital_human_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("digital_human_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStyleVideoJobAction(formData: FormData) {
+  const referenceJobId = requiredString(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const query = new URLSearchParams();
+  query.set("reference_job", referenceJobId);
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  query.set("video_status", "failed");
+
+  try {
+    const durationSeconds = Number(textField(formData, "duration_seconds") || "5");
+    const job = await createSameStyleVideoJob({
+      reference_job_id: referenceJobId,
+      prompt: textField(formData, "video_prompt"),
+      aspect_ratio: sameStyleAspectRatio(formData),
+      duration_seconds: Number.isFinite(durationSeconds) ? durationSeconds : 5,
+    });
+    query.set("video_job", job.id);
+    query.set("video_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("video_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStyleSubtitleJobAction(formData: FormData) {
+  const referenceJobId = requiredString(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const videoJobId = textField(formData, "video_job_id");
+  const query = new URLSearchParams();
+  query.set("reference_job", referenceJobId);
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  if (videoJobId) {
+    query.set("video_job", videoJobId);
+  }
+  query.set("subtitle_status", "failed");
+
+  try {
+    const maxDurationSeconds = Number(
+      textField(formData, "max_duration_seconds") || "60",
+    );
+    const job = await createSameStyleSubtitleJob({
+      reference_job_id: referenceJobId,
+      audio_job_id: audioJobId,
+      style: textField(formData, "subtitle_style") || "douyin_clear",
+      font_name: textField(formData, "subtitle_font_name") || "PingFang SC",
+      font_color: textField(formData, "subtitle_font_color") || "#fff4d8",
+      outline_color: textField(formData, "subtitle_outline_color") || "#111111",
+      max_duration_seconds: Number.isFinite(maxDurationSeconds)
+        ? maxDurationSeconds
+        : 60,
+    });
+    query.set("subtitle_job", job.id);
+    query.set("subtitle_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("subtitle_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStyleBgmJobAction(formData: FormData) {
+  const referenceJobId = textField(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const videoJobId = textField(formData, "video_job_id");
+  const subtitleJobId = textField(formData, "subtitle_job_id");
+  const query = new URLSearchParams();
+  if (referenceJobId) {
+    query.set("reference_job", referenceJobId);
+  }
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  if (videoJobId) {
+    query.set("video_job", videoJobId);
+  }
+  if (subtitleJobId) {
+    query.set("subtitle_job", subtitleJobId);
+  }
+  query.set("bgm_status", "failed");
+
+  try {
+    const volume = Number(textField(formData, "bgm_volume") || "0.18");
+    const job = await createSameStyleBgmJob({
+      digital_human_job_id: digitalHumanJobId,
+      video_job_id: videoJobId,
+      strategy: sameStyleBgmStrategy(formData),
+      bgm_path: textField(formData, "bgm_path"),
+      volume: Number.isFinite(volume) ? volume : 0.18,
+    });
+    query.set("bgm_job", job.id);
+    query.set("bgm_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("bgm_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStylePublishCopyJobAction(formData: FormData) {
+  const referenceJobId = requiredString(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const videoJobId = textField(formData, "video_job_id");
+  const subtitleJobId = textField(formData, "subtitle_job_id");
+  const bgmJobId = textField(formData, "bgm_job_id");
+  const query = new URLSearchParams();
+  query.set("reference_job", referenceJobId);
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  if (videoJobId) {
+    query.set("video_job", videoJobId);
+  }
+  if (subtitleJobId) {
+    query.set("subtitle_job", subtitleJobId);
+  }
+  if (bgmJobId) {
+    query.set("bgm_job", bgmJobId);
+  }
+  query.set("publish_copy_status", "failed");
+
+  try {
+    const job = await createSameStylePublishCopyJob({
+      reference_job_id: referenceJobId,
+      platform: textField(formData, "platform") || "douyin",
+      audience: textField(formData, "audience"),
+    });
+    query.set("publish_copy_job", job.id);
+    query.set("publish_copy_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("publish_copy_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStyleCoverJobAction(formData: FormData) {
+  const referenceJobId = requiredString(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const videoJobId = textField(formData, "video_job_id");
+  const subtitleJobId = textField(formData, "subtitle_job_id");
+  const bgmJobId = textField(formData, "bgm_job_id");
+  const publishCopyJobId = textField(formData, "publish_copy_job_id");
+  const query = new URLSearchParams();
+  query.set("reference_job", referenceJobId);
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  if (videoJobId) {
+    query.set("video_job", videoJobId);
+  }
+  if (subtitleJobId) {
+    query.set("subtitle_job", subtitleJobId);
+  }
+  if (bgmJobId) {
+    query.set("bgm_job", bgmJobId);
+  }
+  if (publishCopyJobId) {
+    query.set("publish_copy_job", publishCopyJobId);
+  }
+  query.set("cover_status", "failed");
+
+  try {
+    const job = await createSameStyleCoverJob({
+      reference_job_id: referenceJobId,
+      publish_copy_job_id: publishCopyJobId,
+      template_id: textField(formData, "template_id") || "pixel_diary",
+    });
+    query.set("cover_job", job.id);
+    query.set("cover_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("cover_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
+}
+
+export async function startSameStylePublishJobAction(formData: FormData) {
+  const referenceJobId = textField(formData, "reference_job_id");
+  const audioJobId = textField(formData, "audio_job_id");
+  const digitalHumanJobId = textField(formData, "digital_human_job_id");
+  const videoJobId = textField(formData, "video_job_id");
+  const subtitleJobId = textField(formData, "subtitle_job_id");
+  const bgmJobId = textField(formData, "bgm_job_id");
+  const publishCopyJobId = textField(formData, "publish_copy_job_id");
+  const coverJobId = textField(formData, "cover_job_id");
+  const query = new URLSearchParams();
+  if (referenceJobId) {
+    query.set("reference_job", referenceJobId);
+  }
+  if (audioJobId) {
+    query.set("audio_job", audioJobId);
+  }
+  if (digitalHumanJobId) {
+    query.set("digital_human_job", digitalHumanJobId);
+  }
+  if (videoJobId) {
+    query.set("video_job", videoJobId);
+  }
+  if (subtitleJobId) {
+    query.set("subtitle_job", subtitleJobId);
+  }
+  if (bgmJobId) {
+    query.set("bgm_job", bgmJobId);
+  }
+  if (publishCopyJobId) {
+    query.set("publish_copy_job", publishCopyJobId);
+  }
+  if (coverJobId) {
+    query.set("cover_job", coverJobId);
+  }
+  query.set("publish_status", "failed");
+
+  const platforms = formData
+    .getAll("platforms")
+    .filter(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    )
+    .map((value) => value.trim());
+
+  try {
+    const job = await createSameStylePublishJob({
+      bgm_job_id: bgmJobId,
+      subtitle_job_id: subtitleJobId,
+      cover_job_id: coverJobId,
+      publish_copy_job_id: publishCopyJobId,
+      platforms: platforms.length ? platforms : ["douyin"],
+      auto_submit: formData.get("auto_submit") === "on",
+    });
+    query.set("publish_job", job.id);
+    query.set("publish_status", job.status);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    query.set("publish_error", message.slice(0, 120));
+  }
+  redirect(`/same-style-script?${query.toString()}`);
 }
 
 export async function sendTopicFeedbackAction(formData: FormData) {
@@ -536,6 +895,23 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   const textFieldNames: RuntimeTextField[] = [
     "deepseek_api_key",
     "deepseek_model",
+    "seedance_api_key",
+    "seedance_base_url",
+    "seedance_status_url_template",
+    "seedance_model",
+    "cosyvoice_api_key",
+    "cosyvoice_base_url",
+    "cosyvoice_status_url_template",
+    "cosyvoice_model",
+    "cosyvoice_voice_id",
+    "heygem_api_key",
+    "heygem_base_url",
+    "heygem_status_url_template",
+    "heygem_avatar_id",
+    "social_auto_upload_api_key",
+    "social_auto_upload_base_url",
+    "social_auto_upload_status_url_template",
+    "yt_dlp_cookies_path",
     "product_hunt_token",
     "tencentcloud_secret_id",
     "tencentcloud_secret_key",
@@ -549,6 +925,7 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
     "video_inbox_path",
     "video_output_path",
     "draft_output_path",
+    "bgm_library_path",
     "jianying_draft_root_path",
     "database_path",
   ];

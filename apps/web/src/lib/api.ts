@@ -24,6 +24,25 @@ import type {
   RuntimeHealth,
   RuntimeSettings,
   RuntimeSettingsUpdate,
+  SameStyleAudioJob,
+  SameStyleAudioJobRequest,
+  SameStyleBgmJob,
+  SameStyleBgmJobRequest,
+  SameStyleCoverJob,
+  SameStyleCoverJobRequest,
+  SameStyleDigitalHumanJob,
+  SameStyleDigitalHumanJobRequest,
+  SameStylePublishCopyJob,
+  SameStylePublishCopyJobRequest,
+  SameStylePublishJob,
+  SameStylePublishJobRequest,
+  SameStyleReferenceJob,
+  SameStyleReferenceJobRequest,
+  SameStyleSubtitleJob,
+  SameStyleSubtitleJobRequest,
+  SameStyleVideoJob,
+  SameStyleVideoJobRequest,
+  SameStyleWorkflow,
   ScriptRewriteIntents,
   ScriptPackage,
   SourceItems,
@@ -131,6 +150,158 @@ export function getRuntimeSettings(): Promise<RuntimeSettings> {
 
 export function getRuntimeHealth(): Promise<RuntimeHealth> {
   return request<RuntimeHealth>("/api/runtime/health");
+}
+
+export function getSameStyleWorkflow(): Promise<SameStyleWorkflow> {
+  return request<SameStyleWorkflow>("/api/same-style/workflow");
+}
+
+export function createSameStyleReferenceJob(
+  payload: SameStyleReferenceJobRequest,
+): Promise<SameStyleReferenceJob> {
+  return request<SameStyleReferenceJob>("/api/same-style/reference-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleReferenceJob(jobId: string): Promise<SameStyleReferenceJob> {
+  return request<SameStyleReferenceJob>(
+    `/api/same-style/reference-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleAudioJob(
+  payload: SameStyleAudioJobRequest,
+): Promise<SameStyleAudioJob> {
+  return request<SameStyleAudioJob>("/api/same-style/audio-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleAudioJob(jobId: string): Promise<SameStyleAudioJob> {
+  return request<SameStyleAudioJob>(
+    `/api/same-style/audio-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleDigitalHumanJob(
+  payload: SameStyleDigitalHumanJobRequest,
+): Promise<SameStyleDigitalHumanJob> {
+  return request<SameStyleDigitalHumanJob>("/api/same-style/digital-human-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleDigitalHumanJob(
+  jobId: string,
+): Promise<SameStyleDigitalHumanJob> {
+  return request<SameStyleDigitalHumanJob>(
+    `/api/same-style/digital-human-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleSubtitleJob(
+  payload: SameStyleSubtitleJobRequest,
+): Promise<SameStyleSubtitleJob> {
+  return request<SameStyleSubtitleJob>("/api/same-style/subtitle-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleSubtitleJob(jobId: string): Promise<SameStyleSubtitleJob> {
+  return request<SameStyleSubtitleJob>(
+    `/api/same-style/subtitle-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleBgmJob(
+  payload: SameStyleBgmJobRequest,
+): Promise<SameStyleBgmJob> {
+  return request<SameStyleBgmJob>("/api/same-style/bgm-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleBgmJob(jobId: string): Promise<SameStyleBgmJob> {
+  return request<SameStyleBgmJob>(
+    `/api/same-style/bgm-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStylePublishCopyJob(
+  payload: SameStylePublishCopyJobRequest,
+): Promise<SameStylePublishCopyJob> {
+  return request<SameStylePublishCopyJob>("/api/same-style/publish-copy-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStylePublishCopyJob(
+  jobId: string,
+): Promise<SameStylePublishCopyJob> {
+  return request<SameStylePublishCopyJob>(
+    `/api/same-style/publish-copy-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleCoverJob(
+  payload: SameStyleCoverJobRequest,
+): Promise<SameStyleCoverJob> {
+  return request<SameStyleCoverJob>("/api/same-style/cover-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleCoverJob(jobId: string): Promise<SameStyleCoverJob> {
+  return request<SameStyleCoverJob>(
+    `/api/same-style/cover-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStylePublishJob(
+  payload: SameStylePublishJobRequest,
+): Promise<SameStylePublishJob> {
+  return request<SameStylePublishJob>("/api/same-style/publish-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStylePublishJob(jobId: string): Promise<SameStylePublishJob> {
+  return request<SameStylePublishJob>(
+    `/api/same-style/publish-jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function createSameStyleVideoJob(
+  payload: SameStyleVideoJobRequest,
+): Promise<SameStyleVideoJob> {
+  return request<SameStyleVideoJob>("/api/same-style/video-jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 180_000,
+  });
+}
+
+export function getSameStyleVideoJob(jobId: string): Promise<SameStyleVideoJob> {
+  return request<SameStyleVideoJob>(
+    `/api/same-style/video-jobs/${encodeURIComponent(jobId)}`,
+  );
 }
 
 export function getDiagnosticsStatus(): Promise<DiagnosticsStatus> {

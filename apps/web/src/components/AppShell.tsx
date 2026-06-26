@@ -17,6 +17,7 @@ type NavItem = {
 const taskNavItems: NavItem[] = [
   { href: "/", label: "今日工作台", icon: "desk" },
   { href: "/topics", label: "选题池", icon: "note" },
+  { href: "/same-style-script", label: "同款脚本生成", icon: "spark" },
   { href: "/script", label: "口播稿", icon: "script" },
   { href: "/cover", label: "封面", icon: "cover" },
   { href: "/video", label: "视频处理", icon: "video" },

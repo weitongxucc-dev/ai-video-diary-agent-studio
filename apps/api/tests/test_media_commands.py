@@ -4,6 +4,8 @@ import subprocess
 from app.media_commands import (
     build_cut_video_command,
     build_extract_audio_command,
+    build_extract_reference_frames_command,
+    build_mix_bgm_command,
     capture_media_command,
     read_media_duration_seconds,
     safe_file_under_root,
@@ -139,6 +141,43 @@ def test_build_extract_audio_command_creates_shared_16k_mono_wav_command():
         "pcm_s16le",
         "/tmp/audio.wav",
     ]
+
+
+def test_build_extract_reference_frames_command_creates_fps_frame_command():
+    command = build_extract_reference_frames_command(
+        Path("/tmp/source.mp4"),
+        Path("/tmp/frames/frame_%04d.jpg"),
+        fps=1,
+    )
+
+    assert command == [
+        "ffmpeg",
+        "-y",
+        "-i",
+        "/tmp/source.mp4",
+        "-vf",
+        "fps=1,scale=720:-2:force_original_aspect_ratio=decrease",
+        "-q:v",
+        "3",
+        "/tmp/frames/frame_%04d.jpg",
+    ]
+
+
+def test_build_mix_bgm_command_creates_ffmpeg_amix_command():
+    command = build_mix_bgm_command(
+        Path("/tmp/talk.mp4"),
+        Path("/tmp/bgm.mp3"),
+        Path("/tmp/mixed.mp4"),
+        bgm_volume=0.18,
+    )
+
+    joined = " ".join(command)
+    assert command[:6] == ["ffmpeg", "-y", "-i", "/tmp/talk.mp4", "-stream_loop", "-1"]
+    assert "/tmp/bgm.mp3" in command
+    assert "-filter_complex" in command
+    assert "[1:a]volume=0.18[bgm]" in joined
+    assert "amix=inputs=2:duration=first:dropout_transition=2[a]" in joined
+    assert command[-1] == "/tmp/mixed.mp4"
 
 
 def test_safe_child_file_path_rejects_traversal_and_unsupported_extensions(tmp_path):

@@ -105,6 +105,10 @@ def _default_draft_output_path() -> str:
     return str(Path.home() / "Movies" / "AI视频日记" / "05_剪映草稿")
 
 
+def _default_bgm_library_path() -> str:
+    return str(Path.home() / "Movies" / "AI视频日记" / "04_BGM素材")
+
+
 def _default_jianying_draft_root_path() -> str:
     return str(
         Path.home()
@@ -167,6 +171,23 @@ class Settings:
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
+    seedance_api_key: str | None = None
+    seedance_base_url: str | None = None
+    seedance_status_url_template: str | None = None
+    seedance_model: str = "seedance-2-0"
+    cosyvoice_api_key: str | None = None
+    cosyvoice_base_url: str | None = None
+    cosyvoice_status_url_template: str | None = None
+    cosyvoice_model: str = "cosyvoice-v3-flash"
+    cosyvoice_voice_id: str = "default"
+    heygem_api_key: str | None = None
+    heygem_base_url: str | None = None
+    heygem_status_url_template: str | None = None
+    heygem_avatar_id: str = "default"
+    social_auto_upload_api_key: str | None = None
+    social_auto_upload_base_url: str | None = None
+    social_auto_upload_status_url_template: str | None = None
+    yt_dlp_cookies_path: str | None = None
     obsidian_vault_path: str | None = None
     product_hunt_token: str | None = None
     product_hunt_api_url: str = "https://api.producthunt.com/v2/api/graphql"
@@ -175,6 +196,7 @@ class Settings:
     video_inbox_path: str = _default_video_inbox_path()
     video_output_path: str = _default_video_output_path()
     draft_output_path: str = _default_draft_output_path()
+    bgm_library_path: str = _default_bgm_library_path()
     jianying_draft_root_path: str = _default_jianying_draft_root_path()
     database_path: str = _default_database_path()
     tencentcloud_secret_id: str | None = None
@@ -195,6 +217,28 @@ class Settings:
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
             deepseek_model=os.getenv("DEEPSEEK_MODEL", cls.deepseek_model),
+            seedance_api_key=os.getenv("SEEDANCE_API_KEY"),
+            seedance_base_url=os.getenv("SEEDANCE_BASE_URL"),
+            seedance_status_url_template=os.getenv("SEEDANCE_STATUS_URL_TEMPLATE"),
+            seedance_model=os.getenv("SEEDANCE_MODEL", cls.seedance_model),
+            cosyvoice_api_key=os.getenv("COSYVOICE_API_KEY"),
+            cosyvoice_base_url=os.getenv("COSYVOICE_BASE_URL"),
+            cosyvoice_status_url_template=os.getenv("COSYVOICE_STATUS_URL_TEMPLATE"),
+            cosyvoice_model=os.getenv("COSYVOICE_MODEL", cls.cosyvoice_model),
+            cosyvoice_voice_id=os.getenv(
+                "COSYVOICE_VOICE_ID",
+                cls.cosyvoice_voice_id,
+            ),
+            heygem_api_key=os.getenv("HEYGEM_API_KEY"),
+            heygem_base_url=os.getenv("HEYGEM_BASE_URL"),
+            heygem_status_url_template=os.getenv("HEYGEM_STATUS_URL_TEMPLATE"),
+            heygem_avatar_id=os.getenv("HEYGEM_AVATAR_ID", cls.heygem_avatar_id),
+            social_auto_upload_api_key=os.getenv("SOCIAL_AUTO_UPLOAD_API_KEY"),
+            social_auto_upload_base_url=os.getenv("SOCIAL_AUTO_UPLOAD_BASE_URL"),
+            social_auto_upload_status_url_template=os.getenv(
+                "SOCIAL_AUTO_UPLOAD_STATUS_URL_TEMPLATE"
+            ),
+            yt_dlp_cookies_path=os.getenv("YT_DLP_COOKIES_PATH"),
             obsidian_vault_path=os.getenv("OBSIDIAN_VAULT_PATH")
             or _default_obsidian_vault_path(),
             product_hunt_token=os.getenv("PRODUCT_HUNT_TOKEN"),
@@ -211,6 +255,8 @@ class Settings:
             or _default_video_output_path(),
             draft_output_path=os.getenv("DRAFT_OUTPUT_PATH")
             or _default_draft_output_path(),
+            bgm_library_path=os.getenv("BGM_LIBRARY_PATH")
+            or _default_bgm_library_path(),
             jianying_draft_root_path=os.getenv("JIANYING_DRAFT_ROOT_PATH")
             or _default_jianying_draft_root_path(),
             database_path=os.getenv("DATABASE_PATH") or _default_database_path(),
@@ -333,6 +379,84 @@ class Settings:
                     "secret": False,
                 },
                 {
+                    "name": "SEEDANCE_API_KEY",
+                    "configured": bool(self.seedance_api_key),
+                    "value": "已配置" if self.seedance_api_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "SEEDANCE_BASE_URL",
+                    "configured": bool(self.seedance_base_url),
+                    "value": self.seedance_base_url,
+                    "secret": False,
+                },
+                {
+                    "name": "SEEDANCE_STATUS_URL_TEMPLATE",
+                    "configured": bool(self.seedance_status_url_template),
+                    "value": self.seedance_status_url_template,
+                    "secret": False,
+                },
+                {
+                    "name": "SEEDANCE_MODEL",
+                    "configured": bool(self.seedance_model),
+                    "value": self.seedance_model,
+                    "secret": False,
+                },
+                {
+                    "name": "COSYVOICE_API_KEY",
+                    "configured": bool(self.cosyvoice_api_key),
+                    "value": "已配置" if self.cosyvoice_api_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "COSYVOICE_BASE_URL",
+                    "configured": bool(self.cosyvoice_base_url),
+                    "value": self.cosyvoice_base_url,
+                    "secret": False,
+                },
+                {
+                    "name": "COSYVOICE_STATUS_URL_TEMPLATE",
+                    "configured": bool(self.cosyvoice_status_url_template),
+                    "value": self.cosyvoice_status_url_template,
+                    "secret": False,
+                },
+                {
+                    "name": "COSYVOICE_MODEL",
+                    "configured": bool(self.cosyvoice_model),
+                    "value": self.cosyvoice_model,
+                    "secret": False,
+                },
+                {
+                    "name": "COSYVOICE_VOICE_ID",
+                    "configured": bool(self.cosyvoice_voice_id),
+                    "value": self.cosyvoice_voice_id,
+                    "secret": False,
+                },
+                {
+                    "name": "HEYGEM_API_KEY",
+                    "configured": bool(self.heygem_api_key),
+                    "value": "已配置" if self.heygem_api_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "HEYGEM_BASE_URL",
+                    "configured": bool(self.heygem_base_url),
+                    "value": self.heygem_base_url,
+                    "secret": False,
+                },
+                {
+                    "name": "HEYGEM_STATUS_URL_TEMPLATE",
+                    "configured": bool(self.heygem_status_url_template),
+                    "value": self.heygem_status_url_template,
+                    "secret": False,
+                },
+                {
+                    "name": "HEYGEM_AVATAR_ID",
+                    "configured": bool(self.heygem_avatar_id),
+                    "value": self.heygem_avatar_id,
+                    "secret": False,
+                },
+                {
                     "name": "OBSIDIAN_VAULT_PATH",
                     "configured": bool(self.obsidian_vault_path),
                     "value": self.obsidian_vault_path,
@@ -360,6 +484,36 @@ class Settings:
                     "name": "DRAFT_OUTPUT_PATH",
                     "configured": bool(self.draft_output_path),
                     "value": self.draft_output_path,
+                    "secret": False,
+                },
+                {
+                    "name": "BGM_LIBRARY_PATH",
+                    "configured": bool(self.bgm_library_path),
+                    "value": self.bgm_library_path,
+                    "secret": False,
+                },
+                {
+                    "name": "YT_DLP_COOKIES_PATH",
+                    "configured": bool(self.yt_dlp_cookies_path),
+                    "value": self.yt_dlp_cookies_path,
+                    "secret": False,
+                },
+                {
+                    "name": "SOCIAL_AUTO_UPLOAD_API_KEY",
+                    "configured": bool(self.social_auto_upload_api_key),
+                    "value": "已配置" if self.social_auto_upload_api_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "SOCIAL_AUTO_UPLOAD_BASE_URL",
+                    "configured": bool(self.social_auto_upload_base_url),
+                    "value": self.social_auto_upload_base_url,
+                    "secret": False,
+                },
+                {
+                    "name": "SOCIAL_AUTO_UPLOAD_STATUS_URL_TEMPLATE",
+                    "configured": bool(self.social_auto_upload_status_url_template),
+                    "value": self.social_auto_upload_status_url_template,
                     "secret": False,
                 },
                 {

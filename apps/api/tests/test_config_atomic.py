@@ -70,3 +70,59 @@ def test_load_dotenv_files_reads_runtime_env_override(tmp_path, monkeypatch):
 
     assert config.os.environ["DEEPSEEK_API_KEY"] == "runtime-secret"
     assert config.os.environ["DEEPSEEK_MODEL"] == "deepseek-v4-flash"
+
+
+def test_runtime_settings_updates_include_seedance_fields():
+    from app.runtime_settings import runtime_settings_updates
+
+    updates = runtime_settings_updates(
+        {
+            "seedance_api_key": "seedance-key",
+            "seedance_base_url": "https://seedance.example.com/tasks",
+            "seedance_model": "seedance-test",
+        }
+    )
+
+    assert updates == {
+        "SEEDANCE_API_KEY": "seedance-key",
+        "SEEDANCE_BASE_URL": "https://seedance.example.com/tasks",
+        "SEEDANCE_MODEL": "seedance-test",
+    }
+
+
+def test_runtime_settings_updates_include_cosyvoice_fields():
+    from app.runtime_settings import runtime_settings_updates
+
+    updates = runtime_settings_updates(
+        {
+            "cosyvoice_api_key": "cosy-key",
+            "cosyvoice_base_url": "https://cosyvoice.example.com/tts",
+            "cosyvoice_model": "cosyvoice-test",
+            "cosyvoice_voice_id": "creator",
+        }
+    )
+
+    assert updates == {
+        "COSYVOICE_API_KEY": "cosy-key",
+        "COSYVOICE_BASE_URL": "https://cosyvoice.example.com/tts",
+        "COSYVOICE_MODEL": "cosyvoice-test",
+        "COSYVOICE_VOICE_ID": "creator",
+    }
+
+
+def test_runtime_settings_updates_include_heygem_fields():
+    from app.runtime_settings import runtime_settings_updates
+
+    updates = runtime_settings_updates(
+        {
+            "heygem_api_key": "heygem-key",
+            "heygem_base_url": "http://localhost:8383/tasks",
+            "heygem_avatar_id": "creator-avatar",
+        }
+    )
+
+    assert updates == {
+        "HEYGEM_API_KEY": "heygem-key",
+        "HEYGEM_BASE_URL": "http://localhost:8383/tasks",
+        "HEYGEM_AVATAR_ID": "creator-avatar",
+    }

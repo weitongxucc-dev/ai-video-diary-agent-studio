@@ -60,6 +60,116 @@ export default async function SettingsPage() {
                 />
               </label>
               <label className="settings-field">
+                <span>Seedance API Key</span>
+                <input
+                  autoComplete="off"
+                  name="seedance_api_key"
+                  placeholder={settingMap.get("SEEDANCE_API_KEY") === "已配置" ? "留空不修改" : "粘贴新密钥"}
+                  type="password"
+                />
+              </label>
+              <label className="settings-field">
+                <span>Seedance Base URL</span>
+                <input
+                  name="seedance_base_url"
+                  type="text"
+                  defaultValue={settingMap.get("SEEDANCE_BASE_URL") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>Seedance Status URL</span>
+                <input
+                  name="seedance_status_url_template"
+                  type="text"
+                  defaultValue={settingMap.get("SEEDANCE_STATUS_URL_TEMPLATE") ?? ""}
+                  placeholder="https://.../{job_id}"
+                />
+              </label>
+              <label className="settings-field">
+                <span>Seedance Model</span>
+                <input
+                  name="seedance_model"
+                  type="text"
+                  defaultValue={settingMap.get("SEEDANCE_MODEL") ?? "seedance-2-0"}
+                />
+              </label>
+              <label className="settings-field">
+                <span>CosyVoice API Key</span>
+                <input
+                  autoComplete="off"
+                  name="cosyvoice_api_key"
+                  placeholder={settingMap.get("COSYVOICE_API_KEY") === "已配置" ? "留空不修改" : "可选密钥"}
+                  type="password"
+                />
+              </label>
+              <label className="settings-field">
+                <span>CosyVoice Base URL</span>
+                <input
+                  name="cosyvoice_base_url"
+                  type="text"
+                  defaultValue={settingMap.get("COSYVOICE_BASE_URL") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>CosyVoice Status URL</span>
+                <input
+                  name="cosyvoice_status_url_template"
+                  type="text"
+                  defaultValue={settingMap.get("COSYVOICE_STATUS_URL_TEMPLATE") ?? ""}
+                  placeholder="https://.../{job_id}"
+                />
+              </label>
+              <label className="settings-field">
+                <span>CosyVoice Model</span>
+                <input
+                  name="cosyvoice_model"
+                  type="text"
+                  defaultValue={settingMap.get("COSYVOICE_MODEL") ?? "cosyvoice-v3-flash"}
+                />
+              </label>
+              <label className="settings-field">
+                <span>CosyVoice Voice ID</span>
+                <input
+                  name="cosyvoice_voice_id"
+                  type="text"
+                  defaultValue={settingMap.get("COSYVOICE_VOICE_ID") ?? "default"}
+                />
+              </label>
+              <label className="settings-field">
+                <span>HeyGem API Key</span>
+                <input
+                  autoComplete="off"
+                  name="heygem_api_key"
+                  placeholder={settingMap.get("HEYGEM_API_KEY") === "已配置" ? "留空不修改" : "可选密钥"}
+                  type="password"
+                />
+              </label>
+              <label className="settings-field">
+                <span>HeyGem Base URL</span>
+                <input
+                  name="heygem_base_url"
+                  type="text"
+                  defaultValue={settingMap.get("HEYGEM_BASE_URL") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>HeyGem Status URL</span>
+                <input
+                  name="heygem_status_url_template"
+                  type="text"
+                  defaultValue={settingMap.get("HEYGEM_STATUS_URL_TEMPLATE") ?? ""}
+                  placeholder="https://.../{job_id}"
+                />
+              </label>
+              <label className="settings-field">
+                <span>HeyGem Avatar ID</span>
+                <input
+                  name="heygem_avatar_id"
+                  type="text"
+                  defaultValue={settingMap.get("HEYGEM_AVATAR_ID") ?? "default"}
+                />
+              </label>
+              <label className="settings-field">
                 <span>Product Hunt Token</span>
                 <input
                   autoComplete="off"
@@ -164,6 +274,48 @@ export default async function SettingsPage() {
                   name="draft_output_path"
                   type="text"
                   defaultValue={settingMap.get("DRAFT_OUTPUT_PATH") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>BGM Library</span>
+                <input
+                  name="bgm_library_path"
+                  type="text"
+                  defaultValue={settingMap.get("BGM_LIBRARY_PATH") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>yt-dlp Cookies</span>
+                <input
+                  name="yt_dlp_cookies_path"
+                  type="text"
+                  defaultValue={settingMap.get("YT_DLP_COOKIES_PATH") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>Auto Upload API Key</span>
+                <input
+                  autoComplete="off"
+                  name="social_auto_upload_api_key"
+                  placeholder={settingMap.get("SOCIAL_AUTO_UPLOAD_API_KEY") === "已配置" ? "留空不修改" : "可选密钥"}
+                  type="password"
+                />
+              </label>
+              <label className="settings-field">
+                <span>Auto Upload Base URL</span>
+                <input
+                  name="social_auto_upload_base_url"
+                  type="text"
+                  defaultValue={settingMap.get("SOCIAL_AUTO_UPLOAD_BASE_URL") ?? ""}
+                />
+              </label>
+              <label className="settings-field">
+                <span>Auto Upload Status URL</span>
+                <input
+                  name="social_auto_upload_status_url_template"
+                  type="text"
+                  defaultValue={settingMap.get("SOCIAL_AUTO_UPLOAD_STATUS_URL_TEMPLATE") ?? ""}
+                  placeholder="https://.../{job_id}"
                 />
               </label>
               <label className="settings-field">
