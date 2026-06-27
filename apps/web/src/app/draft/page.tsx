@@ -104,8 +104,8 @@ export default async function DraftPage() {
   const olderPackages = packages.slice(5);
   return (
     <AppShell>
-      <div className="workspace-page">
-        <section className="workspace-main pixel-card draft-main">
+      <div className="workspace-page draft-workstation">
+        <section className="workspace-main retro-panel draft-main">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">剪映草稿</span>
@@ -128,7 +128,7 @@ export default async function DraftPage() {
             </Link>
           </div>
 
-          <div className="draft-flow" aria-label="剪映草稿流程">
+          <div className="draft-flow draft-stage-strip" aria-label="剪映草稿流程">
             <div className="draft-flow-step active">
               <strong>1 生成素材包</strong>
               <span>从预处理视频生成可追溯素材。</span>
@@ -242,22 +242,22 @@ export default async function DraftPage() {
 
         </section>
 
-        <aside className="workspace-side">
+        <aside className="workspace-side draft-inspector">
           <MetricCard icon="clip" value={String(env?.package_count ?? 0)} label="素材包" tone="purple" />
           <MetricCard icon="video" value={String(env?.processed_video_count ?? 0)} label="可用视频" tone="green" />
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>草稿工具</h2>
             <p>{toolAvailable ? env?.draft_tool.tool_name : "未安装"}</p>
             <code>{env?.draft_tool.checked_modules.join(" / ") ?? "--"}</code>
             <span>{env?.editable_draft_supported ? "兼容桥接可用，需确认导入" : "当前只能生成素材包 fallback"}</span>
           </div>
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>剪映目录</h2>
             <p>{env?.jianying_root_exists ? "已发现" : "未发现"}</p>
             <code>{env?.jianying_root_path ?? "--"}</code>
             {env?.jianying_blocker ? <span>{env.jianying_blocker}</span> : null}
           </div>
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>输出目录</h2>
             <code>{env?.output_path ?? "--"}</code>
           </div>

@@ -24,8 +24,8 @@ export default async function PublishFeedbackPage() {
 
   return (
     <AppShell>
-      <div className="workspace-page publish-feedback-page">
-        <section className="workspace-main pixel-card">
+      <div className="workspace-page publish-feedback-page publish-feedback-workstation">
+        <section className="workspace-main retro-panel">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">发布反馈</span>
@@ -43,18 +43,18 @@ export default async function PublishFeedbackPage() {
           <PublishFeedbackPanel episode={episode} />
         </section>
 
-        <aside className="workspace-side">
-          <div className="pixel-card side-note">
+        <aside className="workspace-side publish-feedback-inspector">
+          <div className="retro-panel-secondary side-note">
             <h2>发布域</h2>
             <p>{episode ? episode.status : "--"}</p>
             <span>登记链接、播放、点赞、评论和明确原因。</span>
           </div>
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>学习去向</h2>
             <p>反馈学习</p>
             <span>发布反馈会写入 Episode，并在偏好记忆里沉淀。</span>
           </div>
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>下一步影响</h2>
             <p>
               <PixelIcon name="publish" /> 选题 / 口播

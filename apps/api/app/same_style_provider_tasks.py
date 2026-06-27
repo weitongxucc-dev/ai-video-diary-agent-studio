@@ -63,7 +63,7 @@ def download_provider_media(
         output_path = workspace / output_name
         with httpx.Client(transport=transport, timeout=timeout) as client:
             response = client.get(media_value)
-        response.raise_for_status()
+        raise_for_status_with_body(response)
         output_path.write_bytes(response.content)
         return output_path
 
@@ -91,8 +91,23 @@ def fetch_provider_status(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     with httpx.Client(transport=transport, timeout=timeout) as client:
         response = client.get(status_url, headers=headers)
-    response.raise_for_status()
+    raise_for_status_with_body(response)
     return response.json()
+
+
+def raise_for_status_with_body(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = response.text.strip()
+        if body:
+            message = f"{exc} Response body: {body}"
+            raise httpx.HTTPStatusError(
+                message,
+                request=exc.request,
+                response=exc.response,
+            ) from exc
+        raise
 
 
 def _value_at_path(payload: object, path: str) -> object | None:

@@ -84,6 +84,8 @@ def test_deepseek_script_generator_requests_json_chat_completion():
     )
 
     script = generator.generate(topic, day_number=1)
+    user_payload = json.loads(captured["payload"]["messages"][1]["content"])
+    requirements_text = "\n".join(user_payload["requirements"])
 
     assert script.hook == "开头来自 DeepSeek"
     assert script.sections[0].content == "这是 DeepSeek 生成的开头。"
@@ -91,7 +93,36 @@ def test_deepseek_script_generator_requests_json_chat_completion():
     assert captured["authorization"] == "Bearer secret"
     assert captured["payload"]["model"] == "deepseek-v4-flash"
     assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert captured["payload"]["max_tokens"] >= 4200
     assert "只输出 JSON" in captured["payload"]["messages"][0]["content"]
+    assert "800-1000" in captured["payload"]["messages"][0]["content"]
+    assert "800-1000" in requirements_text
+    assert "4-6 分钟" in requirements_text
+    assert "每段至少" in requirements_text
+    assert "真实细节" in requirements_text
+
+
+def test_template_script_generator_produces_longform_draft():
+    from app.llm import TemplateScriptGenerator
+
+    topic = TopicCandidate(
+        id="topic_1",
+        title="为什么原创课程会被问版权归属？",
+        core_viewpoint="版权不只是署名问题，而是交付链路、合同边界和素材来源共同决定。",
+        reason="客户在项目复盘里询问课程版权归属，暴露了创作者交付前没有说清权利边界。",
+        audience="技术型个人创作者",
+        outline=["先讲真实冲突", "拆开版权边界", "给出下次交付动作"],
+        score=90,
+        source_refs=[SourceRef("Obsidian", "课程交付复盘", "[[课程交付复盘]]")],
+    )
+
+    script = TemplateScriptGenerator().generate(topic, day_number=12)
+    full_text = script.hook + "".join(section.content for section in script.sections)
+
+    assert 800 <= len(full_text) <= 1000
+    assert len(script.sections) >= 6
+    assert all(len(section.content) >= 95 for section in script.sections)
+    assert script.sections[-1].title == "行动建议"
 
 
 def test_settings_status_reports_deepseek_without_exposing_key():

@@ -113,20 +113,69 @@ function EmptyScriptState({
                 };
 
   return (
-    <section className="script-empty pixel-card">
-      <span className="section-kicker">口播稿</span>
-      <h1>{copy.title}</h1>
-      <p>{copy.description}</p>
-      {episode ? (
-        <p className="script-empty-meta">Episode #{episode.day_number}</p>
-      ) : null}
-      <div className="script-empty-actions">
-        <Link className="pixel-button" href="/topics">
-          去选题池
-        </Link>
-        <Link className="pixel-button secondary" href="/">
-          返回今日工作台
-        </Link>
+    <section className="script-empty-workflow empty-state-workflow">
+      <div className="script-empty-layout">
+        <div className="script-empty-main">
+          <span className="section-kicker">当前步骤：口播稿</span>
+          <h1>{copy.title}</h1>
+          <p>{copy.description}</p>
+          {episode ? (
+            <p className="script-empty-meta">Episode #{episode.day_number}</p>
+          ) : null}
+
+          <div className="script-dependency-flow" aria-label="口播稿生成依赖流程">
+            <article className="workflow-step">
+              <span className="status-badge">1</span>
+              <strong>生成候选选题</strong>
+              <p>从选题池中生成多个候选选题，提供人工筛选。</p>
+            </article>
+            <article className="workflow-step">
+              <span className="status-badge">2</span>
+              <strong>人工确认一个选题</strong>
+              <p>在候选选题中确定一个最终选题，作为本期节目的主题。</p>
+            </article>
+            <article className="workflow-step">
+              <span className="status-badge">3</span>
+              <strong>自动生成口播稿</strong>
+              <p>系统将基于已确认的选题，自动生成本期口播稿内容。</p>
+            </article>
+          </div>
+
+          <section className="script-empty-preview" aria-label="口播稿预览">
+            <div className="script-empty-preview-row" />
+            <div className="script-empty-preview-row" />
+            <div className="script-empty-preview-row" />
+            <div className="script-empty-preview-row short" />
+          </section>
+
+          <div className="script-empty-actions">
+            <Link className="pixel-button" href="/topics">
+              去选题池
+            </Link>
+            <Link className="pixel-button secondary" href="/">
+              返回今日工作台
+            </Link>
+          </div>
+        </div>
+
+        <aside className="script-empty-inspector inspector-panel">
+          <h2>工作流状态</h2>
+          <dl>
+            <div>
+              <dt>Episode</dt>
+              <dd>#{episode?.day_number ?? "--"}</dd>
+            </div>
+            <div>
+              <dt>当前状态</dt>
+              <dd>等待选题确认</dd>
+            </div>
+            <div>
+              <dt>下一步</dt>
+              <dd>去选题池</dd>
+            </div>
+          </dl>
+          <p>尚未确认选题，因此无法生成口播稿。完成前置步骤后，这里会自动展示可编辑的长口播稿。</p>
+        </aside>
       </div>
     </section>
   );
@@ -191,10 +240,11 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
   const totalSeconds = script
     ? 3 + script.sections.reduce((sum, section) => sum + section.estimated_seconds, 0)
     : 0;
-  const feedbackCount = script
-    ? script.sections.filter((section) => Boolean(section.feedback)).length
+  const scriptChars = script
+    ? script.hook.length + script.sections.reduce((sum, section) => sum + section.content.length, 0)
     : 0;
   const sectionCount = script ? script.sections.length + 1 : 0;
+  const minuteLabel = `${Math.floor(totalSeconds / 60)}m${String(totalSeconds % 60).padStart(2, "0")}s`;
 
   return (
     <AppShell>
@@ -211,19 +261,19 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
               <section className="script-editor-toolbar pixel-card" aria-label="口播稿主操作">
                 <div className="script-dashboard" aria-label="脚本仪表盘">
                   <div className="script-dashboard-stat">
-                    <span>总时长</span>
-                    <strong>{totalSeconds}s</strong>
+                    <span>总字数</span>
+                    <strong>{scriptChars}</strong>
+                    <small>目标 800-1000 字</small>
+                  </div>
+                  <div className="script-dashboard-stat">
+                    <span>预计时长</span>
+                    <strong>{minuteLabel}</strong>
                     <small>含开头 3 秒</small>
                   </div>
                   <div className="script-dashboard-stat">
                     <span>段落</span>
                     <strong>{sectionCount}</strong>
-                    <small>结构完整</small>
-                  </div>
-                  <div className="script-dashboard-stat">
-                    <span>反馈</span>
-                    <strong>{feedbackCount}/{script.sections.length}</strong>
-                    <small>可继续校准</small>
+                    <small>长稿结构</small>
                   </div>
                   <div className="script-dashboard-stat">
                     <span>状态</span>
@@ -232,31 +282,33 @@ export default async function ScriptPage({ searchParams }: ScriptPageProps) {
                   </div>
                 </div>
                 <div className="script-primary-actions" aria-label="写稿操作">
-                  <div>
+                  <div className="script-action-copy">
                     <span className="section-kicker">写稿操作</span>
-                    <strong>编辑正文，保存后确认录制</strong>
-                    <p>正文在下方连续编辑；发布素材、封面文案和版本记录在右侧检查栏。</p>
+                    <strong>按 800-1000 字长口播编辑，保存后确认录制</strong>
+                    <p>正文优先连续编辑；标题、封面、发布文案和版本记录在右侧检查栏集中处理。</p>
                   </div>
-                  <button className="pixel-button" form={scriptFormId} type="submit">
-                    保存修改
-                  </button>
-                  <form action={regenerateScriptAction} className="script-control-form">
-                    <input name="episode_id" type="hidden" value={episode.id} />
-                    <input
-                      name="reason"
-                      placeholder="更犀利、更像自己、少概念"
-                      type="text"
-                    />
-                    <button className="pixel-button secondary" type="submit">
-                      重写整篇
+                  <div className="script-action-buttons">
+                    <button className="pixel-button" form={scriptFormId} type="submit">
+                      保存修改
                     </button>
-                  </form>
-                  <form action={approveScriptAction} className="script-confirm-form">
-                    <input name="episode_id" type="hidden" value={episode.id} />
-                    <button className="pixel-button" type="submit">
-                      确认脚本
-                    </button>
-                  </form>
+                    <form action={regenerateScriptAction} className="script-control-form">
+                      <input name="episode_id" type="hidden" value={episode.id} />
+                      <input
+                        name="reason"
+                        placeholder="更犀利、更像自己、更多真实细节"
+                        type="text"
+                      />
+                      <button className="pixel-button secondary" type="submit">
+                        重写整篇
+                      </button>
+                    </form>
+                    <form action={approveScriptAction} className="script-confirm-form">
+                      <input name="episode_id" type="hidden" value={episode.id} />
+                      <button className="pixel-button" type="submit">
+                        确认脚本
+                      </button>
+                    </form>
+                  </div>
                 </div>
               </section>
 

@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GlobalSearchBox } from "@/components/GlobalSearchBox";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 import { RetroChrome } from "@/components/RetroChrome";
 import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
@@ -117,22 +116,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
               当前页面：{currentNavItem.label}
             </div>
-            <header className="topbar">
-              <div className="breadcrumb">{currentNavItem.label}</div>
-              <div className="topbar-center" suppressHydrationWarning>
-                <PixelIcon name="calendar" />
-                <span>今日 · {todayLabel}</span>
-              </div>
-              <div className="topbar-actions">
-                <GlobalSearchBox />
-                <button className="icon-button" type="button" aria-label="通知" disabled>
-                  <PixelIcon name="bell" />
-                </button>
-                <span className="avatar">
-                  <PixelIcon name="person" />
-                </span>
-              </div>
-            </header>
             <div className="main-scroll">
               {children}
             </div>

@@ -413,23 +413,60 @@ export default async function SameStyleScriptPage({
   return (
     <AppShell>
       <div className="workspace-page same-style-page">
-        <section className="same-style-hero pixel-card">
+        <section className="same-style-hero retro-panel">
           <div className="same-style-hero-copy">
             <span className="section-kicker">同款脚本生成</span>
             <h1>{workflow.title}</h1>
             <p>{workflow.summary}</p>
           </div>
-          <div className="same-style-capability-rack" aria-label="工作流能力状态">
+          <aside className="same-style-environment-panel inspector-panel" aria-label="环境状态">
+            <h2>环境状态</h2>
+            <div className="same-style-environment-list">
             {workflow.capabilities.map((capability) => (
-              <span className={`same-style-status ${capability.status}`} key={capability.id}>
+              <div key={capability.id}>
+                <span className={`status-dot ${capability.status}`} />
                 <strong>{capability.label}</strong>
                 <em>{statusLabel[capability.status]}</em>
-              </span>
+              </div>
             ))}
-          </div>
+            </div>
+          </aside>
           <Link className="pixel-button secondary" href="/script">
             查看口播稿
             </Link>
+        </section>
+
+        <section className="same-style-step-grid" aria-label="同款脚本生成步骤">
+          <article className="same-style-step-card retro-panel-secondary">
+            <span className="section-kicker">Step 1</span>
+            <h2>输入对标视频</h2>
+            <p>粘贴抖音、视频号、B站等链接或本地视频路径，补充自有产品名称、卖点、人群和禁用词。</p>
+            <ul className="same-style-step-meta">
+              <li><span className="status-dot processing" /> 抽帧参考图</li>
+              <li><span className="status-dot processing" /> ASR 转写原文案</li>
+              <li><span className="status-dot processing" /> 拆解镜头节奏</li>
+            </ul>
+          </article>
+          <article className="same-style-step-card retro-panel-secondary">
+            <span className="section-kicker">Step 2</span>
+            <h2>文案结果</h2>
+            <p>大模型保留爆款结构、冲突节奏和镜头逻辑，只替换为你自己的产品信息与表达口吻。</p>
+            <ul className="same-style-step-meta">
+              <li><span className="status-dot ready" /> 对标文案</li>
+              <li><span className="status-dot partial" /> 仿写口播稿</li>
+              <li><span className="status-dot partial" /> 标题标签候选</li>
+            </ul>
+          </article>
+          <article className="same-style-step-card retro-panel-secondary">
+            <span className="section-kicker">Step 3</span>
+            <h2>衍生素材</h2>
+            <p>继续生成音频、字幕、宫格参考图、Seedance 同款镜头视频、封面和发布素材包。</p>
+            <ul className="same-style-step-meta">
+              <li><span className="status-dot partial" /> CosyVoice 音频</li>
+              <li><span className="status-dot missing" /> Seedance 视频</li>
+              <li><span className="status-dot partial" /> 发布包</li>
+            </ul>
+          </article>
         </section>
 
         <ReferenceJobBanner

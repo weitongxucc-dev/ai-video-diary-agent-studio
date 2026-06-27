@@ -16,6 +16,7 @@ from app.same_style_provider_tasks import (
     fetch_provider_status,
     normalize_provider_status,
     provider_value,
+    raise_for_status_with_body,
 )
 from app.schemas import SameStyleAudioJobRequest, SameStyleAudioJobResponse
 
@@ -78,7 +79,7 @@ class CosyVoiceHttpGenerator:
                 json=payload,
                 headers=headers,
             )
-        response.raise_for_status()
+        raise_for_status_with_body(response)
         data = response.json()
         audio_url = provider_value(
             data,

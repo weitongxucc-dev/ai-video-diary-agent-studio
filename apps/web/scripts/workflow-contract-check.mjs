@@ -5,6 +5,7 @@ const files = {
   publishFeedbackCss: new URL("../src/app/styles/publish-feedback.css", import.meta.url),
   topics: new URL("../src/app/topics/page.tsx", import.meta.url),
   script: new URL("../src/app/script/page.tsx", import.meta.url),
+  sameStyle: new URL("../src/app/same-style-script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
   scriptQuickRewritePanel: new URL("../src/components/ScriptQuickRewritePanel.tsx", import.meta.url),
   scriptQuickRewriteButton: new URL("../src/components/ScriptQuickRewriteButton.tsx", import.meta.url),
@@ -45,6 +46,7 @@ const [
   publishFeedbackCss,
   topicsPage,
   scriptPage,
+  sameStylePage,
   sectionEditor,
   scriptQuickRewritePanel,
   scriptQuickRewriteButton,
@@ -74,6 +76,148 @@ const [
 
 const failures = [];
 const publishFeedbackSurface = `${publishFeedbackPage}\n${publishFeedbackPanel}`;
+
+for (const token of [
+  "--retro-bg: #C9C3B4",
+  "--retro-panel: #F4EFD9",
+  "--retro-panel-soft: #ECE6D0",
+  "--retro-input: #FFFDF0",
+  "--retro-blue: #064A9B",
+  "--retro-blue-dark: #003F8F",
+  "--retro-border: #111111",
+  "--retro-border-soft: #6F6A5B",
+  "--retro-text: #171717",
+  "--retro-text-muted: #60656F",
+  "--retro-success: #1F8A4C",
+  "--retro-warning: #C28A18",
+  "--retro-danger: #B7332F",
+  "--retro-disabled: #B8B2A3",
+]) {
+  if (!css.includes(token)) {
+    failures.push(`retro design system must define ${token}.`);
+  }
+}
+
+for (const className of [
+  "retro-panel",
+  "retro-panel-secondary",
+  "retro-field",
+  "status-dot",
+  "status-badge",
+  "workflow-step",
+  "inspector-panel",
+  "retro-data-table",
+  "empty-state-workflow",
+  "page-workstation",
+]) {
+  if (!css.includes(`.${className}`)) {
+    failures.push(`retro design system must expose .${className}.`);
+  }
+}
+
+for (const required of [
+  "workbench-stage-strip",
+  "workbench-three-column",
+  "workbench-episode-meta",
+  "agent-compact-diagnostic",
+  "Agent 状态",
+]) {
+  if (!homePage.includes(required)) {
+    failures.push(`/ must use the retro production cockpit structure with ${required}.`);
+  }
+}
+
+if (homePage.includes('<span className="section-kicker">今日工作台</span>')) {
+  failures.push("/ must not repeat 今日工作台 as both a kicker and heading.");
+}
+
+if (appShell.includes('<header className="topbar">')) {
+  failures.push("AppShell must not render a visible duplicate route title bar above every page.");
+}
+
+for (const required of [
+  "topic-empty-workstation",
+  "Agent 将参考以下数据源",
+  "生成后你将获得",
+  "topic-inspector",
+]) {
+  if (!topicsPage.includes(required)) {
+    failures.push(`/topics empty state must explain the workflow with ${required}.`);
+  }
+}
+
+for (const required of [
+  "same-style-step-grid",
+  "Step 1",
+  "Step 2",
+  "Step 3",
+  "same-style-environment-panel",
+]) {
+  if (!sameStylePage.includes(required)) {
+    failures.push(`/same-style-script must use a step workflow and environment inspector with ${required}.`);
+  }
+}
+
+for (const required of [
+  "script-empty-workflow",
+  "等待选题确认",
+  "生成候选选题",
+  "人工确认一个选题",
+  "自动生成口播稿",
+  "script-empty-preview",
+]) {
+  if (!scriptPage.includes(required)) {
+    failures.push(`/script empty state must show workflow dependencies with ${required}.`);
+  }
+}
+
+for (const required of [
+  "cover-page-workstation",
+  "cover-stage-strip",
+  "cover-inspector",
+]) {
+  if (!coverPage.includes(required)) {
+    failures.push(`/cover must share the retro workstation structure with ${required}.`);
+  }
+}
+
+for (const required of [
+  "video-workstation-actions",
+  "video-data-table",
+  "video-inspector",
+]) {
+  if (!videoPage.includes(required)) {
+    failures.push(`/video must share the retro workstation structure with ${required}.`);
+  }
+}
+
+for (const required of [
+  "edit-plan-workstation",
+  "edit-plan-inspector",
+]) {
+  if (!editPlanPage.includes(required)) {
+    failures.push(`/edit-plan must share the retro workstation structure with ${required}.`);
+  }
+}
+
+for (const required of [
+  "draft-workstation",
+  "draft-stage-strip",
+  "draft-inspector",
+]) {
+  if (!draftPage.includes(required)) {
+    failures.push(`/draft must share the retro workstation structure with ${required}.`);
+  }
+}
+
+for (const required of [
+  "publish-feedback-workstation",
+  "publish-feedback-inspector",
+]) {
+  if (!publishFeedbackPage.includes(required)) {
+    failures.push(`/publish-feedback must share the retro workstation structure with ${required}.`);
+  }
+}
 
 if (scriptPage.includes("approveTopic(") || scriptPage.includes("approveTopic,")) {
   failures.push("/script must not approve a topic automatically.");
@@ -222,7 +366,7 @@ if (!scriptPageRule.includes("padding-bottom: 24px")) {
 }
 
 const scriptInspectorRule = css.match(/\.script-inspector\s*\{[\s\S]*?\}/)?.[0] ?? "";
-for (const required of ["position: sticky", "max-height: calc(100vh - 368px)", "overflow-y: auto"]) {
+for (const required of ["position: sticky", "max-height: none", "overflow: visible"]) {
   if (!scriptInspectorRule.includes(required)) {
     failures.push(`/script inspector must stay usable beside long scripts with ${required}.`);
   }
@@ -231,6 +375,16 @@ for (const required of ["position: sticky", "max-height: calc(100vh - 368px)", "
 const scriptCopyColumnRule = css.match(/\.script-copy-column\s*\{[\s\S]*?\}/)?.[0] ?? "";
 if (!scriptCopyColumnRule.includes("padding-bottom: 18px")) {
   failures.push("/script copy column must add bottom space so the command dock does not obscure the final section.");
+}
+
+const scriptEditorBodyRule = css.match(/\.script-editor-body\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (!scriptEditorBodyRule.includes("minmax(640px, 1fr)")) {
+  failures.push("/script editor must reserve a wide primary writing column with minmax(640px, 1fr).");
+}
+
+const scriptEditorToolbarRule = css.match(/\.script-editor-toolbar\s*\{[\s\S]*?\}/)?.[0] ?? "";
+if (!scriptEditorToolbarRule.includes("grid-template-columns: minmax(0, 1fr)")) {
+  failures.push("/script toolbar must stack dashboard and actions instead of squeezing them into two columns.");
 }
 
 const scriptSectionRule = css.match(/\.script-section\s*\{[\s\S]*?\}/)?.[0] ?? "";

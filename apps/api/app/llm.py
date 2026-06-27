@@ -12,6 +12,10 @@ from app.creator_profile import CreatorProfile, creator_profile_prompt_payload
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
 from app.preference_memory import preference_memory_payload
 
+SCRIPT_TARGET_WORDING = "800-1000 字，约 4-6 分钟"
+SCRIPT_MIN_CHARS = 800
+SCRIPT_MAX_CHARS = 1000
+
 
 class LLMConfigurationError(RuntimeError):
     pass
@@ -78,21 +82,109 @@ class TemplateScriptGenerator:
         template: ContentTemplate | None = None,
         creator_profile: CreatorProfile | None = None,
     ) -> ScriptPackage:
+        outline = [item for item in topic.outline if item.strip()]
+        first_point = outline[0] if len(outline) > 0 else topic.core_viewpoint
+        second_point = outline[1] if len(outline) > 1 else topic.reason
+        third_point = outline[2] if len(outline) > 2 else "把结论落到下一次行动"
+        hook = (
+            f"我做了半年 AI 内容后，最怕的不是没人看，而是客户突然问："
+            f"“这东西到底归谁？”这次我想把「{topic.title}」讲透。"
+        )
+        sections = [
+            ScriptSection(
+                "scene",
+                "真实场景",
+                42,
+                (
+                    f"事情是从一个很具体的场景开始的。{topic.reason}"
+                    f"表面看只是客户问一句边界，我解释一句流程。"
+                    f"但我马上意识到，这不是补一句说明就能过去的问题。"
+                    f"危险的不是做不出来，而是做出来以后，别人分不清哪些是你的方法，"
+                    f"哪些是客户素材，哪些又是 AI 辅助生成。"
+                ),
+            ),
+            ScriptSection(
+                "conflict",
+                "冲突拆开",
+                44,
+                (
+                    f"这件事最容易被讲浅，因为大家会立刻把它归到版权两个字上。"
+                    f"但我的判断是：{topic.core_viewpoint}"
+                    f"版权只是最后被看见的名字，前面其实是一整条交付链路。"
+                    f"从资料、脚本、课程结构到最终文件，"
+                    f"每一环如果没有提前标注归属，最后都会变成一句难回答的话：这个东西到底算谁的？"
+                ),
+            ),
+            ScriptSection(
+                "point_1",
+                "第一层判断",
+                46,
+                (
+                    f"第一层是「{first_point}」。我以前会默认，只要核心框架是我搭的，"
+                    f"客户就自然能理解这是我的原创能力。但真实合作里不能靠默认。"
+                    f"客户看到的是结果，不一定看得到过程；他也不一定知道哪些素材来自他，哪些表达来自我。"
+                    f"所以只要过程不透明，信任就会被消耗。不是客户为难你，"
+                    f"而是你没有给他一个能放心采购和复用的说明。"
+                ),
+            ),
+            ScriptSection(
+                "point_2",
+                "第二层判断",
+                44,
+                (
+                    f"第二层是「{second_point}」。很多创作者的问题不是能力不够，"
+                    f"而是交付边界写得太晚。等客户已经拿到东西，再去解释授权范围、"
+                    f"二次修改和署名方式，气氛就会很被动。"
+                    f"我后来反思，专业做法应该是在开工前说清三件事："
+                    f"输入资料归谁，成品怎么用，AI 参与的部分怎么标注。"
+                ),
+            ),
+            ScriptSection(
+                "point_3",
+                "第三层判断",
+                43,
+                (
+                    f"第三层是「{third_point}」。如果只是口头讲一遍，下一次还会重复踩坑。"
+                    f"所以我现在更倾向于把它产品化：每次课程、脚本、视频交付，"
+                    f"都附一个简短的权利说明和素材清单。哪怕只有几行，也比事后解释强。"
+                    f"这份说明会写清楚：课程结构、原创文案、客户资料、公开素材、AI 生成内容分别怎么处理。"
+                ),
+            ),
+            ScriptSection(
+                "reflection",
+                "个人反思",
+                42,
+                (
+                    f"这件事也提醒我，AI 创作时代的护城河，不只是你会不会调用模型。"
+                    f"模型可以提速，但不能替你建立信任。真正值钱的是你能不能把混乱的过程讲清楚，"
+                    f"把客户担心的问题提前处理掉，"
+                    f"把一种新的创作方式变成对方敢长期合作的标准流程。"
+                ),
+            ),
+            ScriptSection(
+                "action",
+                "行动建议",
+                39,
+                (
+                    f"如果你也在做 AI 课程、视频或自动化交付，我建议下一次别只交成品。"
+                    f"顺手加一页说明：用了哪些资料，哪些内容是你原创，哪些地方 AI 参与了，"
+                    f"客户能怎么用，不能怎么用。"
+                    f"这不是加负担，而是在降低不确定性。"
+                    f"评论区告诉我，你担心版权、署名还是商用边界？"
+                ),
+            ),
+        ]
         return ScriptPackage(
             id=f"script_{uuid4().hex[:6]}",
-            hook=f"今天这个选题我想讲一个真实判断：{topic.core_viewpoint}",
-            sections=[
-                ScriptSection("hook", "开头 3 秒钩子", 12, f"{topic.title} 这件事，表面看是技术问题，其实是产品生存问题。"),
-                ScriptSection("why", "为什么今天聊这个", 24, topic.reason),
-                ScriptSection("point_1", "原因 1", 36, topic.outline[0]),
-                ScriptSection("point_2", "原因 2", 36, topic.outline[1]),
-                ScriptSection("point_3", "原因 3", 36, topic.outline[2]),
-                ScriptSection("ending", "结尾金句", 18, "AI 产品最终比拼的不是演示效果，而是能不能进入真实生活和真实工作流。"),
-            ],
+            hook=hook,
+            sections=sections,
             title_options=[topic.title, f"第 {day_number} 天：{topic.title}", f"一个 AI 产品判断：{topic.core_viewpoint}"],
-            cover_copy=topic.title,
-            publish_copy=f"AI视频日记今天聊：{topic.title}。我的判断是：{topic.core_viewpoint}",
-            comment_prompt="你最近有没有遇到看起来很强、但自己不会天天用的 AI 产品？",
+            cover_copy=f"{topic.title}\n边界讲清，合作才稳",
+            publish_copy=(
+                f"AI视频日记第 {day_number} 天：{topic.title}。"
+                f"这次不只讲观点，也讲我从真实交付里踩到的边界问题：{topic.core_viewpoint}"
+            ),
+            comment_prompt="你在 AI 创作里最担心的是版权、署名，还是商用边界？",
         )
 
     def regenerate_section(
@@ -160,7 +252,7 @@ class DeepSeekScriptGenerator:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
-            "max_tokens": 2400,
+            "max_tokens": 4800,
         }
         url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
@@ -271,6 +363,8 @@ class DeepSeekScriptGenerator:
             "estimated_seconds 按约 180 字/分钟估算。"
             "口播要像真人日记：直接、具体、有判断，不要营销腔。"
             "不要使用动物、怪物、玄幻、热血鸡汤类比。"
+            f"成稿目标是 {SCRIPT_TARGET_WORDING}，按完整口播稿写，不要写成提纲。"
+            "每段都要有现场感、推进关系和可直接念出的完整句子。"
         )
 
     def _section_system_prompt(self, template: ContentTemplate | None = None) -> str:
@@ -282,6 +376,7 @@ class DeepSeekScriptGenerator:
             "JSON 字段必须包含 id、title、estimated_seconds、content。"
             "只重写用户指定段落，保持 id 和 title 不变，保持真人日记感，不要营销腔。"
             "重写后的段落必须与上一段和下一段自然衔接。"
+            "重写后的段落要有完整展开，通常不少于 120 个中文字符，不要只给一句总结。"
         )
 
     def _user_prompt(
@@ -319,16 +414,29 @@ class DeepSeekScriptGenerator:
                 },
                 "recent_feedback": feedback,
                 "preference_memory": preference_memory_payload(feedback_events),
+                "target_length": {
+                    "chinese_characters": {
+                        "min": SCRIPT_MIN_CHARS,
+                        "max": SCRIPT_MAX_CHARS,
+                    },
+                    "spoken_duration": "4-6 分钟",
+                    "pace": "按日常中文口播约 180-220 字/分钟估算",
+                },
                 "requirements": [
-                    f"生成总时长 {template.recommended_duration if template else '2 到 3 分钟'} 的中文口播稿。",
+                    "生成 800-1000 字中文口播稿，总时长约 4-6 分钟。",
+                    f"本次栏目参考时长：{template.recommended_duration if template else SCRIPT_TARGET_WORDING}。",
                     "hook 是独立字段",
                     "开头 3 秒要有明确冲突或判断。",
                     "sections 要与 topic.outline 或 content_template.script_structure 对齐。",
+                    "sections 建议 6-7 段，除 hook 外每段至少 100 个中文字符，核心论证段建议 120-170 个中文字符。",
+                    "每段都要有真实细节、个人判断和推进关系，不能只写观点标题或一句概括。",
+                    "整篇要像对镜头说完的一版成稿，不要输出提纲、笔记、短句堆叠或发布摘要。",
+                    "结构建议：开头冲突 -> 真实场景 -> 问题拆解 -> 三段主体判断 -> 个人反思 -> 行动建议/评论引导。",
                     "优先遵守 preference_memory：prefer 是应该强化的表达方式，avoid 是应该避开的表达方式。",
                     "优先遵守 creator_profile",
                     "creator_profile 用来稳定口播语气、标题、封面和发布文案边界，不要把 profile 当作事实来源。",
-                    "estimated_seconds 按约 180 字/分钟估算。",
-                    "保留三段核心原因，每段都要有一句可直接口播的内容。",
+                    "estimated_seconds 按约 180-220 字/分钟估算。",
+                    "保留三段核心原因，每段都要有一段可直接口播的展开内容。",
                     "生成 3 个标题候选、1 条封面文案、1 条发布文案、1 条评论引导。",
                 ],
             },
@@ -409,6 +517,7 @@ class DeepSeekScriptGenerator:
                     "creator_profile 用来保持重写段落的口吻边界，但只改 target_section。",
                     "只重写 target_section，不要改 hook、标题候选、封面文案和发布文案。",
                     "不要让重写段落和上下文断裂。",
+                    "重写段落要补足真实细节和推理过程，通常不少于 120 个中文字符。",
                 ],
             },
             ensure_ascii=False,

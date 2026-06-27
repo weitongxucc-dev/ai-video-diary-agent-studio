@@ -303,6 +303,43 @@ def test_seedance_generator_uses_ark_content_generation_payload(tmp_path):
     assert result["status"] == "submitted"
 
 
+def test_seedance_job_includes_provider_error_body(tmp_path):
+    grid_path = tmp_path / "reference_grid.jpg"
+    grid_path.write_bytes(b"fake grid")
+    write_reference_manifest(tmp_path, reference_grid_path=grid_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "error": {
+                    "code": "ModelNotOpen",
+                    "message": "model service is not activated",
+                },
+            },
+            request=request,
+        )
+
+    generator = SeedanceHttpVideoGenerator(
+        Settings(
+            seedance_api_key="ark-key",
+            seedance_base_url="https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+            seedance_model="doubao-seedance-2-0-260128",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = create_same_style_video_job(
+        Settings(draft_output_path=str(tmp_path)),
+        SameStyleVideoJobRequest(reference_job_id="reference_job"),
+        generator=generator,
+    )
+
+    assert result.status == "failed"
+    assert "ModelNotOpen" in result.message
+    assert "model service is not activated" in result.message
+
+
 def test_same_style_video_job_reads_ark_video_url_from_nested_output(tmp_path):
     grid_path = tmp_path / "reference_grid.jpg"
     grid_path.write_bytes(b"fake grid")

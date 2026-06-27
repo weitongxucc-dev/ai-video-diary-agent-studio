@@ -120,7 +120,7 @@ function CoverEmptyState({
         };
 
   return (
-    <section className="cover-workbench cover-missing-workbench pixel-card">
+    <section className="cover-workbench cover-missing-workbench retro-panel">
       <div className="workspace-header compact">
         <div>
           <span className="section-kicker">封面工位</span>
@@ -129,7 +129,7 @@ function CoverEmptyState({
         </div>
         {episode ? <span className="step-state">Episode #{episode.day_number}</span> : null}
       </div>
-      <div className="cover-prereq-grid" aria-label="封面生成前置条件">
+      <div className="cover-prereq-grid cover-stage-strip" aria-label="封面生成前置条件">
         <div>
           <strong>1 口播稿确认</strong>
           <span>封面会读取脚本的标题候选、开头钩子和 cover_copy。</span>
@@ -199,10 +199,10 @@ export default async function CoverPage() {
 
   return (
     <AppShell>
-      <div className="cover-page">
+      <div className="cover-page cover-page-workstation">
         {cover && episode ? (
           <>
-            <section className="cover-workbench cover-primary-stage pixel-card">
+            <section className="cover-workbench cover-primary-stage retro-panel">
               <div className="workspace-header compact cover-workbench-head">
                 <div>
                   <span className="section-kicker">封面工位</span>
@@ -286,7 +286,7 @@ export default async function CoverPage() {
               </details>
             </section>
 
-            <details className="cover-editor cover-secondary-drawer pixel-card">
+            <details className="cover-editor cover-secondary-drawer retro-panel">
               <summary>
                 <span>微调封面文案</span>
                 <strong>主标题 / 副标题 / 标签</strong>
@@ -357,8 +357,8 @@ export default async function CoverPage() {
           <CoverEmptyState episode={episode} error={error} />
         )}
 
-        <aside className="workspace-side">
-          <div className="pixel-card side-note cover-export-status">
+        <aside className="workspace-side cover-inspector inspector-panel">
+          <div className="retro-panel-secondary side-note cover-export-status">
             <PixelIcon name="cover" />
             <h2>导出状态</h2>
             <p>{cover?.preview_url ? "已生成封面图" : cover ? "待生成封面图" : "等待脚本"}</p>
@@ -368,7 +368,7 @@ export default async function CoverPage() {
                 : "点击生成封面图后，草稿素材包会写入 4:3 cover.png。"}
             </span>
           </div>
-          <div className="pixel-card side-note">
+          <div className="retro-panel-secondary side-note">
             <h2>下一步</h2>
             <p>确认后回到草稿页生成素材包，系统会导出 4:3 cover.png。</p>
             <Link className="pixel-button secondary" href="/draft">

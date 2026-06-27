@@ -52,22 +52,82 @@ function EmptyTopicState({
         };
 
   return (
-    <section className="topic-empty pixel-card">
-      <span className="section-kicker">选题池</span>
-      <h1>{copy.title}</h1>
-      <p>{copy.description}</p>
-      <div className="script-empty-actions">
-        {episode ? (
-          <form action={generateTopicsAction}>
-            <input name="episode_id" type="hidden" value={episode.id} />
-            <button className="pixel-button" disabled={isTopicProcessing} type="submit">
-              {isTopicProcessing ? "生成中" : "生成今日选题"}
-            </button>
-          </form>
-        ) : null}
-        <Link className="pixel-button secondary" href="/">
-          返回今日工作台
-        </Link>
+    <section className="topic-empty-workstation empty-state-workflow">
+      <div className="topic-empty-layout">
+        <aside className="topic-empty-side retro-panel-secondary">
+          <span className="section-kicker">选题池</span>
+          <h2>候选将会出现在这里</h2>
+          <p>生成后，复核通过的选题卡片会显示在今日工作台中，供你继续优化、提稿与发布。</p>
+        </aside>
+
+        <div className="topic-empty-main retro-panel-secondary">
+          <div>
+            <span className="section-kicker">Agent 工作站</span>
+            <h1>{copy.title}</h1>
+            <p>{copy.description}</p>
+          </div>
+          <div className="topic-source-grid" aria-label="Agent 将参考以下数据源">
+            <h2>Agent 将参考以下数据源</h2>
+            <ul className="topic-source-grid">
+              <li>
+                <PixelIcon name="folder" />
+                <span>Obsidian 个人知识库</span>
+                <span className="status-badge"><span className="status-dot ready" /> 已连接</span>
+              </li>
+              <li>
+                <PixelIcon name="link" />
+                <span>外链素材源</span>
+                <span className="status-badge"><span className="status-dot partial" /> 部分可用</span>
+              </li>
+              <li>
+                <PixelIcon name="product" />
+                <span>产品资料库</span>
+                <span className="status-badge"><span className="status-dot ready" /> 已就绪</span>
+              </li>
+              <li>
+                <PixelIcon name="archive" />
+                <span>历史反馈记录</span>
+                <span className="status-badge"><span className="status-dot partial" /> 待积累</span>
+              </li>
+            </ul>
+          </div>
+          <div aria-label="生成后你将获得">
+            <h2>生成后你将获得</h2>
+            <ul className="topic-outcome-list">
+              <li><PixelIcon name="spark" /><span>3-5 个候选选题，贴合目标、具备传播潜力</span></li>
+              <li><PixelIcon name="agent" /><span>每个选题的爆点理由、口播角度与风险提醒</span></li>
+              <li><PixelIcon name="script" /><span>可继续进入口播稿工作流的人工确认入口</span></li>
+            </ul>
+          </div>
+          <div className="script-empty-actions">
+            {episode ? (
+              <form action={generateTopicsAction}>
+                <input name="episode_id" type="hidden" value={episode.id} />
+                <button className="pixel-button" disabled={isTopicProcessing} type="submit">
+                  {isTopicProcessing ? "生成中" : "生成今日选题"}
+                </button>
+              </form>
+            ) : null}
+            <Link className="pixel-button secondary" href="/">
+              返回今日工作台
+            </Link>
+          </div>
+        </div>
+
+        <aside className="topic-inspector inspector-panel">
+          <h2>Agent 提示</h2>
+          <PixelIcon name="agent" />
+          <p>我会结合多源信息为你生成更有价值的选题，提升视频内容的传播力与转化潜力。</p>
+          <ul className="topic-inspector-list" aria-label="数据源状态">
+            <li><span>Obsidian</span><span className="status-badge"><span className="status-dot ready" /> 已连接</span></li>
+            <li><span>外链素材源</span><span className="status-badge"><span className="status-dot partial" /> 部分可用</span></li>
+            <li><span>产品资料库</span><span className="status-badge"><span className="status-dot ready" /> 已就绪</span></li>
+            <li><span>历史反馈记录</span><span className="status-badge"><span className="status-dot partial" /> 待积累</span></li>
+          </ul>
+          <Link className="pixel-button secondary" href="/settings">
+            管理数据源
+          </Link>
+        </aside>
       </div>
     </section>
   );

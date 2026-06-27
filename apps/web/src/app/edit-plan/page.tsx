@@ -155,8 +155,8 @@ export default async function EditPlanPage() {
 
   return (
     <AppShell>
-      <div className="edit-plan-page">
-        <section className="edit-plan-main pixel-card">
+      <div className="edit-plan-page edit-plan-workstation">
+        <section className="edit-plan-main retro-panel">
           <div className="edit-plan-header">
             <div>
               <span className="section-kicker">剪辑计划</span>
@@ -476,8 +476,8 @@ export default async function EditPlanPage() {
           </section>
         </section>
 
-        <aside className="edit-plan-side">
-          <section className="pixel-card edit-agent-next">
+        <aside className="edit-plan-side edit-plan-inspector">
+          <section className="retro-panel-secondary edit-agent-next">
             <div className="edit-agent-robot">
               <PixelMascot />
             </div>
@@ -499,7 +499,7 @@ export default async function EditPlanPage() {
             )}
           </section>
 
-          <section className="pixel-card edit-side-panel">
+          <section className="retro-panel-secondary edit-side-panel">
             <h2>语音定位结果</h2>
             <dl>
               <div>
@@ -521,7 +521,7 @@ export default async function EditPlanPage() {
             </dl>
           </section>
 
-          <section className="pixel-card edit-side-panel">
+          <section className="retro-panel-secondary edit-side-panel">
             <h2>剪映轨道预览</h2>
             <ul className="track-preview">
               <li><span>V1</span><strong>主视频</strong><em>{keptCount || 0} 段</em></li>

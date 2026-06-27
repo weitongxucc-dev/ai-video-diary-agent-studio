@@ -174,7 +174,7 @@ export default async function VideoPage() {
   return (
     <AppShell>
       <div className="video-page">
-        <section className="video-main pixel-card">
+        <section className="video-main video-workstation-actions retro-panel">
           <div className="video-header">
             <div>
               <span className="section-kicker">视频处理</span>
@@ -320,7 +320,7 @@ export default async function VideoPage() {
             </div>
           ) : null}
 
-          <div className="video-list bounded-list" aria-label="待处理视频列表">
+          <div className="video-list video-data-table retro-data-table bounded-list" aria-label="待处理视频列表">
             {visibleVideos.length > 0 ? (
               <>
                 {visibleVideos.map((video, index) => (
@@ -425,7 +425,7 @@ export default async function VideoPage() {
           </div>
         </section>
 
-        <aside className="video-side pixel-card">
+        <aside className="video-side video-inspector inspector-panel">
           <h2>本地环境</h2>
           <div className="video-status-list">
             <div className="video-status-row">
