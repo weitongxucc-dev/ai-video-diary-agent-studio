@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+import logging
 import time as time_module
+from datetime import UTC, date, datetime, time
 from typing import Protocol
 
 from app.config import Settings
@@ -14,6 +15,8 @@ from app.topics import topic_generator_from_settings
 from app.video import ProcessedVideo, VideoInbox
 from app.video_pipeline import video_processing_pipeline_from_settings
 from app.workflow import LangGraphEpisodeWorkflow
+
+logger = logging.getLogger(__name__)
 
 
 class VideoProcessor(Protocol):
@@ -41,7 +44,7 @@ class AgentAutomationWorker:
         self._topic_runs: set[date] = set()
 
     def run_scheduled_topics_once(self, now: datetime | None = None) -> bool:
-        now = now or datetime.now()
+        now = now or datetime.now(UTC)
         today = now.date()
         if now.time() < self.daily_topic_time or today in self._topic_runs:
             return False
@@ -80,8 +83,14 @@ class AgentAutomationWorker:
 
     def run_forever(self, poll_interval_seconds: float = 30.0) -> None:
         while True:
-            self.run_scheduled_topics_once()
-            self.process_pending_videos_once()
+            try:
+                self.run_scheduled_topics_once()
+                self.process_pending_videos_once()
+            except Exception:
+                logger.exception(
+                    "AgentAutomationWorker loop crashed – retrying in 30s"
+                )
+                time_module.sleep(30)
             time_module.sleep(poll_interval_seconds)
 
 

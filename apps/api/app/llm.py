@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import random
+import time as time_module
 from typing import Protocol
 from uuid import uuid4
 
@@ -114,6 +116,39 @@ class TemplateScriptGenerator:
         )
 
 
+def _httpx_post_with_retry(
+    url: str,
+    json: object,
+    headers: dict[str, str],
+    timeout: float,
+    transport: object | None,
+    max_retries: int = 3,
+) -> httpx.Response:
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            with httpx.Client(
+                transport=transport, timeout=timeout
+            ) as client:
+                response = client.post(url, json=json, headers=headers)
+            if response.is_success or response.status_code < 500:
+                return response
+            body_preview = response.text[:200]
+            raise httpx.HTTPStatusError(
+                f"server error {response.status_code}: {body_preview}",
+                request=response.request,
+                response=response,
+            )
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = 2 ** attempt + random.random()
+                time_module.sleep(delay)
+    raise LLMResponseError(
+        f"DeepSeek API call failed after {max_retries + 1} attempts"
+    ) from last_exc
+
+
 class DeepSeekScriptGenerator:
     def __init__(
         self,
@@ -148,8 +183,9 @@ class DeepSeekScriptGenerator:
         url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
 
-        with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
-            response = client.post(url, json=payload, headers=headers)
+        response = _httpx_post_with_retry(
+            url, payload, headers, self._timeout, self._transport
+        )
 
         try:
             response.raise_for_status()
@@ -202,8 +238,9 @@ class DeepSeekScriptGenerator:
         url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
 
-        with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
-            response = client.post(url, json=payload, headers=headers)
+        response = _httpx_post_with_retry(
+            url, payload, headers, self._timeout, self._transport
+        )
 
         try:
             response.raise_for_status()

@@ -9,7 +9,6 @@ from app.schemas import SystemStatusResponse
 from app.sources import ObsidianVault, TopicSourceItem
 from app.topics import DeepSeekTopicGenerator, _external_topic_sources
 
-
 SAMPLE_REPORT = """🤖 **AI 产品日报 · 2026-05-27**
 
 ---

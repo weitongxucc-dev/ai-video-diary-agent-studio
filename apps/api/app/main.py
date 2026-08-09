@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections import Counter
 import logging
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
-from pathlib import Path
 
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
@@ -21,9 +21,14 @@ from app.edit_plan import (
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
-from app.llm import LLMConfigurationError, LLMResponseError, script_generator_from_settings
+from app.llm import (
+    LLMConfigurationError,
+    LLMResponseError,
+    script_generator_from_settings,
+)
 from app.models import (
     Episode,
+    EpisodeIntakeMode,
     EpisodeStatus,
     FeedbackEvent,
     ScriptPackage,
@@ -31,47 +36,61 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
-from app.preference_memory import build_preference_memory
-from app.repository import EpisodeRepository
+from app.preference_memory import PreferenceState, build_preference_memory
+from app.repository import (
+    EpisodeRepository,
+    load_preference_state_payload,
+    save_preference_state_payload,
+)
 from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
+    ArchiveSourcesRequest,
+    ArchiveSourcesResponse,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
-    DraftPackageRequest,
-    DraftPackageResponse,
-    EditPlanResponse,
-    EditPlanSegmentDecisionRequest,
-    DraftImportRequest,
-    DraftImportResponse,
     DraftAssetResponse,
     DraftEnvironmentResponse,
+    DraftImportRequest,
+    DraftImportResponse,
+    DraftPackageRequest,
+    DraftPackageResponse,
     DraftStatusResponse,
+    EditPlanResponse,
+    EditPlanSegmentDecisionRequest,
+    EpisodeListResponse,
     EpisodeResponse,
-    FeedbackRequest,
+    EpisodeSummaryResponse,
     FeedbackEventResponse,
+    FeedbackRequest,
     FeedbackRevertRequest,
     FeedbackSummaryResponse,
     KnowledgeNoteResponse,
-    MarkPublishedRequest,
     ManualLinkRequest,
+    MarkPublishedRequest,
     PendingVideoResponse,
-    PreferencesResponse,
     PreferenceItemResponse,
+    PreferencesResponse,
+    PreferenceToggleRequest,
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
+    ProductionChainResponse,
+    PublishMetricsUpdateRequest,
     RetakeReportResponse,
+    RuntimeHealthResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
-    RuntimeHealthResponse,
     ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
-    SourceItemsResponse,
+    SourceFileStatesResponse,
     SourceItemResponse,
+    SourceItemsResponse,
+    SourceSyncStatusesResponse,
+    SourceSyncStatusResponse,
     SystemStatusResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
@@ -85,7 +104,7 @@ from app.topics import (
     TopicGenerationResponseError,
     topic_generator_from_settings,
 )
-from app.video import FfmpegVideoProcessor, VideoInbox
+from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
@@ -102,6 +121,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail if isinstance(exc.detail, str) else type(exc).__name__,
+            "detail": str(exc.detail),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    from fastapi.responses import JSONResponse
+
+    status_map: dict[type[Exception], int] = {
+        ValueError: 400,
+        FileNotFoundError: 404,
+        PermissionError: 403,
+        RuntimeError: 500,
+        NotImplementedError: 501,
+    }
+    status_code = 500
+    for exc_type, code in status_map.items():
+        if isinstance(exc, exc_type):
+            status_code = code
+            break
+    logger.exception(
+        "unhandled exception %s: %s", type(exc).__name__, exc
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": type(exc).__name__,
+            "detail": str(exc),
+        },
+    )
+
+
 settings = Settings.from_env()
 repo = EpisodeRepository(database_path=settings.database_path)
 vault = ObsidianVault(settings.obsidian_vault_path)
@@ -117,6 +178,7 @@ service = EpisodeService(
 workflow = LangGraphEpisodeWorkflow(service)
 video_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
+source_tracker = SourceTracker(video_inbox)
 manual_source_items: list[TopicSourceItem] = []
 
 
@@ -243,7 +305,7 @@ def update_runtime_settings(
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, service, workflow
+    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow
 
     settings = Settings.from_env()
     repo = EpisodeRepository(database_path=settings.database_path)
@@ -255,6 +317,7 @@ def _reload_runtime_dependencies() -> None:
         processor=video_processor,
     )
     draft_workspace = DraftWorkspace(settings)
+    source_tracker = SourceTracker(video_inbox)
     service = EpisodeService(
         script_generator=script_generator_from_settings(settings),
         topic_generator=topic_generator_from_settings(settings, vault),
@@ -325,6 +388,39 @@ def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
     return _source_items_response(manual_source_items)
 
 
+@app.get(
+    "/api/sources/sync-status",
+    response_model=SourceSyncStatusesResponse,
+)
+def get_source_sync_status() -> SourceSyncStatusesResponse:
+    from app.repository import load_source_sync_statuses
+
+    raw_statuses = load_source_sync_statuses()
+    statuses = [
+        {
+            "source_type": source_type,
+            "configured": data.get("configured", False),
+            "last_sync_at": datetime.fromisoformat(data["last_sync_at"])
+            if data.get("last_sync_at")
+            else None,
+            "last_success_at": datetime.fromisoformat(data["last_success_at"])
+            if data.get("last_success_at")
+            else None,
+            "last_failure_at": datetime.fromisoformat(data["last_failure_at"])
+            if data.get("last_failure_at")
+            else None,
+            "error_message": data.get("error_message"),
+        }
+        for source_type, data in raw_statuses.items()
+    ]
+    return SourceSyncStatusesResponse(
+        statuses=[
+            SourceSyncStatusResponse(**status)
+            for status in statuses
+        ],
+    )
+
+
 @app.get("/api/feedback/summary", response_model=FeedbackSummaryResponse)
 def get_feedback_summary() -> FeedbackSummaryResponse:
     all_event_pairs = [
@@ -360,13 +456,67 @@ def get_preferences() -> PreferencesResponse:
         for event in episode.feedback_events
         if event.reason and event.active
     ]
-    memory = build_preference_memory(events, limit=20)
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
     preferences = [
         PreferenceItemResponse(
             label=label,
             signal=signal.signal,
             evidence_count=signal.evidence_count,
             confidence=signal.confidence,
+            enabled=signal.enabled,
+        )
+        for label, signals in (
+            ("偏好", memory.prefer),
+            ("避开", memory.avoid),
+        )
+        for signal in signals
+    ]
+    return PreferencesResponse(
+        total_feedback_count=len(events),
+        preferences=preferences[:20],
+    )
+
+
+@app.patch(
+    "/api/preferences/disable",
+    response_model=PreferencesResponse,
+)
+def disable_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    pref_state.disable(request.signal)
+    save_preference_state_payload(pref_state.to_payload())
+    return _rebuilt_preferences_response(pref_state)
+
+
+@app.patch(
+    "/api/preferences/restore",
+    response_model=PreferencesResponse,
+)
+def restore_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    pref_state.restore(request.signal)
+    save_preference_state_payload(pref_state.to_payload())
+    return _rebuilt_preferences_response(pref_state)
+
+
+def _rebuilt_preferences_response(
+    pref_state: PreferenceState,
+) -> PreferencesResponse:
+    events = [
+        event
+        for episode in repo.all()
+        for event in episode.feedback_events
+        if event.reason and event.active
+    ]
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
+    preferences = [
+        PreferenceItemResponse(
+            label=label,
+            signal=signal.signal,
+            evidence_count=signal.evidence_count,
+            confidence=signal.confidence,
+            enabled=signal.enabled,
         )
         for label, signals in (
             ("偏好", memory.prefer),
@@ -1151,9 +1301,11 @@ def mark_episode_published(
         "mark_published",
         get_episode_or_404(episode_id),
         publish_url=request.publish_url,
+        platform=request.platform,
         play_count=request.play_count,
         like_count=request.like_count,
         comment_count=request.comment_count,
+        notes=request.notes,
     )
     return episode_response(repo.save(episode))
 
@@ -1187,4 +1339,130 @@ def revert_episode_feedback(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return episode_response(repo.save(episode))
+
+
+@app.get(
+    "/api/episodes/{episode_id}/production-chain",
+    response_model=ProductionChainResponse,
+)
+def get_episode_production_chain(episode_id: str) -> ProductionChainResponse:
+    episode = get_episode_or_404(episode_id)
+    return ProductionChainResponse(
+        episode_id=episode.id,
+        intake_mode=episode.intake_mode,
+        chain=[
+            {
+                "stage": step.stage,
+                "status": step.status,
+                "started_at": step.started_at,
+                "finished_at": step.finished_at,
+                "detail": step.detail,
+            }
+            for step in episode.video_production_chain
+        ],
+    )
+
+
+@app.get(
+    "/api/episodes/{episode_id}/source-file-states",
+    response_model=SourceFileStatesResponse,
+)
+def get_episode_source_file_states(episode_id: str) -> SourceFileStatesResponse:
+    episode = get_episode_or_404(episode_id)
+    return SourceFileStatesResponse(
+        episode_id=episode.id,
+        files=[
+            {"file_name": name, "state": state}
+            for name, state in episode.source_file_states.items()
+        ],
+    )
+
+
+@app.post(
+    "/api/episodes/{episode_id}/archive-sources",
+    response_model=ArchiveSourcesResponse,
+)
+def archive_episode_sources(
+    episode_id: str,
+    request: ArchiveSourcesRequest,
+) -> ArchiveSourcesResponse:
+    episode = get_episode_or_404(episode_id)
+    try:
+        episode = service.archive_source_files(episode, source_tracker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    repo.save(episode)
+    files = [
+        {"file_name": name, "state": state}
+        for name, state in episode.source_file_states.items()
+    ]
+    archived_count = sum(
+        1 for f in files if f["state"] == "archived"
+    )
+    return ArchiveSourcesResponse(
+        episode_id=episode.id,
+        archived_count=archived_count,
+        files=files,
+    )
+
+
+@app.get("/api/episodes", response_model=EpisodeListResponse)
+def list_episodes(
+    status: EpisodeStatus | None = None,
+    intake_mode: EpisodeIntakeMode | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> EpisodeListResponse:
+    episodes = repo.all()
+    filtered = [
+        ep for ep in episodes
+        if (status is None or ep.status == status)
+        and (intake_mode is None or ep.intake_mode == intake_mode)
+    ]
+    page = filtered[offset : offset + limit]
+    return EpisodeListResponse(
+        episodes=[
+            EpisodeSummaryResponse(
+                id=ep.id,
+                day_number=ep.day_number,
+                episode_date=ep.episode_date,
+                status=ep.status,
+                intake_mode=ep.intake_mode,
+                content_template_id=ep.content_template_id,
+                selected_topic_id=ep.selected_topic_id,
+                video_source_file_name=ep.video_source_file_name,
+                video_job_status=ep.video_job_status,
+                video_job_message=ep.video_job_message,
+                draft_package_name=ep.draft_package_name,
+                publish_url=ep.publish_url,
+                platform=ep.platform,
+                published_at=ep.published_at,
+                created_at=ep.created_at,
+                updated_at=ep.updated_at,
+            )
+            for ep in page
+        ],
+        total=len(filtered),
+    )
+
+
+@app.put(
+    "/api/episodes/{episode_id}/publish-metrics",
+    response_model=EpisodeResponse,
+)
+def update_episode_publish_metrics(
+    episode_id: str,
+    request: PublishMetricsUpdateRequest,
+) -> EpisodeResponse:
+    episode = get_episode_or_404(episode_id)
+    episode = service.update_publish_metrics(
+        episode,
+        publish_url=request.publish_url,
+        platform=request.platform,
+        play_count=request.play_count,
+        like_count=request.like_count,
+        comment_count=request.comment_count,
+        notes=request.notes,
+    )
     return episode_response(repo.save(episode))

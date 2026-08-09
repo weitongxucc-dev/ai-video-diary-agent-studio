@@ -57,10 +57,10 @@ class HtmlPageSourceClient:
         return "外链"
 
     def _title(self, text: str) -> str | None:
-        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.I | re.S)
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL)
         if title_match:
             return self._clean_text(title_match.group(1))
-        h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", text, flags=re.I | re.S)
+        h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", text, flags=re.IGNORECASE | re.DOTALL)
         if h1_match:
             return self._clean_text(h1_match.group(1))
         return None
@@ -70,7 +70,7 @@ class HtmlPageSourceClient:
             r"<(script|style)[^>]*>.*?</\1>",
             " ",
             text,
-            flags=re.I | re.S,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         visible_text = re.sub(r"<[^>]+>", " ", without_scripts)
         return self._clean_text(visible_text)[:max_chars]

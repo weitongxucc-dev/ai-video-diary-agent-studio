@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.config import write_dotenv_values
 
-
 LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 

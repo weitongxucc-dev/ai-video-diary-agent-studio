@@ -1,5 +1,5 @@
-from datetime import date
 import json
+from datetime import date
 from pathlib import Path
 from types import ModuleType
 
@@ -202,7 +202,7 @@ def test_ad_hoc_draft_does_not_invent_script_subtitles_when_asr_fails(tmp_path):
         episode_date=date(2026, 5, 29),
         status=EpisodeStatus.VIDEO_PROCESSING,
     )
-    episode.intake_mode = "ad_hoc_video"
+    episode.intake_mode = "ad_hoc_single"
 
     package = workspace.create_package("talk_preview.mp4", episode)
 
@@ -213,7 +213,7 @@ def test_ad_hoc_draft_does_not_invent_script_subtitles_when_asr_fails(tmp_path):
     assert (package_dir / "cover.png").exists()
     assert package.subtitle_path is None
     assert package.cover_path == str(package_dir / "cover.png")
-    assert manifest["source_mode"] == "ad_hoc_video"
+    assert manifest["source_mode"] == "ad_hoc_single"
     assert manifest["artifacts"]["subtitle_path"] is None
     assert manifest["artifacts"]["subtitle_source"] == "none"
     assert manifest["artifacts"]["asr_status"] == "failed"

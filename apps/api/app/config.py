@@ -206,7 +206,7 @@ class Settings:
     local_whisper_language: str = "zh"
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         load_dotenv_files()
         return cls(
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),

@@ -1,5 +1,5 @@
-from datetime import date
 import json
+from datetime import date
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -8,7 +8,6 @@ import app.main as main_module
 from app.config import Settings
 from app.models import EpisodeStatus
 from app.repository import EpisodeRepository
-
 
 client = TestClient(main_module.app)
 

@@ -8,7 +8,6 @@ from typing import Any
 
 from app.models import Episode, VideoJobStatus, utc_now
 
-
 VALID_SEGMENT_DECISIONS = {"keep", "remove", "review"}
 
 

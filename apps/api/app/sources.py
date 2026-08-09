@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,7 @@ class ObsidianVault:
             title=self._title_from_text(text, path),
             ref=ref,
             excerpt=self._excerpt_from_text(text),
-            modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
+            modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=UTC),
             tags=self._tags_from_text(text),
             wikilinks=self._wikilinks_from_text(text),
             outlinks=self._outlinks_from_text(text),

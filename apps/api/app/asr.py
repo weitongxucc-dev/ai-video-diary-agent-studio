@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import logging
+import random
 import re
 import subprocess
 import time
@@ -265,6 +267,30 @@ def asr_transcriber_from_settings(settings: Settings) -> ASRTranscriber:
     )
 
 
+def _call_with_sdk_retry(fn, max_retries: int = 2) -> object:
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            cls_name = type(exc).__name__
+            if cls_name.endswith("SDKException"):
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "tencent cloud ASR SDK error (attempt %d/%d): %s",
+                    attempt + 1, max_retries + 1, exc,
+                )
+            else:
+                raise
+            if attempt < max_retries:
+                delay = 1.0 + random.random()
+                time.sleep(delay)
+    raise ASRTranscriptionError(
+        f"Tencent Cloud ASR SDK call failed after {max_retries + 1} attempts"
+    ) from last_exc
+
+
 class TencentCloudASRApiClient:
     def __init__(self, settings: Settings) -> None:
         try:
@@ -305,7 +331,9 @@ class TencentCloudASRApiClient:
         request.DataLen = len(audio_bytes)
         request.ConvertNumMode = 1
         request.SentenceMaxLength = 18
-        response = self._client.CreateRecTask(request)
+        response = _call_with_sdk_retry(
+            lambda: self._client.CreateRecTask(request)
+        )
         task_id = getattr(getattr(response, "Data", None), "TaskId", None)
         if task_id is None:
             raise ASRTranscriptionError("Tencent Cloud ASR did not return task id")
@@ -314,7 +342,9 @@ class TencentCloudASRApiClient:
     def describe_task_status(self, task_id: int) -> dict[str, object]:
         request = self._models.DescribeTaskStatusRequest()
         request.TaskId = int(task_id)
-        response = self._client.DescribeTaskStatus(request)
+        response = _call_with_sdk_retry(
+            lambda: self._client.DescribeTaskStatus(request)
+        )
         data = getattr(response, "Data", None)
         if data is None:
             raise ASRTranscriptionError("Tencent Cloud ASR did not return task data")
@@ -344,7 +374,7 @@ def transcription_to_srt(transcription: ASRTranscription) -> str:
 
 def _model_object_to_dict(value: object) -> dict[str, object]:
     if hasattr(value, "_serialize"):
-        serialized = value._serialize()  # noqa: SLF001 - Tencent SDK model helper.
+        serialized = value._serialize()
         if isinstance(serialized, dict):
             return serialized
     return {
