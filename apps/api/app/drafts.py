@@ -275,7 +275,7 @@ class DraftWorkspace:
         try:
             draft_path = self.legacy_draft_writer(package_dir, self.jianying_root_path, manifest)
             self._sync_jianying_root_meta(draft_path, wait_seconds=3.0)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             result = {
                 **base_result,
                 "status": "failed",

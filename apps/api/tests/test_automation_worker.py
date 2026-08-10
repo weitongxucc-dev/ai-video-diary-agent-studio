@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import app.automation as automation_module
@@ -45,8 +45,8 @@ def test_automation_worker_generates_daily_topics_once():
         daily_topic_time=time(7, 0),
     )
 
-    first = worker.run_scheduled_topics_once(datetime(2026, 5, 28, 7, 1))
-    second = worker.run_scheduled_topics_once(datetime(2026, 5, 28, 8, 0))
+    first = worker.run_scheduled_topics_once(datetime(2026, 5, 28, 7, 1, tzinfo=UTC))
+    second = worker.run_scheduled_topics_once(datetime(2026, 5, 28, 8, 0, tzinfo=UTC))
 
     assert first is True
     assert second is False

@@ -54,7 +54,7 @@ class RetakeVideoRefiner:
                 self.runner(self._build_extract_audio_command(source_path, audio_path))
                 transcription = self.transcriber.transcribe(audio_path)
             detection = self.detector.detect(transcription.segments)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self._write_report(
                 report_path,
                 self._report_payload(

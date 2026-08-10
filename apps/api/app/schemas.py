@@ -662,33 +662,83 @@ class EpisodeHistoryItemResponse(BaseModel):
     title: str
     status: EpisodeStatus
     created_at: datetime
+    updated_at: datetime | None = None
     platform: str | None = None
     notes: str | None = None
     topic_title: str | None = None
+    script_title: str | None = None
+    intake_mode: EpisodeIntakeMode | None = None
+    publish_url: str | None = None
+    play_count: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
+    draft_package_path: str | None = None
+    video_dedup_report_path: str | None = None
+    published_at: datetime | None = None
 
 
 class EpisodeHistoryResponse(BaseModel):
-    episodes: list[EpisodeHistoryItemResponse]
-    total: int
+    items: list[EpisodeHistoryItemResponse]
+    total_count: int
+    filtered_count: int = 0
+    status: EpisodeStatus | None = None
+
+
+class PreferenceCardResponse(BaseModel):
+    id: str
+    label: str
+    signal: str
+    category: str
+    confidence: float = Field(ge=0, le=1)
+    evidence_count: int
+    enabled: bool = True
+    latest_evidence_at: datetime | None = None
 
 
 class PreferencesCardsResponse(BaseModel):
-    cards: list[PreferenceItemResponse]
+    total_count: int
+    enabled_count: int
+    disabled_count: int
+    cards: list[PreferenceCardResponse]
+
+
+class PreferenceEvidenceItemResponse(BaseModel):
+    feedback_event_id: str
+    episode_id: str | None = None
+    episode_date: date | None = None
+    target_type: str
+    target_id: str
+    value: str
+    reason: str | None = None
+    created_at: datetime
 
 
 class PreferenceEvidenceResponse(BaseModel):
-    signal: str
-    evidence: list[dict[str, object]]
+    preference_id: str
+    total: int
+    items: list[PreferenceEvidenceItemResponse]
+
+
+class TopicEvidenceItemResponse(BaseModel):
+    source_key: str
+    source_type: str
+    title: str
+    ref: str
+    excerpt: str | None = None
+    freshness: str = "recent"
+    freshness_label: str = "近期"
+    participated_topics: int = 0
+    last_used_at: datetime | None = None
 
 
 class TopicEvidenceResponse(BaseModel):
     episode_id: str
-    topic_id: str | None
-    source_refs: list[dict[str, str]]
+    total: int
+    items: list[TopicEvidenceItemResponse]
 
 
 class ProductionModeRequest(BaseModel):
-    mode: str
+    mode: str  # one of: bilibili, youtube, shorts, douyin, xiaohongshu
 
 
 class SourceSyncRetryResponse(BaseModel):

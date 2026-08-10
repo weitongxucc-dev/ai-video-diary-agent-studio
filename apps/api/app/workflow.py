@@ -50,7 +50,7 @@ class EpisodeWorkflowState(TypedDict, total=False):
 
 
 class LangGraphEpisodeWorkflow:
-    human_nodes = ["approve_topic", "approve_script", "mark_published"]
+    human_nodes: list[str] = ["approve_topic", "approve_script", "mark_published"]  # noqa: RUF012
 
     def __init__(self, service: EpisodeService) -> None:
         self._service = service

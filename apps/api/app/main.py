@@ -72,6 +72,8 @@ from app.schemas import (
     ManualLinkRequest,
     MarkPublishedRequest,
     PendingVideoResponse,
+    PreferenceCardResponse,
+    PreferenceEvidenceItemResponse,
     PreferenceEvidenceResponse,
     PreferenceItemResponse,
     PreferencesCardsResponse,
@@ -98,6 +100,7 @@ from app.schemas import (
     SourceSyncStatusesResponse,
     SourceSyncStatusResponse,
     SystemStatusResponse,
+    TopicEvidenceItemResponse,
     TopicEvidenceResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
@@ -1556,6 +1559,7 @@ def list_episode_history(
 ) -> EpisodeHistoryResponse:
     episodes = repo.all()
     sorted_episodes = sorted(episodes, key=lambda ep: ep.created_at, reverse=True)
+    total_all = len(sorted_episodes)
     page = sorted_episodes[offset : offset + limit]
 
     def _make_title(ep: Episode) -> str:
@@ -1568,22 +1572,39 @@ def list_episode_history(
         selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
         return selected.title if selected else None
 
+    def _script_title(ep: Episode) -> str | None:
+        if ep.script:
+            return ep.script.hook or ep.script.title_options[0] if ep.script.title_options else None
+        return None
+
+    items = [
+        EpisodeHistoryItemResponse(
+            id=ep.id,
+            day_number=ep.day_number,
+            episode_date=ep.episode_date,
+            title=_make_title(ep),
+            status=ep.status,
+            created_at=ep.created_at,
+            updated_at=ep.updated_at,
+            platform=ep.platform,
+            notes=ep.notes,
+            topic_title=_topic_title(ep),
+            script_title=_script_title(ep),
+            intake_mode=ep.intake_mode,
+            publish_url=ep.publish_url,
+            play_count=ep.play_count,
+            like_count=ep.like_count,
+            comment_count=ep.comment_count,
+            draft_package_path=ep.draft_package_name,
+            video_dedup_report_path=ep.video_dedup_report_path,
+            published_at=ep.published_at,
+        )
+        for ep in page
+    ]
     return EpisodeHistoryResponse(
-        episodes=[
-            EpisodeHistoryItemResponse(
-                id=ep.id,
-                day_number=ep.day_number,
-                episode_date=ep.episode_date,
-                title=_make_title(ep),
-                status=ep.status,
-                created_at=ep.created_at,
-                platform=ep.platform,
-                notes=ep.notes,
-                topic_title=_topic_title(ep),
-            )
-            for ep in page
-        ],
-        total=len(sorted_episodes),
+        items=items,
+        total_count=total_all,
+        filtered_count=total_all,
     )
 
 
@@ -1610,13 +1631,16 @@ def get_preferences_cards() -> PreferencesCardsResponse:
     ]
     pref_state = PreferenceState.from_payload(load_preference_state_payload())
     memory = build_preference_memory(events, limit=20, preference_state=pref_state)
-    cards = [
-        PreferenceItemResponse(
+    all_cards = [
+        PreferenceCardResponse(
+            id=f"{label}::{signal.signal}",
             label=label,
             signal=signal.signal,
+            category=label,
             evidence_count=signal.evidence_count,
             confidence=signal.confidence,
             enabled=signal.enabled,
+            latest_evidence_at=None,
         )
         for label, signals in (
             ("偏好", memory.prefer),
@@ -1624,7 +1648,13 @@ def get_preferences_cards() -> PreferencesCardsResponse:
         )
         for signal in signals
     ]
-    return PreferencesCardsResponse(cards=cards[:20])
+    cards = all_cards[:20]
+    return PreferencesCardsResponse(
+        total_count=len(cards),
+        enabled_count=sum(1 for c in cards if c.enabled),
+        disabled_count=sum(1 for c in cards if not c.enabled),
+        cards=cards,
+    )
 
 
 @app.get(
@@ -1632,21 +1662,27 @@ def get_preferences_cards() -> PreferencesCardsResponse:
     response_model=PreferenceEvidenceResponse,
 )
 def get_preference_card_evidence(card_id: str) -> PreferenceEvidenceResponse:
-    """Stub: return evidence for a preference signal."""
+    """Return evidence items for a preference signal."""
     episodes = repo.all()
+    items = [
+        PreferenceEvidenceItemResponse(
+            feedback_event_id=ev.id,
+            episode_id=ep.id,
+            episode_date=ep.episode_date,
+            target_type=ev.target_type,
+            target_id=ev.target_id,
+            value=ev.value.value,
+            reason=ev.reason or "",
+            created_at=ev.created_at,
+        )
+        for ep in episodes[:50]
+        for ev in ep.feedback_events
+        if ev.active and ev.reason and card_id in ev.reason
+    ][:10]
     return PreferenceEvidenceResponse(
-        signal=card_id,
-        evidence=[
-            {
-                "episode_id": ep.id,
-                "reason": ev.reason or "",
-                "value": ev.value.value,
-                "created_at": ev.created_at.isoformat(),
-            }
-            for ep in episodes[:50]
-            for ev in ep.feedback_events
-            if ev.active and ev.reason and card_id in ev.reason
-        ][:10],
+        preference_id=card_id,
+        total=len(items),
+        items=items,
     )
 
 
@@ -1655,16 +1691,22 @@ def get_preference_card_evidence(card_id: str) -> PreferenceEvidenceResponse:
     response_model=TopicEvidenceResponse,
 )
 def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
-    """Stub: return topic evidence (source refs) from the selected topic."""
+    """Return topic evidence (source refs) from the selected topic."""
     episode = get_episode_or_404(episode_id)
     selected = next((t for t in episode.topics if t.id == episode.selected_topic_id), None)
+    items = [
+        TopicEvidenceItemResponse(
+            source_key=sf.ref or sf.title,
+            source_type=sf.source_type,
+            title=sf.title,
+            ref=sf.ref,
+        )
+        for sf in selected.source_refs
+    ] if selected else []
     return TopicEvidenceResponse(
         episode_id=episode_id,
-        topic_id=episode.selected_topic_id,
-        source_refs=[
-            {"source_type": sf.source_type, "title": sf.title, "ref": sf.ref}
-            for sf in selected.source_refs
-        ] if selected else [],
+        total=len(items),
+        items=items,
     )
 
 
@@ -1708,3 +1750,14 @@ def update_episode_publish_metrics(
         notes=request.notes,
     )
     return episode_response(repo.save(episode))
+
+
+# ── Server entry point (for standalone API server) ──────────────────
+if __name__ == "__main__":
+    import os
+
+    import uvicorn
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)

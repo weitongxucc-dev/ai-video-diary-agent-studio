@@ -165,7 +165,7 @@ class ObsidianVault:
             for match in re.finditer(r"\[[^\]]+\]\((https?://[^)\s]+)\)", text)
         ]
         bare_urls = [
-            match.group(1).rstrip("。。，,)")
+            match.group(1).rstrip("。。，,)")  # noqa: B005
             for match in re.finditer(r"(?<!\()(?<!\]\()((?:https?://)[^\s<>\]]+)", text)
         ]
         return self._unique_clean([*markdown_urls, *bare_urls])

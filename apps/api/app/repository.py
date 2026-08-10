@@ -403,7 +403,7 @@ class EpisodeRepository:
     def _script_version_from_dict(self, data: dict[str, object]) -> ScriptVersion:
         script_data = data.get("script")
         if not isinstance(script_data, dict):
-            raise ValueError("script version must contain script payload")
+            raise TypeError("script version must contain script payload")
         return ScriptVersion(
             id=str(data["id"]),
             source=_safe_enum(ScriptVersionSource, data.get("source"), ScriptVersionSource.AI_GENERATED, context="script version source"),

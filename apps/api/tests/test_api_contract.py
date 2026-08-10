@@ -7,7 +7,7 @@ active-only feedback learning rules described in:
   docs/superpowers/specs/2026-06-04-productized-video-production-workflow-design.md
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -644,7 +644,7 @@ def test_episode_source_file_states_tracks_pending_to_archived(tmp_path):
         file_name="clip.mp4",
         path=str(inbox.path / "clip.mp4"),
         size_bytes=4,
-        modified_at=datetime.now(),
+        modified_at=datetime.now(tz=UTC),
     )
     service.bind_video(episode, video)
     assert episode.source_file_states["clip.mp4"] == SourceFileState.PENDING
@@ -958,17 +958,17 @@ def test_source_sync_status_dataclass_fields():
     status = SourceSyncStatus(
         source_type="Obsidian",
         configured=True,
-        last_sync_at=datetime(2026, 6, 4, 12, 0, 0),
-        last_success_at=datetime(2026, 6, 4, 12, 0, 1),
+        last_sync_at=datetime(2026, 6, 4, 12, 0, 0, tzinfo=UTC),
+        last_success_at=datetime(2026, 6, 4, 12, 0, 1, tzinfo=UTC),
     )
     assert status.source_type == "Obsidian"
     assert status.configured is True
     assert status.last_failure_at is None
     assert status.error_message is None
 
-    status.last_failure_at = datetime(2026, 6, 5)
+    status.last_failure_at = datetime(2026, 6, 5, tzinfo=UTC)
     status.error_message = "Connection timeout"
-    assert status.last_failure_at == datetime(2026, 6, 5)
+    assert status.last_failure_at == datetime(2026, 6, 5, tzinfo=UTC)
     assert status.error_message == "Connection timeout"
 
 
