@@ -131,18 +131,6 @@ pnpm --dir apps/web exec tsc --noEmit
 pnpm --dir apps/web lint
 ```
 
-Run API:
-
-```bash
-corepack pnpm dev:api
-```
-
-Run web:
-
-```bash
-corepack pnpm dev:web
-```
-
 Visit:
 
 - http://localhost:3000
