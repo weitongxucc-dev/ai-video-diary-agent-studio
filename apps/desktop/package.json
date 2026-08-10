@@ -1,0 +1,64 @@
+{
+  "name": "ai-video-diary-studio",
+  "version": "0.1.0",
+  "description": "AI视频日记 Agent Studio — macOS 本地内容生产 Agent",
+  "main": "main.js",
+  "author": "AI视频日记 Contributors",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "build:web": "cd ../web && pnpm build",
+    "build:api": "cd ../api && pyinstaller pyinstaller.spec --distpath ../desktop/dist --workpath ../desktop/build-api --clean --noconfirm",
+    "build": "pnpm build:web && pnpm build:api && electron-builder",
+    "build:mac": "pnpm build:web && pnpm build:api && electron-builder --mac",
+    "pack": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.aivideodiary.studio",
+    "productName": "AI视频日记 Agent Studio",
+    "copyright": "MIT License",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "minimumSystemVersion": "12.0",
+      "icon": "assets/icon.icns",
+      "entitlements": "assets/entitlements.plist",
+      "entitlementsInherit": "assets/entitlements.plist",
+      "hardenedRuntime": true,
+      "extendInfo": {
+        "CFBundleName": "AI视频日记 Agent Studio",
+        "CFBundleDisplayName": "AI视频日记",
+        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleVersion": "0.1.0",
+        "NSMicrophoneUsageDescription": "AI视频日记需要使用麦克风进行语音指令输入",
+        "NSDesktopFolderUsageDescription": "AI视频日记需要访问桌面文件夹读取知识库和视频文件"
+      }
+    },
+    "dmg": {
+      "title": "AI视频日记 Agent Studio",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ],
+      "window": { "width": 540, "height": 380 }
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      { "from": "dist/api-server", "to": "api-server" },
+      { "from": "../web/out", "to": "web", "filter": ["**/*"] }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
