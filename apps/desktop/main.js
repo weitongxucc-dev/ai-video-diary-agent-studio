@@ -8,8 +8,11 @@ const http = require('http');
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
 let apiProcess = null;
+let nextProcess = null;
 let apiPort = 0;
+let nextPort = 0;
 let apiStopping = false;
+let nextStopping = false;
 const isDev = process.env.NODE_ENV === 'development';
 
 // ── API Process Management ─────────────────────────────
@@ -135,6 +138,114 @@ function stopApiServer() {
   }, 5000);
 }
 
+// ── Next.js Server Management ───────────────────────────
+function findNextServer() {
+  if (isDev) return null;
+
+  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
+  const candidate = path.join(resourcePath, 'web', 'server.js');
+  try {
+    fs.accessSync(candidate, fs.constants.R_OK);
+    return candidate;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function startNextServer() {
+  const serverJs = findNextServer();
+  if (!serverJs) {
+    console.log('[main] Next.js standalone server not found — assuming external Next.js');
+    return null;
+  }
+
+  nextPort = await getFreePort();
+  console.log(`[main] Starting Next.js server on port ${nextPort}...`);
+
+  const env = {
+    ...process.env,
+    PORT: String(nextPort),
+    HOSTNAME: '127.0.0.1',
+    API_PORT: String(apiPort),
+  };
+
+  nextProcess = spawn('node', [serverJs], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  nextProcess.on('error', (err) => {
+    console.error(`[main] Failed to spawn Next.js server: ${err.message}`);
+    nextProcess = null;
+  });
+
+  nextProcess.stdout.on('data', (data) => {
+    console.log(`[next] ${data.toString().trim()}`);
+  });
+
+  nextProcess.stderr.on('data', (data) => {
+    console.error(`[next:err] ${data.toString().trim()}`);
+  });
+
+  nextProcess.on('exit', (code, signal) => {
+    console.log(`[main] Next.js server exited (code=${code}, signal=${signal})`);
+    nextProcess = null;
+  });
+
+  // Wait for Next.js to be ready
+  await waitForNext(nextPort);
+  return nextPort;
+}
+
+function waitForNext(port, maxRetries = 30) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const check = () => {
+      attempts++;
+      const req = http.get(`http://127.0.0.1:${port}`, (res) => {
+        if (res.statusCode < 500) {
+          console.log(`[main] Next.js server ready on port ${port}`);
+          resolve();
+        } else if (attempts < maxRetries) {
+          setTimeout(check, 1000);
+        } else {
+          reject(new Error('Next.js server did not become ready'));
+        }
+      });
+      req.on('error', () => {
+        if (attempts < maxRetries) {
+          setTimeout(check, 1000);
+        } else {
+          reject(new Error('Next.js server did not become ready'));
+        }
+      });
+      req.setTimeout(2000, () => {
+        req.destroy();
+        if (attempts < maxRetries) {
+          setTimeout(check, 1000);
+        } else {
+          reject(new Error('Next.js server did not become ready'));
+        }
+      });
+    };
+    check();
+  });
+}
+
+function stopNextServer() {
+  if (!nextProcess || nextStopping) return;
+  nextStopping = true;
+  console.log('[main] Stopping Next.js server...');
+  nextProcess.kill('SIGTERM');
+  const pid = nextProcess.pid;
+  setTimeout(() => {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (_) { /* already dead */ }
+    nextStopping = false;
+  }, 5000);
+}
+
 // ── IPC Handlers ───────────────────────────────────────
 function registerIpcHandlers() {
   ipcMain.handle('get-api-port', () => {
@@ -191,14 +302,10 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Production: load from bundled web static files via API server
-    const webPath = path.join(process.resourcesPath || path.join(__dirname, '..'), 'web');
-    mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
-    // Fallback: if API serves static files; otherwise load from file
-    try {
-      fs.accessSync(path.join(webPath, 'index.html'));
-      mainWindow.loadFile(path.join(webPath, 'index.html'));
-    } catch (_) {
+    // Production: load from Next.js standalone server
+    if (nextPort) {
+      mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
+    } else {
       mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
     }
   }
@@ -332,6 +439,12 @@ app.whenReady().then(async () => {
   }
 
   if (apiReady) {
+    // Start Next.js server after API is ready (middleware proxies /api to API)
+    try {
+      await startNextServer();
+    } catch (err) {
+      console.error('[main] Failed to start Next.js server:', err.message);
+    }
     createWindow();
   }
 
@@ -343,6 +456,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  stopNextServer();
   stopApiServer();
   if (process.platform !== 'darwin') {
     app.quit();
@@ -350,10 +464,12 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopNextServer();
   stopApiServer();
 });
 
 app.on('quit', () => {
+  stopNextServer();
   stopApiServer();
 });
 

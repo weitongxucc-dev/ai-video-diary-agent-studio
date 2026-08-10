@@ -54,7 +54,7 @@
     ],
     "extraResources": [
       { "from": "dist/api-server", "to": "api-server" },
-      { "from": "../web/out", "to": "web", "filter": ["**/*"] }
+      { "from": "../web/.next/standalone", "to": "web", "filter": ["**/*"] }
     ]
   },
   "devDependencies": {
