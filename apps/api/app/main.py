@@ -1556,11 +1556,23 @@ def list_episodes(
 def list_episode_history(
     limit: int = 50,
     offset: int = 0,
+    status: str | None = None,
 ) -> EpisodeHistoryResponse:
     episodes = repo.all()
     sorted_episodes = sorted(episodes, key=lambda ep: ep.created_at, reverse=True)
+
+    # Apply status filter if provided
+    if status:
+        try:
+            status_enum = EpisodeStatus(status)
+            filtered = [ep for ep in sorted_episodes if ep.status == status_enum]
+        except ValueError:
+            filtered = sorted_episodes
+    else:
+        filtered = sorted_episodes
+
     total_all = len(sorted_episodes)
-    page = sorted_episodes[offset : offset + limit]
+    page = filtered[offset : offset + limit]
 
     def _make_title(ep: Episode) -> str:
         selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
@@ -1604,7 +1616,7 @@ def list_episode_history(
     return EpisodeHistoryResponse(
         items=items,
         total_count=total_all,
-        filtered_count=total_all,
+        filtered_count=len(filtered),
     )
 
 
