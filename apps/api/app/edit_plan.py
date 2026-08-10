@@ -8,7 +8,6 @@ from typing import Any
 
 from app.models import Episode, VideoJobStatus, utc_now
 
-
 VALID_SEGMENT_DECISIONS = {"keep", "remove", "review"}
 
 
@@ -546,7 +545,7 @@ def _read_episode_edit_plan(
     edit_plan_path = _safe_file(episode.video_edit_plan_path, root)
     payload = json.loads(edit_plan_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("edit plan payload must be an object")
+        raise TypeError("edit plan payload must be an object")
     return edit_plan_path, payload
 
 

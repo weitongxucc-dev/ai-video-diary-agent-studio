@@ -112,7 +112,7 @@ class DeepSeekTopicGenerator:
     ) -> None:
         self._settings = settings
         self._vault = vault
-        self._external_source_provider = external_source_provider or (lambda: [])
+        self._external_source_provider = external_source_provider or (list)
         self._transport = transport
         self._timeout = timeout
 

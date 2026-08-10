@@ -1,9 +1,13 @@
-import pytest
-from fastapi.testclient import TestClient
-from datetime import date
 import json
+import os
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+
+os.environ.setdefault("DEEPSEEK_API_KEY", "test-fake-key")
+
+import pytest
+from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.llm import TemplateScriptGenerator
@@ -13,7 +17,6 @@ from app.schemas import ProcessedVideoResponse
 from app.services import EpisodeService
 from app.topics import TemplateTopicGenerator
 from app.video import ProcessedVideo
-
 
 app = main_module.app
 client = TestClient(app)
@@ -115,7 +118,7 @@ def test_planned_episode_video_processing_uses_pipeline():
     assert pipeline.process_calls == ["raw.mov"]
 
 
-def test_ad_hoc_video_background_completion_uses_pipeline():
+def test_ad_hoc_single_background_completion_uses_pipeline():
     pipeline = CapturingVideoPipeline(
         ProcessedVideo("raw_preview.mp4", "/tmp/raw_preview.mp4", "raw.mov")
     )
@@ -129,7 +132,7 @@ def test_ad_hoc_video_background_completion_uses_pipeline():
     assert main_module.repo.get(episode.id).status == main_module.EpisodeStatus.DRAFT_READY
 
 
-def test_ad_hoc_video_batch_background_completion_uses_pipeline():
+def test_ad_hoc_single_batch_background_completion_uses_pipeline():
     pipeline = CapturingVideoPipeline(
         ProcessedVideo(
             "part-02_batch_2_preview.mp4",
@@ -500,6 +503,7 @@ def test_episode_video_to_draft_to_publish_flow_updates_episode_state(tmp_path):
             jianying_draft_root_path=str(tmp_path / "jianying"),
         ),
         runner=runner,
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(
@@ -553,7 +557,7 @@ def test_episode_video_to_draft_to_publish_flow_updates_episode_state(tmp_path):
     assert published["published_at"]
 
 
-def test_ad_hoc_video_can_skip_topic_and_script_and_create_draft(tmp_path):
+def test_ad_hoc_single_can_skip_topic_and_script_and_create_draft(tmp_path):
     inbox = tmp_path / "inbox"
     processed = tmp_path / "processed"
     drafts = tmp_path / "drafts"
@@ -578,6 +582,7 @@ def test_ad_hoc_video_can_skip_topic_and_script_and_create_draft(tmp_path):
     main_module.video_processor = main_module.FfmpegVideoProcessor(
         settings,
         runner=runner,
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(
@@ -593,7 +598,7 @@ def test_ad_hoc_video_can_skip_topic_and_script_and_create_draft(tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["intake_mode"] == "ad_hoc_video"
+    assert body["intake_mode"] == "ad_hoc_single"
     assert body["selected_topic_id"] is None
     assert body["script"] is None
     assert body["status"] == "draft_ready"
@@ -605,12 +610,12 @@ def test_ad_hoc_video_can_skip_topic_and_script_and_create_draft(tmp_path):
             encoding="utf-8"
         )
     )
-    assert manifest["source_mode"] == "ad_hoc_video"
+    assert manifest["source_mode"] == "ad_hoc_single"
     assert manifest["artifacts"]["subtitle_source"] == "none"
     assert manifest["artifacts"]["cover_path"]
 
 
-def test_ad_hoc_video_clears_planned_topic_and_script_context(tmp_path):
+def test_ad_hoc_single_clears_planned_topic_and_script_context(tmp_path):
     inbox = tmp_path / "inbox"
     processed = tmp_path / "processed"
     drafts = tmp_path / "drafts"
@@ -630,7 +635,7 @@ def test_ad_hoc_video_clears_planned_topic_and_script_context(tmp_path):
         jianying_draft_root_path=str(tmp_path / "jianying"),
     )
     main_module.video_inbox = main_module.VideoInbox(inbox)
-    main_module.video_processor = main_module.FfmpegVideoProcessor(settings, runner=runner)
+    main_module.video_processor = main_module.FfmpegVideoProcessor(settings, runner=runner, duration_reader=lambda path: 10.0)
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(settings, runner=runner)
     episode = client.post("/api/episodes").json()
@@ -647,13 +652,13 @@ def test_ad_hoc_video_clears_planned_topic_and_script_context(tmp_path):
     )
 
     body = response.json()
-    assert body["intake_mode"] == "ad_hoc_video"
+    assert body["intake_mode"] == "ad_hoc_single"
     assert body["topics"] == []
     assert body["selected_topic_id"] is None
     assert body["script"] is None
 
 
-def test_ad_hoc_video_batch_merges_ordered_clips_and_creates_draft(tmp_path):
+def test_ad_hoc_single_batch_merges_ordered_clips_and_creates_draft(tmp_path):
     inbox = tmp_path / "inbox"
     processed = tmp_path / "processed"
     drafts = tmp_path / "drafts"
@@ -680,6 +685,7 @@ def test_ad_hoc_video_batch_merges_ordered_clips_and_creates_draft(tmp_path):
         settings,
         runner=runner,
         silence_detector=lambda path: [],
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(settings, runner=runner)
@@ -692,7 +698,7 @@ def test_ad_hoc_video_batch_merges_ordered_clips_and_creates_draft(tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["intake_mode"] == "ad_hoc_video_batch"
+    assert body["intake_mode"] == "ad_hoc_batch"
     assert body["video_source_file_names"] == ["part-02.mov", "part-01.mov"]
     assert body["status"] == "draft_ready"
     assert "concat=n=2:v=1:a=1" in " ".join(calls[0])
@@ -707,7 +713,7 @@ def test_ad_hoc_video_batch_merges_ordered_clips_and_creates_draft(tmp_path):
     ]
 
 
-def test_ad_hoc_video_returns_processing_immediately_and_ignores_duplicate_submission(
+def test_ad_hoc_single_returns_processing_immediately_and_ignores_duplicate_submission(
     tmp_path,
 ):
     inbox = tmp_path / "inbox"
@@ -757,7 +763,7 @@ def test_ad_hoc_video_returns_processing_immediately_and_ignores_duplicate_submi
     assert len(main_module.video_job_runner.jobs) == 1
 
 
-def test_ad_hoc_video_failure_records_actionable_job_error():
+def test_ad_hoc_single_failure_records_actionable_job_error():
     class FailingVideoPipeline:
         def process(self, file_name: str) -> ProcessedVideo:
             raise RuntimeError("ffmpeg exited with code 1")

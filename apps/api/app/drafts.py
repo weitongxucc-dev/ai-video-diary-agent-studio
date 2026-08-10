@@ -4,20 +4,20 @@ import importlib.util
 import json
 import shutil
 import subprocess
-import time
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import textwrap
+import time
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PIL import Image, ImageDraw, ImageFont
 
 from app.asr import (
     ASRConfigurationError,
-    ASRTranscriber,
     ASRTimeoutError,
+    ASRTranscriber,
     ASRTranscriptionError,
     asr_transcriber_from_settings,
     transcription_to_srt,
@@ -135,14 +135,14 @@ class DraftWorkspace:
         episode: Episode | None = None,
     ) -> DraftPackage:
         video = self._resolve_video(video_file_name)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         package_name = f"AI视频日记_{timestamp}_{Path(video.file_name).stem}"
         package_dir = self.draft_output_path / package_name
         package_dir.mkdir(parents=True, exist_ok=False)
         artifacts = self._write_script_artifacts(package_dir, episode, video)
 
         manifest = {
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "package_name": package_name,
             "source_mode": self._episode_source_mode(episode),
             "video": {
@@ -275,7 +275,7 @@ class DraftWorkspace:
         try:
             draft_path = self.legacy_draft_writer(package_dir, self.jianying_root_path, manifest)
             self._sync_jianying_root_meta(draft_path, wait_seconds=3.0)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             result = {
                 **base_result,
                 "status": "failed",
@@ -683,7 +683,7 @@ class DraftWorkspace:
             file_name=path.name,
             path=str(path),
             size_bytes=stat.st_size,
-            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
         )
 
     def _package_asset_from_path(self, path: Path) -> DraftAsset:

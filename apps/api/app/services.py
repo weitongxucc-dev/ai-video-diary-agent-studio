@@ -10,16 +10,19 @@ from app.models import (
     EpisodeStatus,
     FeedbackEvent,
     FeedbackValue,
+    ProductionChainStage,
+    ProductionChainStep,
     ScriptPackage,
     ScriptSection,
     ScriptVersion,
     ScriptVersionSource,
+    SourceFileState,
     TopicCandidate,
     new_id,
     utc_now,
 )
-from app.video import PendingVideo, ProcessedVideo
 from app.topics import TemplateTopicGenerator, TopicGenerator
+from app.video import PendingVideo, ProcessedVideo, SourceTracker
 
 
 class EpisodeService:
@@ -346,21 +349,24 @@ class EpisodeService:
         return episode
 
     def bind_video(self, episode: Episode, video: PendingVideo) -> Episode:
-        if episode.script is None and episode.intake_mode != EpisodeIntakeMode.AD_HOC_VIDEO:
+        if episode.script is None and episode.intake_mode != EpisodeIntakeMode.AD_HOC_SINGLE:
             raise ValueError("generate a script before binding video")
         episode.video_source_file_name = video.file_name
         episode.video_source_file_names = [video.file_name]
+        episode.source_file_states[video.file_name] = SourceFileState.PENDING
         if episode.status not in {EpisodeStatus.DRAFT_READY, EpisodeStatus.PUBLISHED}:
             episode.status = EpisodeStatus.WAITING_VIDEO
         return episode
 
     def bind_ad_hoc_video(self, episode: Episode, video: PendingVideo) -> Episode:
-        episode.intake_mode = EpisodeIntakeMode.AD_HOC_VIDEO
+        episode.intake_mode = EpisodeIntakeMode.AD_HOC_SINGLE
         episode.topics = []
         episode.selected_topic_id = None
         episode.script = None
+        episode.script_versions = []
         episode.video_source_file_name = video.file_name
         episode.video_source_file_names = [video.file_name]
+        episode.source_file_states[video.file_name] = SourceFileState.PENDING
         if episode.status != EpisodeStatus.PUBLISHED:
             episode.status = EpisodeStatus.WAITING_VIDEO
         return episode
@@ -372,12 +378,15 @@ class EpisodeService:
     ) -> Episode:
         if len(videos) < 2:
             raise ValueError("at least two video files are required")
-        episode.intake_mode = EpisodeIntakeMode.AD_HOC_VIDEO_BATCH
+        episode.intake_mode = EpisodeIntakeMode.AD_HOC_BATCH
         episode.topics = []
         episode.selected_topic_id = None
         episode.script = None
+        episode.script_versions = []
         episode.video_source_file_name = videos[0].file_name
         episode.video_source_file_names = [video.file_name for video in videos]
+        for video in videos:
+            episode.source_file_states[video.file_name] = SourceFileState.PENDING
         if episode.status != EpisodeStatus.PUBLISHED:
             episode.status = EpisodeStatus.WAITING_VIDEO
         return episode
@@ -389,8 +398,26 @@ class EpisodeService:
         episode.video_processed_path = video.output_path
         episode.video_edit_plan_path = video.edit_plan_path
         episode.video_dedup_report_path = video.dedup_report_path
+        for file_name in episode.video_source_file_names:
+            episode.source_file_states[file_name] = SourceFileState.PROCESSED
+        episode.video_production_chain = _build_production_chain(
+            episode.intake_mode,
+            num_source_files=len(episode.video_source_file_names),
+            has_dedup=video.dedup_report_path is not None,
+        )
         if episode.status != EpisodeStatus.PUBLISHED:
             episode.status = EpisodeStatus.VIDEO_PROCESSING
+        return episode
+
+    def archive_source_files(
+        self,
+        episode: Episode,
+        source_tracker: SourceTracker,
+    ) -> Episode:
+        for file_name in list(episode.source_file_states.keys()):
+            if episode.source_file_states[file_name] == SourceFileState.PROCESSED:
+                source_tracker.archive(file_name)
+                episode.source_file_states[file_name] = SourceFileState.ARCHIVED
         return episode
 
     def bind_draft_package(
@@ -401,6 +428,7 @@ class EpisodeService:
     ) -> Episode:
         episode.draft_package_name = package_name
         episode.draft_package_path = package_path
+        _advance_chain(episode, ProductionChainStage.DRAFT_PACKAGE)
         if episode.status != EpisodeStatus.PUBLISHED:
             episode.status = EpisodeStatus.DRAFT_READY
         return episode
@@ -409,17 +437,169 @@ class EpisodeService:
         self,
         episode: Episode,
         publish_url: str | None = None,
+        platform: str | None = None,
         play_count: int | None = None,
         like_count: int | None = None,
         comment_count: int | None = None,
+        notes: str | None = None,
     ) -> Episode:
         episode.publish_url = publish_url
+        episode.platform = platform
         episode.play_count = play_count
         episode.like_count = like_count
         episode.comment_count = comment_count
+        episode.notes = notes
         episode.published_at = utc_now()
         episode.status = EpisodeStatus.PUBLISHED
         return episode
+
+    def update_publish_metrics(
+        self,
+        episode: Episode,
+        publish_url: str | None = None,
+        platform: str | None = None,
+        play_count: int | None = None,
+        like_count: int | None = None,
+        comment_count: int | None = None,
+        notes: str | None = None,
+    ) -> Episode:
+        if publish_url is not None:
+            episode.publish_url = publish_url
+        if platform is not None:
+            episode.platform = platform
+        if play_count is not None:
+            episode.play_count = play_count
+        if like_count is not None:
+            episode.like_count = like_count
+        if comment_count is not None:
+            episode.comment_count = comment_count
+        if notes is not None:
+            episode.notes = notes
+        return episode
+
+
+def _build_production_chain(
+    intake_mode: EpisodeIntakeMode,
+    num_source_files: int = 1,
+    has_dedup: bool = False,
+) -> list[ProductionChainStep]:
+    now = utc_now()
+    is_batch = intake_mode in {
+        EpisodeIntakeMode.PLANNED_BATCH,
+        EpisodeIntakeMode.AD_HOC_BATCH,
+    }
+    steps: list[ProductionChainStep] = [
+        ProductionChainStep(
+            stage=ProductionChainStage.SOURCE_CLIPS,
+            status="completed",
+            started_at=now,
+            finished_at=now,
+        ),
+    ]
+    if is_batch:
+        steps.append(
+            ProductionChainStep(
+                stage=ProductionChainStage.MERGE,
+                status="completed",
+                started_at=now,
+                finished_at=now,
+            )
+        )
+    else:
+        steps.append(
+            ProductionChainStep(
+                stage=ProductionChainStage.MERGE,
+                status="skipped",
+                detail="single source clip, no merge required",
+            )
+        )
+    steps.extend([
+        ProductionChainStep(
+            stage=ProductionChainStage.SILENCE_CUT,
+            status="completed",
+            started_at=now,
+            finished_at=now,
+        ),
+        ProductionChainStep(
+            stage=ProductionChainStage.SPEED_PASS,
+            status="completed",
+            started_at=now,
+            finished_at=now,
+        ),
+    ])
+    if has_dedup:
+        steps.extend([
+            ProductionChainStep(
+                stage=ProductionChainStage.RETAKE_SCAN,
+                status="completed",
+                started_at=now,
+                finished_at=now,
+            ),
+            ProductionChainStep(
+                stage=ProductionChainStage.RETAKE_REMOVAL,
+                status="completed",
+                started_at=now,
+                finished_at=now,
+            ),
+        ])
+    else:
+        steps.append(
+            ProductionChainStep(
+                stage=ProductionChainStage.RETAKE_SCAN,
+                status="skipped",
+                detail="retake scan not configured or skipped",
+            )
+        )
+        steps.append(
+            ProductionChainStep(
+                stage=ProductionChainStage.RETAKE_REMOVAL,
+                status="skipped",
+            )
+        )
+    steps.extend([
+        ProductionChainStep(
+            stage=ProductionChainStage.SUBTITLE,
+            status="pending",
+        ),
+        ProductionChainStep(
+            stage=ProductionChainStage.COVER,
+            status="pending",
+        ),
+        ProductionChainStep(
+            stage=ProductionChainStage.DRAFT_PACKAGE,
+            status="pending",
+        ),
+        ProductionChainStep(
+            stage=ProductionChainStage.JIANYING_IMPORT,
+            status="pending",
+        ),
+    ])
+    return steps
+
+
+def _advance_chain(
+    episode: Episode,
+    stage: ProductionChainStage,
+    status: str = "completed",
+    detail: str | None = None,
+) -> None:
+    now = utc_now()
+    for step in episode.video_production_chain:
+        if step.stage == stage:
+            step.status = status
+            step.finished_at = now
+            if detail:
+                step.detail = detail
+            return
+    episode.video_production_chain.append(
+        ProductionChainStep(
+            stage=stage,
+            status=status,
+            started_at=now,
+            finished_at=now,
+            detail=detail,
+        )
+    )
 
 
 def _feedback_value_from_snapshot(

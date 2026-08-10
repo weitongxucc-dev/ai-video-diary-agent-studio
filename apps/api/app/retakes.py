@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Sequence
 
 from app.asr import SubtitleSegment
-
 
 MIN_EFFECTIVE_CHARS = 8
 MAX_GAP_MS = 30_000

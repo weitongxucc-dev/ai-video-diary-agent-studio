@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import uuid4
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def new_id(prefix: str) -> str:
@@ -38,9 +39,31 @@ class VideoJobStatus(StrEnum):
 
 
 class EpisodeIntakeMode(StrEnum):
-    PLANNED = "planned"
-    AD_HOC_VIDEO = "ad_hoc_video"
-    AD_HOC_VIDEO_BATCH = "ad_hoc_video_batch"
+    PLANNED_SINGLE = "planned_single"
+    PLANNED_BATCH = "planned_batch"
+    AD_HOC_SINGLE = "ad_hoc_single"
+    AD_HOC_BATCH = "ad_hoc_batch"
+
+
+class SourceFileState(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
+    ARCHIVED = "archived"
+    SKIPPED = "skipped"
+
+
+class ProductionChainStage(StrEnum):
+    SOURCE_CLIPS = "source_clips"
+    MERGE = "merge"
+    SILENCE_CUT = "silence_cut"
+    SPEED_PASS = "speed_pass"
+    RETAKE_SCAN = "retake_scan"
+    RETAKE_REMOVAL = "retake_removal"
+    SUBTITLE = "subtitle"
+    COVER = "cover"
+    DRAFT_PACKAGE = "draft_package"
+    JIANYING_IMPORT = "jianying_import"
 
 
 class FeedbackValue(StrEnum):
@@ -61,6 +84,16 @@ class SourceRef:
     source_type: str
     title: str
     ref: str
+
+
+@dataclass
+class SourceSyncStatus:
+    source_type: str
+    configured: bool = False
+    last_sync_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    error_message: str | None = None
 
 
 @dataclass
@@ -108,6 +141,15 @@ class ScriptVersion:
 
 
 @dataclass
+class ProductionChainStep:
+    stage: ProductionChainStage
+    status: Literal["pending", "skipped", "completed", "failed"] = "pending"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    detail: str | None = None
+
+
+@dataclass
 class FeedbackEvent:
     target_type: str
     target_id: str
@@ -128,7 +170,7 @@ class Episode:
     day_number: int
     episode_date: date
     status: EpisodeStatus
-    intake_mode: EpisodeIntakeMode = EpisodeIntakeMode.PLANNED
+    intake_mode: EpisodeIntakeMode = EpisodeIntakeMode.PLANNED_SINGLE
     content_template_id: str = "video_diary"
     topics: list[TopicCandidate] = field(default_factory=list)
     selected_topic_id: str | None = None
@@ -147,10 +189,14 @@ class Episode:
     video_job_finished_at: datetime | None = None
     draft_package_name: str | None = None
     draft_package_path: str | None = None
+    video_production_chain: list[ProductionChainStep] = field(default_factory=list)
+    source_file_states: dict[str, SourceFileState] = field(default_factory=dict)
     publish_url: str | None = None
+    platform: str | None = None
     play_count: int | None = None
     like_count: int | None = None
     comment_count: int | None = None
+    notes: str | None = None
     published_at: datetime | None = None
     feedback_events: list[FeedbackEvent] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)

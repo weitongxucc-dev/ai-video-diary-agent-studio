@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from app.config import Settings
@@ -39,12 +41,22 @@ class VideoInbox:
         if not self.path.exists() or not self.path.is_dir():
             return []
 
+        archived_dir = self.path / "_已处理"
         videos = [
             self._to_pending_video(item)
             for item in self.path.iterdir()
-            if item.is_file() and item.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+            if item.is_file()
+            and item.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+            and not self._is_under_archived_dir(item, archived_dir)
         ]
         return sorted(videos, key=lambda video: video.modified_at, reverse=True)
+
+    def _is_under_archived_dir(self, item: Path, archived_dir: Path) -> bool:
+        try:
+            item.resolve().relative_to(archived_dir.resolve())
+            return True
+        except ValueError:
+            return False
 
     def _to_pending_video(self, path: Path) -> PendingVideo:
         stat = path.stat()
@@ -52,7 +64,7 @@ class VideoInbox:
             file_name=path.name,
             path=str(path),
             size_bytes=stat.st_size,
-            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
         )
 
 
@@ -151,8 +163,15 @@ class FfmpegVideoProcessor:
     def _safe_duration(self, input_path: Path) -> float:
         try:
             return self.duration_reader(input_path)
-        except (subprocess.CalledProcessError, ValueError):
-            return 0.0
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "ffprobe duration probe failed for %s: %s",
+                input_path, exc,
+            )
+            raise ValueError(
+                f"无法获取视频时长: {input_path}"
+            ) from exc
 
     def _keep_ranges(
         self,
@@ -348,3 +367,50 @@ class FfmpegVideoProcessor:
         ]
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         return float(result.stdout.strip())
+
+
+class SourceTracker:
+    """Manage source file lifecycle: pending -> processing -> processed -> archived.
+
+    Does NOT delete files. Archiving moves them from inbox to an _已处理
+    subdirectory organised by date.
+    """
+
+    def __init__(self, inbox: VideoInbox) -> None:
+        self._inbox = inbox
+
+    @property
+    def inbox_path(self) -> Path:
+        return self._inbox.path
+
+    def archive_directory(self, reference_date: date | None = None) -> Path:
+        from datetime import datetime as dt
+
+        day = reference_date or dt.now(tz=UTC).date()
+        archive_dir = self.inbox_path / "_已处理" / day.isoformat()
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        return archive_dir
+
+    def archive(self, file_name: str) -> Path:
+        source_path = self.inbox_path / file_name
+        archive_dir = self.archive_directory()
+        destination = archive_dir / file_name
+        if not source_path.exists():
+            raise ValueError(f"source file not found: {file_name}")
+        if destination.exists():
+            destination = archive_dir / f"{source_path.stem}_{source_path.stat().st_mtime:.0f}{source_path.suffix}"
+        shutil.move(str(source_path), str(destination))
+        return destination
+
+    def unarchive(self, file_name: str) -> Path:
+
+        for archive_dir in sorted(
+            (self.inbox_path / "_已处理").glob("*/"),
+            reverse=True,
+        ):
+            candidate = archive_dir / file_name
+            if candidate.exists():
+                destination = self.inbox_path / file_name
+                shutil.move(str(candidate), str(destination))
+                return destination
+        raise ValueError(f"archived file not found: {file_name}")

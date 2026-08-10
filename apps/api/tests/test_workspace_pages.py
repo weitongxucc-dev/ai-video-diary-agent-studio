@@ -1,5 +1,5 @@
-from datetime import date
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -7,11 +7,15 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.config import Settings
-from app.models import EpisodeStatus, FeedbackEvent, FeedbackValue, ScriptPackage, ScriptSection
+from app.models import (
+    EpisodeStatus,
+    FeedbackEvent,
+    FeedbackValue,
+    ScriptPackage,
+    ScriptSection,
+)
 from app.repository import EpisodeRepository
-from app.services import EpisodeService
 from app.video import FfmpegVideoProcessor, VideoInbox
-
 
 client = TestClient(main_module.app)
 
@@ -175,6 +179,7 @@ def test_preferences_endpoint_turns_feedback_reasons_into_memory_cards():
         "signal": "多讲真实项目",
         "evidence_count": 2,
         "confidence": 0.65,
+        "enabled": True,
     }
     assert body["preferences"][1]["label"] == "避开"
     assert body["preferences"][1]["signal"] == "太像概念课"

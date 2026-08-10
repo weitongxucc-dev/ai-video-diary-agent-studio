@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections import Counter
 import logging
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
-from pathlib import Path
 
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
@@ -21,9 +21,14 @@ from app.edit_plan import (
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
-from app.llm import LLMConfigurationError, LLMResponseError, script_generator_from_settings
+from app.llm import (
+    LLMConfigurationError,
+    LLMResponseError,
+    script_generator_from_settings,
+)
 from app.models import (
     Episode,
+    EpisodeIntakeMode,
     EpisodeStatus,
     FeedbackEvent,
     ScriptPackage,
@@ -31,48 +36,72 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
-from app.preference_memory import build_preference_memory
-from app.repository import EpisodeRepository
+from app.preference_memory import PreferenceState, build_preference_memory
+from app.repository import (
+    EpisodeRepository,
+    load_preference_state_payload,
+    save_preference_state_payload,
+)
 from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.schemas import (
     ApproveTopicRequest,
+    ArchiveSourcesRequest,
+    ArchiveSourcesResponse,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
-    DraftPackageRequest,
-    DraftPackageResponse,
-    EditPlanResponse,
-    EditPlanSegmentDecisionRequest,
-    DraftImportRequest,
-    DraftImportResponse,
     DraftAssetResponse,
     DraftEnvironmentResponse,
+    DraftImportRequest,
+    DraftImportResponse,
+    DraftPackageRequest,
+    DraftPackageResponse,
     DraftStatusResponse,
+    EditPlanResponse,
+    EditPlanSegmentDecisionRequest,
+    EpisodeHistoryItemResponse,
+    EpisodeHistoryResponse,
+    EpisodeListResponse,
     EpisodeResponse,
-    FeedbackRequest,
+    EpisodeSummaryResponse,
     FeedbackEventResponse,
+    FeedbackRequest,
     FeedbackRevertRequest,
     FeedbackSummaryResponse,
     KnowledgeNoteResponse,
-    MarkPublishedRequest,
     ManualLinkRequest,
+    MarkPublishedRequest,
     PendingVideoResponse,
-    PreferencesResponse,
+    PreferenceCardResponse,
+    PreferenceEvidenceItemResponse,
+    PreferenceEvidenceResponse,
     PreferenceItemResponse,
+    PreferencesCardsResponse,
+    PreferencesResponse,
+    PreferenceToggleRequest,
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
+    ProductionChainResponse,
+    ProductionModeRequest,
+    PublishMetricsUpdateRequest,
     RetakeReportResponse,
+    RuntimeHealthResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
-    RuntimeHealthResponse,
     ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
-    SourceItemsResponse,
+    SourceFileStatesResponse,
     SourceItemResponse,
+    SourceItemsResponse,
+    SourceSyncRetryResponse,
+    SourceSyncStatusesResponse,
+    SourceSyncStatusResponse,
     SystemStatusResponse,
+    TopicEvidenceItemResponse,
+    TopicEvidenceResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
@@ -85,7 +114,7 @@ from app.topics import (
     TopicGenerationResponseError,
     topic_generator_from_settings,
 )
-from app.video import FfmpegVideoProcessor, VideoInbox
+from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
@@ -102,6 +131,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail if isinstance(exc.detail, str) else type(exc).__name__,
+            "detail": str(exc.detail),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    from fastapi.responses import JSONResponse
+
+    status_map: dict[type[Exception], int] = {
+        ValueError: 400,
+        FileNotFoundError: 404,
+        PermissionError: 403,
+        RuntimeError: 500,
+        NotImplementedError: 501,
+    }
+    status_code = 500
+    for exc_type, code in status_map.items():
+        if isinstance(exc, exc_type):
+            status_code = code
+            break
+    logger.exception(
+        "unhandled exception %s: %s", type(exc).__name__, exc
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": type(exc).__name__,
+            "detail": str(exc),
+        },
+    )
+
+
 settings = Settings.from_env()
 repo = EpisodeRepository(database_path=settings.database_path)
 vault = ObsidianVault(settings.obsidian_vault_path)
@@ -117,6 +188,7 @@ service = EpisodeService(
 workflow = LangGraphEpisodeWorkflow(service)
 video_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
+source_tracker = SourceTracker(video_inbox)
 manual_source_items: list[TopicSourceItem] = []
 
 
@@ -213,6 +285,77 @@ def get_content_templates() -> ContentTemplatesResponse:
     )
 
 
+@app.get("/api/version")
+async def get_version():
+    """Return the current API version, build info, and completed phases."""
+    import subprocess
+    from pathlib import Path as _Path
+
+    # Read version from pyproject.toml
+    version = "0.1.0"
+    pyproject_path = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if pyproject_path.exists():
+        for line in pyproject_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version"):
+                version = stripped.split("=", 1)[1].strip().strip('"')
+                break
+
+    # Read git commit and date
+    git_commit = ""
+    build_date = ""
+    try:
+        result = subprocess.run(  # noqa: ASYNC221
+            ["git", "log", "-1", "--format=%H,%aI"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            cwd=_Path(__file__).resolve().parents[3],
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split(",", 1)
+            git_commit = parts[0]
+            build_date = parts[1] if len(parts) > 1 else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return {
+        "version": version,
+        "build_date": build_date,
+        "git_commit": git_commit,
+        "phases_completed": [
+            "phase-a-script-control-feedback-foundations",
+            "phase-b-production-modes-chain-source-lifecycle",
+            "phase-c-publish-feedback-episode-history",
+            "phase-d-source-sync-preference-cards",
+            "phase-0-emergency-hardening",
+        ],
+    }
+
+
+def _require_feature(feature: str) -> None:
+    """Raise 503 if a required feature gate is not available."""
+    import os as _os
+    import shutil as _shutil
+
+    llm_available = bool(settings.deepseek_api_key or _os.getenv("DEEPSEEK_API_KEY"))
+    ffmpeg_available = _shutil.which("ffmpeg") is not None
+    gates: dict[str, tuple[bool, str]] = {
+        "generate-topics": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "generate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "regenerate-section": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "regenerate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "process-video": (ffmpeg_available, "ffmpeg 未安装，请运行 brew install ffmpeg"),
+    }
+    available, reason = gates.get(feature, (True, ""))
+    if not available:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": reason, "action": reason},
+        )
+
+
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
 def get_runtime_health() -> RuntimeHealthResponse:
     return RuntimeHealthResponse.model_validate(runtime_health(settings))
@@ -242,8 +385,24 @@ def update_runtime_settings(
     return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
 
 
+
+@app.get("/api/is_setup")
+async def is_setup():
+    """Check whether the minimum backend configuration is ready."""
+    settings = Settings.from_env()
+    missing: list[str] = []
+    if not settings.deepseek_api_key:
+        missing.append("deepseek_api_key")
+    configured = len(missing) == 0
+    return {
+        "configured": configured,
+        "missing": missing,
+        "next_step": "/welcome" if missing else "",
+    }
+
+
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, service, workflow
+    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow
 
     settings = Settings.from_env()
     repo = EpisodeRepository(database_path=settings.database_path)
@@ -255,6 +414,7 @@ def _reload_runtime_dependencies() -> None:
         processor=video_processor,
     )
     draft_workspace = DraftWorkspace(settings)
+    source_tracker = SourceTracker(video_inbox)
     service = EpisodeService(
         script_generator=script_generator_from_settings(settings),
         topic_generator=topic_generator_from_settings(settings, vault),
@@ -325,6 +485,39 @@ def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
     return _source_items_response(manual_source_items)
 
 
+@app.get(
+    "/api/sources/sync-status",
+    response_model=SourceSyncStatusesResponse,
+)
+def get_source_sync_status() -> SourceSyncStatusesResponse:
+    from app.repository import load_source_sync_statuses
+
+    raw_statuses = load_source_sync_statuses()
+    statuses = [
+        {
+            "source_type": source_type,
+            "configured": data.get("configured", False),
+            "last_sync_at": datetime.fromisoformat(data["last_sync_at"])
+            if data.get("last_sync_at")
+            else None,
+            "last_success_at": datetime.fromisoformat(data["last_success_at"])
+            if data.get("last_success_at")
+            else None,
+            "last_failure_at": datetime.fromisoformat(data["last_failure_at"])
+            if data.get("last_failure_at")
+            else None,
+            "error_message": data.get("error_message"),
+        }
+        for source_type, data in raw_statuses.items()
+    ]
+    return SourceSyncStatusesResponse(
+        statuses=[
+            SourceSyncStatusResponse(**status)
+            for status in statuses
+        ],
+    )
+
+
 @app.get("/api/feedback/summary", response_model=FeedbackSummaryResponse)
 def get_feedback_summary() -> FeedbackSummaryResponse:
     all_event_pairs = [
@@ -360,13 +553,67 @@ def get_preferences() -> PreferencesResponse:
         for event in episode.feedback_events
         if event.reason and event.active
     ]
-    memory = build_preference_memory(events, limit=20)
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
     preferences = [
         PreferenceItemResponse(
             label=label,
             signal=signal.signal,
             evidence_count=signal.evidence_count,
             confidence=signal.confidence,
+            enabled=signal.enabled,
+        )
+        for label, signals in (
+            ("偏好", memory.prefer),
+            ("避开", memory.avoid),
+        )
+        for signal in signals
+    ]
+    return PreferencesResponse(
+        total_feedback_count=len(events),
+        preferences=preferences[:20],
+    )
+
+
+@app.patch(
+    "/api/preferences/disable",
+    response_model=PreferencesResponse,
+)
+def disable_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    pref_state.disable(request.signal)
+    save_preference_state_payload(pref_state.to_payload())
+    return _rebuilt_preferences_response(pref_state)
+
+
+@app.patch(
+    "/api/preferences/restore",
+    response_model=PreferencesResponse,
+)
+def restore_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    pref_state.restore(request.signal)
+    save_preference_state_payload(pref_state.to_payload())
+    return _rebuilt_preferences_response(pref_state)
+
+
+def _rebuilt_preferences_response(
+    pref_state: PreferenceState,
+) -> PreferencesResponse:
+    events = [
+        event
+        for episode in repo.all()
+        for event in episode.feedback_events
+        if event.reason and event.active
+    ]
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
+    preferences = [
+        PreferenceItemResponse(
+            label=label,
+            signal=signal.signal,
+            evidence_count=signal.evidence_count,
+            confidence=signal.confidence,
+            enabled=signal.enabled,
         )
         for label, signals in (
             ("偏好", memory.prefer),
@@ -390,6 +637,7 @@ def get_pending_videos() -> list[PendingVideoResponse]:
 
 @app.post("/api/videos/process", response_model=ProcessedVideoResponse)
 def process_video(request: ProcessVideoRequest) -> ProcessedVideoResponse:
+    _require_feature("process-video")
     try:
         if not request.file_name:
             raise ValueError("file_name is required")
@@ -596,6 +844,7 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
 def generate_topics(episode_id: str) -> EpisodeResponse:
     try:
         episode = get_episode_or_404(episode_id)
+        _require_feature("generate-topics")
         episode = workflow.run(
             "generate_topics",
             episode,
@@ -612,6 +861,7 @@ def generate_topics(episode_id: str) -> EpisodeResponse:
 def regenerate_topics(episode_id: str) -> EpisodeResponse:
     try:
         episode = get_episode_or_404(episode_id)
+        _require_feature("generate-topics")
         episode = workflow.run(
             "regenerate_topics",
             episode,
@@ -678,6 +928,8 @@ def regenerate_episode_script(
     request: ScriptRegenerateRequest,
 ) -> EpisodeResponse:
     try:
+        get_episode_or_404(episode_id)
+        _require_feature("regenerate-script")
         episode = workflow.run(
             "regenerate_script",
             get_episode_or_404(episode_id),
@@ -703,6 +955,8 @@ def regenerate_episode_script_section(
     request: ScriptSectionRegenerateRequest,
 ) -> EpisodeResponse:
     try:
+        get_episode_or_404(episode_id)
+        _require_feature("regenerate-section")
         episode = workflow.run(
             "regenerate_script_section",
             get_episode_or_404(episode_id),
@@ -940,6 +1194,7 @@ def process_episode_video(
     request: ProcessVideoRequest,
 ) -> EpisodeResponse:
     episode = get_episode_or_404(episode_id)
+    _require_feature("process-video")
     file_name = request.file_name or episode.video_source_file_name
     if not file_name:
         raise HTTPException(status_code=400, detail="bind or provide a video first")
@@ -1151,9 +1406,11 @@ def mark_episode_published(
         "mark_published",
         get_episode_or_404(episode_id),
         publish_url=request.publish_url,
+        platform=request.platform,
         play_count=request.play_count,
         like_count=request.like_count,
         comment_count=request.comment_count,
+        notes=request.notes,
     )
     return episode_response(repo.save(episode))
 
@@ -1188,3 +1445,331 @@ def revert_episode_feedback(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return episode_response(repo.save(episode))
+
+
+@app.get(
+    "/api/episodes/{episode_id}/production-chain",
+    response_model=ProductionChainResponse,
+)
+def get_episode_production_chain(episode_id: str) -> ProductionChainResponse:
+    episode = get_episode_or_404(episode_id)
+    return ProductionChainResponse(
+        episode_id=episode.id,
+        intake_mode=episode.intake_mode,
+        chain=[
+            {
+                "stage": step.stage,
+                "status": step.status,
+                "started_at": step.started_at,
+                "finished_at": step.finished_at,
+                "detail": step.detail,
+            }
+            for step in episode.video_production_chain
+        ],
+    )
+
+
+@app.get(
+    "/api/episodes/{episode_id}/source-file-states",
+    response_model=SourceFileStatesResponse,
+)
+def get_episode_source_file_states(episode_id: str) -> SourceFileStatesResponse:
+    episode = get_episode_or_404(episode_id)
+    return SourceFileStatesResponse(
+        episode_id=episode.id,
+        files=[
+            {"file_name": name, "state": state}
+            for name, state in episode.source_file_states.items()
+        ],
+    )
+
+
+@app.post(
+    "/api/episodes/{episode_id}/archive-sources",
+    response_model=ArchiveSourcesResponse,
+)
+def archive_episode_sources(
+    episode_id: str,
+    request: ArchiveSourcesRequest,
+) -> ArchiveSourcesResponse:
+    episode = get_episode_or_404(episode_id)
+    try:
+        episode = service.archive_source_files(episode, source_tracker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    repo.save(episode)
+    files = [
+        {"file_name": name, "state": state}
+        for name, state in episode.source_file_states.items()
+    ]
+    archived_count = sum(
+        1 for f in files if f["state"] == "archived"
+    )
+    return ArchiveSourcesResponse(
+        episode_id=episode.id,
+        archived_count=archived_count,
+        files=files,
+    )
+
+
+@app.get("/api/episodes", response_model=EpisodeListResponse)
+def list_episodes(
+    status: EpisodeStatus | None = None,
+    intake_mode: EpisodeIntakeMode | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> EpisodeListResponse:
+    episodes = repo.all()
+    filtered = [
+        ep for ep in episodes
+        if (status is None or ep.status == status)
+        and (intake_mode is None or ep.intake_mode == intake_mode)
+    ]
+    page = filtered[offset : offset + limit]
+    return EpisodeListResponse(
+        episodes=[
+            EpisodeSummaryResponse(
+                id=ep.id,
+                day_number=ep.day_number,
+                episode_date=ep.episode_date,
+                status=ep.status,
+                intake_mode=ep.intake_mode,
+                content_template_id=ep.content_template_id,
+                selected_topic_id=ep.selected_topic_id,
+                video_source_file_name=ep.video_source_file_name,
+                video_job_status=ep.video_job_status,
+                video_job_message=ep.video_job_message,
+                draft_package_name=ep.draft_package_name,
+                publish_url=ep.publish_url,
+                platform=ep.platform,
+                published_at=ep.published_at,
+                created_at=ep.created_at,
+                updated_at=ep.updated_at,
+            )
+            for ep in page
+        ],
+        total=len(filtered),
+    )
+
+
+@app.get("/api/episodes/history", response_model=EpisodeHistoryResponse)
+def list_episode_history(
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> EpisodeHistoryResponse:
+    episodes = repo.all()
+    sorted_episodes = sorted(episodes, key=lambda ep: ep.created_at, reverse=True)
+
+    # Apply status filter if provided
+    if status:
+        try:
+            status_enum = EpisodeStatus(status)
+            filtered = [ep for ep in sorted_episodes if ep.status == status_enum]
+        except ValueError:
+            filtered = sorted_episodes
+    else:
+        filtered = sorted_episodes
+
+    total_all = len(sorted_episodes)
+    page = filtered[offset : offset + limit]
+
+    def _make_title(ep: Episode) -> str:
+        selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
+        if selected:
+            return selected.title
+        return f"第{ep.day_number}期 {ep.episode_date}"
+
+    def _topic_title(ep: Episode) -> str | None:
+        selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
+        return selected.title if selected else None
+
+    def _script_title(ep: Episode) -> str | None:
+        if ep.script:
+            return ep.script.hook or ep.script.title_options[0] if ep.script.title_options else None
+        return None
+
+    items = [
+        EpisodeHistoryItemResponse(
+            id=ep.id,
+            day_number=ep.day_number,
+            episode_date=ep.episode_date,
+            title=_make_title(ep),
+            status=ep.status,
+            created_at=ep.created_at,
+            updated_at=ep.updated_at,
+            platform=ep.platform,
+            notes=ep.notes,
+            topic_title=_topic_title(ep),
+            script_title=_script_title(ep),
+            intake_mode=ep.intake_mode,
+            publish_url=ep.publish_url,
+            play_count=ep.play_count,
+            like_count=ep.like_count,
+            comment_count=ep.comment_count,
+            draft_package_path=ep.draft_package_name,
+            video_dedup_report_path=ep.video_dedup_report_path,
+            published_at=ep.published_at,
+        )
+        for ep in page
+    ]
+    return EpisodeHistoryResponse(
+        items=items,
+        total_count=total_all,
+        filtered_count=len(filtered),
+    )
+
+
+@app.post("/api/sources/{key}/retry", response_model=SourceSyncRetryResponse)
+def retry_source_sync(key: str) -> SourceSyncRetryResponse:
+    """Stub: trigger re-sync for the given source key."""
+    known_sources = {"hermes_radar", "manual", "external_urls"}
+    if key not in known_sources:
+        raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
+    return SourceSyncRetryResponse(
+        source_type=key,
+        status="retried",
+        message=f"Retry triggered for {key} (sync logic not yet implemented — this is a stub)",
+    )
+
+
+@app.get("/api/preferences/cards", response_model=PreferencesCardsResponse)
+def get_preferences_cards() -> PreferencesCardsResponse:
+    events = [
+        event
+        for episode in repo.all()
+        for event in episode.feedback_events
+        if event.reason and event.active
+    ]
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
+    all_cards = [
+        PreferenceCardResponse(
+            id=f"{label}::{signal.signal}",
+            label=label,
+            signal=signal.signal,
+            category=label,
+            evidence_count=signal.evidence_count,
+            confidence=signal.confidence,
+            enabled=signal.enabled,
+            latest_evidence_at=None,
+        )
+        for label, signals in (
+            ("偏好", memory.prefer),
+            ("避开", memory.avoid),
+        )
+        for signal in signals
+    ]
+    cards = all_cards[:20]
+    return PreferencesCardsResponse(
+        total_count=len(cards),
+        enabled_count=sum(1 for c in cards if c.enabled),
+        disabled_count=sum(1 for c in cards if not c.enabled),
+        cards=cards,
+    )
+
+
+@app.get(
+    "/api/preferences/cards/{card_id}/evidence",
+    response_model=PreferenceEvidenceResponse,
+)
+def get_preference_card_evidence(card_id: str) -> PreferenceEvidenceResponse:
+    """Return evidence items for a preference signal."""
+    episodes = repo.all()
+    items = [
+        PreferenceEvidenceItemResponse(
+            feedback_event_id=ev.id,
+            episode_id=ep.id,
+            episode_date=ep.episode_date,
+            target_type=ev.target_type,
+            target_id=ev.target_id,
+            value=ev.value.value,
+            reason=ev.reason or "",
+            created_at=ev.created_at,
+        )
+        for ep in episodes[:50]
+        for ev in ep.feedback_events
+        if ev.active and ev.reason and card_id in ev.reason
+    ][:10]
+    return PreferenceEvidenceResponse(
+        preference_id=card_id,
+        total=len(items),
+        items=items,
+    )
+
+
+@app.get(
+    "/api/episodes/{episode_id}/topic-evidence",
+    response_model=TopicEvidenceResponse,
+)
+def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
+    """Return topic evidence (source refs) from the selected topic."""
+    episode = get_episode_or_404(episode_id)
+    selected = next((t for t in episode.topics if t.id == episode.selected_topic_id), None)
+    items = [
+        TopicEvidenceItemResponse(
+            source_key=sf.ref or sf.title,
+            source_type=sf.source_type,
+            title=sf.title,
+            ref=sf.ref,
+        )
+        for sf in selected.source_refs
+    ] if selected else []
+    return TopicEvidenceResponse(
+        episode_id=episode_id,
+        total=len(items),
+        items=items,
+    )
+
+
+@app.post(
+    "/api/episodes/{episode_id}/production-mode",
+    response_model=EpisodeResponse,
+)
+def set_episode_production_mode(
+    episode_id: str,
+    request: ProductionModeRequest,
+) -> EpisodeResponse:
+    """Stub: accept production mode (bilibili/youtube/shorts) and return episode."""
+    known_modes = {"bilibili", "youtube", "shorts", "douyin", "xiaohongshu"}
+    if request.mode not in known_modes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown production mode: {request.mode}. Known: {', '.join(sorted(known_modes))}",
+        )
+    episode = get_episode_or_404(episode_id)
+    episode.platform = request.mode
+    repo.save(episode)
+    return episode_response(episode)
+
+
+@app.put(
+    "/api/episodes/{episode_id}/publish-metrics",
+    response_model=EpisodeResponse,
+)
+def update_episode_publish_metrics(
+    episode_id: str,
+    request: PublishMetricsUpdateRequest,
+) -> EpisodeResponse:
+    episode = get_episode_or_404(episode_id)
+    episode = service.update_publish_metrics(
+        episode,
+        publish_url=request.publish_url,
+        platform=request.platform,
+        play_count=request.play_count,
+        like_count=request.like_count,
+        comment_count=request.comment_count,
+        notes=request.notes,
+    )
+    return episode_response(repo.save(episode))
+
+
+# ── Server entry point (for standalone API server) ──────────────────
+if __name__ == "__main__":
+    import os
+
+    import uvicorn
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)

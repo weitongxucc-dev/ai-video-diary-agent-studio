@@ -42,13 +42,15 @@ class EpisodeWorkflowState(TypedDict, total=False):
     package_name: str
     package_path: str
     publish_url: str | None
+    platform: str | None
     play_count: int | None
     like_count: int | None
     comment_count: int | None
+    notes: str | None
 
 
 class LangGraphEpisodeWorkflow:
-    human_nodes = ["approve_topic", "approve_script", "mark_published"]
+    human_nodes: list[str] = ["approve_topic", "approve_script", "mark_published"]  # noqa: RUF012
 
     def __init__(self, service: EpisodeService) -> None:
         self._service = service
@@ -253,8 +255,10 @@ class LangGraphEpisodeWorkflow:
             "episode": self._service.mark_published(
                 state["episode"],
                 publish_url=state.get("publish_url"),
+                platform=state.get("platform"),
                 play_count=state.get("play_count"),
                 like_count=state.get("like_count"),
                 comment_count=state.get("comment_count"),
+                notes=state.get("notes"),
             )
         }

@@ -9,7 +9,9 @@ from app.models import (
     EpisodeIntakeMode,
     EpisodeStatus,
     FeedbackValue,
+    ProductionChainStage,
     ScriptVersionSource,
+    SourceFileState,
     VideoJobStatus,
 )
 
@@ -100,11 +102,15 @@ class EpisodeResponse(BaseModel):
     draft_package_name: str | None
     draft_package_path: str | None
     publish_url: str | None
+    platform: str | None
     play_count: int | None
     like_count: int | None
     comment_count: int | None
+    notes: str | None
     published_at: datetime | None
     feedback_events: list[FeedbackEventResponse]
+    video_production_chain: list[ProductionChainStepResponse]
+    source_file_states: dict[str, SourceFileState]
     created_at: datetime
     updated_at: datetime
 
@@ -258,12 +264,20 @@ class RuntimeHealthItemResponse(BaseModel):
     reason: str
     impact: str
     repair_action: str
+    fix_command: str | None = None
     last_checked_at: datetime
+
+
+class FeatureGateResponse(BaseModel):
+    feature: str
+    available: bool
+    reason: str
 
 
 class RuntimeHealthResponse(BaseModel):
     summary: RuntimeHealthSummaryResponse
     items: list[RuntimeHealthItemResponse]
+    feature_gates: list[FeatureGateResponse]
 
 
 class PendingVideoResponse(BaseModel):
@@ -416,11 +430,29 @@ class FeedbackSummaryResponse(BaseModel):
     recent_events: list[FeedbackEventResponse]
 
 
+class SourceSyncStatusResponse(BaseModel):
+    source_type: str
+    configured: bool
+    last_sync_at: datetime | None
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    error_message: str | None
+
+
+class SourceSyncStatusesResponse(BaseModel):
+    statuses: list[SourceSyncStatusResponse]
+
+
 class PreferenceItemResponse(BaseModel):
     label: str
     signal: str
     evidence_count: int
     confidence: float = Field(ge=0, le=1)
+    enabled: bool = True
+
+
+class PreferenceToggleRequest(BaseModel):
+    signal: str
 
 
 class PreferencesResponse(BaseModel):
@@ -528,9 +560,44 @@ class UploadVideoRequest(BaseModel):
 
 class MarkPublishedRequest(BaseModel):
     publish_url: str | None = None
+    platform: str | None = None
     play_count: int | None = Field(default=None, ge=0)
     like_count: int | None = Field(default=None, ge=0)
     comment_count: int | None = Field(default=None, ge=0)
+    notes: str | None = None
+
+
+class PublishMetricsUpdateRequest(BaseModel):
+    publish_url: str | None = None
+    platform: str | None = None
+    play_count: int | None = Field(default=None, ge=0)
+    like_count: int | None = Field(default=None, ge=0)
+    comment_count: int | None = Field(default=None, ge=0)
+    notes: str | None = None
+
+
+class EpisodeSummaryResponse(BaseModel):
+    id: str
+    day_number: int
+    episode_date: date
+    status: EpisodeStatus
+    intake_mode: EpisodeIntakeMode
+    content_template_id: str
+    selected_topic_id: str | None
+    video_source_file_name: str | None
+    video_job_status: VideoJobStatus
+    video_job_message: str | None
+    draft_package_name: str | None
+    publish_url: str | None
+    platform: str | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EpisodeListResponse(BaseModel):
+    episodes: list[EpisodeSummaryResponse]
+    total: int
 
 
 class VoiceCommandRequest(BaseModel):
@@ -552,3 +619,129 @@ class VoiceCommandResponse(BaseModel):
     operations: list[VoiceCommandOperationResponse]
     result_episode: EpisodeResponse | None = None
     result_edit_plan: EditPlanResponse | None = None
+
+
+class ProductionChainStepResponse(BaseModel):
+    stage: ProductionChainStage
+    status: Literal["pending", "skipped", "completed", "failed"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    detail: str | None = None
+
+
+class ProductionChainResponse(BaseModel):
+    episode_id: str
+    intake_mode: EpisodeIntakeMode
+    chain: list[ProductionChainStepResponse]
+
+
+class SourceFileStateResponse(BaseModel):
+    file_name: str
+    state: SourceFileState
+
+
+class SourceFileStatesResponse(BaseModel):
+    episode_id: str
+    files: list[SourceFileStateResponse]
+
+
+class ArchiveSourcesRequest(BaseModel):
+    file_names: list[str] | None = None
+
+
+class ArchiveSourcesResponse(BaseModel):
+    episode_id: str
+    archived_count: int
+    files: list[SourceFileStateResponse]
+
+
+class EpisodeHistoryItemResponse(BaseModel):
+    id: str
+    day_number: int
+    episode_date: date
+    title: str
+    status: EpisodeStatus
+    created_at: datetime
+    updated_at: datetime | None = None
+    platform: str | None = None
+    notes: str | None = None
+    topic_title: str | None = None
+    script_title: str | None = None
+    intake_mode: EpisodeIntakeMode | None = None
+    publish_url: str | None = None
+    play_count: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
+    draft_package_path: str | None = None
+    video_dedup_report_path: str | None = None
+    published_at: datetime | None = None
+
+
+class EpisodeHistoryResponse(BaseModel):
+    items: list[EpisodeHistoryItemResponse]
+    total_count: int
+    filtered_count: int = 0
+    status: EpisodeStatus | None = None
+
+
+class PreferenceCardResponse(BaseModel):
+    id: str
+    label: str
+    signal: str
+    category: str
+    confidence: float = Field(ge=0, le=1)
+    evidence_count: int
+    enabled: bool = True
+    latest_evidence_at: datetime | None = None
+
+
+class PreferencesCardsResponse(BaseModel):
+    total_count: int
+    enabled_count: int
+    disabled_count: int
+    cards: list[PreferenceCardResponse]
+
+
+class PreferenceEvidenceItemResponse(BaseModel):
+    feedback_event_id: str
+    episode_id: str | None = None
+    episode_date: date | None = None
+    target_type: str
+    target_id: str
+    value: str
+    reason: str | None = None
+    created_at: datetime
+
+
+class PreferenceEvidenceResponse(BaseModel):
+    preference_id: str
+    total: int
+    items: list[PreferenceEvidenceItemResponse]
+
+
+class TopicEvidenceItemResponse(BaseModel):
+    source_key: str
+    source_type: str
+    title: str
+    ref: str
+    excerpt: str | None = None
+    freshness: str = "recent"
+    freshness_label: str = "近期"
+    participated_topics: int = 0
+    last_used_at: datetime | None = None
+
+
+class TopicEvidenceResponse(BaseModel):
+    episode_id: str
+    total: int
+    items: list[TopicEvidenceItemResponse]
+
+
+class ProductionModeRequest(BaseModel):
+    mode: str  # one of: bilibili, youtube, shorts, douyin, xiaohongshu
+
+
+class SourceSyncRetryResponse(BaseModel):
+    source_type: str
+    status: str
+    message: str

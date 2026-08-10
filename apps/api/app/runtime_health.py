@@ -1,11 +1,53 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 from typing import Any
 
 from app.config import Settings
 from app.models import utc_now
+
+
+def _feature_gates(settings: Settings) -> list[dict[str, Any]]:
+    llm_available = bool(settings.deepseek_api_key)
+    ffmpeg_available = shutil.which("ffmpeg") is not None
+    return [
+        {
+            "feature": "generate-topics",
+            "available": llm_available,
+            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
+            if not llm_available
+            else "",
+        },
+        {
+            "feature": "generate-script",
+            "available": llm_available,
+            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
+            if not llm_available
+            else "",
+        },
+        {
+            "feature": "regenerate-section",
+            "available": llm_available,
+            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
+            if not llm_available
+            else "",
+        },
+        {
+            "feature": "regenerate-script",
+            "available": llm_available,
+            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
+            if not llm_available
+            else "",
+        },
+        {
+            "feature": "process-video",
+            "available": ffmpeg_available,
+            "reason": "ffmpeg 未安装，请运行 brew install ffmpeg"
+            if not ffmpeg_available
+            else "",
+        },
+    ]
 
 
 def runtime_health(settings: Settings) -> dict[str, Any]:
@@ -22,6 +64,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
             "视频处理页无法扫描待处理视频。",
             "在设置页选择一个存在的待处理视频目录。",
             checked_at,
+            fix_command=f"mkdir -p {settings.video_inbox_path}",
         ),
         _video_directory_item(
             "video_output",
@@ -30,6 +73,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
             "处理后视频、剪辑计划和字幕无法写入。",
             "在设置页选择一个存在且可写的输出目录。",
             checked_at,
+            fix_command=f"mkdir -p {settings.video_output_path}",
         ),
         _video_directory_item(
             "draft_output",
@@ -38,6 +82,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
             "无法生成剪映素材包和 manifest。",
             "在设置页选择一个存在且可写的素材包目录。",
             checked_at,
+            fix_command=f"mkdir -p {settings.draft_output_path}",
         ),
         _jianying_item(settings, checked_at),
         _external_sources_item(settings, checked_at),
@@ -45,6 +90,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
     counts = {"ready": 0, "missing": 0, "degraded": 0, "invalid": 0}
     for item in items:
         counts[str(item["status"])] += 1
+    gates = _feature_gates(settings)
     return {
         "summary": {
             "total": len(items),
@@ -54,6 +100,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
             "invalid": counts["invalid"],
         },
         "items": items,
+        "feature_gates": gates,
     }
 
 
@@ -66,6 +113,7 @@ def _health_item(
     impact: str,
     repair_action: str,
     checked_at,
+    fix_command: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": item_id,
@@ -74,6 +122,7 @@ def _health_item(
         "reason": reason,
         "impact": impact,
         "repair_action": repair_action,
+        "fix_command": fix_command,
         "last_checked_at": checked_at,
     }
 
@@ -96,12 +145,14 @@ def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
         reason="未配置 DEEPSEEK_API_KEY。",
         impact="无法调用真实模型生成选题、脚本和语音指令草案。",
         repair_action="在设置页填写 DeepSeek API Key 后保存。",
+        fix_command="在 https://platform.deepseek.com 注册获取 API Key",
         checked_at=checked_at,
     )
 
 
 def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
     path = Path(settings.obsidian_vault_path).expanduser() if settings.obsidian_vault_path else None
+    fix_command = None
     if path and path.is_dir():
         markdown_count = len(list(path.rglob("*.md")))
         status = "ready" if markdown_count else "degraded"
@@ -111,6 +162,7 @@ def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
         status = "missing"
         reason = "Obsidian Vault 路径不存在。"
         repair_action = "在设置页选择真实存在的 Obsidian Vault。"
+        fix_command = "在 Obsidian 中打开你的知识库查看路径"
     return _health_item(
         item_id="obsidian",
         label="Obsidian",
@@ -118,6 +170,7 @@ def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
         reason=reason,
         impact="影响知识库摄入、选题素材和偏好上下文。",
         repair_action=repair_action,
+        fix_command=fix_command,
         checked_at=checked_at,
     )
 
@@ -131,6 +184,7 @@ def _ffmpeg_item(checked_at) -> dict[str, Any]:
         reason="命令可用。" if available else "未在 PATH 中找到 ffmpeg。",
         impact="影响视频预处理、音频抽取、静音检测、字幕和封面生成。",
         repair_action="无需处理。" if available else "安装 ffmpeg 并确认终端 PATH 可访问。",
+        fix_command=None if available else "brew install ffmpeg",
         checked_at=checked_at,
     )
 
@@ -144,6 +198,7 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
         settings.local_whisper_model_path
         and Path(settings.local_whisper_model_path).expanduser().is_file()
     )
+    fix_command = None
     if python_ok and model_ok:
         status = "ready"
         reason = "本地 Whisper Python 和模型均可访问。"
@@ -156,6 +211,7 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
         status = "missing"
         reason = "未配置本地 Whisper。"
         repair_action = "配置本地 Whisper，或改用腾讯云 ASR。"
+        fix_command = "pip install openai-whisper"
     return _health_item(
         item_id="local_whisper",
         label="本地 Whisper",
@@ -163,6 +219,7 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
         reason=reason,
         impact="影响本地转写、重复录制检测和字幕对齐。",
         repair_action=repair_action,
+        fix_command=fix_command,
         checked_at=checked_at,
     )
 
@@ -174,6 +231,7 @@ def _video_directory_item(
     impact: str,
     repair_action: str,
     checked_at,
+    fix_command: str | None = None,
 ) -> dict[str, Any]:
     path = Path(path_value).expanduser()
     ready = path.exists() and path.is_dir()
@@ -184,16 +242,19 @@ def _video_directory_item(
         reason=f"目录存在：{path}" if ready else f"目录不存在：{path}",
         impact=impact,
         repair_action="无需处理。" if ready else repair_action,
+        fix_command=None if ready else fix_command,
         checked_at=checked_at,
     )
 
 
 def _jianying_item(settings: Settings, checked_at) -> dict[str, Any]:
     root = Path(settings.jianying_draft_root_path).expanduser()
+    fix_command = None
     if not root.exists() or not root.is_dir():
         status = "missing"
         reason = f"剪映草稿目录不存在：{root}"
         repair_action = "在设置页选择剪映草稿根目录。"
+        fix_command = "在剪映中创建至少一个草稿后使用"
     else:
         encrypted_markers = list(root.glob("*/crypto_key_store.dat"))
         status = "degraded" if encrypted_markers else "ready"
@@ -206,6 +267,7 @@ def _jianying_item(settings: Settings, checked_at) -> dict[str, Any]:
         reason=reason,
         impact="影响自动导入剪映草稿箱。",
         repair_action=repair_action,
+        fix_command=fix_command,
         checked_at=checked_at,
     )
 
@@ -219,5 +281,6 @@ def _external_sources_item(settings: Settings, checked_at) -> dict[str, Any]:
         reason="已配置外部信息源。" if has_sources else "没有配置 Product Hunt、Hermes 或手动 URL。",
         impact="影响 AI 产品趋势素材和工具测评选题。",
         repair_action="无需处理。" if has_sources else "在设置页配置 Product Hunt Token、Hermes 目录或外链 URL。",
+        fix_command=None if has_sources else "在 https://www.producthunt.com 注册获取 API Token",
         checked_at=checked_at,
     )

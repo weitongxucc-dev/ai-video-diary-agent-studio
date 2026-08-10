@@ -215,6 +215,7 @@ def test_deepseek_topic_prompt_includes_preference_memory(tmp_path):
         "signal": "多讲真实项目",
         "evidence_count": 2,
         "confidence": 0.65,
+        "enabled": True,
     }
     assert user_prompt["preference_memory"]["avoid"][0]["signal"] == "太像概念课"
     assert "优先遵守 preference_memory" in user_prompt["requirements"]

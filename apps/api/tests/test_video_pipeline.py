@@ -45,6 +45,7 @@ def test_ffmpeg_processor_builds_accelerated_preview_command(tmp_path):
     processor = FfmpegVideoProcessor(
         Settings(video_inbox_path=str(inbox), video_output_path=str(output)),
         runner=runner,
+        duration_reader=lambda path: 10.0,
     )
 
     processed = processor.process("talk.mov")
@@ -123,6 +124,7 @@ def test_ffmpeg_processor_merges_ordered_batch_before_preview(tmp_path):
         Settings(video_inbox_path=str(inbox), video_output_path=str(output)),
         runner=runner,
         silence_detector=lambda path: [],
+        duration_reader=lambda path: 10.0,
     )
 
     processed = processor.process_batch(["part-02.mov", "part-01.mov"])
