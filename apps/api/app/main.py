@@ -1444,6 +1444,17 @@ def revert_episode_feedback(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ── Server entry point (for pyinstaller onefile binary) ─────────────
+if __name__ == "__main__":
+    import os
+
+    import uvicorn
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
     return episode_response(repo.save(episode))
 
 
