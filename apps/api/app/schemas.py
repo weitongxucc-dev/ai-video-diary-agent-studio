@@ -264,12 +264,20 @@ class RuntimeHealthItemResponse(BaseModel):
     reason: str
     impact: str
     repair_action: str
+    fix_command: str | None = None
     last_checked_at: datetime
+
+
+class FeatureGateResponse(BaseModel):
+    feature: str
+    available: bool
+    reason: str
 
 
 class RuntimeHealthResponse(BaseModel):
     summary: RuntimeHealthSummaryResponse
     items: list[RuntimeHealthItemResponse]
+    feature_gates: list[FeatureGateResponse]
 
 
 class PendingVideoResponse(BaseModel):
@@ -645,3 +653,45 @@ class ArchiveSourcesResponse(BaseModel):
     episode_id: str
     archived_count: int
     files: list[SourceFileStateResponse]
+
+
+class EpisodeHistoryItemResponse(BaseModel):
+    id: str
+    day_number: int
+    episode_date: date
+    title: str
+    status: EpisodeStatus
+    created_at: datetime
+    platform: str | None = None
+    notes: str | None = None
+    topic_title: str | None = None
+
+
+class EpisodeHistoryResponse(BaseModel):
+    episodes: list[EpisodeHistoryItemResponse]
+    total: int
+
+
+class PreferencesCardsResponse(BaseModel):
+    cards: list[PreferenceItemResponse]
+
+
+class PreferenceEvidenceResponse(BaseModel):
+    signal: str
+    evidence: list[dict[str, object]]
+
+
+class TopicEvidenceResponse(BaseModel):
+    episode_id: str
+    topic_id: str | None
+    source_refs: list[dict[str, str]]
+
+
+class ProductionModeRequest(BaseModel):
+    mode: str
+
+
+class SourceSyncRetryResponse(BaseModel):
+    source_type: str
+    status: str
+    message: str

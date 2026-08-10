@@ -1,7 +1,10 @@
 import json
+import os
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+
+os.environ.setdefault("DEEPSEEK_API_KEY", "test-fake-key")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -500,6 +503,7 @@ def test_episode_video_to_draft_to_publish_flow_updates_episode_state(tmp_path):
             jianying_draft_root_path=str(tmp_path / "jianying"),
         ),
         runner=runner,
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(
@@ -578,6 +582,7 @@ def test_ad_hoc_single_can_skip_topic_and_script_and_create_draft(tmp_path):
     main_module.video_processor = main_module.FfmpegVideoProcessor(
         settings,
         runner=runner,
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(
@@ -630,7 +635,7 @@ def test_ad_hoc_single_clears_planned_topic_and_script_context(tmp_path):
         jianying_draft_root_path=str(tmp_path / "jianying"),
     )
     main_module.video_inbox = main_module.VideoInbox(inbox)
-    main_module.video_processor = main_module.FfmpegVideoProcessor(settings, runner=runner)
+    main_module.video_processor = main_module.FfmpegVideoProcessor(settings, runner=runner, duration_reader=lambda path: 10.0)
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(settings, runner=runner)
     episode = client.post("/api/episodes").json()
@@ -680,6 +685,7 @@ def test_ad_hoc_single_batch_merges_ordered_clips_and_creates_draft(tmp_path):
         settings,
         runner=runner,
         silence_detector=lambda path: [],
+        duration_reader=lambda path: 10.0,
     )
     main_module.video_pipeline = PassthroughVideoPipeline(main_module.video_processor)
     main_module.draft_workspace = main_module.DraftWorkspace(settings, runner=runner)

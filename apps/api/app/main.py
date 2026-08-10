@@ -59,6 +59,8 @@ from app.schemas import (
     DraftStatusResponse,
     EditPlanResponse,
     EditPlanSegmentDecisionRequest,
+    EpisodeHistoryItemResponse,
+    EpisodeHistoryResponse,
     EpisodeListResponse,
     EpisodeResponse,
     EpisodeSummaryResponse,
@@ -70,13 +72,16 @@ from app.schemas import (
     ManualLinkRequest,
     MarkPublishedRequest,
     PendingVideoResponse,
+    PreferenceEvidenceResponse,
     PreferenceItemResponse,
+    PreferencesCardsResponse,
     PreferencesResponse,
     PreferenceToggleRequest,
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
     ProductionChainResponse,
+    ProductionModeRequest,
     PublishMetricsUpdateRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
@@ -89,9 +94,11 @@ from app.schemas import (
     SourceFileStatesResponse,
     SourceItemResponse,
     SourceItemsResponse,
+    SourceSyncRetryResponse,
     SourceSyncStatusesResponse,
     SourceSyncStatusResponse,
     SystemStatusResponse,
+    TopicEvidenceResponse,
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
@@ -275,6 +282,77 @@ def get_content_templates() -> ContentTemplatesResponse:
     )
 
 
+@app.get("/api/version")
+async def get_version():
+    """Return the current API version, build info, and completed phases."""
+    import subprocess
+    from pathlib import Path as _Path
+
+    # Read version from pyproject.toml
+    version = "0.1.0"
+    pyproject_path = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if pyproject_path.exists():
+        for line in pyproject_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version"):
+                version = stripped.split("=", 1)[1].strip().strip('"')
+                break
+
+    # Read git commit and date
+    git_commit = ""
+    build_date = ""
+    try:
+        result = subprocess.run(  # noqa: ASYNC221
+            ["git", "log", "-1", "--format=%H,%aI"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            cwd=_Path(__file__).resolve().parents[3],
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split(",", 1)
+            git_commit = parts[0]
+            build_date = parts[1] if len(parts) > 1 else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return {
+        "version": version,
+        "build_date": build_date,
+        "git_commit": git_commit,
+        "phases_completed": [
+            "phase-a-script-control-feedback-foundations",
+            "phase-b-production-modes-chain-source-lifecycle",
+            "phase-c-publish-feedback-episode-history",
+            "phase-d-source-sync-preference-cards",
+            "phase-0-emergency-hardening",
+        ],
+    }
+
+
+def _require_feature(feature: str) -> None:
+    """Raise 503 if a required feature gate is not available."""
+    import os as _os
+    import shutil as _shutil
+
+    llm_available = bool(settings.deepseek_api_key or _os.getenv("DEEPSEEK_API_KEY"))
+    ffmpeg_available = _shutil.which("ffmpeg") is not None
+    gates: dict[str, tuple[bool, str]] = {
+        "generate-topics": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "generate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "regenerate-section": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "regenerate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "process-video": (ffmpeg_available, "ffmpeg 未安装，请运行 brew install ffmpeg"),
+    }
+    available, reason = gates.get(feature, (True, ""))
+    if not available:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": reason, "action": reason},
+        )
+
+
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
 def get_runtime_health() -> RuntimeHealthResponse:
     return RuntimeHealthResponse.model_validate(runtime_health(settings))
@@ -302,6 +380,22 @@ def update_runtime_settings(
         _reload_runtime_dependencies,
     )
     return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
+
+
+
+@app.get("/api/is_setup")
+async def is_setup():
+    """Check whether the minimum backend configuration is ready."""
+    settings = Settings.from_env()
+    missing: list[str] = []
+    if not settings.deepseek_api_key:
+        missing.append("deepseek_api_key")
+    configured = len(missing) == 0
+    return {
+        "configured": configured,
+        "missing": missing,
+        "next_step": "/welcome" if missing else "",
+    }
 
 
 def _reload_runtime_dependencies() -> None:
@@ -540,6 +634,7 @@ def get_pending_videos() -> list[PendingVideoResponse]:
 
 @app.post("/api/videos/process", response_model=ProcessedVideoResponse)
 def process_video(request: ProcessVideoRequest) -> ProcessedVideoResponse:
+    _require_feature("process-video")
     try:
         if not request.file_name:
             raise ValueError("file_name is required")
@@ -746,6 +841,7 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
 def generate_topics(episode_id: str) -> EpisodeResponse:
     try:
         episode = get_episode_or_404(episode_id)
+        _require_feature("generate-topics")
         episode = workflow.run(
             "generate_topics",
             episode,
@@ -762,6 +858,7 @@ def generate_topics(episode_id: str) -> EpisodeResponse:
 def regenerate_topics(episode_id: str) -> EpisodeResponse:
     try:
         episode = get_episode_or_404(episode_id)
+        _require_feature("generate-topics")
         episode = workflow.run(
             "regenerate_topics",
             episode,
@@ -828,6 +925,8 @@ def regenerate_episode_script(
     request: ScriptRegenerateRequest,
 ) -> EpisodeResponse:
     try:
+        get_episode_or_404(episode_id)
+        _require_feature("regenerate-script")
         episode = workflow.run(
             "regenerate_script",
             get_episode_or_404(episode_id),
@@ -853,6 +952,8 @@ def regenerate_episode_script_section(
     request: ScriptSectionRegenerateRequest,
 ) -> EpisodeResponse:
     try:
+        get_episode_or_404(episode_id)
+        _require_feature("regenerate-section")
         episode = workflow.run(
             "regenerate_script_section",
             get_episode_or_404(episode_id),
@@ -1090,6 +1191,7 @@ def process_episode_video(
     request: ProcessVideoRequest,
 ) -> EpisodeResponse:
     episode = get_episode_or_404(episode_id)
+    _require_feature("process-video")
     file_name = request.file_name or episode.video_source_file_name
     if not file_name:
         raise HTTPException(status_code=400, detail="bind or provide a video first")
@@ -1445,6 +1547,146 @@ def list_episodes(
         ],
         total=len(filtered),
     )
+
+
+@app.get("/api/episodes/history", response_model=EpisodeHistoryResponse)
+def list_episode_history(
+    limit: int = 50,
+    offset: int = 0,
+) -> EpisodeHistoryResponse:
+    episodes = repo.all()
+    sorted_episodes = sorted(episodes, key=lambda ep: ep.created_at, reverse=True)
+    page = sorted_episodes[offset : offset + limit]
+
+    def _make_title(ep: Episode) -> str:
+        selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
+        if selected:
+            return selected.title
+        return f"第{ep.day_number}期 {ep.episode_date}"
+
+    def _topic_title(ep: Episode) -> str | None:
+        selected = next((t for t in ep.topics if t.id == ep.selected_topic_id), None)
+        return selected.title if selected else None
+
+    return EpisodeHistoryResponse(
+        episodes=[
+            EpisodeHistoryItemResponse(
+                id=ep.id,
+                day_number=ep.day_number,
+                episode_date=ep.episode_date,
+                title=_make_title(ep),
+                status=ep.status,
+                created_at=ep.created_at,
+                platform=ep.platform,
+                notes=ep.notes,
+                topic_title=_topic_title(ep),
+            )
+            for ep in page
+        ],
+        total=len(sorted_episodes),
+    )
+
+
+@app.post("/api/sources/{key}/retry", response_model=SourceSyncRetryResponse)
+def retry_source_sync(key: str) -> SourceSyncRetryResponse:
+    """Stub: trigger re-sync for the given source key."""
+    known_sources = {"hermes_radar", "manual", "external_urls"}
+    if key not in known_sources:
+        raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
+    return SourceSyncRetryResponse(
+        source_type=key,
+        status="retried",
+        message=f"Retry triggered for {key} (sync logic not yet implemented — this is a stub)",
+    )
+
+
+@app.get("/api/preferences/cards", response_model=PreferencesCardsResponse)
+def get_preferences_cards() -> PreferencesCardsResponse:
+    events = [
+        event
+        for episode in repo.all()
+        for event in episode.feedback_events
+        if event.reason and event.active
+    ]
+    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    memory = build_preference_memory(events, limit=20, preference_state=pref_state)
+    cards = [
+        PreferenceItemResponse(
+            label=label,
+            signal=signal.signal,
+            evidence_count=signal.evidence_count,
+            confidence=signal.confidence,
+            enabled=signal.enabled,
+        )
+        for label, signals in (
+            ("偏好", memory.prefer),
+            ("避开", memory.avoid),
+        )
+        for signal in signals
+    ]
+    return PreferencesCardsResponse(cards=cards[:20])
+
+
+@app.get(
+    "/api/preferences/cards/{card_id}/evidence",
+    response_model=PreferenceEvidenceResponse,
+)
+def get_preference_card_evidence(card_id: str) -> PreferenceEvidenceResponse:
+    """Stub: return evidence for a preference signal."""
+    episodes = repo.all()
+    return PreferenceEvidenceResponse(
+        signal=card_id,
+        evidence=[
+            {
+                "episode_id": ep.id,
+                "reason": ev.reason or "",
+                "value": ev.value.value,
+                "created_at": ev.created_at.isoformat(),
+            }
+            for ep in episodes[:50]
+            for ev in ep.feedback_events
+            if ev.active and ev.reason and card_id in ev.reason
+        ][:10],
+    )
+
+
+@app.get(
+    "/api/episodes/{episode_id}/topic-evidence",
+    response_model=TopicEvidenceResponse,
+)
+def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
+    """Stub: return topic evidence (source refs) from the selected topic."""
+    episode = get_episode_or_404(episode_id)
+    selected = next((t for t in episode.topics if t.id == episode.selected_topic_id), None)
+    return TopicEvidenceResponse(
+        episode_id=episode_id,
+        topic_id=episode.selected_topic_id,
+        source_refs=[
+            {"source_type": sf.source_type, "title": sf.title, "ref": sf.ref}
+            for sf in selected.source_refs
+        ] if selected else [],
+    )
+
+
+@app.post(
+    "/api/episodes/{episode_id}/production-mode",
+    response_model=EpisodeResponse,
+)
+def set_episode_production_mode(
+    episode_id: str,
+    request: ProductionModeRequest,
+) -> EpisodeResponse:
+    """Stub: accept production mode (bilibili/youtube/shorts) and return episode."""
+    known_modes = {"bilibili", "youtube", "shorts", "douyin", "xiaohongshu"}
+    if request.mode not in known_modes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown production mode: {request.mode}. Known: {', '.join(sorted(known_modes))}",
+        )
+    episode = get_episode_or_404(episode_id)
+    episode.platform = request.mode
+    repo.save(episode)
+    return episode_response(episode)
 
 
 @app.put(

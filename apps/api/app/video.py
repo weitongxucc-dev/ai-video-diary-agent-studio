@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -162,8 +163,15 @@ class FfmpegVideoProcessor:
     def _safe_duration(self, input_path: Path) -> float:
         try:
             return self.duration_reader(input_path)
-        except (subprocess.CalledProcessError, ValueError):
-            return 0.0
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "ffprobe duration probe failed for %s: %s",
+                input_path, exc,
+            )
+            raise ValueError(
+                f"无法获取视频时长: {input_path}"
+            ) from exc
 
     def _keep_ranges(
         self,

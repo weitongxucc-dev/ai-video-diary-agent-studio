@@ -179,7 +179,7 @@ def test_preferences_endpoint_turns_feedback_reasons_into_memory_cards():
         "signal": "多讲真实项目",
         "evidence_count": 2,
         "confidence": 0.65,
-            "enabled": True,
+        "enabled": True,
     }
     assert body["preferences"][1]["label"] == "避开"
     assert body["preferences"][1]["signal"] == "太像概念课"

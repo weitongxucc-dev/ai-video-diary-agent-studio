@@ -72,9 +72,6 @@ def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
 
 
 def _default_obsidian_vault_path() -> str | None:
-    candidate = Path.home() / "Desktop/鑫哥知识库"
-    if candidate.exists():
-        return str(candidate)
     return None
 
 
@@ -106,20 +103,11 @@ def _default_database_path() -> str:
 
 
 def _default_local_whisper_python_path() -> str | None:
-    candidate = Path.home() / "Documents" / "声迹" / ".venv-whisper" / "bin" / "python"
-    return str(candidate) if candidate.exists() else None
+    return None
 
 
 def _default_local_whisper_model_path() -> str | None:
-    candidate = (
-        Path.home()
-        / "Documents"
-        / "声迹"
-        / "infra"
-        / "local-whisper-models"
-        / "small.pt"
-    )
-    return str(candidate) if candidate.exists() else None
+    return None
 
 
 def _default_hermes_radar_path() -> str:
