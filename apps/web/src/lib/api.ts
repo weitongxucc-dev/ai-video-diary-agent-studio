@@ -7,7 +7,6 @@ import type {
   DraftPackage,
   DraftStatus,
   EpisodeHistory,
-  EpisodeIntakeMode,
   EpisodeStatus,
   FeedbackTargetType,
   FeedbackValue,
@@ -15,7 +14,6 @@ import type {
   KnowledgeNote,
   PendingVideo,
   Preferences,
-  PreferenceCard,
   PreferenceCards,
   PreferenceEvidence,
   ProcessedVideo,
@@ -30,6 +28,7 @@ import type {
   SourcesStatus,
   SourceFileStates,
   SourceItems,
+  SourceSyncRetryResult,
   SystemStatus,
   TopicEvidenceList,
   VideoProductionMode,
@@ -151,14 +150,10 @@ export function syncSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/sync", { method: "POST" });
 }
 
-// TODO(backend): retry-single-source endpoint is not implemented yet.
-// Until it is, callers should use syncSourceItems() or surface a friendly toast.
-export function retrySourceSync(sourceKey: string): Promise<SourceItems> {
-  return Promise.reject(
-    new Error(
-      `重试单来源暂未实现（${sourceKey}），请改用 /api/sources/sync`,
-    ),
-  );
+export function retrySourceSync(sourceKey: string): Promise<SourceSyncRetryResult> {
+  return request<SourceSyncRetryResult>(`/api/sources/${encodeURIComponent(sourceKey)}/retry`, {
+    method: "POST",
+  });
 }
 
 export function ingestManualLink(url: string): Promise<SourceItems> {
@@ -168,15 +163,8 @@ export function ingestManualLink(url: string): Promise<SourceItems> {
   });
 }
 
-// TODO(backend): topic-evidence endpoint is not implemented yet.
-// Until it is, callers should omit evidence and the page should render
-// without the per-topic freshness breakdown.
 export function getTopicEvidence(episodeId: string): Promise<TopicEvidenceList> {
-  return Promise.reject(
-    new Error(
-      `topic-evidence 端点暂未实现（episode=${episodeId}）`,
-    ),
-  );
+  return request<TopicEvidenceList>(`/api/episodes/${episodeId}/topic-evidence`);
 }
 
 export function getFeedbackSummary(): Promise<FeedbackSummary> {
@@ -188,33 +176,13 @@ export function getPreferences(): Promise<Preferences> {
 }
 
 export function getPreferenceCards(): Promise<PreferenceCards> {
-  return request<Preferences>("/api/preferences").then((prefs) => {
-    const cards: PreferenceCard[] = prefs.preferences.map((item) => ({
-      id: `${item.label}::${item.signal}`,
-      label: item.label,
-      signal: item.signal,
-      category: item.label,
-      confidence: item.confidence,
-      evidence_count: item.evidence_count,
-      enabled: item.enabled,
-      latest_evidence_at: null,
-    }));
-    return {
-      total_count: cards.length,
-      enabled_count: cards.filter((card) => card.enabled).length,
-      disabled_count: cards.filter((card) => !card.enabled).length,
-      cards,
-    };
-  });
+  return request<PreferenceCards>("/api/preferences/cards");
 }
 
-// TODO(backend): preference evidence endpoint is not implemented yet.
 export function getPreferenceEvidence(
   preferenceId: string,
 ): Promise<PreferenceEvidence> {
-  return Promise.reject(
-    new Error(`偏好证据端点暂未实现（${preferenceId}）`),
-  );
+  return request<PreferenceEvidence>(`/api/preferences/cards/${encodeURIComponent(preferenceId)}/evidence`);
 }
 
 export function disablePreferenceCard(
@@ -330,18 +298,14 @@ export function archiveEpisodeVideoSources(
   });
 }
 
-// TODO(backend): production-mode endpoint is not implemented yet.
-// Today the production mode is derived from how videos are bound to the
-// episode, not a separate user setting.
 export function setEpisodeProductionMode(
   episodeId: string,
   mode: VideoProductionMode,
 ): Promise<Episode> {
-  return Promise.reject(
-    new Error(
-      `production-mode 端点暂未实现（episode=${episodeId}, mode=${mode}）`,
-    ),
-  );
+  return request<Episode>(`/api/episodes/${episodeId}/production-mode`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export function processVideo(fileName: string): Promise<ProcessedVideo> {
@@ -439,58 +403,13 @@ export function updatePublishMetrics(
 }
 
 export function getEpisodeHistory(status?: EpisodeStatus): Promise<EpisodeHistory> {
-  // Backend does not expose a dedicated history endpoint; reuse the episode
-  // list (which is paginated and filterable) and adapt to the history shape
-  // consumed by the page.
   const params = new URLSearchParams();
   if (status) {
     params.set("status", status);
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : "";
-  return request<{
-    total: number;
-    episodes: Array<{
-      id: string;
-      day_number: number;
-      episode_date: string;
-      status: EpisodeStatus;
-      intake_mode: EpisodeIntakeMode;
-      selected_topic_id: string | null;
-      publish_url: string | null;
-      platform: string | null;
-      draft_package_name: string | null;
-      published_at: string | null;
-      created_at: string;
-      updated_at: string;
-    }>;
-  }>(`/api/episodes${suffix}`).then((response): EpisodeHistory => {
-    const items = response.episodes.map((ep) => ({
-      id: ep.id,
-      day_number: ep.day_number,
-      episode_date: ep.episode_date,
-      status: ep.status,
-      intake_mode: ep.intake_mode,
-      topic_title: null,
-      script_title: ep.draft_package_name,
-      publish_url: ep.publish_url,
-      platform: ep.platform,
-      play_count: null,
-      like_count: null,
-      comment_count: null,
-      draft_package_path: null,
-      video_dedup_report_path: null,
-      published_at: ep.published_at,
-      created_at: ep.created_at,
-      updated_at: ep.updated_at,
-    }));
-    return {
-      total_count: response.total,
-      filtered_count: items.length,
-      status: status ?? null,
-      items,
-    };
-  });
+  return request<EpisodeHistory>(`/api/episodes/history${suffix}`);
 }
 
 // TODO(backend): dedicated publish-feedback endpoint is not implemented.

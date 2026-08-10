@@ -26,10 +26,11 @@ export type EpisodeIntakeMode =
   | "ad_hoc_batch";
 
 export type VideoProductionMode =
-  | "planned_single"
-  | "planned_batch"
-  | "ad_hoc_single"
-  | "ad_hoc_batch";
+  | "bilibili"
+  | "youtube"
+  | "shorts"
+  | "douyin"
+  | "xiaohongshu";
 
 export type ProductionMode = VideoProductionMode;
 
@@ -474,6 +475,12 @@ export type SourcesStatus = {
   statuses: SourceSyncStatus[];
 };
 
+export type SourceSyncRetryResult = {
+  source_type: string;
+  status: string;
+  message: string;
+};
+
 export type SourceEvidenceFreshness = "fresh" | "aging" | "stale" | "unknown";
 
 export type TopicEvidence = {
@@ -534,9 +541,6 @@ export type PreferenceCards = {
   cards: PreferenceCard[];
 };
 
-// TODO(backend): preference evidence endpoint is not implemented.
-// Frontend keeps the type for compatibility, but the API call rejects
-// so the page renders the empty state until the endpoint ships.
 export type PreferenceEvidenceItem = {
   feedback_event_id: string;
   episode_id: string | null;

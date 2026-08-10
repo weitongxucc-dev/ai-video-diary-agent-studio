@@ -110,24 +110,29 @@ const PRODUCTION_MODE_CARDS: {
   description: string;
 }[] = [
   {
-    mode: "planned_single",
-    title: "单条精剪",
-    description: "已选题已脚本，单条录制视频按计划精剪。",
+    mode: "bilibili",
+    title: "B站",
+    description: "适合中长视频，横屏 16:9，内容深度优先。",
   },
   {
-    mode: "planned_batch",
-    title: "多段拼剪",
-    description: "已选题已脚本，多段录制视频按顺序合并精剪。",
+    mode: "youtube",
+    title: "YouTube",
+    description: "全球分发，横屏 16:9，SEO 标题优化。",
   },
   {
-    mode: "ad_hoc_single",
-    title: "临时单条",
-    description: "临时录制单条视频，跳过选题与脚本直接产出素材包。",
+    mode: "shorts",
+    title: "短视频",
+    description: "竖屏 9:16，快节奏剪辑，适合抖音/小红书/B站 Shorts。",
   },
   {
-    mode: "ad_hoc_batch",
-    title: "临时多段",
-    description: "临时录制多条视频，按序拼接后直接产出素材包。",
+    mode: "douyin",
+    title: "抖音",
+    description: "竖屏 9:16，强节奏感，前 3 秒钩子优先。",
+  },
+  {
+    mode: "xiaohongshu",
+    title: "小红书",
+    description: "竖屏 3:4 或 9:16，封面文案驱动，社区氛围优先。",
   },
 ];
 
