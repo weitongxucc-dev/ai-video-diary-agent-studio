@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  archiveSourcesAction,
   processAdHocVideoBatchAction,
   processAdHocVideoAction,
   processPendingVideoAction,
@@ -12,10 +13,23 @@ import {
   getEpisodeRetakeReport,
   getLatestRetakeReport,
   getPendingVideos,
+  getProductionChain,
+  getSourceFileStates,
   getSystemStatus,
   getTodayEpisode,
 } from "@/lib/api";
-import type { Episode, PendingVideo, RetakeReport, SystemStatus } from "@/lib/types";
+import type {
+  Episode,
+  PendingVideo,
+  ProductionChain,
+  ProductionChainStep,
+  ProductionMode,
+  RetakeReport,
+  SourceFileState,
+  SourceFileStates,
+  SourceFileStateEntry,
+  SystemStatus,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +37,8 @@ type VideoLoadState = {
   videos: PendingVideo[];
   systemStatus: SystemStatus | null;
   episode: Episode | null;
+  productionChain: ProductionChain | null;
+  sourceFileStates: SourceFileStates | null;
   retakeReport: RetakeReport | null;
   isLatestRetakeReport: boolean;
   offline: boolean;
@@ -36,10 +52,25 @@ async function loadVideoState(): Promise<VideoLoadState> {
       getTodayEpisode(),
     ]);
 
+    let productionChain: ProductionChain | null = null;
+    let sourceFileStates: SourceFileStates | null = null;
+    if (episode) {
+      try {
+        productionChain = await getProductionChain(episode.id);
+      } catch {
+        productionChain = null;
+      }
+      try {
+        sourceFileStates = await getSourceFileStates(episode.id);
+      } catch {
+        sourceFileStates = null;
+      }
+    }
+
     let retakeReport: RetakeReport | null = null;
     let isLatestRetakeReport = false;
     try {
-      if (episode.video_dedup_report_path) {
+      if (episode && episode.video_dedup_report_path) {
         retakeReport = await getEpisodeRetakeReport(episode.id);
       } else {
         retakeReport = await getLatestRetakeReport();
@@ -53,6 +84,8 @@ async function loadVideoState(): Promise<VideoLoadState> {
       videos,
       systemStatus,
       episode,
+      productionChain,
+      sourceFileStates,
       retakeReport,
       isLatestRetakeReport,
       offline: false,
@@ -62,12 +95,59 @@ async function loadVideoState(): Promise<VideoLoadState> {
       videos: [],
       systemStatus: null,
       episode: null,
+      productionChain: null,
+      sourceFileStates: null,
       retakeReport: null,
       isLatestRetakeReport: false,
       offline: true,
     };
   }
 }
+
+const PRODUCTION_MODE_CARDS: {
+  mode: ProductionMode;
+  title: string;
+  description: string;
+}[] = [
+  {
+    mode: "planned_single",
+    title: "单条精剪",
+    description: "已选题已脚本，单条录制视频按计划精剪。",
+  },
+  {
+    mode: "planned_batch",
+    title: "多段拼剪",
+    description: "已选题已脚本，多段录制视频按顺序合并精剪。",
+  },
+  {
+    mode: "ad_hoc_single",
+    title: "临时单条",
+    description: "临时录制单条视频，跳过选题与脚本直接产出素材包。",
+  },
+  {
+    mode: "ad_hoc_batch",
+    title: "临时多段",
+    description: "临时录制多条视频，按序拼接后直接产出素材包。",
+  },
+];
+
+const PRODUCTION_CHAIN_STAGE_LABELS: Record<string, string> = {
+  upload: "上传素材",
+  dedup: "重复口播检查",
+  cut: "剪辑计划",
+  subtitle: "字幕生成",
+  cover: "封面生成",
+  package: "素材包组装",
+  archive: "源文件归档",
+};
+
+const SOURCE_FILE_STATE_LABELS: Record<SourceFileState, string> = {
+  pending: "待处理",
+  processing: "处理中",
+  processed: "已处理",
+  archived: "已归档",
+  skipped: "已跳过",
+};
 
 function formatFileSize(sizeBytes: number): string {
   if (sizeBytes < 1024 * 1024) {
@@ -151,11 +231,89 @@ function getBaseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+function getStageLabel(stage: string): string {
+  return PRODUCTION_CHAIN_STAGE_LABELS[stage] ?? stage;
+}
+
+function getChainStepTitle(step: ProductionChainStep): string {
+  const label = getStageLabel(step.stage);
+  if (step.output) {
+    return `${label} · ${getBaseName(step.output)}`;
+  }
+  return label;
+}
+
+function getSourceFileStateLabel(state: SourceFileState): string {
+  return SOURCE_FILE_STATE_LABELS[state];
+}
+
+function getProductionChainSummary(chain: ProductionChain | null): string {
+  if (!chain) {
+    return "尚未拉取生产链路状态。";
+  }
+
+  if (chain.steps.length === 0) {
+    return "当前 Episode 暂无生产链路步骤。";
+  }
+
+  const completedCount = chain.steps.filter(
+    (step) => step.status === "completed",
+  ).length;
+  const failedCount = chain.steps.filter(
+    (step) => step.status === "failed",
+  ).length;
+  const processingCount = chain.steps.filter(
+    (step) => step.status === "processing",
+  ).length;
+
+  if (failedCount > 0) {
+    return `共 ${chain.steps.length} 步：已完成 ${completedCount}，处理中 ${processingCount}，失败 ${failedCount}。`;
+  }
+  if (processingCount > 0) {
+    return `共 ${chain.steps.length} 步：已完成 ${completedCount}，处理中 ${processingCount}。`;
+  }
+  return `共 ${chain.steps.length} 步：已完成 ${completedCount}。`;
+}
+
+function getSourceFileStatesSummary(states: SourceFileStates | null): string {
+  if (!states) {
+    return "尚未拉取源文件状态。";
+  }
+  if (states.files.length === 0) {
+    return "当前 Episode 没有源文件记录。";
+  }
+
+  const counts: Record<SourceFileState, number> = {
+    pending: 0,
+    processing: 0,
+    processed: 0,
+    archived: 0,
+    skipped: 0,
+  };
+  for (const file of states.files) {
+    counts[file.state] += 1;
+  }
+
+  const summary: string[] = [];
+  (Object.keys(counts) as SourceFileState[]).forEach((key) => {
+    if (counts[key] > 0) {
+      summary.push(`${SOURCE_FILE_STATE_LABELS[key]} ${counts[key]}`);
+    }
+  });
+  return `共 ${states.files.length} 个源文件：${summary.join(" · ")}。`;
+}
+
+function getArchivableFiles(files: SourceFileStateEntry[]): SourceFileStateEntry[] {
+  return files.filter((file) => file.state === "processed");
+}
+
 export default async function VideoPage() {
   const {
     videos,
     systemStatus,
     episode,
+    productionChain,
+    sourceFileStates,
     retakeReport,
     isLatestRetakeReport,
     offline,
@@ -166,6 +324,11 @@ export default async function VideoPage() {
   const canCreateFullPackage = canProcess && Boolean(episode?.script);
   const episodeId = episode?.id;
   const canCreateAdHocPackage = canProcess && Boolean(episodeId);
+  const currentProductionMode = episode?.production_mode ?? null;
+  const archivableFiles = sourceFileStates
+    ? getArchivableFiles(sourceFileStates.files)
+    : [];
+  const hasArchivableFiles = archivableFiles.length > 0;
 
   return (
     <AppShell>
@@ -188,20 +351,67 @@ export default async function VideoPage() {
             </Link>
           </div>
 
-          <div className="video-mode-strip" aria-label="视频生产模式">
-            <div className="video-mode-card">
-              <strong>单条截取</strong>
-              <span>处理一条录制视频，生成预览或完整素材包。</span>
-            </div>
-            <div className="video-mode-card">
-              <strong>多段拼剪</strong>
-              <span>勾选多条片段后按序合并，适合分段录制。</span>
-            </div>
-            <div className="video-mode-card">
-              <strong>自动生产包</strong>
-              <span>带字幕、封面、素材包，进入剪映草稿流程。</span>
-            </div>
-          </div>
+          <section className="video-mode-strip" aria-label="视频生产模式">
+            {PRODUCTION_MODE_CARDS.map((card) => {
+              const isActive = currentProductionMode === card.mode;
+              return (
+                <div
+                  aria-current={isActive ? "true" : undefined}
+                  className={`video-mode-card ${isActive ? "active" : ""}`}
+                  data-mode={card.mode}
+                  key={card.mode}
+                >
+                  <strong>{card.title}</strong>
+                  <span>{card.description}</span>
+                  {isActive ? (
+                    <span className="video-mode-tag">当前模式</span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </section>
+
+          {episodeId ? (
+            <section
+              aria-label="生产链路状态"
+              className="video-chain"
+            >
+              <div className="video-chain-heading">
+                <strong>生产链路</strong>
+                <span>{getProductionChainSummary(productionChain)}</span>
+              </div>
+              {productionChain && productionChain.steps.length > 0 ? (
+                <ol className="video-chain-list">
+                  {productionChain.steps.map((step, index) => (
+                    <li
+                      className={`video-chain-row ${step.status}`}
+                      key={`${step.stage}-${index}`}
+                    >
+                      <span className="video-chain-index">{index + 1}</span>
+                      <span className="video-chain-stage">
+                        {getChainStepTitle(step)}
+                      </span>
+                      <span className={`video-chain-status ${step.status}`}>
+                        {step.status === "pending"
+                          ? "待处理"
+                          : step.status === "processing"
+                            ? "处理中"
+                            : step.status === "completed"
+                              ? "已完成"
+                              : step.status === "failed"
+                                ? "失败"
+                                : "已跳过"}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <div className="video-chain-empty">
+                  <span>暂无生产链路步骤，先选择生产模式或处理一条视频。</span>
+                </div>
+              )}
+            </section>
+          ) : null}
 
           <form
             action={processAdHocVideoBatchAction}
@@ -332,8 +542,11 @@ export default async function VideoPage() {
                       className="video-batch-order"
                       defaultValue={index + 1}
                       form="ad-hoc-video-batch-form"
+                      max={videos.length || 99}
                       min="1"
                       name={`order:${video.file_name}`}
+                      required
+                      title="合并顺序 1-N"
                       type="number"
                     />
                   </label>
@@ -412,6 +625,71 @@ export default async function VideoPage() {
               </div>
             )}
           </div>
+
+          <section
+            aria-label="源文件状态"
+            className="video-source-states"
+          >
+            <div className="video-source-states-heading">
+              <strong>源文件状态</strong>
+              <span>{getSourceFileStatesSummary(sourceFileStates)}</span>
+            </div>
+            {episodeId && hasArchivableFiles ? (
+              <form
+                action={archiveSourcesAction}
+                className="video-source-states-toolbar"
+              >
+                <input name="episode_id" type="hidden" value={episodeId} />
+                {archivableFiles.map((file) => (
+                  <input
+                    key={file.file_name}
+                    name="file_names"
+                    type="hidden"
+                    value={file.file_name}
+                  />
+                ))}
+                <span>
+                  将归档 {archivableFiles.length} 个已处理源文件，腾出待处理文件夹空间。
+                </span>
+                <button className="pixel-button" type="submit">
+                  归档已处理文件
+                </button>
+              </form>
+            ) : null}
+            {sourceFileStates && sourceFileStates.files.length > 0 ? (
+              <ul className="video-source-states-list">
+                {sourceFileStates.files.map((file) => (
+                  <li
+                    className={`video-source-state-row ${file.state}`}
+                    key={file.file_name}
+                  >
+                    <PixelIcon name="video" />
+                    <div>
+                      <strong>{file.file_name}</strong>
+                      <span>
+                        状态 {getSourceFileStateLabel(file.state)}
+                        {file.output_path
+                          ? ` · 输出 ${getBaseName(file.output_path)}`
+                          : ""}
+                      </span>
+                      <span>
+                        处理 {formatJobTime(file.processed_at)} · 归档{" "}
+                        {formatJobTime(file.archived_at)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="video-source-states-empty">
+                <span>
+                  {offline
+                    ? "API 未连接，无法获取源文件状态。"
+                    : "暂无源文件记录，处理一条视频后会出现在这里。"}
+                </span>
+              </div>
+            )}
+          </section>
         </section>
 
         <aside className="video-side pixel-card">
@@ -448,6 +726,11 @@ export default async function VideoPage() {
               <PixelIcon name="code" />
               <span>本地 Whisper</span>
               <strong>{systemStatus?.asr.local_whisper_configured ? "可用" : "未配置"}</strong>
+            </div>
+            <div className="video-status-row">
+              <PixelIcon name="settings" />
+              <span>生产模式</span>
+              <strong>{currentProductionMode ?? "未设置"}</strong>
             </div>
           </div>
           <p>

@@ -8,6 +8,7 @@ import {
   sendScriptSectionFeedbackAction,
 } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
+import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { PixelIcon } from "@/components/PixelIcon";
 import { ScriptSectionEditor } from "@/components/ScriptSectionEditor";
 import { generateScript, generateTopics, getTodayEpisode } from "@/lib/api";
@@ -180,11 +181,16 @@ export default async function ScriptPage() {
       <div className="script-page">
         {script && episode && scriptFormId ? (
           <>
-            <form action={saveScriptAction} className="script-edit-owner" id={scriptFormId}>
+            <FormErrorBanner
+              action={saveScriptAction}
+              className="script-edit-owner"
+              emptyMessage="请补全口播稿必填字段"
+              formId={scriptFormId}
+            >
               <input name="episode_id" type="hidden" value={episode.id} />
               <input name="script_id" type="hidden" value={script.id} />
               <input name="reason" type="hidden" value="用户手动编辑口播稿" />
-            </form>
+            </FormErrorBanner>
             <section className="script-main" aria-label="口播稿正文">
               <section className="script-dashboard pixel-card" aria-label="脚本仪表盘">
                 <div className="script-dashboard-stat">
@@ -230,7 +236,11 @@ export default async function ScriptPage() {
                   className="script-hook-textarea"
                   defaultValue={script.hook}
                   form={scriptFormId}
+                  maxLength={280}
+                  minLength={8}
                   name="hook"
+                  required
+                  title="钩子句 8-280 字"
                 />
               </section>
               {script.sections.map((section) => (
@@ -276,8 +286,11 @@ export default async function ScriptPage() {
                       <input name="episode_id" type="hidden" value={episode.id} />
                       <input name="section_id" type="hidden" value={section.id} />
                       <input
+                        aria-label="重写本段的原因"
+                        maxLength={200}
                         name="reason"
                         placeholder="更像日记、少一点营销感"
+                        title="重写理由 0-200 字"
                         type="text"
                       />
                       <button className="pixel-button secondary" type="submit">
@@ -295,33 +308,53 @@ export default async function ScriptPage() {
                 <h3>标题候选</h3>
                 {titleOptions.map((title, index) => (
                   <input
+                    aria-label={`标题候选 ${index + 1}`}
                     className="script-title-option-input"
                     form={scriptFormId}
                     key={`${title}-${index}`}
+                    maxLength={60}
+                    minLength={4}
                     name="title_option"
+                    required
+                    title="标题 4-60 字"
                     defaultValue={title}
                   />
                 ))}
                 <h3>封面文案</h3>
                 <textarea
+                  aria-label="封面文案"
                   className="script-side-textarea"
                   defaultValue={script.cover_copy}
                   form={scriptFormId}
+                  maxLength={80}
+                  minLength={8}
                   name="cover_copy"
+                  required
+                  title="封面文案 8-80 字"
                 />
                 <h3>发布文案</h3>
                 <textarea
+                  aria-label="发布文案"
                   className="script-side-textarea"
                   defaultValue={script.publish_copy}
                   form={scriptFormId}
+                  maxLength={200}
+                  minLength={8}
                   name="publish_copy"
+                  required
+                  title="发布文案 8-200 字"
                 />
                 <h3>评论引导</h3>
                 <textarea
+                  aria-label="评论引导"
                   className="script-side-textarea"
                   defaultValue={script.comment_prompt}
                   form={scriptFormId}
+                  maxLength={80}
+                  minLength={4}
                   name="comment_prompt"
+                  required
+                  title="评论引导 4-80 字"
                 />
               </section>
 
@@ -333,8 +366,11 @@ export default async function ScriptPage() {
                 <form action={regenerateScriptAction} className="script-control-form">
                   <input name="episode_id" type="hidden" value={episode.id} />
                   <input
+                    aria-label="整篇重写理由"
+                    maxLength={200}
                     name="reason"
                     placeholder="更犀利、更像自己、少概念"
+                    title="整篇重写理由 0-200 字"
                     type="text"
                   />
                   <button className="pixel-button secondary" type="submit">

@@ -7,6 +7,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
 import { PixelMascot } from "@/components/PixelMascot";
+import { PixelTooltip } from "@/components/PixelTooltip";
 import { apiUrl, getEpisodeEditPlan, getTodayEpisode } from "@/lib/api";
 import type { EditPlan, EditPlanDecision, EditPlanSegment, Episode } from "@/lib/types";
 
@@ -240,15 +241,36 @@ export default async function EditPlanPage() {
                   </div>
                 </dl>
                 <div className="video-preview-controls" aria-label="视频浏览控制">
-                  <button className="pixel-button secondary" disabled type="button">
-                    上一段
-                  </button>
-                  <button className="pixel-button" disabled type="button">
-                    使用视频控件播放
-                  </button>
-                  <button className="pixel-button secondary" disabled type="button">
-                    下一段
-                  </button>
+                  <PixelTooltip label="使用视频原生控件播放">
+                    <button
+                      aria-label="使用视频控件播放"
+                      className="pixel-button"
+                      disabled
+                      type="button"
+                    >
+                      使用视频控件播放
+                    </button>
+                  </PixelTooltip>
+                  <PixelTooltip label="使用视频原生控件播放">
+                    <button
+                      aria-label="上一段"
+                      className="pixel-button secondary"
+                      disabled
+                      type="button"
+                    >
+                      上一段
+                    </button>
+                  </PixelTooltip>
+                  <PixelTooltip label="使用视频原生控件播放">
+                    <button
+                      aria-label="下一段"
+                      className="pixel-button secondary"
+                      disabled
+                      type="button"
+                    >
+                      下一段
+                    </button>
+                  </PixelTooltip>
                 </div>
               </div>
             </div>

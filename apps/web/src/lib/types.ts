@@ -19,7 +19,59 @@ export type VideoJobStatus =
   | "failed"
   | "interrupted";
 
-export type EpisodeIntakeMode = "planned" | "ad_hoc_video" | "ad_hoc_video_batch";
+export type EpisodeIntakeMode =
+  | "planned_single"
+  | "planned_batch"
+  | "ad_hoc_single"
+  | "ad_hoc_batch";
+
+export type VideoProductionMode =
+  | "planned_single"
+  | "planned_batch"
+  | "ad_hoc_single"
+  | "ad_hoc_batch";
+
+export type ProductionMode = VideoProductionMode;
+
+export type ProductionChainStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export type ProductionChainStep = {
+  stage: string;
+  status: ProductionChainStatus;
+  output?: string | null;
+};
+
+export type ProductionChain = {
+  episode_id: string;
+  mode: ProductionMode;
+  steps: ProductionChainStep[];
+  updated_at: string | null;
+};
+
+export type SourceFileState =
+  | "pending"
+  | "processing"
+  | "processed"
+  | "archived"
+  | "skipped";
+
+export type SourceFileStateEntry = {
+  file_name: string;
+  state: SourceFileState;
+  output_path: string | null;
+  processed_at: string | null;
+  archived_at: string | null;
+};
+
+export type SourceFileStates = {
+  episode_id: string;
+  files: SourceFileStateEntry[];
+};
 
 export type FeedbackValue = "up" | "down";
 
@@ -93,6 +145,16 @@ export type FeedbackEvent = {
   created_at: string;
 };
 
+export type PublishFeedback = {
+  publish_url: string | null;
+  platform: string | null;
+  play_count: number | null;
+  like_count: number | null;
+  comment_count: number | null;
+  notes: string | null;
+  published_at: string | null;
+};
+
 export type Episode = {
   id: string;
   day_number: number;
@@ -118,13 +180,45 @@ export type Episode = {
   draft_package_name: string | null;
   draft_package_path: string | null;
   publish_url: string | null;
+  platform: string | null;
+  notes: string | null;
   play_count: number | null;
   like_count: number | null;
   comment_count: number | null;
   published_at: string | null;
+  publish_feedback: PublishFeedback | null;
   feedback_events: FeedbackEvent[];
+  production_mode: ProductionMode | null;
+  archived_source_file_names: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type EpisodeHistoryItem = {
+  id: string;
+  day_number: number;
+  episode_date: string;
+  status: EpisodeStatus;
+  intake_mode: EpisodeIntakeMode;
+  topic_title: string | null;
+  script_title: string | null;
+  publish_url: string | null;
+  platform: string | null;
+  play_count: number | null;
+  like_count: number | null;
+  comment_count: number | null;
+  draft_package_path: string | null;
+  video_dedup_report_path: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EpisodeHistory = {
+  total_count: number;
+  filtered_count: number;
+  status: EpisodeStatus | null;
+  items: EpisodeHistoryItem[];
 };
 
 export type SystemStatus = {
@@ -199,6 +293,26 @@ export type ContentTemplate = {
 
 export type ContentTemplates = {
   templates: ContentTemplate[];
+};
+
+export type SetupCheckStatus = "ready" | "missing" | "degraded" | "invalid";
+
+export type ToastKind = "success" | "error" | "info";
+
+export type SetupCheckItem = {
+  id: string;
+  label: string;
+  status: SetupCheckStatus;
+  detail: string;
+  impact: string;
+  repair_action: string;
+};
+
+export type SetupStatus = {
+  complete: boolean;
+  ready_count: number;
+  total_count: number;
+  items: SetupCheckItem[];
 };
 
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
@@ -347,6 +461,39 @@ export type SourceItems = {
   source_counts: Record<string, number>;
 };
 
+export type SourceSyncStatus = {
+  source_type: string;
+  configured: boolean;
+  last_sync_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  error_message: string | null;
+};
+
+export type SourcesStatus = {
+  statuses: SourceSyncStatus[];
+};
+
+export type SourceEvidenceFreshness = "fresh" | "aging" | "stale" | "unknown";
+
+export type TopicEvidence = {
+  source_key: string;
+  source_type: string;
+  title: string;
+  ref: string;
+  excerpt: string;
+  freshness: SourceEvidenceFreshness;
+  freshness_label: string;
+  participated_topics: number;
+  last_used_at: string | null;
+};
+
+export type TopicEvidenceList = {
+  episode_id: string;
+  total: number;
+  items: TopicEvidence[];
+};
+
 export type FeedbackEventResponse = FeedbackEvent;
 
 export type FeedbackSummary = {
@@ -361,11 +508,50 @@ export type PreferenceItem = {
   signal: string;
   evidence_count: number;
   confidence: number;
+  enabled: boolean;
 };
 
 export type Preferences = {
   total_feedback_count: number;
   preferences: PreferenceItem[];
+};
+
+export type PreferenceCard = {
+  id: string;
+  label: string;
+  signal: string;
+  category: string;
+  confidence: number;
+  evidence_count: number;
+  enabled: boolean;
+  latest_evidence_at: string | null;
+};
+
+export type PreferenceCards = {
+  total_count: number;
+  enabled_count: number;
+  disabled_count: number;
+  cards: PreferenceCard[];
+};
+
+// TODO(backend): preference evidence endpoint is not implemented.
+// Frontend keeps the type for compatibility, but the API call rejects
+// so the page renders the empty state until the endpoint ships.
+export type PreferenceEvidenceItem = {
+  feedback_event_id: string;
+  episode_id: string | null;
+  episode_date: string | null;
+  target_type: string;
+  target_id: string;
+  value: "up" | "down";
+  reason: string | null;
+  created_at: string;
+};
+
+export type PreferenceEvidence = {
+  preference_id: string;
+  total: number;
+  items: PreferenceEvidenceItem[];
 };
 
 export type RuntimeSettingItem = {

@@ -1,10 +1,15 @@
+import { redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { EpisodeProgress } from "@/components/EpisodeProgress";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
 import { PixelMascot } from "@/components/PixelMascot";
 import { PixelAgentPanel } from "@/components/PixelAgentPanel";
-import { getSystemStatus, getTodayEpisode } from "@/lib/api";
+import {
+  getSetupStatus,
+  getSystemStatus,
+  getTodayEpisode,
+} from "@/lib/api";
 import type { Episode, SystemStatus } from "@/lib/types";
 
 async function safelyGetTodayEpisode(): Promise<Episode | null> {
@@ -23,15 +28,27 @@ async function safelyGetSystemStatus(): Promise<SystemStatus | null> {
   }
 }
 
+async function ensureConfigured(): Promise<void> {
+  try {
+    const setup = await getSetupStatus();
+    if (!setup.complete) {
+      redirect("/welcome");
+    }
+  } catch {
+    // /api/is_setup unavailable or network down — render home as before.
+  }
+}
+
 export default async function HomePage() {
+  await ensureConfigured();
   const [episode, systemStatus] = await Promise.all([
     safelyGetTodayEpisode(),
     safelyGetSystemStatus(),
   ]);
-  const currentTopic = episode?.topics[0] ?? null;
-  const selectedTopic = episode?.topics.find(
-    (topic) => topic.id === episode.selected_topic_id,
-  );
+  const currentTopic = episode?.topics?.[0] ?? null;
+  const selectedTopic = episode?.topics?.find(
+    (topic) => topic.id === episode?.selected_topic_id,
+  ) ?? null;
   const topicForWorkbench = selectedTopic ?? currentTopic;
   const hasApprovedTopic = Boolean(episode?.selected_topic_id);
   const materialCount =

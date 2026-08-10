@@ -6,20 +6,33 @@ import type {
   DraftImport,
   DraftPackage,
   DraftStatus,
+  EpisodeHistory,
+  EpisodeIntakeMode,
+  EpisodeStatus,
   FeedbackTargetType,
   FeedbackValue,
   FeedbackSummary,
   KnowledgeNote,
   PendingVideo,
   Preferences,
+  PreferenceCard,
+  PreferenceCards,
+  PreferenceEvidence,
   ProcessedVideo,
+  ProductionChain,
+  PublishFeedback,
   RetakeReport,
   RuntimeHealth,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   ScriptPackage,
+  SetupStatus,
+  SourcesStatus,
+  SourceFileStates,
   SourceItems,
   SystemStatus,
+  TopicEvidenceList,
+  VideoProductionMode,
   VoiceCommandResponse,
   WorkflowStatus,
 } from "./types";
@@ -94,6 +107,10 @@ export function getRuntimeHealth(): Promise<RuntimeHealth> {
   return request<RuntimeHealth>("/api/runtime/health");
 }
 
+export function getSetupStatus(): Promise<SetupStatus> {
+  return request<SetupStatus>("/api/is_setup");
+}
+
 export function updateRuntimeSettings(
   payload: RuntimeSettingsUpdate,
 ): Promise<RuntimeSettings> {
@@ -126,8 +143,22 @@ export function getSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/items");
 }
 
+export function getSourcesStatus(): Promise<SourcesStatus> {
+  return request<SourcesStatus>("/api/sources/sync-status");
+}
+
 export function syncSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/sync", { method: "POST" });
+}
+
+// TODO(backend): retry-single-source endpoint is not implemented yet.
+// Until it is, callers should use syncSourceItems() or surface a friendly toast.
+export function retrySourceSync(sourceKey: string): Promise<SourceItems> {
+  return Promise.reject(
+    new Error(
+      `重试单来源暂未实现（${sourceKey}），请改用 /api/sources/sync`,
+    ),
+  );
 }
 
 export function ingestManualLink(url: string): Promise<SourceItems> {
@@ -137,12 +168,77 @@ export function ingestManualLink(url: string): Promise<SourceItems> {
   });
 }
 
+// TODO(backend): topic-evidence endpoint is not implemented yet.
+// Until it is, callers should omit evidence and the page should render
+// without the per-topic freshness breakdown.
+export function getTopicEvidence(episodeId: string): Promise<TopicEvidenceList> {
+  return Promise.reject(
+    new Error(
+      `topic-evidence 端点暂未实现（episode=${episodeId}）`,
+    ),
+  );
+}
+
 export function getFeedbackSummary(): Promise<FeedbackSummary> {
   return request<FeedbackSummary>("/api/feedback/summary");
 }
 
 export function getPreferences(): Promise<Preferences> {
   return request<Preferences>("/api/preferences");
+}
+
+export function getPreferenceCards(): Promise<PreferenceCards> {
+  return request<Preferences>("/api/preferences").then((prefs) => {
+    const cards: PreferenceCard[] = prefs.preferences.map((item) => ({
+      id: `${item.label}::${item.signal}`,
+      label: item.label,
+      signal: item.signal,
+      category: item.label,
+      confidence: item.confidence,
+      evidence_count: item.evidence_count,
+      enabled: item.enabled,
+      latest_evidence_at: null,
+    }));
+    return {
+      total_count: cards.length,
+      enabled_count: cards.filter((card) => card.enabled).length,
+      disabled_count: cards.filter((card) => !card.enabled).length,
+      cards,
+    };
+  });
+}
+
+// TODO(backend): preference evidence endpoint is not implemented yet.
+export function getPreferenceEvidence(
+  preferenceId: string,
+): Promise<PreferenceEvidence> {
+  return Promise.reject(
+    new Error(`偏好证据端点暂未实现（${preferenceId}）`),
+  );
+}
+
+export function disablePreferenceCard(
+  preferenceId: string,
+): Promise<Preferences> {
+  return request<Preferences>(
+    "/api/preferences/disable",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ signal: preferenceId }),
+    },
+  );
+}
+
+export function restorePreferenceCard(
+  preferenceId: string,
+): Promise<Preferences> {
+  return request<Preferences>(
+    "/api/preferences/restore",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ signal: preferenceId }),
+    },
+  );
 }
 
 export function getDraftStatus(): Promise<DraftStatus> {
@@ -165,6 +261,26 @@ export function importDraftPackage(packageName?: string): Promise<DraftImport> {
 
 export function getPendingVideos(): Promise<PendingVideo[]> {
   return request<PendingVideo[]>("/api/videos/pending");
+}
+
+export function getProductionChain(episodeId: string): Promise<ProductionChain> {
+  return request<ProductionChain>(`/api/episodes/${episodeId}/production-chain`);
+}
+
+export function getSourceFileStates(episodeId: string): Promise<SourceFileStates> {
+  return request<SourceFileStates>(
+    `/api/episodes/${episodeId}/source-file-states`,
+  );
+}
+
+export function archiveSources(
+  episodeId: string,
+  fileNames: string[],
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/archive-sources`, {
+    method: "POST",
+    body: JSON.stringify({ file_names: fileNames }),
+  });
 }
 
 export function getEpisodeRetakeReport(episodeId: string): Promise<RetakeReport> {
@@ -202,6 +318,30 @@ export function revertEditPlanSegmentDecision(
 
 export function getLatestRetakeReport(): Promise<RetakeReport> {
   return request<RetakeReport>("/api/retake-reports/latest");
+}
+
+export function archiveEpisodeVideoSources(
+  episodeId: string,
+  fileNames: string[],
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/archive-sources`, {
+    method: "POST",
+    body: JSON.stringify({ file_names: fileNames }),
+  });
+}
+
+// TODO(backend): production-mode endpoint is not implemented yet.
+// Today the production mode is derived from how videos are bound to the
+// episode, not a separate user setting.
+export function setEpisodeProductionMode(
+  episodeId: string,
+  mode: VideoProductionMode,
+): Promise<Episode> {
+  return Promise.reject(
+    new Error(
+      `production-mode 端点暂未实现（episode=${episodeId}, mode=${mode}）`,
+    ),
+  );
 }
 
 export function processVideo(fileName: string): Promise<ProcessedVideo> {
@@ -266,16 +406,100 @@ export function createEpisodeDraft(episodeId: string): Promise<Episode> {
 export function markEpisodePublished(
   episodeId: string,
   payload: {
-    publish_url?: string;
-    play_count?: number;
-    like_count?: number;
-    comment_count?: number;
+    publish_url?: string | null;
+    platform?: string | null;
+    play_count?: number | null;
+    like_count?: number | null;
+    comment_count?: number | null;
+    notes?: string | null;
+    published_at?: string | null;
   },
 ): Promise<Episode> {
   return request<Episode>(`/api/episodes/${episodeId}/mark-published`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function updatePublishMetrics(
+  episodeId: string,
+  payload: {
+    publish_url?: string | null;
+    platform?: string | null;
+    play_count?: number | null;
+    like_count?: number | null;
+    comment_count?: number | null;
+    notes?: string | null;
+  },
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/publish-metrics`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getEpisodeHistory(status?: EpisodeStatus): Promise<EpisodeHistory> {
+  // Backend does not expose a dedicated history endpoint; reuse the episode
+  // list (which is paginated and filterable) and adapt to the history shape
+  // consumed by the page.
+  const params = new URLSearchParams();
+  if (status) {
+    params.set("status", status);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return request<{
+    total: number;
+    episodes: Array<{
+      id: string;
+      day_number: number;
+      episode_date: string;
+      status: EpisodeStatus;
+      intake_mode: EpisodeIntakeMode;
+      selected_topic_id: string | null;
+      publish_url: string | null;
+      platform: string | null;
+      draft_package_name: string | null;
+      published_at: string | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+  }>(`/api/episodes${suffix}`).then((response): EpisodeHistory => {
+    const items = response.episodes.map((ep) => ({
+      id: ep.id,
+      day_number: ep.day_number,
+      episode_date: ep.episode_date,
+      status: ep.status,
+      intake_mode: ep.intake_mode,
+      topic_title: null,
+      script_title: ep.draft_package_name,
+      publish_url: ep.publish_url,
+      platform: ep.platform,
+      play_count: null,
+      like_count: null,
+      comment_count: null,
+      draft_package_path: null,
+      video_dedup_report_path: null,
+      published_at: ep.published_at,
+      created_at: ep.created_at,
+      updated_at: ep.updated_at,
+    }));
+    return {
+      total_count: response.total,
+      filtered_count: items.length,
+      status: status ?? null,
+      items,
+    };
+  });
+}
+
+// TODO(backend): dedicated publish-feedback endpoint is not implemented.
+// The Episode response already carries the latest publish fields, so
+// callers can read them from the Episode directly.
+export function getPublishFeedback(episodeId: string): Promise<PublishFeedback> {
+  return Promise.reject(
+    new Error(`publish-feedback 端点暂未实现（${episodeId}）`),
+  );
 }
 
 export function createEpisode(): Promise<Episode> {

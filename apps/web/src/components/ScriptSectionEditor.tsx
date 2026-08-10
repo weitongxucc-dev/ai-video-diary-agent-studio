@@ -38,8 +38,12 @@ export function ScriptSectionEditor({
             aria-label={`${section.title} 段落标题`}
             className="script-section-title-input"
             form={formId}
+            maxLength={60}
+            minLength={2}
             name={`section_title:${section.id}`}
             defaultValue={section.title}
+            required
+            title="段落标题 2-60 字"
           />
         </div>
         <div className="script-section-meta">
@@ -49,8 +53,11 @@ export function ScriptSectionEditor({
               aria-label={`${section.title} 预计秒数`}
               className="script-section-seconds-input"
               form={formId}
+              max="60"
               min="1"
               name={`section_seconds:${section.id}`}
+              required
+              title="预计秒数 1-60 秒"
               type="number"
               defaultValue={String(section.estimated_seconds)}
             />
@@ -63,7 +70,11 @@ export function ScriptSectionEditor({
         aria-label={`${section.title} 口播稿内容`}
         defaultValue={section.content}
         form={formId}
+        maxLength={600}
+        minLength={8}
         name={`section_content:${section.id}`}
+        required
+        title="口播稿内容 8-600 字"
       />
       <div className="script-section-footer">
         <span>{charCount} 字</span>

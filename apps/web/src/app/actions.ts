@@ -1,15 +1,19 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
   approveScript,
   approveTopic,
+  archiveSources,
   createEpisodeDraft,
   createDraftPackage,
+  disablePreferenceCard,
   generateTopics,
   generateScript,
   ingestManualLink,
   importDraftPackage,
+  markEpisodePublished,
   processAdHocEpisodeVideo,
   processAdHocEpisodeVideoBatch,
   processEpisodeVideo,
@@ -17,6 +21,7 @@ import {
   regenerateEpisodeScript,
   regenerateEpisodeScriptSection,
   regenerateTopics,
+  restorePreferenceCard,
   revertEditPlanSegmentDecision,
   revertEpisodeScriptVersion,
   revertFeedbackEvent,
@@ -26,6 +31,7 @@ import {
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
   uploadEpisodeVideo,
+  updatePublishMetrics,
   updateRuntimeSettings,
 } from "@/lib/api";
 import type {
@@ -33,6 +39,7 @@ import type {
   FeedbackValue,
   RuntimeSettingsUpdate,
   ScriptPackage,
+  ToastKind,
 } from "@/lib/types";
 
 function requiredString(formData: FormData, key: string): string {
@@ -47,11 +54,9 @@ function requiredString(formData: FormData, key: string): string {
 
 function feedbackValue(formData: FormData): FeedbackValue {
   const value = requiredString(formData, "value");
-
   if (value !== "up" && value !== "down") {
     throw new Error("Invalid feedback value");
   }
-
   return value;
 }
 
@@ -59,13 +64,11 @@ function optionalFeedbackValue(value: FormDataEntryValue | null): FeedbackValue 
   if (value === "up" || value === "down") {
     return value;
   }
-
   return null;
 }
 
 function optionalString(formData: FormData, key: string): string | undefined {
   const value = formData.get(key);
-
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
@@ -77,6 +80,26 @@ function editPlanSegmentDecisionAction(
     throw new Error("Invalid edit plan segment decision");
   }
   return action;
+}
+
+function redirectWithToast(
+  path: string,
+  kind: ToastKind,
+  message: string,
+): never {
+  const separator = path.includes("?") ? "&" : "?";
+  const params = new URLSearchParams({
+    toast: kind,
+    toast_message: message,
+  });
+  redirect(`${path}${separator}${params.toString()}`);
+}
+
+function safeErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return fallback;
 }
 
 function scriptFromFormData(formData: FormData): ScriptPackage {
@@ -116,24 +139,52 @@ export async function approveTopicAndGenerateScript(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const topicId = requiredString(formData, "topic_id");
 
-  await approveTopic(episodeId, topicId);
-  await generateScript(episodeId);
-  redirect("/script");
+  try {
+    await approveTopic(episodeId, topicId);
+    await generateScript(episodeId);
+    revalidatePath("/script");
+    revalidatePath("/topics");
+    redirectWithToast("/script", "success", "选题已通过，口播稿生成中");
+  } catch (err) {
+    redirectWithToast(
+      "/topics",
+      "error",
+      `选题已通过但生成口播稿失败：${safeErrorMessage(err, "未知错误")}（选题已确认，可重试生成）`,
+    );
+  }
 }
 
 export async function selectContentTemplateAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const templateId = requiredString(formData, "template_id");
 
-  await selectEpisodeContentTemplate(episodeId, templateId);
-  redirect("/templates");
+  try {
+    await selectEpisodeContentTemplate(episodeId, templateId);
+    revalidatePath("/templates");
+    redirectWithToast("/templates", "success", "内容模板已切换");
+  } catch (err) {
+    redirectWithToast(
+      "/templates",
+      "error",
+      `切换内容模板失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function generateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await generateTopics(episodeId);
-  redirect("/topics");
+  try {
+    await generateTopics(episodeId);
+    revalidatePath("/topics");
+    redirectWithToast("/topics", "success", "今日选题已生成");
+  } catch (err) {
+    redirectWithToast(
+      "/topics",
+      "error",
+      `生成选题失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function sendTopicFeedbackAction(formData: FormData) {
@@ -141,21 +192,40 @@ export async function sendTopicFeedbackAction(formData: FormData) {
   const topicId = requiredString(formData, "topic_id");
   const reason = formData.get("reason");
 
-  await sendFeedback(
-    episodeId,
-    "topic",
-    topicId,
-    feedbackValue(formData),
-    typeof reason === "string" ? reason : undefined,
-  );
-  redirect("/topics");
+  try {
+    await sendFeedback(
+      episodeId,
+      "topic",
+      topicId,
+      feedbackValue(formData),
+      typeof reason === "string" ? reason : undefined,
+    );
+    revalidatePath("/topics");
+    revalidatePath("/learning");
+    redirectWithToast("/topics", "success", "选题反馈已记录");
+  } catch (err) {
+    redirectWithToast(
+      "/topics",
+      "error",
+      `记录选题反馈失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function regenerateTopicsAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await regenerateTopics(episodeId);
-  redirect("/topics");
+  try {
+    await regenerateTopics(episodeId);
+    revalidatePath("/topics");
+    redirectWithToast("/topics", "success", "选题已重新生成");
+  } catch (err) {
+    redirectWithToast(
+      "/topics",
+      "error",
+      `重新生成选题失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function sendScriptSectionFeedbackAction(formData: FormData) {
@@ -163,106 +233,211 @@ export async function sendScriptSectionFeedbackAction(formData: FormData) {
   const sectionId = requiredString(formData, "section_id");
   const reason = formData.get("reason");
 
-  await sendFeedback(
-    episodeId,
-    "script_section",
-    sectionId,
-    feedbackValue(formData),
-    typeof reason === "string" ? reason : undefined,
-  );
-  redirect("/script");
+  try {
+    await sendFeedback(
+      episodeId,
+      "script_section",
+      sectionId,
+      feedbackValue(formData),
+      typeof reason === "string" ? reason : undefined,
+    );
+    revalidatePath("/script");
+    revalidatePath("/learning");
+    redirectWithToast("/script", "success", "口播段落反馈已记录");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `记录口播段落反馈失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function saveScriptAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await updateEpisodeScript(
-    episodeId,
-    scriptFromFormData(formData),
-    optionalString(formData, "reason"),
-  );
-  redirect("/script");
+  try {
+    await updateEpisodeScript(
+      episodeId,
+      scriptFromFormData(formData),
+      optionalString(formData, "reason"),
+    );
+    revalidatePath("/script");
+    redirectWithToast("/script", "success", "口播稿已保存");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `保存口播稿失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function regenerateScriptAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await regenerateEpisodeScript(episodeId, optionalString(formData, "reason"));
-  redirect("/script");
+  try {
+    await regenerateEpisodeScript(episodeId, optionalString(formData, "reason"));
+    revalidatePath("/script");
+    redirectWithToast("/script", "success", "口播稿已整体重新生成");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `重新生成口播稿失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function regenerateScriptSectionAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const sectionId = requiredString(formData, "section_id");
 
-  await regenerateEpisodeScriptSection(
-    episodeId,
-    sectionId,
-    optionalString(formData, "reason"),
-  );
-  redirect("/script");
+  try {
+    await regenerateEpisodeScriptSection(
+      episodeId,
+      sectionId,
+      optionalString(formData, "reason"),
+    );
+    revalidatePath("/script");
+    redirectWithToast("/script", "success", "段落已重新生成");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `重新生成段落失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function revertScriptVersionAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const versionId = requiredString(formData, "version_id");
 
-  await revertEpisodeScriptVersion(
-    episodeId,
-    versionId,
-    optionalString(formData, "reason"),
-  );
-  redirect("/script");
+  try {
+    await revertEpisodeScriptVersion(
+      episodeId,
+      versionId,
+      optionalString(formData, "reason"),
+    );
+    revalidatePath("/script");
+    redirectWithToast("/script", "success", "已回滚到指定版本");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `回滚口播稿版本失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function revertFeedbackAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const feedbackEventId = requiredString(formData, "feedback_event_id");
 
-  await revertFeedbackEvent(
-    episodeId,
-    feedbackEventId,
-    optionalString(formData, "reason"),
-  );
-  redirect("/learning");
+  try {
+    await revertFeedbackEvent(
+      episodeId,
+      feedbackEventId,
+      optionalString(formData, "reason"),
+    );
+    revalidatePath("/learning");
+    revalidatePath("/topics");
+    revalidatePath("/script");
+    redirectWithToast("/learning", "success", "反馈已撤销");
+  } catch (err) {
+    redirectWithToast(
+      "/learning",
+      "error",
+      `撤销反馈失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function approveScriptAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await approveScript(episodeId);
-  redirect("/video");
+  try {
+    await approveScript(episodeId);
+    revalidatePath("/video");
+    revalidatePath("/script");
+    redirectWithToast("/video", "success", "口播稿已确认通过");
+  } catch (err) {
+    redirectWithToast(
+      "/script",
+      "error",
+      `确认口播稿失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function processPendingVideoAction(formData: FormData) {
   const fileName = requiredString(formData, "file_name");
   const episodeId = formData.get("episode_id");
 
-  if (typeof episodeId === "string" && episodeId.length > 0) {
-    await uploadEpisodeVideo(episodeId, fileName);
-    await processEpisodeVideo(episodeId);
-  } else {
-    await processVideo(fileName);
+  try {
+    if (typeof episodeId === "string" && episodeId.length > 0) {
+      await uploadEpisodeVideo(episodeId, fileName);
+      await processEpisodeVideo(episodeId);
+    } else {
+      await processVideo(fileName);
+    }
+    revalidatePath("/video");
+    revalidatePath("/");
+    redirectWithToast("/video", "success", "视频已预处理");
+  } catch (err) {
+    redirectWithToast(
+      "/video",
+      "error",
+      `视频预处理失败：${safeErrorMessage(err, "未知错误")}`,
+    );
   }
-  redirect("/video");
 }
 
 export async function processVideoAndPackageAction(formData: FormData) {
   const fileName = requiredString(formData, "file_name");
   const episodeId = requiredString(formData, "episode_id");
 
-  await uploadEpisodeVideo(episodeId, fileName);
-  await processEpisodeVideo(episodeId);
-  await createEpisodeDraft(episodeId);
-  redirect("/draft");
+  let uploadOk = false;
+  let processedOk = false;
+  try {
+    await uploadEpisodeVideo(episodeId, fileName);
+    uploadOk = true;
+    await processEpisodeVideo(episodeId);
+    processedOk = true;
+    await createEpisodeDraft(episodeId);
+    revalidatePath("/draft");
+    revalidatePath("/video");
+    redirectWithToast("/draft", "success", "素材包已生成并导入");
+  } catch (err) {
+    const stage = !uploadOk
+      ? "上传视频"
+      : !processedOk
+        ? "预处理视频"
+        : "生成草稿素材包";
+    redirectWithToast(
+      "/video",
+      "error",
+      `${stage}失败：${safeErrorMessage(err, "未知错误")}（之前步骤已生效，请重试）`,
+    );
+  }
 }
 
 export async function processAdHocVideoAction(formData: FormData) {
   const fileName = requiredString(formData, "file_name");
   const episodeId = requiredString(formData, "episode_id");
 
-  await processAdHocEpisodeVideo(episodeId, fileName);
-  redirect("/video");
+  try {
+    await processAdHocEpisodeVideo(episodeId, fileName);
+    revalidatePath("/video");
+    redirectWithToast("/video", "success", "临时视频已处理");
+  } catch (err) {
+    redirectWithToast(
+      "/video",
+      "error",
+      `临时视频处理失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function processAdHocVideoBatchAction(formData: FormData) {
@@ -278,67 +453,309 @@ export async function processAdHocVideoBatchAction(formData: FormData) {
     });
 
   if (fileNames.length < 2) {
-    throw new Error("至少选择两条短视频");
+    redirectWithToast("/video", "error", "至少选择两条短视频");
   }
 
-  await processAdHocEpisodeVideoBatch(episodeId, fileNames);
-  redirect("/video");
+  try {
+    await processAdHocEpisodeVideoBatch(episodeId, fileNames);
+    revalidatePath("/video");
+    redirectWithToast(
+      "/video",
+      "success",
+      `已合并 ${fileNames.length} 段视频`,
+    );
+  } catch (err) {
+    redirectWithToast(
+      "/video",
+      "error",
+      `合并临时视频失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function archiveSourcesAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+  const fileNames = formData
+    .getAll("file_names")
+    .filter((value): value is string => typeof value === "string")
+    .filter((value, index, values) => values.indexOf(value) === index);
+
+  if (fileNames.length === 0) {
+    redirectWithToast("/video", "error", "请选择要归档的源文件");
+  }
+
+  try {
+    await archiveSources(episodeId, fileNames);
+    revalidatePath("/video");
+    redirectWithToast(
+      "/video",
+      "success",
+      `已归档 ${fileNames.length} 个源文件`,
+    );
+  } catch (err) {
+    redirectWithToast(
+      "/video",
+      "error",
+      `归档源文件失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+function optionalPublishUrl(formData: FormData): string | null {
+  const value = optionalString(formData, "publish_url");
+  return value ?? null;
+}
+
+function optionalPlatform(formData: FormData): string | null {
+  return optionalString(formData, "platform") ?? null;
+}
+
+function optionalPublishNotes(formData: FormData): string | null {
+  return optionalString(formData, "notes") ?? null;
+}
+
+function optionalPublishedAt(formData: FormData): string | null {
+  const value = optionalString(formData, "published_at");
+  return value ?? null;
+}
+
+function optionalMetric(formData: FormData, key: string): number | null {
+  const raw = formData.get(key);
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : null;
+}
+
+export async function markEpisodePublishedAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  try {
+    await markEpisodePublished(episodeId, {
+      publish_url: optionalPublishUrl(formData),
+      platform: optionalPlatform(formData),
+      play_count: optionalMetric(formData, "play_count"),
+      like_count: optionalMetric(formData, "like_count"),
+      comment_count: optionalMetric(formData, "comment_count"),
+      notes: optionalPublishNotes(formData),
+      published_at: optionalPublishedAt(formData),
+    });
+    revalidatePath("/history");
+    revalidatePath("/draft");
+    redirectWithToast("/history", "success", "已标记为已发布");
+  } catch (err) {
+    redirectWithToast(
+      "/draft",
+      "error",
+      `标记发布失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function updatePublishMetricsAction(formData: FormData) {
+  const episodeId = requiredString(formData, "episode_id");
+
+  try {
+    await updatePublishMetrics(episodeId, {
+      play_count: optionalMetric(formData, "play_count"),
+      like_count: optionalMetric(formData, "like_count"),
+      comment_count: optionalMetric(formData, "comment_count"),
+    });
+    revalidatePath("/history");
+    revalidatePath("/draft");
+    redirectWithToast("/history", "success", "发布数据已更新");
+  } catch (err) {
+    redirectWithToast(
+      "/history",
+      "error",
+      `更新发布数据失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function retrySourceSyncAction(formData: FormData) {
+  const sourceKey = requiredString(formData, "source_key");
+  // Backend 不支持单来源重试：使用全量同步 + 提示用户
+  void sourceKey;
+  try {
+    await syncSourceItems();
+    revalidatePath("/sources");
+    redirectWithToast(
+      "/sources",
+      "error",
+      "单来源重试接口暂未实现，已改为全量同步",
+    );
+  } catch (err) {
+    redirectWithToast(
+      "/sources",
+      "error",
+      `全量同步失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function disablePreferenceCardAction(formData: FormData) {
+  const preferenceId = requiredString(formData, "preference_id");
+  try {
+    await disablePreferenceCard(preferenceId);
+    revalidatePath("/learning");
+    redirectWithToast("/learning", "success", "偏好卡已禁用");
+  } catch (err) {
+    redirectWithToast(
+      "/learning",
+      "error",
+      `禁用偏好卡失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function restorePreferenceCardAction(formData: FormData) {
+  const preferenceId = requiredString(formData, "preference_id");
+  try {
+    await restorePreferenceCard(preferenceId);
+    revalidatePath("/learning");
+    redirectWithToast("/learning", "success", "偏好卡已恢复");
+  } catch (err) {
+    redirectWithToast(
+      "/learning",
+      "error",
+      `恢复偏好卡失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function createDraftPackageAction(formData: FormData) {
   const value = formData.get("video_file_name");
   const fileName = typeof value === "string" && value.length > 0 ? value : undefined;
 
-  await createDraftPackage(fileName);
-  redirect("/draft");
+  try {
+    await createDraftPackage(fileName);
+    revalidatePath("/draft");
+    redirectWithToast("/draft", "success", "剪映素材包已生成");
+  } catch (err) {
+    redirectWithToast(
+      "/draft",
+      "error",
+      `生成剪映素材包失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function confirmEditPlanAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
-  await createEpisodeDraft(episodeId);
-  redirect("/draft");
+  try {
+    await createEpisodeDraft(episodeId);
+    revalidatePath("/draft");
+    revalidatePath("/edit-plan");
+    redirectWithToast("/draft", "success", "剪辑计划已确认，素材包已生成");
+  } catch (err) {
+    redirectWithToast(
+      "/edit-plan",
+      "error",
+      `确认剪辑计划失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function updateEditPlanSegmentDecisionAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const segmentId = requiredString(formData, "segment_id");
 
-  await updateEditPlanSegmentDecision(
-    episodeId,
-    segmentId,
-    editPlanSegmentDecisionAction(formData),
-    optionalString(formData, "reason"),
-  );
-  redirect("/edit-plan");
+  try {
+    await updateEditPlanSegmentDecision(
+      episodeId,
+      segmentId,
+      editPlanSegmentDecisionAction(formData),
+      optionalString(formData, "reason"),
+    );
+    revalidatePath("/edit-plan");
+    redirectWithToast("/edit-plan", "success", "片段决策已保存");
+  } catch (err) {
+    redirectWithToast(
+      "/edit-plan",
+      "error",
+      `保存片段决策失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function revertEditPlanSegmentDecisionAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
   const segmentId = requiredString(formData, "segment_id");
 
-  await revertEditPlanSegmentDecision(episodeId, segmentId);
-  redirect("/edit-plan");
+  try {
+    await revertEditPlanSegmentDecision(episodeId, segmentId);
+    revalidatePath("/edit-plan");
+    redirectWithToast("/edit-plan", "success", "片段决策已撤销");
+  } catch (err) {
+    redirectWithToast(
+      "/edit-plan",
+      "error",
+      `撤销片段决策失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function importDraftPackageAction(formData: FormData) {
   const value = formData.get("package_name");
   const packageName = typeof value === "string" && value.length > 0 ? value : undefined;
 
-  await importDraftPackage(packageName);
-  redirect("/draft");
+  try {
+    await importDraftPackage(packageName);
+    revalidatePath("/draft");
+    redirectWithToast("/draft", "success", "已重新导入剪映");
+  } catch (err) {
+    redirectWithToast(
+      "/draft",
+      "error",
+      `导入剪映失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function syncSourcesAction() {
-  await syncSourceItems();
-  redirect("/sources");
+  try {
+    await syncSourceItems();
+    revalidatePath("/sources");
+    redirectWithToast("/sources", "success", "信息源已同步");
+  } catch (err) {
+    redirectWithToast(
+      "/sources",
+      "error",
+      `信息源同步失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function refreshTemplatesAction() {
+  try {
+    revalidatePath("/templates");
+    redirectWithToast("/templates", "success", "模板列表已刷新");
+  } catch (err) {
+    redirectWithToast(
+      "/templates",
+      "error",
+      `刷新模板失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function ingestManualLinkAction(formData: FormData) {
   const url = requiredString(formData, "url");
 
-  await ingestManualLink(url);
-  redirect("/sources");
+  try {
+    await ingestManualLink(url);
+    revalidatePath("/sources");
+    redirectWithToast("/sources", "success", "手动链接已识别");
+  } catch (err) {
+    redirectWithToast(
+      "/sources",
+      "error",
+      `识别链接失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
 
 export async function updateRuntimeSettingsAction(formData: FormData) {
@@ -379,6 +796,15 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
       .filter(Boolean);
   }
 
-  await updateRuntimeSettings(payload);
-  redirect("/settings");
+  try {
+    await updateRuntimeSettings(payload);
+    revalidatePath("/settings");
+    redirectWithToast("/settings", "success", "配置已保存");
+  } catch (err) {
+    redirectWithToast(
+      "/settings",
+      "error",
+      `保存配置失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
 }
