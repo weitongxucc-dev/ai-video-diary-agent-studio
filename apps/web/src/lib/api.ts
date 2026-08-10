@@ -24,7 +24,18 @@ import type {
   WorkflowStatus,
 } from "./types";
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+/**
+ * Browser requests use the relative Next.js `/api` route so middleware can
+ * proxy them to the bundled Python server. Server Components and Server
+ * Actions run in Node, where a relative URL is invalid; they use the same
+ * runtime-selected API port directly instead.
+ */
+const serverApiBase = process.env.API_PORT
+  ? `http://127.0.0.1:${process.env.API_PORT}`
+  : (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000");
+
+export const API_BASE =
+  typeof window === "undefined" ? serverApiBase : (process.env.NEXT_PUBLIC_API_BASE ?? "");
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
