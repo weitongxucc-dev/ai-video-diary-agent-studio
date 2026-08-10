@@ -1,18 +1,33 @@
 import Link from "next/link";
-import { createDraftPackageAction, importDraftPackageAction } from "@/app/actions";
+import {
+  createDraftPackageAction,
+  importDraftPackageAction,
+  markEpisodePublishedAction,
+  updatePublishMetricsAction,
+} from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getDraftStatus } from "@/lib/api";
-import type { DraftStatus } from "@/lib/types";
+import { getDraftStatus, getTodayEpisode } from "@/lib/api";
+import type { DraftStatus, Episode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-async function loadDraftStatus(): Promise<{ draft: DraftStatus | null; offline: boolean }> {
+type DraftLoadState = {
+  draft: DraftStatus | null;
+  episode: Episode | null;
+  offline: boolean;
+};
+
+async function loadDraftState(): Promise<DraftLoadState> {
   try {
-    return { draft: await getDraftStatus(), offline: false };
+    const [draft, episode] = await Promise.all([
+      getDraftStatus(),
+      getTodayEpisode().catch(() => null),
+    ]);
+    return { draft, episode, offline: false };
   } catch {
-    return { draft: null, offline: true };
+    return { draft: null, episode: null, offline: true };
   }
 }
 
@@ -34,8 +49,44 @@ function formatFileSize(sizeBytes: number): string {
   return `${(sizeBytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "--";
+  }
+  return value.toLocaleString("zh-CN");
+}
+
+function getStatusLabel(status: Episode["status"] | undefined): string {
+  if (!status) {
+    return "未连接";
+  }
+  const labels: Record<Episode["status"], string> = {
+    created: "已创建",
+    sources_ingesting: "素材收集中",
+    topics_ready: "选题就绪",
+    topic_approved: "选题已确认",
+    script_ready: "口播稿就绪",
+    script_approved: "口播稿已确认",
+    waiting_video: "等待视频",
+    video_processing: "视频处理中",
+    draft_ready: "草稿就绪",
+    published: "已发布",
+    failed: "失败",
+  };
+  return labels[status];
+}
+
+const PUBLISH_PLATFORMS = [
+  { value: "douyin", label: "抖音" },
+  { value: "bilibili", label: "B站" },
+  { value: "xigua", label: "西瓜视频" },
+  { value: "kuaishou", label: "快手" },
+  { value: "youtube", label: "YouTube" },
+  { value: "other", label: "其他" },
+];
+
 export default async function DraftPage() {
-  const { draft, offline } = await loadDraftStatus();
+  const { draft, episode, offline } = await loadDraftState();
   const env = draft?.environment;
   const toolAvailable = env?.draft_tool.available ?? false;
   const bridgeReady = env?.editable_draft_supported ?? false;
@@ -43,6 +94,16 @@ export default async function DraftPage() {
   const packages = draft?.packages ?? [];
   const recentPackages = packages.slice(0, 5);
   const olderPackages = packages.slice(5);
+  const showPublishPanel =
+    !offline && Boolean(episode) && (episode?.status === "draft_ready" || episode?.status === "published");
+  const isPublished = episode?.status === "published";
+  const existingFeedback = episode?.publish_feedback ?? null;
+  const initialPublishUrl = existingFeedback?.publish_url ?? episode?.publish_url ?? "";
+  const initialPlatform = existingFeedback?.platform ?? episode?.platform ?? "douyin";
+  const initialNotes = existingFeedback?.notes ?? episode?.notes ?? "";
+  const initialPlayCount = existingFeedback?.play_count ?? episode?.play_count ?? null;
+  const initialLikeCount = existingFeedback?.like_count ?? episode?.like_count ?? null;
+  const initialCommentCount = existingFeedback?.comment_count ?? episode?.comment_count ?? null;
 
   return (
     <AppShell>
@@ -68,19 +129,137 @@ export default async function DraftPage() {
           </div>
 
           <div className="draft-flow" aria-label="剪映草稿流程">
-            <div className="draft-flow-step active">
+            <div className={`draft-flow-step ${episode?.status === "draft_ready" || isPublished ? "active" : ""}`}>
               <strong>1 生成素材包</strong>
               <span>从预处理视频生成可追溯素材。</span>
             </div>
-            <div className="draft-flow-step">
+            <div className={`draft-flow-step ${isPublished ? "active" : ""}`}>
               <strong>2 自动导入剪映</strong>
               <span>剪好后自动写入草稿箱，失败时保留重试。</span>
             </div>
-            <div className="draft-flow-step">
+            <div className={`draft-flow-step ${isPublished ? "active" : ""}`}>
               <strong>3 打开剪映验证</strong>
               <span>刷新草稿箱，人工确认可编辑。</span>
             </div>
+            <div className={`draft-flow-step ${isPublished ? "active" : ""}`}>
+              <strong>4 标记已发布</strong>
+              <span>记录发布链接与平台，写入反馈学习。</span>
+            </div>
           </div>
+
+          {showPublishPanel && episode ? (
+            <section
+              aria-label={isPublished ? "发布反馈" : "标记已发布"}
+              className="publish-panel"
+            >
+              <div className="publish-panel-heading">
+                <strong>
+                  {isPublished ? "发布反馈与数据" : "标记已发布"}
+                </strong>
+                <span>
+                  {isPublished
+                    ? `Episode 状态：${getStatusLabel(episode.status)}，请补全发布信息。`
+                    : `Episode 状态：${getStatusLabel(episode.status)}，填写发布信息后归档当日内容。`}
+                </span>
+              </div>
+
+              <form
+                action={isPublished ? updatePublishMetricsAction : markEpisodePublishedAction}
+                className="publish-form"
+              >
+                <input name="episode_id" type="hidden" value={episode.id} />
+
+                <fieldset className="publish-form-fieldset" disabled={isPublished}>
+                  <legend>发布信息</legend>
+                  <label className="publish-field">
+                    <span>发布 URL</span>
+                    <input
+                      defaultValue={initialPublishUrl ?? ""}
+                      name="publish_url"
+                      placeholder="https://www.douyin.com/video/..."
+                      type="url"
+                    />
+                  </label>
+                  <label className="publish-field">
+                    <span>平台</span>
+                    <select defaultValue={initialPlatform ?? "douyin"} name="platform">
+                      {PUBLISH_PLATFORMS.map((platform) => (
+                        <option key={platform.value} value={platform.value}>
+                          {platform.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="publish-field publish-field-wide">
+                    <span>备注</span>
+                    <textarea
+                      defaultValue={initialNotes ?? ""}
+                      name="notes"
+                      placeholder="记录发布背景、字幕差异、二剪说明等。"
+                      rows={3}
+                    />
+                  </label>
+                </fieldset>
+
+                <fieldset className="publish-form-fieldset">
+                  <legend>{isPublished ? "最新数据" : "初始数据"}</legend>
+                  <label className="publish-field">
+                    <span>播放数</span>
+                    <input
+                      defaultValue={initialPlayCount ?? ""}
+                      min="0"
+                      name="play_count"
+                      placeholder="0"
+                      type="number"
+                    />
+                  </label>
+                  <label className="publish-field">
+                    <span>点赞数</span>
+                    <input
+                      defaultValue={initialLikeCount ?? ""}
+                      min="0"
+                      name="like_count"
+                      placeholder="0"
+                      type="number"
+                    />
+                  </label>
+                  <label className="publish-field">
+                    <span>评论数</span>
+                    <input
+                      defaultValue={initialCommentCount ?? ""}
+                      min="0"
+                      name="comment_count"
+                      placeholder="0"
+                      type="number"
+                    />
+                  </label>
+                </fieldset>
+
+                <div className="publish-form-actions">
+                  <span>
+                    {isPublished
+                      ? "更新后会写入反馈学习并刷新发布历史。"
+                      : "提交后会跳转到历史页，可补录后续数据。"}
+                  </span>
+                  <button className="pixel-button" type="submit">
+                    {isPublished ? "更新发布数据" : "标记已发布"}
+                  </button>
+                </div>
+              </form>
+
+              {isPublished ? (
+                <div className="publish-summary">
+                  <strong>当前发布数据</strong>
+                  <span>
+                    播放 {formatNumber(episode.play_count)} · 点赞{" "}
+                    {formatNumber(episode.like_count)} · 评论{" "}
+                    {formatNumber(episode.comment_count)}
+                  </span>
+                  <code>{episode.publish_url ?? "未填写发布 URL"}</code>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           <div className="workspace-list">
             {processedVideos.map((video) => (
@@ -192,6 +371,14 @@ export default async function DraftPage() {
             <p>{env?.jianying_root_exists ? "已发现" : "未发现"}</p>
             <code>{env?.jianying_root_path ?? "--"}</code>
             {env?.jianying_blocker ? <span>{env.jianying_blocker}</span> : null}
+          </div>
+          <div className="pixel-card side-note">
+            <h2>当前 Episode</h2>
+            <p>{getStatusLabel(episode?.status)}</p>
+            <code>{episode?.id ?? "--"}</code>
+            {episode?.published_at ? (
+              <span>发布于 {formatDate(episode.published_at)}</span>
+            ) : null}
           </div>
           <div className="pixel-card side-note">
             <h2>输出目录</h2>

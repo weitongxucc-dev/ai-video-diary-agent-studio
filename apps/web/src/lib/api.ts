@@ -6,20 +6,32 @@ import type {
   DraftImport,
   DraftPackage,
   DraftStatus,
+  EpisodeHistory,
+  EpisodeStatus,
   FeedbackTargetType,
   FeedbackValue,
   FeedbackSummary,
   KnowledgeNote,
   PendingVideo,
   Preferences,
+  PreferenceCards,
+  PreferenceEvidence,
   ProcessedVideo,
+  ProductionChain,
+  PublishFeedback,
   RetakeReport,
   RuntimeHealth,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   ScriptPackage,
+  SetupStatus,
+  SourcesStatus,
+  SourceFileStates,
   SourceItems,
+  SourceSyncRetryResult,
   SystemStatus,
+  TopicEvidenceList,
+  VideoProductionMode,
   VoiceCommandResponse,
   WorkflowStatus,
 } from "./types";
@@ -94,6 +106,10 @@ export function getRuntimeHealth(): Promise<RuntimeHealth> {
   return request<RuntimeHealth>("/api/runtime/health");
 }
 
+export function getSetupStatus(): Promise<SetupStatus> {
+  return request<SetupStatus>("/api/is_setup");
+}
+
 export function updateRuntimeSettings(
   payload: RuntimeSettingsUpdate,
 ): Promise<RuntimeSettings> {
@@ -126,8 +142,18 @@ export function getSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/items");
 }
 
+export function getSourcesStatus(): Promise<SourcesStatus> {
+  return request<SourcesStatus>("/api/sources/sync-status");
+}
+
 export function syncSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/sync", { method: "POST" });
+}
+
+export function retrySourceSync(sourceKey: string): Promise<SourceSyncRetryResult> {
+  return request<SourceSyncRetryResult>(`/api/sources/${encodeURIComponent(sourceKey)}/retry`, {
+    method: "POST",
+  });
 }
 
 export function ingestManualLink(url: string): Promise<SourceItems> {
@@ -137,12 +163,50 @@ export function ingestManualLink(url: string): Promise<SourceItems> {
   });
 }
 
+export function getTopicEvidence(episodeId: string): Promise<TopicEvidenceList> {
+  return request<TopicEvidenceList>(`/api/episodes/${episodeId}/topic-evidence`);
+}
+
 export function getFeedbackSummary(): Promise<FeedbackSummary> {
   return request<FeedbackSummary>("/api/feedback/summary");
 }
 
 export function getPreferences(): Promise<Preferences> {
   return request<Preferences>("/api/preferences");
+}
+
+export function getPreferenceCards(): Promise<PreferenceCards> {
+  return request<PreferenceCards>("/api/preferences/cards");
+}
+
+export function getPreferenceEvidence(
+  preferenceId: string,
+): Promise<PreferenceEvidence> {
+  return request<PreferenceEvidence>(`/api/preferences/cards/${encodeURIComponent(preferenceId)}/evidence`);
+}
+
+export function disablePreferenceCard(
+  preferenceId: string,
+): Promise<Preferences> {
+  return request<Preferences>(
+    "/api/preferences/disable",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ signal: preferenceId }),
+    },
+  );
+}
+
+export function restorePreferenceCard(
+  preferenceId: string,
+): Promise<Preferences> {
+  return request<Preferences>(
+    "/api/preferences/restore",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ signal: preferenceId }),
+    },
+  );
 }
 
 export function getDraftStatus(): Promise<DraftStatus> {
@@ -165,6 +229,26 @@ export function importDraftPackage(packageName?: string): Promise<DraftImport> {
 
 export function getPendingVideos(): Promise<PendingVideo[]> {
   return request<PendingVideo[]>("/api/videos/pending");
+}
+
+export function getProductionChain(episodeId: string): Promise<ProductionChain> {
+  return request<ProductionChain>(`/api/episodes/${episodeId}/production-chain`);
+}
+
+export function getSourceFileStates(episodeId: string): Promise<SourceFileStates> {
+  return request<SourceFileStates>(
+    `/api/episodes/${episodeId}/source-file-states`,
+  );
+}
+
+export function archiveSources(
+  episodeId: string,
+  fileNames: string[],
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/archive-sources`, {
+    method: "POST",
+    body: JSON.stringify({ file_names: fileNames }),
+  });
 }
 
 export function getEpisodeRetakeReport(episodeId: string): Promise<RetakeReport> {
@@ -202,6 +286,26 @@ export function revertEditPlanSegmentDecision(
 
 export function getLatestRetakeReport(): Promise<RetakeReport> {
   return request<RetakeReport>("/api/retake-reports/latest");
+}
+
+export function archiveEpisodeVideoSources(
+  episodeId: string,
+  fileNames: string[],
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/archive-sources`, {
+    method: "POST",
+    body: JSON.stringify({ file_names: fileNames }),
+  });
+}
+
+export function setEpisodeProductionMode(
+  episodeId: string,
+  mode: VideoProductionMode,
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/production-mode`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export function processVideo(fileName: string): Promise<ProcessedVideo> {
@@ -266,16 +370,55 @@ export function createEpisodeDraft(episodeId: string): Promise<Episode> {
 export function markEpisodePublished(
   episodeId: string,
   payload: {
-    publish_url?: string;
-    play_count?: number;
-    like_count?: number;
-    comment_count?: number;
+    publish_url?: string | null;
+    platform?: string | null;
+    play_count?: number | null;
+    like_count?: number | null;
+    comment_count?: number | null;
+    notes?: string | null;
+    published_at?: string | null;
   },
 ): Promise<Episode> {
   return request<Episode>(`/api/episodes/${episodeId}/mark-published`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function updatePublishMetrics(
+  episodeId: string,
+  payload: {
+    publish_url?: string | null;
+    platform?: string | null;
+    play_count?: number | null;
+    like_count?: number | null;
+    comment_count?: number | null;
+    notes?: string | null;
+  },
+): Promise<Episode> {
+  return request<Episode>(`/api/episodes/${episodeId}/publish-metrics`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getEpisodeHistory(status?: EpisodeStatus): Promise<EpisodeHistory> {
+  const params = new URLSearchParams();
+  if (status) {
+    params.set("status", status);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return request<EpisodeHistory>(`/api/episodes/history${suffix}`);
+}
+
+// TODO(backend): dedicated publish-feedback endpoint is not implemented.
+// The Episode response already carries the latest publish fields, so
+// callers can read them from the Episode directly.
+export function getPublishFeedback(episodeId: string): Promise<PublishFeedback> {
+  return Promise.reject(
+    new Error(`publish-feedback 端点暂未实现（${episodeId}）`),
+  );
 }
 
 export function createEpisode(): Promise<Episode> {

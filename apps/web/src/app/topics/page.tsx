@@ -7,8 +7,13 @@ import {
   regenerateTopicsAction,
   sendTopicFeedbackAction,
 } from "@/app/actions";
-import { getTodayEpisode } from "@/lib/api";
-import type { Episode } from "@/lib/types";
+import { getTodayEpisode, getTopicEvidence } from "@/lib/api";
+import type {
+  Episode,
+  SourceEvidenceFreshness,
+  TopicCandidate,
+  TopicEvidence,
+} from "@/lib/types";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -19,16 +24,32 @@ type TopicsPageProps = {
 
 type TopicLoadState = {
   episode: Episode | null;
+  evidence: TopicEvidence[];
   error: "offline" | null;
 };
 
 async function loadTopicEpisode(): Promise<TopicLoadState> {
   try {
-    return { episode: await getTodayEpisode(), error: null };
+    const episode = await getTodayEpisode();
+    let evidence: TopicEvidence[] = [];
+    try {
+      const evidenceList = await getTopicEvidence(episode.id);
+      evidence = evidenceList.items;
+    } catch {
+      evidence = [];
+    }
+    return { episode, evidence, error: null };
   } catch {
-    return { episode: null, error: "offline" };
+    return { episode: null, evidence: [], error: "offline" };
   }
 }
+
+const FRESHNESS_LABEL: Record<SourceEvidenceFreshness, string> = {
+  fresh: "新鲜",
+  aging: "陈旧",
+  stale: "过期",
+  unknown: "未知",
+};
 
 function EmptyTopicState({
   episode,
@@ -76,17 +97,297 @@ function topicFeedbackLabel(feedback: string | null) {
   return "待复核";
 }
 
+type ExtendedTopicFields = {
+  conflictLevel?: string | null;
+  topicType?: string | null;
+  risk?: string | null;
+  agentRecommendation?: string | null;
+  agentRisk?: string | null;
+  agentSuggestion?: string | null;
+  checklistItems?: { id: string; label: string; tone: "check" | "note" }[];
+};
+
+function readExtendedTopic(topic: TopicCandidate): ExtendedTopicFields {
+  const extended = (topic as unknown as { extended?: ExtendedTopicFields })
+    .extended;
+  return extended ?? {};
+}
+
+function formatEmpty(value: string | null | undefined): string {
+  return typeof value === "string" && value.trim().length > 0 ? value : "--";
+}
+
+function hasAnyAgentJudgment(fields: ExtendedTopicFields): boolean {
+  return Boolean(
+    fields.agentRecommendation ||
+      fields.agentRisk ||
+      fields.agentSuggestion,
+  );
+}
+
+function hasAnyChecklist(fields: ExtendedTopicFields): boolean {
+  return Boolean(fields.checklistItems && fields.checklistItems.length > 0);
+}
+
+type TopicDetailProps = {
+  topic: TopicCandidate;
+  evidenceByKey: Map<string, TopicEvidence>;
+  episodeId: string | null;
+};
+
+function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
+  const extended = readExtendedTopic(topic);
+  return (
+    <section className="topic-detail pixel-card">
+      <header className="topic-detail-header">
+        <div>
+          <span className="section-kicker">推荐选题</span>
+          <h1>{topic.title}</h1>
+          <p>{topic.reason}</p>
+        </div>
+        <div className="topic-detail-status" aria-label="选题状态">
+          <span>分数</span>
+          <strong>{topic.score}</strong>
+          <em>{topicFeedbackLabel(topic.feedback)}</em>
+        </div>
+      </header>
+
+      <div className="topic-review-workbench">
+        <div className="topic-detail-main">
+          <section className="topic-console-panel">
+            <h3>3 分钟结构</h3>
+            {topic.outline.length > 0 ? (
+              <ol>
+                {topic.outline.map((item, index) => (
+                  <li key={item}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <strong>{item}</strong>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="topic-empty-cell">等待 Agent 补充 3 分钟结构</p>
+            )}
+          </section>
+
+          <section className="topic-console-panel">
+            <h3>核心观点</h3>
+            <p>
+              {topic.core_viewpoint?.trim() ||
+                "等待 Agent 补充核心观点"}
+            </p>
+            <dl className="topic-mini-meta">
+              <div>
+                <dt>受众</dt>
+                <dd>{formatEmpty(topic.audience)}</dd>
+              </div>
+              {extended.topicType ? (
+                <div>
+                  <dt>选题类型</dt>
+                  <dd>{extended.topicType}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </section>
+
+          <section className="topic-console-panel evidence-console">
+            <h3>来源依据</h3>
+            <div className="evidence-list">
+              {topic.source_refs.map((source) => {
+                const evidenceEntry = evidenceByKey.get(
+                  `${source.source_type}::${source.ref}`,
+                );
+                const freshness = evidenceEntry?.freshness ?? "unknown";
+                const freshnessLabel =
+                  evidenceEntry?.freshness_label ??
+                  FRESHNESS_LABEL[freshness];
+                const participated =
+                  evidenceEntry?.participated_topics ?? 0;
+                return (
+                  <div
+                    className={`evidence-item ${freshness}`}
+                    key={`${source.source_type}-${source.ref}`}
+                  >
+                    <strong>{source.source_type}</strong>
+                    <div className="evidence-item-body">
+                      <span>{source.title}</span>
+                      {evidenceEntry?.excerpt ? (
+                        <p>{evidenceEntry.excerpt}</p>
+                      ) : null}
+                      <code>{source.ref}</code>
+                    </div>
+                    <div className="evidence-item-meta">
+                      <span
+                        className={`evidence-freshness ${freshness}`}
+                        title={`新鲜度：${freshnessLabel}`}
+                      >
+                        {freshnessLabel}
+                      </span>
+                      <span
+                        className="evidence-participation"
+                        title={`参与过 ${participated} 个候选选题`}
+                      >
+                        参与 {participated} 次
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {topic.source_refs.length === 0 ? (
+                <div className="evidence-item empty">
+                  <strong>--</strong>
+                  <span>暂无来源，建议补充 1 条真实案例</span>
+                  <code>waiting/source</code>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
+
+        <aside className="topic-review-aside">
+          <section className="topic-audit-card">
+            <h3>复核清单</h3>
+            {hasAnyChecklist(extended) ? (
+              <ul>
+                {(extended.checklistItems ?? []).map((item) => (
+                  <li key={item.id}>
+                    <PixelIcon name={item.tone} />
+                    <span>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="topic-empty-cell">等待 Agent 补充复核清单</p>
+            )}
+          </section>
+
+          <section className="topic-audit-card">
+            <h3>选题元信息</h3>
+            <dl>
+              <div>
+                <dt>素材真实性</dt>
+                <dd>{topic.source_refs.length} 条来源</dd>
+              </div>
+              {extended.conflictLevel ? (
+                <div>
+                  <dt>冲突感</dt>
+                  <dd>{extended.conflictLevel}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>发布优先级</dt>
+                <dd>{topic.score >= 8 ? "高" : "中"}</dd>
+              </div>
+              {extended.risk ? (
+                <div>
+                  <dt>风险</dt>
+                  <dd>{extended.risk}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </section>
+
+          {hasAnyAgentJudgment(extended) ? (
+            <section className="topic-agent-terminal">
+              <h3>Agent 判断</h3>
+              {extended.agentRecommendation ? (
+                <p>推荐原因：{extended.agentRecommendation}</p>
+              ) : null}
+              {extended.agentRisk ? (
+                <p>风险：{extended.agentRisk}</p>
+              ) : null}
+              {extended.agentSuggestion ? (
+                <p>建议：{extended.agentSuggestion}</p>
+              ) : null}
+            </section>
+          ) : null}
+        </aside>
+      </div>
+
+      <div className="topic-action-dock">
+        <div>
+          <strong>操作台</strong>
+          <span>确认后将进入口播稿生成流程</span>
+        </div>
+        <form action={approveTopicAndGenerateScript}>
+          <input name="episode_id" type="hidden" value={episodeId ?? ""} />
+          <input name="topic_id" type="hidden" value={topic.id} />
+          <button className="pixel-button" type="submit">
+            通过并生成口播稿
+          </button>
+        </form>
+        <form action={sendTopicFeedbackAction}>
+          <input name="episode_id" type="hidden" value={episodeId ?? ""} />
+          <input name="topic_id" type="hidden" value={topic.id} />
+          <input name="reason" type="hidden" value="这个方向值得继续强化" />
+          <button className="pixel-button secondary" name="value" type="submit" value="up">
+            赞这个选题
+          </button>
+        </form>
+        <form action={sendTopicFeedbackAction}>
+          <input name="episode_id" type="hidden" value={episodeId ?? ""} />
+          <input name="topic_id" type="hidden" value={topic.id} />
+          <input name="reason" type="hidden" value="这个方向暂时不够具体" />
+          <button className="pixel-button secondary" name="value" type="submit" value="down">
+            踩这个选题
+          </button>
+        </form>
+        <form action={sendTopicFeedbackAction}>
+          <input name="episode_id" type="hidden" value={episodeId ?? ""} />
+          <input name="topic_id" type="hidden" value={topic.id} />
+          <input name="reason" type="hidden" value="想换成更贴近日记感的角度" />
+          <button className="pixel-button secondary" name="value" type="submit" value="down">
+            换一个角度
+          </button>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 export default async function TopicsPage({ searchParams }: TopicsPageProps) {
   const params = await searchParams;
-  const { episode, error } = await loadTopicEpisode();
+  const { episode, evidence, error } = await loadTopicEpisode();
   const topics = episode?.topics ?? [];
-  const activeTopicId = params?.topic_id ?? episode?.selected_topic_id ?? topics[0]?.id;
-  const selected =
-    topics.find((topic) => topic.id === activeTopicId) ?? topics[0] ?? null;
+  const requestedTopicId =
+    typeof params?.topic_id === "string" && params.topic_id.length > 0
+      ? params.topic_id
+      : null;
+  const fallbackTopicId =
+    episode?.selected_topic_id ?? topics[0]?.id ?? null;
+  const requestedExists =
+    requestedTopicId !== null
+      ? topics.some((topic) => topic.id === requestedTopicId)
+      : true;
+  const activeTopicId = requestedExists
+    ? requestedTopicId ?? fallbackTopicId
+    : fallbackTopicId;
+  const selected = topics.find((topic) => topic.id === activeTopicId) ?? null;
+  const evidenceByKey = new Map(
+    evidence.map((entry) => [
+      `${entry.source_type}::${entry.ref}`,
+      entry,
+    ]),
+  );
 
   return (
     <AppShell>
       <div className="topic-page">
+        {requestedTopicId !== null && !requestedExists ? (
+          <div
+            aria-live="polite"
+            className="pixel-form-error"
+            role="status"
+          >
+            <span aria-hidden="true" className="pixel-form-error-light" />
+            <div className="pixel-form-error-body">
+              <strong>请求的 topic_id 不存在</strong>
+              <span>
+                找不到 “{requestedTopicId}”，已回退到当前默认选题。
+              </span>
+            </div>
+          </div>
+        ) : null}
         <section className="topic-list" aria-label="候选选题">
           {episode && topics.length > 0 ? (
             <form action={regenerateTopicsAction} className="topic-regenerate-form">
@@ -124,132 +425,11 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
         </section>
 
         {selected ? (
-          <section className="topic-detail pixel-card">
-            <header className="topic-detail-header">
-              <div>
-                <span className="section-kicker">推荐选题</span>
-                <h1>{selected.title}</h1>
-                <p>{selected.reason}</p>
-              </div>
-              <div className="topic-detail-status" aria-label="选题状态">
-                <span>分数</span>
-                <strong>{selected.score}</strong>
-                <em>{topicFeedbackLabel(selected.feedback)}</em>
-              </div>
-            </header>
-
-            <div className="topic-review-workbench">
-              <div className="topic-detail-main">
-                <section className="topic-console-panel">
-                  <h3>3 分钟结构</h3>
-                  <ol>
-                    {selected.outline.map((item, index) => (
-                      <li key={item}>
-                        <span>{String(index + 1).padStart(2, "0")}</span>
-                        <strong>{item}</strong>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-
-                <section className="topic-console-panel">
-                  <h3>核心观点</h3>
-                  <p>{selected.core_viewpoint}</p>
-                  <dl className="topic-mini-meta">
-                    <div><dt>受众</dt><dd>{selected.audience}</dd></div>
-                    <div><dt>选题类型</dt><dd>技术反思</dd></div>
-                  </dl>
-                </section>
-
-                <section className="topic-console-panel evidence-console">
-                  <h3>来源依据</h3>
-                  <div className="evidence-list">
-                    {selected.source_refs.map((source) => (
-                      <div className="evidence-item" key={`${source.source_type}-${source.ref}`}>
-                        <strong>{source.source_type}</strong>
-                        <span>{source.title}</span>
-                        <code>{source.ref}</code>
-                      </div>
-                    ))}
-                    {selected.source_refs.length === 0 ? (
-                      <div className="evidence-item empty">
-                        <strong>--</strong>
-                        <span>暂无来源，建议补充 1 条真实案例</span>
-                        <code>waiting/source</code>
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
-              </div>
-
-              <aside className="topic-review-aside">
-                <section className="topic-audit-card">
-                  <h3>复核清单</h3>
-                  <ul>
-                    <li><PixelIcon name="check" /> 有真实案例支撑</li>
-                    <li><PixelIcon name="check" /> 适合 60 秒口播</li>
-                    <li><PixelIcon name="note" /> 冲突观点需再锐化</li>
-                    <li><PixelIcon name="note" /> 可作为今日发布</li>
-                  </ul>
-                </section>
-
-                <section className="topic-audit-card">
-                  <h3>选题元信息</h3>
-                  <dl>
-                    <div><dt>素材真实性</dt><dd>{selected.source_refs.length} 条来源</dd></div>
-                    <div><dt>冲突感</dt><dd>中</dd></div>
-                    <div><dt>发布优先级</dt><dd>{selected.score >= 8 ? "高" : "中"}</dd></div>
-                    <div><dt>风险</dt><dd>案例可更具体</dd></div>
-                  </dl>
-                </section>
-
-                <section className="topic-agent-terminal">
-                  <h3>Agent 判断</h3>
-                  <p>推荐原因：技术人自省类选题与近期偏好匹配</p>
-                  <p>风险：案例不够具体</p>
-                  <p>建议：加入一次真实项目决策场景</p>
-                </section>
-              </aside>
-            </div>
-
-            <div className="topic-action-dock">
-              <div>
-                <strong>操作台</strong>
-                <span>确认后将进入口播稿生成流程</span>
-              </div>
-              <form action={approveTopicAndGenerateScript}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <button className="pixel-button" type="submit">
-                  通过并生成口播稿
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="这个方向值得继续强化" />
-                <button className="pixel-button secondary" name="value" type="submit" value="up">
-                  赞这个选题
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="这个方向暂时不够具体" />
-                <button className="pixel-button secondary" name="value" type="submit" value="down">
-                  踩这个选题
-                </button>
-              </form>
-              <form action={sendTopicFeedbackAction}>
-                <input name="episode_id" type="hidden" value={episode?.id ?? ""} />
-                <input name="topic_id" type="hidden" value={selected.id} />
-                <input name="reason" type="hidden" value="想换成更贴近日记感的角度" />
-                <button className="pixel-button secondary" name="value" type="submit" value="down">
-                  换一个角度
-                </button>
-              </form>
-            </div>
-          </section>
+          <TopicDetail
+            episodeId={episode?.id ?? null}
+            evidenceByKey={evidenceByKey}
+            topic={selected}
+          />
         ) : (
           <EmptyTopicState episode={episode} error={error} />
         )}

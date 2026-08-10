@@ -2,9 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { HelpPanel } from "@/components/HelpPanel";
+import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
+import { PixelTooltip } from "@/components/PixelTooltip";
 import { RetroChrome } from "@/components/RetroChrome";
 import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
+import { WorkflowProgress } from "@/components/WorkflowProgress";
+import { toggleHelpPanel } from "@/lib/helpPanel";
 
 type NavItem = {
   href: string;
@@ -21,6 +26,7 @@ const navItems: NavItem[] = [
   { href: "/video", label: "视频处理", icon: "video" },
   { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
   { href: "/draft", label: "剪映草稿", icon: "clip" },
+  { href: "/history", label: "Episode 历史", icon: "calendar" },
   { href: "/knowledge", label: "知识库", icon: "folder" },
   { href: "/sources", label: "信息源", icon: "link" },
   { href: "/learning", label: "反馈学习", icon: "spark" },
@@ -29,11 +35,7 @@ const navItems: NavItem[] = [
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const currentNavItem =
-    navItems.find((item) =>
-      item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
-    ) ?? navItems[0];
+  const pathname = usePathname() ?? "";
   const todayLabel = new Intl.DateTimeFormat("zh-CN", {
     day: "2-digit",
     month: "2-digit",
@@ -41,6 +43,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     weekday: "short",
     year: "numeric"
   }).format(new Date());
+
+  const currentNavItem =
+    navItems.find((item) =>
+      item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
+    ) ?? navItems[0];
 
   return (
     <div className="retro-desktop-shell">
@@ -95,7 +102,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <strong>专注创作，</strong>
               <span>记录每一步一点点</span>
               <span>- Agent Studio</span>
+              <nav aria-label="法律信息" className="sidebar-legal-links">
+                <Link href="/privacy">隐私政策</Link>
+                <Link href="/terms">使用条款</Link>
+              </nav>
             </div>
+            <WorkflowProgress />
           </aside>
 
           <main className="main-area">
@@ -106,16 +118,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span>今日 · {todayLabel}</span>
               </div>
               <div className="topbar-actions">
-                <input
-                  className="search-box"
-                  type="search"
-                  placeholder="搜索 Episode、选题、素材..."
-                  aria-label="搜索 Episode、选题、素材"
-                  disabled
-                />
-                <button className="icon-button" type="button" aria-label="通知" disabled>
-                  <PixelIcon name="bell" />
-                </button>
+                <PixelTooltip label="搜索即将推出">
+                  <input
+                    className="search-box"
+                    type="search"
+                    placeholder="搜索 Episode、选题、素材..."
+                    aria-label="搜索 Episode、选题、素材"
+                    disabled
+                  />
+                </PixelTooltip>
+                <PixelTooltip label="帮助 · 按 ? 也能打开">
+                  <button
+                    aria-label="帮助"
+                    className="icon-button"
+                    onClick={() => toggleHelpPanel()}
+                    type="button"
+                  >
+                    <PixelIcon name="bell" />
+                  </button>
+                </PixelTooltip>
                 <span className="avatar">
                   <PixelIcon name="person" />
                 </span>
@@ -124,6 +145,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {children}
             <VoiceCommandConsole contextLabel={currentNavItem.label} />
           </main>
+          <KeyboardShortcuts />
+          <HelpPanel />
         </div>
       </div>
     </div>

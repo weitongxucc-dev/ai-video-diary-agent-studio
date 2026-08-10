@@ -1,7 +1,11 @@
 import Link from "next/link";
-import { selectContentTemplateAction } from "@/app/actions";
+import {
+  refreshTemplatesAction,
+  selectContentTemplateAction,
+} from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
+import { PixelTooltip } from "@/components/PixelTooltip";
 import { getContentTemplates, getTodayEpisode } from "@/lib/api";
 import type { ContentTemplate, Episode } from "@/lib/types";
 
@@ -27,9 +31,37 @@ function joinList(items: string[]): string {
   return items.join(" / ");
 }
 
+function EmptyTemplatesState({ offline }: { offline: boolean }) {
+  return (
+    <div className="template-empty pixel-card">
+      <div className="template-empty-icon" aria-hidden="true">
+        <span className="template-empty-icon-frame">
+          <PixelIcon name="product" />
+        </span>
+      </div>
+      <h2>暂无内容模板</h2>
+      <p>
+        内容模板定义了视频类型、脚本结构和剪辑风格。
+      </p>
+      {offline ? (
+        <span className="template-empty-hint">
+          API 未连接，刷新无效。请先确认本地 API 已启动。
+        </span>
+      ) : (
+        <form action={refreshTemplatesAction} className="template-empty-actions">
+          <button className="pixel-button" type="submit">
+            刷新模板
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 export default async function TemplatesPage() {
   const { episode, templates, offline } = await loadTemplateState();
   const selectedTemplateId = episode?.content_template_id ?? "video_diary";
+  const hasTemplates = templates.length > 0;
 
   return (
     <AppShell>
@@ -51,75 +83,86 @@ export default async function TemplatesPage() {
           </div>
 
           <div className="template-grid">
-            {templates.map((template) => {
-              const active = template.template_id === selectedTemplateId;
+            {hasTemplates
+              ? templates.map((template) => {
+                  const active = template.template_id === selectedTemplateId;
 
-              return (
-                <article
-                  className={`template-card${active ? " active" : ""}`}
-                  key={template.template_id}
-                >
-                  <div className="template-card-head">
-                    <PixelIcon name="product" />
-                    <div>
-                      <span>{template.template_id}</span>
-                      <h2>{template.name}</h2>
-                    </div>
-                    <em>{active ? "当前" : "可选"}</em>
-                  </div>
+                  return (
+                    <article
+                      className={`template-card${active ? " active" : ""}`}
+                      key={template.template_id}
+                    >
+                      <div className="template-card-head">
+                        <PixelIcon name="product" />
+                        <div>
+                          <span>{template.template_id}</span>
+                          <h2>{template.name}</h2>
+                        </div>
+                        <em>{active ? "当前" : "可选"}</em>
+                      </div>
 
-                  <p>{template.scenario}</p>
-                  <dl className="template-spec-table">
-                    <div>
-                      <dt>推荐时长</dt>
-                      <dd>{template.recommended_duration}</dd>
-                    </div>
-                    <div>
-                      <dt>选题结构</dt>
-                      <dd>{joinList(template.topic_structure)}</dd>
-                    </div>
-                    <div>
-                      <dt>脚本结构</dt>
-                      <dd>{joinList(template.script_structure)}</dd>
-                    </div>
-                    <div>
-                      <dt>素材需求</dt>
-                      <dd>{joinList(template.material_requirements)}</dd>
-                    </div>
-                    <div>
-                      <dt>剪映样式</dt>
-                      <dd>{template.jianying_style}</dd>
-                    </div>
-                    <div>
-                      <dt>反馈维度</dt>
-                      <dd>{joinList(template.default_feedback_dimensions)}</dd>
-                    </div>
-                  </dl>
+                      <p>{template.scenario}</p>
+                      <dl className="template-spec-table">
+                        <div>
+                          <dt>推荐时长</dt>
+                          <dd>{template.recommended_duration}</dd>
+                        </div>
+                        <div>
+                          <dt>选题结构</dt>
+                          <dd>{joinList(template.topic_structure)}</dd>
+                        </div>
+                        <div>
+                          <dt>脚本结构</dt>
+                          <dd>{joinList(template.script_structure)}</dd>
+                        </div>
+                        <div>
+                          <dt>素材需求</dt>
+                          <dd>{joinList(template.material_requirements)}</dd>
+                        </div>
+                        <div>
+                          <dt>剪映样式</dt>
+                          <dd>{template.jianying_style}</dd>
+                        </div>
+                        <div>
+                          <dt>反馈维度</dt>
+                          <dd>{joinList(template.default_feedback_dimensions)}</dd>
+                        </div>
+                      </dl>
 
-                  {episode ? (
-                    <form action={selectContentTemplateAction}>
-                      <input name="episode_id" type="hidden" value={episode.id} />
-                      <input
-                        name="template_id"
-                        type="hidden"
-                        value={template.template_id}
-                      />
-                      <button
-                        className={active ? "pixel-button secondary" : "pixel-button"}
-                        disabled={active}
-                        type="submit"
-                      >
-                        {active ? "已选择" : "选择这个模板"}
-                      </button>
-                    </form>
-                  ) : (
-                    <button className="pixel-button" disabled type="button">
-                      等待 Episode
-                    </button>
-                  )}
-                </article>
-              );
-            })}
+                      {episode ? (
+                        <form action={selectContentTemplateAction}>
+                          <input name="episode_id" type="hidden" value={episode.id} />
+                          <input
+                            name="template_id"
+                            type="hidden"
+                            value={template.template_id}
+                          />
+                          <button
+                            className={
+                              active ? "pixel-button secondary" : "pixel-button"
+                            }
+                            disabled={active}
+                            type="submit"
+                          >
+                            {active ? "已选择" : "选择这个模板"}
+                          </button>
+                        </form>
+                      ) : (
+                        <PixelTooltip label="请先创建一个 Episode">
+                          <button
+                            aria-label="等待 Episode"
+                            className="pixel-button"
+                            disabled
+                            type="button"
+                          >
+                            等待 Episode
+                          </button>
+                        </PixelTooltip>
+                      )}
+                    </article>
+                  );
+                })
+              : <EmptyTemplatesState offline={offline} />}
           </div>
         </section>
 
