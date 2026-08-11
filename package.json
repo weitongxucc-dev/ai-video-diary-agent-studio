@@ -10,6 +10,8 @@
     "test:pixel-style": "node apps/web/scripts/pixel-style-contract-check.mjs",
     "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
     "dev:worker": "cd apps/api && uv run python -m app.automation",
-    "test:api": "cd apps/api && uv run pytest"
+    "test:api": "cd apps/api && uv run pytest",
+    "test:web": "corepack pnpm --dir apps/web test",
+    "test": "pnpm run test:web-contract && pnpm run test:pixel-style && pnpm run test:web"
   }
 }
