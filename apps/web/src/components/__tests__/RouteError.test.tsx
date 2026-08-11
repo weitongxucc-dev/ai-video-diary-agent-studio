@@ -32,9 +32,11 @@ describe("sanitizeMessage", () => {
     expect(sanitizeMessage("   ")).toBeNull();
   });
 
-  it("returns null for messages longer than 240 characters", () => {
+  it("truncates messages longer than 240 characters", () => {
     const long = "x".repeat(241);
-    expect(sanitizeMessage(long)).toBeNull();
+    const result = sanitizeMessage(long);
+    expect(result).not.toBeNull();
+    expect(result).toBe("x".repeat(237) + "...");
   });
 
   it("returns trimmed message for valid input", () => {
