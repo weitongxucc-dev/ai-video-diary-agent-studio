@@ -5,10 +5,9 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
+  # ── Build jobs (one per architecture, no publishing) ──────────────
+
   build:
     name: Build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -100,11 +99,119 @@ jobs:
           fi
           echo "API binary architecture verified: $EXPECTED"
 
-      # ── Package & Publish ────────────────────────────────────
+      # ── Package (no publish) ─────────────────────────────────
 
-      - name: Package and publish macOS app (${{ matrix.arch }})
+      - name: Package macOS app (${{ matrix.arch }})
         run: |
           cd apps/desktop
-          npx electron-builder --mac --${{ matrix.arch }} --publish always
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Collect release assets
+        run: |
+          mkdir -p assets-${{ matrix.arch }}
+          cp apps/desktop/dist/*.dmg apps/desktop/dist/*.zip assets-${{ matrix.arch }}/ 2>/dev/null || true
+          echo "Assets for ${{ matrix.arch }}:"
+          ls -la assets-${{ matrix.arch }}/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ matrix.arch }}
+          path: assets-${{ matrix.arch }}/
+
+  # ── Publish job (single, unified release) ─────────────────────
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download arm64 assets
+        uses: actions/download-artifact@v4
+        with:
+          name: assets-arm64
+          path: assets/
+
+      - name: Download x64 assets
+        uses: actions/download-artifact@v4
+        with:
+          name: assets-x64
+          path: assets/
+
+      - name: List all assets
+        run: |
+          echo "All release assets:"
+          ls -la assets/
+
+      - name: Generate latest-mac.yml
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          node -e "
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+
+          const assetsDir = 'assets';
+          const files = fs.readdirSync(assetsDir);
+
+          const arm64Zip = files.find(f => f.includes('arm64') && f.endsWith('.zip'));
+          const x64Zip = files.find(f => f.includes('x64') && f.endsWith('.zip'));
+
+          if (!arm64Zip || !x64Zip) {
+            console.error('Missing zip files. Found:', files);
+            process.exit(1);
+          }
+
+          function hashFile(name) {
+            const buf = fs.readFileSync(path.join(assetsDir, name));
+            return crypto.createHash('sha512').update(buf).digest('base64');
+          }
+
+          function sizeFile(name) {
+            return fs.statSync(path.join(assetsDir, name)).size;
+          }
+
+          const yml =
+            'version: ' + process.env.VERSION + '\n' +
+            'files:\n' +
+            '  - url: ' + arm64Zip + '\n' +
+            '    sha512: ' + hashFile(arm64Zip) + '\n' +
+            '    size: ' + sizeFile(arm64Zip) + '\n' +
+            '  - url: ' + x64Zip + '\n' +
+            '    sha512: ' + hashFile(x64Zip) + '\n' +
+            '    size: ' + sizeFile(x64Zip) + '\n' +
+            'path: ' + arm64Zip + '\n' +
+            'sha512: ' + hashFile(arm64Zip) + '\n' +
+            'releaseDate: ' + new Date().toISOString().replace(/\.\d{3}Z\$/, '.000Z') + '\n';
+
+          const outPath = path.join(assetsDir, 'latest-mac.yml');
+          fs.writeFileSync(outPath, yml);
+          console.log('Generated latest-mac.yml:');
+          console.log(fs.readFileSync(outPath, 'utf8'));
+          "
+        env:
+          VERSION: ${{ github.ref_name }}
+
+      - name: Verify latest-mac.yml exists and is valid
+        run: |
+          if [ ! -f assets/latest-mac.yml ]; then
+            echo "::error::latest-mac.yml was not generated"
+            exit 1
+          fi
+          echo "latest-mac.yml size: $(wc -c < assets/latest-mac.yml) bytes"
+          echo "--- content ---"
+          cat assets/latest-mac.yml
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ github.ref_name }}"
+          files: assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
