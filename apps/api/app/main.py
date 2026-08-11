@@ -11,6 +11,10 @@ from fastapi.responses import FileResponse
 
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
+from app.creator_profile import (
+    get_or_create_profile,
+    upsert_creator_profile,
+)
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
     apply_confirmed_edit_plan,
@@ -50,6 +54,9 @@ from app.schemas import (
     ArchiveSourcesResponse,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
+    CreatorProfileLearnResult,
+    CreatorProfileResponse,
+    CreatorProfileUpdate,
     DraftAssetResponse,
     DraftEnvironmentResponse,
     DraftImportRequest,
@@ -1067,6 +1074,194 @@ async def voice_transcribe(
         provider=result["provider"],
         segments=result["segments"],
     )
+
+
+# ── Creator Profile ──────────────────────────────────────────────
+
+
+@app.get("/api/creator-profile", response_model=CreatorProfileResponse)
+def get_creator_profile_endpoint() -> CreatorProfileResponse:
+    """Return the current creator profile, creating a default one if needed."""
+    profile = get_or_create_profile(settings.database_path)
+    return CreatorProfileResponse(
+        id=profile.id,
+        common_expressions=profile.common_expressions,
+        banned_words=profile.banned_words,
+        style_preferences=profile.style_preferences,
+        created_at=profile.created_at,
+        updated_at=profile.updated_at,
+    )
+
+
+@app.patch("/api/creator-profile", response_model=CreatorProfileResponse)
+def update_creator_profile_endpoint(
+    body: CreatorProfileUpdate,
+) -> CreatorProfileResponse:
+    """Merge update the creator profile. Only provided fields are changed."""
+    profile = get_or_create_profile(settings.database_path)
+
+    if body.common_expressions is not None:
+        profile.common_expressions = body.common_expressions
+    if body.banned_words is not None:
+        profile.banned_words = body.banned_words
+    if body.style_preferences is not None:
+        profile.style_preferences = body.style_preferences
+
+    profile = upsert_creator_profile(profile, settings.database_path)
+    return CreatorProfileResponse(
+        id=profile.id,
+        common_expressions=profile.common_expressions,
+        banned_words=profile.banned_words,
+        style_preferences=profile.style_preferences,
+        created_at=profile.created_at,
+        updated_at=profile.updated_at,
+    )
+
+
+@app.post("/api/creator-profile/learn", response_model=CreatorProfileLearnResult)
+def learn_creator_profile_endpoint() -> CreatorProfileLearnResult:
+    """Analyze historical episode scripts and feedback to learn creator habits.
+
+    Extracts frequently-used expressions from script content, identifies
+    negatively-received patterns from feedback, and infers style preferences.
+    """
+    profile = get_or_create_profile(settings.database_path)
+    episodes = repo.all()
+
+    # ── Collect text from active script versions ──
+    all_script_text: list[str] = []
+    all_hooks: list[str] = []
+    for ep in episodes:
+        for sv in ep.script_versions:
+            if not sv.active:
+                continue
+            for section in sv.script.sections:
+                all_script_text.append(section.content)
+            all_hooks.append(sv.script.hook)
+
+    # ── Extract candidate expressions via n-gram frequency ──
+    new_expressions: list[str] = []
+    if all_script_text:
+        combined = "。".join(all_script_text)
+        new_expressions = _extract_frequent_phrases(
+            combined,
+            existing=set(profile.common_expressions),
+            min_len=2,
+            max_len=5,
+            min_count=3,
+        )
+
+    # ── Infer banned words from persistent negative feedback ──
+    new_banned: list[str] = []
+    down_reasons: list[str] = []
+    for ep in episodes:
+        for fe in ep.feedback_events:
+            if fe.value and fe.value.value == "down" and fe.reason:
+                down_reasons.append(fe.reason)
+    if down_reasons:
+        new_banned = _extract_frequent_phrases(
+            "。".join(down_reasons),
+            existing=set(profile.banned_words),
+            min_len=2,
+            max_len=4,
+            min_count=2,
+        )
+
+    # ── Infer style preferences from hooks ──
+    style_changes: dict[str, str] = {}
+    if all_hooks:
+        question_hooks = sum(1 for h in all_hooks if "？" in h or "?" in h)
+        exclaim_hooks = sum(1 for h in all_hooks if "！" in h or "!" in h)
+        total = len(all_hooks)
+        if question_hooks / total >= 0.4:
+            style_changes["hook_style"] = "question"
+        elif exclaim_hooks / total >= 0.3:
+            style_changes["hook_style"] = "exclamation"
+        else:
+            style_changes["hook_style"] = "statement"
+
+    # ── Update profile ──
+    if new_expressions:
+        existing_expr = set(profile.common_expressions)
+        for expr in new_expressions:
+            if expr not in existing_expr:
+                profile.common_expressions.append(expr)
+
+    if new_banned:
+        existing_banned = set(profile.banned_words)
+        for word in new_banned:
+            if word not in existing_banned:
+                profile.banned_words.append(word)
+
+    if style_changes:
+        profile.style_preferences.update(style_changes)
+
+    profile = upsert_creator_profile(profile, settings.database_path)
+
+    return CreatorProfileLearnResult(
+        profile=CreatorProfileResponse(
+            id=profile.id,
+            common_expressions=profile.common_expressions,
+            banned_words=profile.banned_words,
+            style_preferences=profile.style_preferences,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        ),
+        summary={
+            "new_expressions": new_expressions,
+            "new_banned_words": new_banned,
+            "style_changes": style_changes,
+        },
+    )
+
+
+def _extract_frequent_phrases(
+    text: str,
+    *,
+    existing: set[str],
+    min_len: int = 2,
+    max_len: int = 5,
+    min_count: int = 3,
+) -> list[str]:
+    """Extract frequent Chinese character n-grams from text.
+
+    Uses substring slicing (not tokenization) for CJK text.
+    Filters very short or already-known phrases.
+    """
+    from collections import Counter
+
+    # Keep only Chinese characters and common punctuation for n-gram extraction
+    cleaned: list[str] = []
+    for ch in text:
+        if "一" <= ch <= "鿿" or "　" <= ch <= "〿" or "＀" <= ch <= "￯":
+            cleaned.append(ch)
+
+    if not cleaned:
+        return []
+
+    counter: Counter[str] = Counter()
+    chars = "".join(cleaned)
+    for n in range(min_len, max_len + 1):
+        for i in range(len(chars) - n + 1):
+            ngram = chars[i : i + n]
+            # Skip phrases that are just punctuation
+            if all("一" <= c <= "鿿" for c in ngram):
+                counter[ngram] += 1
+
+    result: list[str] = []
+    for phrase, count in counter.most_common(50):
+        if count < min_count:
+            continue
+        if phrase in existing:
+            continue
+        # Deduplicate: skip if a longer phrase contains this one
+        if any(phrase != other and phrase in other for other in result):
+            continue
+        result.append(phrase)
+        if len(result) >= 10:
+            break
+
+    return result
 
 
 def _voice_command_response(

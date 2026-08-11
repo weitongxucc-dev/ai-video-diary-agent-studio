@@ -10,6 +10,7 @@ import httpx
 
 from app.config import Settings
 from app.content_templates import ContentTemplate
+from app.creator_profile import get_creator_profile
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
 from app.preference_memory import preference_memory_payload
 
@@ -261,6 +262,42 @@ class DeepSeekScriptGenerator:
             feedback=current.feedback,
         )
 
+    def _profile_context(self) -> str:
+        """Build a prompt suffix from the creator profile, if available."""
+        profile = get_creator_profile(self._settings.database_path)
+        if profile is None:
+            return ""
+        parts: list[str] = []
+        if profile.common_expressions:
+            parts.append(
+                "优先使用以下表达方式："
+                + "、".join(profile.common_expressions[:10])
+                + "。"
+            )
+        if profile.banned_words:
+            parts.append(
+                "避免使用以下词汇："
+                + "、".join(profile.banned_words[:10])
+                + "。"
+            )
+        if profile.style_preferences:
+            prefs = profile.style_preferences
+            if "tone" in prefs:
+                parts.append(f"语气偏好：{prefs['tone']}。")
+            if "sentence_length" in prefs:
+                parts.append(f"句长偏好：{prefs['sentence_length']}。")
+            if "hook_style" in prefs:
+                style_hint = {
+                    "question": "开篇优先使用提问式 hook。",
+                    "exclamation": "开篇优先使用感叹式 hook。",
+                    "statement": "开篇优先使用陈述式 hook。",
+                }.get(prefs["hook_style"], "")
+                if style_hint:
+                    parts.append(style_hint)
+        if not parts:
+            return ""
+        return "以下来自创作者画像，请在生成内容时参考：" + " ".join(parts)
+
     def _system_prompt(self, template: ContentTemplate | None = None) -> str:
         template_context = ""
         if template is not None:
@@ -273,6 +310,7 @@ class DeepSeekScriptGenerator:
                 f"封面文案规则：{'；'.join(template.cover_copy_rules)}。"
                 f"发布文案规则：{'；'.join(template.publish_copy_rules)}。"
             )
+        profile_ctx = self._profile_context()
         return (
             "你是一个中文 AI 视频日记口播编导，服务于技术型个人创作者。"
             "只输出 JSON，不要 Markdown，不要解释。"
@@ -284,6 +322,7 @@ class DeepSeekScriptGenerator:
             "estimated_seconds 按约 180 字/分钟估算。"
             "口播要像真人日记：直接、具体、有判断，不要营销腔。"
             "不要使用动物、怪物、玄幻、热血鸡汤类比。"
+            + (f" {profile_ctx}" if profile_ctx else "")
         )
 
     def _section_system_prompt(self, template: ContentTemplate | None = None) -> str:
