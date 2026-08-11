@@ -39,6 +39,17 @@ describe("sanitizeMessage", () => {
     expect(result).toBe("x".repeat(237) + "...");
   });
 
+  it("returns null for long messages containing sensitive patterns (filter before truncate)", () => {
+    const longSecret = "x".repeat(200) + " api_key=sk-abc123 " + "y".repeat(50);
+    expect(sanitizeMessage(longSecret)).toBeNull();
+
+    const longPath = "/home/user/" + "x".repeat(230) + "/secret.txt";
+    expect(sanitizeMessage(longPath)).toBeNull();
+
+    const longStack = "Error: boom\n" + "x".repeat(230) + "\n  at Object.<anonymous>";
+    expect(sanitizeMessage(longStack)).toBeNull();
+  });
+
   it("returns trimmed message for valid input", () => {
     expect(sanitizeMessage("  请求失败  ")).toBe("请求失败");
   });
