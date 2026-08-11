@@ -119,8 +119,8 @@ GitHub Actions 矩阵 runner：
 
 | 架构 | Runner | PyInstaller 产出 | electron-builder 目标 |
 |------|--------|------------------|----------------------|
-| arm64 | `macos-latest` (Apple Silicon M1) | arm64 `api-server` | `--arm64` |
-| x64 | `macos-13` (Intel) | x86_64 `api-server` | `--x64` |
+| arm64 | `macos-15` (Apple Silicon) | arm64 `api-server` | `--arm64` |
+| x64 | `macos-15-intel` (Intel) | x86_64 `api-server` | `--x64` |
 
 固定版本：
 
