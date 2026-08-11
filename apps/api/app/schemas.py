@@ -745,3 +745,39 @@ class SourceSyncRetryResponse(BaseModel):
     source_type: str
     status: str
     message: str
+
+
+class VoiceTranscribeSegment(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str
+    provider: str
+    segments: list[VoiceTranscribeSegment]
+    confidence: float = 0.0
+
+
+# ── Creator Profile ──────────────────────────────────────────────
+
+
+class CreatorProfileResponse(BaseModel):
+    id: str
+    common_expressions: list[str]
+    banned_words: list[str]
+    style_preferences: dict[str, str]
+    created_at: str
+    updated_at: str
+
+
+class CreatorProfileUpdate(BaseModel):
+    common_expressions: list[str] | None = None
+    banned_words: list[str] | None = None
+    style_preferences: dict[str, str] | None = None
+
+
+class CreatorProfileLearnResult(BaseModel):
+    profile: CreatorProfileResponse
+    summary: dict[str, object]
