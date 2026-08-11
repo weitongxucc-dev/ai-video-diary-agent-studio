@@ -546,12 +546,12 @@ function configureAutoUpdater() {
 }
 
 function checkForUpdates(silent = true) {
-  if (isDev) {
+  if (!app.isPackaged) {
     if (!silent) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: '开发模式',
-        message: '当前为开发模式，不检查更新。',
+        title: '未打包环境',
+        message: '当前为未打包环境，不检查更新。',
         detail: '更新检查仅在打包版本中生效。',
       });
     }
