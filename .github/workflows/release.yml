@@ -112,7 +112,13 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p assets-${{ matrix.arch }}
-          cp apps/desktop/dist/*.dmg apps/desktop/dist/*.zip assets-${{ matrix.arch }}/ 2>/dev/null || true
+          shopt -s nullglob
+          assets=(apps/desktop/dist/*.dmg apps/desktop/dist/*.zip)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No DMG or ZIP assets were produced for ${{ matrix.arch }}"
+            exit 1
+          fi
+          cp "${assets[@]}" assets-${{ matrix.arch }}/
           echo "Assets for ${{ matrix.arch }}:"
           ls -la assets-${{ matrix.arch }}/
 
@@ -152,6 +158,7 @@ jobs:
       - name: Generate latest-mac.yml
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
+          export VERSION
           node -e "
           const crypto = require('crypto');
           const fs = require('fs');
@@ -195,8 +202,6 @@ jobs:
           console.log('Generated latest-mac.yml:');
           console.log(fs.readFileSync(outPath, 'utf8'));
           "
-        env:
-          VERSION: ${{ github.ref_name }}
 
       - name: Verify latest-mac.yml exists and is valid
         run: |
@@ -211,7 +216,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "v${{ github.ref_name }}"
+          name: "${{ github.ref_name }}"
           files: assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
