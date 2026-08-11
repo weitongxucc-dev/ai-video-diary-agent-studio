@@ -7,17 +7,33 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+# ── Dotenv path resolution ──────────────────────────────────
+# When set, AI_VIDEO_DIARY_DOTENV overrides the default
+# repo-root .env lookup.  Electron passes a path under
+# app.getPath('userData') so the packaged API and Worker
+# share one writable config file outside the signed Resources
+# bundle.
+_ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
+
+
+def _resolve_dotenv_path() -> Path:
+    """Return the primary .env path, honouring the override env var."""
+    override = os.getenv(_ENV_FILE_OVERRIDE_VAR)
+    if override:
+        return Path(override)
+    return _repo_root() / ".env"
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
 def runtime_env_file_path() -> Path:
-    return _repo_root() / ".env"
+    return _resolve_dotenv_path()
 
 
 def load_dotenv_files() -> None:
-    for path in (_repo_root() / ".env", _repo_root() / "apps/api/.env"):
+    for path in (_resolve_dotenv_path(), _repo_root() / "apps/api/.env"):
         if not path.exists():
             continue
         for raw_line in path.read_text(encoding="utf-8").splitlines():
