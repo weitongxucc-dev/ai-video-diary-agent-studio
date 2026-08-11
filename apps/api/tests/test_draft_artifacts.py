@@ -756,3 +756,226 @@ def test_srt_to_jianying_segments_includes_text_materials(tmp_path):
     assert text_materials[0]["content"] == "第一段字幕"
     assert text_materials[0]["type"] == "text"
     assert text_materials[1]["content"] == "第二段字幕"
+
+
+# ── Template tracks ────────────────────────────────────────────────────
+
+def test_template_tracks_title_card_added_for_video_diary(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "template_title_test",
+        "video": {"path": str(video_output / "talk.mp4")},
+        "content_template": {
+            "template_id": "video_diary",
+            "name": "视频日记",
+            "script_structure": ["开头", "主体", "结尾"],
+        },
+        "script_sections": [
+            {"index": 0, "label": "开头", "section_id": "s1", "section_title": "Hook", "estimated_seconds": 5},
+            {"index": 1, "label": "主体", "section_id": "s2", "section_title": "Body", "estimated_seconds": 30},
+        ],
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    tracks = content["tracks"]
+
+    # Track 0 = video, Track 1+ = text tracks (title + chapter)
+    text_tracks = [t for t in tracks if t["type"] == "text"]
+    assert len(text_tracks) >= 2, f"expected >=2 text tracks, got {len(text_tracks)}"
+
+    # First text track should be the title card
+    title_track = text_tracks[0]
+    title_content = title_track["segments"][0]["content"]
+    assert title_content == "视频日记"
+
+    # Chapter track should contain at least 1 chapter label
+    chapter_track = text_tracks[1]
+    chapter_labels = [s["content"] for s in chapter_track["segments"]]
+    assert "开头" in chapter_labels, f"chapter labels: {chapter_labels}"
+
+    # metadata recorded
+    assert "title_card:video_diary" in workspace._last_template_tracks_meta
+    assert "chapter_labels" in workspace._last_template_tracks_meta
+
+
+def test_template_tracks_no_title_or_chapters_without_data(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    # No content_template or script_sections in manifest
+    manifest = {
+        "package_name": "no_template",
+        "video": {"path": str(video_output / "talk.mp4")},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    # Should only have video track (no template data → no text tracks)
+    text_tracks = [t for t in content["tracks"] if t["type"] == "text"]
+    assert len(text_tracks) == 0, f"expected 0 text tracks without template, got {len(text_tracks)}"
+
+
+def test_template_tracks_background_music_added_when_configured(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    music_file = tmp_path / "bgm.mp3"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+    music_file.write_bytes(b"fake music data")
+
+    manifest = {
+        "package_name": "music_test",
+        "video": {"path": str(video_output / "talk.mp4")},
+    }
+
+    workspace = DraftWorkspace(
+        Settings(
+            jianying_draft_root_path=str(jianying_root),
+            draft_background_music_path=str(music_file),
+        )
+    )
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    # Should have an audio track
+    audio_tracks = [t for t in content["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 1
+    assert len(content["materials"]["audios"]) == 1
+    assert "background_music" in workspace._last_template_tracks_meta
+
+
+def test_template_tracks_background_music_skipped_when_not_configured(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "no_music",
+        "video": {"path": str(video_output / "talk.mp4")},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    audio_tracks = [t for t in content["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 0
+    assert "background_music" not in workspace._last_template_tracks_meta
+
+
+def test_template_tracks_background_music_skipped_when_file_missing(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "missing_music",
+        "video": {"path": str(video_output / "talk.mp4")},
+    }
+
+    workspace = DraftWorkspace(
+        Settings(
+            jianying_draft_root_path=str(jianying_root),
+            draft_background_music_path="/nonexistent/bgm.mp3",
+        )
+    )
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    audio_tracks = [t for t in content["tracks"] if t["type"] == "audio"]
+    assert len(audio_tracks) == 0, "should skip music when file missing"
+
+
+def test_draft_content_json_includes_template_metadata_on_manifest(tmp_path):
+    """Verify import result includes template_tracks in manifest jianying_import."""
+    from app.config import Settings
+    from app.drafts import DraftWorkspace
+
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    workspace = DraftWorkspace(Settings(
+        video_output_path=str(video_output),
+        draft_output_path=str(tmp_path / "drafts"),
+        jianying_draft_root_path=str(jianying_root),
+        database_path=str(tmp_path / "db.sqlite"),
+    ))
+
+    # Create package with episode=None (no template data)
+    # First create a minimal manifest manually
+    (tmp_path / "drafts").mkdir(exist_ok=True)
+    pkg_dir = tmp_path / "drafts" / "test_pkg"
+    pkg_dir.mkdir(exist_ok=True)
+    manifest_data = {
+        "created_at": "2025-01-01T00:00:00",
+        "package_name": "test_pkg",
+        "source_mode": "standalone_video",
+        "video": {
+            "file_name": "talk.mp4",
+            "path": str(video_output / "talk.mp4"),
+            "size_bytes": 5,
+            "modified_at": "2025-01-01T00:00:00",
+        },
+        "episode": None,
+        "content_template": {
+            "template_id": "video_diary",
+            "name": "视频日记",
+            "script_structure": ["开头", "主体", "结尾"],
+        },
+        "script_sections": [
+            {"index": 0, "label": "开头", "section_id": "s1", "section_title": "Hook", "estimated_seconds": 5},
+        ],
+        "artifacts": {
+            "subtitle_path": None,
+            "cover_path": None,
+        },
+        "draft_tool": {},
+        "jianying_import": {},
+        "status": "ready",
+    }
+    (pkg_dir / "manifest.json").write_text(
+        json.dumps(manifest_data, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = workspace.import_package_to_jianying("test_pkg")
+    assert result.status == "imported"
+
+    # Re-read manifest to verify template_tracks was recorded
+    updated = json.loads((pkg_dir / "manifest.json").read_text(encoding="utf-8"))
+    jy_import = updated.get("jianying_import", {})
+    assert isinstance(jy_import, dict)
+    # template_tracks should list what was generated
+    template_tracks = jy_import.get("template_tracks", [])
+    assert "title_card:video_diary" in template_tracks
+    assert "chapter_labels" in template_tracks
