@@ -33,8 +33,6 @@
       "extendInfo": {
         "CFBundleName": "AI视频日记 Agent Studio",
         "CFBundleDisplayName": "AI视频日记",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
         "NSMicrophoneUsageDescription": "AI视频日记需要使用麦克风进行语音指令输入",
         "NSDesktopFolderUsageDescription": "AI视频日记需要访问桌面文件夹读取知识库和视频文件"
       }

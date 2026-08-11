@@ -9,11 +9,34 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-13
 
     steps:
       - uses: actions/checkout@v4
+
+      # ── Architecture guard ────────────────────────────────────
+
+      - name: Verify runner architecture
+        run: |
+          EXPECTED="${{ matrix.arch }}"
+          ACTUAL=$(uname -m)
+          echo "Target arch: $EXPECTED"
+          echo "Runner arch: $ACTUAL"
+          case "$EXPECTED" in
+            arm64) [ "$ACTUAL" = "arm64" ] || { echo "::error::Expected arm64 runner, got $ACTUAL"; exit 1; } ;;
+            x64)   [ "$ACTUAL" = "x86_64" ] || { echo "::error::Expected x64 runner, got $ACTUAL"; exit 1; } ;;
+          esac
+          echo "Architecture guard passed: $ACTUAL matches $EXPECTED"
 
       # ── Runtimes ─────────────────────────────────────────────
 
@@ -56,7 +79,7 @@ jobs:
       - name: Build web frontend (Next.js standalone)
         run: pnpm --dir apps/web build
 
-      - name: Build API binary (PyInstaller)
+      - name: Build API binary (PyInstaller — ${{ matrix.arch }})
         run: |
           cd apps/api
           uv sync --group dev
@@ -65,11 +88,23 @@ jobs:
             --workpath ../desktop/build-api \
             --clean --noconfirm
 
-      # ── Package & Release ────────────────────────────────────
+      - name: Verify API binary architecture
+        run: |
+          API_BIN=apps/desktop/dist/api-server
+          echo "API binary info:"
+          file "$API_BIN"
+          EXPECTED="${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
+          if ! file "$API_BIN" | grep -q "$EXPECTED"; then
+            echo "::error::API binary architecture mismatch: expected $EXPECTED"
+            exit 1
+          fi
+          echo "API binary architecture verified: $EXPECTED"
 
-      - name: Package and publish macOS app
+      # ── Package & Publish ────────────────────────────────────
+
+      - name: Package and publish macOS app (${{ matrix.arch }})
         run: |
           cd apps/desktop
-          npx electron-builder --mac --publish always
+          npx electron-builder --mac --${{ matrix.arch }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
