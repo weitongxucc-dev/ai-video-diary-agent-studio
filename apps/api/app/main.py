@@ -1666,6 +1666,7 @@ def revert_episode_feedback(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return episode_response(repo.save(episode))
 
 
 # ── Server entry point (for pyinstaller onefile binary) ─────────────
@@ -1677,7 +1678,6 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host=host, port=port)
-    return episode_response(repo.save(episode))
 
 
 @app.get(
@@ -1855,15 +1855,51 @@ def list_episode_history(
 
 @app.post("/api/sources/{key}/retry", response_model=SourceSyncRetryResponse)
 def retry_source_sync(key: str) -> SourceSyncRetryResponse:
-    """Stub: trigger re-sync for the given source key."""
+    """Re-sync a specific source type and return item count + status."""
     known_sources = {"hermes_radar", "manual", "external_urls"}
     if key not in known_sources:
         raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
-    return SourceSyncRetryResponse(
-        source_type=key,
-        status="retried",
-        message=f"Retry triggered for {key} (sync logic not yet implemented — this is a stub)",
-    )
+
+    try:
+        if key == "hermes_radar":
+            items = HermesRadarSourceClient(settings.hermes_radar_path).fetch_items()
+            return SourceSyncRetryResponse(
+                source_type=key,
+                status="success",
+                message=f"Hermes radar re-synced: {len(items)} items",
+                item_count=len(items),
+            )
+        elif key == "external_urls":
+            if not settings.topic_source_urls:
+                return SourceSyncRetryResponse(
+                    source_type=key,
+                    status="skipped",
+                    message="No external source URLs configured",
+                )
+            items = HtmlPageSourceClient(settings.topic_source_urls).fetch_items()
+            return SourceSyncRetryResponse(
+                source_type=key,
+                status="success",
+                message=f"External URLs re-synced: {len(items)} items",
+                item_count=len(items),
+            )
+        elif key == "manual":
+            return SourceSyncRetryResponse(
+                source_type=key,
+                status="success",
+                message=f"Manual sources: {len(manual_source_items)} items in memory",
+                item_count=len(manual_source_items),
+            )
+    except ExternalSourceResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Source retry failed for {key}: {exc}",
+        ) from exc
+
+    # Unreachable: unknown source caught above with 404
+    raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
 
 
 @app.get("/api/preferences/cards", response_model=PreferencesCardsResponse)
