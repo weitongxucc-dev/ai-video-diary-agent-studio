@@ -4,6 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
+const { autoUpdater } = require('electron-updater');
 
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
@@ -278,6 +279,10 @@ function registerIpcHandlers() {
   ipcMain.handle('quit', () => {
     app.quit();
   });
+
+  ipcMain.handle('check-for-updates', () => {
+    checkForUpdates(false);
+  });
 }
 
 // ── Window Management ──────────────────────────────────
@@ -404,12 +409,19 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
+          label: '检查更新...',
+          click: () => {
+            checkForUpdates(false);
+          },
+        },
+        { type: 'separator' },
+        {
           label: '关于 AI视频日记',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: '关于 AI视频日记 Agent Studio',
-              message: 'AI视频日记 Agent Studio v0.1.0',
+              message: `AI视频日记 Agent Studio v${app.getVersion()}`,
               detail: '本地优先的 macOS 内容生产 Agent。\n\n将素材、想法和语音指令推进成可验证、可回滚、可导入剪映的完整视频草稿。\n\n© 2026 AI视频日记 Contributors\nMIT License',
             });
           },
@@ -425,6 +437,10 @@ function buildMenu() {
 app.whenReady().then(async () => {
   buildMenu();
   registerIpcHandlers();
+  configureAutoUpdater();
+
+  // Check for updates in background 10s after startup
+  setTimeout(() => checkForUpdates(true), 10_000);
 
   let apiReady = true;
   try {
@@ -472,6 +488,84 @@ app.on('quit', () => {
   stopNextServer();
   stopApiServer();
 });
+
+// ── Auto Updater ──────────────────────────────────────
+function configureAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[updater] Checking for updates...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('[updater] Update available:', info.version);
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '发现新版本',
+      message: `新版本 ${info.version} 可用`,
+      detail: '是否立即下载更新？',
+      buttons: ['下载更新', '稍后提醒'],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (response === 0) {
+        autoUpdater.downloadUpdate();
+      }
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('[updater] No updates available.');
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    console.log(`[updater] Download: ${Math.round(progress.percent)}%`);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[updater] Update downloaded:', info.version);
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '更新已就绪',
+      message: `版本 ${info.version} 已下载完成`,
+      detail: '重启应用以完成更新，或稍后在菜单中选择"检查更新"再重启。',
+      buttons: ['立即重启', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('[updater] Error:', err.message);
+  });
+}
+
+function checkForUpdates(silent = true) {
+  if (!app.isPackaged) {
+    if (!silent) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '未打包环境',
+        message: '当前为未打包环境，不检查更新。',
+        detail: '更新检查仅在打包版本中生效。',
+      });
+    }
+    return;
+  }
+  autoUpdater.checkForUpdates().catch((err) => {
+    if (!silent) {
+      dialog.showErrorBox(
+        '检查更新失败',
+        `无法检查更新：${err.message}`
+      );
+    }
+  });
+}
 
 // Prevent multiple instances
 const gotLock = app.requestSingleInstanceLock();
