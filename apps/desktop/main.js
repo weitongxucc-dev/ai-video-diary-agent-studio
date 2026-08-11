@@ -18,6 +18,23 @@ let nextStopping = false;
 let workerStopping = false;
 const isDev = process.env.NODE_ENV === 'development';
 
+// ── Shared config path ─────────────────────────────────
+// Packaged API and Worker share one writable .env under
+// userData (NOT inside the signed Resources bundle).
+// Dev builds keep the default repo-root .env resolution.
+function userDotenvPath() {
+  return path.join(app.getPath('userData'), '.env');
+}
+
+function ensureUserDotenv() {
+  const p = userDotenvPath();
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '', 'utf-8');
+    console.log('[main] Created user config file:', p);
+  }
+}
+
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
   if (isDev) return null; // dev mode: user runs API separately
@@ -49,6 +66,9 @@ function getFreePort() {
 }
 
 async function startApiServer() {
+  // Duplicate guard: if already running (or starting), return the port
+  if (apiProcess) return apiPort;
+
   const binary = findApiBinary();
   if (!binary) {
     console.log('[main] API server binary not found — assuming external API');
@@ -62,6 +82,7 @@ async function startApiServer() {
     ...process.env,
     PORT: String(apiPort),
     HOST: '127.0.0.1',
+    AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
   };
 
   apiProcess = spawn(binary, [], {
@@ -156,6 +177,9 @@ function findNextServer() {
 }
 
 async function startNextServer() {
+  // Duplicate guard
+  if (nextProcess) return nextPort;
+
   const serverJs = findNextServer();
   if (!serverJs) {
     console.log('[main] Next.js standalone server not found — assuming external Next.js');
@@ -286,6 +310,7 @@ function startWorker() {
     ...process.env,
     API_PORT: String(apiPort),
     HOST: '127.0.0.1',
+    AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
   };
 
   workerProcess = spawn(binary, [], {
@@ -529,6 +554,12 @@ app.whenReady().then(async () => {
   // Check for updates in background 10s after startup
   setTimeout(() => checkForUpdates(true), 10_000);
 
+  // Ensure a writable .env exists under userData (not inside the
+  // signed Resources bundle) before spawning API / Worker.
+  if (!isDev) {
+    ensureUserDotenv();
+  }
+
   let apiReady = true;
   try {
     await startApiServer();
@@ -564,9 +595,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  stopWorker();
-  stopNextServer();
-  stopApiServer();
+  // On macOS the app stays alive with its services (API, Next, Worker)
+  // so re-activate can create a fresh window instantly.  Services are
+  // only torn down on before-quit / quit (actual app termination).
   if (process.platform !== 'darwin') {
     app.quit();
   }
