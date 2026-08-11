@@ -743,8 +743,10 @@ class ProductionModeRequest(BaseModel):
 
 class SourceSyncRetryResponse(BaseModel):
     source_type: str
-    status: str
+    status: str  # success | skipped | error
     message: str
+    item_count: int = 0
+    error: str | None = None
 
 
 class VoiceTranscribeSegment(BaseModel):

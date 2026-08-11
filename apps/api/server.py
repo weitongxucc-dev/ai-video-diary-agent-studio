@@ -22,8 +22,15 @@ def _freeze_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent  # repo root
 
 
+_ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
+
+
 def _configure_env() -> None:
-    """Ensure the repo root is on sys.path and .env is loaded before imports."""
+    """Ensure the repo root is on sys.path and .env is loaded before imports.
+
+    When ``AI_VIDEO_DIARY_DOTENV`` is set (e.g. by the Electron wrapper)
+    that path is used instead of the default repo-root ``.env``.
+    """
     root = _freeze_root()
 
     # Make sure apps/api/ is importable
@@ -31,8 +38,13 @@ def _configure_env() -> None:
     if str(api_dir) not in sys.path:
         sys.path.insert(0, str(api_dir))
 
-    # Pre-load .env so Settings.from_env() picks it up
-    env_path = root / ".env"
+    # Resolve .env path: honour override, fall back to repo root
+    override = os.environ.get(_ENV_FILE_OVERRIDE_VAR)
+    if override:
+        env_path = Path(override)
+    else:
+        env_path = root / ".env"
+
     if env_path.exists():
         with open(env_path, encoding="utf-8") as fh:
             for line in fh:

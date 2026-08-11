@@ -1,7 +1,45 @@
 from pathlib import Path
 
 from app import config
-from app.config import write_dotenv_values
+from app.config import _ENV_FILE_OVERRIDE_VAR, _resolve_dotenv_path, write_dotenv_values
+
+
+def test_resolve_dotenv_path_defaults_to_repo_root(monkeypatch):
+    """Without the override env var, _resolve_dotenv_path returns the repo-root .env."""
+    monkeypatch.delenv(_ENV_FILE_OVERRIDE_VAR, raising=False)
+    result = _resolve_dotenv_path()
+    assert result.name == ".env"
+    # Default path should end with the repo-root .env, not a userData path
+    assert "Library" not in str(result)
+
+
+def test_resolve_dotenv_path_honours_override(monkeypatch, tmp_path):
+    """When AI_VIDEO_DIARY_DOTENV is set, it takes precedence."""
+    custom = tmp_path / "custom.env"
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(custom))
+    result = _resolve_dotenv_path()
+    assert result == custom
+
+
+def test_runtime_env_file_path_uses_override(monkeypatch, tmp_path):
+    """runtime_env_file_path delegates to _resolve_dotenv_path."""
+    custom = tmp_path / "user-config.env"
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(custom))
+    assert config.runtime_env_file_path() == custom
+
+
+def test_load_dotenv_files_honours_override(monkeypatch, tmp_path):
+    """load_dotenv_files() reads from the override path when set."""
+    custom = tmp_path / ".env"
+    custom.write_text("OVERRIDE_KEY=override-value\n", encoding="utf-8")
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(custom))
+    # Clear any pre-existing env value
+    monkeypatch.delenv("OVERRIDE_KEY", raising=False)
+
+    import os
+
+    config.load_dotenv_files()
+    assert os.environ.get("OVERRIDE_KEY") == "override-value"
 
 
 def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
