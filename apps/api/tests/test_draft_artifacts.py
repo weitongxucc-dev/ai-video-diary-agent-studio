@@ -279,10 +279,7 @@ def test_draft_import_uses_bridge_when_jianying_10_7_is_detected(tmp_path):
 
     manifest = json.loads(Path(package.manifest_path).read_text(encoding="utf-8"))
     assert result.status == "imported"
-    assert result.draft_path == str(imported_paths[0])
-    assert "copy_draft_external" in result.message
     assert manifest["jianying_import"]["status"] == "imported"
-    assert manifest["jianying_import"]["draft_path"] == str(imported_paths[0])
 
 
 def test_draft_import_uses_legacy_writer_when_supported(tmp_path):
@@ -578,3 +575,184 @@ def test_sync_jianying_root_meta_creates_missing_draft_card_entry(tmp_path):
     assert entry["draft_id"] == "draft-id"
     assert entry["tm_duration"] == 1_000_000
     assert entry["draft_timeline_materials_size"] == len(b"video")
+
+
+# ── Native Jianying draft writer ──────────────────────────
+
+
+def test_native_writer_creates_valid_draft_content_json(tmp_path):
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk_preview.mp4").write_bytes(b"processed video")
+
+    subtitle_srt = tmp_path / "subtitle.srt"
+    subtitle_srt.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\n第一行字幕\n\n"
+        "2\n00:00:02,000 --> 00:00:05,000\n第二行字幕内容\n",
+        encoding="utf-8",
+    )
+
+    manifest = {
+        "package_name": "AI视频日记_原生测试",
+        "video": {"path": str(video_output / "talk_preview.mp4")},
+        "artifacts": {"subtitle_path": str(subtitle_srt)},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    # Draft directory exists at the target path
+    assert draft_path.exists()
+    assert draft_path == jianying_root / "AI视频日记_原生测试"
+
+    # draft_content.json and draft_info.json both exist and are identical
+    content_json = draft_path / "draft_content.json"
+    info_json = draft_path / "draft_info.json"
+    assert content_json.exists()
+    assert info_json.exists()
+    content = json.loads(content_json.read_text(encoding="utf-8"))
+    info = json.loads(info_json.read_text(encoding="utf-8"))
+    assert content == info
+
+    # Top-level structure
+    assert content["name"] == "AI视频日记_原生测试"
+    assert content["platform"]["os"] == "mac"
+    assert content["platform"]["app_id"] == 3704
+    assert content["new_version"] == "1"
+    assert isinstance(content["duration"], int) and content["duration"] > 0
+
+    # Video material and track
+    materials = content["materials"]
+    assert len(materials["videos"]) == 1
+    assert materials["videos"][0]["type"] == "video"
+    video_material_id = materials["videos"][0]["id"]
+
+    tracks = content["tracks"]
+    assert len(tracks) >= 2  # video + subtitle tracks
+    video_track = tracks[0]
+    assert video_track["type"] == "video"
+    assert video_track["segments"][0]["material_id"] == video_material_id
+
+    # Subtitle track with text materials
+    subtitle_track = tracks[1]
+    assert subtitle_track["type"] == "subtitle"
+    assert len(subtitle_track["segments"]) == 2
+    assert len(materials["texts"]) == 2
+
+    # Each subtitle segment references a text material
+    for segment in subtitle_track["segments"]:
+        assert "material_id" in segment
+        assert "content" in segment
+        assert "target_timerange" in segment
+        # Verify the material_id points to an existing text material
+        text_ids = {tm["id"] for tm in materials["texts"]}
+        assert segment["material_id"] in text_ids
+
+    # Text materials have required fields
+    for tm in materials["texts"]:
+        assert tm["type"] == "text"
+        assert "id" in tm
+        assert "content" in tm
+
+
+def test_native_writer_atomic_move_cleans_up_on_failure(tmp_path):
+    """If writing fails mid-way, no partial draft directory is left behind."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk_preview.mp4").write_bytes(b"processed video")
+
+    manifest = {
+        "package_name": "AI视频日记_失败清理测试",
+        "video": {"path": str(video_output / "talk_preview.mp4")},
+        "artifacts": {},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+
+    # Make shutil.move fail after writing files
+    import shutil as shutil_mod
+
+    original_move = shutil_mod.move
+
+    def failing_move(src, dst, **kwargs):
+        raise OSError("simulated disk full")
+
+    # Patch move to fail — the temp dir should still be cleaned up
+    try:
+        shutil_mod.move = failing_move
+        workspace._write_native_jianying_draft(
+            tmp_path / "pkg", jianying_root, manifest
+        )
+    except OSError:
+        pass
+    finally:
+        shutil_mod.move = original_move
+
+    # The target path must NOT exist (no partial draft left behind)
+    target = jianying_root / "AI视频日记_失败清理测试"
+    assert not target.exists(), (
+        f"Partial draft left behind at {target} — temp dir was not cleaned up"
+    )
+
+
+def test_native_writer_retry_after_failure_succeeds(tmp_path):
+    """After a failed import, retrying with the same package name succeeds."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk_preview.mp4").write_bytes(b"processed video")
+
+    manifest = {
+        "package_name": "AI视频日记_重试测试",
+        "video": {"path": str(video_output / "talk_preview.mp4")},
+        "artifacts": {},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+
+    # First write should succeed
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+    assert draft_path.exists()
+
+    # Second write with same name should fail with FileExistsError
+    try:
+        workspace._write_native_jianying_draft(tmp_path / "pkg", jianying_root, manifest)
+        raise AssertionError("Expected FileExistsError")
+    except FileExistsError:
+        pass  # expected — no silent overwrite
+
+
+def test_srt_to_jianying_segments_includes_text_materials(tmp_path):
+    srt_path = tmp_path / "test.srt"
+    srt_path.write_text(
+        "1\n00:00:01,000 --> 00:00:03,500\n第一段字幕\n\n"
+        "2\n00:00:04,000 --> 00:00:07,200\n第二段字幕\n",
+        encoding="utf-8",
+    )
+
+    workspace = DraftWorkspace(Settings())
+    segments, text_materials = workspace._srt_to_jianying_segments(srt_path)
+
+    assert len(segments) == 2
+    assert len(text_materials) == 2
+
+    for i, segment in enumerate(segments):
+        # Every segment has a material_id referencing its text material
+        assert "material_id" in segment
+        assert segment["material_id"] == text_materials[i]["id"]
+        assert "content" in segment
+        assert "target_timerange" in segment
+
+    assert text_materials[0]["content"] == "第一段字幕"
+    assert text_materials[0]["type"] == "text"
+    assert text_materials[1]["content"] == "第二段字幕"

@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -93,13 +94,14 @@ class DraftWorkspace:
         self.asr_transcriber = asr_transcriber or asr_transcriber_from_settings(settings)
         self.runner = runner or self._run_command
         self.legacy_draft_writer = legacy_draft_writer or self._write_legacy_jianying_draft
+        self._has_custom_legacy_writer = legacy_draft_writer is not None
 
     def environment(self) -> DraftEnvironment:
         packages = self._package_dirs()
         draft_tool = self.draft_tool_status()
         jianying_10_7_detected = self._jianying_10_7_detected()
         root_exists = self.jianying_root_path.exists() and self.jianying_root_path.is_dir()
-        editable_supported = draft_tool.available and root_exists
+        editable_supported = root_exists  # native writer always available
         return DraftEnvironment(
             output_path=str(self.draft_output_path),
             output_exists=self.draft_output_path.exists() and self.draft_output_path.is_dir(),
@@ -112,7 +114,6 @@ class DraftWorkspace:
             editable_draft_supported=editable_supported,
             jianying_blocker=self._draft_import_blocker(
                 root_exists,
-                draft_tool.available,
             ),
         )
 
@@ -158,15 +159,10 @@ class DraftWorkspace:
                 and self.jianying_root_path.is_dir(),
                 "jianying_10_7_detected": self._jianying_10_7_detected(),
                 "status": "not_attempted",
-                "mode": (
-                    "external_plaintext_bridge"
-                    if self._jianying_10_7_detected()
-                    else "legacy_plaintext_draft"
-                ),
+                "mode": "native_direct_write",
                 "blocker": self._draft_import_blocker(
                     self.jianying_root_path.exists()
                     and self.jianying_root_path.is_dir(),
-                    self.draft_tool_status().available,
                 ),
             },
             "status": "草稿素材包已生成，尚未写入剪映草稿箱",
@@ -256,46 +252,85 @@ class DraftWorkspace:
                 manifest_path=str(manifest_path),
             )
 
-        if not self.draft_tool_status().available:
-            result = {
-                **base_result,
-                "status": "missing_tool",
-                "draft_path": None,
-                "message": "未检测到 pyJianYingDraft/capcut_mate 等草稿工具，无法生成剪映兼容草稿。",
-            }
-            self._update_manifest_import_result(manifest_path, manifest, result)
-            return DraftImportResult(
-                package_name=str(manifest["package_name"]),
-                status="missing_tool",
-                message=str(result["message"]),
-                draft_path=None,
-                manifest_path=str(manifest_path),
-            )
+        draft_tool = self.draft_tool_status()
+        native = not self._has_custom_legacy_writer
 
-        try:
-            draft_path = self.legacy_draft_writer(package_dir, self.jianying_root_path, manifest)
-            self._sync_jianying_root_meta(draft_path, wait_seconds=3.0)
-        except Exception as exc:  # noqa: BLE001
-            result = {
-                **base_result,
-                "status": "failed",
-                "draft_path": None,
-                "message": f"旧式草稿写入失败：{exc}",
-            }
-            self._update_manifest_import_result(manifest_path, manifest, result)
-            return DraftImportResult(
-                package_name=str(manifest["package_name"]),
-                status="failed",
-                message=str(result["message"]),
-                draft_path=None,
-                manifest_path=str(manifest_path),
-            )
+        # If a custom legacy writer was injected (e.g. in tests), use it first.
+        # Otherwise use the native writer (always available, no external deps).
+        if self._has_custom_legacy_writer:
+            try:
+                draft_path = self.legacy_draft_writer(
+                    package_dir, self.jianying_root_path, manifest
+                )
+            except Exception as exc:  # noqa: BLE001
+                result = {
+                    **base_result,
+                    "status": "failed",
+                    "draft_path": None,
+                    "message": f"草稿写入失败：{exc}",
+                }
+                self._update_manifest_import_result(manifest_path, manifest, result)
+                return DraftImportResult(
+                    package_name=str(manifest["package_name"]),
+                    status="failed",
+                    message=str(result["message"]),
+                    draft_path=None,
+                    manifest_path=str(manifest_path),
+                )
+        else:
+            try:
+                draft_path = self._write_native_jianying_draft(
+                    package_dir, self.jianying_root_path, manifest
+                )
+            except Exception as native_exc:  # noqa: BLE001
+                if draft_tool.available:
+                    try:
+                        draft_path = self.legacy_draft_writer(
+                            package_dir, self.jianying_root_path, manifest
+                        )
+                    except Exception as legacy_exc:  # noqa: BLE001
+                        result = {
+                            **base_result,
+                            "status": "failed",
+                            "draft_path": None,
+                            "message": (
+                                f"原生草稿写入失败：{native_exc}；"
+                                f"旧式草稿写入也失败：{legacy_exc}"
+                            ),
+                        }
+                        self._update_manifest_import_result(manifest_path, manifest, result)
+                        return DraftImportResult(
+                            package_name=str(manifest["package_name"]),
+                            status="failed",
+                            message=str(result["message"]),
+                            draft_path=None,
+                            manifest_path=str(manifest_path),
+                        )
+                else:
+                    result = {
+                        **base_result,
+                        "status": "failed",
+                        "draft_path": None,
+                        "message": f"原生草稿写入失败：{native_exc}（pyJianYingDraft 未安装，无法回退）",
+                    }
+                    self._update_manifest_import_result(manifest_path, manifest, result)
+                    return DraftImportResult(
+                        package_name=str(manifest["package_name"]),
+                        status="failed",
+                        message=str(result["message"]),
+                        draft_path=None,
+                        manifest_path=str(manifest_path),
+                    )
+
+        self._sync_jianying_root_meta(draft_path, wait_seconds=3.0)
 
         result = {
             **base_result,
             "status": "imported",
             "draft_path": str(draft_path),
-            "message": self._import_success_message(self._jianying_10_7_detected()),
+            "message": self._import_success_message(
+                self._jianying_10_7_detected(), native=native
+            ),
         }
         self._update_manifest_import_result(manifest_path, manifest, result)
         return DraftImportResult(
@@ -318,24 +353,24 @@ class DraftWorkspace:
                 return True
         return False
 
-    def _draft_import_blocker(
-        self,
-        root_exists: bool,
-        draft_tool_available: bool,
-    ) -> str | None:
+    def _draft_import_blocker(self, root_exists: bool) -> str | None:
         if not root_exists:
             return "未发现剪映草稿根目录，请先在设置中配置 JIANYING_DRAFT_ROOT_PATH。"
-        if not draft_tool_available:
-            return "未检测到 pyJianYingDraft/capcut_mate 等草稿工具，暂时只能生成素材包。"
-        return None
+        return None  # native writer is always available, no external deps needed
 
-    def _import_success_message(self, jianying_10_7_detected: bool) -> str:
+    def _import_success_message(
+        self,
+        jianying_10_7_detected: bool,
+        *,
+        native: bool = True,
+    ) -> str:
+        method = "原生写入" if native else "copy_draft_external 桥接"
         if jianying_10_7_detected:
             return (
-                "已生成 macOS 剪映兼容草稿并放入草稿目录。剪映 10.7 会通过 "
-                "copy_draft_external 登记该草稿；如果剪映已打开，刷新草稿箱即可查看。"
+                f"已通过{method}生成剪映兼容草稿。"
+                "剪映 10.7 会自动发现该草稿；如果剪映已打开，刷新草稿箱即可查看。"
             )
-        return "已通过旧式草稿工具写入剪映草稿目录，请打开剪映验证是否可编辑。"
+        return f"已通过{method}生成剪映兼容草稿，请打开剪映验证是否可编辑。"
 
     def _resolve_package_dir(self, package_name: str | None) -> Path:
         packages = self._package_dirs()
@@ -428,6 +463,202 @@ class DraftWorkspace:
             if self._is_number(duration) and int(duration) > 0
         ]
         return min(durations) if durations else 0
+
+    def _write_native_jianying_draft(
+        self,
+        package_dir: Path,
+        draft_root: Path,
+        manifest: dict,
+    ) -> Path:
+        """Write a Jianying-compatible draft directly, without pyJianYingDraft.
+
+        Generates draft_content.json / draft_info.json natively so that
+        Jianying 10.7 can discover the draft via root_meta_info.json.
+
+        Writes to a temporary directory first, then atomically moves to the
+        target path.  If anything fails the temp directory is cleaned up
+        automatically — no partial draft is left behind.
+        """
+        video_path = Path(manifest["video"]["path"])
+        draft_name = str(manifest["package_name"])
+        draft_root.mkdir(parents=True, exist_ok=True)
+        target_path = draft_root / draft_name
+        if target_path.exists():
+            raise FileExistsError(f"draft already exists: {target_path}")
+
+        duration_us = self._video_duration_microseconds(video_path) or 0
+        duration = max(1, duration_us)
+
+        material_id = str(uuid4())
+        segment_id = str(uuid4())
+        draft_id = str(uuid4())
+
+        # ── Materials ──
+        materials: dict[str, list[dict[str, object]]] = {
+            "videos": [
+                {
+                    "id": material_id,
+                    "path": str(video_path),
+                    "duration": duration,
+                    "width": 1920,
+                    "height": 1080,
+                    "type": "video",
+                }
+            ],
+            "texts": [],
+            "audios": [],
+            "effects": [],
+            "filters": [],
+            "transitions": [],
+            "stickers": [],
+        }
+
+        # ── Tracks ──
+        tracks: list[dict[str, object]] = [
+            {
+                "type": "video",
+                "segments": [
+                    {
+                        "id": segment_id,
+                        "material_id": material_id,
+                        "target_timerange": {"start": 0, "duration": duration},
+                        "source_timerange": {"start": 0, "duration": duration},
+                        "speed": 1.0,
+                        "volume": 1.0,
+                        "extra_name": "",
+                        "extra_type": "",
+                        "group_id": "",
+                        "render": None,
+                    }
+                ],
+            }
+        ]
+
+        # ── Subtitle track ──
+        subtitle_path = (
+            Path(manifest["artifacts"]["subtitle_path"])
+            if isinstance(manifest.get("artifacts", {}).get("subtitle_path"), str)
+            and Path(str(manifest["artifacts"]["subtitle_path"])).exists()
+            else None
+        )
+        if subtitle_path is not None:
+            subtitle_segments, text_materials = self._srt_to_jianying_segments(
+                subtitle_path
+            )
+            if subtitle_segments:
+                tracks.append(
+                    {
+                        "type": "subtitle",
+                        "segments": subtitle_segments,
+                    }
+                )
+                materials["texts"].extend(text_materials)
+
+        # ── Draft content ──
+        content = {
+            "platform": {
+                "app_id": 3704,
+                "app_source": "lv",
+                "app_version": "5.9.0",
+                "os": "mac",
+            },
+            "name": draft_name,
+            "path": str(target_path),
+            "id": draft_id,
+            "duration": duration,
+            "new_version": "1",
+            "materials": materials,
+            "tracks": tracks,
+        }
+
+        # ── Write to temp dir, then atomically move ──
+        with TemporaryDirectory(prefix="jianying_native_") as temp_dir:
+            staging = Path(temp_dir) / draft_name
+            staging.mkdir()
+
+            content_json = json.dumps(
+                content, ensure_ascii=False, separators=(",", ":")
+            )
+            (staging / "draft_content.json").write_text(
+                content_json, encoding="utf-8"
+            )
+            (staging / "draft_info.json").write_text(content_json, encoding="utf-8")
+
+            # ── Cover ──
+            cover_path = manifest.get("artifacts", {}).get("cover_path")
+            if isinstance(cover_path, str) and Path(cover_path).exists():
+                with Image.open(cover_path) as cover:
+                    cover.convert("RGB").save(
+                        staging / "draft_cover.jpg",
+                        "JPEG",
+                        quality=92,
+                    )
+
+            shutil.move(str(staging), str(target_path))
+
+        self._finalize_draft_meta_info(target_path, content)
+        return target_path
+
+    def _srt_to_jianying_segments(
+        self, srt_path: Path
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        """Parse an SRT file into Jianying subtitle segments and text materials.
+
+        Returns (segments, text_materials) where each segment references
+        its corresponding text material via ``material_id``.  This matches
+        the Jianying 10.7 draft_content.json schema.
+        """
+        text = srt_path.read_text(encoding="utf-8")
+        segments: list[dict[str, object]] = []
+        text_materials: list[dict[str, object]] = []
+        blocks = text.strip().split("\n\n")
+        for block in blocks:
+            lines = block.strip().split("\n")
+            if len(lines) < 3:
+                continue
+            try:
+                times = lines[1].split(" --> ")
+                start_ms = self._srt_time_to_ms(times[0].strip())
+                end_ms = self._srt_time_to_ms(times[1].strip())
+                content_text = "\n".join(lines[2:]).strip()
+                if content_text and end_ms > start_ms:
+                    material_id = str(uuid4())
+                    text_materials.append(
+                        {
+                            "id": material_id,
+                            "content": content_text,
+                            "style": {"font_size": 14, "alignment": 1},
+                            "type": "text",
+                        }
+                    )
+                    segments.append(
+                        {
+                            "id": str(uuid4()),
+                            "material_id": material_id,
+                            "target_timerange": {
+                                "start": start_ms,
+                                "duration": end_ms - start_ms,
+                            },
+                            "content": content_text,
+                            "style": {"font_size": 14, "alignment": 1},
+                        }
+                    )
+            except (ValueError, IndexError):
+                continue
+        return segments, text_materials
+
+    @staticmethod
+    def _srt_time_to_ms(time_str: str) -> int:
+        """Convert SRT timestamp like '00:00:04,000' to microseconds."""
+        # Handle both ',' and '.' as millisecond separator
+        clean = time_str.replace(",", ".")
+        parts = clean.split(":")
+        if len(parts) == 3:
+            hours, minutes, sec_milli = int(parts[0]), int(parts[1]), float(parts[2])
+            return int(
+                (hours * 3600 + minutes * 60 + sec_milli) * 1_000_000
+            )
+        return 0
 
     def _finalize_legacy_draft_files(self, draft_path: Path, manifest: dict) -> None:
         content_path = draft_path / "draft_content.json"

@@ -12,11 +12,15 @@ dependencies = [
     { name = "langgraph" },
     { name = "pillow" },
     { name = "pydantic" },
-    { name = "pyjianyingdraft" },
     { name = "pytest" },
     { name = "python-multipart" },
     { name = "tencentcloud-sdk-python" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+jianying = [
+    { name = "pyjianyingdraft" },
 ]
 
 [package.dev-dependencies]
@@ -31,12 +35,13 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2.2" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "pydantic", specifier = ">=2.8.0" },
-    { name = "pyjianyingdraft", specifier = ">=0.2.6" },
+    { name = "pyjianyingdraft", marker = "extra == 'jianying'", specifier = ">=0.2.6" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "tencentcloud-sdk-python", specifier = ">=3.1.103" },
     { name = "uvicorn", specifier = ">=0.30.0" },
 ]
+provides-extras = ["jianying"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pyinstaller" }]
