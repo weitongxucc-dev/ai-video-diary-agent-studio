@@ -40,8 +40,8 @@ describe("API_BASE", () => {
     expect(API_BASE).toBe("http://custom:3000");
   });
 
-  it("defaults to http://localhost:8000 when not set", async () => {
+  it("defaults to empty string when not set", async () => {
     const { API_BASE } = await import("../api");
-    expect(API_BASE).toBe("http://localhost:8000");
+    expect(API_BASE).toBe("");
   });
 });

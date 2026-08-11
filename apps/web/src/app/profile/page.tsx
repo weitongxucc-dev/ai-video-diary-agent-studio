@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PixelIcon } from "@/components/PixelIcon";
 import { Skeleton } from "@/components/Skeleton";
 import {
   getCreatorProfile,
@@ -262,7 +263,7 @@ export default function ProfilePage() {
       {/* ── Common Expressions ── */}
       <section className="profile-section">
         <h2>
-          <span aria-hidden="true">📝</span> 常用表达方式
+          <PixelIcon name="note" /> 常用表达方式
         </h2>
         <div className="profile-tags">
           {profile.common_expressions.map((expr) => (
@@ -308,7 +309,7 @@ export default function ProfilePage() {
       {/* ── Banned Words ── */}
       <section className="profile-section">
         <h2>
-          <span aria-hidden="true">🚫</span> 避免使用的词汇
+          <PixelIcon name="thumb-down" /> 避免使用的词汇
         </h2>
         <div className="profile-tags">
           {profile.banned_words.map((word) => (
@@ -354,7 +355,7 @@ export default function ProfilePage() {
       {/* ── Style Preferences ── */}
       <section className="profile-section">
         <h2>
-          <span aria-hidden="true">⚙️</span> 风格偏好
+          <PixelIcon name="settings" /> 风格偏好
         </h2>
         <div className="profile-preferences">
           <label className="profile-pref-row">
@@ -411,7 +412,7 @@ export default function ProfilePage() {
           onClick={handleLearn}
           type="button"
         >
-          {learning ? "学习中..." : "🧠 从历史学习"}
+          {learning ? "学习中..." : (<><PixelIcon name="spark" /> 从历史学习</>)}
         </button>
         <button
           className="btn btn-primary"
@@ -419,7 +420,7 @@ export default function ProfilePage() {
           onClick={handleSave}
           type="button"
         >
-          {saving ? "保存中..." : "💾 保存修改"}
+          {saving ? "保存中..." : (<><PixelIcon name="archive" /> 保存修改</>)}
         </button>
       </footer>
     </div>

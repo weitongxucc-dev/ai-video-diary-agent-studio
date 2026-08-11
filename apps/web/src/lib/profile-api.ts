@@ -1,10 +1,9 @@
+import { API_BASE } from "./api";
 import type {
   CreatorProfile,
   CreatorProfileUpdate,
   CreatorProfileLearnResult,
 } from "./types";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 async function profileRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

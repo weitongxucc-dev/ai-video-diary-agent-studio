@@ -2,7 +2,7 @@
 
 import { Mic, MicOff } from "lucide-react";
 import type { KeyboardEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PixelIcon } from "@/components/PixelIcon";
 import {
   executeVoiceCommand,
@@ -36,25 +36,35 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
   const [result, setResult] = useState<VoiceCommandResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
 
   const recorder = useVoiceRecorder();
-  const { state: recorderState, duration } = recorder;
+  const { state: recorderState, audioBlob, duration, reset: recorderReset, startRecording: recorderStart, stopRecording: recorderStop } = recorder;
   const isRecording = recorderState === "recording";
-  const isTranscribing = recorderState === "transcribing";
+  const isTranscribing = transcribing || recorderState === "transcribing";
   const recorderBusy = isRecording || isTranscribing;
 
-  // 上传转写：录音完成 → 调 transcribeVoice → 自动写入 transcript
+  // Track the last-processed blob to prevent duplicate uploads
+  const lastProcessedBlobRef = useRef<Blob | null>(null);
+
+  // Upload + transcribe: recording done → call transcribeVoice → fill transcript
   useEffect(() => {
-    if (recorderState !== "done" || !recorder.audioBlob) {
+    if (recorderState !== "done" || !audioBlob) {
       return;
     }
-    const blob = recorder.audioBlob;
+    // Guard against duplicate processing of the same blob
+    if (audioBlob === lastProcessedBlobRef.current) {
+      return;
+    }
+    lastProcessedBlobRef.current = audioBlob;
+
+    const blob = audioBlob;
     let cancelled = false;
-    setError(null);
-    setResult(null);
 
     (async () => {
-      setBusy(true);
+      setTranscribing(true);
+      setError(null);
+      setResult(null);
       try {
         const transcriptResult = await transcribeVoice(blob);
         if (cancelled) {
@@ -79,8 +89,9 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
         }
       } finally {
         if (!cancelled) {
-          setBusy(false);
-          recorder.reset();
+          setTranscribing(false);
+          lastProcessedBlobRef.current = null;
+          recorderReset();
         }
       }
     })();
@@ -88,7 +99,7 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
     return () => {
       cancelled = true;
     };
-  }, [recorder, recorderState, recorder.audioBlob]);
+  }, [recorderState, audioBlob, recorderReset]);
 
   async function currentEpisodeId(): Promise<string> {
     const episode = await getTodayEpisode();
@@ -129,11 +140,10 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
     }
     try {
       if (isRecording) {
-        await recorder.stopRecording();
-        // 上传 effect 会接手；这里不重置，由 effect 完成后 reset
+        await recorderStop();
       } else {
         setError(null);
-        await recorder.startRecording();
+        await recorderStart();
       }
     } catch (toggleError) {
       setError(
@@ -260,7 +270,7 @@ export function VoiceCommandConsole({ contextLabel = "全局工作区" }: VoiceC
             setTranscript("");
             setResult(null);
             setError(null);
-            recorder.reset();
+            recorderReset();
           }}
         >
           清空
