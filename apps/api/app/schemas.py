@@ -745,3 +745,16 @@ class SourceSyncRetryResponse(BaseModel):
     source_type: str
     status: str
     message: str
+
+
+class VoiceTranscribeSegment(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str
+    provider: str
+    segments: list[VoiceTranscribeSegment]
+    confidence: float = 0.0

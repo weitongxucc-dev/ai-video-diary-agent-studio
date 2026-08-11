@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -105,6 +105,7 @@ from app.schemas import (
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
+    VoiceTranscriptionResponse,
     WorkflowStatusResponse,
 )
 from app.services import EpisodeService
@@ -117,6 +118,7 @@ from app.topics import (
 from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
+from app.voice import transcribe_audio_bytes
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
 from app.workflow import LangGraphEpisodeWorkflow
 
@@ -1039,6 +1041,31 @@ def execute_voice_command(
         status="executed",
         result_episode=updated_episode,
         result_edit_plan=edit_plan_workspace,
+    )
+
+
+@app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def voice_transcribe(
+    audio: UploadFile = File(...),  # noqa: B008
+) -> VoiceTranscriptionResponse:
+    """Upload an audio file (webm) and transcribe via ASR pipeline."""
+    try:
+        content = await audio.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    try:
+        result = transcribe_audio_bytes(content, settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return VoiceTranscriptionResponse(
+        transcript=result["transcript"],
+        provider=result["provider"],
+        segments=result["segments"],
     )
 
 
