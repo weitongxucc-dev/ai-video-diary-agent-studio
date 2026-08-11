@@ -474,6 +474,10 @@ class DraftWorkspace:
 
         Generates draft_content.json / draft_info.json natively so that
         Jianying 10.7 can discover the draft via root_meta_info.json.
+
+        Writes to a temporary directory first, then atomically moves to the
+        target path.  If anything fails the temp directory is cleaned up
+        automatically — no partial draft is left behind.
         """
         video_path = Path(manifest["video"]["path"])
         draft_name = str(manifest["package_name"])
@@ -482,7 +486,6 @@ class DraftWorkspace:
         if target_path.exists():
             raise FileExistsError(f"draft already exists: {target_path}")
 
-        target_path.mkdir(parents=True, exist_ok=False)
         duration_us = self._video_duration_microseconds(video_path) or 0
         duration = max(1, duration_us)
 
@@ -491,7 +494,7 @@ class DraftWorkspace:
         draft_id = str(uuid4())
 
         # ── Materials ──
-        materials = {
+        materials: dict[str, list[dict[str, object]]] = {
             "videos": [
                 {
                     "id": material_id,
@@ -511,7 +514,7 @@ class DraftWorkspace:
         }
 
         # ── Tracks ──
-        tracks = [
+        tracks: list[dict[str, object]] = [
             {
                 "type": "video",
                 "segments": [
@@ -539,7 +542,9 @@ class DraftWorkspace:
             else None
         )
         if subtitle_path is not None:
-            subtitle_segments = self._srt_to_jianying_segments(subtitle_path)
+            subtitle_segments, text_materials = self._srt_to_jianying_segments(
+                subtitle_path
+            )
             if subtitle_segments:
                 tracks.append(
                     {
@@ -547,6 +552,7 @@ class DraftWorkspace:
                         "segments": subtitle_segments,
                     }
                 )
+                materials["texts"].extend(text_materials)
 
         # ── Draft content ──
         content = {
@@ -565,27 +571,46 @@ class DraftWorkspace:
             "tracks": tracks,
         }
 
-        content_json = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
-        (target_path / "draft_content.json").write_text(content_json, encoding="utf-8")
-        (target_path / "draft_info.json").write_text(content_json, encoding="utf-8")
+        # ── Write to temp dir, then atomically move ──
+        with TemporaryDirectory(prefix="jianying_native_") as temp_dir:
+            staging = Path(temp_dir) / draft_name
+            staging.mkdir()
 
-        # ── Cover ──
-        cover_path = manifest.get("artifacts", {}).get("cover_path")
-        if isinstance(cover_path, str) and Path(cover_path).exists():
-            with Image.open(cover_path) as cover:
-                cover.convert("RGB").save(
-                    target_path / "draft_cover.jpg",
-                    "JPEG",
-                    quality=92,
-                )
+            content_json = json.dumps(
+                content, ensure_ascii=False, separators=(",", ":")
+            )
+            (staging / "draft_content.json").write_text(
+                content_json, encoding="utf-8"
+            )
+            (staging / "draft_info.json").write_text(content_json, encoding="utf-8")
+
+            # ── Cover ──
+            cover_path = manifest.get("artifacts", {}).get("cover_path")
+            if isinstance(cover_path, str) and Path(cover_path).exists():
+                with Image.open(cover_path) as cover:
+                    cover.convert("RGB").save(
+                        staging / "draft_cover.jpg",
+                        "JPEG",
+                        quality=92,
+                    )
+
+            shutil.move(str(staging), str(target_path))
 
         self._finalize_draft_meta_info(target_path, content)
         return target_path
 
-    def _srt_to_jianying_segments(self, srt_path: Path) -> list[dict[str, object]]:
-        """Parse an SRT file into Jianying subtitle segments."""
+    def _srt_to_jianying_segments(
+        self, srt_path: Path
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        """Parse an SRT file into Jianying subtitle segments and text materials.
+
+        Returns (segments, text_materials) where each segment references
+        its corresponding text material via ``material_id``.  This matches
+        the Jianying 10.7 draft_content.json schema.
+        """
         text = srt_path.read_text(encoding="utf-8")
         segments: list[dict[str, object]] = []
+        text_materials: list[dict[str, object]] = []
         blocks = text.strip().split("\n\n")
         for block in blocks:
             lines = block.strip().split("\n")
@@ -597,9 +622,19 @@ class DraftWorkspace:
                 end_ms = self._srt_time_to_ms(times[1].strip())
                 content_text = "\n".join(lines[2:]).strip()
                 if content_text and end_ms > start_ms:
+                    material_id = str(uuid4())
+                    text_materials.append(
+                        {
+                            "id": material_id,
+                            "content": content_text,
+                            "style": {"font_size": 14, "alignment": 1},
+                            "type": "text",
+                        }
+                    )
                     segments.append(
                         {
                             "id": str(uuid4()),
+                            "material_id": material_id,
                             "target_timerange": {
                                 "start": start_ms,
                                 "duration": end_ms - start_ms,
@@ -610,7 +645,7 @@ class DraftWorkspace:
                     )
             except (ValueError, IndexError):
                 continue
-        return segments
+        return segments, text_materials
 
     @staticmethod
     def _srt_time_to_ms(time_str: str) -> int:
