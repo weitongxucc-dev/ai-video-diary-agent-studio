@@ -666,3 +666,17 @@ export type VoiceCommandResponse = {
   result_episode: Episode | null;
   result_edit_plan: EditPlan | null;
 };
+
+export type VoiceRecorderState = "idle" | "recording" | "transcribing" | "done";
+
+export type VoiceTranscribeSegment = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type VoiceTranscribeResult = {
+  transcript: string;
+  confidence: number;
+  segments: VoiceTranscribeSegment[];
+};
