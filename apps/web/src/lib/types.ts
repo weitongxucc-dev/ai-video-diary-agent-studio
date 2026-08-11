@@ -680,3 +680,29 @@ export type VoiceTranscribeResult = {
   confidence: number;
   segments: VoiceTranscribeSegment[];
 };
+
+// ── Creator Profile ──────────────────────────────────────────────
+
+export type CreatorProfile = {
+  id: string;
+  common_expressions: string[];
+  banned_words: string[];
+  style_preferences: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreatorProfileUpdate = {
+  common_expressions?: string[];
+  banned_words?: string[];
+  style_preferences?: Record<string, string>;
+};
+
+export type CreatorProfileLearnResult = {
+  profile: CreatorProfile;
+  summary: {
+    new_expressions: string[];
+    new_banned_words: string[];
+    style_changes: Record<string, string>;
+  };
+};
