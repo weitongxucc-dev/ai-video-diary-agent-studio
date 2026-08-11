@@ -10,10 +10,12 @@ const { autoUpdater } = require('electron-updater');
 let mainWindow = null;
 let apiProcess = null;
 let nextProcess = null;
+let workerProcess = null;
 let apiPort = 0;
 let nextPort = 0;
 let apiStopping = false;
 let nextStopping = false;
+let workerStopping = false;
 const isDev = process.env.NODE_ENV === 'development';
 
 // ── API Process Management ─────────────────────────────
@@ -247,6 +249,84 @@ function stopNextServer() {
   }, 5000);
 }
 
+// ── Worker Process Management ──────────────────────────
+function findWorkerBinary() {
+  if (isDev) return null; // dev mode: user runs worker separately
+
+  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
+  const candidates = [
+    path.join(resourcePath, 'worker-server'),
+    path.join(__dirname, 'dist', 'worker-server'),
+  ];
+  for (const c of candidates) {
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+      return c;
+    } catch (_) { /* continue */ }
+  }
+  return null;
+}
+
+function startWorker() {
+  const binary = findWorkerBinary();
+  if (!binary) {
+    console.log('[main] Worker binary not found — automation disabled');
+    return;
+  }
+
+  // Duplicate guard: prevent two workers
+  if (workerProcess) {
+    console.log('[main] Worker already running (pid=%d) — skipping', workerProcess.pid);
+    return;
+  }
+
+  console.log('[main] Starting automation worker...');
+
+  const env = {
+    ...process.env,
+    API_PORT: String(apiPort),
+    HOST: '127.0.0.1',
+  };
+
+  workerProcess = spawn(binary, [], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  workerProcess.on('error', (err) => {
+    console.error('[main] Failed to spawn worker: %s', err.message);
+    workerProcess = null;
+  });
+
+  workerProcess.stdout.on('data', (data) => {
+    console.log('[worker] %s', data.toString().trim());
+  });
+
+  workerProcess.stderr.on('data', (data) => {
+    console.error('[worker:err] %s', data.toString().trim());
+  });
+
+  // No hidden auto-restart — surface failure in logs, let user decide
+  workerProcess.on('exit', (code, signal) => {
+    console.log('[main] Worker exited (code=%d, signal=%s) — will not auto-restart', code, signal);
+    workerProcess = null;
+  });
+}
+
+function stopWorker() {
+  if (!workerProcess || workerStopping) return;
+  workerStopping = true;
+  console.log('[main] Stopping worker (pid=%d)...', workerProcess.pid);
+  workerProcess.kill('SIGTERM');
+  const pid = workerProcess.pid;
+  setTimeout(() => {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (_) { /* already dead */ }
+    workerStopping = false;
+  }, 5000);
+}
+
 // ── IPC Handlers ───────────────────────────────────────
 function registerIpcHandlers() {
   ipcMain.handle('get-api-port', () => {
@@ -282,6 +362,13 @@ function registerIpcHandlers() {
 
   ipcMain.handle('check-for-updates', () => {
     checkForUpdates(false);
+  });
+
+  ipcMain.handle('get-worker-status', () => {
+    return {
+      running: workerProcess !== null && !workerStopping,
+      pid: workerProcess ? workerProcess.pid : null,
+    };
   });
 }
 
@@ -461,6 +548,11 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('[main] Failed to start Next.js server:', err.message);
     }
+
+    // Start automation worker after API is ready (non-blocking —
+    // worker failures are logged but do not prevent the main window)
+    startWorker();
+
     createWindow();
   }
 
@@ -472,6 +564,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  stopWorker();
   stopNextServer();
   stopApiServer();
   if (process.platform !== 'darwin') {
@@ -480,11 +573,13 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopWorker();
   stopNextServer();
   stopApiServer();
 });
 
 app.on('quit', () => {
+  stopWorker();
   stopNextServer();
   stopApiServer();
 });

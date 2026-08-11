@@ -99,6 +99,26 @@ jobs:
           fi
           echo "API binary architecture verified: $EXPECTED"
 
+      - name: Build Worker binary (PyInstaller — ${{ matrix.arch }})
+        run: |
+          cd apps/api
+          .venv/bin/pyinstaller worker.spec \
+            --distpath ../desktop/dist \
+            --workpath ../desktop/build-worker \
+            --clean --noconfirm
+
+      - name: Verify Worker binary architecture
+        run: |
+          WORKER_BIN=apps/desktop/dist/worker-server
+          echo "Worker binary info:"
+          file "$WORKER_BIN"
+          EXPECTED="${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
+          if ! file "$WORKER_BIN" | grep -q "$EXPECTED"; then
+            echo "::error::Worker binary architecture mismatch: expected $EXPECTED"
+            exit 1
+          fi
+          echo "Worker binary architecture verified: $EXPECTED"
+
       # ── Package (no publish) ─────────────────────────────────
 
       - name: Package macOS app (${{ matrix.arch }})
