@@ -228,7 +228,8 @@ export default async function HistoryPage({
                         {item.draft_package_path ? (
                           <Link
                             className="pixel-button secondary"
-                            href="/draft"
+                            href={`/draft?episode=${encodeURIComponent(item.id)}`}
+                            title={`第 ${item.day_number} 天 · ${item.topic_title ?? "未填写选题"}`}
                           >
                             查看素材包
                           </Link>
@@ -238,7 +239,8 @@ export default async function HistoryPage({
                         {item.video_dedup_report_path ? (
                           <Link
                             className="pixel-button secondary"
-                            href="/video"
+                            href={`/video?episode=${encodeURIComponent(item.id)}`}
+                            title={`第 ${item.day_number} 天 · ${item.topic_title ?? "未填写选题"}`}
                           >
                             查看重录报告
                           </Link>

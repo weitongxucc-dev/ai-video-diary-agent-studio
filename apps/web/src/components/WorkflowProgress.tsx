@@ -114,6 +114,7 @@ export function WorkflowProgress() {
   const pathname = usePathname();
   const [episode, setEpisode] = useState<Episode | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +129,7 @@ export function WorkflowProgress() {
         if (!cancelled) {
           setEpisode(null);
           setLoaded(true);
+          setLoadError(true);
         }
       }
     }
@@ -149,7 +151,9 @@ export function WorkflowProgress() {
           {loaded
             ? episode
               ? `已完成 ${completedCount}/${WORKFLOW_STEPS.length}`
-              : "今日 Episode 待创建"
+              : loadError
+                ? "API 连接失败"
+                : "今日 Episode 待创建"
             : "正在加载..."}
         </span>
       </header>

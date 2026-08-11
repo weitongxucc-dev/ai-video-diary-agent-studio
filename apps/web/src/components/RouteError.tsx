@@ -25,9 +25,6 @@ export function sanitizeMessage(raw: string | undefined): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.length > 240) {
-    return null;
-  }
   if (STACK_LINE_PATTERN.test(trimmed)) {
     return null;
   }
@@ -36,6 +33,9 @@ export function sanitizeMessage(raw: string | undefined): string | null {
   }
   if (SECRET_PATTERN.test(trimmed)) {
     return null;
+  }
+  if (trimmed.length > 240) {
+    return trimmed.slice(0, 237) + "...";
   }
   return trimmed;
 }

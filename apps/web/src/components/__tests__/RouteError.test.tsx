@@ -32,9 +32,22 @@ describe("sanitizeMessage", () => {
     expect(sanitizeMessage("   ")).toBeNull();
   });
 
-  it("returns null for messages longer than 240 characters", () => {
+  it("truncates messages longer than 240 characters", () => {
     const long = "x".repeat(241);
-    expect(sanitizeMessage(long)).toBeNull();
+    const result = sanitizeMessage(long);
+    expect(result).not.toBeNull();
+    expect(result).toBe("x".repeat(237) + "...");
+  });
+
+  it("returns null for long messages containing sensitive patterns (filter before truncate)", () => {
+    const longSecret = "x".repeat(200) + " api_key=sk-abc123 " + "y".repeat(50);
+    expect(sanitizeMessage(longSecret)).toBeNull();
+
+    const longPath = "/home/user/" + "x".repeat(230) + "/secret.txt";
+    expect(sanitizeMessage(longPath)).toBeNull();
+
+    const longStack = "Error: boom\n" + "x".repeat(230) + "\n  at Object.<anonymous>";
+    expect(sanitizeMessage(longStack)).toBeNull();
   });
 
   it("returns trimmed message for valid input", () => {
