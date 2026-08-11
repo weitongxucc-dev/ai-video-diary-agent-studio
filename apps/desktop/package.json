@@ -59,6 +59,12 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "electron-updater": "^6.3.0"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "weitongxucc-dev",
+    "repo": "ai-video-diary-agent-studio"
   }
 }
