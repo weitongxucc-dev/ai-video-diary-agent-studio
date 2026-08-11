@@ -33,6 +33,7 @@ import type {
   TopicEvidenceList,
   VideoProductionMode,
   VoiceCommandResponse,
+  VoiceTranscribeResult,
   WorkflowStatus,
 } from "./types";
 
@@ -540,4 +541,62 @@ export function revertFeedbackEvent(
       reason: reason ?? null,
     }),
   });
+}
+
+export async function transcribeVoice(
+  audioBlob: Blob,
+  options: { episodeId?: string; filename?: string } = {},
+): Promise<VoiceTranscribeResult> {
+  if (!(audioBlob instanceof Blob)) {
+    throw new Error("transcribeVoice: 需要传入 Blob 音频数据");
+  }
+  const formData = new FormData();
+  const filename =
+    options.filename ??
+    (audioBlob.type.includes("webm")
+      ? "voice-command.webm"
+      : audioBlob.type.includes("ogg")
+        ? "voice-command.ogg"
+        : audioBlob.type.includes("mp4")
+          ? "voice-command.m4a"
+          : "voice-command.bin");
+  formData.append("audio", audioBlob, filename);
+  if (options.episodeId) {
+    formData.append("episode_id", options.episodeId);
+  }
+
+  const response = await fetch(`${API_BASE}/api/voice/transcribe`, {
+    method: "POST",
+    body: formData,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as Partial<VoiceTranscribeResult>;
+  return {
+    transcript: typeof payload.transcript === "string" ? payload.transcript : "",
+    confidence:
+      typeof payload.confidence === "number" && Number.isFinite(payload.confidence)
+        ? payload.confidence
+        : 0,
+    segments: Array.isArray(payload.segments)
+      ? payload.segments
+          .map((segment) => {
+            if (!segment || typeof segment !== "object") {
+              return null;
+            }
+            const s = segment as { start?: unknown; end?: unknown; text?: unknown };
+            return {
+              start: typeof s.start === "number" ? s.start : 0,
+              end: typeof s.end === "number" ? s.end : 0,
+              text: typeof s.text === "string" ? s.text : "",
+            };
+          })
+          .filter((segment): segment is NonNullable<typeof segment> => segment !== null)
+      : [],
+  };
 }

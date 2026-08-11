@@ -17,7 +17,7 @@ export type RouteErrorProps = {
   detail?: string;
 };
 
-function sanitizeMessage(raw: string | undefined): string | null {
+export function sanitizeMessage(raw: string | undefined): string | null {
   if (!raw) {
     return null;
   }

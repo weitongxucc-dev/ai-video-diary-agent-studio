@@ -6407,9 +6407,10 @@ select:user-invalid:focus {
 
 .voice-command-line {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   min-width: 0;
+  gap: 6px;
   border: 2px solid var(--border-strong);
   background: #fffdf0;
   padding: 6px 8px;
@@ -6439,6 +6440,77 @@ select:user-invalid:focus {
 
 .voice-command-line input::placeholder {
   color: var(--muted);
+}
+
+.voice-command-mic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 26px;
+  padding: 0 6px;
+  border: 2px solid var(--border-strong);
+  background: #d8d4c8;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #7f7f7f;
+}
+
+.voice-command-mic:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.voice-command-mic:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.voice-command-mic svg {
+  width: 14px;
+  height: 14px;
+}
+
+.voice-command-mic.recording {
+  color: #ffffff;
+  background: var(--accent-red, #c34a4a);
+  animation: voice-command-mic-pulse 1s ease-in-out infinite;
+}
+
+.voice-command-mic.transcribing {
+  color: var(--muted);
+  background: #c8c4b8;
+}
+
+.voice-command-mic-timer {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+@keyframes voice-command-mic-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 1px 1px 0 #ffffff,
+      inset -1px -1px 0 #7f7f7f,
+      0 0 0 0 rgba(195, 74, 74, 0.5);
+  }
+  50% {
+    box-shadow:
+      inset 1px 1px 0 #ffffff,
+      inset -1px -1px 0 #7f7f7f,
+      0 0 0 6px rgba(195, 74, 74, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-command-mic.recording {
+    animation: none;
+  }
 }
 
 .voice-command-preview {
