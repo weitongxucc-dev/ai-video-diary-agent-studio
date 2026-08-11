@@ -36,6 +36,11 @@ Current build delivers:
 - Root-level visual guide: `WINDOWS_PIXEL_UI_GUIDE.md`
 - Agent prompt and content intelligence upgrade guide: `docs/ai-video-diary-agent-prompt-strategy.md`
 - UI contract checks that reject terminal-style black/green palettes, gradients, large radii, emoji icons, and missing 2.0 edit-plan entry points
+- Episode list and history browser at `/history` with status filtering, publish metrics, and platform tracking
+- Creator profile at `/profile` with learnable common expressions, banned words, and style preferences
+- Source file lifecycle tracking (pending → processing → processed → archived) with archive/unarchive support
+- Production chain visualization: 10-stage pipeline from source clips through Jianying import, with per-stage status
+- 2.0 beta acceptance pack: `docs/ai-video-diary-2.0-beta-acceptance-pack.md`
 
 Not yet implemented:
 
@@ -43,7 +48,9 @@ Not yet implemented:
 - Native watchdog event listener; current worker uses stable polling
 - COS/URL mode for Tencent ASR files larger than the local direct-upload limit
 - Real microphone capture; the current command console executes typed text or already-transcribed voice text
-- macOS desktop shell and DMG packaging
+- macOS code signing and notarization; DMG is built by CI but requires right-click → Open on first launch
+- Desktop menu bar dynamic Agent status indicator, system notifications, and global shortcuts
+- Jianying template effects beyond title cards, subtitles, and covers (keyword highlights, BGM, transitions, intro/outro)
 
 ## Local Configuration
 
@@ -133,14 +140,47 @@ pnpm --dir apps/web lint
 
 Visit:
 
-- http://localhost:3000
-- http://localhost:3000/templates
-- http://localhost:3000/topics
-- http://localhost:3000/script
-- http://localhost:3000/video
-- http://localhost:3000/edit-plan
-- http://localhost:3000/draft
-- http://localhost:3000/health
-- http://localhost:3000/settings
+- http://localhost:3000 — 今日工作台
+- http://localhost:3000/welcome — 首次配置向导
+- http://localhost:3000/templates — 内容模板（视频日记 / AI 工具测评 / 教程演示）
+- http://localhost:3000/topics — 选题池
+- http://localhost:3000/script — 口播稿编辑
+- http://localhost:3000/video — 视频处理
+- http://localhost:3000/edit-plan — 剪辑计划台
+- http://localhost:3000/draft — 剪映草稿与发布面板
+- http://localhost:3000/history — Episode 历史
+- http://localhost:3000/learning — 反馈学习与偏好记忆
+- http://localhost:3000/profile — Creator Profile
+- http://localhost:3000/sources — 信息源管理
+- http://localhost:3000/knowledge — 知识库浏览
+- http://localhost:3000/health — 运行健康
+- http://localhost:3000/settings — 运行时设置
 
 The UI should follow `WINDOWS_PIXEL_UI_GUIDE.md`: classic Windows 95/98 pixel desktop software, not a generic SaaS dashboard, terminal console, or decorative retro skin.
+
+## Episode State Machine
+
+Episodes flow through 11 states:
+
+```
+CREATED → SOURCES_INGESTING → TOPICS_READY → TOPIC_APPROVED
+→ SCRIPT_READY → SCRIPT_APPROVED → WAITING_VIDEO
+→ VIDEO_PROCESSING → DRAFT_READY → PUBLISHED
+                                               ↘ FAILED (any stage)
+```
+
+Four intake modes determine how video enters the pipeline:
+
+- `planned_single` — one recorded video for an approved topic+script
+- `planned_batch` — multiple clips merged and processed together
+- `ad_hoc_single` — single spontaneous video; skips topic/script
+- `ad_hoc_batch` — multiple spontaneous clips; skips topic/script
+
+## Desktop Shell
+
+An Electron-based macOS desktop shell lives in the `coordinator` repository
+(`coordinator/apps/desktop/`). It manages the API/Worker/Next.js lifecycle,
+provides native menus (open video dir, open vault), and builds to DMG via
+electron-builder. GitHub Actions CI produces arm64 + x64 DMG artifacts on
+tagged releases. Code signing is documented in `RELEASE.md` but not yet
+configured — first-time users must right-click → Open to bypass Gatekeeper.
