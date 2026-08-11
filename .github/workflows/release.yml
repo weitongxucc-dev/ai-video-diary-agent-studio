@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Runtimes ─────────────────────────────────────────────
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      # ── Version guard ────────────────────────────────────────
+
+      - name: Verify tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match apps/desktop/package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Releasing version $PKG_VERSION"
+
+      # ── Build ────────────────────────────────────────────────
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web frontend (Next.js standalone)
+        run: pnpm --dir apps/web build
+
+      - name: Build API binary (PyInstaller)
+        run: |
+          cd apps/api
+          uv sync --group dev
+          .venv/bin/pyinstaller pyinstaller.spec \
+            --distpath ../desktop/dist \
+            --workpath ../desktop/build-api \
+            --clean --noconfirm
+
+      # ── Package & Release ────────────────────────────────────
+
+      - name: Package and publish macOS app
+        run: |
+          cd apps/desktop
+          npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
