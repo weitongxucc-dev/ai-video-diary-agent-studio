@@ -979,3 +979,160 @@ def test_draft_content_json_includes_template_metadata_on_manifest(tmp_path):
     template_tracks = jy_import.get("template_tracks", [])
     assert "title_card:video_diary" in template_tracks
     assert "chapter_labels" in template_tracks
+    # With no default_feedback_dimensions, keyword emphasis is absent
+    assert "keyword_emphasis:none" in template_tracks
+
+
+# ── Keyword emphasis ────────────────────────────────────────────────────
+
+def test_keyword_emphasis_added_from_template_dimensions(tmp_path):
+    """Keywords derived from content_template.default_feedback_dimensions
+    produce a styled text track."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "keyword_test",
+        "video": {"path": str(video_output / "talk.mp4")},
+        "content_template": {
+            "template_id": "video_diary",
+            "name": "视频日记",
+            "default_feedback_dimensions": ["真实感", "开头速度", "观点清晰度", "行动建议"],
+        },
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    text_tracks = [t for t in content["tracks"] if t["type"] == "text"]
+
+    # Should have at least one text track with keyword segments
+    all_segment_contents = []
+    for track in text_tracks:
+        for seg in track["segments"]:
+            all_segment_contents.append(seg.get("content", ""))
+
+    assert "真实感" in all_segment_contents
+    assert "观点清晰度" in all_segment_contents
+    assert "keyword_emphasis" in workspace._last_template_tracks_meta
+
+    # Keyword segments should use accent colour
+    keyword_track = text_tracks[-1]  # last text track
+    assert keyword_track["segments"][0]["style"]["color"] == "#FF6B35"
+
+
+def test_keyword_emphasis_caps_at_four_keywords(tmp_path):
+    """Only the first 4 dimension labels become keywords."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "keyword_cap_test",
+        "video": {"path": str(video_output / "talk.mp4")},
+        "content_template": {
+            "template_id": "video_diary",
+            "name": "视频日记",
+            "default_feedback_dimensions": ["K1", "K2", "K3", "K4", "K5", "K6"],
+        },
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    draft_path = workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    content = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+    # Last text track is keyword emphasis — should have exactly 4 segments
+    text_tracks = [t for t in content["tracks"] if t["type"] == "text"]
+    keyword_segments = [s for t in text_tracks for s in t["segments"]
+                        if s.get("style", {}).get("color") == "#FF6B35"]
+    assert len(keyword_segments) == 4
+
+
+def test_keyword_emphasis_none_when_no_dimensions(tmp_path):
+    """Explicit absence recorded when template has no dimensions."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "no_keywords",
+        "video": {"path": str(video_output / "talk.mp4")},
+        "content_template": {
+            "template_id": "video_diary",
+            "name": "视频日记",
+            # No default_feedback_dimensions
+        },
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    assert "keyword_emphasis:none" in workspace._last_template_tracks_meta
+
+
+def test_keyword_emphasis_none_when_no_template(tmp_path):
+    """Explicit absence recorded when no template at all."""
+    video_output = tmp_path / "processed"
+    jianying_root = tmp_path / "com.lveditor.draft"
+    video_output.mkdir()
+    jianying_root.mkdir()
+    (video_output / "talk.mp4").write_bytes(b"video")
+
+    manifest = {
+        "package_name": "no_template",
+        "video": {"path": str(video_output / "talk.mp4")},
+    }
+
+    workspace = DraftWorkspace(Settings(jianying_draft_root_path=str(jianying_root)))
+    workspace._write_native_jianying_draft(
+        tmp_path / "pkg", jianying_root, manifest
+    )
+
+    assert "keyword_emphasis:none" in workspace._last_template_tracks_meta
+
+
+def test_safe_keywords_sanitises_inputs():
+    """_safe_keywords strips whitespace, truncates, skips empty and non-string."""
+    workspace = DraftWorkspace(Settings())
+
+    # Happy path
+    assert workspace._safe_keywords({
+        "default_feedback_dimensions": ["真实感", "开头速度"]
+    }) == ["真实感", "开头速度"]
+
+    # Whitespace-only skipped
+    assert workspace._safe_keywords({
+        "default_feedback_dimensions": ["   ", "OK"]
+    }) == ["OK"]
+
+    # Truncate to 20 chars
+    long_kw = "A" * 30
+    result = workspace._safe_keywords({
+        "default_feedback_dimensions": [long_kw]
+    })
+    assert result == ["A" * 20]
+
+    # Non-string items skipped
+    assert workspace._safe_keywords({
+        "default_feedback_dimensions": ["A", 123, None, "B"]
+    }) == ["A", "B"]
+
+    # None template → empty
+    assert workspace._safe_keywords(None) == []
+
+    # Missing key → empty
+    assert workspace._safe_keywords({"name": "test"}) == []

@@ -675,6 +675,42 @@ class DraftWorkspace:
                 tracks.append({"type": "text", "segments": chapter_segments})
                 meta.append("chapter_labels")
 
+        # ── Keyword emphasis (derived from template default_feedback_dimensions) ──
+        keyword_labels = self._safe_keywords(template)
+        if keyword_labels:
+            keyword_segments: list[dict[str, object]] = []
+            safe_duration = max(1, duration_us)
+            pad_us = min(500_000, safe_duration // 4)
+            body_us = max(1, safe_duration - pad_us * 2)
+            spacing = body_us // len(keyword_labels) if keyword_labels else 0
+            for i, kw in enumerate(keyword_labels):
+                start_us = pad_us + spacing * i
+                if start_us >= safe_duration:
+                    break
+                seg_dur = min(1_500_000, safe_duration - start_us)
+                if seg_dur <= 0:
+                    continue
+                mat_id = str(uuid4())
+                materials["texts"].append({
+                    "id": mat_id,
+                    "content": kw,
+                    "style": {"font_size": 36, "alignment": 1, "color": "#FF6B35"},
+                    "type": "text",
+                })
+                keyword_segments.append({
+                    "id": str(uuid4()),
+                    "material_id": mat_id,
+                    "target_timerange": {"start": start_us, "duration": seg_dur},
+                    "content": kw,
+                    "style": {"font_size": 36, "alignment": 1, "color": "#FF6B35"},
+                })
+            if keyword_segments:
+                tracks.append({"type": "text", "segments": keyword_segments})
+                meta.append("keyword_emphasis")
+        else:
+            # Explicit absence when no safe keywords exist
+            meta.append("keyword_emphasis:none")
+
         # ── Background music (only when a validated local asset is configured) ──
         music_path_str = self._background_music_path
         if music_path_str:
@@ -699,6 +735,33 @@ class DraftWorkspace:
                 meta.append("background_music")
 
         self._last_template_tracks_meta = meta
+
+    @staticmethod
+    def _safe_keywords(
+        template: dict[str, object] | None,
+    ) -> list[str]:
+        """Derive sanitised keyword emphasis labels from template metadata.
+
+        Returns up to 4 non-empty strings ≤20 chars each, or an empty list
+        when no safe keywords exist.  Never invents or fabricates words.
+        """
+        if not isinstance(template, dict):
+            return []
+        raw: object = template.get("default_feedback_dimensions")
+        if not isinstance(raw, list):
+            return []
+        cleaned: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            kw = item.strip()
+            if not kw:
+                continue
+            kw = kw[:20]  # truncate to safe length
+            cleaned.append(kw)
+            if len(cleaned) >= 4:
+                break
+        return cleaned
 
     def _srt_to_jianying_segments(
         self, srt_path: Path
