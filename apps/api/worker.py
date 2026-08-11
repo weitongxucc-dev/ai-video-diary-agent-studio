@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Entry point for the automation worker packaged with PyInstaller.
 
 Run with::
