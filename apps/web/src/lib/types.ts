@@ -706,3 +706,32 @@ export type CreatorProfileLearnResult = {
     style_changes: Record<string, string>;
   };
 };
+
+export type TemplateTrackKind =
+  | "title_card"
+  | "chapter_labels"
+  | "keyword_emphasis"
+  | "background_music";
+
+export type TemplateTrackAvailability = "available" | "absent" | "unknown";
+
+export type TemplateTrackEntry = {
+  kind: TemplateTrackKind;
+  label: string;
+  description: string;
+  availability: TemplateTrackAvailability;
+  detail: string;
+  impact: string;
+  fixHref?: string;
+};
+
+export type TemplateTrackSnapshot = {
+  source: "episode+settings" | "episode" | "settings" | "package" | "none";
+  tracks: TemplateTrackEntry[];
+  readyCount: number;
+  totalCount: number;
+  lastPackageImportedAt: string | null;
+  contentTemplateId: string | null;
+  backgroundMusicConfigured: boolean;
+};
+

@@ -8,27 +8,41 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getDraftStatus, getTodayEpisode } from "@/lib/api";
-import type { DraftStatus, Episode } from "@/lib/types";
+import { TemplateTracksPanel } from "@/components/TemplateTracksPanel";
+import { getDraftStatus, getRuntimeSettings, getTodayEpisode } from "@/lib/api";
+import type { DraftAsset, DraftStatus, Episode, RuntimeSettings } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 type DraftLoadState = {
   draft: DraftStatus | null;
   episode: Episode | null;
+  settings: RuntimeSettings | null;
   offline: boolean;
 };
 
 async function loadDraftState(): Promise<DraftLoadState> {
   try {
-    const [draft, episode] = await Promise.all([
+    const [draft, episode, settings] = await Promise.all([
       getDraftStatus(),
       getTodayEpisode().catch(() => null),
+      getRuntimeSettings().catch(() => null),
     ]);
-    return { draft, episode, offline: false };
+    return { draft, episode, settings, offline: false };
   } catch {
-    return { draft: null, episode: null, offline: true };
+    return { draft: null, episode: null, settings: null, offline: true };
   }
+}
+
+function pickLatestPackage(draft: DraftStatus | null): DraftAsset | null {
+  if (!draft) {
+    return null;
+  }
+  const imported = draft.packages.filter((pkg) => pkg.import_status === "imported");
+  if (imported.length > 0) {
+    return imported[0] ?? null;
+  }
+  return draft.packages[0] ?? null;
 }
 
 function formatDate(value: string): string {
@@ -86,7 +100,7 @@ const PUBLISH_PLATFORMS = [
 ];
 
 export default async function DraftPage() {
-  const { draft, episode, offline } = await loadDraftState();
+  const { draft, episode, settings, offline } = await loadDraftState();
   const env = draft?.environment;
   const toolAvailable = env?.draft_tool.available ?? false;
   const bridgeReady = env?.editable_draft_supported ?? false;
@@ -259,6 +273,14 @@ export default async function DraftPage() {
                 </div>
               ) : null}
             </section>
+          ) : null}
+
+          {!offline ? (
+            <TemplateTracksPanel
+              episode={episode}
+              latestPackage={pickLatestPackage(draft)}
+              settings={settings}
+            />
           ) : null}
 
           <div className="workspace-list">

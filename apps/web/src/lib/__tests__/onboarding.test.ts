@@ -133,6 +133,53 @@ describe("buildOnboardingSnapshot", () => {
     expect(asr?.secretSummary).not.toContain("secret-value");
   });
 
+  it("reports draft_output as ready when DRAFT_OUTPUT_PATH is configured (no longer hardcoded missing)", () => {
+    const snapshot = buildOnboardingSnapshot({
+      setup: null,
+      setupError: "is_setup down",
+      health: null,
+      healthError: "down",
+      settings: {
+        settings: [
+          { name: "DRAFT_OUTPUT_PATH", configured: true, value: "/Users/me/Drafts", secret: false },
+          { name: "JIANYING_DRAFT_ROOT_PATH", configured: true, value: "/Users/me/Jianying", secret: false },
+        ],
+        status: makeSystemStatus(),
+      } as RuntimeSettings,
+      settingsError: null,
+      status: makeSystemStatus(),
+      statusError: null,
+    });
+    const entry = snapshot.sections
+      .flatMap((s) => s.entries)
+      .find((e) => e.id === "draft_output");
+    expect(entry?.state).toBe("ready");
+    expect(entry?.secretSummary).toContain("已配置");
+  });
+
+  it("reports draft_output as attention when only DRAFT_OUTPUT_PATH is configured", () => {
+    const snapshot = buildOnboardingSnapshot({
+      setup: null,
+      setupError: "down",
+      health: null,
+      healthError: "down",
+      settings: {
+        settings: [
+          { name: "DRAFT_OUTPUT_PATH", configured: true, value: "/Users/me/Drafts", secret: false },
+          { name: "JIANYING_DRAFT_ROOT_PATH", configured: false, value: null, secret: false },
+        ],
+        status: makeSystemStatus(),
+      } as RuntimeSettings,
+      settingsError: null,
+      status: makeSystemStatus(),
+      statusError: null,
+    });
+    const entry = snapshot.sections
+      .flatMap((s) => s.entries)
+      .find((e) => e.id === "draft_output");
+    expect(entry?.state).toBe("attention");
+  });
+
   it("flags missing entries as blocking and never includes secret values", () => {
     const snapshot = buildOnboardingSnapshot({
       setup: null,
