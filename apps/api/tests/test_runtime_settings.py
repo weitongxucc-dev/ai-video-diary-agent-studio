@@ -112,3 +112,57 @@ def test_runtime_settings_response_includes_bgm_path_when_unconfigured(tmp_path,
     assert bgm_entry is not None
     assert bgm_entry["configured"] is False
     assert bgm_entry["value"] is None
+
+
+def test_runtime_settings_endpoint_persists_and_returns_bgm_path(tmp_path, monkeypatch):
+    """POST /api/settings/runtime accepts draft_background_music_path,
+    persists it to the runtime env file, and returns it in the response."""
+    from app import config as config_module
+
+    env_path = tmp_path / ".env"
+
+    # Make the config module use our temp env file for both read and write
+    monkeypatch.setattr(main_module, "runtime_env_path", env_path)
+    monkeypatch.setattr(config_module, "_resolve_dotenv_path", lambda: env_path)
+
+    client = TestClient(main_module.app, client=("127.0.0.1", 50000))
+
+    response = client.post(
+        "/api/settings/runtime",
+        json={"draft_background_music_path": "/Users/test/bgm.mp3"},
+    )
+    assert response.status_code == 200
+
+    # Response includes the field
+    data = response.json()
+    settings_entries = data["settings"]
+    bgm_entry = next(
+        (s for s in settings_entries if s["name"] == "DRAFT_BACKGROUND_MUSIC_PATH"),
+        None,
+    )
+    assert bgm_entry is not None
+    assert bgm_entry["configured"] is True
+    assert bgm_entry["value"] == "/Users/test/bgm.mp3"
+    assert bgm_entry["secret"] is False
+
+    # env file was written with the correct key
+    assert env_path.exists()
+    env_content = env_path.read_text()
+    assert "DRAFT_BACKGROUND_MUSIC_PATH=/Users/test/bgm.mp3" in env_content
+
+
+def test_runtime_settings_bgm_path_rejected_for_non_local_client(tmp_path, monkeypatch):
+    """POST /api/settings/runtime rejects non-local client even with BGM path."""
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(main_module, "runtime_env_path", env_path)
+
+    remote_client = TestClient(
+        main_module.app,
+        client=("203.0.113.10", 50000),
+    )
+    response = remote_client.post(
+        "/api/settings/runtime",
+        json={"draft_background_music_path": "/tmp/should_not_persist.mp3"},
+    )
+    assert response.status_code == 403
+    assert not env_path.exists()
