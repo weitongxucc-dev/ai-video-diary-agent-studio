@@ -734,4 +734,3 @@ export type TemplateTrackSnapshot = {
   contentTemplateId: string | null;
   backgroundMusicConfigured: boolean;
 };
-
