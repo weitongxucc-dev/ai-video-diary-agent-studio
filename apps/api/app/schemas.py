@@ -490,6 +490,7 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     draft_output_path: str | None = None
     jianying_draft_root_path: str | None = None
     database_path: str | None = None
+    draft_background_music_path: str | None = None
     topic_source_urls: list[str] | None = None
 
 
@@ -507,6 +508,7 @@ class DraftAssetResponse(BaseModel):
     import_status: str | None = None
     import_message: str | None = None
     draft_path: str | None = None
+    template_tracks: list[str] | None = None
 
 
 class DraftEnvironmentResponse(BaseModel):

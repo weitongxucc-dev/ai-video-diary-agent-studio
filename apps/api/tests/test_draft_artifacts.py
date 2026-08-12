@@ -1136,3 +1136,141 @@ def test_safe_keywords_sanitises_inputs():
 
     # Missing key → empty
     assert workspace._safe_keywords({"name": "test"}) == []
+
+
+# ── Template tracks in DraftAsset / manifest ────────────────────────────
+
+
+def test_package_asset_includes_template_tracks_from_manifest(tmp_path):
+    """DraftAsset.template_tracks is populated from manifest jianying_import."""
+    from app.config import Settings
+    from app.drafts import DraftWorkspace
+
+    pkg_dir = tmp_path / "test_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "video.mp4").write_text("video")
+    manifest = {
+        "package_name": "test_pkg",
+        "video": {"path": str(pkg_dir / "video.mp4")},
+        "jianying_import": {
+            "status": "imported",
+            "draft_path": "/tmp/draft",
+            "template_tracks": ["title_card:video_diary", "chapter_labels", "keyword_emphasis"],
+        },
+    }
+    (pkg_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    workspace = DraftWorkspace(Settings(
+        draft_output_path=str(tmp_path),
+        database_path=str(tmp_path / "db.sqlite"),
+    ))
+
+    asset = workspace._package_asset_from_path(pkg_dir)
+    assert asset.template_tracks == ["title_card:video_diary", "chapter_labels", "keyword_emphasis"]
+
+
+def test_package_asset_template_tracks_none_when_no_manifest(tmp_path):
+    """DraftAsset.template_tracks is None when no manifest exists."""
+    from app.config import Settings
+    from app.drafts import DraftWorkspace
+
+    pkg_dir = tmp_path / "test_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "video.mp4").write_text("video")
+
+    workspace = DraftWorkspace(Settings(
+        draft_output_path=str(tmp_path),
+        database_path=str(tmp_path / "db.sqlite"),
+    ))
+
+    asset = workspace._package_asset_from_path(pkg_dir)
+    assert asset.template_tracks is None
+
+
+def test_package_asset_template_tracks_none_when_no_jianying_import(tmp_path):
+    """DraftAsset.template_tracks is None for old packages without jianying_import."""
+    from app.config import Settings
+    from app.drafts import DraftWorkspace
+
+    pkg_dir = tmp_path / "test_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "video.mp4").write_text("video")
+    manifest = {
+        "package_name": "test_pkg",
+        "video": {"path": str(pkg_dir / "video.mp4")},
+        "status": "ready",
+    }
+    (pkg_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    workspace = DraftWorkspace(Settings(
+        draft_output_path=str(tmp_path),
+        database_path=str(tmp_path / "db.sqlite"),
+    ))
+
+    asset = workspace._package_asset_from_path(pkg_dir)
+    assert asset.template_tracks is None
+
+
+def test_package_asset_template_tracks_none_when_missing_key(tmp_path):
+    """DraftAsset.template_tracks is None when jianying_import has no template_tracks."""
+    from app.config import Settings
+    from app.drafts import DraftWorkspace
+
+    pkg_dir = tmp_path / "test_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "video.mp4").write_text("video")
+    manifest = {
+        "package_name": "test_pkg",
+        "video": {"path": str(pkg_dir / "video.mp4")},
+        "jianying_import": {
+            "status": "imported",
+            "draft_path": "/tmp/draft",
+        },
+    }
+    (pkg_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    workspace = DraftWorkspace(Settings(
+        draft_output_path=str(tmp_path),
+        database_path=str(tmp_path / "db.sqlite"),
+    ))
+
+    asset = workspace._package_asset_from_path(pkg_dir)
+    assert asset.template_tracks is None
+
+
+def test_safe_template_tracks_from_manifest_unit():
+    """_safe_template_tracks_from_manifest returns list or None safely."""
+    from app.drafts import _safe_template_tracks_from_manifest
+
+    # Happy path
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": {"template_tracks": ["a", "b"]}
+    }) == ["a", "b"]
+
+    # Empty list → None
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": {"template_tracks": []}
+    }) is None
+
+    # Non-list value → None
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": {"template_tracks": "not_a_list"}
+    }) is None
+
+    # Missing key → None
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": {}
+    }) is None
+
+    # No jianying_import → None
+    assert _safe_template_tracks_from_manifest({}) is None
+
+    # jianying_import is not a dict → None
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": ["list"]
+    }) is None
+
+    # Filters non-string items
+    assert _safe_template_tracks_from_manifest({
+        "jianying_import": {"template_tracks": ["ok", 123, "ok2", None]}
+    }) == ["ok", "ok2"]
