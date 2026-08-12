@@ -10,11 +10,30 @@ const { autoUpdater } = require('electron-updater');
 let mainWindow = null;
 let apiProcess = null;
 let nextProcess = null;
+let workerProcess = null;
 let apiPort = 0;
 let nextPort = 0;
 let apiStopping = false;
 let nextStopping = false;
+let workerStopping = false;
 const isDev = process.env.NODE_ENV === 'development';
+
+// ── Shared config path ─────────────────────────────────
+// Packaged API and Worker share one writable .env under
+// userData (NOT inside the signed Resources bundle).
+// Dev builds keep the default repo-root .env resolution.
+function userDotenvPath() {
+  return path.join(app.getPath('userData'), '.env');
+}
+
+function ensureUserDotenv() {
+  const p = userDotenvPath();
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '', 'utf-8');
+    console.log('[main] Created user config file:', p);
+  }
+}
 
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
@@ -47,6 +66,9 @@ function getFreePort() {
 }
 
 async function startApiServer() {
+  // Duplicate guard: if already running (or starting), return the port
+  if (apiProcess) return apiPort;
+
   const binary = findApiBinary();
   if (!binary) {
     console.log('[main] API server binary not found — assuming external API');
@@ -60,6 +82,7 @@ async function startApiServer() {
     ...process.env,
     PORT: String(apiPort),
     HOST: '127.0.0.1',
+    AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
   };
 
   apiProcess = spawn(binary, [], {
@@ -154,6 +177,9 @@ function findNextServer() {
 }
 
 async function startNextServer() {
+  // Duplicate guard
+  if (nextProcess) return nextPort;
+
   const serverJs = findNextServer();
   if (!serverJs) {
     console.log('[main] Next.js standalone server not found — assuming external Next.js');
@@ -247,6 +273,85 @@ function stopNextServer() {
   }, 5000);
 }
 
+// ── Worker Process Management ──────────────────────────
+function findWorkerBinary() {
+  if (isDev) return null; // dev mode: user runs worker separately
+
+  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
+  const candidates = [
+    path.join(resourcePath, 'worker-server'),
+    path.join(__dirname, 'dist', 'worker-server'),
+  ];
+  for (const c of candidates) {
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+      return c;
+    } catch (_) { /* continue */ }
+  }
+  return null;
+}
+
+function startWorker() {
+  const binary = findWorkerBinary();
+  if (!binary) {
+    console.log('[main] Worker binary not found — automation disabled');
+    return;
+  }
+
+  // Duplicate guard: prevent two workers
+  if (workerProcess) {
+    console.log('[main] Worker already running (pid=%d) — skipping', workerProcess.pid);
+    return;
+  }
+
+  console.log('[main] Starting automation worker...');
+
+  const env = {
+    ...process.env,
+    API_PORT: String(apiPort),
+    HOST: '127.0.0.1',
+    AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
+  };
+
+  workerProcess = spawn(binary, [], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  workerProcess.on('error', (err) => {
+    console.error('[main] Failed to spawn worker: %s', err.message);
+    workerProcess = null;
+  });
+
+  workerProcess.stdout.on('data', (data) => {
+    console.log('[worker] %s', data.toString().trim());
+  });
+
+  workerProcess.stderr.on('data', (data) => {
+    console.error('[worker:err] %s', data.toString().trim());
+  });
+
+  // No hidden auto-restart — surface failure in logs, let user decide
+  workerProcess.on('exit', (code, signal) => {
+    console.log('[main] Worker exited (code=%d, signal=%s) — will not auto-restart', code, signal);
+    workerProcess = null;
+  });
+}
+
+function stopWorker() {
+  if (!workerProcess || workerStopping) return;
+  workerStopping = true;
+  console.log('[main] Stopping worker (pid=%d)...', workerProcess.pid);
+  workerProcess.kill('SIGTERM');
+  const pid = workerProcess.pid;
+  setTimeout(() => {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (_) { /* already dead */ }
+    workerStopping = false;
+  }, 5000);
+}
+
 // ── IPC Handlers ───────────────────────────────────────
 function registerIpcHandlers() {
   ipcMain.handle('get-api-port', () => {
@@ -282,6 +387,13 @@ function registerIpcHandlers() {
 
   ipcMain.handle('check-for-updates', () => {
     checkForUpdates(false);
+  });
+
+  ipcMain.handle('get-worker-status', () => {
+    return {
+      running: workerProcess !== null && !workerStopping,
+      pid: workerProcess ? workerProcess.pid : null,
+    };
   });
 }
 
@@ -442,6 +554,12 @@ app.whenReady().then(async () => {
   // Check for updates in background 10s after startup
   setTimeout(() => checkForUpdates(true), 10_000);
 
+  // Ensure a writable .env exists under userData (not inside the
+  // signed Resources bundle) before spawning API / Worker.
+  if (!isDev) {
+    ensureUserDotenv();
+  }
+
   let apiReady = true;
   try {
     await startApiServer();
@@ -461,6 +579,11 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('[main] Failed to start Next.js server:', err.message);
     }
+
+    // Start automation worker after API is ready (non-blocking —
+    // worker failures are logged but do not prevent the main window)
+    startWorker();
+
     createWindow();
   }
 
@@ -472,19 +595,22 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  stopNextServer();
-  stopApiServer();
+  // On macOS the app stays alive with its services (API, Next, Worker)
+  // so re-activate can create a fresh window instantly.  Services are
+  // only torn down on before-quit / quit (actual app termination).
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
 app.on('before-quit', () => {
+  stopWorker();
   stopNextServer();
   stopApiServer();
 });
 
 app.on('quit', () => {
+  stopWorker();
   stopNextServer();
   stopApiServer();
 });
