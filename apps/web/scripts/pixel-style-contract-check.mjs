@@ -1,105 +1,194 @@
-import { readFile } from "node:fs/promises";
 import { globSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 
-const emojiPattern =
-  /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
-
-const tsxFiles = globSync("src/**/*.{ts,tsx}", {
-  cwd: new URL("../", import.meta.url),
-});
-
-const css = await readFile(
-  new URL("../src/app/globals.css", import.meta.url),
-  "utf8",
-);
+const root = new URL("../", import.meta.url);
+const read = (path) => readFile(new URL(path, root), "utf8");
+const [css, appShell, retroChrome, primitives, commandDock, browserCheck] =
+  await Promise.all([
+    read("src/app/globals.css"),
+    read("src/components/AppShell.tsx"),
+    read("src/components/RetroChrome.tsx"),
+    read("src/components/PixelPrimitives.tsx"),
+    read("src/components/VoiceCommandConsole.tsx"),
+    read("scripts/phase-a-browser-check.js"),
+  ]);
 
 const failures = [];
+const emojiPattern = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+const tsxFiles = globSync("src/**/*.{ts,tsx}", { cwd: root });
 
 for (const file of tsxFiles) {
-  const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+  const source = await read(file);
   if (emojiPattern.test(source)) {
-    failures.push(`${file} contains emoji characters; use PixelIcon assets instead.`);
+    failures.push(`${file} contains emoji; use the shared PixelIcon grid.`);
   }
 }
 
 if (css.includes("linear-gradient(")) {
-  failures.push("globals.css uses gradients; pixel UI should use solid block colors.");
+  failures.push("globals.css uses gradients; the approved workstation uses solid surfaces.");
 }
 
-const terminalPalette = [
-  "#020403",
-  "#030503",
-  "#050705",
-  "#080b08",
-  "#090d09",
-  "#101610",
-  "#36d85f",
-  "#39db64",
-];
+const requiredTokens = {
+  "--retro-canvas": "#c9c3b4",
+  "--retro-surface": "#f4efd9",
+  "--retro-surface-subtle": "#ece6d0",
+  "--retro-inset": "#fffdf0",
+  "--retro-ink": "#171717",
+  "--retro-muted": "#60656f",
+  "--retro-border": "#111111",
+  "--retro-border-soft": "#6f6a5b",
+  "--retro-selection": "#064a9b",
+  "--retro-selection-dark": "#003f8f",
+  "--retro-success": "#1f8a4c",
+  "--retro-warning": "#c28a18",
+  "--retro-danger": "#b7332f",
+  "--retro-focus": "#f0c14b",
+};
 
-const terminalPaletteHits = terminalPalette.filter((color) => css.includes(color));
-if (terminalPaletteHits.length > 0) {
-  failures.push(
-    `globals.css still uses terminal-style black/green colors: ${terminalPaletteHits.join(", ")}. Use Win95 panel colors instead.`,
-  );
+for (const [token, value] of Object.entries(requiredTokens)) {
+  if (!css.includes(`${token}: ${value}`)) {
+    failures.push(`globals.css must map approved token ${token}: ${value}.`);
+  }
 }
 
-const excessiveRadii = [...css.matchAll(/border-radius:\s*(\d+)px/g)]
-  .map((match) => Number(match[1]))
-  .filter((value) => value > 4);
-
-if (excessiveRadii.length > 0) {
-  failures.push(
-    `globals.css has border radii above 4px: ${[...new Set(excessiveRadii)].join(", ")}`,
-  );
+for (const required of [
+  "font-family: var(--font-readable)",
+  "font-size: 14px",
+  "line-height: 1.6",
+  "outline: 2px solid var(--retro-focus)",
+  "@media (max-width: 1179px)",
+  "@media (min-width: 1440px)",
+  'data-scroll-region="main-y"',
+  'data-scroll-region="inspector-y"',
+  'data-scroll-region="command-details-y"',
+]) {
+  const source = required.startsWith("data-") ? `${appShell}\n${commandDock}` : css;
+  if (!source.includes(required)) {
+    failures.push(`Phase A shared system is missing: ${required}`);
+  }
 }
 
-if (!css.includes("--pixel-shadow")) {
-  failures.push("globals.css must define a hard --pixel-shadow token.");
+for (const exportedType of [
+  "PixelPanelProps",
+  "PixelButtonProps",
+  "PixelInputProps",
+  "PixelStatusProps",
+  "PixelStateAction",
+  "PixelStateProps",
+  "PixelEmptyStateProps",
+  "PixelLoadingStateProps",
+  "PixelBlockedStateProps",
+  "PixelErrorStateProps",
+  "PixelScrollableRegionProps",
+]) {
+  if (!primitives.includes(`export type ${exportedType}`)) {
+    failures.push(`PixelPrimitives must export stable ${exportedType}.`);
+  }
 }
 
-if (!css.includes(".pixel-sprite")) {
-  failures.push("globals.css must define reusable .pixel-sprite icons.");
+if (primitives.includes("secondaryAction?: ReactNode")) {
+  failures.push("PixelState actions must use the controlled button/link union, not arbitrary ReactNode.");
 }
 
-if (!css.includes("--font-pixel")) {
-  failures.push("globals.css must define a --font-pixel token.");
+for (const required of [
+  'kind: "button"',
+  'kind: "link"',
+  "ResizeObserver",
+  'event.key === "Home"',
+  'event.key === "End"',
+  "showControls",
+]) {
+  if (!primitives.includes(required)) {
+    failures.push(`PixelPrimitives is missing approved API behavior: ${required}`);
+  }
 }
 
-if (!css.includes("font-family: var(--font-pixel)")) {
-  failures.push("body must use the --font-pixel token.");
+if (/body\s*\{[^}]*overflow-x:\s*(?:hidden|clip)/s.test(css)) {
+  failures.push("body must not hide or clip horizontal overflow.");
 }
 
-if (!css.includes("-webkit-font-smoothing: none") || !css.includes("font-smooth: never")) {
-  failures.push("pixel font rendering must disable font smoothing.");
+const navBlock = appShell.match(/const navItems:[\s\S]*?=\s*\[([\s\S]*?)\n\];/);
+const navRoutes = navBlock?.[1].match(/href:\s*"[^"]+"/g) ?? [];
+if (navRoutes.length !== 8) {
+  failures.push(`AppShell production navigation must contain exactly 8 items; found ${navRoutes.length}.`);
 }
 
-const oversizedFontSizes = [...css.matchAll(/font-size:\s*(\d+)px/g)]
-  .map((match) => Number(match[1]))
-  .filter((value) => value > 28);
-
-if (oversizedFontSizes.length > 0) {
-  failures.push(
-    `globals.css has font sizes above 28px: ${[...new Set(oversizedFontSizes)].join(", ")}`,
-  );
+for (const required of [
+  "PixelPanel",
+  "PixelButton",
+  "PixelInput",
+  "PixelStatus",
+  "PixelEmptyState",
+  "PixelErrorState",
+  "PixelLoadingState",
+  "PixelBlockedState",
+  "PixelScrollableRegion",
+]) {
+  if (!primitives.includes(`export function ${required}`) && !primitives.includes(`export const ${required}`)) {
+    failures.push(`PixelPrimitives must export ${required}.`);
+  }
 }
 
-const oversizedPadding = [...css.matchAll(/padding:\s*(\d+)px/g)]
-  .map((match) => Number(match[1]))
-  .filter((value) => value > 18);
-
-if (oversizedPadding.length > 0) {
-  failures.push(
-    `globals.css has single-value padding above 18px: ${[...new Set(oversizedPadding)].join(", ")}`,
-  );
+if (/localhost|127\.0\.0\.1|disabled/.test(retroChrome)) {
+  failures.push("RetroChrome must not expose development addresses or decorative disabled controls.");
 }
 
-if (css.includes("grid-template-columns: 236px")) {
-  failures.push("sidebar column is too wide for compact pixel UI.");
+for (const required of [
+  "router.back()",
+  "toggleHelpPanel()",
+  "workspaceStatus",
+  "工作区状态未知",
+  "当前工作区",
+]) {
+  if (!retroChrome.includes(required)) {
+    failures.push(`RetroChrome must provide actionable workstation chrome: ${required}`);
+  }
 }
 
-if (css.includes("366px")) {
-  failures.push("right-side panel width is too large for compact pixel UI.");
+if (retroChrome.includes("本地工作区已连接")) {
+  failures.push("RetroChrome must not report a connected workspace without controlled evidence.");
+}
+
+for (const required of [
+  "aria-controls=\"agent-inspector\"",
+  "window.matchMedia(\"(min-width: 1180px)\")",
+  "inspector-backdrop",
+  "shell-main-scroll",
+  "inspectorTriggerRef.current?.focus()",
+]) {
+  if (!appShell.includes(required)) {
+    failures.push(`AppShell is missing compact Inspector/shell contract: ${required}`);
+  }
+}
+
+for (const required of [
+  "export function VoiceCommandConsoleView",
+  "export function VoiceCommandConsole",
+  "aria-controls=\"voice-command-details\"",
+  "预览指令",
+  "确认并执行",
+  "setExpanded(true)",
+]) {
+  if (!commandDock.includes(required)) {
+    failures.push(`Command dock is missing preview/confirm/collapse behavior: ${required}`);
+  }
+}
+
+for (const required of [
+  "1440, height: 900",
+  "1180, height: 800",
+  "1024, height: 768",
+  "undersized targets",
+  "inaccessible clipped content",
+  "primary focus is not visibly rendered",
+  "last stage is not reachable",
+  "inspector drawer shrank main task",
+  "inspector focus was not returned",
+  "horizontal controls are missing",
+]) {
+  if (!browserCheck.includes(required)) {
+    failures.push(`Phase A browser check is missing gate: ${required}`);
+  }
 }
 
 if (failures.length > 0) {
@@ -107,4 +196,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("pixel style contract checks passed");
+console.log("approved pixel workstation contract checks passed");
