@@ -447,6 +447,12 @@ class Settings:
                     "value": self.local_whisper_language,
                     "secret": False,
                 },
+                {
+                    "name": "DRAFT_BACKGROUND_MUSIC_PATH",
+                    "configured": bool(self.draft_background_music_path),
+                    "value": self.draft_background_music_path,
+                    "secret": False,
+                },
             ],
             "status": self.public_status(),
         }

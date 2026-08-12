@@ -507,6 +507,7 @@ class DraftAssetResponse(BaseModel):
     import_status: str | None = None
     import_message: str | None = None
     draft_path: str | None = None
+    template_tracks: list[str] | None = None
 
 
 class DraftEnvironmentResponse(BaseModel):

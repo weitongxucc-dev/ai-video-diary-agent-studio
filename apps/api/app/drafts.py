@@ -38,6 +38,26 @@ class DraftAsset:
     import_status: str | None = None
     import_message: str | None = None
     draft_path: str | None = None
+    template_tracks: list[str] | None = None
+
+
+def _safe_template_tracks_from_manifest(manifest: dict) -> list[str] | None:
+    """Extract template_tracks from manifest, or None when absent.
+
+    Returns a list of strings from jianying_import.template_tracks,
+    or None when the key is missing/not a list — never fabricates.
+    """
+    jianying_import = manifest.get("jianying_import")
+    if not isinstance(jianying_import, dict):
+        return None
+    raw = jianying_import.get("template_tracks")
+    if not isinstance(raw, list):
+        return None
+    tracks: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            tracks.append(item)
+    return tracks if tracks else None
 
 
 @dataclass(frozen=True)
@@ -1109,6 +1129,7 @@ class DraftWorkspace:
             draft_path=str(import_result["draft_path"])
             if import_result.get("draft_path")
             else None,
+            template_tracks=_safe_template_tracks_from_manifest(manifest),
         )
 
     def _package_dirs(self) -> list[Path]:

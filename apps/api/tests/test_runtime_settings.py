@@ -60,3 +60,55 @@ def test_runtime_settings_endpoint_rejects_non_local_clients(tmp_path, monkeypat
     assert response.status_code == 403
     assert not env_path.exists()
     assert reloaded is False
+
+
+def test_runtime_settings_updates_maps_draft_background_music_path():
+    updates = runtime_settings_updates(
+        {
+            "draft_background_music_path": " /Users/example/bgm.mp3 ",
+        }
+    )
+    assert updates == {"DRAFT_BACKGROUND_MUSIC_PATH": "/Users/example/bgm.mp3"}
+
+
+def test_runtime_settings_response_includes_bgm_path_when_configured(tmp_path, monkeypatch):
+    from app.config import Settings
+
+    settings = Settings(draft_background_music_path="/tmp/bgm.mp3")
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "repo", main_module.repo)
+
+    client = TestClient(main_module.app, client=("127.0.0.1", 50000))
+    response = client.get("/api/settings/runtime")
+    assert response.status_code == 200
+    data = response.json()
+    settings_entries = data["settings"]
+    bgm_entry = next(
+        (s for s in settings_entries if s["name"] == "DRAFT_BACKGROUND_MUSIC_PATH"),
+        None,
+    )
+    assert bgm_entry is not None
+    assert bgm_entry["configured"] is True
+    assert bgm_entry["value"] == "/tmp/bgm.mp3"
+    assert bgm_entry["secret"] is False
+
+
+def test_runtime_settings_response_includes_bgm_path_when_unconfigured(tmp_path, monkeypatch):
+    from app.config import Settings
+
+    settings = Settings(draft_background_music_path=None)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "repo", main_module.repo)
+
+    client = TestClient(main_module.app, client=("127.0.0.1", 50000))
+    response = client.get("/api/settings/runtime")
+    assert response.status_code == 200
+    data = response.json()
+    settings_entries = data["settings"]
+    bgm_entry = next(
+        (s for s in settings_entries if s["name"] == "DRAFT_BACKGROUND_MUSIC_PATH"),
+        None,
+    )
+    assert bgm_entry is not None
+    assert bgm_entry["configured"] is False
+    assert bgm_entry["value"] is None
