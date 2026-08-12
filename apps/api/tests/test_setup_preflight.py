@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -258,29 +259,60 @@ def test_preflight_obsidian_not_configured_is_missing():
     assert obsidian["status"] == "missing"
 
 
-# ── Secrets are never leaked ────────────────────────────────────────────
+# ── Secrets and paths are never leaked ─────────────────────────────────
 
 
-def test_preflight_never_leaks_api_key_in_summary(tmp_path):
-    """Preflight summary/reason never contains the actual API key value."""
+def test_preflight_never_leaks_secrets_or_absolute_paths(tmp_path):
+    """The entire serialized preflight payload must never contain API keys,
+    configured directory paths, or sys.executable."""
+    dirs = {
+        "obsidian": tmp_path / "obsidian",
+        "inbox": tmp_path / "inbox",
+        "output": tmp_path / "output",
+        "jianying": tmp_path / "jianying",
+    }
+    for d in dirs.values():
+        d.mkdir()
+
     settings = Settings(
         deepseek_api_key="sk-abc123secret",
+        obsidian_vault_path=str(dirs["obsidian"]),
+        video_inbox_path=str(dirs["inbox"]),
+        video_output_path=str(dirs["output"]),
+        jianying_draft_root_path=str(dirs["jianying"]),
+        tencentcloud_secret_id="tid-secret",
+        tencentcloud_secret_key="tkey-secret",
+        local_whisper_python_path=str(tmp_path / "python"),
+        local_whisper_model_path=str(tmp_path / "model.bin"),
         database_path=str(tmp_path / "db.sqlite"),
     )
 
     with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
         result = setup_preflight(settings)
 
-    # Serialize entire result to JSON and ensure the key value is absent
     import json
     payload = json.dumps(result, ensure_ascii=False)
-    assert "sk-abc123secret" not in payload
 
+    # Never leak API key values
+    assert "sk-abc123secret" not in payload
+    assert "tid-secret" not in payload
+    assert "tkey-secret" not in payload
+
+    # Never leak configured directory paths
+    for p in dirs.values():
+        assert str(p) not in payload, f"leaked path: {p}"
+
+    # Never leak sys.executable
+    assert sys.executable not in payload
+
+    # Sanity: summaries are user-facing and path-free
     deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
-    summary = deepseek["summary"]
-    # Shows "已配置" but NOT the key itself
-    assert "已配置" in summary
-    assert "sk-abc" not in summary
+    assert "已配置" in deepseek["summary"]
+    assert "sk-abc" not in deepseek["summary"]
+
+    python_check = next(c for c in result["checks"] if c["id"] == "python")
+    assert "可用" in python_check["summary"]
+    assert "/" not in python_check["summary"]
 
 
 # ── settings_target populated ───────────────────────────────────────────

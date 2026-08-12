@@ -104,7 +104,7 @@ def _obsidian_check(settings: Settings) -> dict:
             item_id="obsidian",
             label="Obsidian 知识库",
             status="invalid",
-            summary=f"配置的路径不存在：{path}",
+            summary="配置的目录不存在",
             impact="无法摄入知识库笔记作为选题上下文。",
             repair_action="在设置页重新选择存在的 Obsidian Vault 目录。",
             settings_target="obsidian_vault_path",
@@ -115,7 +115,7 @@ def _obsidian_check(settings: Settings) -> dict:
             item_id="obsidian",
             label="Obsidian 知识库",
             status="degraded",
-            summary=f"目录可访问但未找到 .md 笔记（{path}）",
+            summary="目录可访问但未找到 .md 笔记",
             impact="知识库为空，选题将只依赖外部信息源。",
             repair_action="在 Obsidian 中创建笔记后刷新。",
             settings_target="obsidian_vault_path",
@@ -154,7 +154,7 @@ def _video_inbox_check(settings: Settings) -> dict:
         item_id="video_inbox",
         label="视频待处理目录",
         status="missing",
-        summary=f"目录不存在：{path}",
+        summary="配置的目录不存在",
         impact="无法扫描待处理视频。",
         repair_action="在设置页选择或创建视频待处理目录。",
         settings_target="video_inbox_path",
@@ -168,7 +168,7 @@ def _video_output_check(settings: Settings) -> dict:
             item_id="video_output",
             label="视频输出目录",
             status="ready",
-            summary=f"目录存在：{path}",
+            summary="目录可访问",
             impact="处理后视频、字幕和素材将写入此目录。",
             repair_action="无需处理。",
             settings_target="video_output_path",
@@ -177,7 +177,7 @@ def _video_output_check(settings: Settings) -> dict:
         item_id="video_output",
         label="视频输出目录",
         status="missing",
-        summary=f"目录不存在：{path}",
+        summary="配置的目录不存在",
         impact="处理后视频、字幕和材料无法写入。",
         repair_action="在设置页选择或创建视频输出目录。",
         settings_target="video_output_path",
@@ -191,7 +191,7 @@ def _jianying_check(settings: Settings) -> dict:
             item_id="jianying",
             label="剪映草稿目录",
             status="missing",
-            summary=f"目录不存在：{root}",
+            summary="配置的目录不存在",
             impact="无法将素材包导入剪映草稿箱。",
             repair_action="在设置页选择剪映草稿根目录（通常为 com.lveditor.draft）。",
             settings_target="jianying_draft_root_path",
@@ -211,7 +211,7 @@ def _jianying_check(settings: Settings) -> dict:
         item_id="jianying",
         label="剪映草稿目录",
         status="ready",
-        summary=f"目录存在，草稿可直写：{root}",
+        summary="目录可访问，草稿可直写",
         impact="素材包可直接写入剪映草稿目录。",
         repair_action="无需处理。",
         settings_target="jianying_draft_root_path",
@@ -242,13 +242,12 @@ def _ffmpeg_check() -> dict:
 def _python_check() -> dict:
     """Report system Python availability — always ready since the backend
     is running on it, but verify for completeness."""
-    exe = sys.executable
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     return _preflight_item(
         item_id="python",
         label="Python 运行时",
         status="ready",
-        summary=f"Python {version}（{exe}）",
+        summary=f"Python {version} 可用",
         impact="后端进程、脚本执行和本地 Whisper 依赖此 Python。",
         repair_action="无需处理。",
     )
