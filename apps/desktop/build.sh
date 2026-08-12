@@ -17,6 +17,8 @@ echo "[1/5] Building web frontend..."
 cd "$WEB_DIR"
 pnpm install --frozen-lockfile
 pnpm build
+echo "  Materialising standalone deps..."
+node "$DESKTOP_DIR/scripts/bundle-standalone.js"
 echo "  Web frontend built."
 
 # ── Step 2: Build API binary ──

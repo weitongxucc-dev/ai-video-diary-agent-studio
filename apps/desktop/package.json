@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "NODE_ENV=development electron .",
-    "build:web": "cd ../web && pnpm build",
+    "build:web": "cd ../web && pnpm build && node ../desktop/scripts/bundle-standalone.js",
     "build:api": "cd ../api && pyinstaller pyinstaller.spec --distpath ../desktop/dist --workpath ../desktop/build-api --clean --noconfirm",
     "build:worker": "cd ../api && pyinstaller worker.spec --distpath ../desktop/dist --workpath ../desktop/build-worker --clean --noconfirm",
     "build": "pnpm build:web && pnpm build:api && pnpm build:worker && electron-builder",
@@ -54,7 +54,7 @@
     "extraResources": [
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "dist/worker-server", "to": "worker-server" },
-      { "from": "../web/.next/standalone/apps/web", "to": "web", "filter": ["**/*"] }
+      { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] }
     ],
     "publish": {
       "provider": "github",
