@@ -5,12 +5,14 @@ import type {
   RuntimeSettings,
   TemplateTrackAvailability,
   TemplateTrackSnapshot,
+  TemplateTrackSource,
 } from "@/lib/types";
 
 type TemplateTracksPanelProps = {
   episode: Episode | null;
   settings: RuntimeSettings | null;
   latestPackage: DraftAsset | null;
+  draftPackages?: DraftAsset[] | null;
 };
 
 function availabilityTone(availability: TemplateTrackAvailability): string {
@@ -23,6 +25,14 @@ function availabilityLabel(availability: TemplateTrackAvailability): string {
   if (availability === "available") return "已生成";
   if (availability === "absent") return "未生成";
   return "未确认";
+}
+
+function sourceLabel(source: TemplateTrackSource): string {
+  if (source === "package-metadata") return "后端真实元数据";
+  if (source === "package-fallback-empty") return "后端空数组 (显式 fallback)";
+  if (source === "package-fallback-absent") return "后端无元数据 (老包 fallback)";
+  if (source === "settings") return "运行时配置 (BGM)";
+  return "无数据";
 }
 
 function formatTimestamp(value: string | null): string {
@@ -43,11 +53,13 @@ export function TemplateTracksPanel({
   episode,
   settings,
   latestPackage,
+  draftPackages,
 }: TemplateTracksPanelProps) {
   const snapshot: TemplateTrackSnapshot = resolveTemplateTracks({
     episode,
     settings,
-    draftPackage: latestPackage,
+    preferredPackage: latestPackage,
+    draftPackages: draftPackages ?? undefined,
   });
   const summary = describeTrackTone(snapshot);
   const readyPct =
@@ -66,8 +78,9 @@ export function TemplateTracksPanel({
           <span className="section-kicker">Native 模板轨道</span>
           <h2 id="template-tracks-heading">剪映草稿轨道清单</h2>
           <p>
-            基于 Episode 内容模板、运行时配置与最近一次导入的素材包计算
-            <strong>（不发明任何轨道状态）</strong>。
+            优先使用后端 DraftAsset.template_tracks 真实元数据；对老包或无 metadata 的场景保留
+            显式 fallback
+            <strong>（不发明任何轨道状态，不暴露 secret）</strong>。
             {snapshot.source === "none"
               ? "需要先连通本地 API 才能看到状态。"
               : null}
@@ -104,7 +117,13 @@ export function TemplateTracksPanel({
           <em>{readyPct}%</em>
         </div>
         <p className="template-tracks-summary-meta">
-          数据源：<code>{snapshot.source}</code>
+          元数据：<code>
+            {snapshot.packageMetadata === null
+              ? "null（老包 / 无字段）"
+              : snapshot.packageMetadata.length === 0
+                ? "[]（空 manifest 显式 fallback）"
+                : `[${snapshot.packageMetadata.join(", ")}]`}
+          </code>
           {snapshot.contentTemplateId ? (
             <>
               {" · "}模板 ID：<code>{snapshot.contentTemplateId}</code>
@@ -132,6 +151,13 @@ export function TemplateTracksPanel({
                   className={`template-track-state tone-${availabilityTone(track.availability)}`}
                 >
                   {availabilityLabel(track.availability)}
+                </span>
+                <span
+                  className="template-track-source"
+                  title={track.raw ?? sourceLabel(track.source)}
+                >
+                  {sourceLabel(track.source)}
+                  {track.raw ? ` · ${track.raw}` : null}
                 </span>
               </div>
               <p className="template-track-row-description">{track.description}</p>

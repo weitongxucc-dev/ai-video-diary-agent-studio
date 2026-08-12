@@ -8312,6 +8312,17 @@ select:user-invalid:focus {
   background: #f5e5b6;
 }
 
+.template-track-source {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  background: #fffdf0;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
 .template-track-row-description,
 .template-track-row-detail,
 .template-track-row-impact {

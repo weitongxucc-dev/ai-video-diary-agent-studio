@@ -605,6 +605,7 @@ export type DraftAsset = {
   import_status: string | null;
   import_message: string | null;
   draft_path: string | null;
+  template_tracks: string[] | null;
 };
 
 export type DraftEnvironment = {
@@ -715,6 +716,13 @@ export type TemplateTrackKind =
 
 export type TemplateTrackAvailability = "available" | "absent" | "unknown";
 
+export type TemplateTrackSource =
+  | "package-metadata"
+  | "package-fallback-empty"
+  | "package-fallback-absent"
+  | "settings"
+  | "none";
+
 export type TemplateTrackEntry = {
   kind: TemplateTrackKind;
   label: string;
@@ -723,6 +731,8 @@ export type TemplateTrackEntry = {
   detail: string;
   impact: string;
   fixHref?: string;
+  source: TemplateTrackSource;
+  raw: string | null;
 };
 
 export type TemplateTrackSnapshot = {
@@ -733,4 +743,6 @@ export type TemplateTrackSnapshot = {
   lastPackageImportedAt: string | null;
   contentTemplateId: string | null;
   backgroundMusicConfigured: boolean;
+  packageMetadata: string[] | null;
+  packageImportStatus: string | null;
 };

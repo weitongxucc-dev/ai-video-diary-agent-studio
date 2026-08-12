@@ -277,6 +277,7 @@ export default async function DraftPage() {
 
           {!offline ? (
             <TemplateTracksPanel
+              draftPackages={draft?.packages ?? []}
               episode={episode}
               latestPackage={pickLatestPackage(draft)}
               settings={settings}

@@ -9,6 +9,7 @@ import type {
   RuntimeSettings,
   ScriptPackage,
   ScriptSection,
+  TemplateTrackEntry,
 } from "../types";
 
 function makeSettings(musicConfigured: boolean): RuntimeSettings {
@@ -121,109 +122,225 @@ function makePackage(overrides: Partial<DraftAsset> = {}): DraftAsset {
     import_status: "imported",
     import_message: "已通过原生写入生成剪映兼容草稿。",
     draft_path: "/Users/me/Jianying/draft1",
+    template_tracks: null,
     ...overrides,
   };
 }
 
-describe("resolveTemplateTracks", () => {
-  it("returns none source when no inputs are provided", () => {
-    const snapshot = resolveTemplateTracks({
-      episode: null,
-      settings: null,
-      draftPackage: null,
-    });
-    expect(snapshot.source).toBe("none");
-    expect(snapshot.totalCount).toBeGreaterThan(0);
-    snapshot.tracks.forEach((track) => {
-      expect(track.availability).toBe("unknown");
-    });
-  });
+function findTrack(
+  tracks: TemplateTrackEntry[],
+  kind: TemplateTrackEntry["kind"],
+) {
+  return tracks.find((track) => track.kind === kind);
+}
 
-  it("marks title/chapter/keyword as available when template is selected and an imported package exists", () => {
+describe("resolveTemplateTracks - real backend metadata", () => {
+  it("uses actual template_tracks entries with kind+payload when provided", () => {
     const snapshot = resolveTemplateTracks({
       episode: makeEpisode(),
       settings: makeSettings(false),
-      draftPackage: makePackage(),
+      preferredPackage: makePackage({
+        template_tracks: [
+          "title_card:tpl_3min",
+          "chapter_labels",
+          "keyword_emphasis",
+        ],
+      }),
     });
-    const title = snapshot.tracks.find((t) => t.kind === "title_card");
-    const chapter = snapshot.tracks.find((t) => t.kind === "chapter_labels");
-    const keyword = snapshot.tracks.find((t) => t.kind === "keyword_emphasis");
-    const bgm = snapshot.tracks.find((t) => t.kind === "background_music");
+    const title = findTrack(snapshot.tracks, "title_card");
+    const chapter = findTrack(snapshot.tracks, "chapter_labels");
+    const keyword = findTrack(snapshot.tracks, "keyword_emphasis");
+    const bgm = findTrack(snapshot.tracks, "background_music");
+
     expect(title?.availability).toBe("available");
+    expect(title?.source).toBe("package-metadata");
+    expect(title?.raw).toBe("title_card:tpl_3min");
+    expect(title?.detail).toContain("title_card:tpl_3min");
     expect(chapter?.availability).toBe("available");
     expect(keyword?.availability).toBe("available");
     expect(bgm?.availability).toBe("absent");
+    expect(bgm?.source).toBe("settings");
   });
 
-  it("marks BGM available when settings expose a configured DRAFT_BACKGROUND_MUSIC_PATH", () => {
+  it("ignores unknown kinds in template_tracks (e.g. legacy tokens) without claiming they exist", () => {
     const snapshot = resolveTemplateTracks({
       episode: makeEpisode(),
-      settings: makeSettings(true),
-      draftPackage: makePackage(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({
+        template_tracks: [
+          "title_card:tpl_x",
+          "unknown_kind:foo",
+          "another_legacy",
+        ],
+      }),
     });
-    const bgm = snapshot.tracks.find((t) => t.kind === "background_music");
+    expect(snapshot.packageMetadata).toEqual([
+      "title_card:tpl_x",
+      "unknown_kind:foo",
+      "another_legacy",
+    ]);
+    const title = findTrack(snapshot.tracks, "title_card");
+    expect(title?.availability).toBe("available");
+    // No track should be falsely reported as present because of unknown tokens.
+    expect(snapshot.tracks).toHaveLength(4);
+  });
+
+  it("marks BGM available when backend metadata includes background_music", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({
+        template_tracks: ["title_card:tpl_x", "background_music"],
+      }),
+    });
+    const bgm = findTrack(snapshot.tracks, "background_music");
     expect(bgm?.availability).toBe("available");
-  });
-
-  it("marks chapter_labels as absent when template is selected but script has no sections", () => {
-    const episode = makeEpisode();
-    episode.script = {
-      ...episode.script!,
-      sections: [],
-    };
-    const snapshot = resolveTemplateTracks({
-      episode,
-      settings: makeSettings(false),
-      draftPackage: makePackage(),
-    });
-    const chapter = snapshot.tracks.find((t) => t.kind === "chapter_labels");
-    expect(chapter?.availability).toBe("absent");
-  });
-
-  it("marks template tracks as unknown when content_template_id is empty", () => {
-    const snapshot = resolveTemplateTracks({
-      episode: makeEpisode({ content_template_id: "" }),
-      settings: makeSettings(false),
-      draftPackage: makePackage(),
-    });
-    const title = snapshot.tracks.find((t) => t.kind === "title_card");
-    expect(title?.availability).toBe("unknown");
-  });
-
-  it("preserves template-tracks field name and never fabricates availability", () => {
-    const snapshot = resolveTemplateTracks({
-      episode: null,
-      settings: null,
-      draftPackage: null,
-    });
-    const kinds = new Set(snapshot.tracks.map((t) => t.kind));
-    expect(kinds.has("title_card")).toBe(true);
-    expect(kinds.has("chapter_labels")).toBe(true);
-    expect(kinds.has("keyword_emphasis")).toBe(true);
-    expect(kinds.has("background_music")).toBe(true);
-    // BGM should never claim available without settings + imported package.
-    const bgm = snapshot.tracks.find((t) => t.kind === "background_music")!;
-    expect(bgm.availability).toBe("unknown");
+    expect(bgm?.source).toBe("package-metadata");
+    expect(bgm?.raw).toBe("background_music");
   });
 });
 
-describe("describeTrackTone", () => {
-  it("returns muted tone when source is none", () => {
-    const snapshot = resolveTemplateTracks({
-      episode: null,
-      settings: null,
-      draftPackage: null,
-    });
-    const tone = describeTrackTone(snapshot);
-    expect(tone.tone).toBe("muted");
-    expect(tone.headline).toMatch(/尚未/);
-  });
-
-  it("returns green when every track is available", () => {
+describe("resolveTemplateTracks - BGM configuration from runtime setting", () => {
+  it("uses RuntimeSettings DRAFT_BACKGROUND_MUSIC_PATH when metadata does not mention background_music", () => {
     const snapshot = resolveTemplateTracks({
       episode: makeEpisode(),
       settings: makeSettings(true),
-      draftPackage: makePackage(),
+      preferredPackage: makePackage({
+        template_tracks: ["title_card:tpl_3min", "chapter_labels"],
+      }),
+    });
+    const bgm = findTrack(snapshot.tracks, "background_music");
+    // BGM is sourced from the runtime setting per task contract — settings
+    // configured → BGM available, regardless of whether the latest package
+    // listed it. The detail still surfaces the metadata state for honesty.
+    expect(bgm?.availability).toBe("available");
+    expect(bgm?.source).toBe("settings");
+    expect(bgm?.detail).toContain("DRAFT_BACKGROUND_MUSIC_PATH");
+  });
+
+  it("returns unknown BGM when RuntimeSettings does not expose the setting", () => {
+    const settings: RuntimeSettings = {
+      settings: [],
+      status: makeSettings(false).status,
+    } as RuntimeSettings;
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings,
+      preferredPackage: makePackage({
+        template_tracks: ["title_card:tpl_3min"],
+      }),
+    });
+    const bgm = findTrack(snapshot.tracks, "background_music");
+    expect(bgm?.availability).toBe("unknown");
+    expect(bgm?.source).toBe("settings");
+    expect(bgm?.detail).toContain("DRAFT_BACKGROUND_MUSIC_PATH");
+  });
+});
+
+describe("resolveTemplateTracks - explicit fallbacks", () => {
+  it("marks every track as package-fallback-absent when template_tracks is null (legacy packages)", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({ template_tracks: null }),
+    });
+    expect(snapshot.packageMetadata).toBeNull();
+    for (const track of snapshot.tracks) {
+      expect(track.availability).toBe("unknown");
+      expect(track.source).toBe("package-fallback-absent");
+      expect(track.detail).toMatch(/老包|template_tracks 字段/);
+    }
+  });
+
+  it("marks template-bound tracks as package-fallback-empty when template_tracks is empty (BGM still from settings)", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({ template_tracks: [] }),
+    });
+    expect(snapshot.packageMetadata).toEqual([]);
+    for (const track of snapshot.tracks) {
+      if (track.kind === "background_music") {
+        // BGM is sourced from the runtime setting, independent of metadata.
+        expect(track.source).toBe("settings");
+        continue;
+      }
+      expect(track.availability).toBe("absent");
+      expect(track.source).toBe("package-fallback-empty");
+    }
+    const bgm = findTrack(snapshot.tracks, "background_music");
+    expect(bgm?.detail).toContain("template_tracks 为空数组");
+  });
+
+  it("marks a missing kind as package-fallback-empty when other kinds are present", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({
+        template_tracks: ["title_card:tpl_3min"],
+      }),
+    });
+    const chapter = findTrack(snapshot.tracks, "chapter_labels");
+    const keyword = findTrack(snapshot.tracks, "keyword_emphasis");
+    expect(chapter?.availability).toBe("absent");
+    expect(chapter?.source).toBe("package-fallback-empty");
+    expect(keyword?.availability).toBe("absent");
+    expect(keyword?.source).toBe("package-fallback-empty");
+    expect(chapter?.detail).toContain("未列出");
+  });
+});
+
+describe("resolveTemplateTracks - secrets + redaction", () => {
+  it("does not leak the BGM path into any detail string", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(true),
+      preferredPackage: makePackage({
+        template_tracks: ["background_music"],
+      }),
+    });
+    const json = JSON.stringify(snapshot);
+    expect(json).not.toContain("/Users/me/Music/bgm.mp3");
+    const bgm = findTrack(snapshot.tracks, "background_music");
+    expect(bgm?.detail).not.toContain("/Users/me/Music/bgm.mp3");
+  });
+});
+
+describe("describeTrackTone - fallback-aware headlines", () => {
+  it("returns yellow headline when packageMetadata is null", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({ template_tracks: null }),
+    });
+    const tone = describeTrackTone(snapshot);
+    expect(tone.tone).toBe("yellow");
+    expect(tone.headline).toMatch(/尚未读取到 native 模板轨道元数据/);
+  });
+
+  it("returns yellow headline when packageMetadata is an empty array", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(false),
+      preferredPackage: makePackage({ template_tracks: [] }),
+    });
+    const tone = describeTrackTone(snapshot);
+    expect(tone.tone).toBe("yellow");
+    expect(tone.headline).toMatch(/显式确认未写入/);
+  });
+
+  it("returns green when all four kinds are in real metadata", () => {
+    const snapshot = resolveTemplateTracks({
+      episode: makeEpisode(),
+      settings: makeSettings(true),
+      preferredPackage: makePackage({
+        template_tracks: [
+          "title_card:tpl_3min",
+          "chapter_labels",
+          "keyword_emphasis",
+          "background_music",
+        ],
+      }),
     });
     const tone = describeTrackTone(snapshot);
     expect(tone.tone).toBe("green");
