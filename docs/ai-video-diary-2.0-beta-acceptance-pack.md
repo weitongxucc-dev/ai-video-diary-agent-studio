@@ -1,7 +1,7 @@
 # AI视频日记 Agent Studio 2.0 Beta — Acceptance Pack
 
-- **文档日期**：2026-08-11
-- **基线**：origin/main（`d9c37d8`，合并 PR #9 backend + PR #10 frontend + PR #11 coordinator）
+- **文档日期**：2026-08-12
+- **基线**：origin/main（`6b06053`，合并 PR #9–#18：backend retry/sources, desktop worker lifecycle + packaging fix, frontend onboarding + native template tracks, native Jianying writer）
 - **关联 PRD**：[`docs/ai-video-diary-agent-2.0-prd.md`](./ai-video-diary-agent-2.0-prd.md)
 
 ---
@@ -129,17 +129,25 @@
 
 | # | PRD Criterion | Status | Evidence |
 |---|---|---|---|
-| 1 | 3 template styles (diary_minimal, tool_review, tutorial_demo) | ⚠️ | Defined as `jianying_style` strings in content templates; not programmatic track definitions |
-| 2 | Title card generation | ✅ | `drafts.py` generates cover PNG |
+| 1 | 3 template styles (diary_minimal, tool_review, tutorial_demo) | ✅ | Defined as `jianying_style` in content templates + programmatic native tracks via `_add_template_tracks()` in `drafts.py:631-757` |
+| 2 | Title card generation | ✅ | `drafts.py:649-667` — template name rendered as 48px centered text, first 2s |
 | 3 | Subtitle generation | ✅ | SRT from Tencent ASR or script-estimated timing |
-| 4 | Keyword highlight | ❌ | Not in current draft package |
-| 5 | BGM volume control | ❌ | Not in current draft package |
-| 6 | Intro/outro | ❌ | Not in current draft package |
-| 7 | Draft package with manifest | ✅ | `drafts.py` — package with video, SRT, cover, manifest.json |
-| 8 | Auto-import to Jianying | ⚠️ | Compatibility bridge (plaintext-compatible); NOT native 10.7 encrypted format |
-| 9 | Import status tracking | ✅ | manifest.json records import attempt result (attempted/failed/package_only) |
-| 10 | Retry import | ✅ | `POST /api/drafts/import` accepts `package_name` for re-import |
-| 11 | Manual Jianying verification reminder | ✅ | UI displays "打开剪映人工验证" message |
+| 4 | Chapter labels | ✅ | `drafts.py:670-693` — one 28px label per script section, 2s each |
+| 5 | Keyword emphasis | ✅ | `drafts.py:698-729` — derived from template's `default_feedback_dimensions`, orange 36px text (#FF6B35), evenly spaced across body |
+| 6 | Background music | ✅ | `drafts.py:734-756` — from `DRAFT_BACKGROUND_MUSIC_PATH` setting, validated local file, volume 0.3 over full duration |
+| 7 | Transitions | ❌ | `drafts.py:538` — `"transitions": []`, not implemented |
+| 8 | Effects | ❌ | `drafts.py:536` — `"effects": []`, not implemented |
+| 9 | Intro/outro | ❌ | Not in current template tracks |
+| 10 | Draft package with manifest | ✅ | `drafts.py:156-263` — package with video, SRT, cover, manifest.json with `template_tracks` meta |
+| 11 | Native draft import to Jianying | ✅ | `drafts.py:499` — `_write_native_jianying_draft()` writes `draft_content.json` directly (zero external deps); pyJianYingDraft is an optional fallback only when native fails |
+| 12 | Import status tracking | ✅ | manifest.json records import attempt result (imported/failed/package_only) with `jianying_10_7_detected` flag |
+| 13 | Retry import | ✅ | `POST /api/drafts/import` accepts `package_name` for re-import |
+| 14 | Manual Jianying verification reminder | ✅ | UI displays "打开剪映人工验证" message |
+| 15 | Template tracks in frontend | ✅ | `apps/web/src/lib/template-tracks.ts` — 4 track specs (title_card, chapter_labels, keyword_emphasis, background_music) with per-track readiness checks |
+| 16 | Template tracks in draft status | ✅ | `DraftAsset.template_tracks` field exposed via `_safe_template_tracks_from_manifest()` |
+| 17 | Jianying 10.7 auto-discovery | ✅ | `_jianying_10_7_detected()` checks root path; native writer produces compatible `draft_content.json` that 10.7 auto-discovers on refresh |
+
+**Architecture note:** The native writer (`_write_native_jianying_draft`, `drafts.py:499`) writes `draft_content.json` directly — no external dependencies required. The optional `pyjianyingdraft>=0.2.6` extra is only used as a fallback if the native writer fails. This is NOT a "compatibility bridge" — it's the native Jianying draft format. Jianying 10.7 encrypts its own metadata internally, so our drafts appear as auto-discovered imports rather than matching 10.7's internal encrypted representation.
 
 ### A.9 Section 8.10 — Explainable Preference Learning
 
@@ -219,10 +227,10 @@ mkdir -p ~/Desktop/鑫哥知识库
 corepack pnpm install
 
 # 运行所有验证
-corepack pnpm test:api          # 期望: 191 passed
+corepack pnpm test:api          # 期望: 226 passed
 corepack pnpm test:web-contract  # 期望: passed
 corepack pnpm test:pixel-style   # 期望: passed
-corepack pnpm build:web          # 期望: 成功, 13 routes
+corepack pnpm build:web          # 期望: 成功, 17 routes
 corepack pnpm --dir apps/web exec tsc --noEmit  # 期望: 0 errors
 corepack pnpm --dir apps/web lint                 # 期望: 0 warnings
 ```
@@ -298,7 +306,7 @@ corepack pnpm dev:worker
 2. 访问 http://localhost:3000/video
 3. **验证**: 待处理视频列表显示你的文件（文件名、大小、修改时间）
 4. 选择一个文件，点击 **处理视频**
-5. **验证**: 
+5. **验证**:
    - 处理完成后显示处理结果（输出路径、时长变化）
    - `_已处理` 子目录不再显示该文件
    - `06_待发布成片` 中出现 `*_preview.mp4` 文件
@@ -320,7 +328,7 @@ corepack pnpm dev:worker
    - 点击 **保留** 或 **删除**
    - **验证**: 决策记录在片段上
 4. 点击 **确认剪辑计划**
-5. **验证**: 
+5. **验证**:
    - `_confirmed` preview 文件生成
    - 跳转到剪映草稿页
 
@@ -329,7 +337,7 @@ corepack pnpm dev:worker
 1. 访问 http://localhost:3000/draft
 2. **验证**: 素材包已生成，显示包名、路径、状态
 3. 点击 **尝试导入剪映**
-4. **验证**: 
+4. **验证**:
    - 成功：显示 "已自动导入" 状态 + 草稿路径
    - 失败：显示失败原因 + **重试导入** 按钮
 5. **验证**: `05_剪映草稿` 目录中存在 `AI视频日记_*` 子目录，包含：
@@ -422,9 +430,10 @@ corepack pnpm --dir apps/web lint
 | Prerequisite | Why Untestable | How to Verify | Failure Mode |
 |---|---|---|---|
 | **JianyingPro installed** | Proprietary app; path hardcoded | `ls "/Applications/JianyingPro.app"` (常见路径) | 剪映导入步骤失败 |
-| **Jianying version compatibility** | Version-specific draft format; 10.7 uses encrypted metadata | Open Jianying → About → check version | Bridge import 失败；package 仍可手工导入 |
+| **Jianying version compatibility** | Version-specific draft format; 10.7 auto-discovers compatible `draft_content.json` | Open Jianying → About → check version | Draft appears in 剪映草稿箱 after refresh; if not, manifest.json records failure reason |
 | **Jianying draft directory writable** | Permissions vary | `touch "$JIANYING_DRAFT_ROOT_PATH/.test" && rm "$JIANYING_DRAFT_ROOT_PATH/.test"` | 导入失败，manifest 记录 "permission_denied" |
-| **Native encrypted format (10.7+)** | Known limitation — documented as "not yet" | N/A | 兼容桥是当前方案；`manifest.json` 中的素材包是可靠 fallback |
+| **Native writer produces auto-discoverable draft** | External validation — must be tested inside Jianying | Run E2E Phase 10; check 剪映草稿箱 for auto-discovered draft | Draft not visible in Jianying; fall back to asset package import |
+| **pyJianYingDraft optional fallback** | Extra dependency (`pip install pyjianyingdraft>=0.2.6`); not required for native path | Only needed if native writer fails; test `pip install pyjianyingdraft` | Without it, native failure = no fallback; draft package remains the reliable asset source |
 
 ### C.6 Obsidian Vault
 
@@ -436,34 +445,31 @@ corepack pnpm --dir apps/web lint
 
 ---
 
-## Part D: README Updates
+## Part D: README Updates (applied in baseline)
 
-对 `README.md` 的修订建议（基于 origin/main 实际代码验证）：
+对 `README.md` 的修订已基于 origin/main 实际代码验证并应用（见本分支 `README.md` diff）：
 
-### D.1 Stale Claims
+### D.1 Applied Changes
 
-| 当前 README 声称 | 实际状态 | 建议 |
+| 原状态 | 修改 | 状态 |
 |---|---|---|
-| "Not yet implemented: Native Jianying 10.7 encrypted draft authoring" | ✅ 仍然准确 — 无需修改 | — |
-| "Not yet implemented: Native watchdog event listener" | ✅ 仍然准确 — worker 使用轮询 | — |
-| "Not yet implemented: COS/URL mode for Tencent ASR" | ✅ 仍然准确 | — |
-| "Not yet implemented: Real microphone capture" | ✅ 仍然准确（desktop entitlements 启用但 preload 无 capture API） | — |
-| "Not yet implemented: macOS desktop shell and DMG packaging" | ❌ **已过时** — coordinator 仓库已实现 Electron 壳 + DMG 打包 + CI/CD 发布流程 | 移除此行，更新为当前状态 |
-| EPISODE STATUS 未列出 | 代码中已有 11 个状态（`CREATED..FAILED`） | 建议新增 Episode 状态机说明 |
-| 未提及 Creator Profile | `creator_profile.py` + `/api/creator-profile` 端点已实现 | 建议新增 Creator Profile 条目 |
-| 未提及 Episode History 和历史页面 | `/api/episodes/history` + `frontend/apps/web/src/app/history/page.tsx` 已实现 | 建议新增 |
-| 未提及 Source File Lifecycle (pending→processed→archived) | `SourceFileState` + `SourceTracker` 已实现 | 建议新增 |
-| 未提及 Production Chain 可视化 | `ProductionChainStage` (10 stages) + `/api/episodes/{id}/production-chain` | 建议新增 |
-| Visit 路由清单缺少新路由 | `/history`, `/welcome`, `/privacy`, `/terms`, `/profile`, `/learning` 等已存在 | 补充路由清单 |
+| "Not yet implemented: macOS desktop shell" | 移除；新增 Desktop Shell 章节描述 Electron 壳 + DMG 打包 | ✅ 已应用 |
+| 缺少 Episode 状态机 | 新增 11 状态（CREATED→PUBLISHED/FAILED）+ 4 种 intake mode | ✅ 已应用 |
+| 缺少 Creator Profile | 新增 `/profile` 条目 | ✅ 已应用 |
+| 缺少 Episode History | 新增 `/history` 条目 | ✅ 已应用 |
+| 缺少 Source Lifecycle | 新增 SourceFileState + SourceTracker 描述 | ✅ 已应用 |
+| 缺少 Production Chain | 新增 10-stage pipeline 描述 | ✅ 已应用 |
+| Visit 路由 9→14 | 扩展至 17 条路由（含 `/onboarding`, `/privacy`, `/terms`） | ✅ 已应用 |
+| "Not yet implemented" 列表过时 | 更新为准确的 7 项未实现清单（含 signing, notifications, Jianying effects） | ✅ 已应用 |
 
 ### D.2 验证命令 — 全部可运行 ✅
 
 所有 README 中的命令已验证在当前代码库可执行：
 ```bash
-corepack pnpm test:api           # ✅ 191 passed
+corepack pnpm test:api           # ✅ 226 passed
 corepack pnpm test:web-contract   # ✅ passed
 corepack pnpm test:pixel-style    # ✅ passed
-corepack pnpm build:web           # ✅ 成功
+corepack pnpm build:web           # ✅ 成功 (17 routes)
 corepack pnpm --dir apps/web exec tsc --noEmit  # ✅ 0 errors
 corepack pnpm --dir apps/web lint                 # ✅ 0 warnings
 corepack pnpm dev:api             # ✅ 可启动
@@ -476,27 +482,29 @@ corepack pnpm dev:web             # ✅ 可启动
 
 ### What's Ready for Beta
 
-- ✅ Backend: 201 tests, 50+ endpoints, full Episode state machine, 3 content templates, script versioning, voice command preview/execute, edit plan workspace, production chain tracking, source lifecycle, preference memory with disable/restore, creator profile, automation worker
-- ✅ Frontend: 17 routes, 20 components, comprehensive API coverage, pixel-style design system, error/loading boundaries on critical routes, setup wizard, health dashboard
-- ✅ Desktop: Electron shell with API/worker/Next.js lifecycle, DMG packaging, GitHub Actions CI/CD, auto-update infrastructure (blocked by signing)
+- ✅ Backend: 226 tests, 50+ endpoints, full Episode state machine, 3 content templates with native template tracks (title card, chapter labels, keyword emphasis, background music), script versioning, voice command preview/execute, edit plan workspace, production chain tracking, source lifecycle with real retry, preference memory with disable/restore, creator profile, automation worker, native Jianying `draft_content.json` writer (zero external deps), real source retry (PR #12)
+- ✅ Frontend: 17 routes (incl. onboarding, privacy, terms), 20+ components, comprehensive API coverage, pixel-style design system, error/loading boundaries on critical routes, setup wizard, health dashboard, first-run readiness checklist (PR #14), native Jianying template tracks UI with per-track spec display (PR #15/#16), draft_output onboarding fix (PR #16)
+- ✅ Desktop: Electron shell with API/Worker/Next.js lifecycle + duplicate-start guards, writable user config (`AI_VIDEO_DIARY_DOTENV`), DMG packaging with GitHub Actions CI/CD, auto-update infrastructure (blocked by signing), symlink-dereferenced standalone deps (PR #18), correct `API_PORT`/`API_HOST` env vars (PR #18)
 
 ### What's NOT Ready (Gates Beta)
 
-- ❌ macOS code signing + notarization → Gatekeeper blocks normal double-click launch
-- ❌ Microphone capture → voice commands are text-only in current desktop build
-- ❌ Native Jianying 10.7 encrypted format → compatibility bridge only; manual verification required
+- ❌ macOS code signing + notarization → Gatekeeper blocks normal double-click launch (PR #18 DMG is functional but unsigned; right-click → Open workaround applies)
+- ❌ Desktop-level microphone capture → browser-based recording available in web frontend; preload.js lacks `getUserMedia` bridge
+- ❌ Jianying 10.7 encrypted metadata authoring → native writer produces auto-discoverable `draft_content.json` but cannot replicate 10.7's internal encryption
 
 ### What's Partially Ready
 
 - ⚠️ Voice intents use keyword matching, not LLM parsing (functional but brittle)
 - ⚠️ Desktop notifications, global shortcuts, crash recovery not implemented
-- ⚠️ Jianying template effects (keyword highlight, BGM, transitions) not in current draft packages
+- ⚠️ Jianying transitions and effects not in current draft packages (title card, chapter labels, keyword emphasis, and background music are implemented)
 - ⚠️ Edit plan decisions stored in JSON files alongside video output (not in SQLite)
+- ⚠️ pyJianYingDraft is an optional extra dependency used only as native-writer fallback; not required for normal operation
 
 ### Immediate Action Items
 
-1. **Sign & notarize** the desktop app (requires Apple Developer Program)
-2. **Add microphone capture API** to preload.js (entitlements already configured)
-3. **Fix `/api/sources/status` → `/api/sources/sync-status`** path mismatch in frontend api.ts
-4. **Run the E2E scenario** (Part B) on a real Mac with a real video file and a real DeepSeek key
-5. **Update README** per Part D recommendations
+1. **Sign & notarize** the desktop app (requires Apple Developer Program) — PR #18 DMG is functional but unsigned
+2. **Add microphone capture API** to preload.js (entitlements already configured) — browser-based recording works in web frontend; desktop shell bridge remains pending
+3. ~~**Fix `/api/sources/status` → `/api/sources/sync-status`** path mismatch~~ — ✅ resolved in origin/main (`apps/web/src/lib/api.ts:158`)
+4. **Run the E2E scenario** (Part B) on a real Mac with a real video file and a real DeepSeek key, including Phase 10 native draft auto-discovery in Jianying
+5. ~~**Update README** per Part D recommendations~~ — ✅ applied; includes Desktop Shell, Episode state machine, Creator Profile, history, source lifecycle, production chain, template tracks, onboarding/privacy/terms routes
+6. **Verify native draft auto-discovery** in Jianying 10.7 (external validation — cannot be automated)

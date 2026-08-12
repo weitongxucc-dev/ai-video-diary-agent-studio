@@ -40,17 +40,19 @@ Current build delivers:
 - Creator profile at `/profile` with learnable common expressions, banned words, and style preferences
 - Source file lifecycle tracking (pending → processing → processed → archived) with archive/unarchive support
 - Production chain visualization: 10-stage pipeline from source clips through Jianying import, with per-stage status
+- First-run readiness checklist at `/onboarding`: aggregates setup, health, settings, and system status into a single readiness snapshot with tone-coded entries, progress bar, and secret-safe display
+- Draft page with native Jianying template tracks (diary/tool_review/tutorial) including category tabs, preview toggle, and one-click track application
 - 2.0 beta acceptance pack: `docs/ai-video-diary-2.0-beta-acceptance-pack.md`
 
 Not yet implemented:
 
-- Native Jianying 10.7 encrypted draft authoring without the compatibility bridge
+- Jianying 10.7 encrypted metadata authoring; the native writer produces compatible `draft_content.json` that Jianying auto-discovers, but cannot replicate 10.7's internal encryption format
 - Native watchdog event listener; current worker uses stable polling
 - COS/URL mode for Tencent ASR files larger than the local direct-upload limit
-- Real microphone capture; the current command console executes typed text or already-transcribed voice text
+- Real microphone capture at the desktop shell level; browser-based recording is available in the web frontend
 - macOS code signing and notarization; DMG is built by CI but requires right-click → Open on first launch
 - Desktop menu bar dynamic Agent status indicator, system notifications, and global shortcuts
-- Jianying template effects beyond title cards, subtitles, and covers (keyword highlights, BGM, transitions, intro/outro)
+- Jianying transitions, effects, and intro/outro (title card, chapter labels, keyword emphasis, and background music are implemented as native template tracks)
 
 ## Local Configuration
 
@@ -151,10 +153,13 @@ Visit:
 - http://localhost:3000/history — Episode 历史
 - http://localhost:3000/learning — 反馈学习与偏好记忆
 - http://localhost:3000/profile — Creator Profile
+- http://localhost:3000/onboarding — 启动检查
 - http://localhost:3000/sources — 信息源管理
 - http://localhost:3000/knowledge — 知识库浏览
 - http://localhost:3000/health — 运行健康
 - http://localhost:3000/settings — 运行时设置
+- http://localhost:3000/privacy — 隐私声明
+- http://localhost:3000/terms — 使用条款
 
 The UI should follow `WINDOWS_PIXEL_UI_GUIDE.md`: classic Windows 95/98 pixel desktop software, not a generic SaaS dashboard, terminal console, or decorative retro skin.
 
