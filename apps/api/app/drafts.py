@@ -24,6 +24,7 @@ from app.asr import (
     transcription_to_srt,
 )
 from app.config import Settings
+from app.content_templates import get_content_template
 from app.models import Episode, ScriptPackage
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
@@ -95,6 +96,8 @@ class DraftWorkspace:
         self.runner = runner or self._run_command
         self.legacy_draft_writer = legacy_draft_writer or self._write_legacy_jianying_draft
         self._has_custom_legacy_writer = legacy_draft_writer is not None
+        self._background_music_path = settings.draft_background_music_path
+        self._last_template_tracks_meta: list[str] = []
 
     def environment(self) -> DraftEnvironment:
         packages = self._package_dirs()
@@ -151,6 +154,8 @@ class DraftWorkspace:
                 "modified_at": video.modified_at.isoformat(),
             },
             "episode": self._episode_summary(episode),
+            "content_template": self._content_template_summary(episode),
+            "script_sections": self._script_section_labels(episode),
             "artifacts": artifacts,
             "draft_tool": asdict(self.draft_tool_status()),
             "jianying_import": {
@@ -331,6 +336,7 @@ class DraftWorkspace:
             "message": self._import_success_message(
                 self._jianying_10_7_detected(), native=native
             ),
+            "template_tracks": getattr(self, '_last_template_tracks_meta', []),
         }
         self._update_manifest_import_result(manifest_path, manifest, result)
         return DraftImportResult(
@@ -554,6 +560,9 @@ class DraftWorkspace:
                 )
                 materials["texts"].extend(text_materials)
 
+        # ── Template-based tracks (opt-in, deterministic) ──
+        self._add_template_tracks(tracks, materials, manifest, duration)
+
         # ── Draft content ──
         content = {
             "platform": {
@@ -598,6 +607,161 @@ class DraftWorkspace:
 
         self._finalize_draft_meta_info(target_path, content)
         return target_path
+
+    def _add_template_tracks(
+        self,
+        tracks: list[dict[str, object]],
+        materials: dict[str, list[dict[str, object]]],
+        manifest: dict,
+        duration_us: int,
+    ) -> None:
+        """Add opt-in template tracks: title card, chapter labels, background music."""
+        template = manifest.get("content_template")
+        sections = manifest.get("script_sections")
+        meta: list[str] = []
+
+        # ── Title card ──
+        if isinstance(template, dict) and template.get("name"):
+            title_id = str(uuid4())
+            title_material_id = str(uuid4())
+            title_text = template.get("name", "")
+            materials["texts"].append({
+                "id": title_material_id,
+                "content": title_text,
+                "style": {"font_size": 48, "alignment": 1},
+                "type": "text",
+            })
+            tracks.append({
+                "type": "text",
+                "segments": [{
+                    "id": title_id,
+                    "material_id": title_material_id,
+                    "target_timerange": {"start": 0, "duration": min(2_000_000, duration_us)},
+                    "content": title_text,
+                    "style": {"font_size": 48, "alignment": 1},
+                }],
+            })
+            meta.append(f"title_card:{template.get('template_id', '')}")
+
+        # ── Chapter labels ──
+        if isinstance(sections, list) and sections:
+            chapter_segments: list[dict[str, object]] = []
+            step_duration_us = 2_000_000  # 2s per chapter label
+            for i, section in enumerate(sections):
+                if not isinstance(section, dict):
+                    continue
+                start_us = step_duration_us * i
+                if start_us >= duration_us:
+                    break
+                seg_dur = min(step_duration_us, duration_us - start_us)
+                label = str(section.get("label", ""))
+                if not label:
+                    continue
+                mat_id = str(uuid4())
+                materials["texts"].append({
+                    "id": mat_id,
+                    "content": label,
+                    "style": {"font_size": 28, "alignment": 1},
+                    "type": "text",
+                })
+                chapter_segments.append({
+                    "id": str(uuid4()),
+                    "material_id": mat_id,
+                    "target_timerange": {"start": start_us, "duration": seg_dur},
+                    "content": label,
+                    "style": {"font_size": 28, "alignment": 1},
+                })
+            if chapter_segments:
+                tracks.append({"type": "text", "segments": chapter_segments})
+                meta.append("chapter_labels")
+
+        # ── Keyword emphasis (derived from template default_feedback_dimensions) ──
+        keyword_labels = self._safe_keywords(template)
+        if keyword_labels:
+            keyword_segments: list[dict[str, object]] = []
+            safe_duration = max(1, duration_us)
+            pad_us = min(500_000, safe_duration // 4)
+            body_us = max(1, safe_duration - pad_us * 2)
+            spacing = body_us // len(keyword_labels) if keyword_labels else 0
+            for i, kw in enumerate(keyword_labels):
+                start_us = pad_us + spacing * i
+                if start_us >= safe_duration:
+                    break
+                seg_dur = min(1_500_000, safe_duration - start_us)
+                if seg_dur <= 0:
+                    continue
+                mat_id = str(uuid4())
+                materials["texts"].append({
+                    "id": mat_id,
+                    "content": kw,
+                    "style": {"font_size": 36, "alignment": 1, "color": "#FF6B35"},
+                    "type": "text",
+                })
+                keyword_segments.append({
+                    "id": str(uuid4()),
+                    "material_id": mat_id,
+                    "target_timerange": {"start": start_us, "duration": seg_dur},
+                    "content": kw,
+                    "style": {"font_size": 36, "alignment": 1, "color": "#FF6B35"},
+                })
+            if keyword_segments:
+                tracks.append({"type": "text", "segments": keyword_segments})
+                meta.append("keyword_emphasis")
+        else:
+            # Explicit absence when no safe keywords exist
+            meta.append("keyword_emphasis:none")
+
+        # ── Background music (only when a validated local asset is configured) ──
+        music_path_str = self._background_music_path
+        if music_path_str:
+            music_path = Path(music_path_str).expanduser()
+            if music_path.is_file():
+                audio_id = str(uuid4())
+                materials["audios"].append({
+                    "id": audio_id,
+                    "path": str(music_path),
+                    "duration": duration_us,
+                    "type": "audio",
+                })
+                tracks.append({
+                    "type": "audio",
+                    "segments": [{
+                        "id": str(uuid4()),
+                        "material_id": audio_id,
+                        "target_timerange": {"start": 0, "duration": duration_us},
+                        "volume": 0.3,
+                    }],
+                })
+                meta.append("background_music")
+
+        self._last_template_tracks_meta = meta
+
+    @staticmethod
+    def _safe_keywords(
+        template: dict[str, object] | None,
+    ) -> list[str]:
+        """Derive sanitised keyword emphasis labels from template metadata.
+
+        Returns up to 4 non-empty strings ≤20 chars each, or an empty list
+        when no safe keywords exist.  Never invents or fabricates words.
+        """
+        if not isinstance(template, dict):
+            return []
+        raw: object = template.get("default_feedback_dimensions")
+        if not isinstance(raw, list):
+            return []
+        cleaned: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            kw = item.strip()
+            if not kw:
+                continue
+            kw = kw[:20]  # truncate to safe length
+            cleaned.append(kw)
+            if len(cleaned) >= 4:
+                break
+        return cleaned
 
     def _srt_to_jianying_segments(
         self, srt_path: Path
@@ -959,6 +1123,45 @@ class DraftWorkspace:
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
+
+    def _content_template_summary(
+        self, episode: Episode | None
+    ) -> dict[str, object] | None:
+        if episode is None:
+            return None
+        try:
+            template = get_content_template(episode.content_template_id)
+        except KeyError:
+            return None
+        return {
+            "template_id": template.template_id,
+            "name": template.name,
+            "script_structure": template.script_structure,
+            "subtitle_style": template.subtitle_style,
+            "default_feedback_dimensions": template.default_feedback_dimensions,
+        }
+
+    def _script_section_labels(
+        self, episode: Episode | None
+    ) -> list[dict[str, object]] | None:
+        if episode is None or episode.script is None:
+            return None
+        try:
+            template = get_content_template(episode.content_template_id)
+        except KeyError:
+            template = get_content_template("video_diary")
+        steps = template.script_structure
+        sections = episode.script.sections
+        labels: list[dict[str, object]] = []
+        for i, (step, section) in enumerate(zip(steps, sections)):
+            labels.append({
+                "index": i,
+                "label": step,
+                "section_id": section.id,
+                "section_title": section.title,
+                "estimated_seconds": section.estimated_seconds,
+            })
+        return labels if labels else None
 
     def _episode_summary(self, episode: Episode | None) -> dict[str, object] | None:
         if episode is None:

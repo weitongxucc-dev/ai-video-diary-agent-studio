@@ -208,6 +208,7 @@ class Settings:
     local_whisper_python_path: str | None = None
     local_whisper_model_path: str | None = None
     local_whisper_language: str = "zh"
+    draft_background_music_path: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -271,6 +272,7 @@ class Settings:
                 "LOCAL_WHISPER_LANGUAGE",
                 cls.local_whisper_language,
             ),
+            draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
         )
 
     def public_status(self) -> dict[str, Any]:
