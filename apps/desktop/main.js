@@ -80,8 +80,8 @@ async function startApiServer() {
 
   const env = {
     ...process.env,
-    PORT: String(apiPort),
-    HOST: '127.0.0.1',
+    API_PORT: String(apiPort),
+    API_HOST: '127.0.0.1',
     AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
   };
 
