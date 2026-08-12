@@ -78,6 +78,9 @@ jobs:
       - name: Build web frontend (Next.js standalone)
         run: pnpm --dir apps/web build
 
+      - name: Materialise standalone deps (dereference symlinks)
+        run: node apps/desktop/scripts/bundle-standalone.js
+
       - name: Build API binary (PyInstaller — ${{ matrix.arch }})
         run: |
           cd apps/api
