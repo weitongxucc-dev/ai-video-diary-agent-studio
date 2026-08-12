@@ -113,12 +113,12 @@ async function startApiServer() {
   return apiPort;
 }
 
-function waitForApi(port, maxRetries = 30) {
+function waitForApi(port, maxRetries = 60) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const check = () => {
       attempts++;
-      const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
+      const req = http.get(`http://127.0.0.1:${port}/api/runtime/health`, (res) => {
         if (res.statusCode === 200) {
           console.log(`[main] API server ready on port ${port}`);
           resolve();
