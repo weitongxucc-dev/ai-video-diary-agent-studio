@@ -172,7 +172,7 @@ export function buildOnboardingSnapshot(input: {
   status: SystemStatus | null;
   statusError: string | null;
 }): OnboardingSnapshot {
-  const { setup, health, settings, status } = input;
+  const { setup, health, settings, status, settingsError } = input;
 
   const deepseek = settingsValue(settings, "DEEPSEEK_API_KEY");
   const productHunt = settingsValue(settings, "PRODUCT_HUNT_TOKEN");
@@ -180,6 +180,8 @@ export function buildOnboardingSnapshot(input: {
   const tencentSecretKey = settingsValue(settings, "TENCENTCLOUD_SECRET_KEY");
   const localWhisperPython = settingsValue(settings, "LOCAL_WHISPER_PYTHON_PATH");
   const localWhisperModel = settingsValue(settings, "LOCAL_WHISPER_MODEL_PATH");
+  const draftOutput = settingsValue(settings, "DRAFT_OUTPUT_PATH");
+  const jianyingRoot = settingsValue(settings, "JIANYING_DRAFT_ROOT_PATH");
 
   const obsidianConfigured = pathConfigured(
     status?.obsidian.exists ? { configured: true } : undefined,
@@ -321,17 +323,47 @@ export function buildOnboardingSnapshot(input: {
     secretSummary: "视频输出目录：未配置",
   });
 
-  const draftOutputEntry: OnboardingChecklistEntry = buildEntry({
-    id: "draft_output",
-    title: "剪映素材包输出",
-    detail: "需在设置中填写 draft_output_path，用于把素材包自动落到剪映目录。",
-    impact: "没有输出目录，剪映素材包无法落地。",
-    state: "missing",
-    fixHref: "/settings",
-    fixLabel: "去设置路径",
-    isSecret: false,
-    secretSummary: "剪映素材包：未配置",
-  });
+  const draftOutputEntry: OnboardingChecklistEntry = (() => {
+    if (draftOutput.configured) {
+      return buildEntry({
+        id: "draft_output",
+        title: "剪映素材包输出",
+        detail: jianyingRoot.configured
+          ? "draft_output_path 与 jianying_draft_root_path 均已配置，可自动生成素材包并尝试导入剪映。"
+          : "draft_output_path 已配置；jianying_draft_root_path 未填写时只会写素材包 fallback。",
+        impact: "已具备剪映素材包输出能力。",
+        state: jianyingRoot.configured ? "ready" : "attention",
+        fixHref: "/settings",
+        fixLabel: jianyingRoot.configured ? "查看路径" : "去补 jianying_draft_root_path",
+        isSecret: false,
+        secretSummary: `剪映素材包：${jianyingRoot.configured ? "已配置" : "draft_output 已配置 / 剪映根目录未配置"}`,
+      });
+    }
+    if (settingsError) {
+      return buildEntry({
+        id: "draft_output",
+        title: "剪映素材包输出",
+        detail: `无法读取运行配置：${settingsError}`,
+        impact: "设置读取失败，先修复 /api/settings/runtime。",
+        state: "unknown",
+        fixHref: "/settings",
+        fixLabel: "查看设置",
+        isSecret: false,
+        secretSummary: "剪映素材包：未读取",
+      });
+    }
+    return buildEntry({
+      id: "draft_output",
+      title: "剪映素材包输出",
+      detail: "需在设置中填写 draft_output_path，用于把素材包自动落到剪映目录。",
+      impact: "没有输出目录，剪映素材包无法落地。",
+      state: "missing",
+      fixHref: "/settings",
+      fixLabel: "去设置路径",
+      isSecret: false,
+      secretSummary: "剪映素材包：未配置",
+    });
+  })();
 
   const databaseEntry: OnboardingChecklistEntry = buildEntry({
     id: "database",

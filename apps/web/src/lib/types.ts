@@ -605,6 +605,7 @@ export type DraftAsset = {
   import_status: string | null;
   import_message: string | null;
   draft_path: string | null;
+  template_tracks: string[] | null;
 };
 
 export type DraftEnvironment = {
@@ -705,4 +706,43 @@ export type CreatorProfileLearnResult = {
     new_banned_words: string[];
     style_changes: Record<string, string>;
   };
+};
+
+export type TemplateTrackKind =
+  | "title_card"
+  | "chapter_labels"
+  | "keyword_emphasis"
+  | "background_music";
+
+export type TemplateTrackAvailability = "available" | "absent" | "unknown";
+
+export type TemplateTrackSource =
+  | "package-metadata"
+  | "package-fallback-empty"
+  | "package-fallback-absent"
+  | "settings"
+  | "none";
+
+export type TemplateTrackEntry = {
+  kind: TemplateTrackKind;
+  label: string;
+  description: string;
+  availability: TemplateTrackAvailability;
+  detail: string;
+  impact: string;
+  fixHref?: string;
+  source: TemplateTrackSource;
+  raw: string | null;
+};
+
+export type TemplateTrackSnapshot = {
+  source: "episode+settings" | "episode" | "settings" | "package" | "none";
+  tracks: TemplateTrackEntry[];
+  readyCount: number;
+  totalCount: number;
+  lastPackageImportedAt: string | null;
+  contentTemplateId: string | null;
+  backgroundMusicConfigured: boolean;
+  packageMetadata: string[] | null;
+  packageImportStatus: string | null;
 };

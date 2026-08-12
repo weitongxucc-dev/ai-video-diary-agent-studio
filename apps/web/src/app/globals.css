@@ -8115,3 +8115,237 @@ select:user-invalid:focus {
     margin-left: 0;
   }
 }
+
+.template-tracks-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #7f7f7f;
+}
+
+.template-tracks-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.template-tracks-header h2 {
+  font-family: var(--font-readable);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 0;
+}
+
+.template-tracks-header p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.template-tracks-summary {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+}
+
+.template-tracks-summary.tone-green {
+  background: #d3ead0;
+}
+
+.template-tracks-summary.tone-yellow {
+  background: #f5e5b6;
+}
+
+.template-tracks-summary.tone-red {
+  background: #f3c4c4;
+}
+
+.template-tracks-summary.tone-muted {
+  background: #d8d4c8;
+}
+
+.template-tracks-summary-headline strong {
+  font-family: var(--font-readable);
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.template-tracks-summary-headline span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-tracks-progress {
+  position: relative;
+  display: block;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  background: #d8d4c8;
+  overflow: hidden;
+}
+
+.template-tracks-progress-bar {
+  display: block;
+  height: 100%;
+  background: var(--accent-blue);
+  transition: width 200ms ease-in-out;
+}
+
+.template-tracks-progress em {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: var(--ink);
+  letter-spacing: 1px;
+}
+
+.template-tracks-summary-meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.template-tracks-summary-meta code {
+  font-size: 11px;
+}
+
+.template-tracks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.template-track-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 2px solid var(--border-strong);
+  background: #d8d4c8;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #7f7f7f;
+}
+
+.template-track-row.tone-ready {
+  background: #d3ead0;
+}
+
+.template-track-row.tone-missing {
+  background: #f3c4c4;
+}
+
+.template-track-row.tone-attention {
+  background: #f5e5b6;
+}
+
+.template-track-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-track-row-title strong {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.template-track-light {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--border-strong);
+  display: inline-block;
+  background: var(--muted);
+}
+
+.template-track-light.tone-ready {
+  background: var(--accent-green, #3d8a4a);
+}
+
+.template-track-light.tone-missing {
+  background: var(--accent-red, #c34a4a);
+}
+
+.template-track-light.tone-attention {
+  background: var(--accent-orange, #d99034);
+}
+
+.template-track-state {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  background: #fffdf0;
+}
+
+.template-track-state.tone-ready {
+  color: #1f4d2a;
+  background: #d3ead0;
+}
+
+.template-track-state.tone-missing {
+  color: #6b1f1f;
+  background: #f3c4c4;
+}
+
+.template-track-state.tone-attention {
+  color: #6b4a0f;
+  background: #f5e5b6;
+}
+
+.template-track-source {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  background: #fffdf0;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.template-track-row-description,
+.template-track-row-detail,
+.template-track-row-impact {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.template-track-row-detail {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.template-track-row-impact {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .template-tracks-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .template-track-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
