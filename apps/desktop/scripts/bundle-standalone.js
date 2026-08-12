@@ -12,6 +12,8 @@
  *
  * This script:
  * 1. Copies standalone/apps/web/* to standalone-bundled/apps/web/*
+ *    and adds the static/public assets that Next intentionally omits from
+ *    standalone output.
  * 2. For each top-level symlinked dep (next, react), follows the pnpm chain
  *    and reconstructs a standard node_modules tree with all transitive deps
  *    materialised as real files.
@@ -25,6 +27,8 @@ const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const STANDALONE = path.join(REPO_ROOT, 'apps', 'web', '.next', 'standalone');
+const WEB_BUILD = path.join(REPO_ROOT, 'apps', 'web', '.next');
+const WEB_PUBLIC = path.join(REPO_ROOT, 'apps', 'web', 'public');
 const SRC = path.join(STANDALONE, 'apps', 'web');
 const DST = path.join(REPO_ROOT, 'apps', 'web', '.next', 'standalone-bundled', 'apps', 'web');
 
@@ -82,6 +86,17 @@ for (const entry of fs.readdirSync(SRC)) {
   const s = path.join(SRC, entry);
   const d = path.join(DST, entry);
   copyTree(s, d);
+}
+
+// Next's standalone server deliberately omits `.next/static` and `public`.
+// They are needed at runtime for stylesheets, JavaScript chunks, and any
+// public assets, so materialise them next to server.js before packaging.
+const staticSrc = path.join(WEB_BUILD, 'static');
+if (fs.existsSync(staticSrc)) {
+  copyTree(staticSrc, path.join(DST, '.next', 'static'));
+}
+if (fs.existsSync(WEB_PUBLIC)) {
+  copyTree(WEB_PUBLIC, path.join(DST, 'public'));
 }
 
 // ── Phase 2: materialise top-level node_modules entries ──
