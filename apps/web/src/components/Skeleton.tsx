@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
+import { PixelLoadingState } from "@/components/PixelPrimitives";
 
-type SkeletonProps = {
+export type SkeletonProps = {
   width?: string | number;
   height?: string | number;
   variant?: "block" | "text" | "circle";
@@ -34,7 +35,7 @@ export function Skeleton({
   );
 }
 
-type LoadingShellProps = {
+export type LoadingShellProps = {
   label?: string;
   children?: React.ReactNode;
 };
@@ -45,20 +46,24 @@ export function LoadingShell({
 }: LoadingShellProps) {
   return (
     <div aria-busy="true" aria-live="polite" className="loading-shell">
-      <div className="loading-banner">
-        <span aria-hidden="true" className="loading-cursor" />
-        <strong>{label}</strong>
-        <span aria-hidden="true" className="loading-cursor" />
-      </div>
+      <PixelLoadingState
+        description="内容会在准备完成后自动更新，你可以继续停留在此页面。"
+        title={label}
+      />
       {children}
     </div>
   );
 }
 
-type MetricSkeletonProps = {
+export type MetricSkeletonProps = {
   count?: number;
 };
 
+/**
+ * @deprecated Card-wall loading presets are not part of the approved design
+ * system. Existing pages may keep this temporarily; new pages must use a
+ * skeleton that matches their final task geometry.
+ */
 export function MetricSkeletonRow({ count = 4 }: MetricSkeletonProps) {
   return (
     <div className="loading-metric-row">
@@ -74,7 +79,7 @@ export function MetricSkeletonRow({ count = 4 }: MetricSkeletonProps) {
   );
 }
 
-type ListSkeletonProps = {
+export type ListSkeletonProps = {
   count?: number;
   itemClassName?: string;
 };
@@ -103,7 +108,16 @@ export function ListSkeleton({
   );
 }
 
-export function SidebarSkeletonCards({ count = 3 }: { count?: number }) {
+export type SidebarSkeletonCardsProps = {
+  count?: number;
+};
+
+/**
+ * @deprecated Generic sidebar card placeholders reinforce the old card wall.
+ * Existing pages may keep this temporarily; new Inspector/loading views must
+ * use a structure-specific skeleton.
+ */
+export function SidebarSkeletonCards({ count = 3 }: SidebarSkeletonCardsProps) {
   return (
     <div className="loading-side-list">
       {Array.from({ length: count }).map((_, index) => (

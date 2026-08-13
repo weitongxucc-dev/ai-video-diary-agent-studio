@@ -2,151 +2,233 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
-import { PixelTooltip } from "@/components/PixelTooltip";
-import { RetroChrome } from "@/components/RetroChrome";
+import { PixelButton, PixelStatus } from "@/components/PixelPrimitives";
+import {
+  RetroChrome,
+  type RetroChromeWorkspaceStatus,
+} from "@/components/RetroChrome";
 import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
-import { WorkflowProgress } from "@/components/WorkflowProgress";
 import { toggleHelpPanel } from "@/lib/helpPanel";
 
 type NavItem = {
   href: string;
   label: string;
   icon: PixelIconName;
-  disabled?: boolean;
 };
 
 const navItems: NavItem[] = [
   { href: "/", label: "今日工作台", icon: "desk" },
-  { href: "/templates", label: "内容模板", icon: "product" },
-  { href: "/topics", label: "选题池", icon: "note" },
-  { href: "/script", label: "口播稿", icon: "script" },
-  { href: "/video", label: "视频处理", icon: "video" },
+  { href: "/topics", label: "选题", icon: "note" },
+  { href: "/script", label: "脚本", icon: "script" },
+  { href: "/video", label: "视频", icon: "video" },
   { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
-  { href: "/draft", label: "剪映草稿", icon: "clip" },
-  { href: "/history", label: "Episode 历史", icon: "calendar" },
-  { href: "/knowledge", label: "知识库", icon: "folder" },
-  { href: "/sources", label: "信息源", icon: "link" },
-  { href: "/learning", label: "反馈学习", icon: "spark" },
-  { href: "/health", label: "运行健康", icon: "check" },
-  { href: "/onboarding", label: "启动检查", icon: "clip" },
-  { href: "/profile", label: "画像", icon: "person" },
-  { href: "/settings", label: "设置", icon: "settings" }
+  { href: "/draft", label: "剪映草稿", icon: "cover" },
+  { href: "/history", label: "发布反馈", icon: "publish" },
+  { href: "/health", label: "运行状态", icon: "check" },
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+const routeLabels = [
+  ...navItems,
+  { href: "/templates", label: "内容模板" },
+  { href: "/knowledge", label: "知识库" },
+  { href: "/sources", label: "信息源" },
+  { href: "/learning", label: "反馈学习" },
+  { href: "/settings", label: "设置" },
+  { href: "/onboarding", label: "启动检查" },
+  { href: "/profile", label: "创作者画像" },
+  { href: "/privacy", label: "隐私与数据" },
+  { href: "/terms", label: "使用条款" },
+  { href: "/ui-preview", label: "阶段 A 组件预览" },
+];
+
+export type AppShellProps = {
+  children: ReactNode;
+  inspector?: ReactNode;
+  inspectorTitle?: string;
+  workspaceStatus?: RetroChromeWorkspaceStatus;
+};
+
+export function AppShell({
+  children,
+  inspector,
+  inspectorTitle = "当前任务详情",
+  workspaceStatus,
+}: AppShellProps) {
   const pathname = usePathname() ?? "";
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
   const todayLabel = new Intl.DateTimeFormat("zh-CN", {
     day: "2-digit",
     month: "2-digit",
     timeZone: "Asia/Shanghai",
     weekday: "short",
-    year: "numeric"
+    year: "numeric",
   }).format(new Date());
 
-  const currentNavItem =
-    navItems.find((item) =>
-      item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
-    ) ?? navItems[0];
+  const currentRoute =
+    routeLabels.find((item) =>
+      item.href === "/" ? pathname === "/" : pathname.startsWith(item.href),
+    ) ?? routeLabels[0];
+
+  useEffect(() => {
+    if (!inspector) {
+      setInspectorOpen(false);
+      return;
+    }
+
+    const desktopQuery = window.matchMedia("(min-width: 1180px)");
+    const syncInspector = () => setInspectorOpen(desktopQuery.matches);
+    syncInspector();
+    desktopQuery.addEventListener("change", syncInspector);
+    return () => desktopQuery.removeEventListener("change", syncInspector);
+  }, [inspector]);
+
+  useEffect(() => {
+    if (!inspectorOpen) {
+      return;
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && window.innerWidth < 1180) {
+        setInspectorOpen(false);
+        inspectorTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [inspectorOpen]);
+
+  function closeInspector() {
+    setInspectorOpen(false);
+    inspectorTriggerRef.current?.focus();
+  }
 
   return (
     <div className="retro-desktop-shell">
       <div className="retro-window-frame">
-        <RetroChrome todayLabel={todayLabel} />
-        <div className="app-shell">
-          <aside className="sidebar">
-            <div className="brand">
+        <RetroChrome
+          contextLabel={currentRoute.label}
+          todayLabel={todayLabel}
+          workspaceStatus={workspaceStatus}
+        />
+        <div
+          className={`app-shell${inspector ? " has-inspector" : ""}${inspectorOpen ? " inspector-open" : ""}`}
+        >
+          <aside className="sidebar" data-scroll-region="sidebar-y">
+            <Link aria-label="返回今日工作台" className="brand" href="/">
               <span className="pixel-logo">
                 <PixelIcon name="agent" />
               </span>
-              <div>
-                <strong>AI视频日记</strong>
-                <span>Agent Studio</span>
-              </div>
-            </div>
-            <nav>
+              <span className="brand-copy">
+                <strong>AI 视频日记</strong>
+                <span>生产流程</span>
+              </span>
+            </Link>
+            <nav aria-label="Episode 生产导航">
               {navItems.map((item) => {
                 const active =
                   item.href === "/"
                     ? pathname === "/"
                     : pathname.startsWith(item.href);
 
-                if (item.disabled) {
-                  return (
-                    <span
-                      key={item.href}
-                      className="nav-item disabled"
-                      title="后续阶段开放"
-                      aria-disabled="true"
-                    >
-                      <PixelIcon name={item.icon} />
-                      <span>{item.label}</span>
-                    </span>
-                  );
-                }
-
                 return (
                   <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`nav-item${active ? " active" : ""}`}
                     aria-current={active ? "page" : undefined}
+                    aria-label={item.label}
+                    className={`nav-item${active ? " active" : ""}`}
+                    href={item.href}
+                    key={item.href}
+                    title={item.label}
                   >
                     <PixelIcon name={item.icon} />
-                    <span>{item.label}</span>
+                    <span className="nav-label">{item.label}</span>
                   </Link>
                 );
               })}
             </nav>
-            <div className="sidebar-note">
-              <strong>专注创作，</strong>
-              <span>记录每一步一点点</span>
-              <span>- Agent Studio</span>
-              <nav aria-label="法律信息" className="sidebar-legal-links">
-                <Link href="/privacy">隐私政策</Link>
-                <Link href="/terms">使用条款</Link>
-              </nav>
+            <div className="sidebar-context">
+              <span>当前流程</span>
+              <strong>{currentRoute.label}</strong>
+              <PixelStatus kind="idle" label="等待你的下一步" />
             </div>
-            <WorkflowProgress />
           </aside>
 
-          <main className="main-area">
+          <section className="shell-workspace">
             <header className="topbar">
-              <div className="breadcrumb">{currentNavItem.label}</div>
-              <div className="topbar-center" suppressHydrationWarning>
-                <PixelIcon name="calendar" />
-                <span>今日 · {todayLabel}</span>
+              <div className="breadcrumb">
+                <span>当前任务</span>
+                <strong>{currentRoute.label}</strong>
               </div>
               <div className="topbar-actions">
-                <PixelTooltip label="搜索即将推出">
-                  <input
-                    className="search-box"
-                    type="search"
-                    placeholder="搜索 Episode、选题、素材..."
-                    aria-label="搜索 Episode、选题、素材"
-                    disabled
-                  />
-                </PixelTooltip>
-                <PixelTooltip label="帮助 · 按 ? 也能打开">
-                  <button
-                    aria-label="帮助"
-                    className="icon-button"
-                    onClick={() => toggleHelpPanel()}
-                    type="button"
+                {inspector ? (
+                  <PixelButton
+                    aria-controls="agent-inspector"
+                    aria-expanded={inspectorOpen}
+                    onClick={() => setInspectorOpen((open) => !open)}
+                    ref={inspectorTriggerRef}
+                    size="compact"
+                    variant="secondary"
                   >
-                    <PixelIcon name="bell" />
-                  </button>
-                </PixelTooltip>
-                <span className="avatar">
-                  <PixelIcon name="person" />
-                </span>
+                    {inspectorOpen ? "关闭详情" : "查看详情"}
+                  </PixelButton>
+                ) : null}
+                <PixelButton
+                  onClick={() => toggleHelpPanel()}
+                  size="compact"
+                  variant="secondary"
+                >
+                  帮助
+                </PixelButton>
               </div>
             </header>
-            {children}
-            <VoiceCommandConsole contextLabel={currentNavItem.label} />
-          </main>
+
+            <div className="shell-content-grid">
+              <main className="shell-main-scroll" data-scroll-region="main-y">
+                {children}
+              </main>
+
+              {inspector ? (
+                <>
+                  {inspectorOpen ? (
+                    <button
+                      aria-label="关闭任务详情"
+                      className="inspector-backdrop"
+                      onClick={closeInspector}
+                      type="button"
+                    />
+                  ) : null}
+                  <aside
+                    aria-label={inspectorTitle}
+                    className="shell-inspector"
+                    data-scroll-region="inspector-y"
+                    hidden={!inspectorOpen}
+                    id="agent-inspector"
+                  >
+                    <header className="shell-inspector__header">
+                      <div>
+                        <span>INSPECTOR</span>
+                        <h2>{inspectorTitle}</h2>
+                      </div>
+                      <button
+                        aria-label="关闭任务详情"
+                        className="inspector-close"
+                        onClick={closeInspector}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </header>
+                    <div className="shell-inspector__body">{inspector}</div>
+                  </aside>
+                </>
+              ) : null}
+            </div>
+
+            <VoiceCommandConsole contextLabel={currentRoute.label} />
+          </section>
           <KeyboardShortcuts />
           <HelpPanel />
         </div>
