@@ -1114,7 +1114,14 @@ def test_preference_response_includes_enabled_field():
     assert body["preferences"][0]["enabled"] is True
 
 
-def test_preference_disable_endpoint():
+def test_preference_disable_endpoint(tmp_path, monkeypatch):
+    import app.repository as repo_mod
+
+    monkeypatch.setattr(
+        repo_mod,
+        "_GLOBAL_STATE_FILE",
+        tmp_path / "global_state.json",
+    )
     resp = client.patch(
         "/api/preferences/disable",
         json={"signal": "太像概念课"},
@@ -1128,7 +1135,14 @@ def test_preference_disable_endpoint():
     assert any(not flag for flag in enabled_flags) or True  # at minimum the request worked
 
 
-def test_preference_restore_endpoint():
+def test_preference_restore_endpoint(tmp_path, monkeypatch):
+    import app.repository as repo_mod
+
+    monkeypatch.setattr(
+        repo_mod,
+        "_GLOBAL_STATE_FILE",
+        tmp_path / "global_state.json",
+    )
     # First disable
     client.patch("/api/preferences/disable", json={"signal": "test_signal"})
     # Then restore

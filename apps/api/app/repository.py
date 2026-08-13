@@ -4,11 +4,59 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+# The active workspace for the current request/worker scope. Set by the
+# auth middleware; background jobs re-set it explicitly so repository
+# queries always stay inside the caller's workspace partition.
+_WORKSPACE_CONTEXT: ContextVar[str | None] = ContextVar(
+    "workspace_context", default=None
+)
+
+# Whether Supabase auth is enabled. When enabled, repository queries must
+# resolve a workspace from the active context and never silently fall back
+# to the reserved 'local' workspace — an authenticated flow that loses its
+# context fails loudly instead of reading someone else's data.
+_AUTH_ENABLED: bool = False
+
+
+class WorkspaceContextRequiredError(RuntimeError):
+    """Raised when auth is enabled but no workspace context is active."""
+
+
+def set_auth_enabled(enabled: bool) -> None:
+    global _AUTH_ENABLED
+    _AUTH_ENABLED = bool(enabled)
+
+
+def set_workspace_context(workspace_id: str) -> object:
+    return _WORKSPACE_CONTEXT.set(workspace_id)
+
+
+def reset_workspace_context(token: object) -> None:
+    _WORKSPACE_CONTEXT.reset(token)
+
+
+def active_workspace_id() -> str:
+    """Return the active workspace, failing safe when auth is enabled.
+
+    With Supabase auth enabled a missing context is a programming bug (the
+    middleware/worker must set it), so we raise rather than silently scoping
+    the query to the reserved 'local' workspace.
+    """
+    workspace_id = _WORKSPACE_CONTEXT.get()
+    if workspace_id:
+        return workspace_id
+    if _AUTH_ENABLED:
+        raise WorkspaceContextRequiredError(
+            "workspace context is required when Supabase auth is enabled"
+        )
+    return LEGACY_WORKSPACE_ID
 
 
 from app.models import (
@@ -39,39 +87,56 @@ class EpisodeRepository:
     ) -> None:
         self._today_provider = today_provider
         self._episodes: dict[str, Episode] = {}
-        self._episode_ids_by_date: dict[date, str] = {}
+        self._episode_ids_by_date: dict[tuple[str, date], str] = {}
         self._database_path = Path(database_path).expanduser() if database_path else None
         if self._database_path is not None:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
             self._init_database()
             self._load_database()
 
-    def create(self, episode_date: date | None = None) -> Episode:
+    def create(
+        self,
+        episode_date: date | None = None,
+        workspace_id: str | None = None,
+    ) -> Episode:
+        ws = workspace_id or active_workspace_id()
         episode_date = episode_date or self._today_provider()
         episode = Episode(
             id=f"ep_{uuid4().hex[:8]}",
-            day_number=len(self._episodes) + 1,
+            day_number=len(self.all(workspace_id=ws)) + 1,
             episode_date=episode_date,
             status=EpisodeStatus.CREATED,
+            workspace_id=ws,
         )
         self._episodes[episode.id] = episode
-        self._episode_ids_by_date[episode_date] = episode.id
+        self._episode_ids_by_date[(ws, episode_date)] = episode.id
         self._persist_episode(episode)
         return episode
 
-    def today(self) -> Episode:
+    def today(self, workspace_id: str | None = None) -> Episode:
+        ws = workspace_id or active_workspace_id()
         today = self._today_provider()
-        episode_id = self._episode_ids_by_date.get(today)
+        episode_id = self._episode_ids_by_date.get((ws, today))
         if episode_id is None:
-            return self.create(today)
+            return self.create(today, workspace_id=ws)
         return self._episodes[episode_id]
 
-    def get(self, episode_id: str) -> Episode:
-        return self._episodes[episode_id]
+    def get(self, episode_id: str, workspace_id: str | None = None) -> Episode:
+        ws = workspace_id or active_workspace_id()
+        episode = self._episodes[episode_id]
+        if episode.workspace_id != ws:
+            raise KeyError(episode_id)
+        return episode
 
-    def all(self) -> list[Episode]:
+    def all(self, workspace_id: str | None = None) -> list[Episode]:
+        ws = workspace_id or active_workspace_id()
+        episodes = [
+            episode
+            for episode in self._episodes.values()
+            if episode.workspace_id == ws
+        ]
         return sorted(
-            self._episodes.values(),
+            episodes,
             key=lambda episode: episode.created_at,
             reverse=True,
         )
@@ -79,7 +144,7 @@ class EpisodeRepository:
     def save(self, episode: Episode) -> Episode:
         episode.updated_at = utc_now()
         self._episodes[episode.id] = episode
-        self._episode_ids_by_date[episode.episode_date] = episode.id
+        self._episode_ids_by_date[(episode.workspace_id, episode.episode_date)] = episode.id
         self._persist_episode(episode)
         return episode
 
@@ -90,22 +155,70 @@ class EpisodeRepository:
                 """
                 CREATE TABLE IF NOT EXISTS episodes (
                     id TEXT PRIMARY KEY,
-                    episode_date TEXT NOT NULL UNIQUE,
+                    episode_date TEXT NOT NULL,
                     payload TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+            self._migrate_episodes_schema(conn)
+
+    def _migrate_episodes_schema(self, conn: sqlite3.Connection) -> None:
+        """Backwards-compatible migration to workspace-partitioned episodes.
+
+        Legacy rows (no workspace_id) are assigned the reserved 'local'
+        workspace so that pre-auth local data never becomes visible to any
+        authenticated account.
+        """
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(episodes)").fetchall()
+        }
+        if "workspace_id" in columns:
+            return
+        conn.execute(
+            "ALTER TABLE episodes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local'"
+        )
+        # The legacy schema made episode_date globally unique. Rebuild to a
+        # per-workspace unique constraint so two accounts can each have a
+        # record for the same calendar date.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS episodes_migrated (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL DEFAULT 'local',
+                episode_date TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (workspace_id, episode_date)
+            )
+        """)
+        rows = conn.execute(
+            "SELECT id, workspace_id, episode_date, payload, updated_at FROM episodes"
+        ).fetchall()
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO episodes_migrated
+                (id, workspace_id, episode_date, payload, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.execute("DROP TABLE episodes")
+        conn.execute("ALTER TABLE episodes_migrated RENAME TO episodes")
 
     def _load_database(self) -> None:
         assert self._database_path is not None
         with sqlite3.connect(self._database_path) as conn:
-            rows = conn.execute("SELECT payload FROM episodes").fetchall()
-        for (payload,) in rows:
+            rows = conn.execute(
+                "SELECT payload, workspace_id FROM episodes"
+            ).fetchall()
+        for payload, workspace_id in rows:
             try:
                 episode = self._episode_from_dict(json.loads(payload))
+                episode.workspace_id = str(workspace_id or "local")
                 self._episodes[episode.id] = episode
-                self._episode_ids_by_date[episode.episode_date] = episode.id
+                self._episode_ids_by_date[
+                    (episode.workspace_id, episode.episode_date)
+                ] = episode.id
             except Exception:
                 logger.warning(
                     'skipping unparseable episode row in %s',
@@ -122,11 +235,12 @@ class EpisodeRepository:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO episodes
-                        (id, episode_date, payload, updated_at)
-                    VALUES (?, ?, ?, ?)
+                        (id, workspace_id, episode_date, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         episode.id,
+                        episode.workspace_id,
                         episode.episode_date.isoformat(),
                         payload,
                         episode.updated_at.isoformat(),
@@ -526,14 +640,31 @@ def _enum_value(value: object) -> object:
 
 _GLOBAL_STATE_FILE = Path("data/global_state.json")
 
+# Reserved workspace id for pre-auth local data. Legacy rows and any data
+# written while Supabase auth is disabled live here and are never merged
+# into an authenticated account's workspace.
+LEGACY_WORKSPACE_ID = "local"
+
 
 def load_global_state() -> dict[str, object]:
     if not _GLOBAL_STATE_FILE.exists():
         return {}
     try:
-        return json.loads(_GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
+        state = json.loads(_GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
+    if not isinstance(state, dict):
+        return {}
+    # Migrate legacy flat format into the reserved local workspace so it is
+    # never merged into an authenticated account's data.
+    if not isinstance(state.get("workspaces"), dict):
+        legacy: dict[str, object] = {}
+        for key in ("source_sync_statuses", "preference_state"):
+            if isinstance(state.get(key), dict):
+                legacy[key] = state[key]
+        if legacy:
+            return {"workspaces": {LEGACY_WORKSPACE_ID: legacy}}
+    return state
 
 
 def save_global_state(state: dict[str, object]) -> None:
@@ -544,27 +675,73 @@ def save_global_state(state: dict[str, object]) -> None:
     )
 
 
-def load_source_sync_statuses() -> dict[str, dict[str, object]]:
+def _workspace_state_slot(
+    state: dict[str, object],
+    workspace_id: str,
+) -> dict[str, object]:
+    """Return a copy of the mutable sub-state for a workspace.
+
+    Legacy flat state files are migrated by load_global_state into the
+    reserved 'local' workspace, so this only ever sees the partitioned
+    'workspaces' format.
+    """
+    workspaces = state.get("workspaces")
+    if isinstance(workspaces, dict):
+        slot = workspaces.get(workspace_id)
+        return dict(slot) if isinstance(slot, dict) else {}
+    return {}
+
+
+def _write_workspace_state_slot(
+    workspace_id: str,
+    slot: dict[str, object],
+) -> None:
     state = load_global_state()
-    raw = state.get("source_sync_statuses", {})
+    workspaces = state.get("workspaces")
+    if not isinstance(workspaces, dict):
+        workspaces = {}
+    workspaces[workspace_id] = slot
+    state["workspaces"] = workspaces
+    save_global_state(state)
+
+
+def load_source_sync_statuses(
+    workspace_id: str | None = None,
+) -> dict[str, dict[str, object]]:
+    ws = workspace_id or active_workspace_id()
+    state = load_global_state()
+    raw = _workspace_state_slot(state, ws).get("source_sync_statuses", {})
     if isinstance(raw, dict):
         return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
     return {}
 
 
-def save_source_sync_statuses(statuses: dict[str, dict[str, object]]) -> None:
+def save_source_sync_statuses(
+    statuses: dict[str, dict[str, object]],
+    workspace_id: str | None = None,
+) -> None:
+    ws = workspace_id or active_workspace_id()
     state = load_global_state()
-    state["source_sync_statuses"] = statuses
-    save_global_state(state)
+    slot = _workspace_state_slot(state, ws)
+    slot["source_sync_statuses"] = statuses
+    _write_workspace_state_slot(ws, slot)
 
 
-def load_preference_state_payload() -> dict[str, object] | None:
+def load_preference_state_payload(
+    workspace_id: str | None = None,
+) -> dict[str, object] | None:
+    ws = workspace_id or active_workspace_id()
     state = load_global_state()
-    pref = state.get("preference_state")
+    pref = _workspace_state_slot(state, ws).get("preference_state")
     return pref if isinstance(pref, dict) else None
 
 
-def save_preference_state_payload(payload: dict[str, object]) -> None:
+def save_preference_state_payload(
+    payload: dict[str, object],
+    workspace_id: str | None = None,
+) -> None:
+    ws = workspace_id or active_workspace_id()
     state = load_global_state()
-    state["preference_state"] = payload
-    save_global_state(state)
+    slot = _workspace_state_slot(state, ws)
+    slot["preference_state"] = payload
+    _write_workspace_state_slot(ws, slot)

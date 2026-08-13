@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import logging
 import time as time_module
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time
 from typing import Protocol
 
 from app.config import Settings
 from app.drafts import DraftWorkspace
 from app.llm import script_generator_from_settings
-from app.repository import EpisodeRepository
+from app.repository import (
+    LEGACY_WORKSPACE_ID,
+    EpisodeRepository,
+    reset_workspace_context,
+    set_auth_enabled,
+    set_workspace_context,
+)
 from app.services import EpisodeService
 from app.sources import ObsidianVault
 from app.topics import topic_generator_from_settings
@@ -48,37 +56,39 @@ class AgentAutomationWorker:
         today = now.date()
         if now.time() < self.daily_topic_time or today in self._topic_runs:
             return False
-        episode = self.repo.today()
-        episode = self.workflow.run("generate_topics", episode)
-        self.repo.save(episode)
+        with _local_workspace_scope():
+            episode = self.repo.today()
+            episode = self.workflow.run("generate_topics", episode)
+            self.repo.save(episode)
         self._topic_runs.add(today)
         return True
 
     def process_pending_videos_once(self) -> list[str]:
         if not (self.video_inbox and self.video_processor and self.draft_workspace):
             return []
-        episode = self.repo.today()
-        if episode.script is None:
-            return []
-        processed_names: list[str] = []
-        for video in self.video_inbox.pending_videos():
-            if episode.video_processed_file_name:
-                break
-            episode = self.workflow.run("bind_video", episode, video=video)
-            processed = self.video_processor.process(video.file_name)
-            episode = self.workflow.run("bind_processed_video", episode, video=processed)
-            package = self.draft_workspace.create_package_and_import_to_jianying(
-                video_file_name=processed.file_name,
-                episode=episode,
-            )
-            episode = self.workflow.run(
-                "bind_draft_package",
-                episode,
-                package_name=package.package_name,
-                package_path=package.path,
-            )
-            self.repo.save(episode)
-            processed_names.append(video.file_name)
+        with _local_workspace_scope():
+            episode = self.repo.today()
+            if episode.script is None:
+                return []
+            processed_names: list[str] = []
+            for video in self.video_inbox.pending_videos():
+                if episode.video_processed_file_name:
+                    break
+                episode = self.workflow.run("bind_video", episode, video=video)
+                processed = self.video_processor.process(video.file_name)
+                episode = self.workflow.run("bind_processed_video", episode, video=processed)
+                package = self.draft_workspace.create_package_and_import_to_jianying(
+                    video_file_name=processed.file_name,
+                    episode=episode,
+                )
+                episode = self.workflow.run(
+                    "bind_draft_package",
+                    episode,
+                    package_name=package.package_name,
+                    package_path=package.path,
+                )
+                self.repo.save(episode)
+                processed_names.append(video.file_name)
         return processed_names
 
     def run_forever(self, poll_interval_seconds: float = 30.0) -> None:
@@ -94,8 +104,24 @@ class AgentAutomationWorker:
             time_module.sleep(poll_interval_seconds)
 
 
+@contextmanager
+def _local_workspace_scope() -> Iterator[None]:
+    """Explicitly scope a block to the reserved local workspace.
+
+    The automation worker is the local single-user daemon. It always operates
+    on the reserved 'local' workspace explicitly, so with Supabase auth
+    enabled it can never accidentally act on an authenticated account's data.
+    """
+    token = set_workspace_context(LEGACY_WORKSPACE_ID)
+    try:
+        yield
+    finally:
+        reset_workspace_context(token)
+
+
 def build_worker_from_env() -> AgentAutomationWorker:
     settings = Settings.from_env()
+    set_auth_enabled(settings.auth_enabled)
     vault = ObsidianVault(settings.obsidian_vault_path)
     service = EpisodeService(
         script_generator=script_generator_from_settings(settings),

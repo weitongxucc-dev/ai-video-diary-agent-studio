@@ -209,6 +209,24 @@ class Settings:
     local_whisper_model_path: str | None = None
     local_whisper_language: str = "zh"
     draft_background_music_path: str | None = None
+    supabase_url: str | None = None
+    supabase_publishable_key: str | None = None
+    supabase_secret_key: str | None = None
+    supabase_jwt_audience: str = "authenticated"
+    supabase_jwt_issuer: str | None = None
+
+    @property
+    def auth_enabled(self) -> bool:
+        """True when Supabase is configured and product-data auth is enforced."""
+        return bool(self.supabase_url and self.supabase_secret_key)
+
+    @property
+    def supabase_jwt_issuer_resolved(self) -> str | None:
+        if self.supabase_jwt_issuer:
+            return self.supabase_jwt_issuer
+        if self.supabase_url:
+            return f"{self.supabase_url.rstrip('/')}/auth/v1"
+        return None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -273,6 +291,14 @@ class Settings:
                 cls.local_whisper_language,
             ),
             draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
+            supabase_url=os.getenv("SUPABASE_URL"),
+            supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
+            supabase_secret_key=os.getenv("SUPABASE_SECRET_KEY"),
+            supabase_jwt_audience=os.getenv(
+                "SUPABASE_JWT_AUDIENCE",
+                cls.supabase_jwt_audience,
+            ),
+            supabase_jwt_issuer=os.getenv("SUPABASE_JWT_ISSUER"),
         )
 
     def public_status(self) -> dict[str, Any]:
@@ -339,6 +365,10 @@ class Settings:
                 ),
                 "local_whisper_python_path": self.local_whisper_python_path,
                 "local_whisper_model_path": self.local_whisper_model_path,
+            },
+            "auth": {
+                "enabled": self.auth_enabled,
+                "supabase_configured": bool(self.supabase_url),
             },
         }
 
@@ -451,6 +481,30 @@ class Settings:
                     "name": "DRAFT_BACKGROUND_MUSIC_PATH",
                     "configured": bool(self.draft_background_music_path),
                     "value": self.draft_background_music_path,
+                    "secret": False,
+                },
+                {
+                    "name": "SUPABASE_URL",
+                    "configured": bool(self.supabase_url),
+                    "value": self.supabase_url,
+                    "secret": False,
+                },
+                {
+                    "name": "SUPABASE_PUBLISHABLE_KEY",
+                    "configured": bool(self.supabase_publishable_key),
+                    "value": "已配置" if self.supabase_publishable_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "SUPABASE_SECRET_KEY",
+                    "configured": bool(self.supabase_secret_key),
+                    "value": "已配置" if self.supabase_secret_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "SUPABASE_JWT_AUDIENCE",
+                    "configured": bool(self.supabase_jwt_audience),
+                    "value": self.supabase_jwt_audience,
                     "secret": False,
                 },
             ],

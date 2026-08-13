@@ -26,7 +26,7 @@ class InlineVideoJobRunner:
     def is_active(self, episode_id: str) -> bool:
         return False
 
-    def submit(self, episode_id: str, job) -> bool:
+    def submit(self, episode_id: str, job, workspace_id: str | None = None) -> bool:
         job()
         return True
 
@@ -39,7 +39,7 @@ class CapturingVideoJobRunner:
     def is_active(self, episode_id: str) -> bool:
         return episode_id in self.active_episode_ids
 
-    def submit(self, episode_id: str, job) -> bool:
+    def submit(self, episode_id: str, job, workspace_id: str | None = None) -> bool:
         if self.is_active(episode_id):
             return False
         self.active_episode_ids.add(episode_id)

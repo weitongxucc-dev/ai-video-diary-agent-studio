@@ -7,8 +7,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
+from app.auth import ForbiddenError, SupabaseAuthContext, UnauthorizedError
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
 from app.creator_profile import (
@@ -43,9 +44,14 @@ from app.models import (
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
 from app.repository import (
+    LEGACY_WORKSPACE_ID,
     EpisodeRepository,
+    active_workspace_id,
     load_preference_state_payload,
+    reset_workspace_context,
     save_preference_state_payload,
+    set_auth_enabled,
+    set_workspace_context,
 )
 from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
@@ -145,8 +151,6 @@ app.add_middleware(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    from fastapi.responses import JSONResponse
-
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -158,8 +162,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    from fastapi.responses import JSONResponse
-
     status_map: dict[type[Exception], int] = {
         ValueError: 400,
         FileNotFoundError: 404,
@@ -185,6 +187,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 settings = Settings.from_env()
+set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
@@ -201,6 +204,72 @@ video_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
 source_tracker = SourceTracker(video_inbox)
 manual_source_items: list[TopicSourceItem] = []
+auth_context = SupabaseAuthContext(settings)
+
+# Endpoints that are true pre-login / local-readiness probes and therefore
+# stay public even when Supabase auth is enabled. Everything else requires a
+# verified bearer token.
+PUBLIC_AUTH_PATHS: set[str] = {
+    "/api/runtime/health",
+    "/api/setup/preflight",
+    "/api/is_setup",
+    "/api/system/status",
+    "/api/version",
+    "/api/workflow/status",
+    "/api/content-templates",
+}
+
+
+def current_workspace_id(request: Request) -> str:
+    """Resolve the workspace id scoping the current request.
+
+    With Supabase auth enabled the middleware always attaches a verified
+    principal, so this fails loudly (via active_workspace_id) instead of
+    silently scoping an authenticated request to the reserved legacy
+    workspace. With auth disabled it falls back to the reserved local
+    workspace so the local-first path keeps working unchanged.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is not None and principal.workspace_id:
+        return principal.workspace_id
+    return active_workspace_id()
+
+
+@app.middleware("http")
+async def auth_boundary_middleware(request: Request, call_next):
+    """Enforce the bearer-token trust boundary for product-data endpoints.
+
+    Public readiness endpoints are exempt. When auth is enabled, a missing or
+    invalid token yields 401 and a valid token without an authorized workspace
+    yields 403. The resolved principal is attached to request.state and the
+    workspace context is set for the duration of the request so repository
+    queries stay inside the caller's partition.
+    """
+    path = request.url.path
+    if (
+        path in PUBLIC_AUTH_PATHS
+        or request.method == "OPTIONS"
+        or not auth_context.enabled
+    ):
+        return await call_next(request)
+    try:
+        request.state.principal = auth_context.authenticate(request)
+    except UnauthorizedError as exc:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "unauthorized", "detail": str(exc)},
+        )
+    except ForbiddenError as exc:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "forbidden", "detail": str(exc)},
+        )
+    workspace_id = request.state.principal.workspace_id or LEGACY_WORKSPACE_ID
+    token = set_workspace_context(workspace_id)
+    try:
+        return await call_next(request)
+    finally:
+        reset_workspace_context(token)
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
@@ -424,9 +493,11 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow
+    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
 
     settings = Settings.from_env()
+    set_auth_enabled(settings.auth_enabled)
+    auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)
@@ -511,10 +582,11 @@ def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
     "/api/sources/sync-status",
     response_model=SourceSyncStatusesResponse,
 )
-def get_source_sync_status() -> SourceSyncStatusesResponse:
+def get_source_sync_status(request: Request) -> SourceSyncStatusesResponse:
     from app.repository import load_source_sync_statuses
 
-    raw_statuses = load_source_sync_statuses()
+    ws = current_workspace_id(request)
+    raw_statuses = load_source_sync_statuses(workspace_id=ws)
     statuses = [
         {
             "source_type": source_type,
@@ -541,10 +613,11 @@ def get_source_sync_status() -> SourceSyncStatusesResponse:
 
 
 @app.get("/api/feedback/summary", response_model=FeedbackSummaryResponse)
-def get_feedback_summary() -> FeedbackSummaryResponse:
+def get_feedback_summary(request: Request) -> FeedbackSummaryResponse:
+    ws = current_workspace_id(request)
     all_event_pairs = [
         (episode.id, event)
-        for episode in repo.all()
+        for episode in repo.all(workspace_id=ws)
         for event in episode.feedback_events
     ]
     all_event_pairs = sorted(
@@ -568,14 +641,17 @@ def get_feedback_summary() -> FeedbackSummaryResponse:
 
 
 @app.get("/api/preferences", response_model=PreferencesResponse)
-def get_preferences() -> PreferencesResponse:
+def get_preferences(request: Request) -> PreferencesResponse:
+    ws = current_workspace_id(request)
     events = [
         event
-        for episode in repo.all()
+        for episode in repo.all(workspace_id=ws)
         for event in episode.feedback_events
         if event.reason and event.active
     ]
-    pref_state = PreferenceState.from_payload(load_preference_state_payload())
+    pref_state = PreferenceState.from_payload(
+        load_preference_state_payload(workspace_id=ws)
+    )
     memory = build_preference_memory(events, limit=20, preference_state=pref_state)
     preferences = [
         PreferenceItemResponse(
@@ -601,30 +677,43 @@ def get_preferences() -> PreferencesResponse:
     "/api/preferences/disable",
     response_model=PreferencesResponse,
 )
-def disable_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
-    pref_state = PreferenceState.from_payload(load_preference_state_payload())
-    pref_state.disable(request.signal)
-    save_preference_state_payload(pref_state.to_payload())
-    return _rebuilt_preferences_response(pref_state)
+def disable_preference(
+    request: Request,
+    body: PreferenceToggleRequest,
+) -> PreferencesResponse:
+    ws = current_workspace_id(request)
+    pref_state = PreferenceState.from_payload(
+        load_preference_state_payload(workspace_id=ws)
+    )
+    pref_state.disable(body.signal)
+    save_preference_state_payload(pref_state.to_payload(), workspace_id=ws)
+    return _rebuilt_preferences_response(pref_state, workspace_id=ws)
 
 
 @app.patch(
     "/api/preferences/restore",
     response_model=PreferencesResponse,
 )
-def restore_preference(request: PreferenceToggleRequest) -> PreferencesResponse:
-    pref_state = PreferenceState.from_payload(load_preference_state_payload())
-    pref_state.restore(request.signal)
-    save_preference_state_payload(pref_state.to_payload())
-    return _rebuilt_preferences_response(pref_state)
+def restore_preference(
+    request: Request,
+    body: PreferenceToggleRequest,
+) -> PreferencesResponse:
+    ws = current_workspace_id(request)
+    pref_state = PreferenceState.from_payload(
+        load_preference_state_payload(workspace_id=ws)
+    )
+    pref_state.restore(body.signal)
+    save_preference_state_payload(pref_state.to_payload(), workspace_id=ws)
+    return _rebuilt_preferences_response(pref_state, workspace_id=ws)
 
 
 def _rebuilt_preferences_response(
     pref_state: PreferenceState,
+    workspace_id: str,
 ) -> PreferencesResponse:
     events = [
         event
-        for episode in repo.all()
+        for episode in repo.all(workspace_id=workspace_id)
         for event in episode.feedback_events
         if event.reason and event.active
     ]
@@ -703,11 +792,15 @@ def get_draft_status() -> DraftStatusResponse:
 
 
 @app.post("/api/drafts/package", response_model=DraftPackageResponse)
-def create_draft_package(request: DraftPackageRequest) -> DraftPackageResponse:
+def create_draft_package(
+    request: Request,
+    body: DraftPackageRequest,
+) -> DraftPackageResponse:
+    ws = current_workspace_id(request)
     try:
         package = draft_workspace.create_package_and_import_to_jianying(
-            video_file_name=request.video_file_name,
-            episode=repo.today(),
+            video_file_name=body.video_file_name,
+            episode=repo.today(workspace_id=ws),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -742,17 +835,19 @@ def _pending_videos_by_name(file_names: list[str]):
 
 
 @app.get("/api/episodes/today", response_model=EpisodeResponse)
-def get_today_episode() -> EpisodeResponse:
-    return episode_response(repo.today())
+def get_today_episode(request: Request) -> EpisodeResponse:
+    return episode_response(repo.today(workspace_id=current_workspace_id(request)))
 
 
 @app.post("/api/episodes", response_model=EpisodeResponse)
-def create_episode() -> EpisodeResponse:
-    return episode_response(repo.create())
+def create_episode(request: Request) -> EpisodeResponse:
+    return episode_response(
+        repo.create(workspace_id=current_workspace_id(request))
+    )
 
 
 @app.get("/api/episodes/{episode_id}", response_model=EpisodeResponse)
-def get_episode(episode_id: str) -> EpisodeResponse:
+def get_episode(episode_id: str, request: Request) -> EpisodeResponse:
     return episode_response(get_episode_or_404(episode_id))
 
 
@@ -1093,9 +1188,12 @@ async def voice_transcribe(
 
 
 @app.get("/api/creator-profile", response_model=CreatorProfileResponse)
-def get_creator_profile_endpoint() -> CreatorProfileResponse:
+def get_creator_profile_endpoint(request: Request) -> CreatorProfileResponse:
     """Return the current creator profile, creating a default one if needed."""
-    profile = get_or_create_profile(settings.database_path)
+    profile = get_or_create_profile(
+        settings.database_path,
+        workspace_id=current_workspace_id(request),
+    )
     return CreatorProfileResponse(
         id=profile.id,
         common_expressions=profile.common_expressions,
@@ -1109,9 +1207,11 @@ def get_creator_profile_endpoint() -> CreatorProfileResponse:
 @app.patch("/api/creator-profile", response_model=CreatorProfileResponse)
 def update_creator_profile_endpoint(
     body: CreatorProfileUpdate,
+    request: Request,
 ) -> CreatorProfileResponse:
     """Merge update the creator profile. Only provided fields are changed."""
-    profile = get_or_create_profile(settings.database_path)
+    ws = current_workspace_id(request)
+    profile = get_or_create_profile(settings.database_path, workspace_id=ws)
 
     if body.common_expressions is not None:
         profile.common_expressions = body.common_expressions
@@ -1120,7 +1220,7 @@ def update_creator_profile_endpoint(
     if body.style_preferences is not None:
         profile.style_preferences = body.style_preferences
 
-    profile = upsert_creator_profile(profile, settings.database_path)
+    profile = upsert_creator_profile(profile, settings.database_path, workspace_id=ws)
     return CreatorProfileResponse(
         id=profile.id,
         common_expressions=profile.common_expressions,
@@ -1132,14 +1232,15 @@ def update_creator_profile_endpoint(
 
 
 @app.post("/api/creator-profile/learn", response_model=CreatorProfileLearnResult)
-def learn_creator_profile_endpoint() -> CreatorProfileLearnResult:
+def learn_creator_profile_endpoint(request: Request) -> CreatorProfileLearnResult:
     """Analyze historical episode scripts and feedback to learn creator habits.
 
     Extracts frequently-used expressions from script content, identifies
     negatively-received patterns from feedback, and infers style preferences.
     """
-    profile = get_or_create_profile(settings.database_path)
-    episodes = repo.all()
+    ws = current_workspace_id(request)
+    profile = get_or_create_profile(settings.database_path, workspace_id=ws)
+    episodes = repo.all(workspace_id=ws)
 
     # ── Collect text from active script versions ──
     all_script_text: list[str] = []
@@ -1209,7 +1310,11 @@ def learn_creator_profile_endpoint() -> CreatorProfileLearnResult:
     if style_changes:
         profile.style_preferences.update(style_changes)
 
-    profile = upsert_creator_profile(profile, settings.database_path)
+    profile = upsert_creator_profile(
+        profile,
+        settings.database_path,
+        workspace_id=ws,
+    )
 
     return CreatorProfileLearnResult(
         profile=CreatorProfileResponse(
@@ -1444,23 +1549,26 @@ def process_episode_video(
 @app.post("/api/episodes/{episode_id}/process-ad-hoc-video", response_model=EpisodeResponse)
 def process_ad_hoc_episode_video(
     episode_id: str,
-    request: ProcessVideoRequest,
+    request: Request,
+    body: ProcessVideoRequest,
 ) -> EpisodeResponse:
-    if not request.file_name:
+    if not body.file_name:
         raise HTTPException(status_code=400, detail="file_name is required")
     if video_job_runner.is_active(episode_id):
         return episode_response(get_episode_or_404(episode_id))
+    ws = current_workspace_id(request)
     try:
         episode = workflow.run(
             "bind_ad_hoc_video",
             get_episode_or_404(episode_id),
-            video=_pending_video_by_name(request.file_name),
+            video=_pending_video_by_name(body.file_name),
         )
         _start_video_job(episode)
         episode = repo.save(episode)
         video_job_runner.submit(
             episode_id,
-            lambda: _complete_ad_hoc_episode_video(episode_id, request.file_name),
+            lambda: _complete_ad_hoc_episode_video(episode_id, body.file_name),
+            workspace_id=ws,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1473,12 +1581,14 @@ def process_ad_hoc_episode_video(
 )
 def process_ad_hoc_episode_video_batch(
     episode_id: str,
-    request: ProcessVideoBatchRequest,
+    request: Request,
+    body: ProcessVideoBatchRequest,
 ) -> EpisodeResponse:
     if video_job_runner.is_active(episode_id):
         return episode_response(get_episode_or_404(episode_id))
+    ws = current_workspace_id(request)
     try:
-        videos = _pending_videos_by_name(request.file_names)
+        videos = _pending_videos_by_name(body.file_names)
         episode = workflow.run(
             "bind_ad_hoc_video_batch",
             get_episode_or_404(episode_id),
@@ -1490,8 +1600,9 @@ def process_ad_hoc_episode_video_batch(
             episode_id,
             lambda: _complete_ad_hoc_episode_video_batch(
                 episode_id,
-                request.file_names,
+                body.file_names,
             ),
+            workspace_id=ws,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

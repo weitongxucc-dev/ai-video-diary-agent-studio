@@ -13,6 +13,7 @@ from app.content_templates import ContentTemplate
 from app.creator_profile import get_creator_profile
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
 from app.preference_memory import preference_memory_payload
+from app.repository import active_workspace_id
 
 
 class LLMConfigurationError(RuntimeError):
@@ -263,8 +264,17 @@ class DeepSeekScriptGenerator:
         )
 
     def _profile_context(self) -> str:
-        """Build a prompt suffix from the creator profile, if available."""
-        profile = get_creator_profile(self._settings.database_path)
+        """Build a prompt suffix from the creator profile, if available.
+
+        The profile is scoped to the active workspace so a generation
+        request can never silently inherit another workspace's (or the
+        reserved 'local' workspace's) creator habits. With Supabase auth
+        enabled, a missing workspace context raises instead of falling back.
+        """
+        profile = get_creator_profile(
+            self._settings.database_path,
+            workspace_id=active_workspace_id(),
+        )
         if profile is None:
             return ""
         parts: list[str] = []

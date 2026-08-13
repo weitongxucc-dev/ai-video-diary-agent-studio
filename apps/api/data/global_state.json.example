@@ -1,0 +1,10 @@
+{
+  "workspaces": {
+    "local": {
+      "preference_state": {
+        "disabled_signals": []
+      },
+      "source_sync_statuses": {}
+    }
+  }
+}
