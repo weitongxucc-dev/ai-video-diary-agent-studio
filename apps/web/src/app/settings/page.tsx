@@ -3,7 +3,7 @@ import { updateRuntimeSettingsAction } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
-import { getRuntimeSettings } from "@/lib/api";
+import { getRuntimeSettings } from "@/lib/api.server";
 import type {
   RuntimeSettingItem,
   RuntimeSettings,

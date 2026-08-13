@@ -3,20 +3,11 @@ import type {
   RuntimeHealthItem,
   RuntimeSettings,
   SetupStatus,
+  SetupPreflightResponse,
   SystemStatus,
 } from "./types";
 
-export type OnboardingChecklistId =
-  | "deepseek_api_key"
-  | "obsidian_vault"
-  | "video_inbox"
-  | "video_output"
-  | "draft_output"
-  | "database"
-  | "ffmpeg"
-  | "product_hunt_token"
-  | "tencentcloud_asr"
-  | "local_whisper";
+export type OnboardingChecklistId = string;
 
 export type OnboardingChecklistState = "ready" | "attention" | "missing" | "unknown";
 
@@ -64,6 +55,8 @@ export type OnboardingSnapshot = {
     settingsError: string | null;
     status: SystemStatus | null;
     statusError: string | null;
+    preflight: SetupPreflightResponse | null;
+    preflightError: string | null;
   };
   sections: OnboardingChecklistSection[];
   generatedAt: string;
@@ -159,6 +152,8 @@ export function buildOnboardingSnapshot(input: {
   settingsError: string | null;
   status: SystemStatus | null;
   statusError: string | null;
+  preflight?: SetupPreflightResponse | null;
+  preflightError?: string | null;
 }): OnboardingSnapshot {
   const { setup, health, settings, status, settingsError } = input;
 
@@ -435,7 +430,7 @@ export function buildOnboardingSnapshot(input: {
     secretSummary: "本地 Whisper：未配置",
   });
 
-  const sections: OnboardingChecklistSection[] = [
+  let sections: OnboardingChecklistSection[] = [
     {
       id: "model",
       title: "AI 模型",
@@ -462,6 +457,35 @@ export function buildOnboardingSnapshot(input: {
     },
   ];
 
+  if (input.preflight) {
+    sections = [
+      {
+        id: "preflight",
+        title: "首次启动预检",
+        description: "这些结果来自本机 API 的实时检查；所有阻断项修复前不能完成首次启动。",
+        entries: input.preflight.checks.map((check) => {
+          const state: OnboardingChecklistState =
+            check.status === "ready" || check.status === "not_applicable"
+              ? "ready"
+              : check.status === "missing" || check.status === "invalid"
+                ? "missing"
+                : "attention";
+          return buildEntry({
+            id: check.id,
+            title: check.label,
+            detail: check.summary,
+            impact: `${check.impact} 修复：${check.repair_action}`,
+            state,
+            fixHref: "/settings",
+            fixLabel: check.settings_target ? "打开对应设置" : "查看设置",
+            isSecret: check.id === "deepseek" || check.id === "asr",
+            secretSummary: `${check.label}：${describeState(state)}`,
+          });
+        }),
+      },
+    ];
+  }
+
   const allEntries = sections.flatMap((section) => section.entries);
   const readyCount = allEntries.filter((entry) => entry.state === "ready").length;
   const blockingCount = allEntries.filter((entry) => entry.state === "missing").length;
@@ -472,7 +496,9 @@ export function buildOnboardingSnapshot(input: {
   const percent = total === 0 ? 0 : Math.round((readyCount / total) * 100);
 
   return {
-    ready: blockingCount === 0 && attentionCount === 0,
+    ready: input.preflight === undefined
+      ? blockingCount === 0 && attentionCount === 0
+      : input.preflight?.overall === "ready",
     completion: { ready: readyCount, total, percent },
     blockingCount,
     attentionCount,
@@ -493,6 +519,8 @@ export function buildOnboardingSnapshot(input: {
       settingsError: input.settingsError,
       status: input.status,
       statusError: input.statusError,
+      preflight: input.preflight ?? null,
+      preflightError: input.preflightError ?? null,
     },
     sections,
     generatedAt: new Date().toISOString(),

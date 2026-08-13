@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PixelBlockMeter } from "@/components/PixelBlockMeter";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getRuntimeHealth } from "@/lib/api";
+import { getRuntimeHealth } from "@/lib/api.server";
 import type { RuntimeHealth, RuntimeHealthItem, RuntimeHealthStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

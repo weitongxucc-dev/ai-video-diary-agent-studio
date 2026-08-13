@@ -7,6 +7,7 @@ import type {
   RuntimeHealth,
   RuntimeSettings,
   SetupStatus,
+  SetupPreflight,
   SystemStatus,
 } from "../types";
 
@@ -93,6 +94,45 @@ function makeHealth(overrides: Partial<RuntimeHealth> = {}): RuntimeHealth {
 }
 
 describe("buildOnboardingSnapshot", () => {
+  it("uses setup preflight as the authoritative readiness gate", () => {
+    const preflight: SetupPreflight = {
+      overall: "blocked",
+      generated_at: "2026-08-13T00:00:00Z",
+      checks: [
+        {
+          id: "deepseek",
+          label: "DeepSeek",
+          status: "missing",
+          summary: "尚未配置",
+          impact: "无法生成内容。",
+          repair_action: "打开设置填写 API Key。",
+          settings_target: "deepseek_api_key",
+        },
+      ],
+    };
+    const snapshot = buildOnboardingSnapshot({
+      preflight,
+      preflightError: null,
+      setup: makeSetup({ complete: true }),
+      setupError: null,
+      health: makeHealth({ summary: { total: 1, ready: 1, missing: 0, degraded: 0, invalid: 0 } }),
+      healthError: null,
+      settings: makeSettings(),
+      settingsError: null,
+      status: makeSystemStatus(),
+      statusError: null,
+    });
+
+    expect(snapshot.ready).toBe(false);
+    expect(snapshot.sections).toHaveLength(1);
+    expect(snapshot.sections[0]?.entries[0]).toMatchObject({
+      id: "deepseek",
+      state: "missing",
+      detail: "尚未配置",
+    });
+    expect(snapshot.sections[0]?.entries[0]?.impact).toContain("打开设置填写 API Key");
+  });
+
   it("returns ready=false when any entry is missing but keeps totals consistent", () => {
     const settings = makeSettings();
     const status = makeSystemStatus();
@@ -210,6 +250,24 @@ describe("buildOnboardingSnapshot", () => {
     expect(snapshot.sources.health).toBeNull();
     expect(snapshot.sources.status).toBeNull();
     expect(snapshot.ready).toBe(false);
+  });
+
+  it("blocks completion when the real preflight request is unavailable", () => {
+    const snapshot = buildOnboardingSnapshot({
+      preflight: null,
+      preflightError: "API server unreachable",
+      setup: makeSetup({ complete: true, items: [] }),
+      setupError: null,
+      health: makeHealth({ summary: { total: 1, ready: 1, missing: 0, degraded: 0, invalid: 0 } }),
+      healthError: null,
+      settings: makeSettings(),
+      settingsError: null,
+      status: makeSystemStatus(),
+      statusError: null,
+    });
+
+    expect(snapshot.ready).toBe(false);
+    expect(snapshot.sources.preflightError).toBe("API server unreachable");
   });
 });
 

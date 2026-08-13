@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { OnboardingChecklist } from "@/components/OnboardingChecklist";
-import { getRuntimeHealth, getRuntimeSettings, getSetupStatus, getSystemStatus } from "@/lib/api";
+import { getRuntimeHealth, getRuntimeSettings, getSetupPreflight, getSetupStatus, getSystemStatus } from "@/lib/api.server";
 import { buildOnboardingSnapshot, summarizeOnboardingHealth } from "@/lib/onboarding";
 
 export const dynamic = "force-dynamic";
 
 async function loadOnboardingSnapshot() {
-  const [setupResult, healthResult, settingsResult, statusResult] = await Promise.allSettled([
+  const [preflightResult, setupResult, healthResult, settingsResult, statusResult] = await Promise.allSettled([
+    getSetupPreflight(),
     getSetupStatus(),
     getRuntimeHealth(),
     getRuntimeSettings(),
@@ -15,6 +16,10 @@ async function loadOnboardingSnapshot() {
   ]);
 
   return buildOnboardingSnapshot({
+    preflight: preflightResult.status === "fulfilled" ? preflightResult.value : null,
+    preflightError: preflightResult.status === "rejected"
+      ? extractMessage(preflightResult.reason)
+      : null,
     setup: setupResult.status === "fulfilled" ? setupResult.value : null,
     setupError: setupResult.status === "rejected"
       ? extractMessage(setupResult.reason)
@@ -68,9 +73,11 @@ export default async function OnboardingPage() {
                 不会展示任何密钥原文，只会显示「已配置 / 未配置」状态。
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/">
-              返回工作台
-            </Link>
+            {snapshot.ready ? (
+              <Link className="pixel-button secondary" href="/">
+                返回工作台
+              </Link>
+            ) : null}
           </div>
 
           <div
@@ -103,13 +110,17 @@ export default async function OnboardingPage() {
             </p>
           </div>
 
-          {(snapshot.sources.setupError ||
+          {(snapshot.sources.preflightError ||
+            snapshot.sources.setupError ||
             snapshot.sources.healthError ||
             snapshot.sources.settingsError ||
             snapshot.sources.statusError) ? (
             <div className="onboarding-source-errors" role="alert">
               <strong>部分检查接口未连通：</strong>
               <ul>
+                {snapshot.sources.preflightError ? (
+                  <li>/api/setup/preflight · {snapshot.sources.preflightError}</li>
+                ) : null}
                 {snapshot.sources.setupError ? (
                   <li>/api/is_setup · {snapshot.sources.setupError}</li>
                 ) : null}
@@ -132,6 +143,26 @@ export default async function OnboardingPage() {
           ) : null}
 
           <OnboardingChecklist initialSnapshot={snapshot} />
+
+          <div className="onboarding-completion-gate">
+            <strong>
+              {snapshot.ready ? "本机预检已通过" : "首次启动仍被预检阻断"}
+            </strong>
+            <span>
+              {snapshot.ready
+                ? "可以继续创建第一条 Episode；完成第一条任务后才会正式完成 onboarding。"
+                : "请按上方每一项的修复动作处理并重新检查。未就绪时不能进入工作台。"}
+            </span>
+            {snapshot.ready ? (
+              <Link className="pixel-button" href="/topics">
+                继续创建第一条 Episode
+              </Link>
+            ) : (
+              <button className="pixel-button" disabled type="button">
+                预检未通过
+              </button>
+            )}
+          </div>
         </section>
 
         <aside className="workspace-side onboarding-side">

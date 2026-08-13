@@ -33,7 +33,7 @@ import {
   uploadEpisodeVideo,
   updatePublishMetrics,
   updateRuntimeSettings,
-} from "@/lib/api";
+} from "@/lib/api.server";
 import type {
   EditPlanSegmentDecisionAction,
   FeedbackValue,

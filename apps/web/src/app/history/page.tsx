@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getEpisodeHistory } from "@/lib/api";
+import { getEpisodeHistory } from "@/lib/api.server";
 import type {
   EpisodeHistory,
   EpisodeHistoryItem,

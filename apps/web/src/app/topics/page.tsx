@@ -7,7 +7,7 @@ import {
   regenerateTopicsAction,
   sendTopicFeedbackAction,
 } from "@/app/actions";
-import { getTodayEpisode, getTopicEvidence } from "@/lib/api";
+import { getTodayEpisode, getTopicEvidence } from "@/lib/api.server";
 import type {
   Episode,
   SourceEvidenceFreshness,

@@ -55,12 +55,23 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+type ServerAuthorizationProvider = () => Promise<string | null>;
+let serverAuthorizationProvider: ServerAuthorizationProvider | null = null;
+
+export function setServerAuthorizationProvider(
+  provider: ServerAuthorizationProvider,
+): void {
+  serverAuthorizationProvider = provider;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const serverAuthorization = await getServerAuthorization();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
+      ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
     },
     cache: "no-store",
   });
@@ -71,6 +82,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+async function getServerAuthorization(): Promise<string | null> {
+  if (typeof window !== "undefined" || !serverAuthorizationProvider) return null;
+  return serverAuthorizationProvider();
 }
 
 export function getTodayEpisode(): Promise<Episode> {

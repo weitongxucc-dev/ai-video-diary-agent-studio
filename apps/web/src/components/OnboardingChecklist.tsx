@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   getRuntimeHealth,
   getRuntimeSettings,
+  getSetupPreflight,
   getSetupStatus,
   getSystemStatus,
 } from "@/lib/api";
@@ -59,14 +60,21 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
   const runCheck = useCallback(async () => {
     setRefresh({ kind: "loading" });
     try {
-      const [setupResult, healthResult, settingsResult, statusResult] =
+      const [preflightResult, setupResult, healthResult, settingsResult, statusResult] =
         await Promise.allSettled([
+          getSetupPreflight(),
           getSetupStatus(),
           getRuntimeHealth(),
           getRuntimeSettings(),
           getSystemStatus(),
         ]);
       const next = buildOnboardingSnapshot({
+        preflight:
+          preflightResult.status === "fulfilled" ? preflightResult.value : null,
+        preflightError:
+          preflightResult.status === "rejected"
+            ? describeError(preflightResult.reason)
+            : null,
         setup: setupResult.status === "fulfilled" ? setupResult.value : null,
         setupError:
           setupResult.status === "rejected"

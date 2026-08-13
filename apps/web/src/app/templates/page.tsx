@@ -6,7 +6,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
 import { PixelTooltip } from "@/components/PixelTooltip";
-import { getContentTemplates, getTodayEpisode } from "@/lib/api";
+import { getContentTemplates, getTodayEpisode } from "@/lib/api.server";
 import type { ContentTemplate, Episode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
