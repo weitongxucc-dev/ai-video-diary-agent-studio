@@ -28,14 +28,20 @@ def setup_preflight(settings: Settings) -> dict:
     ]
 
     critical = {"deepseek", "ffmpeg", "asr"}
+    any_missing_or_invalid = any(
+        check["status"] in ("missing", "invalid")
+        for check in checks
+    )
     critical_ready = all(
         check["status"] == "ready"
         for check in checks
         if check["id"] in critical
     )
 
+    overall_ready = critical_ready and not any_missing_or_invalid
+
     return {
-        "overall": "ready" if critical_ready else "blocked",
+        "overall": "ready" if overall_ready else "blocked",
         "checks": checks,
         "generated_at": generated_at.isoformat(),
     }
@@ -71,7 +77,7 @@ def _deepseek_check(settings: Settings) -> dict:
             item_id="deepseek",
             label="DeepSeek API",
             status="ready",
-            summary=f"已配置（模型：{settings.deepseek_model}）",
+            summary="配置已提供，远端可用性由 /api/runtime/health 验证",
             impact="AI 选题、脚本生成、语音指令草案均依赖此服务。",
             repair_action="无需处理。",
             settings_target="deepseek_api_key",
@@ -153,7 +159,7 @@ def _video_inbox_check(settings: Settings) -> dict:
     return _preflight_item(
         item_id="video_inbox",
         label="视频待处理目录",
-        status="missing",
+        status="invalid",
         summary="配置的目录不存在",
         impact="无法扫描待处理视频。",
         repair_action="在设置页选择或创建视频待处理目录。",
@@ -176,7 +182,7 @@ def _video_output_check(settings: Settings) -> dict:
     return _preflight_item(
         item_id="video_output",
         label="视频输出目录",
-        status="missing",
+        status="invalid",
         summary="配置的目录不存在",
         impact="处理后视频、字幕和材料无法写入。",
         repair_action="在设置页选择或创建视频输出目录。",
@@ -190,7 +196,7 @@ def _jianying_check(settings: Settings) -> dict:
         return _preflight_item(
             item_id="jianying",
             label="剪映草稿目录",
-            status="missing",
+            status="invalid",
             summary="配置的目录不存在",
             impact="无法将素材包导入剪映草稿箱。",
             repair_action="在设置页选择剪映草稿根目录（通常为 com.lveditor.draft）。",
@@ -202,9 +208,9 @@ def _jianying_check(settings: Settings) -> dict:
             item_id="jianying",
             label="剪映草稿目录",
             status="degraded",
-            summary="检测到剪映 10.7+ 加密草稿，导入受限于兼容桥模式。",
-            impact="素材包将通过兼容桥模式导入，导入后需在剪映中人工验证。",
-            repair_action="导入后在剪映中打开草稿人工验证。",
+            summary="检测到剪映 10.7+ 加密草稿，导入时以原生 draft_content.json 写入",
+            impact="加密草稿无法直接拷贝；将以原生草稿格式写入，剪映会自动发现新草稿，已打开的剪映需刷新草稿箱。",
+            repair_action="导入后在剪映中刷新草稿箱或人工验证。",
             settings_target="jianying_draft_root_path",
         )
     return _preflight_item(
@@ -273,7 +279,7 @@ def _asr_check(settings: Settings) -> dict:
     whisper_partial = whisper_python or whisper_model
 
     if tencent_ok:
-        summary_parts = ["Tencent Cloud ASR 已配置"]
+        summary_parts = ["Tencent Cloud ASR 配置已提供，远端可用性由 /api/runtime/health 验证"]
         if whisper_ok:
             summary_parts.append("本地 Whisper 备用就绪")
         elif whisper_partial:
@@ -293,7 +299,7 @@ def _asr_check(settings: Settings) -> dict:
             item_id="asr",
             label="语音转写（ASR）",
             status="ready",
-            summary="本地 Whisper 已配置（未配置 Tencent Cloud ASR）",
+            summary="本地 Whisper 条件满足（Python 与模型路径可访问，未配置 Tencent Cloud ASR）",
             impact="语音日记转写将使用本地 Whisper 处理。",
             repair_action="无需处理。",
             settings_target="local_whisper_model_path",

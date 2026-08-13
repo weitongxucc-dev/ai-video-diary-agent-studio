@@ -127,11 +127,31 @@ def test_preflight_missing_deepseek_key_blocks():
     assert "未配置" in deepseek["summary"]
 
 
+def test_preflight_deepseek_ready_is_honest_about_local_only(tmp_path):
+    """DeepSeek ready must say config is provided, not verified, and defer
+    remote availability to /api/runtime/health (no network call)."""
+    settings = Settings(
+        deepseek_api_key="sk-test",
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        result = setup_preflight(settings)
+
+    deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
+    assert deepseek["status"] == "ready"
+    assert "配置已提供" in deepseek["summary"]
+    assert "runtime/health" in deepseek["summary"]
+    # Honest wording must not claim verification
+    assert "已验证" not in deepseek["summary"]
+    assert "verified" not in deepseek["summary"]
+
+
 # ── Directory not available ─────────────────────────────────────────────
 
 
-def test_preflight_directory_missing(tmp_path):
-    """A configured but nonexistent directory shows missing status."""
+def test_preflight_directory_invalid_blocks(tmp_path):
+    """Any configured-but-missing directory → invalid → overall blocked."""
     fake = str(tmp_path / "nonexistent_dir")
 
     settings = Settings(
@@ -146,9 +166,27 @@ def test_preflight_directory_missing(tmp_path):
         result = setup_preflight(settings)
 
     by_id = {c["id"]: c for c in result["checks"]}
-    assert by_id["video_inbox"]["status"] == "missing"
-    assert by_id["video_output"]["status"] == "missing"
-    assert by_id["jianying"]["status"] == "missing"
+    assert by_id["video_inbox"]["status"] == "invalid"
+    assert by_id["video_output"]["status"] == "invalid"
+    assert by_id["jianying"]["status"] == "invalid"
+    # invalid (even non-critical) directories must block overall
+    assert result["overall"] == "blocked"
+
+
+def test_preflight_invalid_obsidian_directory_blocks(tmp_path):
+    """Obsidian configured but path does not exist → invalid → overall blocked."""
+    settings = Settings(
+        deepseek_api_key="sk-test",
+        obsidian_vault_path=str(tmp_path / "missing_vault"),
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        result = setup_preflight(settings)
+
+    obsidian = next(c for c in result["checks"] if c["id"] == "obsidian")
+    assert obsidian["status"] == "invalid"
+    assert result["overall"] == "blocked"
 
 
 # ── Binary not available ────────────────────────────────────────────────
@@ -173,10 +211,9 @@ def test_preflight_ffmpeg_missing(tmp_path):
 
 
 def test_preflight_asr_degraded_partial_whisper(tmp_path):
-    """Partial Whisper config → degraded ASR, overall blocked when no Tencent."""
+    """ASR is critical: partial Whisper → degraded → overall blocked."""
     whisper_python = tmp_path / "python"
     whisper_python.write_text("fake")
-    # model not configured → only Python path set
 
     settings = Settings(
         deepseek_api_key="sk-test",
@@ -190,15 +227,30 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
     with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
         result = setup_preflight(settings)
 
-    # overall is ready because deepseek+ffmpeg are the critical checks
-    # and asr is only blocked when ALL asr options are missing
     asr = next(c for c in result["checks"] if c["id"] == "asr")
     assert asr["status"] == "degraded"
-
-    # deepseek+ffmpeg are ready, so overall could be ready
-    # Wait — is asr critical? Let me check: critical = {"deepseek", "ffmpeg", "asr"}
-    # asr is degraded, not ready → overall should be blocked
+    # Critical checks must be ready (not just non-missing)
     assert result["overall"] == "blocked"
+
+
+def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):
+    """ASR ready must say config is provided / local conditions met, not
+    verified, and defer Tencent remote availability to /api/runtime/health."""
+    settings = Settings(
+        deepseek_api_key="sk-test",
+        tencentcloud_secret_id="test-id",
+        tencentcloud_secret_key="test-key",
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        result = setup_preflight(settings)
+
+    asr = next(c for c in result["checks"] if c["id"] == "asr")
+    assert asr["status"] == "ready"
+    assert "配置已提供" in asr["summary"]
+    assert "runtime/health" in asr["summary"]
+    assert "已验证" not in asr["summary"]
 
 
 def test_preflight_jianying_degraded_encrypted(tmp_path):
@@ -219,7 +271,11 @@ def test_preflight_jianying_degraded_encrypted(tmp_path):
 
     jianying = next(c for c in result["checks"] if c["id"] == "jianying")
     assert jianying["status"] == "degraded"
-    assert "10.7" in jianying["summary"] or "加密" in jianying["summary"]
+    assert "10.7" in jianying["summary"]
+    assert "draft_content.json" in jianying["summary"]
+    # Must not use the deprecated '兼容桥模式' wording
+    assert "兼容桥" not in jianying["summary"]
+    assert "兼容桥" not in jianying["impact"]
 
 
 def test_preflight_obsidian_degraded_no_md(tmp_path):
@@ -239,6 +295,47 @@ def test_preflight_obsidian_degraded_no_md(tmp_path):
     obsidian = next(c for c in result["checks"] if c["id"] == "obsidian")
     assert obsidian["status"] == "degraded"
     assert ".md" in obsidian["summary"]
+
+
+def test_preflight_non_critical_degraded_does_not_block(tmp_path):
+    """Non-critical degraded (empty Obsidian + encrypted Jianying) keeps
+    overall ready when all critical checks are ready."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    jianying_root = tmp_path / "jianying"
+    jianying_root.mkdir()
+    (jianying_root / "draft_001").mkdir()
+    (jianying_root / "draft_001" / "crypto_key_store.dat").write_text("enc")
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+
+    settings = Settings(
+        deepseek_api_key="sk-test",
+        obsidian_vault_path=str(vault),
+        video_inbox_path=str(inbox),
+        video_output_path=str(output),
+        jianying_draft_root_path=str(jianying_root),
+        tencentcloud_secret_id="test-id",
+        tencentcloud_secret_key="test-key",
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        result = setup_preflight(settings)
+
+    by_id = {c["id"]: c for c in result["checks"]}
+    assert by_id["obsidian"]["status"] == "degraded"
+    assert by_id["jianying"]["status"] == "degraded"
+    # Critical checks all ready
+    assert by_id["deepseek"]["status"] == "ready"
+    assert by_id["ffmpeg"]["status"] == "ready"
+    assert by_id["asr"]["status"] == "ready"
+    # Non-critical degraded must NOT block
+    assert result["overall"] == "ready"
 
 
 # ── Not applicable vs missing ───────────────────────────────────────────
@@ -305,9 +402,9 @@ def test_preflight_never_leaks_secrets_or_absolute_paths(tmp_path):
     # Never leak sys.executable
     assert sys.executable not in payload
 
-    # Sanity: summaries are user-facing and path-free
+    # Sanity: summaries are user-facing, path-free, and honest
     deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
-    assert "已配置" in deepseek["summary"]
+    assert "配置已提供" in deepseek["summary"]
     assert "sk-abc" not in deepseek["summary"]
 
     python_check = next(c for c in result["checks"] if c["id"] == "python")
