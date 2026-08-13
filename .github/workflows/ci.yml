@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install Python dependencies
+        working-directory: apps/api
+        run: uv sync --locked
+
+      - name: Run backend tests
+        working-directory: apps/api
+        run: uv run pytest
+
+      - name: Run Ruff
+        working-directory: apps/api
+        run: uvx ruff check .
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run ESLint
+        run: pnpm run lint:web
+
+      - name: Run Vitest
+        run: pnpm run test:web
+
+      - name: Build Next.js app
+        run: pnpm run build:web
+
+      - name: Check workflow contract
+        run: pnpm run test:web-contract
+
+      - name: Check pixel-style contract
+        run: pnpm run test:pixel-style
+
+  desktop-syntax:
+    name: Desktop syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check desktop JavaScript syntax
+        run: |
+          node --check apps/desktop/main.js
+          node --check apps/desktop/preload.js
+          node --check apps/desktop/scripts/bundle-standalone.js
+
+      - name: Check packaged Python entry-point syntax
+        run: python -m py_compile apps/api/server.py apps/api/worker.py
