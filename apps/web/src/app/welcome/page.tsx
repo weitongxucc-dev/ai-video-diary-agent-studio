@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  type ChangeEvent,
   type FormEvent,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from "react";
+import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { PixelIcon } from "@/components/PixelIcon";
 import {
@@ -82,19 +82,6 @@ type InitialPathState = {
   loaded: boolean;
   paths: PathFormState;
 };
-
-function readSelectedDirectoryName(event: ChangeEvent<HTMLInputElement>): string {
-  const files = event.target.files;
-  if (!files || files.length === 0) {
-    return "";
-  }
-  const first = files[0] as File & { webkitRelativePath?: string };
-  const relative = first.webkitRelativePath ?? "";
-  if (!relative) {
-    return "";
-  }
-  return relative.split("/")[0] ?? "";
-}
 
 function describeVerifyError(err: unknown): string {
   if (err instanceof Error && err.message) {
@@ -540,7 +527,7 @@ function StepPaths({
         <h2>本地目录</h2>
         <p>
           配置 Obsidian Vault、视频待处理 / 输出目录与剪映草稿根路径。
-          文本框填绝对路径，下方的目录选择器会记住文件夹名称（浏览器限制无法直接读绝对路径）。
+          桌面端点击「选择目录」直接填入绝对路径；浏览器中请手动输入绝对路径。
         </p>
       </div>
 
@@ -549,7 +536,7 @@ function StepPaths({
           label="Obsidian Vault 路径"
           name="obsidian_vault_path"
           onChange={(value) => onChange({ ...paths, obsidianVaultPath: value })}
-          onPick={(name) => onChange({ ...paths, obsidianVaultPath: name })}
+          onPick={(path) => onChange({ ...paths, obsidianVaultPath: path })}
           placeholder="/Users/you/Documents/ObsidianVault"
           value={paths.obsidianVaultPath}
         />
@@ -557,7 +544,7 @@ function StepPaths({
           label="视频待处理目录"
           name="video_inbox_path"
           onChange={(value) => onChange({ ...paths, videoInboxPath: value })}
-          onPick={(name) => onChange({ ...paths, videoInboxPath: name })}
+          onPick={(path) => onChange({ ...paths, videoInboxPath: path })}
           placeholder="/Users/you/Movies/AI-Video-Inbox"
           value={paths.videoInboxPath}
         />
@@ -565,7 +552,7 @@ function StepPaths({
           label="视频输出目录"
           name="video_output_path"
           onChange={(value) => onChange({ ...paths, videoOutputPath: value })}
-          onPick={(name) => onChange({ ...paths, videoOutputPath: name })}
+          onPick={(path) => onChange({ ...paths, videoOutputPath: path })}
           placeholder="/Users/you/Movies/AI-Video-Output"
           value={paths.videoOutputPath}
         />
@@ -573,7 +560,7 @@ function StepPaths({
           label="剪映草稿目录"
           name="draft_output_path"
           onChange={(value) => onChange({ ...paths, draftOutputPath: value })}
-          onPick={(name) => onChange({ ...paths, draftOutputPath: name })}
+          onPick={(path) => onChange({ ...paths, draftOutputPath: path })}
           placeholder="/Users/you/Movies/JianyingDrafts"
           value={paths.draftOutputPath}
         />
@@ -583,8 +570,8 @@ function StepPaths({
           onChange={(value) =>
             onChange({ ...paths, jianyingDraftRootPath: value })
           }
-          onPick={(name) =>
-            onChange({ ...paths, jianyingDraftRootPath: name })
+          onPick={(path) =>
+            onChange({ ...paths, jianyingDraftRootPath: path })
           }
           placeholder="/Users/you/Library/.../JianyingPro"
           value={paths.jianyingDraftRootPath}
@@ -619,7 +606,7 @@ function PathField({
   name: string;
   value: string;
   onChange: (value: string) => void;
-  onPick: (folderName: string) => void;
+  onPick: (path: string) => void;
   placeholder: string;
 }) {
   return (
@@ -633,23 +620,7 @@ function PathField({
           type="text"
           value={value}
         />
-        <label className="pixel-button secondary welcome-pick-button">
-          选择目录
-          <input
-            multiple
-            name={`${name}__picker`}
-            onChange={(event) => {
-              const folderName = readSelectedDirectoryName(event);
-              if (folderName) {
-                onPick(folderName);
-              }
-            }}
-            type="file"
-            // @ts-expect-error: webkitdirectory is a non-standard attribute for picking folders.
-            webkitdirectory=""
-            directory=""
-          />
-        </label>
+        <DirectoryPickerButton onPick={onPick} />
       </div>
     </label>
   );

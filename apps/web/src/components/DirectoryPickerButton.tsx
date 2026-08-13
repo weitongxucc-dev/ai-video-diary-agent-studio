@@ -1,51 +1,69 @@
 "use client";
 
-import type { ChangeEvent } from "react";
-
-function readSelectedDirectoryName(event: ChangeEvent<HTMLInputElement>): string {
-  const files = event.target.files;
-  if (!files || files.length === 0) {
-    return "";
-  }
-  const first = files[0] as File & { webkitRelativePath?: string };
-  const relative = first.webkitRelativePath ?? "";
-  if (!relative) {
-    return "";
-  }
-  return relative.split("/")[0] ?? "";
-}
+import { useEffect, useState, type MouseEvent } from "react";
+import { hasDirectoryPicker, pickDirectory } from "@/lib/directoryPicker";
 
 /**
- * Folder picker used inside server-rendered settings forms. Browsers cannot
- * hand us an absolute path, so we copy the picked folder name into the
- * sibling text input and let the user confirm the full path.
+ * Two writeback modes, exactly one must be provided:
+ *   - onPick: controlled forms (welcome) receive the absolute path.
+ *   - targetName: server-rendered uncontrolled forms (settings) get the
+ *     sibling text input with that `name` updated in place.
  */
-export function DirectoryPickerButton({ targetName }: { targetName: string }) {
+type DirectoryPickerButtonProps =
+  | { onPick: (path: string) => void; targetName?: never }
+  | { onPick?: never; targetName: string };
+
+const BROWSER_HINT = "桌面端可选择目录；浏览器中请手动输入绝对路径。";
+
+/**
+ * Shared directory picker used by the settings and welcome forms. In the
+ * desktop shell it opens the native dialog via `electronAPI.openDirectory()`
+ * and writes the returned absolute path; in a plain browser it never fakes a
+ * basename as a path — it shows a non-blocking hint and leaves manual input
+ * untouched. Canceling the dialog writes nothing.
+ */
+export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
+  // Determined after mount so SSR output matches the first client render;
+  // the desktop shell never sees the browser hint, and plain browsers get
+  // the hint as soon as hydration runs.
+  const [showBrowserHint, setShowBrowserHint] = useState(false);
+
+  useEffect(() => {
+    setShowBrowserHint(!hasDirectoryPicker());
+  }, []);
+
+  async function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    // React clears `currentTarget` once dispatch ends, so capture it before
+    // awaiting the native dialog.
+    const button = event.currentTarget;
+    const result = await pickDirectory();
+    if (result.kind !== "picked") {
+      return;
+    }
+    if (props.onPick) {
+      props.onPick(result.path);
+      return;
+    }
+    const input = button
+      .closest(".settings-field-row")
+      ?.querySelector<HTMLInputElement>(`input[name="${props.targetName}"]`);
+    if (input) {
+      input.value = result.path;
+    }
+  }
+
   return (
-    <label className="pixel-button secondary settings-pick-button">
-      选择目录
-      <input
-        multiple
-        name={`${targetName}__picker`}
-        onChange={(event) => {
-          const folderName = readSelectedDirectoryName(event);
-          if (!folderName) {
-            return;
-          }
-          const textInput = event.currentTarget
-            .closest(".settings-field-row")
-            ?.querySelector(`input[name="${targetName}"]`) as
-            | HTMLInputElement
-            | null;
-          if (textInput) {
-            textInput.value = folderName;
-          }
-        }}
-        type="file"
-        // @ts-expect-error: webkitdirectory is a non-standard attribute for picking folders.
-        webkitdirectory=""
-        directory=""
-      />
-    </label>
+    <span className="settings-pick-wrap">
+      <button
+        className="pixel-button secondary settings-pick-button"
+        onClick={handleClick}
+        type="button"
+      >
+        选择目录
+      </button>
+      {showBrowserHint ? (
+        <small className="settings-field-helper">{BROWSER_HINT}</small>
+      ) : null}
+    </span>
   );
 }

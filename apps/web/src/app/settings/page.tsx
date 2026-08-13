@@ -52,7 +52,7 @@ const SECTIONS: SectionDef[] = [
     id: "paths",
     title: "本地目录",
     description:
-      "Obsidian、视频、剪映与数据库都要求本地路径存在；点击「选择目录」会用浏览器原生目录选择器填入。",
+      "Obsidian、视频、剪映与数据库都要求本地路径存在；桌面端点击「选择目录」直接填入绝对路径，浏览器中请手动输入。",
     tone: "green",
   },
   {

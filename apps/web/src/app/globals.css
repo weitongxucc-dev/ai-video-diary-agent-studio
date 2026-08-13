@@ -3433,6 +3433,13 @@ textarea {
   cursor: pointer;
 }
 
+.settings-pick-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
 .settings-pick-button input[type="file"] {
   position: absolute;
   inset: 0;
