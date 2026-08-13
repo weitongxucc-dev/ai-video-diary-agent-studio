@@ -1177,3 +1177,18 @@ def test_topic_candidate_includes_source_refs():
     assert len(topic.source_refs) == 2
     assert topic.source_refs[0].source_type == "Obsidian"
     assert topic.source_refs[1].source_type == "HermesRadar"
+
+
+def test_is_setup_matches_documented_shape():
+    """The frontend SetupStatus type expects configured/missing/next_step.
+    Backend contract must keep returning exactly these top-level fields.
+    """
+    client = TestClient(main_module.app)
+    response = client.get("/api/is_setup")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) >= {"configured", "missing", "next_step"}
+    assert isinstance(payload["configured"], bool)
+    assert isinstance(payload["missing"], list)
+    assert isinstance(payload["next_step"], str)

@@ -296,24 +296,12 @@ export type ContentTemplates = {
   templates: ContentTemplate[];
 };
 
-export type SetupCheckStatus = "ready" | "missing" | "degraded" | "invalid";
-
 export type ToastKind = "success" | "error" | "info";
 
-export type SetupCheckItem = {
-  id: string;
-  label: string;
-  status: SetupCheckStatus;
-  detail: string;
-  impact: string;
-  repair_action: string;
-};
-
 export type SetupStatus = {
-  complete: boolean;
-  ready_count: number;
-  total_count: number;
-  items: SetupCheckItem[];
+  configured: boolean;
+  missing: string[];
+  next_step: string;
 };
 
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";

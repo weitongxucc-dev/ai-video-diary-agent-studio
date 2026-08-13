@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { type ChangeEvent } from "react";
 import { updateRuntimeSettingsAction } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
+import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { getRuntimeSettings } from "@/lib/api";
 import type {
@@ -70,19 +70,6 @@ const SECTIONS: SectionDef[] = [
     tone: "purple",
   },
 ];
-
-function readSelectedDirectoryName(event: ChangeEvent<HTMLInputElement>): string {
-  const files = event.target.files;
-  if (!files || files.length === 0) {
-    return "";
-  }
-  const first = files[0] as File & { webkitRelativePath?: string };
-  const relative = first.webkitRelativePath ?? "";
-  if (!relative) {
-    return "";
-  }
-  return relative.split("/")[0] ?? "";
-}
 
 function statusTone(configured: boolean): "green" | "red" {
   return configured ? "green" : "red";
@@ -326,31 +313,7 @@ function FieldRow({ field }: { field: FieldDef }) {
             type="text"
             defaultValue={field.defaultValue ?? ""}
           />
-          <label className="pixel-button secondary settings-pick-button">
-            选择目录
-            <input
-              multiple
-              name={`${field.name}__picker`}
-              onChange={(event) => {
-                const folderName = readSelectedDirectoryName(event);
-                if (!folderName) {
-                  return;
-                }
-                const textInput = event.currentTarget
-                  .closest(".settings-field-row")
-                  ?.querySelector(`input[name="${field.name}"]`) as
-                  | HTMLInputElement
-                  | null;
-                if (textInput) {
-                  textInput.value = folderName;
-                }
-              }}
-              type="file"
-              // @ts-expect-error: webkitdirectory is a non-standard attribute for picking folders.
-              webkitdirectory=""
-              directory=""
-            />
-          </label>
+          <DirectoryPickerButton targetName={field.name} />
         </div>
         {field.helper ? (
           <small className="settings-field-helper">{field.helper}</small>

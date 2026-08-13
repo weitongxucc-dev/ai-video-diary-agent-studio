@@ -10,21 +10,22 @@ import {
   useMemo,
   useState,
 } from "react";
+import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { PixelIcon } from "@/components/PixelIcon";
 import {
   getRuntimeHealth,
   getRuntimeSettings,
   getSetupStatus,
+  getSystemStatus,
   updateRuntimeSettings,
 } from "@/lib/api";
+import {
+  buildOnboardingSnapshot,
+  type OnboardingSnapshot,
+} from "@/lib/onboarding";
 import type {
-  RuntimeHealth,
-  RuntimeHealthItem,
   RuntimeSettings,
   RuntimeSettingsUpdate,
-  SetupCheckItem,
-  SetupCheckStatus,
-  SetupStatus,
 } from "@/lib/types";
 
 type StepId = "welcome" | "model" | "paths" | "verify";
@@ -63,18 +64,10 @@ const STEP_ORDER: StepDef[] = [
   },
 ];
 
-const STATUS_LABEL: Record<SetupCheckStatus, string> = {
-  ready: "就绪",
-  missing: "未配置",
-  degraded: "降级",
-  invalid: "异常",
-};
-
 type VerifyState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "ok"; status: SetupStatus }
-  | { kind: "fallback"; health: RuntimeHealth; error: string }
+  | { kind: "ok"; snapshot: OnboardingSnapshot }
   | { kind: "error"; message: string };
 
 type PathFormState = {
@@ -103,11 +96,14 @@ function readSelectedDirectoryName(event: ChangeEvent<HTMLInputElement>): string
   return relative.split("/")[0] ?? "";
 }
 
-function statusTone(status: SetupCheckStatus): string {
-  if (status === "ready") return "green";
-  if (status === "missing") return "red";
-  if (status === "degraded") return "yellow";
-  return "red";
+function describeVerifyError(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return "请求失败";
 }
 
 export default function WelcomePage() {
@@ -194,7 +190,7 @@ export default function WelcomePage() {
       } else if (llmItem) {
         setKeyFeedback({
           tone: "yellow",
-          text: `已保存，但状态：${STATUS_LABEL[llmItem.status] ?? llmItem.status}（${llmItem.reason}）`,
+          text: `已保存，但状态：${llmItem.status}（${llmItem.reason}）`,
         });
       } else {
         setKeyFeedback({
@@ -243,22 +239,39 @@ export default function WelcomePage() {
   const runVerification = useCallback(async () => {
     setVerify({ kind: "loading" });
     try {
-      const status = await getSetupStatus();
-      setVerify({ kind: "ok", status });
+      const [setupResult, healthResult, settingsResult, statusResult] =
+        await Promise.allSettled([
+          getSetupStatus(),
+          getRuntimeHealth(),
+          getRuntimeSettings(),
+          getSystemStatus(),
+        ]);
+      const snapshot = buildOnboardingSnapshot({
+        setup: setupResult.status === "fulfilled" ? setupResult.value : null,
+        setupError:
+          setupResult.status === "rejected"
+            ? describeVerifyError(setupResult.reason)
+            : null,
+        health: healthResult.status === "fulfilled" ? healthResult.value : null,
+        healthError:
+          healthResult.status === "rejected"
+            ? describeVerifyError(healthResult.reason)
+            : null,
+        settings:
+          settingsResult.status === "fulfilled" ? settingsResult.value : null,
+        settingsError:
+          settingsResult.status === "rejected"
+            ? describeVerifyError(settingsResult.reason)
+            : null,
+        status: statusResult.status === "fulfilled" ? statusResult.value : null,
+        statusError:
+          statusResult.status === "rejected"
+            ? describeVerifyError(statusResult.reason)
+            : null,
+      });
+      setVerify({ kind: "ok", snapshot });
     } catch (error) {
-      try {
-        const health = await getRuntimeHealth();
-        setVerify({
-          kind: "fallback",
-          health,
-          error: (error as Error).message,
-        });
-      } catch (fallbackError) {
-        setVerify({
-          kind: "error",
-          message: (fallbackError as Error).message,
-        });
-      }
+      setVerify({ kind: "error", message: describeVerifyError(error) });
     }
   }, []);
 
@@ -662,21 +675,17 @@ function StepVerify({
       <div>
         <span className="section-kicker">Step 4</span>
         <h2>验证并完成</h2>
-        <p>调用 <code>GET /api/is_setup</code> 检查所有项目是否就绪。</p>
+        <p>汇总运行配置、健康检查与本地目录状态，确认关键项全部就绪。</p>
       </div>
 
       {state.kind === "loading" || state.kind === "idle" ? (
         <div className="welcome-verify-status">
-          <span>正在请求 /api/is_setup…</span>
+          <span>正在运行启动检查…</span>
         </div>
       ) : null}
 
       {state.kind === "ok" ? (
-        <VerifyChecklist items={state.status.items} summary={state.status} />
-      ) : null}
-
-      {state.kind === "fallback" ? (
-        <VerifyFallback health={state.health} notice={state.error} />
+        <OnboardingChecklist initialSnapshot={state.snapshot} />
       ) : null}
 
       {state.kind === "error" ? (
@@ -726,83 +735,6 @@ function StepVerify({
           进入主页
         </button>
       </div>
-    </div>
-  );
-}
-
-function VerifyChecklist({
-  items,
-  summary,
-}: {
-  items: SetupCheckItem[];
-  summary: SetupStatus;
-}) {
-  return (
-    <div className="welcome-verify-result">
-      <div className="welcome-verify-banner">
-        <strong>
-          {summary.complete
-            ? `全部 ${summary.total_count} 项通过`
-            : `${summary.ready_count}/${summary.total_count} 通过`}
-        </strong>
-        <span>
-          {summary.complete
-            ? "可以进入主页了。"
-            : "存在未通过项，可先调整后再次验证。"}
-        </span>
-      </div>
-      <ul className="welcome-verify-list">
-        {items.map((item) => (
-          <li
-            className={`welcome-verify-row ${statusTone(item.status)}`}
-            key={item.id}
-          >
-            <span className={`welcome-verify-light ${statusTone(item.status)}`} />
-            <div>
-              <strong>{item.label}</strong>
-              <span>{item.detail || STATUS_LABEL[item.status]}</span>
-              {item.repair_action ? (
-                <code>修复动作：{item.repair_action}</code>
-              ) : null}
-            </div>
-            <span className={`step-state ${statusTone(item.status)}`}>
-              {STATUS_LABEL[item.status]}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function VerifyFallback({
-  health,
-  notice,
-}: {
-  health: RuntimeHealth;
-  notice: string;
-}) {
-  const items: SetupCheckItem[] = health.items.map((item: RuntimeHealthItem) => ({
-    id: item.id,
-    label: item.label,
-    status: item.status,
-    detail: item.reason,
-    impact: item.impact,
-    repair_action: item.repair_action,
-  }));
-  const summary: SetupStatus = {
-    complete: health.summary.invalid === 0 && health.summary.missing === 0,
-    ready_count: health.summary.ready,
-    total_count: health.summary.total,
-    items,
-  };
-  return (
-    <div className="welcome-verify-result">
-      <div className="welcome-verify-banner warning">
-        <strong>/api/is_setup 暂未返回</strong>
-        <span>回退使用 /api/runtime/health（{notice}）。</span>
-      </div>
-      <VerifyChecklist items={summary.items} summary={summary} />
     </div>
   );
 }
