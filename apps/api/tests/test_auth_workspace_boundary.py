@@ -24,10 +24,12 @@ from app.auth import (
 from app.config import Settings
 from app.repository import (
     EpisodeRepository,
+    WorkspaceContextRequiredError,
     active_workspace_id,
     load_preference_state_payload,
     reset_workspace_context,
     save_preference_state_payload,
+    set_auth_enabled,
     set_workspace_context,
 )
 
@@ -437,3 +439,199 @@ def test_cross_workspace_isolation_through_http(auth_ctx, monkeypatch):
     assert list_response.status_code == 200
     ids = [e["id"] for e in list_response.json()["episodes"]]
     assert episode_b.id not in ids
+
+
+# ── Creator profile scoping in the LLM prompt path ─────────────────────
+
+
+def test_creator_profile_scoped_per_workspace(tmp_path):
+    from app.creator_profile import (
+        get_creator_profile,
+        get_or_create_profile,
+        upsert_creator_profile,
+    )
+
+    db = tmp_path / "profiles.sqlite"
+    a = get_or_create_profile(db, workspace_id="ws-a")
+    a.common_expressions = ["把“交付”挂嘴边"]
+    upsert_creator_profile(a, db, workspace_id="ws-a")
+
+    b = get_or_create_profile(db, workspace_id="ws-b")
+    b.common_expressions = ["把“对齐”挂嘴边"]
+    upsert_creator_profile(b, db, workspace_id="ws-b")
+
+    assert get_creator_profile(db, workspace_id="ws-a").common_expressions == [
+        "把“交付”挂嘴边"
+    ]
+    assert get_creator_profile(db, workspace_id="ws-b").common_expressions == [
+        "把“对齐”挂嘴边"
+    ]
+
+
+def test_llm_prompt_profile_context_is_workspace_scoped(tmp_path):
+    from app.creator_profile import get_or_create_profile, upsert_creator_profile
+    from app.llm import DeepSeekScriptGenerator
+
+    settings = Settings(
+        deepseek_api_key="sk-test",
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+    a = get_or_create_profile(settings.database_path, workspace_id="ws-a")
+    a.common_expressions = ["把“交付”挂嘴边"]
+    upsert_creator_profile(a, settings.database_path, workspace_id="ws-a")
+
+    b = get_or_create_profile(settings.database_path, workspace_id="ws-b")
+    b.common_expressions = ["把“对齐”挂嘴边"]
+    upsert_creator_profile(b, settings.database_path, workspace_id="ws-b")
+
+    generator = DeepSeekScriptGenerator(settings)
+
+    token = set_workspace_context("ws-a")
+    try:
+        prompt_a = generator._system_prompt()
+    finally:
+        reset_workspace_context(token)
+
+    token = set_workspace_context("ws-b")
+    try:
+        prompt_b = generator._system_prompt()
+    finally:
+        reset_workspace_context(token)
+
+    assert "把“交付”挂嘴边" in prompt_a
+    assert "把“对齐”挂嘴边" not in prompt_a
+    assert "把“对齐”挂嘴边" in prompt_b
+    assert "把“交付”挂嘴边" not in prompt_b
+
+
+# ── Fail-safe: auth enabled never silently reads the local workspace ───
+
+
+def test_creator_profile_requires_context_when_auth_enabled(tmp_path):
+    from app.creator_profile import get_creator_profile
+
+    set_auth_enabled(True)
+    try:
+        with pytest.raises(WorkspaceContextRequiredError):
+            get_creator_profile(str(tmp_path / "db.sqlite"))
+    finally:
+        set_auth_enabled(False)
+
+
+def test_legacy_local_profile_only_visible_in_explicit_local_mode(tmp_path):
+    from app.creator_profile import (
+        get_creator_profile,
+        get_or_create_profile,
+        upsert_creator_profile,
+    )
+    from app.repository import LEGACY_WORKSPACE_ID
+
+    db = tmp_path / "legacy.sqlite"
+    local = get_or_create_profile(db, workspace_id=LEGACY_WORKSPACE_ID)
+    local.common_expressions = ["本地画像"]
+    upsert_creator_profile(local, db, workspace_id=LEGACY_WORKSPACE_ID)
+
+    # Explicit local mode sees the legacy profile.
+    assert get_creator_profile(db, workspace_id=LEGACY_WORKSPACE_ID).common_expressions == [
+        "本地画像"
+    ]
+
+    # Another workspace never sees it.
+    assert get_creator_profile(db, workspace_id="ws-a") is None
+
+    # Auth-disabled local-compat mode (no context) still resolves local.
+    set_auth_enabled(False)
+    assert get_creator_profile(db).common_expressions == ["本地画像"]
+
+
+def test_active_workspace_fails_safe_when_auth_enabled_and_no_context():
+    set_auth_enabled(True)
+    try:
+        with pytest.raises(WorkspaceContextRequiredError):
+            active_workspace_id()
+    finally:
+        set_auth_enabled(False)
+
+
+def test_current_workspace_id_fails_safe_without_principal_when_auth_enabled(
+    auth_ctx, monkeypatch
+):
+    from fastapi import Request
+
+    _, settings, _, _ = auth_ctx
+    monkeypatch.setattr(main_module, "settings", settings)
+    set_auth_enabled(True)
+    try:
+        request = Request({"type": "http", "headers": []})
+        with pytest.raises(WorkspaceContextRequiredError):
+            main_module.current_workspace_id(request)
+    finally:
+        set_auth_enabled(False)
+
+
+def test_endpoint_generation_fails_safe_without_context(auth_ctx, monkeypatch):
+    """An authenticated request whose workspace context is lost must not
+    silently generate against the reserved 'local' workspace."""
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    repo = EpisodeRepository(database_path=settings.database_path)
+    monkeypatch.setattr(main_module, "repo", repo)
+
+    token = _sign_token("user-a", key=private_pem)
+    client = TestClient(main_module.app)
+
+    # Normal authenticated path: the middleware sets the workspace context
+    # and the endpoint succeeds.
+    set_auth_enabled(True)
+    try:
+        ok = client.post(
+            "/api/episodes",
+            json={},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert ok.status_code == 200
+
+        # Simulate a lost context: no principal attached but auth is still
+        # enabled. current_workspace_id must fail instead of resolving to
+        # 'local'.
+        from fastapi import Request
+
+        bare_request = Request({"type": "http", "headers": []})
+        with pytest.raises(WorkspaceContextRequiredError):
+            main_module.current_workspace_id(bare_request)
+    finally:
+        set_auth_enabled(False)
+
+
+def test_authenticated_creator_profile_never_reads_local(auth_ctx, monkeypatch):
+    """An authenticated request's creator profile must not inherit the
+    reserved 'local' workspace's profile."""
+    from app.creator_profile import get_or_create_profile, upsert_creator_profile
+
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    repo = EpisodeRepository(database_path=settings.database_path)
+    monkeypatch.setattr(main_module, "repo", repo)
+    set_auth_enabled(True)
+
+    # Seed a distinctive profile in the reserved local workspace.
+    local = get_or_create_profile(settings.database_path, workspace_id="local")
+    local.common_expressions = ["本地专属口头禅"]
+    upsert_creator_profile(local, settings.database_path, workspace_id="local")
+
+    token = _sign_token("user-a", key=private_pem)
+    client = TestClient(main_module.app)
+    try:
+        response = client.get(
+            "/api/creator-profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "本地专属口头禅" not in body["common_expressions"]
+    finally:
+        set_auth_enabled(False)

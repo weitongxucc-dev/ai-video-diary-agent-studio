@@ -46,9 +46,11 @@ from app.preflight import setup_preflight
 from app.repository import (
     LEGACY_WORKSPACE_ID,
     EpisodeRepository,
+    active_workspace_id,
     load_preference_state_payload,
     reset_workspace_context,
     save_preference_state_payload,
+    set_auth_enabled,
     set_workspace_context,
 )
 from app.runtime_health import runtime_health
@@ -185,6 +187,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 settings = Settings.from_env()
+set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
@@ -220,13 +223,16 @@ PUBLIC_AUTH_PATHS: set[str] = {
 def current_workspace_id(request: Request) -> str:
     """Resolve the workspace id scoping the current request.
 
-    Falls back to the reserved legacy workspace when auth is disabled so the
-    local-first path keeps working without changes.
+    With Supabase auth enabled the middleware always attaches a verified
+    principal, so this fails loudly (via active_workspace_id) instead of
+    silently scoping an authenticated request to the reserved legacy
+    workspace. With auth disabled it falls back to the reserved local
+    workspace so the local-first path keeps working unchanged.
     """
     principal = getattr(request.state, "principal", None)
-    if principal is None:
-        return LEGACY_WORKSPACE_ID
-    return principal.workspace_id or LEGACY_WORKSPACE_ID
+    if principal is not None and principal.workspace_id:
+        return principal.workspace_id
+    return active_workspace_id()
 
 
 @app.middleware("http")
@@ -487,9 +493,11 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow
+    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
 
     settings = Settings.from_env()
+    set_auth_enabled(settings.auth_enabled)
+    auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)
@@ -1180,9 +1188,12 @@ async def voice_transcribe(
 
 
 @app.get("/api/creator-profile", response_model=CreatorProfileResponse)
-def get_creator_profile_endpoint() -> CreatorProfileResponse:
+def get_creator_profile_endpoint(request: Request) -> CreatorProfileResponse:
     """Return the current creator profile, creating a default one if needed."""
-    profile = get_or_create_profile(settings.database_path)
+    profile = get_or_create_profile(
+        settings.database_path,
+        workspace_id=current_workspace_id(request),
+    )
     return CreatorProfileResponse(
         id=profile.id,
         common_expressions=profile.common_expressions,
@@ -1196,9 +1207,11 @@ def get_creator_profile_endpoint() -> CreatorProfileResponse:
 @app.patch("/api/creator-profile", response_model=CreatorProfileResponse)
 def update_creator_profile_endpoint(
     body: CreatorProfileUpdate,
+    request: Request,
 ) -> CreatorProfileResponse:
     """Merge update the creator profile. Only provided fields are changed."""
-    profile = get_or_create_profile(settings.database_path)
+    ws = current_workspace_id(request)
+    profile = get_or_create_profile(settings.database_path, workspace_id=ws)
 
     if body.common_expressions is not None:
         profile.common_expressions = body.common_expressions
@@ -1207,7 +1220,7 @@ def update_creator_profile_endpoint(
     if body.style_preferences is not None:
         profile.style_preferences = body.style_preferences
 
-    profile = upsert_creator_profile(profile, settings.database_path)
+    profile = upsert_creator_profile(profile, settings.database_path, workspace_id=ws)
     return CreatorProfileResponse(
         id=profile.id,
         common_expressions=profile.common_expressions,
@@ -1219,14 +1232,15 @@ def update_creator_profile_endpoint(
 
 
 @app.post("/api/creator-profile/learn", response_model=CreatorProfileLearnResult)
-def learn_creator_profile_endpoint() -> CreatorProfileLearnResult:
+def learn_creator_profile_endpoint(request: Request) -> CreatorProfileLearnResult:
     """Analyze historical episode scripts and feedback to learn creator habits.
 
     Extracts frequently-used expressions from script content, identifies
     negatively-received patterns from feedback, and infers style preferences.
     """
-    profile = get_or_create_profile(settings.database_path)
-    episodes = repo.all()
+    ws = current_workspace_id(request)
+    profile = get_or_create_profile(settings.database_path, workspace_id=ws)
+    episodes = repo.all(workspace_id=ws)
 
     # ── Collect text from active script versions ──
     all_script_text: list[str] = []
@@ -1296,7 +1310,11 @@ def learn_creator_profile_endpoint() -> CreatorProfileLearnResult:
     if style_changes:
         profile.style_preferences.update(style_changes)
 
-    profile = upsert_creator_profile(profile, settings.database_path)
+    profile = upsert_creator_profile(
+        profile,
+        settings.database_path,
+        workspace_id=ws,
+    )
 
     return CreatorProfileLearnResult(
         profile=CreatorProfileResponse(

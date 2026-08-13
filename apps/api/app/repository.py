@@ -18,6 +18,21 @@ _WORKSPACE_CONTEXT: ContextVar[str | None] = ContextVar(
     "workspace_context", default=None
 )
 
+# Whether Supabase auth is enabled. When enabled, repository queries must
+# resolve a workspace from the active context and never silently fall back
+# to the reserved 'local' workspace — an authenticated flow that loses its
+# context fails loudly instead of reading someone else's data.
+_AUTH_ENABLED: bool = False
+
+
+class WorkspaceContextRequiredError(RuntimeError):
+    """Raised when auth is enabled but no workspace context is active."""
+
+
+def set_auth_enabled(enabled: bool) -> None:
+    global _AUTH_ENABLED
+    _AUTH_ENABLED = bool(enabled)
+
 
 def set_workspace_context(workspace_id: str) -> object:
     return _WORKSPACE_CONTEXT.set(workspace_id)
@@ -28,7 +43,20 @@ def reset_workspace_context(token: object) -> None:
 
 
 def active_workspace_id() -> str:
-    return _WORKSPACE_CONTEXT.get() or LEGACY_WORKSPACE_ID
+    """Return the active workspace, failing safe when auth is enabled.
+
+    With Supabase auth enabled a missing context is a programming bug (the
+    middleware/worker must set it), so we raise rather than silently scoping
+    the query to the reserved 'local' workspace.
+    """
+    workspace_id = _WORKSPACE_CONTEXT.get()
+    if workspace_id:
+        return workspace_id
+    if _AUTH_ENABLED:
+        raise WorkspaceContextRequiredError(
+            "workspace context is required when Supabase auth is enabled"
+        )
+    return LEGACY_WORKSPACE_ID
 
 
 from app.models import (
