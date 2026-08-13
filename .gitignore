@@ -24,3 +24,7 @@ output/
 *.mov
 *.m4v
 *.srt
+
+# Runtime user state — created/rewritten at runtime, never committed.
+# apps/api/data/global_state.json.example documents the schema.
+apps/api/data/global_state.json

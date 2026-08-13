@@ -381,6 +381,19 @@ def test_legacy_flat_state_only_visible_to_local(tmp_path, monkeypatch):
     assert load_preference_state_payload(workspace_id="ws-a") is None
 
 
+def test_global_state_safely_initializes_when_file_missing(tmp_path, monkeypatch):
+    import app.repository as repo_mod
+
+    # The committed runtime file was removed from version control; the app
+    # must not depend on a pre-existing data/global_state.json.
+    missing = tmp_path / "does-not-exist" / "global_state.json"
+    monkeypatch.setattr(repo_mod, "_GLOBAL_STATE_FILE", missing)
+
+    assert repo_mod.load_global_state() == {}
+    assert load_preference_state_payload(workspace_id="local") is None
+    assert repo_mod.load_source_sync_statuses(workspace_id="local") == {}
+
+
 # ── Request bodies can't forge user/workspace identity ──────────────────
 
 
