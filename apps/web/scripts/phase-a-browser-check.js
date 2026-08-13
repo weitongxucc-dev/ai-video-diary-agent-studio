@@ -33,7 +33,7 @@ async (page) => {
           };
         })
         .filter((target) => target.width < 32 || target.height < 32);
-      const importantUndersized = [...document.querySelectorAll(".pixel-button--primary,.pixel-button--danger")]
+      const importantUndersized = [...document.querySelectorAll(".pixel-control-button--primary,.pixel-control-button--danger")]
         .filter(shown)
         .map((element) => {
           const rect = element.getBoundingClientRect();
@@ -62,12 +62,31 @@ async (page) => {
       const disabledChrome = document.querySelectorAll(
         ".system-titlebar :disabled,.system-menubar :disabled,.system-toolbar :disabled",
       ).length;
+      const legacyButton = document.createElement("button");
+      legacyButton.className = "pixel-button secondary";
+      legacyButton.textContent = "兼容按钮";
+      document.body.append(legacyButton);
+      const legacyButtonStyle = getComputedStyle(legacyButton);
+      const legacyButtonContract = {
+        minHeight: legacyButtonStyle.minHeight,
+        usesPhaseAClass: legacyButton.classList.contains("pixel-control-button"),
+      };
+      legacyButton.remove();
+      const phaseAButton = document.querySelector('[data-testid="phase-a-primary"]');
+      const phaseAButtonContract = phaseAButton
+        ? {
+            minHeight: getComputedStyle(phaseAButton).minHeight,
+            usesLegacyClass: phaseAButton.classList.contains("pixel-button"),
+          }
+        : null;
 
       return {
         bodyOverflow: body.scrollWidth - body.clientWidth,
         disabledChrome,
         dockOverlap,
         importantUndersized,
+        legacyButtonContract,
+        phaseAButtonContract,
         regionFailures,
         rootOverflow: root.scrollWidth - root.clientWidth,
         undersized,
@@ -82,6 +101,28 @@ async (page) => {
     }
     if (initial.regionFailures.length > 0 || initial.dockOverlap || initial.disabledChrome > 0) {
       throw new Error(`${viewport.width}: shell contract failed ${JSON.stringify(initial)}`);
+    }
+    if (
+      initial.legacyButtonContract.minHeight !== "34px" ||
+      initial.legacyButtonContract.usesPhaseAClass ||
+      initial.phaseAButtonContract?.minHeight !== "40px" ||
+      initial.phaseAButtonContract.usesLegacyClass
+    ) {
+      throw new Error(`${viewport.width}: PixelButton namespaces are not isolated ${JSON.stringify(initial)}`);
+    }
+
+    const commandPreview = page.getByRole("button", { name: "预览指令" });
+    const commandPreviewContract = await commandPreview.evaluate((element) => ({
+      disabled: element.matches(":disabled"),
+      primary: element.classList.contains("pixel-control-button--primary"),
+      secondary: element.classList.contains("pixel-control-button--secondary"),
+    }));
+    if (
+      !commandPreviewContract.disabled ||
+      commandPreviewContract.primary ||
+      !commandPreviewContract.secondary
+    ) {
+      throw new Error(`${viewport.width}: empty command preview is not neutral ${JSON.stringify(commandPreviewContract)}`);
     }
 
     const primary = page.getByTestId("phase-a-primary");
@@ -138,11 +179,29 @@ async (page) => {
     }
 
     const dockToggle = page.locator('[aria-controls="voice-command-details"]');
-    await dockToggle.click();
-    if ((await dockToggle.getAttribute("aria-expanded")) !== "true") {
-      throw new Error(`${viewport.width}: command details did not expand`);
+    if ((await dockToggle.getAttribute("aria-expanded")) === "true") {
+      await dockToggle.click();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[aria-controls="voice-command-details"]')
+            ?.getAttribute("aria-expanded") === "false",
+      );
     }
     await dockToggle.click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[aria-controls="voice-command-details"]')
+          ?.getAttribute("aria-expanded") === "true",
+    );
+    await dockToggle.click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[aria-controls="voice-command-details"]')
+          ?.getAttribute("aria-expanded") === "false",
+    );
 
     if (viewport.width === 1024) {
       const mainWidthBefore = await page.locator(".shell-main-scroll").evaluate(

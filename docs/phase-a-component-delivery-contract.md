@@ -370,17 +370,17 @@ export type VoiceCommandConsoleViewProps = { /* 受控值、preview 与事件回
 
 `VoiceCommandConsole` 是 Controller，继续使用既有 API/hook且未改数据契约；`VoiceCommandConsoleView` 是不导入 API 的纯受控 View。
 
-**token/尺寸映射**：dock=`surface_subtle`；输入=`inset`、40px；mic 32×32px；预览主动作 40px；详情最大高 180px且自身纵滚；状态复用六态 token。
+**token/尺寸映射**：dock=`surface_subtle`；输入=`inset`、40px；mic 32×32px；预览动作保持中性且高 40px；详情最大高 180px且自身纵滚；状态复用六态 token。
 
 **适用**：全局低频语音/文本生产指令，必须先预览。
 **禁止**：页面主表单、聊天历史、未经预览直接执行、高风险动作无影响/范围、默认展开占据第二工作区。
 
 | 状态 | 状态标/界面 | 动作契约 |
 | --- | --- | --- |
-| default/idle | 等待输入；详情收起 | `预览指令` 为唯一主动作；展开为次动作 |
+| default/idle | 等待输入；详情收起 | 空输入时 `预览指令` 中性且禁用；有效输入时仍为中性预览动作 |
 | recording | running + 计时；mic `aria-pressed=true` | 点击停止；预览禁用 |
 | loading/transcribing | running 文案 | mic/预览按阶段禁用；不显示假进度 |
-| waiting_for_user | waiting；预览结果展开 | 仅此时出现 `确认并执行` |
+| waiting_for_user | waiting；预览结果展开 | 仅此时出现 primary `确认并执行`；预览仍为中性 |
 | succeeded | succeeded 文案；如有 next_url 跳转 | 结果应可见；回滚契约尚未定义 |
 | blocked | blocked 文案 | 详情显示 API 返回摘要；具体修复入口尚依赖业务响应 |
 | error | failed 文案 | 当前错误显示在详情；恢复路径主要为修正/重试预览 |
@@ -409,6 +409,7 @@ export type RouteErrorProps = {
 };
 
 export function sanitizeMessage(raw?: string): string | null;
+export function classifyRouteError(error: Error): RouteErrorCategory;
 ```
 
 **token 映射**：复用 failed state；宽度最大 720px；正文 readable 14px；技术详情可换行；无成功图标。
@@ -424,7 +425,7 @@ export function sanitizeMessage(raw?: string): string | null;
 | disabled | 恢复按钮不得无解释禁用 |
 | focus | summary、恢复、返回均可 Tab；焦点黄 |
 
-默认 `errorCategory="generic"`，不假设 API、网络或本机依赖故障；`domainHint` 优先于 category 默认文案和兼容 `hint`。恢复动作固定为 primary。
+默认 `errorCategory="generic"`，不假设 API、网络或本机依赖故障；route error boundary 使用 `classifyRouteError` 区分网络、权限、配置与依赖，其余业务错误安全回落 generic。`domainHint` 仅用于调用方确知的领域事实，并优先于 category 默认文案和兼容 `hint`；恢复动作固定为 primary。
 
 **测试/截图**：单测覆盖敏感信息过滤、generic/category/domain hint、截断、标题/详情/digest、primary reset、返回链接、无成功勾；`/ui-preview` 显示基础 Error。
 
@@ -541,7 +542,7 @@ ListSkeleton({ count = 4, itemClassName? })
 | `WorkflowProgress` | **计划弃用** | 生产导航的当前态 + 单一 WorkflowRail | 与导航、EpisodeProgress 重复工作流 |
 | `FormErrorBanner` | **计划迁移** | 局部表单错误用 `PixelErrorState` 的轻量 variant 或 Field error | 当前与 RouteError/Toast 状态体系分裂；轻量 variant 尚未批准 |
 | raw `.pixel-card` | **逐步弃用** | `PixelPanel` 或语义 State | 页面可随意嵌套、投影和着色，无法守住两层边界 |
-| raw `.pixel-button` | **逐步弃用** | `PixelButton`；链接动作需审核 `PixelAction`/Link API | class 无类型约束，无法保证 loading/disabled/focus/尺寸 |
+| raw `.pixel-button` | **兼容保留、逐步弃用** | 使用独立 `.pixel-control-button` 命名空间的 `PixelButton`；链接动作需审核 `PixelAction`/Link API | 历史类继续使用原有样式，阶段 A token 不得通过同名选择器静默重塑业务页 |
 | `Skeleton` 的 `MetricSkeletonRow` | **已标记 deprecated** | 与目标页面几何一致的结构 skeleton | 预设四指标强化卡墙；仅保留旧页兼容 |
 | `SidebarSkeletonCards` | **已标记 deprecated** | Inspector/列表的具体 skeleton fixture | 通用“卡片”形状不保证最终布局稳定；仅保留旧页兼容 |
 | `PixelTooltip` | **保留但收口** | 未来 `PixelIconButton` 必须组合 tooltip | 不应包裹禁用装饰控件；需验证键盘/aria-describedby |

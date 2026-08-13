@@ -46,6 +46,11 @@ describe("PixelPrimitives", () => {
     const button = screen.getByRole("button", { name: "正在保存" });
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveClass(
+      "pixel-control-button",
+      "pixel-control-button--secondary",
+    );
+    expect(button).not.toHaveClass("pixel-button");
   });
 
   it("keeps the input label visible and associates its error", () => {
@@ -93,7 +98,7 @@ describe("PixelPrimitives", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     expect(onClick).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "重新检查" })).toHaveClass(
-      "pixel-button--primary",
+      "pixel-control-button--primary",
     );
   });
 
@@ -116,7 +121,7 @@ describe("PixelPrimitives", () => {
       "/health",
     );
     expect(screen.getByRole("button", { name: "稍后重试" })).toHaveClass(
-      "pixel-button--secondary",
+      "pixel-control-button--secondary",
     );
   });
 

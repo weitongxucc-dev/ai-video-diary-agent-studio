@@ -97,12 +97,12 @@ export const PixelButton = forwardRef<HTMLButtonElement, PixelButtonProps>(
       <button
         {...props}
         aria-busy={loading || undefined}
-        className={`pixel-button pixel-button--${variant} pixel-button--${size}${className ? ` ${className}` : ""}`}
+        className={`pixel-control-button pixel-control-button--${variant} pixel-control-button--${size}${className ? ` ${className}` : ""}`}
         disabled={disabled || loading}
         ref={ref}
         type={type}
       >
-        {loading ? <span aria-hidden="true" className="pixel-button__busy" /> : null}
+        {loading ? <span aria-hidden="true" className="pixel-control-button__busy" /> : null}
         <span>{children}</span>
       </button>
     );
@@ -210,7 +210,7 @@ function PixelStateActionControl({
   if (action.kind === "link") {
     return (
       <Link
-        className={`pixel-button pixel-button--${tone} pixel-button--default`}
+        className={`pixel-control-button pixel-control-button--${tone} pixel-control-button--default`}
         href={action.href}
       >
         {action.label}

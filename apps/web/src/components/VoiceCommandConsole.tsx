@@ -110,6 +110,7 @@ export function VoiceCommandConsoleView({
   const isTranscribing = viewState === "transcribing";
   const isProcessing =
     isTranscribing || viewState === "previewing" || viewState === "executing";
+  const canPreview = transcript.trim().length > 0 && !isProcessing && !isRecording;
   const statusLabel = isRecording
     ? `录音中 ${formatDuration(duration)}`
     : viewStateLabels[viewState];
@@ -141,7 +142,7 @@ export function VoiceCommandConsoleView({
           name="transcript"
           onChange={(event) => onTranscriptChange(event.target.value)}
           onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
-            if (event.key === "Enter" && !isProcessing && !isRecording) {
+            if (event.key === "Enter" && canPreview) {
               event.preventDefault();
               onPreview();
             }
@@ -179,10 +180,10 @@ export function VoiceCommandConsoleView({
           <PixelStatus kind={viewStateKinds[viewState]} label={statusLabel} />
         </div>
         <PixelButton
-          disabled={isProcessing || isRecording}
+          disabled={!canPreview}
           loading={viewState === "previewing"}
           onClick={onPreview}
-          variant="primary"
+          variant="secondary"
         >
           预览指令
         </PixelButton>

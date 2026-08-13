@@ -3,7 +3,21 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [css, appShell, retroChrome, primitives, commandDock, browserCheck] =
+const routeErrorCallers = [
+  "src/app/error.tsx",
+  "src/app/edit-plan/error.tsx",
+  "src/app/video/error.tsx",
+  "src/app/script/error.tsx",
+];
+const [
+  css,
+  appShell,
+  retroChrome,
+  primitives,
+  commandDock,
+  browserCheck,
+  ...routeErrors
+] =
   await Promise.all([
     read("src/app/globals.css"),
     read("src/components/AppShell.tsx"),
@@ -11,9 +25,12 @@ const [css, appShell, retroChrome, primitives, commandDock, browserCheck] =
     read("src/components/PixelPrimitives.tsx"),
     read("src/components/VoiceCommandConsole.tsx"),
     read("scripts/phase-a-browser-check.js"),
+    ...routeErrorCallers.map(read),
   ]);
 
 const failures = [];
+const phaseAMarker = "/* Phase A — approved DESIGN.md shared workstation system */";
+const [legacyCss, phaseACss = ""] = css.split(phaseAMarker);
 const emojiPattern = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
 const tsxFiles = globSync("src/**/*.{ts,tsx}", { cwd: root });
 
@@ -68,6 +85,10 @@ for (const required of [
   }
 }
 
+if (!/\.pixel-button\s*\{[^}]*min-height:\s*34px[^}]*background:\s*var\(--blue\)/s.test(legacyCss)) {
+  failures.push("Legacy .pixel-button must retain its 34px, legacy-token compatibility contract.");
+}
+
 for (const exportedType of [
   "PixelPanelProps",
   "PixelButtonProps",
@@ -107,6 +128,38 @@ if (/body\s*\{[^}]*overflow-x:\s*(?:hidden|clip)/s.test(css)) {
   failures.push("body must not hide or clip horizontal overflow.");
 }
 
+for (const required of [
+  ".pixel-button {",
+  ".pixel-button.secondary {",
+  ".pixel-button.danger {",
+  ".pixel-button.compact {",
+]) {
+  if (!legacyCss.includes(required)) {
+    failures.push(`Legacy business-page button compatibility is missing: ${required}`);
+  }
+}
+
+if (/\.pixel-button(?![\w-])/.test(phaseACss)) {
+  failures.push("Phase A CSS must not override the legacy .pixel-button namespace.");
+}
+
+for (const required of [
+  "pixel-control-button pixel-control-button--",
+  ".pixel-control-button {",
+  ".pixel-control-button--primary",
+  ".pixel-control-button--secondary",
+  ".pixel-control-button--danger",
+]) {
+  const source = required.startsWith(".") ? phaseACss : primitives;
+  if (!source.includes(required)) {
+    failures.push(`Isolated PixelButton contract is missing: ${required}`);
+  }
+}
+
+if (/className=\{`pixel-button(?:\s|`)/.test(primitives)) {
+  failures.push("PixelButton must not emit the legacy .pixel-button class.");
+}
+
 const navBlock = appShell.match(/const navItems:[\s\S]*?=\s*\[([\s\S]*?)\n\];/);
 const navRoutes = navBlock?.[1].match(/href:\s*"[^"]+"/g) ?? [];
 if (navRoutes.length !== 8) {
@@ -128,6 +181,28 @@ for (const required of [
     failures.push(`PixelPrimitives must export ${required}.`);
   }
 }
+
+if (!commandDock.includes("disabled={!canPreview}")) {
+  failures.push("Command dock preview must be disabled until trimmed input can be previewed.");
+}
+
+if (!/<PixelButton[\s\S]*?onClick=\{onPreview\}[\s\S]*?variant="secondary"[\s\S]*?>\s*预览指令/.test(commandDock)) {
+  failures.push("Command dock preview must remain a neutral secondary action.");
+}
+
+if ((commandDock.match(/variant="primary"/g) ?? []).length !== 1) {
+  failures.push("Command dock may use primary only for the waiting-for-user confirm action.");
+}
+
+routeErrors.forEach((source, index) => {
+  const caller = routeErrorCallers[index];
+  if (!source.includes("errorCategory={classifyRouteError(error)}")) {
+    failures.push(`${caller} must classify the actual error before rendering RouteError.`);
+  }
+  if (/\b(?:hint|detail)=/.test(source)) {
+    failures.push(`${caller} must not override error classification with hard-coded hint/detail copy.`);
+  }
+});
 
 if (/localhost|127\.0\.0\.1|disabled/.test(retroChrome)) {
   failures.push("RetroChrome must not expose development addresses or decorative disabled controls.");
@@ -185,6 +260,8 @@ for (const required of [
   "inspector drawer shrank main task",
   "inspector focus was not returned",
   "horizontal controls are missing",
+  "PixelButton namespaces are not isolated",
+  "empty command preview is not neutral",
 ]) {
   if (!browserCheck.includes(required)) {
     failures.push(`Phase A browser check is missing gate: ${required}`);

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { RouteError, sanitizeMessage } from "../../components/RouteError";
+import {
+  classifyRouteError,
+  RouteError,
+  sanitizeMessage,
+} from "../../components/RouteError";
 
 // Mock next/link
 vi.mock("next/link", () => ({
@@ -68,6 +72,18 @@ describe("sanitizeMessage", () => {
 
   it("returns null for messages containing 'password'", () => {
     expect(sanitizeMessage("password is wrong")).toBeNull();
+  });
+});
+
+describe("classifyRouteError", () => {
+  it.each([
+    ["目录权限不足 EACCES", "permission"],
+    ["缺少 API key 配置", "configuration"],
+    ["ffmpeg executable not found", "dependency"],
+    ["远端服务连接超时", "network"],
+    ["选题状态不允许此操作", "generic"],
+  ] as const)("classifies %s as %s", (message, category) => {
+    expect(classifyRouteError(new Error(message))).toBe(category);
   });
 });
 
@@ -163,7 +179,7 @@ describe("RouteError", () => {
     screen.getByText("重新加载页面").click();
     expect(resetFn).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "重新加载页面" })).toHaveClass(
-      "pixel-button--primary",
+      "pixel-control-button--primary",
     );
   });
 

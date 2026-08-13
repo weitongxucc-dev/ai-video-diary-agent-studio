@@ -34,6 +34,28 @@ const categoryHints: Record<RouteErrorCategory, string> = {
   permission: "当前页面缺少完成操作所需的访问权限。请检查授权后重试。",
 };
 
+const permissionPattern = /(?:权限|授权|无权|permission|forbidden|unauthorized|eacces|eperm)/i;
+const configurationPattern = /(?:配置|密钥|环境变量|config(?:uration)?|api[_ -]?key|credential|\.env)/i;
+const dependencyPattern = /(?:依赖|ffmpeg|whisper|python|executable|binary|command not found)/i;
+const networkPattern = /(?:网络|连接|超时|远端|服务不可用|network|fetch|timeout|timed out|econn|502|503|504)/i;
+
+export function classifyRouteError(error: Error): RouteErrorCategory {
+  const message = error.message;
+  if (permissionPattern.test(message)) {
+    return "permission";
+  }
+  if (configurationPattern.test(message)) {
+    return "configuration";
+  }
+  if (dependencyPattern.test(message)) {
+    return "dependency";
+  }
+  if (networkPattern.test(message)) {
+    return "network";
+  }
+  return "generic";
+}
+
 export function sanitizeMessage(raw: string | undefined): string | null {
   if (!raw) {
     return null;

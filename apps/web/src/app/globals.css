@@ -8896,7 +8896,7 @@ select:user-invalid:focus {
   padding: var(--space-4);
 }
 
-.pixel-button {
+.pixel-control-button {
   display: inline-flex;
   min-height: 40px;
   align-items: center;
@@ -8915,40 +8915,42 @@ select:user-invalid:focus {
   cursor: pointer;
 }
 
-.pixel-button:hover {
+.pixel-control-button--primary {
+  background: var(--retro-selection);
+  color: var(--retro-inset);
+}
+
+.pixel-control-button:hover {
   box-shadow: var(--shadow-hard-small);
   filter: brightness(1.04);
   transform: none;
 }
 
-.pixel-button:active {
+.pixel-control-button:active {
   box-shadow: inset 1px 1px 0 var(--retro-border-soft);
   transform: translate(1px, 1px);
 }
 
-.pixel-button--secondary,
-.pixel-button.secondary {
+.pixel-control-button--secondary {
   min-height: 34px;
   background: var(--retro-surface-subtle);
   color: var(--retro-ink);
 }
 
-.pixel-button--danger,
-.pixel-button.danger {
+.pixel-control-button--danger {
   min-height: 40px;
   background: var(--retro-danger);
   color: var(--retro-inset);
 }
 
-.pixel-button--compact,
-.pixel-button.compact {
+.pixel-control-button--compact {
   min-height: 32px;
   font-size: 12px;
   padding: 0 var(--space-2);
 }
 
-.pixel-button:disabled,
-.pixel-button:disabled:hover {
+.pixel-control-button:disabled,
+.pixel-control-button:disabled:hover {
   border-color: var(--retro-border-soft);
   background: var(--retro-surface-subtle);
   box-shadow: none;
@@ -8958,7 +8960,7 @@ select:user-invalid:focus {
   cursor: not-allowed;
 }
 
-.pixel-button__busy {
+.pixel-control-button__busy {
   width: 10px;
   height: 10px;
   border: 2px solid currentColor;
@@ -9136,7 +9138,7 @@ select:user-invalid:focus {
   gap: var(--space-1);
 }
 
-.pixel-scrollable-region__controls .pixel-button {
+.pixel-scrollable-region__controls .pixel-control-button {
   width: 32px;
   min-width: 32px;
   padding: 0;
@@ -9268,7 +9270,7 @@ select:user-invalid:focus {
   gap: var(--space-2);
 }
 
-.voice-command-actions .pixel-button {
+.voice-command-actions .pixel-control-button {
   min-height: 40px;
 }
 
@@ -9526,8 +9528,8 @@ select:user-invalid:focus {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .phase-a-preview__task .pixel-button,
-  .phase-a-preview__form .pixel-button {
+  .phase-a-preview__task .pixel-control-button,
+  .phase-a-preview__form .pixel-control-button {
     justify-self: start;
   }
 
@@ -9542,7 +9544,7 @@ select:user-invalid:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pixel-button__busy {
+  .pixel-control-button__busy {
     animation: none;
   }
 }

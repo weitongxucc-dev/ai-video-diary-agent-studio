@@ -34,6 +34,18 @@ function renderView(
 }
 
 describe("VoiceCommandConsoleView", () => {
+  it("keeps an empty idle preview neutral and disabled", () => {
+    const props = renderView("idle", { transcript: "   " });
+    const preview = screen.getByRole("button", { name: "预览指令" });
+    expect(preview).toBeDisabled();
+    expect(preview).toHaveClass("pixel-control-button--secondary");
+    expect(preview).not.toHaveClass("pixel-control-button--primary");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "语音指令文本" }), {
+      key: "Enter",
+    });
+    expect(props.onPreview).not.toHaveBeenCalled();
+  });
+
   it("renders recording state and lets the user stop recording", () => {
     const props = renderView("recording");
     expect(screen.getByRole("status")).toHaveTextContent("录音中 00:07");
@@ -41,7 +53,16 @@ describe("VoiceCommandConsoleView", () => {
     expect(mic).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(mic);
     expect(props.onToggleRecording).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "预览指令" })).toBeDisabled();
+    const preview = screen.getByRole("button", { name: "预览指令" });
+    expect(preview).toBeDisabled();
+    expect(preview).toHaveClass("pixel-control-button--secondary");
+  });
+
+  it("keeps transcribing preview neutral and disabled", () => {
+    renderView("transcribing");
+    const preview = screen.getByRole("button", { name: "预览指令" });
+    expect(preview).toBeDisabled();
+    expect(preview).toHaveClass("pixel-control-button--secondary");
   });
 
   it("renders previewing as a busy, non-executable state", () => {
@@ -51,13 +72,21 @@ describe("VoiceCommandConsoleView", () => {
       "aria-busy",
       "true",
     );
+    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass(
+      "pixel-control-button--secondary",
+    );
     expect(screen.queryByRole("button", { name: "确认并执行" })).not.toBeInTheDocument();
   });
 
   it("shows the confirm action only while waiting for the user", () => {
     const props = renderView("waiting_for_user");
     expect(screen.getByRole("status")).toHaveTextContent("等待确认");
-    fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
+    const confirm = screen.getByRole("button", { name: "确认并执行" });
+    expect(confirm).toHaveClass("pixel-control-button--primary");
+    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass(
+      "pixel-control-button--secondary",
+    );
+    fireEvent.click(confirm);
     expect(props.onExecute).toHaveBeenCalledOnce();
   });
 
