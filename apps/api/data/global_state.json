@@ -1,7 +1,11 @@
 {
-  "preference_state": {
-    "disabled_signals": [
-      "太像概念课"
-    ]
+  "workspaces": {
+    "local": {
+      "preference_state": {
+        "disabled_signals": [
+          "太像概念课"
+        ]
+      }
+    }
   }
 }

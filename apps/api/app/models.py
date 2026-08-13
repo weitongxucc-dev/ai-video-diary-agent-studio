@@ -172,6 +172,7 @@ class Episode:
     status: EpisodeStatus
     intake_mode: EpisodeIntakeMode = EpisodeIntakeMode.PLANNED_SINGLE
     content_template_id: str = "video_diary"
+    workspace_id: str = "local"
     topics: list[TopicCandidate] = field(default_factory=list)
     selected_topic_id: str | None = None
     script: ScriptPackage | None = None

@@ -12,6 +12,18 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
+LEGACY_WORKSPACE_ID = "local"
+
+
+def _resolve_workspace_id(workspace_id: str | None) -> str:
+    if workspace_id:
+        return workspace_id
+    # Avoid a hard import at module load (keeps the module importable in
+    # isolation); repository.active_workspace_id resolves the current scope.
+    from app.repository import active_workspace_id
+
+    return active_workspace_id()
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -25,6 +37,7 @@ class CreatorProfile:
     style_preferences: dict[str, str] = field(default_factory=dict)
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
+    workspace_id: str = LEGACY_WORKSPACE_ID
 
 
 def _ensure_table(database_path: str | Path) -> None:
@@ -40,15 +53,43 @@ def _ensure_table(database_path: str | Path) -> None:
             )
             """
         )
+        _migrate_creator_profile_schema(conn)
 
 
-def get_creator_profile(database_path: str | Path) -> CreatorProfile | None:
-    """Return the singleton profile or None if not yet created."""
+def _migrate_creator_profile_schema(conn: sqlite3.Connection) -> None:
+    """Add workspace partitioning to the creator_profile table.
+
+    Legacy rows are assigned the reserved 'local' workspace so pre-auth data
+    is never visible to an authenticated account.
+    """
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(creator_profile)").fetchall()
+    }
+    if "workspace_id" in columns:
+        return
+    conn.execute(
+        "ALTER TABLE creator_profile "
+        "ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local'"
+    )
+
+
+def get_creator_profile(
+    database_path: str | Path,
+    workspace_id: str | None = None,
+) -> CreatorProfile | None:
+    """Return the profile for a workspace or None if not yet created."""
+    ws = _resolve_workspace_id(workspace_id)
     _ensure_table(database_path)
     db = Path(database_path).expanduser()
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
-            "SELECT payload FROM creator_profile ORDER BY updated_at DESC LIMIT 1"
+            """
+            SELECT payload FROM creator_profile
+            WHERE workspace_id = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (ws,),
         ).fetchall()
     if not rows:
         return None
@@ -61,6 +102,7 @@ def get_creator_profile(database_path: str | Path) -> CreatorProfile | None:
             style_preferences=data.get("style_preferences", {}),
             created_at=data.get("created_at", _utc_now_iso()),
             updated_at=data.get("updated_at", _utc_now_iso()),
+            workspace_id=ws,
         )
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("Failed to parse creator_profile row: %s", exc)
@@ -70,9 +112,12 @@ def get_creator_profile(database_path: str | Path) -> CreatorProfile | None:
 def upsert_creator_profile(
     profile: CreatorProfile,
     database_path: str | Path,
+    workspace_id: str | None = None,
 ) -> CreatorProfile:
-    """Insert or replace the singleton profile."""
+    """Insert or replace the profile for a workspace."""
+    ws = _resolve_workspace_id(workspace_id)
     _ensure_table(database_path)
+    profile.workspace_id = ws
     profile.updated_at = _utc_now_iso()
     payload = json.dumps(
         {
@@ -88,16 +133,31 @@ def upsert_creator_profile(
     db = Path(database_path).expanduser()
     with sqlite3.connect(str(db)) as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO creator_profile (id, payload, updated_at) VALUES (?, ?, ?)",
-            (profile.id, payload, profile.updated_at),
+            """
+            INSERT OR REPLACE INTO creator_profile
+                (id, workspace_id, payload, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (profile.id, ws, payload, profile.updated_at),
         )
     return profile
 
 
-def get_or_create_profile(database_path: str | Path) -> CreatorProfile:
-    """Return the existing profile or create a default empty one."""
-    existing = get_creator_profile(database_path)
+def get_or_create_profile(
+    database_path: str | Path,
+    workspace_id: str | None = None,
+) -> CreatorProfile:
+    """Return the existing workspace profile or create a default empty one."""
+    ws = _resolve_workspace_id(workspace_id)
+    existing = get_creator_profile(database_path, workspace_id=ws)
     if existing is not None:
         return existing
-    profile = CreatorProfile(id=f"cp_{uuid4().hex[:8]}")
-    return upsert_creator_profile(profile, database_path)
+    profile = CreatorProfile(
+        id=f"cp_{uuid4().hex[:8]}",
+        workspace_id=ws,
+    )
+    return upsert_creator_profile(
+        profile,
+        database_path,
+        workspace_id=ws,
+    )

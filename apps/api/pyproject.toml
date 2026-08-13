@@ -12,6 +12,7 @@ dependencies = [
   "tencentcloud-sdk-python>=3.1.103",
   "langgraph>=1.2.2",
   "python-multipart>=0.0.32",
+  "pyjwt[crypto]>=2.8.0",
 ]
 
 [project.optional-dependencies]

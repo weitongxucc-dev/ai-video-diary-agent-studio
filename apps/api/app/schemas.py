@@ -512,6 +512,10 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     database_path: str | None = None
     draft_background_music_path: str | None = None
     topic_source_urls: list[str] | None = None
+    supabase_url: str | None = None
+    supabase_publishable_key: str | None = None
+    supabase_secret_key: str | None = None
+    supabase_jwt_audience: str | None = None
 
 
 class DraftToolStatusResponse(BaseModel):
