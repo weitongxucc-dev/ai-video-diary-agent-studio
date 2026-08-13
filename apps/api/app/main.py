@@ -41,6 +41,7 @@ from app.models import (
     utc_now,
 )
 from app.preference_memory import PreferenceState, build_preference_memory
+from app.preflight import setup_preflight
 from app.repository import (
     EpisodeRepository,
     load_preference_state_payload,
@@ -100,6 +101,7 @@ from app.schemas import (
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
+    SetupPreflightResponse,
     SourceFileStatesResponse,
     SourceItemResponse,
     SourceItemsResponse,
@@ -368,6 +370,17 @@ def _require_feature(feature: str) -> None:
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
 def get_runtime_health() -> RuntimeHealthResponse:
     return RuntimeHealthResponse.model_validate(runtime_health(settings))
+
+
+@app.get("/api/setup/preflight", response_model=SetupPreflightResponse)
+def get_setup_preflight() -> SetupPreflightResponse:
+    """Run a native setup preflight and return a stable consumable structure.
+
+    Returns overall ready|blocked with per-check details including
+    status, summary, impact, repair_action, and optional settings_target.
+    Never leaks secrets or absolute sensitive content.
+    """
+    return SetupPreflightResponse.model_validate(setup_preflight(settings))
 
 
 @app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)

@@ -280,6 +280,26 @@ class RuntimeHealthResponse(BaseModel):
     feature_gates: list[FeatureGateResponse]
 
 
+# ── Setup preflight ────────────────────────────────────────────────────
+
+class PreflightCheckItem(BaseModel):
+    """A single preflight check result."""
+    id: str
+    label: str
+    status: Literal["ready", "missing", "invalid", "degraded", "not_applicable"]
+    summary: str
+    impact: str
+    repair_action: str
+    settings_target: str | None = None
+
+
+class SetupPreflightResponse(BaseModel):
+    """GET /api/setup/preflight response contract."""
+    overall: Literal["ready", "blocked"]
+    checks: list[PreflightCheckItem]
+    generated_at: datetime
+
+
 class PendingVideoResponse(BaseModel):
     file_name: str
     path: str
