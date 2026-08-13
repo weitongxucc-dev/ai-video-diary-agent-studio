@@ -30,6 +30,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+
       - name: Install Python dependencies
         working-directory: apps/api
         run: uv sync --locked
