@@ -307,9 +307,8 @@ function FieldRow({ field }: { field: FieldDef }) {
             aria-label={field.label}
             maxLength={512}
             name={field.name}
-            pattern="^[/~\u4e00-\u9fa5\w.\-\s]*$"
             placeholder={field.placeholder}
-            title="仅支持绝对路径，禁止特殊符号"
+            title="支持 POSIX 与 Windows 绝对路径，留空保持现有值"
             type="text"
             defaultValue={field.defaultValue ?? ""}
           />
