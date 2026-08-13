@@ -24,6 +24,7 @@ import type {
   RuntimeSettings,
   RuntimeSettingsUpdate,
   ScriptPackage,
+  SetupPreflightResponse,
   SetupStatus,
   SourcesStatus,
   SourceFileStates,
@@ -120,6 +121,10 @@ export function getRuntimeHealth(): Promise<RuntimeHealth> {
 
 export function getSetupStatus(): Promise<SetupStatus> {
   return request<SetupStatus>("/api/is_setup");
+}
+
+export function getSetupPreflight(): Promise<SetupPreflightResponse> {
+  return request<SetupPreflightResponse>("/api/setup/preflight");
 }
 
 export function updateRuntimeSettings(

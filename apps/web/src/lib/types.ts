@@ -304,6 +304,31 @@ export type SetupStatus = {
   next_step: string;
 };
 
+export type SetupPreflightCheckStatus =
+  | "ready"
+  | "missing"
+  | "invalid"
+  | "degraded"
+  | "not_applicable";
+
+export type SetupPreflightOverall = "ready" | "blocked";
+
+export type SetupPreflightCheckItem = {
+  id: string;
+  label: string;
+  status: SetupPreflightCheckStatus;
+  summary: string;
+  impact: string;
+  repair_action: string;
+  settings_target: string | null;
+};
+
+export type SetupPreflightResponse = {
+  overall: SetupPreflightOverall;
+  checks: SetupPreflightCheckItem[];
+  generated_at: string;
+};
+
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
 
 export type RuntimeHealthItem = {
