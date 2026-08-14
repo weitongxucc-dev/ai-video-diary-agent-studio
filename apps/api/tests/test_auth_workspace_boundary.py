@@ -23,6 +23,7 @@ from app.auth import (
 )
 from app.config import Settings
 from app.repository import (
+    LEGACY_WORKSPACE_ID,
     EpisodeRepository,
     WorkspaceContextRequiredError,
     active_workspace_id,
@@ -471,6 +472,29 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
     assert response.json() == {"workspace_id": "ws-a", "completed": True}
     assert len(repo.all(workspace_id="ws-a")) == 1
     ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a")
+
+
+def test_local_onboarding_completion_uses_local_workspace(monkeypatch, tmp_path):
+    local_settings = Settings(deepseek_api_key="sk-test")
+    local_auth_context = SupabaseAuthContext(local_settings)
+    local_repo = EpisodeRepository(database_path=tmp_path / "local-onboarding.sqlite")
+    monkeypatch.setattr(main_module, "auth_context", local_auth_context)
+    monkeypatch.setattr(main_module, "settings", local_settings)
+    monkeypatch.setattr(main_module, "repo", local_repo)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "ready", "checks": []},
+    )
+
+    response = TestClient(main_module.app).post("/api/onboarding/complete")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "workspace_id": LEGACY_WORKSPACE_ID,
+        "completed": True,
+    }
+    assert len(local_repo.all(workspace_id=LEGACY_WORKSPACE_ID)) == 1
 
 
 # ── Migration: legacy rows become 'local', partitioned queries ─────────

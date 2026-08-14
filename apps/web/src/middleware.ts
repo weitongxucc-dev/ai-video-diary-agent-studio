@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
+  isLocalAuthMode,
   isOnboardingSupportApiPath,
   isOnboardingSupportPath,
   isPublicApiPath,
@@ -53,6 +54,18 @@ async function proxyApiRequest(
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (isLocalAuthMode()) {
+    if (pathname.startsWith("/api/")) {
+      return proxyApiRequest(request, null);
+    }
+
+    if (pathname === "/signin" || pathname.startsWith("/auth/")) {
+      return NextResponse.redirect(new URL("/", request.nextUrl));
+    }
+
+    return NextResponse.next();
+  }
 
   if (pathname.startsWith("/api/")) {
     if (isPublicApiPath(pathname)) {

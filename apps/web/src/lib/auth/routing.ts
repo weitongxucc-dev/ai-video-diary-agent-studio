@@ -28,6 +28,10 @@ const ONBOARDING_SUPPORT_API_PATHS = new Set([
   "/api/settings/runtime",
 ]);
 
+export function isLocalAuthMode(): boolean {
+  return process.env.NEXT_PUBLIC_AUTH_MODE === "local";
+}
+
 export function isPublicAuthPath(pathname: string): boolean {
   return PUBLIC_PATHS.has(pathname) || pathname.startsWith("/auth/signout");
 }
