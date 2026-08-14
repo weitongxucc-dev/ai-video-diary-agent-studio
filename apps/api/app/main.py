@@ -488,6 +488,13 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
             detail="setup preflight is still blocked",
         )
 
+    if not auth_context.enabled:
+        repo.today(workspace_id=LEGACY_WORKSPACE_ID)
+        return OnboardingCompletionResponse(
+            workspace_id=LEGACY_WORKSPACE_ID,
+            completed=True,
+        )
+
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.user_id or not principal.workspace_id:
         raise HTTPException(status_code=403, detail="workspace context is required")

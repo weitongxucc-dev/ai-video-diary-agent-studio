@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isLocalAuthMode,
   isOnboardingSupportApiPath,
   isOnboardingSupportPath,
   isPublicAuthPath,
@@ -10,6 +11,22 @@ import {
 } from "../routing";
 
 describe("auth routing", () => {
+  it("enables local auth only for an explicit internal build", () => {
+    const previousMode = process.env.NEXT_PUBLIC_AUTH_MODE;
+    try {
+      process.env.NEXT_PUBLIC_AUTH_MODE = "local";
+      expect(isLocalAuthMode()).toBe(true);
+      process.env.NEXT_PUBLIC_AUTH_MODE = "supabase";
+      expect(isLocalAuthMode()).toBe(false);
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env.NEXT_PUBLIC_AUTH_MODE;
+      } else {
+        process.env.NEXT_PUBLIC_AUTH_MODE = previousMode;
+      }
+    }
+  });
+
   it("keeps sign-in, auth callbacks and legal pages public", () => {
     expect(isPublicAuthPath("/signin")).toBe(true);
     expect(isPublicAuthPath("/auth/callback")).toBe(true);

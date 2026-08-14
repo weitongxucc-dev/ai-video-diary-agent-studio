@@ -58,6 +58,7 @@ export function AppShell({
   inspectorTitle = "当前任务详情",
   workspaceStatus,
 }: AppShellProps) {
+  const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
@@ -182,12 +183,14 @@ export function AppShell({
                 >
                   帮助
                 </PixelButton>
-                <form action="/auth/signout" method="post">
-                  <button className="avatar" title="退出登录" type="submit">
-                    <PixelIcon name="person" />
-                    <span className="sr-only">退出登录</span>
-                  </button>
-                </form>
+                {!localAuthMode ? (
+                  <form action="/auth/signout" method="post">
+                    <button className="avatar" title="退出登录" type="submit">
+                      <PixelIcon name="person" />
+                      <span className="sr-only">退出登录</span>
+                    </button>
+                  </form>
+                ) : null}
               </div>
             </header>
 

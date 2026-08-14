@@ -25,13 +25,12 @@ jobs:
 
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+      NEXT_PUBLIC_AUTH_MODE: "local"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify native runner and auth configuration
+      - name: Verify native runner
         shell: bash
         run: |
           case "${{ matrix.arch }}" in
@@ -41,10 +40,6 @@ jobs:
           actual_runner=$(uname -m)
           if [ "$actual_runner" != "$expected_runner" ]; then
             echo "::error::Expected $expected_runner runner, got $actual_runner"
-            exit 1
-          fi
-          if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] || [ -z "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" ]; then
-            echo "::error::Internal build auth configuration is missing"
             exit 1
           fi
 
