@@ -2,8 +2,6 @@ import type {
   RuntimeHealth,
   RuntimeHealthItem,
   RuntimeSettings,
-  SetupCheckItem,
-  SetupCheckStatus,
   SetupStatus,
   SystemStatus,
 } from "./types";
@@ -71,13 +69,6 @@ export type OnboardingSnapshot = {
   generatedAt: string;
 };
 
-const SETUP_TONE: Record<SetupCheckStatus, OnboardingChecklistState> = {
-  ready: "ready",
-  missing: "missing",
-  degraded: "attention",
-  invalid: "attention",
-};
-
 const HEALTH_TONE: Record<RuntimeHealthItem["status"], OnboardingChecklistState> = {
   ready: "ready",
   missing: "missing",
@@ -138,21 +129,18 @@ function buildEntry(args: {
   };
 }
 
-function pickSetupItem(
-  setup: SetupStatus | null,
-  matches: (item: SetupCheckItem) => boolean,
-): SetupCheckItem | null {
-  if (!setup) {
+function setupMissing(setup: SetupStatus | null, id: string): boolean | null {
+  if (!setup || !Array.isArray(setup.missing)) {
     return null;
   }
-  return setup.items.find(matches) ?? null;
+  return setup.missing.includes(id);
 }
 
 function pickHealthItem(
   health: RuntimeHealth | null,
   matches: (item: RuntimeHealthItem) => boolean,
 ): RuntimeHealthItem | null {
-  if (!health) {
+  if (!health || !Array.isArray(health.items)) {
     return null;
   }
   return health.items.find(matches) ?? null;
@@ -198,21 +186,21 @@ export function buildOnboardingSnapshot(input: {
   const ffmpegConfigured = status?.video.ffmpeg_available ?? false;
 
   const modelEntry: OnboardingChecklistEntry = (() => {
-    const llmSetup = pickSetupItem(setup, (item) =>
-      item.id === "llm" || item.label.includes("DeepSeek") || item.label.includes("AI"),
-    );
     const llmHealth = pickHealthItem(health, (item) =>
       item.id.toLowerCase().includes("llm") ||
       item.id.toLowerCase().includes("deepseek") ||
       item.label.includes("DeepSeek"),
     );
+    const llmMissing = setupMissing(setup, "deepseek_api_key");
 
     let state: OnboardingChecklistState = "unknown";
     let detail = "尚未读取 AI 模型状态。";
 
-    if (llmSetup) {
-      state = SETUP_TONE[llmSetup.status];
-      detail = llmSetup.detail;
+    if (llmMissing !== null) {
+      state = llmMissing ? "missing" : "ready";
+      detail = llmMissing
+        ? "请在运行配置中填入 DeepSeek API Key。"
+        : "DeepSeek API Key 已配置。";
     } else if (llmHealth) {
       state = HEALTH_TONE[llmHealth.status];
       detail = llmHealth.reason;
@@ -238,16 +226,10 @@ export function buildOnboardingSnapshot(input: {
   })();
 
   const obsidianEntry: OnboardingChecklistEntry = (() => {
-    const pathSetup = pickSetupItem(setup, (item) =>
-      item.label.includes("Obsidian") || item.id.toLowerCase().includes("obsidian"),
-    );
     let state: OnboardingChecklistState = "unknown";
     let detail = "尚未读取 Obsidian 目录状态。";
 
-    if (pathSetup) {
-      state = SETUP_TONE[pathSetup.status];
-      detail = pathSetup.detail;
-    } else if (status?.obsidian.path) {
+    if (status?.obsidian.path) {
       state = obsidianConfigured ? "ready" : "missing";
       detail = obsidianConfigured
         ? `已发现 ${status.obsidian.markdown_count} 篇笔记。`
@@ -271,16 +253,10 @@ export function buildOnboardingSnapshot(input: {
   })();
 
   const videoInboxEntry: OnboardingChecklistEntry = (() => {
-    const pathSetup = pickSetupItem(setup, (item) =>
-      item.label.includes("视频") || item.id.toLowerCase().includes("video"),
-    );
     let state: OnboardingChecklistState = "unknown";
     let detail = "尚未读取视频待处理目录。";
 
-    if (pathSetup) {
-      state = SETUP_TONE[pathSetup.status];
-      detail = pathSetup.detail;
-    } else if (status?.video.inbox_path) {
+    if (status?.video.inbox_path) {
       state = videoInboxConfigured ? "ready" : "missing";
       detail = videoInboxConfigured
         ? `已就绪，当前 ${status.video.pending_count} 个待处理视频。`

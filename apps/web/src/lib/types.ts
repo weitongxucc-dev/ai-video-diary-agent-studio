@@ -296,24 +296,37 @@ export type ContentTemplates = {
   templates: ContentTemplate[];
 };
 
-export type SetupCheckStatus = "ready" | "missing" | "degraded" | "invalid";
-
 export type ToastKind = "success" | "error" | "info";
 
-export type SetupCheckItem = {
-  id: string;
-  label: string;
-  status: SetupCheckStatus;
-  detail: string;
-  impact: string;
-  repair_action: string;
+export type SetupStatus = {
+  configured: boolean;
+  missing: string[];
+  next_step: string;
 };
 
-export type SetupStatus = {
-  complete: boolean;
-  ready_count: number;
-  total_count: number;
-  items: SetupCheckItem[];
+export type SetupPreflightCheckStatus =
+  | "ready"
+  | "missing"
+  | "invalid"
+  | "degraded"
+  | "not_applicable";
+
+export type SetupPreflightOverall = "ready" | "blocked";
+
+export type SetupPreflightCheckItem = {
+  id: string;
+  label: string;
+  status: SetupPreflightCheckStatus;
+  summary: string;
+  impact: string;
+  repair_action: string;
+  settings_target: string | null;
+};
+
+export type SetupPreflightResponse = {
+  overall: SetupPreflightOverall;
+  checks: SetupPreflightCheckItem[];
+  generated_at: string;
 };
 
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";

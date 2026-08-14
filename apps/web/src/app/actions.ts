@@ -41,6 +41,17 @@ import type {
   ScriptPackage,
   ToastKind,
 } from "@/lib/types";
+import { validateAbsolutePath } from "@/lib/absolutePath";
+
+const DIRECTORY_FIELD_NAMES: ReadonlySet<string> = new Set([
+  "obsidian_vault_path",
+  "hermes_radar_path",
+  "video_inbox_path",
+  "video_output_path",
+  "draft_output_path",
+  "jianying_draft_root_path",
+  "database_path",
+]);
 
 function requiredString(formData: FormData, key: string): string {
   const value = formData.get(key);
@@ -781,22 +792,35 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   ];
   const payload: RuntimeSettingsUpdate = {};
 
-  for (const fieldName of textFieldNames) {
-    const value = formData.get(fieldName);
-    if (typeof value === "string" && value.trim()) {
-      payload[fieldName] = value.trim();
-    }
-  }
-
-  const sourceUrls = formData.get("topic_source_urls");
-  if (typeof sourceUrls === "string") {
-    payload.topic_source_urls = sourceUrls
-      .split(/[\n,]/)
-      .map((url) => url.trim())
-      .filter(Boolean);
-  }
-
   try {
+    for (const fieldName of textFieldNames) {
+      const value = formData.get(fieldName);
+      if (typeof value !== "string") {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (trimmed.length === 0) {
+        continue;
+      }
+      if (DIRECTORY_FIELD_NAMES.has(fieldName)) {
+        const validation = validateAbsolutePath(trimmed);
+        if (validation.kind === "relative") {
+          throw new Error(
+            `目录字段 ${fieldName} 必须是绝对路径（POSIX 或 Windows 格式）`,
+          );
+        }
+      }
+      payload[fieldName] = trimmed;
+    }
+
+    const sourceUrls = formData.get("topic_source_urls");
+    if (typeof sourceUrls === "string") {
+      payload.topic_source_urls = sourceUrls
+        .split(/[\n,]/)
+        .map((url) => url.trim())
+        .filter(Boolean);
+    }
+
     await updateRuntimeSettings(payload);
     revalidatePath("/settings");
     redirectWithToast("/settings", "success", "配置已保存");

@@ -29,13 +29,14 @@ async function safelyGetSystemStatus(): Promise<SystemStatus | null> {
 }
 
 async function ensureConfigured(): Promise<void> {
+  let setup;
   try {
-    const setup = await getSetupStatus();
-    if (!setup.complete) {
-      redirect("/welcome");
-    }
+    setup = await getSetupStatus();
   } catch {
-    // /api/is_setup unavailable or network down — render home as before.
+    return;
+  }
+  if (!setup.configured) {
+    redirect(setup.next_step?.trim() ? setup.next_step : "/welcome");
   }
 }
 

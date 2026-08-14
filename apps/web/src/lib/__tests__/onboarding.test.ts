@@ -75,17 +75,11 @@ function makeSystemStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
 
 function makeSetup(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    complete: false,
-    ready_count: 4,
-    total_count: 6,
-    items: [
-      { id: "llm", label: "DeepSeek", status: "ready", detail: "ok", impact: "", repair_action: "" },
-      { id: "obsidian", label: "Obsidian", status: "ready", detail: "ok", impact: "", repair_action: "" },
-      { id: "video", label: "视频", status: "degraded", detail: "缺少输出", impact: "", repair_action: "" },
-      { id: "ffmpeg", label: "ffmpeg", status: "ready", detail: "ok", impact: "", repair_action: "" },
-    ],
+    configured: true,
+    missing: [],
+    next_step: "",
     ...overrides,
-  } as SetupStatus;
+  };
 }
 
 function makeHealth(overrides: Partial<RuntimeHealth> = {}): RuntimeHealth {
@@ -103,14 +97,7 @@ describe("buildOnboardingSnapshot", () => {
     const settings = makeSettings();
     const status = makeSystemStatus();
     const snapshot = buildOnboardingSnapshot({
-      setup: makeSetup({
-        items: [
-          { id: "llm", label: "DeepSeek", status: "ready", detail: "ok", impact: "", repair_action: "" },
-          { id: "obsidian", label: "Obsidian", status: "ready", detail: "ok", impact: "", repair_action: "" },
-          { id: "video", label: "视频", status: "ready", detail: "ok", impact: "", repair_action: "" },
-          { id: "ffmpeg", label: "ffmpeg", status: "ready", detail: "ok", impact: "", repair_action: "" },
-        ],
-      }),
+      setup: makeSetup(),
       setupError: null,
       health: makeHealth(),
       healthError: null,
@@ -229,7 +216,7 @@ describe("buildOnboardingSnapshot", () => {
 describe("summarizeOnboardingHealth", () => {
   it("returns green headline when snapshot is ready", () => {
     const snapshot = buildOnboardingSnapshot({
-      setup: makeSetup({ items: [] }),
+      setup: makeSetup({ missing: ["deepseek_api_key"] }),
       setupError: null,
       health: makeHealth(),
       healthError: null,

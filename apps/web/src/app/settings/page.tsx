@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { type ChangeEvent } from "react";
 import { updateRuntimeSettingsAction } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
+import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { getRuntimeSettings } from "@/lib/api";
 import type {
@@ -52,7 +52,7 @@ const SECTIONS: SectionDef[] = [
     id: "paths",
     title: "本地目录",
     description:
-      "Obsidian、视频、剪映与数据库都要求本地路径存在；点击「选择目录」会用浏览器原生目录选择器填入。",
+      "Obsidian、视频、剪映与数据库都要求本地路径存在；桌面端点击「选择目录」直接填入绝对路径，浏览器中请手动输入。",
     tone: "green",
   },
   {
@@ -70,19 +70,6 @@ const SECTIONS: SectionDef[] = [
     tone: "purple",
   },
 ];
-
-function readSelectedDirectoryName(event: ChangeEvent<HTMLInputElement>): string {
-  const files = event.target.files;
-  if (!files || files.length === 0) {
-    return "";
-  }
-  const first = files[0] as File & { webkitRelativePath?: string };
-  const relative = first.webkitRelativePath ?? "";
-  if (!relative) {
-    return "";
-  }
-  return relative.split("/")[0] ?? "";
-}
 
 function statusTone(configured: boolean): "green" | "red" {
   return configured ? "green" : "red";
@@ -320,37 +307,12 @@ function FieldRow({ field }: { field: FieldDef }) {
             aria-label={field.label}
             maxLength={512}
             name={field.name}
-            pattern="^[/~\u4e00-\u9fa5\w.\-\s]*$"
             placeholder={field.placeholder}
-            title="仅支持绝对路径，禁止特殊符号"
+            title="支持 POSIX 与 Windows 绝对路径，留空保持现有值"
             type="text"
             defaultValue={field.defaultValue ?? ""}
           />
-          <label className="pixel-button secondary settings-pick-button">
-            选择目录
-            <input
-              multiple
-              name={`${field.name}__picker`}
-              onChange={(event) => {
-                const folderName = readSelectedDirectoryName(event);
-                if (!folderName) {
-                  return;
-                }
-                const textInput = event.currentTarget
-                  .closest(".settings-field-row")
-                  ?.querySelector(`input[name="${field.name}"]`) as
-                  | HTMLInputElement
-                  | null;
-                if (textInput) {
-                  textInput.value = folderName;
-                }
-              }}
-              type="file"
-              // @ts-expect-error: webkitdirectory is a non-standard attribute for picking folders.
-              webkitdirectory=""
-              directory=""
-            />
-          </label>
+          <DirectoryPickerButton targetName={field.name} />
         </div>
         {field.helper ? (
           <small className="settings-field-helper">{field.helper}</small>
