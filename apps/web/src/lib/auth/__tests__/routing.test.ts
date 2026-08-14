@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isOnboardingSupportApiPath,
+  isOnboardingSupportPath,
   isPublicAuthPath,
   isPublicApiPath,
   sanitizeNextPath,
@@ -34,8 +36,20 @@ describe("auth routing", () => {
     expect(sanitizeNextPath("/topics?q=video")).toBe("/topics?q=video");
     expect(sanitizeNextPath("https://evil.example")).toBeNull();
     expect(sanitizeNextPath("//evil.example")).toBeNull();
+    expect(sanitizeNextPath("/\\evil.example")).toBeNull();
+    expect(sanitizeNextPath("/topics\\evil.example")).toBeNull();
+    expect(sanitizeNextPath("C:\\evil.example")).toBeNull();
     expect(sanitizeNextPath("/signin?next=/topics")).toBeNull();
     expect(sanitizeNextPath("/auth/callback")).toBeNull();
+  });
+
+  it("only exempts onboarding repair routes from the product gate", () => {
+    expect(isOnboardingSupportPath("/onboarding")).toBe(true);
+    expect(isOnboardingSupportPath("/settings")).toBe(true);
+    expect(isOnboardingSupportPath("/topics")).toBe(false);
+    expect(isOnboardingSupportApiPath("/api/onboarding/complete")).toBe(true);
+    expect(isOnboardingSupportApiPath("/api/settings/runtime")).toBe(true);
+    expect(isOnboardingSupportApiPath("/api/episodes/today")).toBe(false);
   });
 
   it("preserves the protected route when redirecting to sign-in", () => {

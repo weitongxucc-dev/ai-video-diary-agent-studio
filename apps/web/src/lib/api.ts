@@ -12,6 +12,7 @@ import type {
   FeedbackValue,
   FeedbackSummary,
   KnowledgeNote,
+  OnboardingCompletionResponse,
   PendingVideo,
   Preferences,
   PreferenceCards,
@@ -141,6 +142,12 @@ export function getSetupStatus(): Promise<SetupStatus> {
 
 export function getSetupPreflight(): Promise<SetupPreflightResponse> {
   return request<SetupPreflightResponse>("/api/setup/preflight");
+}
+
+export function completeOnboarding(): Promise<OnboardingCompletionResponse> {
+  return request<OnboardingCompletionResponse>("/api/onboarding/complete", {
+    method: "POST",
+  });
 }
 
 export function updateRuntimeSettings(

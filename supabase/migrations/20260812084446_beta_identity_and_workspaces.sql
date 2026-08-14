@@ -148,7 +148,12 @@ grant usage on schema public to authenticated;
 grant select, update on public.profiles to authenticated;
 grant select, insert on public.workspaces to authenticated;
 grant select on public.workspace_members to authenticated;
-grant select, insert, update on public.onboarding_states to authenticated;
+grant select on public.onboarding_states to authenticated;
+-- Bootstrap may set only the identity step. Readiness/completion columns are
+-- reserved for the trusted API after it reruns the local setup preflight.
+grant insert (workspace_id, user_id, identity_complete)
+  on public.onboarding_states to authenticated;
+grant update (identity_complete) on public.onboarding_states to authenticated;
 
 create policy "profiles_select_self"
 on public.profiles for select to authenticated

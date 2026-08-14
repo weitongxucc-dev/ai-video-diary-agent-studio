@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -36,6 +37,10 @@ class UnauthorizedError(Exception):
 
 class ForbiddenError(Exception):
     """Valid token but no authorized workspace membership -> HTTP 403."""
+
+
+class OnboardingStateError(Exception):
+    """Trusted onboarding-state persistence failed."""
 
 
 @dataclass(frozen=True)
@@ -131,7 +136,10 @@ class SupabaseAuthContext:
                 response.status_code,
             )
             raise ForbiddenError("unable to resolve workspace membership")
-        rows = response.json() if response.content else []
+        try:
+            rows = response.json() if response.content else []
+        except ValueError:
+            rows = []
         if not isinstance(rows, list) or not rows:
             return None
         owner = next(
@@ -147,6 +155,58 @@ class SupabaseAuthContext:
             return None
         workspace_id = chosen.get("workspace_id")
         return str(workspace_id) if workspace_id else None
+
+    def complete_onboarding(self, user_id: str, workspace_id: str) -> None:
+        """Persist completion after the API has recomputed a ready preflight.
+
+        The service key stays inside the trusted Python process. Authenticated
+        browser clients only have column-level permission to update
+        ``identity_complete``, so they cannot forge the readiness flags or
+        ``completed_at`` through the Data API.
+        """
+        if not self.enabled:
+            raise OnboardingStateError("authentication is not enabled")
+
+        url = f"{self._settings.supabase_url.rstrip('/')}/rest/v1/onboarding_states"
+        headers = {
+            "apikey": self._settings.supabase_secret_key,
+            "Authorization": f"Bearer {self._settings.supabase_secret_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+        params = {
+            "workspace_id": f"eq.{workspace_id}",
+            "user_id": f"eq.{user_id}",
+            "select": "workspace_id",
+        }
+        payload = {
+            "identity_complete": True,
+            "local_paths_complete": True,
+            "ai_connection_complete": True,
+            "health_check_complete": True,
+            "first_episode_complete": True,
+            "completed_at": datetime.now(UTC).isoformat(),
+        }
+        try:
+            response = httpx.patch(
+                url,
+                headers=headers,
+                params=params,
+                json=payload,
+                timeout=10.0,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("onboarding completion update failed: %s", exc)
+            raise OnboardingStateError("unable to persist onboarding state") from exc
+
+        rows = response.json() if response.content else []
+        if response.status_code != 200 or not isinstance(rows, list) or len(rows) != 1:
+            logger.warning(
+                "onboarding completion update returned HTTP %s with %s rows",
+                response.status_code,
+                len(rows) if isinstance(rows, list) else "invalid",
+            )
+            raise OnboardingStateError("unable to persist onboarding state")
 
     def authenticate(self, request: Request) -> AuthPrincipal:
         """Authenticate a request and resolve its authorized workspace.

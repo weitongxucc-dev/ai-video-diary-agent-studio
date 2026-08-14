@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
+  isOnboardingSupportApiPath,
+  isOnboardingSupportPath,
   isPublicApiPath,
   isPublicAuthPath,
   signInRedirectUrl,
@@ -58,6 +60,16 @@ export async function middleware(request: NextRequest) {
     }
 
     const session = await refreshSession(request);
+    if (
+      session.userId &&
+      !session.onboardingComplete &&
+      !isOnboardingSupportApiPath(pathname)
+    ) {
+      return NextResponse.json(
+        { error: "onboarding_required", detail: "Complete onboarding first." },
+        { status: 403 },
+      );
+    }
     return proxyApiRequest(request, session.accessToken, session.response);
   }
 
@@ -70,6 +82,13 @@ export async function middleware(request: NextRequest) {
     const error = session.configurationError ? "configuration" : undefined;
     return redirectWithRefreshedCookies(
       signInRedirectUrl(request.nextUrl, error),
+      session.response,
+    );
+  }
+
+  if (!session.onboardingComplete && !isOnboardingSupportPath(pathname)) {
+    return redirectWithRefreshedCookies(
+      new URL("/onboarding", request.nextUrl),
       session.response,
     );
   }

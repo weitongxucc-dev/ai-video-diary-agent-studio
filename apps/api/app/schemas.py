@@ -300,6 +300,11 @@ class SetupPreflightResponse(BaseModel):
     generated_at: datetime
 
 
+class OnboardingCompletionResponse(BaseModel):
+    workspace_id: str
+    completed: bool
+
+
 class PendingVideoResponse(BaseModel):
     file_name: str
     path: str

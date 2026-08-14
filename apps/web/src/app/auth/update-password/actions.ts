@@ -9,10 +9,10 @@ export async function updatePassword(formData: FormData): Promise<never> {
   const confirmation = String(formData.get("password_confirmation") ?? "");
   const mode = String(formData.get("mode") ?? "invite");
 
-  if (password.length < 8 || password !== confirmation) {
+  if (password.length < 10 || password !== confirmation) {
     const params = new URLSearchParams({
       mode,
-      error: "密码至少需要 8 位，且两次输入必须一致。",
+      error: "密码至少需要 10 位，且两次输入必须一致。",
     });
     redirect(`/auth/update-password?${params.toString()}`);
   }

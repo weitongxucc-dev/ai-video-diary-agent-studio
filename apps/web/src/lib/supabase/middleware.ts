@@ -6,6 +6,7 @@ export type SessionRefreshResult = {
   response: NextResponse;
   userId: string | null;
   accessToken: string | null;
+  onboardingComplete: boolean;
   configurationError: string | null;
 };
 
@@ -20,6 +21,7 @@ export async function refreshSession(
       response,
       userId: null,
       accessToken: null,
+      onboardingComplete: false,
       configurationError: config.message,
     };
   }
@@ -47,14 +49,23 @@ export async function refreshSession(
         response,
         userId: null,
         accessToken: null,
+        onboardingComplete: false,
         configurationError: null,
       };
     }
     const { data: sessionData } = await supabase.auth.getSession();
+    const { data: onboardingState, error: onboardingError } = await supabase
+      .from("onboarding_states")
+      .select("completed_at, workspaces!inner(owner_id)")
+      .eq("user_id", data.claims.sub)
+      .eq("workspaces.owner_id", data.claims.sub)
+      .maybeSingle();
     return {
       response,
       userId: data.claims.sub,
       accessToken: sessionData.session?.access_token ?? null,
+      onboardingComplete:
+        !onboardingError && Boolean(onboardingState?.completed_at),
       configurationError: null,
     };
   } catch {
@@ -62,6 +73,7 @@ export async function refreshSession(
       response,
       userId: null,
       accessToken: null,
+      onboardingComplete: false,
       configurationError: null,
     };
   }

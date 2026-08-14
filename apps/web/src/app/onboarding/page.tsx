@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { completeOnboardingAction } from "./actions";
 import { AppShell } from "@/components/AppShell";
+import { PixelButton } from "@/components/PixelPrimitives";
 import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { getRuntimeHealth, getRuntimeSettings, getSetupPreflight, getSetupStatus, getSystemStatus } from "@/lib/api.server";
 import { buildOnboardingSnapshot, summarizeOnboardingHealth } from "@/lib/onboarding";
@@ -49,7 +51,12 @@ function extractMessage(err: unknown): string {
   return "请求失败";
 }
 
-export default async function OnboardingPage() {
+type OnboardingPageProps = {
+  searchParams?: Promise<{ error?: string }>;
+};
+
+export default async function OnboardingPage({ searchParams }: OnboardingPageProps) {
+  const params = searchParams ? await searchParams : {};
   const snapshot = await loadOnboardingSnapshot();
   const summary = summarizeOnboardingHealth(snapshot);
   const generatedAtLabel = new Date(snapshot.generatedAt).toLocaleString("zh-CN", {
@@ -144,23 +151,31 @@ export default async function OnboardingPage() {
 
           <OnboardingChecklist initialSnapshot={snapshot} />
 
+          {params.error === "completion" ? (
+            <div className="welcome-feedback red" role="alert">
+              完成启动流程失败。请重新检查后再试；问题持续时请联系内测管理员。
+            </div>
+          ) : null}
+
           <div className="onboarding-completion-gate">
             <strong>
               {snapshot.ready ? "本机预检已通过" : "首次启动仍被预检阻断"}
             </strong>
             <span>
               {snapshot.ready
-                ? "可以继续创建第一条 Episode；完成第一条任务后才会正式完成 onboarding。"
+                ? "提交后服务端会重新运行真实预检，仅在仍然就绪时创建第一条 Episode 并标记 onboarding 完成。"
                 : "请按上方每一项的修复动作处理并重新检查。未就绪时不能进入工作台。"}
             </span>
             {snapshot.ready ? (
-              <Link className="pixel-button" href="/topics">
-                继续创建第一条 Episode
-              </Link>
+              <form action={completeOnboardingAction}>
+                <PixelButton type="submit" variant="primary">
+                  完成启动并进入工作台
+                </PixelButton>
+              </form>
             ) : (
-              <button className="pixel-button" disabled type="button">
+              <PixelButton disabled type="button" variant="primary">
                 预检未通过
-              </button>
+              </PixelButton>
             )}
           </div>
         </section>

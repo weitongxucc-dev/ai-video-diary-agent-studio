@@ -15,6 +15,10 @@
   `/api/runtime/health`、`/api/setup/preflight`、`/api/is_setup`、
   `/api/system/status`、`/api/version`、`/api/workflow/status`、
   `/api/content-templates`。其余产品数据端点都需要有效令牌。
+- **首启完成**：`POST /api/onboarding/complete` 不接受客户端的
+  `ready` 或步骤布尔值。后端先重新运行本机 preflight，只在结果仍为
+  `ready` 时幂等创建当日首条 Episode，再用仅服务端可见的
+  `SUPABASE_SECRET_KEY` 写入完成状态。浏览器对这些完成列没有写权限。
 
 ## HTTP 语义
 

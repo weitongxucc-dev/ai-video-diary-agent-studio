@@ -15,12 +15,32 @@ const PUBLIC_API_PATHS = new Set([
   "/api/content-templates",
 ]);
 
+const ONBOARDING_SUPPORT_PATHS = new Set([
+  "/onboarding",
+  "/settings",
+  "/health",
+  "/welcome",
+]);
+
+const ONBOARDING_SUPPORT_API_PATHS = new Set([
+  "/api/onboarding/complete",
+  "/api/settings/runtime",
+]);
+
 export function isPublicAuthPath(pathname: string): boolean {
   return PUBLIC_PATHS.has(pathname) || pathname.startsWith("/auth/signout");
 }
 
 export function isPublicApiPath(pathname: string): boolean {
   return PUBLIC_API_PATHS.has(pathname);
+}
+
+export function isOnboardingSupportPath(pathname: string): boolean {
+  return ONBOARDING_SUPPORT_PATHS.has(pathname);
+}
+
+export function isOnboardingSupportApiPath(pathname: string): boolean {
+  return ONBOARDING_SUPPORT_API_PATHS.has(pathname);
 }
 
 export function trustedApiHeaders(
@@ -36,7 +56,12 @@ export function trustedApiHeaders(
 }
 
 export function sanitizeNextPath(value: string | null | undefined): string | null {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+  if (
+    !value ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\")
+  ) {
     return null;
   }
 

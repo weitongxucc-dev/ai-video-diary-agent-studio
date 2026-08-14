@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { signIn } from "./actions";
+import { PixelButton } from "@/components/PixelPrimitives";
 import { getSupabasePublicConfig } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 
@@ -57,15 +58,15 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
             <span>密码</span>
             <input
               autoComplete="current-password"
-              minLength={8}
+              minLength={10}
               name="password"
               required
               type="password"
             />
           </label>
-          <button className="pixel-button" disabled={!config.ok} type="submit">
+          <PixelButton disabled={!config.ok} type="submit" variant="primary">
             登录并继续
-          </button>
+          </PixelButton>
         </form>
 
         <div className="auth-help">

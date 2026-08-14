@@ -198,6 +198,34 @@ def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
         ctx.resolve_workspace_id("user-1")
 
 
+def test_complete_onboarding_uses_trusted_service_key_and_scoped_row(auth_ctx):
+    ctx, _, _, _ = auth_ctx
+
+    class FakeResponse:
+        status_code = 200
+        content = b'[{"workspace_id":"ws-a"}]'
+
+        def json(self):
+            return json.loads(self.content)
+
+    with mock.patch("app.auth.httpx.patch", return_value=FakeResponse()) as patch:
+        ctx.complete_onboarding("user-a", "ws-a")
+
+    _, kwargs = patch.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer service-role-secret"
+    assert kwargs["params"] == {
+        "workspace_id": "eq.ws-a",
+        "user_id": "eq.user-a",
+        "select": "workspace_id",
+    }
+    assert kwargs["json"]["identity_complete"] is True
+    assert kwargs["json"]["local_paths_complete"] is True
+    assert kwargs["json"]["ai_connection_complete"] is True
+    assert kwargs["json"]["health_check_complete"] is True
+    assert kwargs["json"]["first_episode_complete"] is True
+    assert kwargs["json"]["completed_at"]
+
+
 # ── Middleware: 401 vs 403 vs 200 ───────────────────────────────────────
 
 
@@ -269,6 +297,61 @@ def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
+
+
+def test_onboarding_completion_rechecks_preflight_before_writing(
+    auth_ctx,
+    monkeypatch,
+):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "blocked", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    ctx.complete_onboarding.assert_not_called()
+
+
+def test_onboarding_completion_persists_only_after_ready_preflight(
+    auth_ctx,
+    monkeypatch,
+    tmp_path,
+):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    repo = EpisodeRepository(database_path=tmp_path / "onboarding.sqlite")
+    monkeypatch.setattr(main_module, "repo", repo)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "ready", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"workspace_id": "ws-a", "completed": True}
+    assert len(repo.all(workspace_id="ws-a")) == 1
+    ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a")
 
 
 # ── Migration: legacy rows become 'local', partitioned queries ─────────

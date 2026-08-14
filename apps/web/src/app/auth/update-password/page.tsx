@@ -1,4 +1,5 @@
 import { updatePassword } from "./actions";
+import { PixelButton } from "@/components/PixelPrimitives";
 
 type UpdatePasswordPageProps = {
   searchParams?: Promise<{ error?: string; mode?: string }>;
@@ -26,14 +27,14 @@ export default async function UpdatePasswordPage({ searchParams }: UpdatePasswor
         <form action={updatePassword} className="auth-form">
           <input name="mode" type="hidden" value={params.mode ?? "invite"} />
           <label className="auth-field">
-            <span>新密码（至少 8 位）</span>
-            <input autoComplete="new-password" minLength={8} name="password" required type="password" />
+            <span>新密码（至少 10 位）</span>
+            <input autoComplete="new-password" minLength={10} name="password" required type="password" />
           </label>
           <label className="auth-field">
             <span>再次输入新密码</span>
-            <input autoComplete="new-password" minLength={8} name="password_confirmation" required type="password" />
+            <input autoComplete="new-password" minLength={10} name="password_confirmation" required type="password" />
           </label>
-          <button className="pixel-button" type="submit">保存密码并继续</button>
+          <PixelButton type="submit" variant="primary">保存密码并继续</PixelButton>
         </form>
       </section>
     </main>
