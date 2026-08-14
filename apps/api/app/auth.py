@@ -29,6 +29,7 @@ from app.repository import LEGACY_WORKSPACE_ID
 logger = logging.getLogger(__name__)
 
 _BEARER_PREFIX = "Bearer "
+_ASYMMETRIC_JWT_ALGORITHMS = ["ES256", "RS256"]
 
 
 class UnauthorizedError(Exception):
@@ -75,7 +76,10 @@ class SupabaseAuthContext:
 
     @property
     def jwks_url(self) -> str:
-        return f"{self._settings.supabase_url.rstrip('/')}/auth/v1/jwt/jwks"
+        return (
+            f"{self._settings.supabase_url.rstrip('/')}/auth/v1/"
+            ".well-known/jwks.json"
+        )
 
     @property
     def issuer(self) -> str | None:
@@ -99,7 +103,7 @@ class SupabaseAuthContext:
             return jwt.decode(
                 token,
                 signing_key.key,
-                algorithms=["RS256"],
+                algorithms=_ASYMMETRIC_JWT_ALGORITHMS,
                 audience=self._settings.supabase_jwt_audience,
                 issuer=self.issuer,
                 options={"require": ["exp", "sub", "iss", "aud"]},

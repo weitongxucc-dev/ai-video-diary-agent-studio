@@ -3,6 +3,7 @@ const PUBLIC_PATHS = new Set([
   "/privacy",
   "/terms",
   "/auth/callback",
+  "/auth/update-password",
 ]);
 
 const PUBLIC_API_PATHS = new Set([

@@ -13,6 +13,7 @@ describe("auth routing", () => {
   it("keeps sign-in, auth callbacks and legal pages public", () => {
     expect(isPublicAuthPath("/signin")).toBe(true);
     expect(isPublicAuthPath("/auth/callback")).toBe(true);
+    expect(isPublicAuthPath("/auth/update-password")).toBe(true);
     expect(isPublicAuthPath("/auth/signout")).toBe(true);
     expect(isPublicAuthPath("/privacy")).toBe(true);
     expect(isPublicAuthPath("/topics")).toBe(false);

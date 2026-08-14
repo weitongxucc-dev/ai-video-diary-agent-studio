@@ -5,9 +5,10 @@
 ## 信任模型
 
 - **身份**：Supabase Auth 的永久用户。后端只信任通过 Bearer JWT 验证得到的 `sub`。
-- **JWT 验证**：本地离线验证，JWKS 来自 `{SUPABASE_URL}/auth/v1/jwt/jwks`，
-  校验 `iss`（默认 `{SUPABASE_URL}/auth/v1`）、`aud`（默认 `authenticated`）、
-  `exp` 与 `sub`。
+- **JWT 验证**：本地离线验证，JWKS 来自
+  `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`，只接受 Supabase 的非对称
+  `ES256` / `RS256` 签名，并校验 `iss`（默认 `{SUPABASE_URL}/auth/v1`）、
+  `aud`（默认 `authenticated`）、`exp` 与 `sub`。
 - **工作区解析**：后端使用 `SUPABASE_SECRET_KEY` 调用 Supabase Data API
   `workspace_members` 表，服务端解析该用户被授权的工作区，优先 `owner` 角色。
   客户端请求体中的 `user_id` / `workspace_id` 一律忽略。

@@ -144,9 +144,18 @@ alter table public.workspaces enable row level security;
 alter table public.workspace_members enable row level security;
 alter table public.onboarding_states enable row level security;
 
+-- Supabase grants broad table privileges to API roles by default. Remove
+-- those defaults before granting the browser the minimum required surface.
+revoke all on public.profiles from anon, authenticated;
+revoke all on public.workspaces from anon, authenticated;
+revoke all on public.workspace_members from anon, authenticated;
+revoke all on public.onboarding_states from anon, authenticated;
+
 grant usage on schema public to authenticated;
-grant select, update on public.profiles to authenticated;
-grant select, insert on public.workspaces to authenticated;
+grant select on public.profiles to authenticated;
+grant update (display_name) on public.profiles to authenticated;
+grant select on public.workspaces to authenticated;
+grant insert (owner_id, name) on public.workspaces to authenticated;
 grant select on public.workspace_members to authenticated;
 grant select on public.onboarding_states to authenticated;
 -- Bootstrap may set only the identity step. Readiness/completion columns are
@@ -167,12 +176,13 @@ with check ((select auth.uid()) = id);
 create policy "workspaces_select_membership"
 on public.workspaces for select to authenticated
 using (
-  exists (
-    select 1
-    from public.workspace_members member
-    where member.workspace_id = workspaces.id
-      and member.user_id = (select auth.uid())
-  )
+  (select auth.uid()) = owner_id
+  or exists (
+      select 1
+      from public.workspace_members member
+      where member.workspace_id = workspaces.id
+        and member.user_id = (select auth.uid())
+    )
 );
 
 create policy "workspaces_create_self_owned"

@@ -11,7 +11,7 @@ from unittest import mock
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -39,6 +39,20 @@ AUDIENCE = "authenticated"
 
 def _make_rsa_keypair():
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_pem, public_pem
+
+
+def _make_ec_keypair():
+    key = ec.generate_private_key(ec.SECP256R1())
     private_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -124,10 +138,39 @@ def test_extract_bearer_token_variants():
 # ── JWT verification ────────────────────────────────────────────────────
 
 
+def test_jwks_url_uses_supabase_discovery_endpoint(tmp_path):
+    ctx = SupabaseAuthContext(_auth_enabled_settings(tmp_path))
+
+    assert ctx.jwks_url == (
+        "https://example.supabase.co/auth/v1/.well-known/jwks.json"
+    )
+
+
 def test_verify_token_returns_sub_for_valid_token(auth_ctx):
     ctx, _, private_pem, _ = auth_ctx
     token = _sign_token("user-123", key=private_pem)
     assert ctx.verify_token(token)["sub"] == "user-123"
+
+
+def test_verify_token_accepts_supabase_es256_signing_key(tmp_path):
+    private_pem, public_pem = _make_ec_keypair()
+    ctx = SupabaseAuthContext(_auth_enabled_settings(tmp_path))
+    ctx._jwks_client = lambda: _fake_jwks_client(public_pem)
+    payload = {
+        "sub": "user-es256",
+        "iss": ISSUER,
+        "aud": AUDIENCE,
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+        "role": "authenticated",
+    }
+    token = pyjwt.encode(
+        payload,
+        private_pem,
+        algorithm="ES256",
+        headers={"kid": "ec-key"},
+    )
+
+    assert ctx.verify_token(token)["sub"] == "user-es256"
 
 
 def test_verify_token_rejects_wrong_audience(auth_ctx):
@@ -433,7 +476,10 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
 # ── Migration: legacy rows become 'local', partitioned queries ─────────
 
 
-def test_migration_partitions_legacy_rows_as_local(tmp_path):
+def test_migration_partitions_legacy_rows_as_local(tmp_path, monkeypatch):
+    import app.repository as repository_module
+
+    monkeypatch.setattr(repository_module, "_AUTH_ENABLED", False)
     db_path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(db_path) as conn:
         conn.execute(

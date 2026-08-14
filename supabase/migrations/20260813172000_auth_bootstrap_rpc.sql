@@ -1,6 +1,23 @@
 -- Idempotent first-login bootstrap for an authenticated user. This runs with
 -- the caller's RLS identity and never requires a service/secret key.
 
+-- Reassert the minimum browser grants for projects that bootstrapped the
+-- identity tables before migration history was recorded.
+revoke all on public.profiles from anon, authenticated;
+revoke all on public.workspaces from anon, authenticated;
+revoke all on public.workspace_members from anon, authenticated;
+revoke all on public.onboarding_states from anon, authenticated;
+
+grant select on public.profiles to authenticated;
+grant update (display_name) on public.profiles to authenticated;
+grant select on public.workspaces to authenticated;
+grant insert (owner_id, name) on public.workspaces to authenticated;
+grant select on public.workspace_members to authenticated;
+grant select on public.onboarding_states to authenticated;
+grant insert (workspace_id, user_id, identity_complete)
+  on public.onboarding_states to authenticated;
+grant update (identity_complete) on public.onboarding_states to authenticated;
+
 alter table public.workspaces
   add constraint workspaces_one_personal_workspace_per_owner unique (owner_id);
 
@@ -44,13 +61,13 @@ begin
     identity_complete
   )
   values (personal_workspace_id, caller_id, true)
-  on conflict (workspace_id) do update
+  on conflict on constraint onboarding_states_pkey do update
     set identity_complete = true;
 
-  select completed_at into onboarding_completed_at
-  from public.onboarding_states
-  where workspace_id = personal_workspace_id
-    and user_id = caller_id;
+  select state.completed_at into onboarding_completed_at
+  from public.onboarding_states as state
+  where state.workspace_id = personal_workspace_id
+    and state.user_id = caller_id;
 
   return query select personal_workspace_id, onboarding_completed_at is not null;
 end;
