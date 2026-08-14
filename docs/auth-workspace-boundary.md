@@ -19,12 +19,16 @@
   `ready` 或步骤布尔值。后端先重新运行本机 preflight，只在结果仍为
   `ready` 时幂等创建当日首条 Episode，再用仅服务端可见的
   `SUPABASE_SECRET_KEY` 写入完成状态。浏览器对这些完成列没有写权限。
+- **首启门禁**：Python API 会以服务端身份读取已解析 workspace 的
+  `completed_at`。未完成首启的用户即使直接访问本机 API，也只能调用
+  `/api/onboarding/complete` 与 `/api/settings/runtime` 修复首启，不能绕过
+  Next.js 的页面门禁访问产品数据。
 
 ## HTTP 语义
 
 - **401 Unauthorized**：缺失、格式错误、过期或无法验证的令牌。
-- **403 Forbidden**：令牌有效，但该用户没有任何被授权的工作区成员关系
-  （或工作区解析失败）。
+- **403 Forbidden**：令牌有效，但该用户没有任何被授权的工作区成员关系、
+  无法解析首启状态，或尚未完成首启却访问非修复 API。
 - **404 Not Found**：资源属于其它工作区时返回 404，避免泄露资源存在性。
 
 ## 数据分区

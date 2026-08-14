@@ -15,6 +15,7 @@ __pycache__/
 *.tsbuildinfo
 .pnpm-store/
 .tmp/
+supabase/.temp/
 .playwright-cli/
 output/
 *.sqlite

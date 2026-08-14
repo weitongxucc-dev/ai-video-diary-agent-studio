@@ -208,6 +208,49 @@ class SupabaseAuthContext:
             )
             raise OnboardingStateError("unable to persist onboarding state")
 
+    def is_onboarding_complete(self, user_id: str, workspace_id: str) -> bool:
+        """Return whether the caller's resolved workspace finished onboarding.
+
+        This query deliberately uses the trusted service key, just like
+        membership resolution.  A direct request to the Python server must not
+        be able to bypass the completion gate that Next.js enforces for browser
+        traffic.
+        """
+        if not self.enabled:
+            return True
+
+        url = f"{self._settings.supabase_url.rstrip('/')}/rest/v1/onboarding_states"
+        headers = {
+            "apikey": self._settings.supabase_secret_key,
+            "Authorization": f"Bearer {self._settings.supabase_secret_key}",
+        }
+        params = {
+            "workspace_id": f"eq.{workspace_id}",
+            "user_id": f"eq.{user_id}",
+            "select": "completed_at",
+        }
+        try:
+            response = httpx.get(url, headers=headers, params=params, timeout=10.0)
+        except httpx.HTTPError as exc:
+            logger.warning("onboarding state lookup failed: %s", exc)
+            raise ForbiddenError("unable to resolve onboarding state") from exc
+        if response.status_code != 200:
+            logger.warning(
+                "onboarding state lookup returned HTTP %s",
+                response.status_code,
+            )
+            raise ForbiddenError("unable to resolve onboarding state")
+        try:
+            rows = response.json() if response.content else []
+        except ValueError:
+            rows = []
+        return bool(
+            isinstance(rows, list)
+            and len(rows) == 1
+            and isinstance(rows[0], dict)
+            and rows[0].get("completed_at")
+        )
+
     def authenticate(self, request: Request) -> AuthPrincipal:
         """Authenticate a request and resolve its authorized workspace.
 

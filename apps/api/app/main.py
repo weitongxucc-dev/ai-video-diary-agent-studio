@@ -225,6 +225,14 @@ PUBLIC_AUTH_PATHS: set[str] = {
     "/api/content-templates",
 }
 
+# Authenticated users who have not completed onboarding may only use these
+# repair endpoints.  The same trusted Python boundary enforces this rule for
+# direct localhost requests, not just Next.js-proxied browser traffic.
+ONBOARDING_REPAIR_PATHS: set[str] = {
+    "/api/onboarding/complete",
+    "/api/settings/runtime",
+}
+
 
 def current_workspace_id(request: Request) -> str:
     """Resolve the workspace id scoping the current request.
@@ -260,6 +268,15 @@ async def auth_boundary_middleware(request: Request, call_next):
         return await call_next(request)
     try:
         request.state.principal = auth_context.authenticate(request)
+        principal = request.state.principal
+        if (
+            path not in ONBOARDING_REPAIR_PATHS
+            and not auth_context.is_onboarding_complete(
+                principal.user_id,
+                principal.workspace_id or LEGACY_WORKSPACE_ID,
+            )
+        ):
+            raise ForbiddenError("onboarding completion required")
     except UnauthorizedError as exc:
         return JSONResponse(
             status_code=401,

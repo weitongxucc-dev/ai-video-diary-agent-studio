@@ -94,6 +94,9 @@ def auth_ctx(tmp_path):
     settings = _auth_enabled_settings(tmp_path)
     ctx = SupabaseAuthContext(settings)
     ctx._jwks_client = lambda: _fake_jwks_client(public_pem)
+    # Product-endpoint tests that are unrelated to onboarding explicitly model
+    # an already-completed workspace. Tests for the completion gate override it.
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
     return ctx, settings, private_pem, public_pem
 
 
@@ -226,6 +229,30 @@ def test_complete_onboarding_uses_trusted_service_key_and_scoped_row(auth_ctx):
     assert kwargs["json"]["completed_at"]
 
 
+def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
+    ctx, _, _, _ = auth_ctx
+
+    class FakeResponse:
+        status_code = 200
+        content = b'[{"completed_at":"2026-08-14T00:00:00+00:00"}]'
+
+        def json(self):
+            return json.loads(self.content)
+
+    # Use the implementation rather than the fixture's completed-workspace
+    # default to verify the trusted lookup's request scope.
+    ctx.is_onboarding_complete = SupabaseAuthContext.is_onboarding_complete.__get__(ctx)
+    with mock.patch("app.auth.httpx.get", return_value=FakeResponse()) as get:
+        assert ctx.is_onboarding_complete("user-a", "ws-a") is True
+
+    _, kwargs = get.call_args
+    assert kwargs["params"] == {
+        "workspace_id": "eq.ws-a",
+        "user_id": "eq.user-a",
+        "select": "completed_at",
+    }
+
+
 # ── Middleware: 401 vs 403 vs 200 ───────────────────────────────────────
 
 
@@ -282,6 +309,7 @@ def test_protected_endpoint_no_workspace_403(auth_ctx, monkeypatch):
 def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
     ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
@@ -297,6 +325,54 @@ def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
+
+
+def test_incomplete_onboarding_cannot_call_product_api(auth_ctx, monkeypatch):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: False
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).get(
+        "/api/episodes/today",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
+    assert response.json()["detail"] == "onboarding completion required"
+
+
+def test_incomplete_onboarding_can_reach_repair_endpoints(auth_ctx, monkeypatch):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = mock.Mock(return_value=False)
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "blocked", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    client = TestClient(main_module.app)
+    settings_response = client.get(
+        "/api/settings/runtime",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    completion_response = client.post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert settings_response.status_code == 200
+    assert completion_response.status_code == 409
+    ctx.is_onboarding_complete.assert_not_called()
+    ctx.complete_onboarding.assert_not_called()
 
 
 def test_onboarding_completion_rechecks_preflight_before_writing(
