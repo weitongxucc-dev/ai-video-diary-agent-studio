@@ -17,6 +17,11 @@ let apiStopping = false;
 let nextStopping = false;
 let workerStopping = false;
 const isDev = process.env.NODE_ENV === 'development';
+// Supabase invite/recovery links must target a stable origin. The callback runs
+// in the user's browser, sets the password, and can then be followed by a fresh
+// sign-in inside Electron; a random port makes that link unreachable.
+const authWebPort = 3000;
+const authWebOrigin = `http://localhost:${authWebPort}`;
 
 // ── Shared config path ─────────────────────────────────
 // Packaged API and Worker share one writable .env under
@@ -62,6 +67,18 @@ function getFreePort() {
       server.close(() => resolve(port));
     });
     server.on('error', reject);
+  });
+}
+
+function ensurePortAvailable(port) {
+  return new Promise((resolve, reject) => {
+    const server = require('net').createServer();
+    server.once('error', () => {
+      reject(new Error(`本地登录端口 ${port} 已被占用，请关闭占用该端口的应用后重试`));
+    });
+    server.listen(port, '127.0.0.1', () => {
+      server.close(resolve);
+    });
   });
 }
 
@@ -186,7 +203,8 @@ async function startNextServer() {
     return null;
   }
 
-  nextPort = await getFreePort();
+  await ensurePortAvailable(authWebPort);
+  nextPort = authWebPort;
   console.log(`[main] Starting Next.js server on port ${nextPort}...`);
 
   const env = {
@@ -419,12 +437,12 @@ function createWindow() {
 
   // Load content
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3000');
+    mainWindow.loadURL(authWebOrigin);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     // Production: load from Next.js standalone server
     if (nextPort) {
-      mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
+      mainWindow.loadURL(authWebOrigin);
     } else {
       mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
     }
@@ -581,6 +599,12 @@ app.whenReady().then(async () => {
       await startNextServer();
     } catch (err) {
       console.error('[main] Failed to start Next.js server:', err.message);
+      dialog.showErrorBox(
+        '启动失败',
+        `无法启动本地 Web 服务：${err.message}`
+      );
+      app.quit();
+      return;
     }
 
     // Start automation worker after API is ready (non-blocking —
