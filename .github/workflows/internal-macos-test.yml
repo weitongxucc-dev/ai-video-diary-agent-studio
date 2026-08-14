@@ -60,25 +60,23 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          # cryptography 50 requires the newer OpenSSL bundled with 3.11.15.
-          # Older Intel runner images resolve "3.11" to 3.11.9 and produce a
-          # PyInstaller binary that fails at runtime with missing SSL symbols.
-          python-version: "3.11.15"
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
 
+      - name: Install compatible Python runtime
+        # cryptography 50 requires the newer OpenSSL bundled with uv's
+        # Python 3.11.15 build. The Intel runner's system 3.11.9 produces a
+        # PyInstaller binary that fails at runtime with missing SSL symbols.
+        run: uv python install 3.11.15
+
       - name: Install dependencies
         run: |
           pnpm install --frozen-lockfile
           cd apps/api
-          uv sync --locked --group dev
+          uv sync --locked --group dev --python 3.11.15
 
       - name: Build web application
         run: |
