@@ -1,0 +1,198 @@
+name: Internal macOS test build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build internal ${{ matrix.arch }} package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            file_arch: arm64
+          - arch: x64
+            runner: macos-15-intel
+            file_arch: x86_64
+
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify native runner and auth configuration
+        shell: bash
+        run: |
+          case "${{ matrix.arch }}" in
+            arm64) expected_runner=arm64 ;;
+            x64) expected_runner=x86_64 ;;
+          esac
+          actual_runner=$(uname -m)
+          if [ "$actual_runner" != "$expected_runner" ]; then
+            echo "::error::Expected $expected_runner runner, got $actual_runner"
+            exit 1
+          fi
+          if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] || [ -z "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "::error::Internal build auth configuration is missing"
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          cd apps/api
+          uv sync --locked --group dev
+
+      - name: Build web application
+        run: |
+          pnpm --dir apps/web build
+          node apps/desktop/scripts/bundle-standalone.js
+
+      - name: Build native API and worker
+        working-directory: apps/api
+        run: |
+          .venv/bin/pyinstaller pyinstaller.spec \
+            --distpath ../desktop/dist \
+            --workpath ../desktop/build-api \
+            --clean --noconfirm
+          .venv/bin/pyinstaller worker.spec \
+            --distpath ../desktop/dist \
+            --workpath ../desktop/build-worker \
+            --clean --noconfirm
+
+      - name: Verify native service architecture
+        shell: bash
+        run: |
+          for binary in apps/desktop/dist/api-server apps/desktop/dist/worker-server; do
+            file "$binary"
+            if ! file "$binary" | grep -q "${{ matrix.file_arch }}"; then
+              echo "::error::$binary is not ${{ matrix.file_arch }}"
+              exit 1
+            fi
+          done
+
+      - name: Package app directory without Developer ID
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: >-
+          npx electron-builder --mac dir --${{ matrix.arch }} --publish never
+          -c.mac.identity=null
+
+      - name: Ad-hoc sign and smoke-test package
+        shell: bash
+        run: |
+          app_path=$(find apps/desktop/dist -type d -name '*.app' -print -quit)
+          if [ -z "$app_path" ]; then
+            echo "::error::Packaged app was not found"
+            exit 1
+          fi
+
+          app_binary=$(find "$app_path/Contents/MacOS" -type f -perm -111 -print -quit)
+          api_binary="$app_path/Contents/Resources/api-server"
+          worker_binary="$app_path/Contents/Resources/worker-server"
+          for binary in "$app_binary" "$api_binary" "$worker_binary"; do
+            file "$binary"
+            if ! file "$binary" | grep -q "${{ matrix.file_arch }}"; then
+              echo "::error::$binary is not ${{ matrix.file_arch }}"
+              exit 1
+            fi
+          done
+
+          codesign --force --deep --options runtime \
+            --entitlements apps/desktop/assets/entitlements.plist \
+            --sign - "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          smoke_dir=$(mktemp -d)
+          : > "$smoke_dir/.env"
+          API_PORT=18765 AI_VIDEO_DIARY_DOTENV="$smoke_dir/.env" \
+            "$api_binary" >"$smoke_dir/api.log" 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill "$api_pid" 2>/dev/null || true
+            wait "$api_pid" 2>/dev/null || true
+            rm -rf "$smoke_dir"
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for attempt in {1..40}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:18765/api/runtime/health >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            cat "$smoke_dir/api.log"
+            echo "::error::Packaged API did not become healthy"
+            exit 1
+          fi
+
+      - name: Create internal DMG, ZIP, and checksums
+        shell: bash
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          app_path=$(find apps/desktop/dist -type d -name '*.app' -print -quit)
+          output_dir="internal-test-${{ matrix.arch }}"
+          base_name="AI视频日记-Agent-Studio-${version}-internal-${{ matrix.arch }}"
+          mkdir -p "$output_dir"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app_path" "$output_dir/$base_name.zip"
+
+          dmg_root=$(mktemp -d)
+          ditto "$app_path" "$dmg_root/$(basename "$app_path")"
+          ln -s /Applications "$dmg_root/Applications"
+          hdiutil create -quiet -volname "AI视频日记 内部测试版" \
+            -srcfolder "$dmg_root" -ov -format UDZO \
+            "$output_dir/$base_name.dmg"
+          rm -rf "$dmg_root"
+
+          cd "$output_dir"
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS.txt
+          ls -lh
+
+      - name: Upload internal test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI视频日记-internal-${{ matrix.arch }}
+          path: internal-test-${{ matrix.arch }}/
+          retention-days: 7
+          if-no-files-found: error
