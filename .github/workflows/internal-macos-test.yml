@@ -63,7 +63,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # cryptography 50 requires the newer OpenSSL bundled with 3.11.15.
+          # Older Intel runner images resolve "3.11" to 3.11.9 and produce a
+          # PyInstaller binary that fails at runtime with missing SSL symbols.
+          python-version: "3.11.15"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
