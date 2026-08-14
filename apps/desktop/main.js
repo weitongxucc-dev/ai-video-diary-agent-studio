@@ -194,9 +194,12 @@ async function startNextServer() {
     PORT: String(nextPort),
     HOSTNAME: '127.0.0.1',
     API_PORT: String(apiPort),
+    // A packaged app cannot rely on a system Node.js installation. Electron's
+    // executable can run the bundled Next server in Node mode instead.
+    ELECTRON_RUN_AS_NODE: '1',
   };
 
-  nextProcess = spawn('node', [serverJs], {
+  nextProcess = spawn(process.execPath, [serverJs], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
