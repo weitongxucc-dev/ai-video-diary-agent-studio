@@ -50,15 +50,14 @@ jobs:
           node-version: "22"
           cache: "pnpm"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
         with:
-          # Keep OpenSSL compatible with the locked cryptography runtime on
-          # both native macOS architectures.
-          python-version: "3.11.15"
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
 
-      - name: Install uv
-        run: pip install uv
+      - name: Install compatible Python runtime
+        run: uv python install 3.11.15
 
       # ── Version guard ────────────────────────────────────────
 
@@ -106,7 +105,7 @@ jobs:
       - name: Build API binary (PyInstaller — ${{ matrix.arch }})
         run: |
           cd apps/api
-          uv sync --group dev
+          uv sync --locked --group dev --python 3.11.15
           .venv/bin/pyinstaller pyinstaller.spec \
             --distpath ../desktop/dist \
             --workpath ../desktop/build-api \
