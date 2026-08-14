@@ -1,40 +1,104 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import {
+  isOnboardingSupportApiPath,
+  isOnboardingSupportPath,
+  isPublicApiPath,
+  isPublicAuthPath,
+  signInRedirectUrl,
+  trustedApiHeaders,
+} from "@/lib/auth/routing";
+import {
+  copyRefreshedSession,
+  redirectWithRefreshedCookies,
+  refreshSession,
+} from "@/lib/supabase/middleware";
 
 const API_PORT = process.env.API_PORT ?? "8000";
 
-export async function middleware(request: NextRequest) {
+async function proxyApiRequest(
+  request: NextRequest,
+  accessToken: string | null,
+  sessionResponse?: NextResponse,
+) {
   const { pathname, search } = request.nextUrl;
+  const apiUrl = `http://127.0.0.1:${API_PORT}${pathname}${search}`;
 
-  if (pathname.startsWith("/api/")) {
-    const apiUrl = `http://127.0.0.1:${API_PORT}${pathname}${search}`;
+  try {
+    const fetchOptions: RequestInit = {
+      method: request.method,
+      headers: trustedApiHeaders(request.headers, accessToken),
+    };
 
-    try {
-      const fetchOptions: RequestInit = {
-        method: request.method,
-        headers: request.headers,
-      };
-
-      if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
-        fetchOptions.body = await request.clone().arrayBuffer();
-      }
-
-      const response = await fetch(apiUrl, fetchOptions);
-
-      return new NextResponse(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    } catch {
-      return new NextResponse(
-        JSON.stringify({ detail: "API server unreachable" }),
-        { status: 502, headers: { "content-type": "application/json" } },
-      );
+    if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
+      fetchOptions.body = await request.clone().arrayBuffer();
     }
+
+    const response = await fetch(apiUrl, fetchOptions);
+    const proxied = new NextResponse(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+    return sessionResponse
+      ? copyRefreshedSession(proxied, sessionResponse)
+      : proxied;
+  } catch {
+    return new NextResponse(
+      JSON.stringify({ detail: "API server unreachable" }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    );
   }
 }
 
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (pathname.startsWith("/api/")) {
+    if (isPublicApiPath(pathname)) {
+      return proxyApiRequest(request, null);
+    }
+
+    const session = await refreshSession(request);
+    if (
+      session.userId &&
+      !session.onboardingComplete &&
+      !isOnboardingSupportApiPath(pathname)
+    ) {
+      return NextResponse.json(
+        { error: "onboarding_required", detail: "Complete onboarding first." },
+        { status: 403 },
+      );
+    }
+    return proxyApiRequest(request, session.accessToken, session.response);
+  }
+
+  const session = await refreshSession(request);
+  if (isPublicAuthPath(pathname)) {
+    return session.response;
+  }
+
+  if (!session.userId) {
+    const error = session.configurationError ? "configuration" : undefined;
+    return redirectWithRefreshedCookies(
+      signInRedirectUrl(request.nextUrl, error),
+      session.response,
+    );
+  }
+
+  if (!session.onboardingComplete && !isOnboardingSupportPath(pathname)) {
+    return redirectWithRefreshedCookies(
+      new URL("/onboarding", request.nextUrl),
+      session.response,
+    );
+  }
+
+  return session.response;
+}
+
 export const config = {
-  matcher: "/api/:path*",
+  matcher: [
+    "/api/:path*",
+    "/((?!_next/static|_next/image|favicon.ico|favicon.svg|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

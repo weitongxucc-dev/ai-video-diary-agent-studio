@@ -45,3 +45,24 @@ describe("API_BASE", () => {
     expect(API_BASE).toBe("");
   });
 });
+
+describe("server authorization provider", () => {
+  it("does not call the server provider in the browser bundle", async () => {
+    const provider = vi.fn().mockResolvedValue("Bearer verified");
+    const { setServerAuthorizationProvider, getSystemStatus } = await import("../api");
+    setServerAuthorizationProvider(provider);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    }));
+
+    await getSystemStatus();
+    expect(provider).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/system/status",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ Authorization: expect.anything() }),
+      }),
+    );
+  });
+});

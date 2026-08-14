@@ -6,10 +6,10 @@ import { PixelIcon } from "@/components/PixelIcon";
 import { PixelMascot } from "@/components/PixelMascot";
 import { PixelAgentPanel } from "@/components/PixelAgentPanel";
 import {
-  getSetupStatus,
+  getSetupPreflight,
   getSystemStatus,
   getTodayEpisode,
-} from "@/lib/api";
+} from "@/lib/api.server";
 import type { Episode, SystemStatus } from "@/lib/types";
 
 async function safelyGetTodayEpisode(): Promise<Episode | null> {
@@ -29,15 +29,14 @@ async function safelyGetSystemStatus(): Promise<SystemStatus | null> {
 }
 
 async function ensureConfigured(): Promise<void> {
-  let setup;
+  let ready = false;
   try {
-    setup = await getSetupStatus();
+    const preflight = await getSetupPreflight();
+    ready = preflight.overall === "ready";
   } catch {
-    return;
+    redirect("/onboarding");
   }
-  if (!setup.configured) {
-    redirect(setup.next_step?.trim() ? setup.next_step : "/welcome");
-  }
+  if (!ready) redirect("/onboarding");
 }
 
 export default async function HomePage() {

@@ -9,7 +9,12 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.auth import ForbiddenError, SupabaseAuthContext, UnauthorizedError
+from app.auth import (
+    ForbiddenError,
+    OnboardingStateError,
+    SupabaseAuthContext,
+    UnauthorizedError,
+)
 from app.config import Settings, runtime_env_file_path
 from app.content_templates import get_content_template, list_content_templates
 from app.creator_profile import (
@@ -85,6 +90,7 @@ from app.schemas import (
     KnowledgeNoteResponse,
     ManualLinkRequest,
     MarkPublishedRequest,
+    OnboardingCompletionResponse,
     PendingVideoResponse,
     PreferenceCardResponse,
     PreferenceEvidenceItemResponse,
@@ -219,6 +225,14 @@ PUBLIC_AUTH_PATHS: set[str] = {
     "/api/content-templates",
 }
 
+# Authenticated users who have not completed onboarding may only use these
+# repair endpoints.  The same trusted Python boundary enforces this rule for
+# direct localhost requests, not just Next.js-proxied browser traffic.
+ONBOARDING_REPAIR_PATHS: set[str] = {
+    "/api/onboarding/complete",
+    "/api/settings/runtime",
+}
+
 
 def current_workspace_id(request: Request) -> str:
     """Resolve the workspace id scoping the current request.
@@ -254,6 +268,15 @@ async def auth_boundary_middleware(request: Request, call_next):
         return await call_next(request)
     try:
         request.state.principal = auth_context.authenticate(request)
+        principal = request.state.principal
+        if (
+            path not in ONBOARDING_REPAIR_PATHS
+            and not auth_context.is_onboarding_complete(
+                principal.user_id,
+                principal.workspace_id or LEGACY_WORKSPACE_ID,
+            )
+        ):
+            raise ForbiddenError("onboarding completion required")
     except UnauthorizedError as exc:
         return JSONResponse(
             status_code=401,
@@ -450,6 +473,45 @@ def get_setup_preflight() -> SetupPreflightResponse:
     Never leaks secrets or absolute sensitive content.
     """
     return SetupPreflightResponse.model_validate(setup_preflight(settings))
+
+
+@app.post(
+    "/api/onboarding/complete",
+    response_model=OnboardingCompletionResponse,
+)
+def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
+    """Complete onboarding only after a fresh trusted preflight succeeds."""
+    preflight = setup_preflight(settings)
+    if preflight.get("overall") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="setup preflight is still blocked",
+        )
+
+    principal = getattr(request.state, "principal", None)
+    if principal is None or not principal.user_id or not principal.workspace_id:
+        raise HTTPException(status_code=403, detail="workspace context is required")
+
+    # The first workbench visit expects today's Episode to exist. Create it
+    # before recording the corresponding onboarding step; repo.today() is
+    # idempotent for the workspace/date pair, so retries stay safe.
+    repo.today(workspace_id=principal.workspace_id)
+
+    try:
+        auth_context.complete_onboarding(
+            principal.user_id,
+            principal.workspace_id,
+        )
+    except OnboardingStateError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="unable to persist onboarding state",
+        ) from exc
+
+    return OnboardingCompletionResponse(
+        workspace_id=principal.workspace_id,
+        completed=True,
+    )
 
 
 @app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)

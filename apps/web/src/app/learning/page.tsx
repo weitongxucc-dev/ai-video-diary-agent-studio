@@ -12,7 +12,7 @@ import {
   getPreferenceCards,
   getPreferenceEvidence,
   getPreferences,
-} from "@/lib/api";
+} from "@/lib/api.server";
 import type {
   FeedbackSummary,
   PreferenceCards,

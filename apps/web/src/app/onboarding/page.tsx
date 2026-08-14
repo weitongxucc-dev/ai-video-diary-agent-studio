@@ -1,13 +1,16 @@
 import Link from "next/link";
+import { completeOnboardingAction } from "./actions";
 import { AppShell } from "@/components/AppShell";
+import { PixelButton } from "@/components/PixelPrimitives";
 import { OnboardingChecklist } from "@/components/OnboardingChecklist";
-import { getRuntimeHealth, getRuntimeSettings, getSetupStatus, getSystemStatus } from "@/lib/api";
+import { getRuntimeHealth, getRuntimeSettings, getSetupPreflight, getSetupStatus, getSystemStatus } from "@/lib/api.server";
 import { buildOnboardingSnapshot, summarizeOnboardingHealth } from "@/lib/onboarding";
 
 export const dynamic = "force-dynamic";
 
 async function loadOnboardingSnapshot() {
-  const [setupResult, healthResult, settingsResult, statusResult] = await Promise.allSettled([
+  const [preflightResult, setupResult, healthResult, settingsResult, statusResult] = await Promise.allSettled([
+    getSetupPreflight(),
     getSetupStatus(),
     getRuntimeHealth(),
     getRuntimeSettings(),
@@ -15,6 +18,10 @@ async function loadOnboardingSnapshot() {
   ]);
 
   return buildOnboardingSnapshot({
+    preflight: preflightResult.status === "fulfilled" ? preflightResult.value : null,
+    preflightError: preflightResult.status === "rejected"
+      ? extractMessage(preflightResult.reason)
+      : null,
     setup: setupResult.status === "fulfilled" ? setupResult.value : null,
     setupError: setupResult.status === "rejected"
       ? extractMessage(setupResult.reason)
@@ -44,7 +51,12 @@ function extractMessage(err: unknown): string {
   return "请求失败";
 }
 
-export default async function OnboardingPage() {
+type OnboardingPageProps = {
+  searchParams?: Promise<{ error?: string }>;
+};
+
+export default async function OnboardingPage({ searchParams }: OnboardingPageProps) {
+  const params = searchParams ? await searchParams : {};
   const snapshot = await loadOnboardingSnapshot();
   const summary = summarizeOnboardingHealth(snapshot);
   const generatedAtLabel = new Date(snapshot.generatedAt).toLocaleString("zh-CN", {
@@ -68,9 +80,11 @@ export default async function OnboardingPage() {
                 不会展示任何密钥原文，只会显示「已配置 / 未配置」状态。
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/">
-              返回工作台
-            </Link>
+            {snapshot.ready ? (
+              <Link className="pixel-button secondary" href="/">
+                返回工作台
+              </Link>
+            ) : null}
           </div>
 
           <div
@@ -103,13 +117,17 @@ export default async function OnboardingPage() {
             </p>
           </div>
 
-          {(snapshot.sources.setupError ||
+          {(snapshot.sources.preflightError ||
+            snapshot.sources.setupError ||
             snapshot.sources.healthError ||
             snapshot.sources.settingsError ||
             snapshot.sources.statusError) ? (
             <div className="onboarding-source-errors" role="alert">
               <strong>部分检查接口未连通：</strong>
               <ul>
+                {snapshot.sources.preflightError ? (
+                  <li>/api/setup/preflight · {snapshot.sources.preflightError}</li>
+                ) : null}
                 {snapshot.sources.setupError ? (
                   <li>/api/is_setup · {snapshot.sources.setupError}</li>
                 ) : null}
@@ -132,6 +150,34 @@ export default async function OnboardingPage() {
           ) : null}
 
           <OnboardingChecklist initialSnapshot={snapshot} />
+
+          {params.error === "completion" ? (
+            <div className="welcome-feedback red" role="alert">
+              完成启动流程失败。请重新检查后再试；问题持续时请联系内测管理员。
+            </div>
+          ) : null}
+
+          <div className="onboarding-completion-gate">
+            <strong>
+              {snapshot.ready ? "本机预检已通过" : "首次启动仍被预检阻断"}
+            </strong>
+            <span>
+              {snapshot.ready
+                ? "提交后服务端会重新运行真实预检，仅在仍然就绪时创建第一条 Episode 并标记 onboarding 完成。"
+                : "请按上方每一项的修复动作处理并重新检查。未就绪时不能进入工作台。"}
+            </span>
+            {snapshot.ready ? (
+              <form action={completeOnboardingAction}>
+                <PixelButton type="submit" variant="primary">
+                  完成启动并进入工作台
+                </PixelButton>
+              </form>
+            ) : (
+              <PixelButton disabled type="button" variant="primary">
+                预检未通过
+              </PixelButton>
+            )}
+          </div>
         </section>
 
         <aside className="workspace-side onboarding-side">

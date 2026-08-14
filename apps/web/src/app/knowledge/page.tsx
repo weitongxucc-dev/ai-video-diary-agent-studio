@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getKnowledgeNotes, getSystemStatus } from "@/lib/api";
+import { getKnowledgeNotes, getSystemStatus } from "@/lib/api.server";
 import type { KnowledgeNote, SystemStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

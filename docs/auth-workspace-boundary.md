@@ -5,9 +5,10 @@
 ## 信任模型
 
 - **身份**：Supabase Auth 的永久用户。后端只信任通过 Bearer JWT 验证得到的 `sub`。
-- **JWT 验证**：本地离线验证，JWKS 来自 `{SUPABASE_URL}/auth/v1/jwt/jwks`，
-  校验 `iss`（默认 `{SUPABASE_URL}/auth/v1`）、`aud`（默认 `authenticated`）、
-  `exp` 与 `sub`。
+- **JWT 验证**：本地离线验证，JWKS 来自
+  `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`，只接受 Supabase 的非对称
+  `ES256` / `RS256` 签名，并校验 `iss`（默认 `{SUPABASE_URL}/auth/v1`）、
+  `aud`（默认 `authenticated`）、`exp` 与 `sub`。
 - **工作区解析**：后端使用 `SUPABASE_SECRET_KEY` 调用 Supabase Data API
   `workspace_members` 表，服务端解析该用户被授权的工作区，优先 `owner` 角色。
   客户端请求体中的 `user_id` / `workspace_id` 一律忽略。
@@ -15,12 +16,20 @@
   `/api/runtime/health`、`/api/setup/preflight`、`/api/is_setup`、
   `/api/system/status`、`/api/version`、`/api/workflow/status`、
   `/api/content-templates`。其余产品数据端点都需要有效令牌。
+- **首启完成**：`POST /api/onboarding/complete` 不接受客户端的
+  `ready` 或步骤布尔值。后端先重新运行本机 preflight，只在结果仍为
+  `ready` 时幂等创建当日首条 Episode，再用仅服务端可见的
+  `SUPABASE_SECRET_KEY` 写入完成状态。浏览器对这些完成列没有写权限。
+- **首启门禁**：Python API 会以服务端身份读取已解析 workspace 的
+  `completed_at`。未完成首启的用户即使直接访问本机 API，也只能调用
+  `/api/onboarding/complete` 与 `/api/settings/runtime` 修复首启，不能绕过
+  Next.js 的页面门禁访问产品数据。
 
 ## HTTP 语义
 
 - **401 Unauthorized**：缺失、格式错误、过期或无法验证的令牌。
-- **403 Forbidden**：令牌有效，但该用户没有任何被授权的工作区成员关系
-  （或工作区解析失败）。
+- **403 Forbidden**：令牌有效，但该用户没有任何被授权的工作区成员关系、
+  无法解析首启状态，或尚未完成首启却访问非修复 API。
 - **404 Not Found**：资源属于其它工作区时返回 404，避免泄露资源存在性。
 
 ## 数据分区

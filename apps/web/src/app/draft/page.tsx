@@ -9,7 +9,7 @@ import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
 import { TemplateTracksPanel } from "@/components/TemplateTracksPanel";
-import { getDraftStatus, getRuntimeSettings, getTodayEpisode } from "@/lib/api";
+import { getDraftStatus, getRuntimeSettings, getTodayEpisode } from "@/lib/api.server";
 import type { DraftAsset, DraftStatus, Episode, RuntimeSettings } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

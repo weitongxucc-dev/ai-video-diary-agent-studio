@@ -7,7 +7,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { PixelIcon } from "@/components/PixelIcon";
-import { getSourceItems, getSourcesStatus, getSystemStatus } from "@/lib/api";
+import { getSourceItems, getSourcesStatus, getSystemStatus } from "@/lib/api.server";
 import type {
   SourceItems,
   SourcesStatus,

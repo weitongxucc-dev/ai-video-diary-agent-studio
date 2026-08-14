@@ -329,6 +329,11 @@ export type SetupPreflightResponse = {
   generated_at: string;
 };
 
+export type OnboardingCompletionResponse = {
+  workspace_id: string;
+  completed: boolean;
+};
+
 export type RuntimeHealthStatus = "ready" | "missing" | "degraded" | "invalid";
 
 export type RuntimeHealthItem = {

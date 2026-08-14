@@ -182,6 +182,12 @@ export function AppShell({
                 >
                   帮助
                 </PixelButton>
+                <form action="/auth/signout" method="post">
+                  <button className="avatar" title="退出登录" type="submit">
+                    <PixelIcon name="person" />
+                    <span className="sr-only">退出登录</span>
+                  </button>
+                </form>
               </div>
             </header>
 

@@ -11,7 +11,7 @@ from unittest import mock
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -39,6 +39,20 @@ AUDIENCE = "authenticated"
 
 def _make_rsa_keypair():
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_pem, public_pem
+
+
+def _make_ec_keypair():
+    key = ec.generate_private_key(ec.SECP256R1())
     private_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -94,6 +108,9 @@ def auth_ctx(tmp_path):
     settings = _auth_enabled_settings(tmp_path)
     ctx = SupabaseAuthContext(settings)
     ctx._jwks_client = lambda: _fake_jwks_client(public_pem)
+    # Product-endpoint tests that are unrelated to onboarding explicitly model
+    # an already-completed workspace. Tests for the completion gate override it.
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
     return ctx, settings, private_pem, public_pem
 
 
@@ -121,10 +138,39 @@ def test_extract_bearer_token_variants():
 # ── JWT verification ────────────────────────────────────────────────────
 
 
+def test_jwks_url_uses_supabase_discovery_endpoint(tmp_path):
+    ctx = SupabaseAuthContext(_auth_enabled_settings(tmp_path))
+
+    assert ctx.jwks_url == (
+        "https://example.supabase.co/auth/v1/.well-known/jwks.json"
+    )
+
+
 def test_verify_token_returns_sub_for_valid_token(auth_ctx):
     ctx, _, private_pem, _ = auth_ctx
     token = _sign_token("user-123", key=private_pem)
     assert ctx.verify_token(token)["sub"] == "user-123"
+
+
+def test_verify_token_accepts_supabase_es256_signing_key(tmp_path):
+    private_pem, public_pem = _make_ec_keypair()
+    ctx = SupabaseAuthContext(_auth_enabled_settings(tmp_path))
+    ctx._jwks_client = lambda: _fake_jwks_client(public_pem)
+    payload = {
+        "sub": "user-es256",
+        "iss": ISSUER,
+        "aud": AUDIENCE,
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+        "role": "authenticated",
+    }
+    token = pyjwt.encode(
+        payload,
+        private_pem,
+        algorithm="ES256",
+        headers={"kid": "ec-key"},
+    )
+
+    assert ctx.verify_token(token)["sub"] == "user-es256"
 
 
 def test_verify_token_rejects_wrong_audience(auth_ctx):
@@ -198,6 +244,58 @@ def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
         ctx.resolve_workspace_id("user-1")
 
 
+def test_complete_onboarding_uses_trusted_service_key_and_scoped_row(auth_ctx):
+    ctx, _, _, _ = auth_ctx
+
+    class FakeResponse:
+        status_code = 200
+        content = b'[{"workspace_id":"ws-a"}]'
+
+        def json(self):
+            return json.loads(self.content)
+
+    with mock.patch("app.auth.httpx.patch", return_value=FakeResponse()) as patch:
+        ctx.complete_onboarding("user-a", "ws-a")
+
+    _, kwargs = patch.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer service-role-secret"
+    assert kwargs["params"] == {
+        "workspace_id": "eq.ws-a",
+        "user_id": "eq.user-a",
+        "select": "workspace_id",
+    }
+    assert kwargs["json"]["identity_complete"] is True
+    assert kwargs["json"]["local_paths_complete"] is True
+    assert kwargs["json"]["ai_connection_complete"] is True
+    assert kwargs["json"]["health_check_complete"] is True
+    assert kwargs["json"]["first_episode_complete"] is True
+    assert kwargs["json"]["completed_at"]
+
+
+def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
+    ctx, _, _, _ = auth_ctx
+
+    class FakeResponse:
+        status_code = 200
+        content = b'[{"completed_at":"2026-08-14T00:00:00+00:00"}]'
+
+        def json(self):
+            return json.loads(self.content)
+
+    # Use the implementation rather than the fixture's completed-workspace
+    # default to verify the trusted lookup's request scope.
+    ctx.is_onboarding_complete = SupabaseAuthContext.is_onboarding_complete.__get__(ctx)
+    with mock.patch("app.auth.httpx.get", return_value=FakeResponse()) as get:
+        assert ctx.is_onboarding_complete("user-a", "ws-a") is True
+
+    _, kwargs = get.call_args
+    assert kwargs["params"] == {
+        "workspace_id": "eq.ws-a",
+        "user_id": "eq.user-a",
+        "select": "completed_at",
+    }
+
+
 # ── Middleware: 401 vs 403 vs 200 ───────────────────────────────────────
 
 
@@ -254,6 +352,7 @@ def test_protected_endpoint_no_workspace_403(auth_ctx, monkeypatch):
 def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
     ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
@@ -271,10 +370,116 @@ def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
     assert response.status_code == 200
 
 
+def test_incomplete_onboarding_cannot_call_product_api(auth_ctx, monkeypatch):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id: False
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).get(
+        "/api/episodes/today",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
+    assert response.json()["detail"] == "onboarding completion required"
+
+
+def test_incomplete_onboarding_can_reach_repair_endpoints(auth_ctx, monkeypatch):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.is_onboarding_complete = mock.Mock(return_value=False)
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "blocked", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    client = TestClient(main_module.app)
+    settings_response = client.get(
+        "/api/settings/runtime",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    completion_response = client.post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert settings_response.status_code == 200
+    assert completion_response.status_code == 409
+    ctx.is_onboarding_complete.assert_not_called()
+    ctx.complete_onboarding.assert_not_called()
+
+
+def test_onboarding_completion_rechecks_preflight_before_writing(
+    auth_ctx,
+    monkeypatch,
+):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "blocked", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    ctx.complete_onboarding.assert_not_called()
+
+
+def test_onboarding_completion_persists_only_after_ready_preflight(
+    auth_ctx,
+    monkeypatch,
+    tmp_path,
+):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.complete_onboarding = mock.Mock()
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    repo = EpisodeRepository(database_path=tmp_path / "onboarding.sqlite")
+    monkeypatch.setattr(main_module, "repo", repo)
+    monkeypatch.setattr(
+        main_module,
+        "setup_preflight",
+        lambda current_settings: {"overall": "ready", "checks": []},
+    )
+
+    token = _sign_token("user-a", key=private_pem)
+    response = TestClient(main_module.app).post(
+        "/api/onboarding/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"workspace_id": "ws-a", "completed": True}
+    assert len(repo.all(workspace_id="ws-a")) == 1
+    ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a")
+
+
 # ── Migration: legacy rows become 'local', partitioned queries ─────────
 
 
-def test_migration_partitions_legacy_rows_as_local(tmp_path):
+def test_migration_partitions_legacy_rows_as_local(tmp_path, monkeypatch):
+    import app.repository as repository_module
+
+    monkeypatch.setattr(repository_module, "_AUTH_ENABLED", False)
     db_path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(db_path) as conn:
         conn.execute(

@@ -8,7 +8,7 @@ import { AppShell } from "@/components/AppShell";
 import { PixelIcon } from "@/components/PixelIcon";
 import { PixelMascot } from "@/components/PixelMascot";
 import { PixelTooltip } from "@/components/PixelTooltip";
-import { apiUrl, getEpisodeEditPlan, getTodayEpisode } from "@/lib/api";
+import { apiUrl, getEpisodeEditPlan, getTodayEpisode } from "@/lib/api.server";
 import type { EditPlan, EditPlanDecision, EditPlanSegment, Episode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

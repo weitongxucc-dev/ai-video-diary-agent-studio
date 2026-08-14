@@ -17,7 +17,7 @@ import {
   getSourceFileStates,
   getSystemStatus,
   getTodayEpisode,
-} from "@/lib/api";
+} from "@/lib/api.server";
 import type {
   Episode,
   PendingVideo,

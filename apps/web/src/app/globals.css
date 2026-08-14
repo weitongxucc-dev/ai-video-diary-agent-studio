@@ -238,6 +238,75 @@ textarea {
   transform: none;
 }
 
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--desktop);
+}
+
+.auth-card {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.auth-card h1,
+.auth-card p {
+  margin: 0;
+}
+
+.auth-card p,
+.auth-field,
+.auth-help {
+  font-family: var(--font-readable);
+}
+
+.auth-form,
+.auth-field,
+.auth-help {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-field span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-field input {
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+  padding: 9px 10px;
+  font-family: var(--font-readable);
+  font-size: 14px;
+}
+
+.auth-field input:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.auth-help {
+  border-top: 2px dashed var(--line-soft);
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-help nav {
+  display: flex;
+  gap: 12px;
+}
+
+.auth-help a {
+  color: var(--blue);
+}
+
 .pixel-sprite {
   position: relative;
   display: inline-grid;
@@ -7930,6 +7999,26 @@ select:user-invalid:focus {
 .onboarding-checklist {
   display: grid;
   gap: 16px;
+}
+
+.onboarding-completion-gate {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  border: 2px solid var(--border-strong);
+  background: #fffdf0;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-hard-small);
+}
+
+.onboarding-completion-gate strong {
+  font-family: var(--font-pixel);
+}
+
+.onboarding-completion-gate span {
+  color: var(--muted);
+  font-family: var(--font-readable);
+  font-size: 12px;
 }
 
 .onboarding-checklist-actions {

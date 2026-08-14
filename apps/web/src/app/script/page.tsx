@@ -11,7 +11,7 @@ import { AppShell } from "@/components/AppShell";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { PixelIcon } from "@/components/PixelIcon";
 import { ScriptSectionEditor } from "@/components/ScriptSectionEditor";
-import { generateScript, generateTopics, getTodayEpisode } from "@/lib/api";
+import { generateScript, generateTopics, getTodayEpisode } from "@/lib/api.server";
 import type { Episode, ScriptPackage, ScriptVersionSource } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
