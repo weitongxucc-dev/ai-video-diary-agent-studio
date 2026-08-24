@@ -1,51 +1,60 @@
 # 内测产品基础：身份、工作区与首启
 
-这份文档定义可分发内测版的最低产品边界。它不是临时演示配置。
+本文定义当前内测版实际采用的身份和首启边界。身份模式必须显式选择，不能在配置失败时悄悄从安全模式降级。
 
-## 用户旅程
+## 当前内部模式
+
+GitHub 的 `Internal macOS test build` 使用：
 
 ```text
-管理员发送邀请
-→ 用户在 HTTPS 邀请页确认邮箱并设置密码
-→ 打开 macOS App，使用邮箱和密码登录
-→ 创建自己的创作者工作区
-→ 明确同意本地文件处理说明
-→ 配置本地目录与 AI 服务
-→ 逐项完成环境检查
-→ 创建第一条 Episode
-→ 进入今日工作台
+NEXT_PUBLIC_AUTH_MODE=local
 ```
 
-首启的任何必填步骤未完成时，工作台不得作为可用入口；用户可以退出并在下次启动继续。
+它只面向少量可信测试者：
 
-## 身份和数据边界
+- 不显示登录或退出流程，直接进入本地工作区。
+- 所有 Episode、画像和偏好记录归入保留的 `local` workspace。
+- 不需要 Supabase URL 或 Key。
+- 首启仍必须完成目录、模型和依赖预检；免登录不等于跳过运行配置。
 
-- 身份：Supabase Auth 的永久用户；内测阶段只允许管理员邀请，不开放自助注册。
-- 工作区：每个用户默认创建一个个人工作区。后续协作通过受信任服务授予成员资格，客户端不能授予角色。
-- 云端：账号、工作区、首启状态、非敏感结构化元数据。
-- 本地：用户主动授权的目录、视频源文件、Obsidian 原文、剪映草稿、AI Key。不得上传到 Supabase。
-- 本地 SQLite：必须以 `workspace_id` 分区；不能继续用一个全局 `agent.sqlite3` 混合多账号记录。
+内部模式不得用于公开分发，也不能声称具备多用户隔离。
 
-## 安全要求
+## 后续分发模式
 
-- 所有 `public` 表必须启用 RLS，且策略以 `auth.uid()` 和工作区成员关系约束。
-- `SUPABASE_SECRET_KEY` 仅存在于可信服务端；不得打包进 Electron 或放入 `NEXT_PUBLIC_*`。
-- API 每次请求必须验证 Bearer JWT，并从经过验证的身份中推导用户和工作区，不能信任请求体里的 user id。
-- 受邀请与成员管理操作只在可信服务端执行。
-- Supabase 本地与线上 Auth 配置都必须关闭公开 signup；邀请激活回调只允许进入明确列入 Redirect URLs 的地址。
-- API Key、完整 Obsidian 内容和未选择的视频文件不得同步到云端。
+Supabase 模式保留在代码中，目标旅程是：
 
-## 交付前验收
+```text
+管理员邀请
+→ 用户设置密码并登录
+→ 服务端创建个人 workspace
+→ 完成本地目录与模型预检
+→ 服务端确认 onboarding 完成
+→ 进入工作台
+```
 
-1. 未受邀邮箱不能创建有效账号或访问 App 数据。
-2. A 用户无法读取、更新或猜测 B 用户的工作区数据。
-3. 退出后重新打开 App 必须回到登录；登录后恢复该用户未完成的首启步骤。
-4. 配置失败时必须显示原因、影响、修复动作和重新检查入口。
-5. 第一次进入工作台前，用户已经完成一条可理解的第一任务，而不是看到空面板。
+该模式必须满足：
 
-## 当前阻塞的外部配置
+- 关闭公开注册，只允许管理员邀请。
+- 浏览器不能伪造用户、workspace、readiness 或 onboarding 完成状态。
+- Python API 验证 Bearer JWT，并由服务端解析 workspace membership。
+- Supabase secret key 只存在于可信服务端，不得进入 Electron 或 `NEXT_PUBLIC_*`。
+- 本地 SQLite 按 workspace 分区；跨 workspace 资源返回 404，避免泄露存在性。
 
-- 一个 Supabase 项目（URL、publishable key、secret key）。
-- 自定义 SMTP 发件服务与验证域名。
-- 邀请回调使用的 HTTPS 域名，配置到 Supabase Redirect URLs。
-- macOS App 的深链/浏览器回跳策略；内测第一阶段使用 HTTPS 邀请激活页，然后在桌面端输入密码登录。
+详细安全边界见 [`auth-workspace-boundary.md`](auth-workspace-boundary.md)。
+
+## 数据边界
+
+- 云端：账号、workspace、membership、首启状态和必要的非敏感元数据。
+- 本地：视频、Obsidian 原文、剪映草稿、目录授权、AI Key 和媒体处理产物。
+- 日志、截图、构建产物和测试证据不得包含密码、token、secret key 或完整私人内容。
+
+## 内测验收
+
+内部模式至少验证：
+
+1. 新机器首次启动能进入首启流程，不需要 Supabase。
+2. 配置未完成时能看到缺项、影响和修复入口。
+3. 完成配置后进入本地工作台，重启后状态可恢复。
+4. API、Web 和 Worker 的启动、异常退出与关闭清理可验证。
+
+启用 Supabase 分发模式前，还必须验证邀请、登录、session 刷新、退出、重复 callback、服务端 onboarding gate 和两位用户的 workspace 隔离。

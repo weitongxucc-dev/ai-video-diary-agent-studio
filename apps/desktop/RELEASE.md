@@ -1,132 +1,49 @@
-# 发布流程
+# macOS 构建与发布
 
-## 版本号
+## 两条构建通道
 
-版本号在 `apps/desktop/package.json` 的 `version` 字段定义（当前 `0.1.0`）。
-Git tag 必须与 package.json version 一致，格式为 `v<version>`（如 `v0.1.0`）。
+### 内部测试包
 
-## 签名与自动更新
+`.github/workflows/internal-macos-test.yml` 只允许手动触发，分别在原生 arm64 和 Intel runner 上构建：
 
-### 现状：未签名（仅可手工安装）
+- 显式设置 `NEXT_PUBLIC_AUTH_MODE=local`。
+- 使用 uv 管理的 Python 3.11.15 构建 API 与 Worker。
+- 校验二进制架构。
+- 对 `.app` 做 ad-hoc 签名并启动打包后的 API 健康 smoke。
+- 生成 DMG、ZIP 和 `SHA256SUMS.txt`。
+- Artifact 仅保留 7 天。
 
-当前项目 **未配置** macOS 代码签名。未签名构建产物的能力边界：
+这类包只供可信测试者使用，不具备 Developer ID 信任和 Apple 公证，不能作为公开 Release。
 
-| 场景 | 支持 | 说明 |
-|------|------|------|
-| 手工安装 .dmg | ✅ | 右键（Control+点击）→ 打开，确认后即可 |
-| 自动更新 | ❌ | macOS 要求自动更新 .app 必须经过 Developer ID 签名 |
-| Gatekeeper 静默通过 | ❌ | 未签名 app 会提示「无法验证开发者」 |
+### 正式 Release
 
-**未签名 app 的自动更新不可用。** electron-builder 官方文档明确：macOS 自动更新（Squirrel.Mac / electron-updater）的前置条件是 app 已使用 Developer ID 签名。在上述限制移除前，本 workflow 仍可安全构建未签名产物用于手工测试。
+推送 `v<version>` tag 会触发 `.github/workflows/release.yml`。Tag 必须与 `apps/desktop/package.json` 的 `version` 完全一致。
 
-### 启用签名（生产自动更新的前置条件）
+工作流会硬性检查以下 GitHub Actions secrets：
 
-需要配置以下 repository secrets（Settings → Secrets and variables → Actions）：
+- `CSC_LINK`
+- `CSC_KEY_PASSWORD`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD`
+- `APPLE_TEAM_ID`
 
-| Secret | 说明 |
-|--------|------|
-| `CSC_LINK` | Developer ID Application 证书的 Base64 编码（.p12 或 .pfx） |
-| `CSC_KEY_PASSWORD` | 证书导出时设置的密码 |
+缺少任一项都会失败，不允许生成“看起来成功”的未签名 Release。每个架构必须通过 `codesign`、Gatekeeper `spctl` 和 `stapler` 验证，之后才会统一发布 DMG、ZIP 和 `latest-mac.yml`。
 
-workflow 已通过环境变量引用这两个 secret：
+## 发布前门禁
 
-```yaml
-env:
-  CSC_LINK: ${{ secrets.CSC_LINK }}
-  CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-```
-
-secret 不存在或为空时，electron-builder 跳过签名（`--publish never` 模式下不报错）。
-
-签名需要以下前置条件：
-
-1. **Apple Developer Program** 会员（$99/年）
-2. **Developer ID Application 证书**：Apple Developer 后台 → Certificates → Developer ID Application → 下载 .cer → 导入钥匙串 → 导出为 .p12
-
-   ```bash
-   # 导出证书为 Base64 字符串（用于 GitHub Secret）
-   base64 -i cert.p12 | pbcopy
-   ```
-
-3. **公证（建议）**：App Store Connect API 密钥 + `notarytool`，在 electron-builder build.mac 中配置 `notarize` 字段
-
-   公证需要的额外 secrets：
-
-   | Secret | 说明 |
-   |--------|------|
-   | `APPLE_ID` | Apple Developer 账号邮箱 |
-   | `APPLE_APP_SPECIFIC_PASSWORD` | App 专用密码 |
-   | `APPLE_TEAM_ID` | Team ID（Developer 后台查看） |
-
-## 发布步骤
-
-1. 确保本地在 `main` 分支且工作区干净
-2. 更新 `apps/desktop/package.json` 中的 `version` 字段
-3. 提交并推送：
-
-```bash
-git add apps/desktop/package.json
-git commit -m "release: v0.1.0"
-git push origin main
-```
-
-4. 打 tag 并推送：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-推送 tag 后，GitHub Actions 自动触发 `.github/workflows/release.yml`：
-两个矩阵 job 并行构建 arm64/x64 → 产物上传为 artifact → 单个 publish job 统一下载、生成 `latest-mac.yml`、创建 GitHub Release。
+1. 使用干净、精确的最新 `main`。
+2. 更新 `apps/desktop/package.json` 版本并通过完整 CI。
+3. 重新生成内部包，在真实 Electron App 完成首次启动、配置、失败恢复、关闭重开和主要生产链 GUI smoke。
+4. 确认签名、公证和自动更新凭据有效。
+5. 创建与 package version 一致的 tag；不要复用旧 tag。
+6. 下载 Release 产物，复核两个架构、校验和、签名、公证和更新清单。
 
 ## 产物
 
-每次发布会在 GitHub Releases 页面生成：
+正式 Release 应同时包含：
 
-| 文件 | 用途 |
-|------|------|
-| `AI视频日记 Agent Studio-<version>-arm64.dmg` | Apple Silicon Mac 安装包 |
-| `AI视频日记 Agent Studio-<version>-arm64-mac.zip` | Apple Silicon 自动更新包 |
-| `AI视频日记 Agent Studio-<version>-x64.dmg` | Intel Mac 安装包 |
-| `AI视频日记 Agent Studio-<version>-x64-mac.zip` | Intel Mac 自动更新包 |
-| `latest-mac.yml` | electron-updater 更新清单（包含双架构文件引用） |
+- arm64 DMG 与 ZIP。
+- x64 DMG 与 ZIP。
+- 同时引用两个架构 ZIP 的 `latest-mac.yml`。
 
-## latest-mac.yml 生成
-
-`latest-mac.yml` 由 publish job 在单一步骤中生成，**不依赖** electron-builder 的部分输出。
-
-生成逻辑（Node.js inline script）：
-1. 从 arm64/x64 两个 artifact 中收集 .zip 文件
-2. 对每个 .zip 计算 `crypto.createHash('sha512').digest('base64')` 和文件大小
-3. 组装 YAML：`version` + `files[]` 数组（每个架构一个 entry，含 url/sha512/size）+ `path`/`sha512` 顶层字段
-
-这避免了并行 `--publish always` 导致的 `latest-mac.yml` 竞争覆盖，保证双架构引用始终完整。
-
-## 自动更新流程（签名后启用）
-
-```
-App 启动 → 10s 后 checkForUpdates()
-         → GET <release>/latest-mac.yml
-         → 版本比对 → 有新版本 → 弹窗提示
-         → 下载 <arch>-mac.zip → 验证 sha512
-         → 替换 .app → 重启 → 完成
-```
-
-## 构建环境
-
-GitHub Actions 矩阵 runner：
-
-| 架构 | Runner | PyInstaller 产出 | electron-builder 目标 |
-|------|--------|------------------|----------------------|
-| arm64 | `macos-15` (Apple Silicon) | arm64 `api-server` | `--arm64` |
-| x64 | `macos-15-intel` (Intel) | x86_64 `api-server` | `--x64` |
-
-固定版本：
-
-- pnpm `9.15.0`（`packageManager` 字段）
-- Node.js `22`
-- Python `3.11`
-
-CI 使用 `pnpm install --frozen-lockfile` 确保依赖版本与 lock 文件一致。
-推送 tag 前请确认 lock 文件已同步（通常提交 version bump 时同时提交）。
+任何构建日志、截图、Artifact 名称或发布说明都不得包含环境变量值、证书、密码或 token。

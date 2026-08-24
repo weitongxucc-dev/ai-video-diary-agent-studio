@@ -1,49 +1,19 @@
 # Changelog
 
-All notable changes to AI视频日记 Agent Studio.
+只记录已经进入当前主线的重要变化；详细历史以 Git commit 和已合并 PR 为准。
 
-## [0.1.0] — 2026-08-09
+## Unreleased — internal beta baseline
 
-### Phase 0: Emergency Hardening
-- **Worker crash protection**: `run_forever` loop now wrapped with try/except + 30s retry delay
-- **Database write protection**: `_persist_episode` catches sqlite3.Error/OSError with explicit RuntimeError
-- **Database read resilience**: `_load_database` skips corrupted JSON rows instead of failing entirely
-- **Database field conversion**: `_episode_from_dict` uses safe defaults for int/date conversions
-- **Global exception handler**: FastAPI `@app.exception_handler` returns safe JSON, no traceback leak
-- **LLM/ASR retry**: DeepSeek HTTP calls get 3× exponential backoff; Tencent ASR gets 2× retry
-- **Config template**: `.env.example` with all 15+ environment variables documented
-- **LICENSE**: MIT License added
+### 2026-08-14
 
-### Phase 1: First-Run Experience
-- **Setup detection API**: `GET /api/is_setup` returns `{configured, missing, next_step}`
-- **Welcome wizard**: 4-step onboarding (Welcome → API Key → Directories → Verify)
-- **Settings page redesign**: 4 section cards (AI / Directories / ASR / External Sources) with directory picker
-- **Hardcoded paths removed**: Developer-specific defaults replaced with `None`
-- **Home redirect**: Unconfigured users redirected to `/welcome`
-- **Health fix commands**: Each health check now includes a concrete fix command
+- 合并 Supabase 邀请登录、JWT 校验、onboarding 和 workspace 隔离。
+- 为可信内测包增加显式本地身份模式；Supabase 模式继续保留给后续分发版本。
+- 加固 macOS 打包：固定 uv 管理的 Python 3.11.15，分别构建 arm64/x64 API 与 Worker。
+- 正式 Release 强制 Developer ID 签名、Apple 公证及 Gatekeeper/stapler 验证。
+- 内部 macOS 构建加入架构检查、API 健康 smoke、DMG/ZIP 与 SHA-256 清单。
 
-### Phase 2: UX Foundation
-- **Error boundaries**: `RouteError` component + 4 `error.tsx` files (root, script, video, edit-plan)
-- **Loading skeletons**: 5 Skeleton component types + 8 `loading.tsx` files for all pages
-- **Toast notifications**: `PixelToast` system with 30 server actions wired up
-- **Form validation**: HTML5 client-side validation on all forms with `FormErrorBanner`
-- **Fake data purge**: Hardcoded placeholder text removed from topics page; data-gated rendering
-- **Disabled tooltips**: `PixelTooltip` component explaining why controls are disabled
-- **Templates empty state**: Proper empty state component when no templates exist
+### 当前发布门禁
 
-### Phase 3: Product Completeness
-- **Workflow progress bar**: Visual pipeline indicator (Topics → Script → Record → Edit → Export)
-- **Keyboard shortcuts**: Ctrl+1~7 page navigation, ? for help, Ctrl+Shift+H for help toggle
-- **In-app help panel**: Context-sensitive help for each page
-- **Privacy policy + Terms of use**: Legal pages with local-first data handling explanation
-- **Version endpoint**: `GET /api/version` with git commit info
-- **Health feature gate**: LLM endpoints return 503 when API key is not configured
-- **Safe duration fix**: `_safe_duration` now raises explicit error instead of silent 0.0
-
-### Known Issues
-- macOS desktop shell (Tauri/Electron) not yet packaged — requires terminal launch
-- Jianying 10.7 native encrypted draft authoring not implemented (compatibility bridge only)
-- Creator Profile (common expressions, banned words, style stabilizer) not yet implemented
-- Voice commands: text input only; real microphone capture and ASR not yet integrated
-- No auto-update mechanism
-- Frontend test coverage: 0% (planned for Phase 5)
+- 在真实 Electron App 完成首次启动、目录授权、失败恢复、关闭重开和主要生产链 GUI 验收。
+- 配置正式签名、公证与自动更新所需凭据。
+- 生成新的未过期内测包并完成小范围用户反馈。

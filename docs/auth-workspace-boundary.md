@@ -1,6 +1,6 @@
 # 后端认证与工作区边界（Beta）
 
-本文档描述 `apps/api` 后端在分发内测版时执行的身份与工作区边界。
+本文档描述 `apps/api` 在 Supabase 分发模式下执行的身份与工作区边界。内部 macOS 测试包显式使用 `NEXT_PUBLIC_AUTH_MODE=local`，只操作保留的本地 workspace；它不经过下述登录流程，也不能用于公开分发。
 
 ## 信任模型
 
@@ -59,6 +59,7 @@
 ## 环境变量
 
 见 `.env.example` 中的“内测账号与工作区”小节：
+`NEXT_PUBLIC_AUTH_MODE`、
 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、
 `SUPABASE_JWT_AUDIENCE`、`SUPABASE_JWT_ISSUER`。
 

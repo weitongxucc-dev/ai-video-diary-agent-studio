@@ -164,11 +164,8 @@ def main():
         pngs[s] = generate_png(s)
         print(f"  Generated {s}×{s} PNG")
 
-    # Write individual PNGs
-    for s, data in pngs.items():
-        OUT_DIR.joinpath(f'icon_{s}x{s}.png').write_bytes(data)
-
-    # Write main icon.png (512px)
+    # Only canonical build assets are persisted. Intermediate sizes stay in
+    # memory so generated duplicates do not accumulate in the repository.
     OUT_DIR.joinpath('icon.png').write_bytes(pngs[512])
 
     # Write icon.icns

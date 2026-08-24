@@ -1,146 +1,110 @@
-# AI视频日记 Agent Studio
+# AI 视频日记 Agent Studio
 
-Local-first content production Agent for AI video diaries.
+面向个人创作者的本地视频生产工作站。它把信息摄入、选题、脚本、视频处理、剪辑决策、剪映草稿和发布反馈串成一条可检查、可确认、可回滚的 Episode 工作流。
 
-Current build delivers:
+## 当前状态
 
-- Pixel-style Next.js workbench
-- FastAPI workflow API with a real LangGraph episode graph
-- DeepSeek-backed topic and script generation
-- Obsidian vault indexing for local knowledge sources
-- Hermes daily radar ingestion for Product Hunt + 观猹 reports
-- External link source ingestion, defaulting to Watcha / 观猹
-- Product Hunt connector, pending token configuration
-- SQLite-backed Episode persistence
-- Cross-episode feedback memory for future topic/script prompts
-- Preference memory cards from topic/script thumbs feedback
-- Reversible feedback events, so preference memory uses active evidence instead of raw like/down counts
-- Editable script workspace with manual save, full regeneration, section regeneration, and script version history
-- Editable runtime settings page with secret-safe updates
-- Local video inbox scanning, conservative long-silence edit plans, ffmpeg preview processing, and Episode-level video binding
-- Local Whisper-driven high-confidence retake removal with report tracking, preserved prior videos, and final subtitles regenerated after the refined edit
-- Tencent Cloud ASR for real video transcription when credentials are configured
-- Draft asset package generation with manifest, Tencent ASR SRT fallback to script-estimated SRT, and 4:3 PNG cover
-- Jianying draft import adapter: creates traceable packages, can try a plaintext-compatible bridge into the draft root, and records every result in `manifest.json`
-- Local automation worker for daily topic scheduling and unattended pending-video processing
-- Human review flow
-- 2.0 beta UI foundation with a classic Windows 95/98 pixel shell
-- Visual edit-plan workbench at `/edit-plan`, including a video preview window, source markers, edit timeline, edit decision cards, voice定位结果, and Jianying track preview
-- 2.0 content templates for 视频日记、AI 工具测评 and 教程演示, with Episode-level template selection
-- Content-template-aware Agent prompts for topic generation, script generation, and section regeneration
-- Preference-memory-aware Agent prompts: active thumbs feedback is summarized into prefer / avoid signals for future topic, script and section prompts
-- Runtime health diagnostics page for DeepSeek, Obsidian, ffmpeg, Whisper, video directories, draft output, Jianying and external sources
-- Persisted edit-plan segment decisions for 保留 / 删除 / 复核 with rollback
-- Confirmed edit-plan execution: user 保留 / 删除 overrides generate a second-pass `_confirmed` preview before Jianying draft packaging
-- Reusable bottom voice command console across the app, with command preview and execution for continuing the flow, regenerating topics/scripts, rewriting script sections, draft creation, and edit-plan segment decisions
-- Root-level visual guide: `WINDOWS_PIXEL_UI_GUIDE.md`
-- Agent prompt and content intelligence upgrade guide: `docs/ai-video-diary-agent-prompt-strategy.md`
-- UI contract checks that reject terminal-style black/green palettes, gradients, large radii, emoji icons, and missing 2.0 edit-plan entry points
+当前主线定位为 **macOS 小范围内部测试版**：
 
-Not yet implemented:
+- Next.js 15 工作台、FastAPI API、自动化 Worker 和 Electron 桌面壳已经连通。
+- 内部 macOS 构建显式使用 `NEXT_PUBLIC_AUTH_MODE=local`，面向可信测试者，不依赖 Supabase 登录。
+- Supabase 邀请登录、JWT 校验和 workspace 隔离仍保留，用于后续分发模式；只有显式配置后才启用。
+- GitHub Actions 可以分别生成 arm64 与 x64 内测包；正式发布必须通过 Developer ID 签名和 Apple 公证。
 
-- Native Jianying 10.7 encrypted draft authoring without the compatibility bridge
-- Native watchdog event listener; current worker uses stable polling
-- COS/URL mode for Tencent ASR files larger than the local direct-upload limit
-- Real microphone capture; the current command console executes typed text or already-transcribed voice text
-- macOS desktop shell and DMG packaging
+这不是公开发行版。真实客户端验收、签名公证、自动更新和小规模用户反馈仍是发布门禁。
 
-## Local Configuration
+## 核心流程
 
-Create `.env` at the repo root:
-
-```bash
-DEEPSEEK_API_KEY=...
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-OBSIDIAN_VAULT_PATH=/Users/Zhuanz/Desktop/鑫哥知识库
-PRODUCT_HUNT_TOKEN=...
-TENCENTCLOUD_SECRET_ID=...
-TENCENTCLOUD_SECRET_KEY=...
-TENCENTCLOUD_ASR_REGION=ap-shanghai
-TENCENTCLOUD_ASR_ENGINE_MODEL_TYPE=16k_zh_en
-HERMES_RADAR_PATH=/Users/Zhuanz/Desktop/product-hunt-raw/daily-reports
-TOPIC_SOURCE_URLS=https://watcha.cn/
-VIDEO_INBOX_PATH=/Users/Zhuanz/Movies/AI视频日记/01_待处理视频
-VIDEO_OUTPUT_PATH=/Users/Zhuanz/Movies/AI视频日记/06_待发布成片
-DRAFT_OUTPUT_PATH=/Users/Zhuanz/Movies/AI视频日记/05_剪映草稿
-JIANYING_DRAFT_ROOT_PATH=/Users/Zhuanz/Movies/JianyingPro/User Data/Projects/com.lveditor.draft
-DATABASE_PATH=/Users/Zhuanz/Movies/AI视频日记/agent.sqlite3
+```text
+信息源 / Obsidian
+→ 选题确认
+→ 脚本生成与版本编辑
+→ 视频导入与转写
+→ 剪辑计划确认
+→ 字幕 / 封面 / 剪映草稿
+→ 人工发布
+→ 反馈与偏好记忆
 ```
 
-`HERMES_RADAR_PATH` points to the Markdown reports generated by the Hermes AI 产品日报 job.
-When a report such as `2026-05-27.md` exists, the API parses Product Hunt and 观猹 entries into topic sources.
-This lets the topic Agent use real daily radar material even when `PRODUCT_HUNT_TOKEN` is not configured.
+主要能力包括：
 
-`TOPIC_SOURCE_URLS` accepts comma-separated URLs. These pages are converted into source items for topic generation.
-Product Hunt requires `PRODUCT_HUNT_TOKEN`; without it, the UI reports the missing token instead of inventing products.
-The draft page creates a local asset package and manifest under `DRAFT_OUTPUT_PATH`.
-It also exposes a "try import to Jianying" action. The action writes a plaintext-compatible draft through the available draft tool, syncs root metadata when possible, and records whether the attempt imported, failed, or fell back to package-only mode.
-The package includes:
+- DeepSeek 驱动的选题、脚本和段落改写。
+- Obsidian、Hermes 日报、Product Hunt 与外部链接信息源。
+- SQLite Episode 持久化、Creator Profile 和可撤销偏好记忆。
+- ffmpeg、本地 Whisper 与腾讯云 ASR 视频处理链路。
+- 可人工覆盖并回滚的剪辑计划。
+- 字幕、封面、素材清单和剪映兼容草稿包。
+- 本地运行健康检查、配置修复入口和自动化 Worker。
 
-- the processed video reference
-- `subtitle.srt`, generated by Tencent Cloud ASR when configured; otherwise generated from the approved script timing estimate
-- `cover.png`, a 4:3 pixel-style cover
-- `manifest.json`, including the honest Jianying status
+## 仓库结构
 
-Tencent Cloud ASR uses `CreateRecTask` + `DescribeTaskStatus` for long audio recognition.
-The first implementation extracts `audio_16k.wav` from the processed video and sends it by local data upload when it is below the configured byte limit.
-For longer videos, use COS/URL mode in a later iteration instead of pretending transcription succeeded.
+```text
+apps/web       Next.js 工作台
+apps/api       FastAPI、工作流、视频处理和 Worker
+apps/desktop   Electron 壳、打包与发布配置
+supabase       分发模式所需的数据库迁移
+docs           当前有效的产品与安全文档
+```
 
-It does not claim native encrypted Jianying 10.7 draft authoring. Jianying 10.7 stores current drafts with encrypted metadata, so this project treats the bridge result as a compatibility import that must be opened and verified manually. The source package remains the reliable fallback.
+## 本地开发
 
-Run API:
+需要 Node.js 22、pnpm 9.15、Python 3.11、uv 和 ffmpeg。
+
+```bash
+corepack pnpm install --frozen-lockfile
+cd apps/api && uv sync --locked --group dev && cd ../..
+cp .env.example .env
+```
+
+分别启动：
 
 ```bash
 corepack pnpm dev:api
-```
-
-Run web:
-
-```bash
 corepack pnpm dev:web
-```
-
-Run the local automation worker:
-
-```bash
 corepack pnpm dev:worker
 ```
 
-## Verification
+访问 `http://localhost:3000`。桌面开发和打包见 [`apps/desktop/README.md`](apps/desktop/README.md)。
 
-Run verification:
+## 配置
+
+完整模板见 [`.env.example`](.env.example)。最小可用配置是：
+
+- `NEXT_PUBLIC_AUTH_MODE=local`：仅用于可信的本机开发/内部测试；否则必须配置 Supabase 模式。
+- `DEEPSEEK_API_KEY`：选题和脚本生成。
+- `DATABASE_PATH`：本地 Episode 数据库。
+- `VIDEO_INBOX_PATH`、`VIDEO_OUTPUT_PATH`、`DRAFT_OUTPUT_PATH`：本地视频流程目录。
+- `OBSIDIAN_VAULT_PATH`：可选的本地知识库。
+- 腾讯云 ASR、Whisper、Product Hunt 和 Supabase 均为按需能力。
+
+密钥不得提交到 Git、文档、截图或日志。`.env*` 已默认忽略，只有 `.env.example` 可跟踪。
+
+## 验证
 
 ```bash
-corepack pnpm test:api
-corepack pnpm test:web-contract
-corepack pnpm test:pixel-style
-corepack pnpm build:web
-corepack pnpm --dir apps/web exec tsc --noEmit
-corepack pnpm --dir apps/web lint
+corepack pnpm run test:web-contract
+corepack pnpm run test:pixel-style
+corepack pnpm run test:web
+corepack pnpm run lint:web
+corepack pnpm run build:web
+corepack pnpm run test:api
 ```
 
-If `pnpm` is already on `PATH`, the equivalent shorter commands also work:
+涉及 UI 时还必须遵循 [`DESIGN.md`](DESIGN.md)，并在 1024、1180、1440 三种桌面尺寸下做真实页面或 Electron 截图验收。
 
-```bash
-pnpm test:api
-pnpm test:web-contract
-pnpm test:pixel-style
-pnpm build:web
-pnpm --dir apps/web exec tsc --noEmit
-pnpm --dir apps/web lint
-```
+## 已知边界
 
-Visit:
+- 剪映 10.7 加密草稿仍只能使用兼容桥和可追踪素材包，不能声称原生写入成功。
+- 真实麦克风采集尚未接入；命令台接收文本或已有转写结果。
+- 腾讯 ASR 大文件尚未接入 COS/URL 模式。
+- 正式 macOS Release 需要仓库配置完整的签名与公证密钥。
 
-- http://localhost:3000
-- http://localhost:3000/templates
-- http://localhost:3000/topics
-- http://localhost:3000/script
-- http://localhost:3000/video
-- http://localhost:3000/edit-plan
-- http://localhost:3000/draft
-- http://localhost:3000/health
-- http://localhost:3000/settings
+## 当前文档
 
-The UI should follow `WINDOWS_PIXEL_UI_GUIDE.md`: classic Windows 95/98 pixel desktop software, not a generic SaaS dashboard, terminal console, or decorative retro skin.
+- [`DESIGN.md`](DESIGN.md)：唯一视觉与交互源文件。
+- [`docs/product-requirements.md`](docs/product-requirements.md)：当前产品范围与发布门禁。
+- [`docs/beta-product-foundation.md`](docs/beta-product-foundation.md)：内部与分发模式的身份、首启边界。
+- [`docs/auth-workspace-boundary.md`](docs/auth-workspace-boundary.md)：Supabase 模式的后端安全边界。
+- [`apps/desktop/RELEASE.md`](apps/desktop/RELEASE.md)：内测构建和正式发布流程。
+
+历史计划、旧审查快照和阶段性截图不保存在主线；需要追溯时使用 Git 历史。
