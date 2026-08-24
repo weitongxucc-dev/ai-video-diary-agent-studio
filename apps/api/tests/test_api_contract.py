@@ -3,8 +3,8 @@ endpoint contracts align with the productized video production workflow
 design (Phase 1: Script Control and Feedback Foundations).
 
 These tests validate the backward compatibility guarantees and
-active-only feedback learning rules described in:
-  docs/superpowers/specs/2026-06-04-productized-video-production-workflow-design.md
+active-only feedback learning rules retained by the current product
+requirements in docs/product-requirements.md.
 """
 
 from datetime import UTC, date, datetime

@@ -3,6 +3,7 @@ node_modules/
 dist/
 __pycache__/
 .pytest_cache/
+.coverage
 .venv/
 .env
 .env.*
@@ -15,6 +16,7 @@ __pycache__/
 *.tsbuildinfo
 .pnpm-store/
 .tmp/
+apps/desktop/.desktop-bin/
 supabase/.temp/
 .playwright-cli/
 output/

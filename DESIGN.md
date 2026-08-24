@@ -6,8 +6,7 @@ applies_to: "apps/web, apps/desktop, product screenshots, UI tests"
 source_priority:
   - "Explicit user direction"
   - "DESIGN.md"
-  - "docs/ai-video-diary-agent-2.0-prd.md"
-  - "WINDOWS_PIXEL_UI_GUIDE.md"
+  - "docs/product-requirements.md"
 visual_direction: "A precise local creator workstation: Windows desktop interaction grammar expressed with restraint, legibility, and deliberate hierarchy."
 breakpoints:
   full_desktop: "1440px and above"
@@ -70,7 +69,7 @@ components:
 
 它把产品定义为一台**精致、可信、可操作的本地视频创作工作站**。它不是套着点阵字体的网页，不是卡片式 SaaS dashboard，也不是把 Windows 95 图标、黑色边框和小字号叠在一起的复古皮肤。
 
-`WINDOWS_PIXEL_UI_GUIDE.md` 仍提供旧 Windows 交互结构、已有组件和页面需求的参考；当其“高信息密度、全硬边框”等描述与本文件的可读性、层级、密度或响应式原则冲突时，以本文件为准。
+旧版 Windows 像素 UI 指南、阶段性审查和页面截图已经退出主线。历史资料只用于 Git 追溯，不能作为实现依据；任何视觉判断都以本文件为准。
 
 ### 0.1 不可跳过的交付顺序
 
