@@ -9,5 +9,4 @@ os.environ.setdefault("DEEPSEEK_API_KEY", "test-fake-key-for-tests")
 # explicit Settings instance, so they still exercise the trusted boundary.
 os.environ.setdefault("SUPABASE_URL", "")
 os.environ.setdefault("SUPABASE_PUBLISHABLE_KEY", "")
-os.environ.setdefault("SUPABASE_SECRET_KEY", "")
 os.environ.setdefault("SUPABASE_JWT_ISSUER", "")

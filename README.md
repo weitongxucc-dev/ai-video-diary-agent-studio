@@ -101,7 +101,7 @@ corepack pnpm run test:api
 ## 已知边界
 
 - Chinese-CLIP 多帧向量提取、缓存失效和文案匹配已经接入独立模型进程；自动放行阈值仍需真实素材基准校准。
-- Qwen3-TTS 授权声音克隆、参考文字校验及真实配音时长回填已经接入；模型运行环境和权重仍需手动准备，产品内下载器尚未完成。
+- Qwen3-TTS 授权声音克隆、参考文字校验及真实配音时长回填已经接入；安装包不内置权重，首次配置时由产品内下载器安装到用户选择的模型目录。当前没有云端声音克隆降级，未安装本地模型时该能力不可用。
 - 时间线与 FFmpeg 渲染已接入，但整个批次的无人值守执行器尚未接入。
 - 剪映 10.7 加密草稿仍只能使用兼容桥和可追踪素材包，不能声称原生写入成功。
 - 真实麦克风采集尚未接入；命令台接收文本或已有转写结果。
@@ -113,7 +113,7 @@ corepack pnpm run test:api
 - [`DESIGN.md`](DESIGN.md)：唯一视觉与交互源文件。
 - [`docs/product-requirements.md`](docs/product-requirements.md)：当前产品范围与发布门禁。
 
-本地 Chinese-CLIP 与 Qwen3-TTS 在「设置 → 本地模型安装」中逐个安装。安装器会先要求用户确认许可证，检查剩余空间，并将运行环境、权重、断点文件与 pip/Hugging Face/Torch 缓存放在所选模型目录附近。`/Volumes/<name>` 未挂载时会阻止安装，不会静默改用内置硬盘。
+安装包只包含轻量模型 worker，不包含大模型权重。Chinese-CLIP 下载约 0.75GB，Qwen3-TTS 下载约 1.99GB，另需为独立 Python 运行时和缓存预留空间。两者在「设置 → 本地模型安装」中逐个安装；安装器会先要求用户确认许可证、检查剩余空间，并将运行环境、权重、断点文件与 pip/Hugging Face/Torch 缓存放在所选模型目录附近。`/Volumes/<name>` 未挂载时会阻止安装，不会静默改用内置硬盘。
 - [`docs/beta-product-foundation.md`](docs/beta-product-foundation.md)：内部与分发模式的身份、首启边界。
 - [`docs/auth-workspace-boundary.md`](docs/auth-workspace-boundary.md)：Supabase 模式的后端安全边界。
 - [`apps/desktop/RELEASE.md`](apps/desktop/RELEASE.md)：内测构建和正式发布流程。

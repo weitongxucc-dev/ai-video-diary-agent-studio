@@ -2,6 +2,15 @@ name: Internal macOS test build
 
 on:
   workflow_dispatch:
+    inputs:
+      auth_mode:
+        description: Authentication mode for this installer
+        required: true
+        type: choice
+        default: local
+        options:
+          - local
+          - supabase
 
 permissions:
   contents: write
@@ -25,7 +34,9 @@ jobs:
 
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      NEXT_PUBLIC_AUTH_MODE: "local"
+      NEXT_PUBLIC_AUTH_MODE: ${{ inputs.auth_mode }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.BETA_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.BETA_SUPABASE_PUBLISHABLE_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +86,7 @@ jobs:
 
       - name: Build web application
         run: |
+          node apps/desktop/scripts/write-distribution-config.js
           pnpm --dir apps/web build
           node apps/desktop/scripts/bundle-standalone.js
 

@@ -418,6 +418,7 @@ async def auth_boundary_middleware(request: Request, call_next):
             and not auth_context.is_onboarding_complete(
                 principal.user_id,
                 principal.workspace_id or LEGACY_WORKSPACE_ID,
+                principal.access_token or "",
             )
         ):
             raise ForbiddenError("onboarding completion required")
@@ -1923,6 +1924,7 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
         auth_context.complete_onboarding(
             principal.user_id,
             principal.workspace_id,
+            principal.access_token or "",
         )
     except OnboardingStateError as exc:
         raise HTTPException(
