@@ -64,6 +64,24 @@ def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
     )
 
 
+def test_unconfigured_missing_model_root_keeps_operating_system_temp(tmp_path, monkeypatch):
+    import tempfile
+
+    from app.config import Settings, configure_process_temporary_directory
+
+    original_tempdir = tempfile.tempdir
+    monkeypatch.delenv("TMPDIR", raising=False)
+    tempfile.tempdir = None
+    try:
+        selected = configure_process_temporary_directory(
+            Settings(model_root_path=str(tmp_path / "missing" / "models"))
+        )
+        assert selected.is_dir()
+        assert "missing" not in str(selected)
+    finally:
+        tempfile.tempdir = original_tempdir
+
+
 def test_runtime_settings_updates_omits_empty_topic_source_urls():
     updates = runtime_settings_updates(
         {

@@ -38,9 +38,20 @@ def configure_process_temporary_directory(settings: Settings) -> Path:
     root = settings.effective_temporary_root_path.resolve()
     if root.parent.is_dir():
         root.mkdir(parents=False, exist_ok=True)
-    os.environ["TMPDIR"] = str(root)
-    tempfile.tempdir = str(root)
-    return root
+        os.environ["TMPDIR"] = str(root)
+        tempfile.tempdir = str(root)
+        return root
+
+    # An explicitly configured data disk must fail closed when it disappears.
+    # Unconfigured development and CI environments may keep their OS temp root.
+    strict_external_path = (
+        settings.temporary_root_path is not None or settings.model_root_path_configured
+    )
+    if strict_external_path:
+        os.environ["TMPDIR"] = str(root)
+        tempfile.tempdir = str(root)
+        return root
+    return Path(tempfile.gettempdir())
 
 
 def load_dotenv_files() -> None:
@@ -245,6 +256,7 @@ class Settings:
     local_whisper_model_path: str | None = None
     local_whisper_language: str = "zh"
     model_root_path: str = _default_model_root_path()
+    model_root_path_configured: bool = False
     temporary_root_path: str | None = None
     model_runtime_python_path: str = _default_model_runtime_python_path()
     visual_model_worker_path: str = _default_visual_model_worker_path()
@@ -375,6 +387,7 @@ class Settings:
                 cls.local_whisper_language,
             ),
             model_root_path=model_root_path,
+            model_root_path_configured=bool(os.getenv("MODEL_ROOT_PATH")),
             temporary_root_path=os.getenv("TEMPORARY_ROOT_PATH"),
             model_runtime_python_path=os.getenv("MODEL_RUNTIME_PYTHON_PATH")
             or _default_model_runtime_python_path(model_root_path),
