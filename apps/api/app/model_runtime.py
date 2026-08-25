@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-
 ModelRuntimeState = Literal[
     "missing_runtime",
     "missing_worker",
@@ -181,7 +180,7 @@ class ModelCatalog:
 def _read_manifest(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("manifest 格式错误")
+        raise ValueError("manifest 格式错误")  # noqa: TRY004 - protocol validation
     return payload
 
 
@@ -206,7 +205,7 @@ def _validate_manifest(
     resolved_root = model_path.resolve()
     for item in files:
         if not isinstance(item, dict):
-            raise ValueError("模型文件记录格式错误")
+            raise ValueError("模型文件记录格式错误")  # noqa: TRY004
         relative_path = item.get("path")
         expected_size = item.get("size")
         expected_sha256 = item.get("sha256")

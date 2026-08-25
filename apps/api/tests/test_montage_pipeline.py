@@ -29,10 +29,10 @@ from app.production import (
     MaterialSegment,
     ProductionBatch,
     ProductionBatchItem,
-    ProductionRepository,
     ProductionProfile,
+    ProductionRepository,
 )
-from app.repository import EpisodeRepository, LEGACY_WORKSPACE_ID
+from app.repository import LEGACY_WORKSPACE_ID, EpisodeRepository
 
 
 def _episode(workspace_id: str = "workspace_a") -> Episode:

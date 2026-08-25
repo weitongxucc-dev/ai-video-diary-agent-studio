@@ -5,10 +5,11 @@ import math
 import re
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 from uuid import uuid4
 
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
@@ -21,7 +22,6 @@ from app.production import (
 )
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
-
 
 MontagePlanStatus = Literal[
     "waiting_for_user",

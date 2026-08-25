@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, Protocol
+from typing import Protocol
 
-from app.model_runtime import ModelCatalog, QWEN3_TTS_06B_BASE_8BIT
+from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT, ModelCatalog
 
 
 class VoiceCloneError(RuntimeError):

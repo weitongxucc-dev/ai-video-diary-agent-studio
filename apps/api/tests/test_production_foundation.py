@@ -15,7 +15,7 @@ from app.production import (
     ProductionRepository,
     VoiceProfile,
 )
-from app.repository import EpisodeRepository, LEGACY_WORKSPACE_ID
+from app.repository import LEGACY_WORKSPACE_ID, EpisodeRepository
 from app.visual_semantics import VisualEmbedding
 
 

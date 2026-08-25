@@ -4,10 +4,11 @@ import json
 import math
 import os
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, Protocol, Sequence
+from typing import Protocol
 
 from app.model_runtime import CHINESE_CLIP_VIT_B16, ModelCatalog
 
@@ -237,13 +238,13 @@ def _parse_embeddings(
         raise ValueError("响应模型不匹配")
     raw_items = payload.get("embeddings")
     if not isinstance(raw_items, list):
-        raise ValueError("响应缺少向量")
+        raise ValueError("响应缺少向量")  # noqa: TRY004 - protocol validation
     expected_ids = {item.segment_id for item in requested_segments}
     results: list[VisualEmbedding] = []
     dimensions: set[int] = set()
     for item in raw_items:
         if not isinstance(item, dict):
-            raise ValueError("向量记录格式错误")
+            raise ValueError("向量记录格式错误")  # noqa: TRY004
         segment_id = item.get("segment_id")
         raw_vector = item.get("vector")
         sample_count = item.get("sample_count")

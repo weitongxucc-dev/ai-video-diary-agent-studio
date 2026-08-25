@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.model_installer import ModelInstallError, ModelInstaller
+from app.model_installer import ModelInstaller, ModelInstallError
 from app.model_runtime import CHINESE_CLIP_VIT_B16, ModelCatalog
 
 

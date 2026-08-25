@@ -5,16 +5,16 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 from urllib.parse import quote
 
 from app.model_runtime import (
@@ -24,7 +24,6 @@ from app.model_runtime import (
     ModelCatalog,
     ModelSpec,
 )
-
 
 InstallState = Literal["queued", "running", "ready", "failed", "interrupted"]
 
@@ -210,7 +209,7 @@ class ModelInstaller:
             if self._on_complete is not None:
                 try:
                     self._on_complete()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - callback failures stay visible
                     self._update_job(
                         job_id,
                         message=(
@@ -218,7 +217,7 @@ class ModelInstaller:
                             f"运行时重载失败，重启应用后生效：{exc}"
                         ),
                     )
-        except Exception as exc:  # job failure must remain inspectable by the UI
+        except Exception as exc:  # noqa: BLE001 - job failures stay visible in the UI
             self._update_job(
                 job_id,
                 status="failed",

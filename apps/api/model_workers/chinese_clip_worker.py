@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
 MODEL_ID = "chinese-clip-vit-base-patch16"
 
 
@@ -23,8 +22,8 @@ def main() -> None:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     _validate_request(request)
 
-    from PIL import Image
     import torch
+    from PIL import Image
     from transformers import ChineseCLIPModel, ChineseCLIPProcessor
 
     model_path = Path(request["model_path"]).expanduser().resolve()
@@ -129,7 +128,7 @@ def _validate_request(payload: object) -> None:
     if payload.get("model_id") != MODEL_ID:
         raise ValueError("unexpected model id")
     if not isinstance(payload.get("model_path"), str):
-        raise ValueError("model path is required")
+        raise ValueError("model path is required")  # noqa: TRY004 - request validation
     mode = payload.get("mode")
     if mode == "text":
         texts = payload.get("texts")
@@ -141,21 +140,21 @@ def _validate_request(payload: object) -> None:
     if mode != "image":
         raise ValueError("unsupported mode")
     if not isinstance(payload.get("video_path"), str):
-        raise ValueError("video path is required")
+        raise ValueError("video path is required")  # noqa: TRY004 - request validation
     segments = payload.get("segments")
     if not isinstance(segments, list) or not segments:
         raise ValueError("segments are required")
     seen: set[str] = set()
     for segment in segments:
         if not isinstance(segment, dict):
-            raise ValueError("invalid segment")
+            raise ValueError("invalid segment")  # noqa: TRY004 - request validation
         segment_id = segment.get("segment_id")
         start = segment.get("start_seconds")
         end = segment.get("end_seconds")
         if not isinstance(segment_id, str) or not segment_id or segment_id in seen:
             raise ValueError("invalid segment id")
         if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-            raise ValueError("invalid segment timestamps")
+            raise ValueError("invalid segment timestamps")  # noqa: TRY004
         if start < 0 or end <= start:
             raise ValueError("invalid segment range")
         seen.add(segment_id)

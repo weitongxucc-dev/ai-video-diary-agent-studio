@@ -39,9 +39,8 @@ from app.llm import (
     LLMResponseError,
     script_generator_from_settings,
 )
-from app.montage import MontagePlanner, MontageRenderer, MontageRepository
-from app.model_installer import ModelInstallError, ModelInstaller
-from app.model_runtime import ModelCatalog, QWEN3_TTS_06B_BASE_8BIT
+from app.model_installer import ModelInstaller, ModelInstallError
+from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT, ModelCatalog
 from app.models import (
     Episode,
     EpisodeIntakeMode,
@@ -52,14 +51,15 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
+from app.montage import MontagePlanner, MontageRenderer, MontageRepository
 from app.narration import NarrationArtifact, NarrationGenerator
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
 from app.production import (
+    MaterialCollection,
+    NarrationArtifactRecord,
     ProductionBatch,
     ProductionBatchItem,
-    NarrationArtifactRecord,
-    MaterialCollection,
     ProductionProfile,
     ProductionRepository,
     VoiceProfile,
@@ -108,6 +108,26 @@ from app.schemas import (
     KnowledgeNoteResponse,
     ManualLinkRequest,
     MarkPublishedRequest,
+    MaterialAssetResponse,
+    MaterialCollectionCreateRequest,
+    MaterialCollectionResponse,
+    MaterialCollectionsResponse,
+    MaterialLibraryInsightsResponse,
+    MaterialLibraryResponse,
+    MaterialReviewRequest,
+    MaterialSegmentUpdateRequest,
+    ModelCatalogResponse,
+    ModelInstallJobResponse,
+    ModelInstallRequest,
+    MontageClipCandidateResponse,
+    MontageClipOrderRequest,
+    MontageClipUpdateRequest,
+    MontagePlanConfirmRequest,
+    MontagePlanCreateRequest,
+    MontagePlanResponse,
+    MontagePlansResponse,
+    MontageRenderRequest,
+    NarrationArtifactResponse,
     OnboardingCompletionResponse,
     PendingVideoResponse,
     PreferenceCardResponse,
@@ -120,29 +140,9 @@ from app.schemas import (
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
-    MaterialAssetResponse,
-    MaterialCollectionCreateRequest,
-    MaterialCollectionResponse,
-    MaterialCollectionsResponse,
-    MaterialLibraryResponse,
-    MaterialLibraryInsightsResponse,
-    MaterialReviewRequest,
-    MaterialSegmentUpdateRequest,
-    ModelCatalogResponse,
-    ModelInstallJobResponse,
-    ModelInstallRequest,
-    NarrationArtifactResponse,
-    MontagePlanConfirmRequest,
-    MontageClipCandidateResponse,
-    MontageClipOrderRequest,
-    MontageClipUpdateRequest,
-    MontagePlanCreateRequest,
-    MontagePlanResponse,
-    MontagePlansResponse,
-    MontageRenderRequest,
     ProductionBatchCreateRequest,
-    ProductionBatchResponse,
     ProductionBatchesResponse,
+    ProductionBatchResponse,
     ProductionChainResponse,
     ProductionFoundationResponse,
     ProductionModeRequest,
@@ -153,8 +153,8 @@ from app.schemas import (
     RuntimeHealthResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
-    ScriptRegenerateRequest,
     ScriptGenerateRequest,
+    ScriptRegenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
@@ -188,8 +188,8 @@ from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
 from app.visual_semantics import visual_semantic_provider_from_catalog
-from app.voice_clone import voice_clone_provider_from_catalog
 from app.voice import transcribe_audio_bytes
+from app.voice_clone import voice_clone_provider_from_catalog
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
 from app.workflow import LangGraphEpisodeWorkflow
 
@@ -313,8 +313,7 @@ ONBOARDING_REPAIR_PATHS: set[str] = {
 def is_onboarding_repair_path(path: str) -> bool:
     return (
         path in ONBOARDING_REPAIR_PATHS
-        or path.startswith("/api/models/")
-        or path.startswith("/api/model-install-jobs/")
+        or path.startswith(("/api/models/", "/api/model-install-jobs/"))
     )
 
 

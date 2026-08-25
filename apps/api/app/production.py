@@ -5,10 +5,12 @@ import json
 import re
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 from uuid import uuid4
 
 from app.models import utc_now
@@ -19,7 +21,6 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
-
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
@@ -1478,7 +1479,7 @@ def _scene_ranges(boundaries: list[float], duration: float) -> list[tuple[float,
     clean = sorted({round(value, 3) for value in boundaries if 0 < value < duration})
     points = [0.0, *clean, round(duration, 3)]
     ranges: list[tuple[float, float]] = []
-    for start, end in zip(points, points[1:]):
+    for start, end in pairwise(points):
         cursor = start
         while end - cursor > 12:
             ranges.append((round(cursor, 3), round(cursor + 12, 3)))
