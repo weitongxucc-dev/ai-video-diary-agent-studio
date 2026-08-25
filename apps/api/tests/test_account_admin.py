@@ -44,6 +44,7 @@ def test_create_account_uses_admin_api_without_exposing_product_email():
     request = urlopen.call_args.args[0]
     assert request.full_url == "https://example.supabase.co/auth/v1/admin/users"
     assert request.headers["Authorization"] == "Bearer service-secret"
+    assert request.headers["User-agent"] == "AI-Video-Diary-Account-Admin/0.1"
     payload = json.loads(io.BytesIO(request.data).read())
     assert payload["email_confirm"] is True
     assert payload["user_metadata"] == {"account": "tester01"}
