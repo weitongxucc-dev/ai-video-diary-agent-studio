@@ -845,6 +845,32 @@ export type ProductionProfile = {
   updated_at: string;
 };
 
+export type VoiceProfile = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  reference_audio_path: string;
+  reference_text: string;
+  consent_confirmed: boolean;
+  is_default: boolean;
+  model_id: string;
+  status: "pending" | "ready" | "blocked" | "failed";
+  message: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceProfiles = {
+  voices: VoiceProfile[];
+  total_count: number;
+};
+
+export type EpisodeVoiceSelection = {
+  episode_id: string;
+  voice: VoiceProfile | null;
+  source: "episode" | "default" | "legacy";
+};
+
 export type ProductionReadiness = {
   ready: boolean;
   blockers: { code: string; message: string }[];
@@ -968,6 +994,11 @@ export type MaterialSegment = {
   usage_role_confidence: number;
   usage_role_reason: string;
   review_status: "raw" | "approved" | "rejected";
+  system_tags: string[];
+  user_tags: string[];
+  collection_ids: string[];
+  usage_count: number;
+  last_used_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -997,4 +1028,32 @@ export type MaterialAsset = {
 export type MaterialLibrary = {
   assets: MaterialAsset[];
   total_count: number;
+};
+
+export type MaterialCollection = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialCollections = {
+  collections: MaterialCollection[];
+  total_count: number;
+};
+
+export type MaterialTagStat = {
+  tag: string;
+  segment_count: number;
+  duration_seconds: number;
+  usage_count: number;
+};
+
+export type MaterialLibraryInsights = {
+  asset_count: number;
+  segment_count: number;
+  tags: MaterialTagStat[];
+  recommended_gaps: string[];
 };

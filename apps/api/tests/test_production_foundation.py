@@ -451,6 +451,10 @@ def test_voice_profile_api_selects_default_and_episode_override(tmp_path, monkey
     assert first.status_code == 200
     assert first.json()["is_default"] is True
     assert second.status_code == 200
+    media = client.get(f"/api/production/voices/{first.json()['id']}/media")
+    assert media.status_code == 200
+    assert media.headers["content-type"] == "audio/wav"
+    assert media.content == b"a"
     selected = client.put(
         f"/api/production/episodes/{episode.id}/voice",
         json={"voice_profile_id": second.json()["id"]},

@@ -398,6 +398,16 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  ipcMain.handle('open-wav-file', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: '选择授权声音参考音频',
+      filters: [{ name: 'WAV 音频', extensions: ['wav'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('open-path', async (_event, filePath) => {
     if (typeof filePath !== 'string' || filePath.length === 0) {
       throw new Error('invalid path');

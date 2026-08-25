@@ -744,6 +744,22 @@ def update_production_voice(
     return VoiceProfileResponse.model_validate(saved, from_attributes=True)
 
 
+@app.get("/api/production/voices/{voice_profile_id}/media")
+def get_production_voice_media(
+    voice_profile_id: str,
+    request: Request,
+) -> FileResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        voice = production_repo.get_voice_profile(workspace_id, voice_profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice profile not found") from exc
+    reference_path = Path(voice.reference_audio_path).expanduser()
+    if reference_path.suffix.lower() != ".wav" or not reference_path.is_file():
+        raise HTTPException(status_code=404, detail="voice reference not found")
+    return FileResponse(reference_path, media_type="audio/wav", filename=reference_path.name)
+
+
 def _episode_voice_selection_response(
     workspace_id: str,
     episode_id: str,

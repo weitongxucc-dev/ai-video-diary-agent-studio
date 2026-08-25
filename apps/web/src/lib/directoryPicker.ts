@@ -13,6 +13,7 @@ declare global {
   interface Window {
     electronAPI?: {
       openDirectory?: () => Promise<string | null>;
+      openWavFile?: () => Promise<string | null>;
     };
   }
 }
@@ -35,6 +36,28 @@ export async function pickDirectory(): Promise<DirectoryPickResult> {
   }
   try {
     const path = await window.electronAPI?.openDirectory?.();
+    if (typeof path === "string" && path.length > 0) {
+      return { kind: "picked", path };
+    }
+    return { kind: "canceled" };
+  } catch {
+    return { kind: "canceled" };
+  }
+}
+
+export function hasWavFilePicker(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.electronAPI?.openWavFile === "function"
+  );
+}
+
+export async function pickWavFile(): Promise<DirectoryPickResult> {
+  if (!hasWavFilePicker()) {
+    return { kind: "unavailable" };
+  }
+  try {
+    const path = await window.electronAPI?.openWavFile?.();
     if (typeof path === "string" && path.length > 0) {
       return { kind: "picked", path };
     }

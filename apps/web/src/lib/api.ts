@@ -8,6 +8,7 @@ import type {
   DraftStatus,
   EpisodeHistory,
   EpisodeStatus,
+  EpisodeVoiceSelection,
   FeedbackTargetType,
   FeedbackValue,
   FeedbackSummary,
@@ -17,7 +18,10 @@ import type {
   OnboardingCompletionResponse,
   PendingVideo,
   MaterialAsset,
+  MaterialCollection,
+  MaterialCollections,
   MaterialLibrary,
+  MaterialLibraryInsights,
   MontagePlan,
   MontageClipCandidate,
   Preferences,
@@ -44,6 +48,8 @@ import type {
   TopicEvidenceList,
   VideoProductionMode,
   VoiceCommandResponse,
+  VoiceProfile,
+  VoiceProfiles,
   VoiceTranscribeResult,
   WorkflowStatus,
 } from "./types";
@@ -119,6 +125,24 @@ export function getProductionMaterials(): Promise<MaterialLibrary> {
   return request<MaterialLibrary>("/api/production/materials");
 }
 
+export function getMaterialLibraryInsights(): Promise<MaterialLibraryInsights> {
+  return request<MaterialLibraryInsights>("/api/production/materials/insights");
+}
+
+export function getMaterialCollections(): Promise<MaterialCollections> {
+  return request<MaterialCollections>("/api/production/material-collections");
+}
+
+export function createMaterialCollection(input: {
+  name: string;
+  parent_id?: string | null;
+}): Promise<MaterialCollection> {
+  return request<MaterialCollection>("/api/production/material-collections", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export function scanProductionMaterials(): Promise<MaterialLibrary> {
   return request<MaterialLibrary>("/api/production/materials/scan", {
     method: "POST",
@@ -154,6 +178,8 @@ export function updateProductionMaterialSegment(
     transcript: string;
     review_status: "raw" | "approved" | "rejected";
     usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+    user_tags?: string[];
+    collection_ids?: string[];
   },
 ): Promise<MaterialAsset> {
   return request<MaterialAsset>(
@@ -171,8 +197,6 @@ export function updateProductionProfile(
     | "workspace_id"
     | "primary_platform"
     | "aspect_ratio"
-    | "target_duration_min_seconds"
-    | "target_duration_max_seconds"
     | "voice_model_status"
     | "voice_model_message"
     | "updated_at"
@@ -181,6 +205,49 @@ export function updateProductionProfile(
   return request<ProductionProfile>("/api/production/profile", {
     method: "PUT",
     body: JSON.stringify(input),
+  });
+}
+
+export function getVoiceProfiles(): Promise<VoiceProfiles> {
+  return request<VoiceProfiles>("/api/production/voices");
+}
+
+export function createVoiceProfile(input: {
+  name: string;
+  reference_audio_path: string;
+  reference_text: string;
+  consent_confirmed: boolean;
+  is_default: boolean;
+}): Promise<VoiceProfile> {
+  return request<VoiceProfile>("/api/production/voices", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateVoiceProfile(
+  voiceProfileId: string,
+  input: {
+    name: string;
+    reference_audio_path: string;
+    reference_text: string;
+    consent_confirmed: boolean;
+    is_default: boolean;
+  },
+): Promise<VoiceProfile> {
+  return request<VoiceProfile>(`/api/production/voices/${voiceProfileId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function selectEpisodeVoice(
+  episodeId: string,
+  voiceProfileId: string | null,
+): Promise<EpisodeVoiceSelection> {
+  return request<EpisodeVoiceSelection>(`/api/production/episodes/${episodeId}/voice`, {
+    method: "PUT",
+    body: JSON.stringify({ voice_profile_id: voiceProfileId }),
   });
 }
 

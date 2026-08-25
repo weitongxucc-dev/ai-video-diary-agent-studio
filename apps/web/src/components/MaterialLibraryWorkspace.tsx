@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clock3,
   Film,
+  FolderPlus,
   FolderSearch,
   LoaderCircle,
   Play,
@@ -19,12 +20,23 @@ import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   analyzeProductionMaterial,
+  createMaterialCollection,
+  getMaterialLibraryInsights,
   reviewProductionMaterial,
   scanProductionMaterials,
+  updateProductionMaterialSegment,
 } from "@/lib/api";
-import type { MaterialAsset, MaterialLibrary } from "@/lib/types";
+import type {
+  MaterialAsset,
+  MaterialCollection,
+  MaterialCollections,
+  MaterialLibrary,
+  MaterialLibraryInsights,
+  MaterialSegment,
+} from "@/lib/types";
 
 type Filter = "all" | "raw" | "approved" | "rejected";
+type Busy = "scan" | "analyze" | "review" | "segment" | "collection" | null;
 
 function duration(value: number | null) {
   if (value === null) return "--:--";
@@ -49,26 +61,81 @@ function reviewLabel(asset: MaterialAsset) {
   return "等待分析";
 }
 
-export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: MaterialLibrary }) {
+function segmentSearchText(segment: MaterialSegment, collections: MaterialCollection[]) {
+  const collectionNames = collections
+    .filter((collection) => segment.collection_ids.includes(collection.id))
+    .map((collection) => collection.name);
+  return [
+    segment.description,
+    segment.transcript,
+    ...segment.system_tags,
+    ...segment.user_tags,
+    ...collectionNames,
+  ].join(" ").toLowerCase();
+}
+
+export function MaterialLibraryWorkspace({
+  initialLibrary,
+  initialInsights,
+  initialCollections,
+}: {
+  initialLibrary: MaterialLibrary;
+  initialInsights: MaterialLibraryInsights;
+  initialCollections: MaterialCollections;
+}) {
   const [assets, setAssets] = useState(initialLibrary.assets);
+  const [insights, setInsights] = useState(initialInsights);
+  const [collections, setCollections] = useState(initialCollections.collections);
   const [selectedId, setSelectedId] = useState(initialLibrary.assets[0]?.id ?? "");
+  const [selectedSegmentId, setSelectedSegmentId] = useState(
+    initialLibrary.assets[0]?.segments[0]?.id ?? "",
+  );
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [busy, setBusy] = useState<"scan" | "analyze" | "review" | null>(null);
+  const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
+  const [tagDraft, setTagDraft] = useState(
+    initialLibrary.assets[0]?.segments[0]?.user_tags.join(", ") ?? "",
+  );
+  const [collectionDraft, setCollectionDraft] = useState(
+    initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
+  );
+  const [newCollectionName, setNewCollectionName] = useState("");
 
   const selected = assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
+  const selectedSegment = selected?.segments.find((segment) => segment.id === selectedSegmentId)
+    ?? selected?.segments[0]
+    ?? null;
   const visible = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return assets.filter((asset) => {
       if (filter !== "all" && asset.review_status !== filter) return false;
       if (!normalized) return true;
-      return asset.file_name.toLowerCase().includes(normalized) || asset.segments.some((segment) => `${segment.description} ${segment.transcript}`.toLowerCase().includes(normalized));
+      return asset.file_name.toLowerCase().includes(normalized)
+        || asset.segments.some((segment) => segmentSearchText(segment, collections).includes(normalized));
     });
-  }, [assets, filter, query]);
+  }, [assets, collections, filter, query]);
 
   function replaceAsset(updated: MaterialAsset) {
     setAssets((current) => current.map((asset) => asset.id === updated.id ? updated : asset));
+  }
+
+  function selectAsset(asset: MaterialAsset) {
+    const first = asset.segments[0];
+    setSelectedId(asset.id);
+    setSelectedSegmentId(first?.id ?? "");
+    setTagDraft(first?.user_tags.join(", ") ?? "");
+    setCollectionDraft(first?.collection_ids[0] ?? "");
+  }
+
+  function selectSegment(segment: MaterialSegment) {
+    setSelectedSegmentId(segment.id);
+    setTagDraft(segment.user_tags.join(", "));
+    setCollectionDraft(segment.collection_ids[0] ?? "");
+  }
+
+  async function refreshInsights() {
+    try { setInsights(await getMaterialLibraryInsights()); } catch { /* Keep last usable snapshot. */ }
   }
 
   async function scan() {
@@ -77,7 +144,10 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
     try {
       const result = await scanProductionMaterials();
       setAssets(result.assets);
-      if (!selectedId && result.assets[0]) setSelectedId(result.assets[0].id);
+      if (result.assets[0] && !result.assets.some((asset) => asset.id === selectedId)) {
+        selectAsset(result.assets[0]);
+      }
+      await refreshInsights();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "扫描素材失败");
     } finally {
@@ -89,9 +159,16 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
     if (!selected) return;
     setBusy("analyze");
     setError("");
-    try { replaceAsset(await analyzeProductionMaterial(selected.id)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "素材分析失败"); }
-    finally { setBusy(null); }
+    try {
+      const updated = await analyzeProductionMaterial(selected.id);
+      replaceAsset(updated);
+      if (updated.segments[0]) selectSegment(updated.segments[0]);
+      await refreshInsights();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "素材分析失败");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function review(status: "approved" | "rejected", role: "b_roll" | "exclude") {
@@ -107,6 +184,46 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
       }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "素材审核失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveSegmentOrganization() {
+    if (!selected || !selectedSegment) return;
+    setBusy("segment");
+    setError("");
+    try {
+      const tags = tagDraft.split(/[,\n]/).map((tag) => tag.trim()).filter(Boolean);
+      const updated = await updateProductionMaterialSegment(selected.id, selectedSegment.id, {
+        description: selectedSegment.description,
+        transcript: selectedSegment.transcript,
+        review_status: selectedSegment.review_status,
+        usage_role: selectedSegment.usage_role,
+        user_tags: Array.from(new Set(tags)),
+        collection_ids: collectionDraft ? [collectionDraft] : [],
+      });
+      replaceAsset(updated);
+      await refreshInsights();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "保存片段分类失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function addCollection() {
+    const name = newCollectionName.trim();
+    if (!name) return;
+    setBusy("collection");
+    setError("");
+    try {
+      const created = await createMaterialCollection({ name });
+      setCollections((current) => [...current, created]);
+      setCollectionDraft(created.id);
+      setNewCollectionName("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "新建标签夹失败");
     } finally {
       setBusy(null);
     }
@@ -131,7 +248,34 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
         <button className="is-primary" disabled={busy !== null} onClick={() => void review("approved", "b_roll")} type="button"><Check size={14} />批准为 B-roll</button>
         <button className="is-danger" disabled={busy !== null} onClick={() => void review("rejected", "exclude")} type="button"><X size={14} />排除素材</button>
       </div>
-      {selected.segments.length ? <div className="library-segments"><h3>识别片段</h3>{selected.segments.map((segment) => <button key={segment.id} type="button"><span>{duration(segment.start_seconds)}–{duration(segment.end_seconds)}</span><p>{segment.description || segment.transcript || "等待补充片段描述"}</p><ChevronRight size={14} /></button>)}</div> : null}
+      {selected.segments.length ? (
+        <div className="library-segments">
+          <h3>识别片段</h3>
+          {selected.segments.map((segment) => (
+            <button className={selectedSegment?.id === segment.id ? "is-selected" : ""} key={segment.id} onClick={() => selectSegment(segment)} type="button">
+              <span>{duration(segment.start_seconds)}–{duration(segment.end_seconds)}</span>
+              <p>{segment.description || segment.transcript || "等待补充片段描述"}</p>
+              <ChevronRight size={14} />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {selectedSegment ? (
+        <div className="library-segment-organizer">
+          <div className="library-segment-heading">
+            <strong>片段分类</strong>
+            <span>已用 {selectedSegment.usage_count} 次{selectedSegment.last_used_at ? ` · 最近 ${new Date(selectedSegment.last_used_at).toLocaleDateString("zh-CN")}` : ""}</span>
+          </div>
+          <div className="library-tag-list" aria-label="系统标签">
+            {selectedSegment.system_tags.map((tag) => <span key={tag}>{tag}</span>)}
+            {!selectedSegment.system_tags.length ? <small>等待画面理解生成系统标签</small> : null}
+          </div>
+          <label><span>我的标签</span><input onChange={(event) => setTagDraft(event.target.value)} placeholder="人物, 产品演示, 夜景" value={tagDraft} /></label>
+          <label><span>标签夹</span><select onChange={(event) => setCollectionDraft(event.target.value)} value={collectionDraft}><option value="">未归类</option>{collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}</select></label>
+          <div className="library-collection-create"><input aria-label="新标签夹名称" onChange={(event) => setNewCollectionName(event.target.value)} placeholder="新建标签夹" value={newCollectionName} /><button disabled={busy !== null || !newCollectionName.trim()} onClick={() => void addCollection()} type="button"><FolderPlus size={14} />新建</button></div>
+          <button className="library-segment-save" disabled={busy !== null} onClick={() => void saveSegmentOrganization()} type="button">{busy === "segment" ? "保存中…" : "保存片段分类"}</button>
+        </div>
+      ) : null}
     </div>
   ) : null;
 
@@ -139,15 +283,21 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
     <AppShell inspector={inspector} inspectorTitle="素材详情">
       <div className="modern-library">
         <header className="modern-library__header">
-          <div><span>素材资产</span><h1>素材库</h1><p>识别长视频中的可用片段，为自动混剪准备经过审核的 B-roll。</p></div>
+          <div><span>素材资产</span><h1>素材库</h1><p>理解长视频中的可用片段，管理覆盖、缺口和镜头复用。</p></div>
           <button className="modern-primary-button" disabled={busy !== null} onClick={() => void scan()} type="button">
             {busy === "scan" ? <LoaderCircle className="is-spinning" size={16} /> : <FolderSearch size={16} />}
             {busy === "scan" ? "正在扫描…" : "扫描素材目录"}
           </button>
         </header>
 
+        <section className="library-coverage" aria-labelledby="library-coverage-title">
+          <div className="library-coverage__summary"><span id="library-coverage-title">素材覆盖</span><strong>{insights.segment_count} 个片段</strong><small>{insights.asset_count} 个文件</small></div>
+          <div className="library-coverage__tags">{insights.tags.slice(0, 6).map((entry) => <span key={entry.tag}><strong>{entry.tag}</strong><small>{entry.segment_count} 段 · 已用 {entry.usage_count} 次</small></span>)}</div>
+          <div className="library-coverage__gaps"><span>建议补充</span><p>{insights.recommended_gaps.length ? insights.recommended_gaps.join("、") : "当前未发现明显缺口"}</p></div>
+        </section>
+
         <div className="library-toolbar">
-          <label className="library-search"><Search size={15} /><input aria-label="搜索素材" onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名、画面描述或转写…" value={query} /></label>
+          <label className="library-search"><Search size={15} /><input aria-label="搜索素材" onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件、画面、标签或标签夹…" value={query} /></label>
           <div className="library-filters" role="group" aria-label="审核状态筛选">
             {(["all", "raw", "approved", "rejected"] as Filter[]).map((value) => <button className={filter === value ? "is-active" : ""} key={value} onClick={() => setFilter(value)} type="button">{{ all: "全部", raw: "待审核", approved: "已批准", rejected: "已排除" }[value]}</button>)}
           </div>
@@ -159,14 +309,8 @@ export function MaterialLibraryWorkspace({ initialLibrary }: { initialLibrary: M
         {visible.length ? (
           <div className="library-grid">
             {visible.map((asset) => (
-              <button className={`library-card${selected?.id === asset.id ? " is-selected" : ""}`} key={asset.id} onClick={() => setSelectedId(asset.id)} type="button">
-                <span className="library-card__poster">
-                  <Film size={22} />
-                  <small>{duration(asset.duration_seconds)}</small>
-                  <i className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}>
-                    {asset.review_status === "approved" ? <ShieldCheck size={13} /> : asset.analysis_status === "ready" ? <Sparkles size={13} /> : <Clock3 size={13} />}
-                  </i>
-                </span>
+              <button className={`library-card${selected?.id === asset.id ? " is-selected" : ""}`} key={asset.id} onClick={() => selectAsset(asset)} type="button">
+                <span className="library-card__poster"><Film size={22} /><small>{duration(asset.duration_seconds)}</small><i className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}>{asset.review_status === "approved" ? <ShieldCheck size={13} /> : asset.analysis_status === "ready" ? <Sparkles size={13} /> : <Clock3 size={13} />}</i></span>
                 <span className="library-card__copy"><strong title={asset.file_name}>{asset.file_name}</strong><small>{roleLabel(asset)} · {reviewLabel(asset)}</small></span>
               </button>
             ))}

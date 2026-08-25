@@ -7,6 +7,7 @@ import {
   approveTopic,
   archiveSources,
   confirmMontageClips,
+  createVoiceProfile,
   createMontagePlan,
   createEpisodeDraft,
   createProductionBatch,
@@ -32,10 +33,12 @@ import {
   sendFeedback,
   selectEpisodeContentTemplate,
   scanProductionMaterials,
+  selectEpisodeVoice,
   syncSourceItems,
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
   updateProductionProfile,
+  updateVoiceProfile,
   updateProductionMaterialSegment,
   reviewProductionMaterial,
   renderMontagePlan,
@@ -940,6 +943,12 @@ export async function updateProductionProfileAction(formData: FormData) {
     await updateProductionProfile({
       workspace_name: requiredString(formData, "workspace_name"),
       brand_name: String(formData.get("brand_name") ?? "").trim(),
+      target_duration_min_seconds: Number(
+        requiredString(formData, "target_duration_min_seconds"),
+      ),
+      target_duration_max_seconds: Number(
+        requiredString(formData, "target_duration_max_seconds"),
+      ),
       brand_template_name: String(formData.get("brand_template_name") ?? "").trim(),
       brand_colors: String(formData.get("brand_colors") ?? "")
         .split(/[\n,]/)
@@ -961,13 +970,54 @@ export async function updateProductionProfileAction(formData: FormData) {
     });
   } catch (err) {
     redirectWithToast(
-      "/production",
+      "/settings",
       "error",
       `保存生产配置失败：${safeErrorMessage(err, "未知错误")}`,
     );
   }
+  revalidatePath("/settings");
   revalidatePath("/production");
-  redirectWithToast("/production", "success", "生产基础配置已保存");
+  redirectWithToast("/settings", "success", "生产基础配置已保存");
+}
+
+export async function createVoiceProfileAction(formData: FormData) {
+  try {
+    await createVoiceProfile({
+      name: requiredString(formData, "name").trim(),
+      reference_audio_path: requiredString(formData, "reference_audio_path").trim(),
+      reference_text: requiredString(formData, "reference_text").trim(),
+      consent_confirmed: formData.get("consent_confirmed") === "on",
+      is_default: formData.get("is_default") === "on",
+    });
+  } catch (err) {
+    redirectWithToast(
+      "/settings",
+      "error",
+      `添加声音失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/settings");
+  redirectWithToast("/settings", "success", "授权声音已加入声音库");
+}
+
+export async function setDefaultVoiceProfileAction(formData: FormData) {
+  try {
+    await updateVoiceProfile(requiredString(formData, "voice_profile_id"), {
+      name: requiredString(formData, "name"),
+      reference_audio_path: requiredString(formData, "reference_audio_path"),
+      reference_text: requiredString(formData, "reference_text"),
+      consent_confirmed: formData.get("consent_confirmed") === "true",
+      is_default: true,
+    });
+  } catch (err) {
+    redirectWithToast(
+      "/settings",
+      "error",
+      `切换默认声音失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/settings");
+  redirectWithToast("/settings", "success", "默认声音已切换");
 }
 
 export async function createProductionBatchAction(formData: FormData) {
@@ -1009,11 +1059,16 @@ export async function runProductionBatchAction(formData: FormData) {
 
 export async function createMontagePlanAction(formData: FormData) {
   const batchId = requiredString(formData, "batch_id");
+  const episodeId = requiredString(formData, "episode_id");
   let successKind: ToastKind = "success";
   let successMessage = "混剪时间线已生成";
   try {
+    await selectEpisodeVoice(
+      episodeId,
+      optionalString(formData, "voice_profile_id") ?? null,
+    );
     const plan = await createMontagePlan(batchId, {
-      episode_id: requiredString(formData, "episode_id"),
+      episode_id: episodeId,
       narration_audio_path: optionalString(formData, "narration_audio_path") ?? null,
     });
     successKind = plan.status === "waiting_for_user" ? "info" : "success";

@@ -99,4 +99,16 @@ describe("DirectoryPickerButton", () => {
     ) as HTMLInputElement;
     expect(textInput.value).toBe("");
   });
+
+  it("uses the desktop WAV picker for a voice reference", async () => {
+    const openWavFile = vi.fn().mockResolvedValue("/Volumes/voices/alice.wav");
+    window.electronAPI = { openWavFile };
+    const onPick = vi.fn();
+    render(<DirectoryPickerButton kind="wav" onPick={onPick} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择 WAV" }));
+
+    await waitFor(() => expect(onPick).toHaveBeenCalledWith("/Volumes/voices/alice.wav"));
+    expect(openWavFile).toHaveBeenCalledTimes(1);
+  });
 });

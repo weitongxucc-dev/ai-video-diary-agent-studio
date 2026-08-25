@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // File system
   openDirectory: () => ipcRenderer.invoke('open-directory'),
+  openWavFile: () => ipcRenderer.invoke('open-wav-file'),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
 
   // Help

@@ -19,13 +19,17 @@ import {
 } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { ProcessingRefresh } from "@/components/ProcessingRefresh";
-import { getProductionFoundation } from "@/lib/api.server";
-import type { ProductionBatch, ProductionFoundation } from "@/lib/types";
+import { getProductionFoundation, getVoiceProfiles } from "@/lib/api.server";
+import type { ProductionBatch, ProductionFoundation, VoiceProfile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-async function loadFoundation(): Promise<ProductionFoundation | null> {
-  try { return await getProductionFoundation(); } catch { return null; }
+async function loadFoundation(): Promise<{ foundation: ProductionFoundation | null; voices: VoiceProfile[] }> {
+  const [foundation, voiceCatalog] = await Promise.all([
+    getProductionFoundation().catch(() => null),
+    getVoiceProfiles().catch(() => ({ voices: [], total_count: 0 })),
+  ]);
+  return { foundation, voices: voiceCatalog.voices };
 }
 
 function state(batch: ProductionBatch) {
@@ -39,7 +43,7 @@ function state(batch: ProductionBatch) {
 
 export default async function ProductionPage({ searchParams }: { searchParams?: Promise<{ new?: string; batch?: string }> }) {
   const params = searchParams ? await searchParams : {};
-  const foundation = await loadFoundation();
+  const { foundation, voices } = await loadFoundation();
 
   if (!foundation) {
     return <AppShell><div className="production-offline"><AlertCircle size={21} /><div><h1>无法打开生产队列</h1><p>本地生产服务没有返回数据。修复运行环境后，已有批次会自动恢复。</p></div><Link href="/health">检查运行健康</Link></div></AppShell>;
@@ -120,7 +124,7 @@ export default async function ProductionPage({ searchParams }: { searchParams?: 
                       </div>
 
                       {batch.status !== "blocked" && batch.status !== "running" && availableEpisodes.length ? (
-                        <details className="queue-plan-create"><summary><Plus size={13} />为已确认文案生成混剪</summary><form action={createMontagePlanAction}><input name="batch_id" type="hidden" value={batch.id} /><label><span>选择文案</span><select name="episode_id" required>{availableEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.title}</option>)}</select></label><label><span>旁白音频路径（可选）</span><input name="narration_audio_path" /></label><button type="submit"><Sparkles size={14} />生成配音与时间线</button></form></details>
+                        <details className="queue-plan-create"><summary><Plus size={13} />为已确认文案生成混剪</summary><form action={createMontagePlanAction}><input name="batch_id" type="hidden" value={batch.id} /><label><span>选择文案</span><select name="episode_id" required>{availableEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.title}</option>)}</select></label><label><span>本次配音</span><select name="voice_profile_id"><option value="">使用默认声音</option>{voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}{voice.is_default ? "（默认）" : ""}</option>)}</select></label><label><span>已有旁白音频路径（可选）</span><input name="narration_audio_path" /></label><button type="submit"><Sparkles size={14} />生成配音与时间线</button></form></details>
                       ) : null}
                     </div>
                     {!selectedBatch ? <Link aria-label={`打开 ${batch.name}`} className="queue-row__open" href={`/production?batch=${batch.id}`}><ArrowRight size={16} /></Link> : null}
