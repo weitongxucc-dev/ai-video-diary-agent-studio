@@ -18,7 +18,11 @@ from app.auth import (
     SupabaseAuthContext,
     UnauthorizedError,
 )
-from app.config import Settings, runtime_env_file_path
+from app.config import (
+    Settings,
+    configure_process_temporary_directory,
+    runtime_env_file_path,
+)
 from app.content_templates import get_content_template, list_content_templates
 from app.creator_profile import (
     get_or_create_profile,
@@ -243,6 +247,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 settings = Settings.from_env()
+configure_process_temporary_directory(settings)
 set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
 model_catalog = ModelCatalog(
@@ -871,14 +876,33 @@ def get_material_library_insights(
     "/api/production/materials",
     response_model=MaterialLibraryResponse,
 )
-def list_production_materials(request: Request) -> MaterialLibraryResponse:
-    assets = production_repo.list_assets(current_workspace_id(request))
+def list_production_materials(
+    request: Request,
+    limit: int = 24,
+    offset: int = 0,
+    q: str | None = None,
+    review_status: str | None = None,
+) -> MaterialLibraryResponse:
+    if limit < 1 or limit > 100 or offset < 0:
+        raise HTTPException(status_code=422, detail="invalid material pagination")
+    if review_status not in {None, "raw", "approved", "rejected"}:
+        raise HTTPException(status_code=422, detail="invalid material review status")
+    assets, total = production_repo.list_assets_page(
+        current_workspace_id(request),
+        limit=limit,
+        offset=offset,
+        query=q,
+        review_status=review_status,
+    )
     return MaterialLibraryResponse(
         assets=[
             MaterialAssetResponse.model_validate(asset, from_attributes=True)
             for asset in assets
         ],
-        total_count=len(assets),
+        total_count=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(assets) < total,
     )
 
 
@@ -927,13 +951,16 @@ def stream_production_material(asset_id: str, request: Request) -> FileResponse:
 def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
     production_repo.scan_library(workspace_id)
-    assets = production_repo.list_assets(workspace_id)
+    assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
     return MaterialLibraryResponse(
         assets=[
             MaterialAssetResponse.model_validate(asset, from_attributes=True)
             for asset in assets
         ],
-        total_count=len(assets),
+        total_count=total,
+        limit=24,
+        offset=0,
+        has_more=len(assets) < total,
     )
 
 
@@ -1957,6 +1984,7 @@ def _reload_runtime_dependencies() -> None:
     global settings, repo, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, production_repo, montage_repo, montage_planner, montage_renderer, narration_generator, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
 
     settings = Settings.from_env()
+    configure_process_temporary_directory(settings)
     set_auth_enabled(settings.auth_enabled)
     auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)

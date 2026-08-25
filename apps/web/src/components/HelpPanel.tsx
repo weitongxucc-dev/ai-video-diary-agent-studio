@@ -46,7 +46,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
         },
         {
           title: "Agent 面板",
-          description: "DeepSeek / Hermes / Obsidian 三方实时状态",
+          description: "模型服务 / Hermes / Obsidian 实时状态",
         },
       ],
       shortcuts: [

@@ -28,6 +28,27 @@ def test_runtime_settings_updates_maps_known_fields_and_skips_blank_values():
     }
 
 
+def test_runtime_settings_supports_openai_compatible_provider_fields():
+    updates = runtime_settings_updates(
+        {
+            "llm_provider": " openrouter ",
+            "llm_api_key": " sk-or-secret ",
+            "llm_base_url": " https://openrouter.ai/api/v1 ",
+            "llm_model": " anthropic/claude-sonnet-4.6 ",
+            "temporary_root_path": " /Volumes/Media/AI视频日记/temporary ",
+        }
+    )
+
+    assert updates == {
+        "LLM_PROVIDER": "openrouter",
+        "LLM_API_KEY": "sk-or-secret",
+        "LLM_API_KEY_PROVIDER": "openrouter",
+        "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        "LLM_MODEL": "anthropic/claude-sonnet-4.6",
+        "TEMPORARY_ROOT_PATH": "/Volumes/Media/AI视频日记/temporary",
+    }
+
+
 def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
     from app.config import Settings
 

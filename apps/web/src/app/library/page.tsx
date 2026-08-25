@@ -13,7 +13,7 @@ import type {
 export const dynamic = "force-dynamic";
 
 export default async function LibraryPage() {
-  let library: MaterialLibrary = { assets: [], total_count: 0 };
+  let library: MaterialLibrary = { assets: [], total_count: 0, limit: 24, offset: 0, has_more: false };
   let insights: MaterialLibraryInsights = { asset_count: 0, segment_count: 0, tags: [], recommended_gaps: [] };
   let collections: MaterialCollections = { collections: [], total_count: 0 };
   [library, insights, collections] = await Promise.all([

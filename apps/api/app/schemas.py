@@ -391,6 +391,9 @@ class MaterialAssetResponse(BaseModel):
 class MaterialLibraryResponse(BaseModel):
     assets: list[MaterialAssetResponse]
     total_count: int
+    limit: int = Field(default=24, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    has_more: bool = False
 
 
 class MaterialCollectionResponse(BaseModel):
@@ -926,6 +929,10 @@ class RuntimeSettingsResponse(BaseModel):
 
 
 class RuntimeSettingsUpdateRequest(BaseModel):
+    llm_provider: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None
     product_hunt_token: str | None = None
@@ -944,6 +951,7 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     jianying_draft_root_path: str | None = None
     database_path: str | None = None
     model_root_path: str | None = None
+    temporary_root_path: str | None = None
     draft_background_music_path: str | None = None
     topic_source_urls: list[str] | None = None
     supabase_url: str | None = None

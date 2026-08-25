@@ -73,24 +73,27 @@ def _preflight_item(
 
 
 def _deepseek_check(settings: Settings) -> dict:
-    if settings.deepseek_api_key:
+    if settings.llm_configured:
         return _preflight_item(
             item_id="deepseek",
-            label="DeepSeek API",
+            label="AI 文案模型",
             status="ready",
-            summary="配置已提供，远端可用性由 /api/runtime/health 验证",
+            summary=(
+                f"配置已提供：{settings.effective_llm_provider} / "
+                f"{settings.effective_llm_model}；远端可用性由 /api/runtime/health 验证"
+            ),
             impact="AI 选题、脚本生成、语音指令草案均依赖此服务。",
             repair_action="无需处理。",
-            settings_target="deepseek_api_key",
+            settings_target="llm_api_key",
         )
     return _preflight_item(
         item_id="deepseek",
         label="云端文案增强",
         status="degraded",
-        summary="未配置 DeepSeek，使用本地来源摘要生成器",
+        summary="未配置外部模型，使用本地来源摘要生成器",
         impact="本地选题和文案仍可生成，表达丰富度可能较低。",
-        repair_action="可选：填写自有 DeepSeek API Key 开启云端增强。",
-        settings_target="deepseek_api_key",
+        repair_action="可选：在设置页连接自有模型服务开启增强。",
+        settings_target="llm_api_key",
     )
 
 

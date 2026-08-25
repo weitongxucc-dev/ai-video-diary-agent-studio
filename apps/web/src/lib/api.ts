@@ -65,7 +65,9 @@ const serverApiBase = process.env.API_PORT
   : (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000");
 
 export const API_BASE =
-  typeof window === "undefined" ? serverApiBase : (process.env.NEXT_PUBLIC_API_BASE ?? "");
+  typeof window === "undefined"
+    ? serverApiBase
+    : (process.env.NEXT_PUBLIC_API_BASE ?? "");
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
@@ -101,7 +103,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function getServerAuthorization(): Promise<string | null> {
-  if (typeof window !== "undefined" || !serverAuthorizationProvider) return null;
+  if (typeof window !== "undefined" || !serverAuthorizationProvider)
+    return null;
   return serverAuthorizationProvider();
 }
 
@@ -121,8 +124,20 @@ export function getProductionFoundation(): Promise<ProductionFoundation> {
   return request<ProductionFoundation>("/api/production/foundation");
 }
 
-export function getProductionMaterials(): Promise<MaterialLibrary> {
-  return request<MaterialLibrary>("/api/production/materials");
+export function getProductionMaterials(input?: {
+  limit?: number;
+  offset?: number;
+  query?: string;
+  reviewStatus?: string;
+}): Promise<MaterialLibrary> {
+  const query = new URLSearchParams();
+  if (input?.limit) query.set("limit", String(input.limit));
+  if (input?.offset) query.set("offset", String(input.offset));
+  if (input?.query) query.set("q", input.query);
+  if (input?.reviewStatus && input.reviewStatus !== "all")
+    query.set("review_status", input.reviewStatus);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return request<MaterialLibrary>(`/api/production/materials${suffix}`);
 }
 
 export function getMaterialLibraryInsights(): Promise<MaterialLibraryInsights> {
@@ -149,10 +164,15 @@ export function scanProductionMaterials(): Promise<MaterialLibrary> {
   });
 }
 
-export function analyzeProductionMaterial(assetId: string): Promise<MaterialAsset> {
-  return request<MaterialAsset>(`/api/production/materials/${assetId}/analyze`, {
-    method: "POST",
-  });
+export function analyzeProductionMaterial(
+  assetId: string,
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(
+    `/api/production/materials/${assetId}/analyze`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function reviewProductionMaterial(
@@ -245,10 +265,13 @@ export function selectEpisodeVoice(
   episodeId: string,
   voiceProfileId: string | null,
 ): Promise<EpisodeVoiceSelection> {
-  return request<EpisodeVoiceSelection>(`/api/production/episodes/${episodeId}/voice`, {
-    method: "PUT",
-    body: JSON.stringify({ voice_profile_id: voiceProfileId }),
-  });
+  return request<EpisodeVoiceSelection>(
+    `/api/production/episodes/${episodeId}/voice`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ voice_profile_id: voiceProfileId }),
+    },
+  );
 }
 
 export function createProductionBatch(input: {
@@ -275,7 +298,9 @@ export function getMontagePlan(planId: string): Promise<MontagePlan> {
   return request<MontagePlan>(`/api/production/montage-plans/${planId}`);
 }
 
-export function getMontagePlans(batchId: string): Promise<{ plans: MontagePlan[]; total_count: number }> {
+export function getMontagePlans(
+  batchId: string,
+): Promise<{ plans: MontagePlan[]; total_count: number }> {
   return request<{ plans: MontagePlan[]; total_count: number }>(
     `/api/production/batches/${batchId}/montage-plans`,
   );
@@ -307,38 +332,56 @@ export function updateMontageClip(
   );
 }
 
-export function reorderMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
-  return request<MontagePlan>(`/api/production/montage-plans/${planId}/clips/order`, {
-    method: "PUT",
-    body: JSON.stringify({ clip_ids: clipIds }),
-  });
+export function reorderMontageClips(
+  planId: string,
+  clipIds: string[],
+): Promise<MontagePlan> {
+  return request<MontagePlan>(
+    `/api/production/montage-plans/${planId}/clips/order`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ clip_ids: clipIds }),
+    },
+  );
 }
 
 export function createMontagePlan(
   batchId: string,
   input: { episode_id: string; narration_audio_path: string | null },
 ): Promise<MontagePlan> {
-  return request<MontagePlan>(`/api/production/batches/${batchId}/montage-plans`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request<MontagePlan>(
+    `/api/production/batches/${batchId}/montage-plans`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
-export function confirmMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
-  return request<MontagePlan>(`/api/production/montage-plans/${planId}/confirm`, {
-    method: "POST",
-    body: JSON.stringify({ clip_ids: clipIds }),
-  });
+export function confirmMontageClips(
+  planId: string,
+  clipIds: string[],
+): Promise<MontagePlan> {
+  return request<MontagePlan>(
+    `/api/production/montage-plans/${planId}/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify({ clip_ids: clipIds }),
+    },
+  );
 }
 
 export function renderMontagePlan(
   planId: string,
   narrationAudioPath: string,
 ): Promise<MontagePlan> {
-  return request<MontagePlan>(`/api/production/montage-plans/${planId}/render`, {
-    method: "POST",
-    body: JSON.stringify({ narration_audio_path: narrationAudioPath }),
-  });
+  return request<MontagePlan>(
+    `/api/production/montage-plans/${planId}/render`,
+    {
+      method: "POST",
+      body: JSON.stringify({ narration_audio_path: narrationAudioPath }),
+    },
+  );
 }
 
 export function previewVoiceCommand(
@@ -449,10 +492,15 @@ export function syncSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/sync", { method: "POST" });
 }
 
-export function retrySourceSync(sourceKey: string): Promise<SourceSyncRetryResult> {
-  return request<SourceSyncRetryResult>(`/api/sources/${encodeURIComponent(sourceKey)}/retry`, {
-    method: "POST",
-  });
+export function retrySourceSync(
+  sourceKey: string,
+): Promise<SourceSyncRetryResult> {
+  return request<SourceSyncRetryResult>(
+    `/api/sources/${encodeURIComponent(sourceKey)}/retry`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function ingestManualLink(url: string): Promise<SourceItems> {
@@ -462,8 +510,12 @@ export function ingestManualLink(url: string): Promise<SourceItems> {
   });
 }
 
-export function getTopicEvidence(episodeId: string): Promise<TopicEvidenceList> {
-  return request<TopicEvidenceList>(`/api/episodes/${episodeId}/topic-evidence`);
+export function getTopicEvidence(
+  episodeId: string,
+): Promise<TopicEvidenceList> {
+  return request<TopicEvidenceList>(
+    `/api/episodes/${episodeId}/topic-evidence`,
+  );
 }
 
 export function getFeedbackSummary(): Promise<FeedbackSummary> {
@@ -481,38 +533,36 @@ export function getPreferenceCards(): Promise<PreferenceCards> {
 export function getPreferenceEvidence(
   preferenceId: string,
 ): Promise<PreferenceEvidence> {
-  return request<PreferenceEvidence>(`/api/preferences/cards/${encodeURIComponent(preferenceId)}/evidence`);
+  return request<PreferenceEvidence>(
+    `/api/preferences/cards/${encodeURIComponent(preferenceId)}/evidence`,
+  );
 }
 
 export function disablePreferenceCard(
   preferenceId: string,
 ): Promise<Preferences> {
-  return request<Preferences>(
-    "/api/preferences/disable",
-    {
-      method: "PATCH",
-      body: JSON.stringify({ signal: preferenceId }),
-    },
-  );
+  return request<Preferences>("/api/preferences/disable", {
+    method: "PATCH",
+    body: JSON.stringify({ signal: preferenceId }),
+  });
 }
 
 export function restorePreferenceCard(
   preferenceId: string,
 ): Promise<Preferences> {
-  return request<Preferences>(
-    "/api/preferences/restore",
-    {
-      method: "PATCH",
-      body: JSON.stringify({ signal: preferenceId }),
-    },
-  );
+  return request<Preferences>("/api/preferences/restore", {
+    method: "PATCH",
+    body: JSON.stringify({ signal: preferenceId }),
+  });
 }
 
 export function getDraftStatus(): Promise<DraftStatus> {
   return request<DraftStatus>("/api/drafts/status");
 }
 
-export function createDraftPackage(videoFileName?: string): Promise<DraftPackage> {
+export function createDraftPackage(
+  videoFileName?: string,
+): Promise<DraftPackage> {
   return request<DraftPackage>("/api/drafts/package", {
     method: "POST",
     body: JSON.stringify({ video_file_name: videoFileName ?? null }),
@@ -530,11 +580,17 @@ export function getPendingVideos(): Promise<PendingVideo[]> {
   return request<PendingVideo[]>("/api/videos/pending");
 }
 
-export function getProductionChain(episodeId: string): Promise<ProductionChain> {
-  return request<ProductionChain>(`/api/episodes/${episodeId}/production-chain`);
+export function getProductionChain(
+  episodeId: string,
+): Promise<ProductionChain> {
+  return request<ProductionChain>(
+    `/api/episodes/${episodeId}/production-chain`,
+  );
 }
 
-export function getSourceFileStates(episodeId: string): Promise<SourceFileStates> {
+export function getSourceFileStates(
+  episodeId: string,
+): Promise<SourceFileStates> {
   return request<SourceFileStates>(
     `/api/episodes/${episodeId}/source-file-states`,
   );
@@ -550,7 +606,9 @@ export function archiveSources(
   });
 }
 
-export function getEpisodeRetakeReport(episodeId: string): Promise<RetakeReport> {
+export function getEpisodeRetakeReport(
+  episodeId: string,
+): Promise<RetakeReport> {
   return request<RetakeReport>(`/api/episodes/${episodeId}/retake-report`);
 }
 
@@ -654,10 +712,13 @@ export function processAdHocEpisodeVideoBatch(
   episodeId: string,
   fileNames: string[],
 ): Promise<Episode> {
-  return request<Episode>(`/api/episodes/${episodeId}/process-ad-hoc-video-batch`, {
-    method: "POST",
-    body: JSON.stringify({ file_names: fileNames }),
-  });
+  return request<Episode>(
+    `/api/episodes/${episodeId}/process-ad-hoc-video-batch`,
+    {
+      method: "POST",
+      body: JSON.stringify({ file_names: fileNames }),
+    },
+  );
 }
 
 export function createEpisodeDraft(episodeId: string): Promise<Episode> {
@@ -701,7 +762,9 @@ export function updatePublishMetrics(
   });
 }
 
-export function getEpisodeHistory(status?: EpisodeStatus): Promise<EpisodeHistory> {
+export function getEpisodeHistory(
+  status?: EpisodeStatus,
+): Promise<EpisodeHistory> {
   const params = new URLSearchParams();
   if (status) {
     params.set("status", status);
@@ -714,7 +777,9 @@ export function getEpisodeHistory(status?: EpisodeStatus): Promise<EpisodeHistor
 // TODO(backend): dedicated publish-feedback endpoint is not implemented.
 // The Episode response already carries the latest publish fields, so
 // callers can read them from the Episode directly.
-export function getPublishFeedback(episodeId: string): Promise<PublishFeedback> {
+export function getPublishFeedback(
+  episodeId: string,
+): Promise<PublishFeedback> {
   return Promise.reject(
     new Error(`publish-feedback 端点暂未实现（${episodeId}）`),
   );
@@ -865,9 +930,11 @@ export async function transcribeVoice(
 
   const payload = (await response.json()) as Partial<VoiceTranscribeResult>;
   return {
-    transcript: typeof payload.transcript === "string" ? payload.transcript : "",
+    transcript:
+      typeof payload.transcript === "string" ? payload.transcript : "",
     confidence:
-      typeof payload.confidence === "number" && Number.isFinite(payload.confidence)
+      typeof payload.confidence === "number" &&
+      Number.isFinite(payload.confidence)
         ? payload.confidence
         : 0,
     segments: Array.isArray(payload.segments)
@@ -876,14 +943,21 @@ export async function transcribeVoice(
             if (!segment || typeof segment !== "object") {
               return null;
             }
-            const s = segment as { start?: unknown; end?: unknown; text?: unknown };
+            const s = segment as {
+              start?: unknown;
+              end?: unknown;
+              text?: unknown;
+            };
             return {
               start: typeof s.start === "number" ? s.start : 0,
               end: typeof s.end === "number" ? s.end : 0,
               text: typeof s.text === "string" ? s.text : "",
             };
           })
-          .filter((segment): segment is NonNullable<typeof segment> => segment !== null)
+          .filter(
+            (segment): segment is NonNullable<typeof segment> =>
+              segment !== null,
+          )
       : [],
   };
 }

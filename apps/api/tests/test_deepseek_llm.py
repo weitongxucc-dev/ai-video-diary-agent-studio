@@ -105,6 +105,38 @@ def test_settings_status_reports_deepseek_without_exposing_key():
     assert "secret" not in json.dumps(status, ensure_ascii=False)
 
 
+def test_settings_status_reports_selected_openai_compatible_provider():
+    settings = Settings(
+        llm_provider="openrouter",
+        llm_api_key="secret",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_model="openai/gpt-5.4",
+    )
+
+    status = settings.public_status()
+
+    assert status["llm"] == {
+        "provider": "openrouter",
+        "configured": True,
+        "model": "openai/gpt-5.4",
+        "base_url": "https://openrouter.ai/api/v1",
+    }
+    assert "secret" not in json.dumps(status, ensure_ascii=False)
+
+
+def test_model_key_is_not_reused_after_provider_switch():
+    settings = Settings(
+        llm_provider="openai",
+        llm_api_key="deepseek-secret",
+        llm_api_key_provider="deepseek",
+        llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-5.4",
+    )
+
+    assert settings.effective_llm_api_key is None
+    assert settings.llm_configured is False
+
+
 def test_deepseek_script_generator_regenerates_one_section():
     captured = {}
 

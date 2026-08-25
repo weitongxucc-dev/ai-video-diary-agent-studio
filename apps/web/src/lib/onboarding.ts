@@ -9,7 +9,8 @@ import type {
 
 export type OnboardingChecklistId = string;
 
-export type OnboardingChecklistState = "ready" | "attention" | "missing" | "unknown";
+export type OnboardingChecklistState =
+  "ready" | "attention" | "missing" | "unknown";
 
 export type OnboardingChecklistEntry = {
   id: OnboardingChecklistId;
@@ -62,7 +63,10 @@ export type OnboardingSnapshot = {
   generatedAt: string;
 };
 
-const HEALTH_TONE: Record<RuntimeHealthItem["status"], OnboardingChecklistState> = {
+const HEALTH_TONE: Record<
+  RuntimeHealthItem["status"],
+  OnboardingChecklistState
+> = {
   ready: "ready",
   missing: "missing",
   degraded: "attention",
@@ -98,7 +102,10 @@ function pathConfigured(item: { configured: boolean } | undefined): boolean {
   return Boolean(item?.configured);
 }
 
-function statusPathConfigured(path: string | null | undefined, exists: boolean): boolean {
+function statusPathConfigured(
+  path: string | null | undefined,
+  exists: boolean,
+): boolean {
   if (!path || path.length === 0) {
     return false;
   }
@@ -157,11 +164,18 @@ export function buildOnboardingSnapshot(input: {
 }): OnboardingSnapshot {
   const { setup, health, settings, status, settingsError } = input;
 
-  const deepseek = settingsValue(settings, "DEEPSEEK_API_KEY");
+  const modelApiKey = settingsValue(settings, "LLM_API_KEY");
+  const legacyDeepseekKey = settingsValue(settings, "DEEPSEEK_API_KEY");
+  const configuredModelKey = modelApiKey.configured
+    ? modelApiKey
+    : legacyDeepseekKey;
   const productHunt = settingsValue(settings, "PRODUCT_HUNT_TOKEN");
   const tencentSecretId = settingsValue(settings, "TENCENTCLOUD_SECRET_ID");
   const tencentSecretKey = settingsValue(settings, "TENCENTCLOUD_SECRET_KEY");
-  const localWhisperPython = settingsValue(settings, "LOCAL_WHISPER_PYTHON_PATH");
+  const localWhisperPython = settingsValue(
+    settings,
+    "LOCAL_WHISPER_PYTHON_PATH",
+  );
   const localWhisperModel = settingsValue(settings, "LOCAL_WHISPER_MODEL_PATH");
   const draftOutput = settingsValue(settings, "DRAFT_OUTPUT_PATH");
   const jianyingRoot = settingsValue(settings, "JIANYING_DRAFT_ROOT_PATH");
@@ -181,12 +195,16 @@ export function buildOnboardingSnapshot(input: {
   const ffmpegConfigured = status?.video.ffmpeg_available ?? false;
 
   const modelEntry: OnboardingChecklistEntry = (() => {
-    const llmHealth = pickHealthItem(health, (item) =>
-      item.id.toLowerCase().includes("llm") ||
-      item.id.toLowerCase().includes("deepseek") ||
-      item.label.includes("DeepSeek"),
+    const llmHealth = pickHealthItem(
+      health,
+      (item) =>
+        item.id.toLowerCase().includes("llm") ||
+        item.id.toLowerCase().includes("deepseek") ||
+        item.label.includes("DeepSeek"),
     );
-    const llmMissing = setupMissing(setup, "deepseek_api_key");
+    const llmMissing =
+      setupMissing(setup, "llm_api_key") ??
+      setupMissing(setup, "deepseek_api_key");
 
     let state: OnboardingChecklistState = "unknown";
     let detail = "尚未读取 AI 模型状态。";
@@ -194,29 +212,32 @@ export function buildOnboardingSnapshot(input: {
     if (llmMissing !== null) {
       state = llmMissing ? "missing" : "ready";
       detail = llmMissing
-        ? "请在运行配置中填入 DeepSeek API Key。"
-        : "DeepSeek API Key 已配置。";
+        ? "请在运行配置中连接模型供应商。"
+        : "模型 API 连接已配置。";
     } else if (llmHealth) {
       state = HEALTH_TONE[llmHealth.status];
       detail = llmHealth.reason;
-    } else if (deepseek.configured) {
+    } else if (configuredModelKey.configured) {
       state = "ready";
-      detail = "DeepSeek API Key 已配置。";
-    } else if (!deepseek.configured) {
+      detail = "模型 API 连接已配置。";
+    } else if (!configuredModelKey.configured) {
       state = "missing";
-      detail = "请在运行配置中填入 DeepSeek API Key。";
+      detail = "请在运行配置中连接模型供应商。";
     }
 
     return buildEntry({
       id: "deepseek_api_key",
-      title: "DeepSeek API Key",
+      title: "模型与 API",
       detail,
       impact: "没有可用模型，AI 生成、语音转写、运行健康都会失败。",
       state,
-      fixHref: "/settings",
-      fixLabel: "去设置 API Key",
+      fixHref: "/settings?section=model",
+      fixLabel: "连接模型",
       isSecret: true,
-      secretSummary: secretSummary("DeepSeek API Key", deepseek.configured),
+      secretSummary: secretSummary(
+        "模型 API Key",
+        configuredModelKey.configured,
+      ),
     });
   })();
 
@@ -305,7 +326,9 @@ export function buildOnboardingSnapshot(input: {
         impact: "已具备剪映素材包输出能力。",
         state: jianyingRoot.configured ? "ready" : "attention",
         fixHref: "/settings",
-        fixLabel: jianyingRoot.configured ? "查看路径" : "去补 jianying_draft_root_path",
+        fixLabel: jianyingRoot.configured
+          ? "查看路径"
+          : "去补 jianying_draft_root_path",
         isSecret: false,
         secretSummary: `剪映素材包：${jianyingRoot.configured ? "已配置" : "draft_output 已配置 / 剪映根目录未配置"}`,
       });
@@ -326,7 +349,8 @@ export function buildOnboardingSnapshot(input: {
     return buildEntry({
       id: "draft_output",
       title: "剪映素材包输出",
-      detail: "需在设置中填写 draft_output_path，用于把素材包自动落到剪映目录。",
+      detail:
+        "需在设置中填写 draft_output_path，用于把素材包自动落到剪映目录。",
       impact: "没有输出目录，剪映素材包无法落地。",
       state: "missing",
       fixHref: "/settings",
@@ -379,15 +403,17 @@ export function buildOnboardingSnapshot(input: {
   });
 
   const asrEntry: OnboardingChecklistEntry = (() => {
-    const hasTencent = tencentSecretId.configured && tencentSecretKey.configured;
+    const hasTencent =
+      tencentSecretId.configured && tencentSecretKey.configured;
     const hasLocal =
       localWhisperPython.configured && localWhisperModel.configured;
     if (hasTencent || hasLocal) {
-      const provider = hasTencent && hasLocal
-        ? "腾讯云 ASR + 本地 Whisper"
-        : hasTencent
-          ? "腾讯云 ASR"
-          : "本地 Whisper";
+      const provider =
+        hasTencent && hasLocal
+          ? "腾讯云 ASR + 本地 Whisper"
+          : hasTencent
+            ? "腾讯云 ASR"
+            : "本地 Whisper";
       return buildEntry({
         id: "tencentcloud_asr",
         title: "语音识别 (ASR)",
@@ -403,7 +429,8 @@ export function buildOnboardingSnapshot(input: {
     return buildEntry({
       id: "tencentcloud_asr",
       title: "语音识别 (ASR)",
-      detail: "腾讯云 SecretId/SecretKey 与本地 Whisper 路径都未配置，语音指令无法转写。",
+      detail:
+        "腾讯云 SecretId/SecretKey 与本地 Whisper 路径都未配置，语音指令无法转写。",
       impact: "没有 ASR，语音指令功能会完全不可用。",
       state: "missing",
       fixHref: "/settings",
@@ -416,9 +443,10 @@ export function buildOnboardingSnapshot(input: {
   const localWhisperEntry: OnboardingChecklistEntry = buildEntry({
     id: "local_whisper",
     title: "本地 Whisper 路径",
-    detail: localWhisperPython.configured && localWhisperModel.configured
-      ? "已配置 Python 解释器和模型路径。腾讯云不可用时会降级到本地。"
-      : "本地 Whisper 路径未填写，会依赖腾讯云。",
+    detail:
+      localWhisperPython.configured && localWhisperModel.configured
+        ? "已配置 Python 解释器和模型路径。腾讯云不可用时会降级到本地。"
+        : "本地 Whisper 路径未填写，会依赖腾讯云。",
     impact: "没有本地 Whisper，离线场景下无法转写。",
     state:
       localWhisperPython.configured && localWhisperModel.configured
@@ -462,7 +490,8 @@ export function buildOnboardingSnapshot(input: {
       {
         id: "preflight",
         title: "首次启动预检",
-        description: "这些结果来自本机 API 的实时检查；所有阻断项修复前不能完成首次启动。",
+        description:
+          "这些结果来自本机 API 的实时检查；所有阻断项修复前不能完成首次启动。",
         entries: input.preflight.checks.map((check) => {
           const state: OnboardingChecklistState =
             check.status === "ready" || check.status === "not_applicable"
@@ -487,8 +516,12 @@ export function buildOnboardingSnapshot(input: {
   }
 
   const allEntries = sections.flatMap((section) => section.entries);
-  const readyCount = allEntries.filter((entry) => entry.state === "ready").length;
-  const blockingCount = allEntries.filter((entry) => entry.state === "missing").length;
+  const readyCount = allEntries.filter(
+    (entry) => entry.state === "ready",
+  ).length;
+  const blockingCount = allEntries.filter(
+    (entry) => entry.state === "missing",
+  ).length;
   const attentionCount = allEntries.filter(
     (entry) => entry.state === "attention" || entry.state === "unknown",
   ).length;
@@ -496,9 +529,10 @@ export function buildOnboardingSnapshot(input: {
   const percent = total === 0 ? 0 : Math.round((readyCount / total) * 100);
 
   return {
-    ready: input.preflight === undefined
-      ? blockingCount === 0 && attentionCount === 0
-      : input.preflight?.overall === "ready",
+    ready:
+      input.preflight === undefined
+        ? blockingCount === 0 && attentionCount === 0
+        : input.preflight?.overall === "ready",
     completion: { ready: readyCount, total, percent },
     blockingCount,
     attentionCount,

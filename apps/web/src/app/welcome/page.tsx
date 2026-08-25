@@ -23,10 +23,7 @@ import {
   buildOnboardingSnapshot,
   type OnboardingSnapshot,
 } from "@/lib/onboarding";
-import type {
-  RuntimeSettings,
-  RuntimeSettingsUpdate,
-} from "@/lib/types";
+import type { RuntimeSettings, RuntimeSettingsUpdate } from "@/lib/types";
 
 type StepId = "welcome" | "model" | "paths" | "verify";
 
@@ -48,7 +45,7 @@ const STEP_ORDER: StepDef[] = [
     id: "model",
     index: 2,
     title: "AI 模型",
-    caption: "配置 DeepSeek",
+    caption: "连接模型服务",
   },
   {
     id: "paths",
@@ -143,7 +140,7 @@ export default function WelcomePage() {
     return () => {
       cancelled = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const currentStepIndex = useMemo(
@@ -167,10 +164,11 @@ export default function WelcomePage() {
     try {
       await updateRuntimeSettings({ deepseek_api_key: trimmed });
       const health = await getRuntimeHealth();
-      const llmItem = health.items.find((item) =>
-        item.id.toLowerCase().includes("llm") ||
-        item.id.toLowerCase().includes("deepseek") ||
-        item.label.includes("DeepSeek"),
+      const llmItem = health.items.find(
+        (item) =>
+          item.id.toLowerCase().includes("llm") ||
+          item.id.toLowerCase().includes("deepseek") ||
+          item.label.includes("DeepSeek"),
       );
       if (llmItem && llmItem.status === "ready") {
         setKeyFeedback({ tone: "green", text: "DeepSeek 配置通过验证。" });
@@ -379,7 +377,10 @@ export default function WelcomePage() {
               className="pixel-button"
               disabled={currentStepIndex >= stepDefs.length - 1}
               onClick={() =>
-                gotoStep(stepDefs[Math.min(stepDefs.length - 1, currentStepIndex + 1)].id)
+                gotoStep(
+                  stepDefs[Math.min(stepDefs.length - 1, currentStepIndex + 1)]
+                    .id,
+                )
               }
               type="button"
             >
@@ -399,8 +400,10 @@ function StepWelcome({ onStart }: { onStart: () => void }) {
         <span className="section-kicker">Step 1</span>
         <h2>欢迎来到 AI 视频日记</h2>
         <p>
-          Agent Studio 帮助创作者把 Obsidian / Hermes / 外链素材整理成口播稿、剪辑计划与剪映草稿。
-          首次运行需要完成三件事：配置大模型、绑定 Obsidian Vault 与视频目录、确认运行环境。
+          Agent Studio 帮助创作者把 Obsidian / Hermes /
+          外链素材整理成口播稿、剪辑计划与剪映草稿。
+          首次运行需要完成三件事：配置大模型、绑定 Obsidian Vault
+          与视频目录、确认运行环境。
         </p>
       </div>
       <ul className="welcome-feature-list">
@@ -456,11 +459,14 @@ function StepModel({
     <div className="welcome-step welcome-step-model">
       <div>
         <span className="section-kicker">Step 2</span>
-        <h2>AI 模型 · DeepSeek</h2>
+        <h2>连接 AI 模型</h2>
         <p>
-          填入你的 DeepSeek API Key。点击「验证并保存」会写入配置并立刻请求{" "}
-          <code>/api/runtime/health</code> 检查 llm 项是否就绪。
+          可在这里快速连接 DeepSeek。使用 OpenAI、OpenRouter、Gemini、Ollama
+          或自定义接口，请进入完整模型设置。
         </p>
+        <Link className="welcome-inline-link" href="/settings?section=model">
+          选择其他模型供应商 →
+        </Link>
       </div>
 
       <div className="welcome-field">
@@ -570,9 +576,7 @@ function StepPaths({
           onChange={(value) =>
             onChange({ ...paths, jianyingDraftRootPath: value })
           }
-          onPick={(path) =>
-            onChange({ ...paths, jianyingDraftRootPath: path })
-          }
+          onPick={(path) => onChange({ ...paths, jianyingDraftRootPath: path })}
           placeholder="/Users/you/Library/.../JianyingPro"
           value={paths.jianyingDraftRootPath}
         />
@@ -663,7 +667,11 @@ function StepVerify({
         <div className="welcome-verify-status error">
           <strong>无法验证</strong>
           <span>{state.message}</span>
-          <button className="pixel-button secondary" onClick={onRetry} type="button">
+          <button
+            className="pixel-button secondary"
+            onClick={onRetry}
+            type="button"
+          >
             重试
           </button>
         </div>
@@ -690,10 +698,18 @@ function StepVerify({
       </label>
 
       <div className="welcome-step-actions">
-        <button className="pixel-button secondary" onClick={onRetry} type="button">
+        <button
+          className="pixel-button secondary"
+          onClick={onRetry}
+          type="button"
+        >
           重新检查
         </button>
-        <button className="pixel-button secondary" onClick={onSkip} type="button">
+        <button
+          className="pixel-button secondary"
+          onClick={onSkip}
+          type="button"
+        >
           先跳过
         </button>
         <button
