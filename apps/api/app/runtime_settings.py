@@ -35,7 +35,6 @@ FIELD_TO_ENV = {
     "draft_background_music_path": "DRAFT_BACKGROUND_MUSIC_PATH",
     "supabase_url": "SUPABASE_URL",
     "supabase_publishable_key": "SUPABASE_PUBLISHABLE_KEY",
-    "supabase_secret_key": "SUPABASE_SECRET_KEY",
     "supabase_jwt_audience": "SUPABASE_JWT_AUDIENCE",
 }
 

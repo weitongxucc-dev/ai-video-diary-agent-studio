@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
@@ -192,7 +193,9 @@ export function AppShell({
         <div className="desktop-sidebar__traffic-spacer" aria-hidden="true" />
         <div className="desktop-sidebar__brand-row">
           <Link aria-label="返回首页" className="desktop-brand" href="/">
-            <span className="desktop-brand__mark"><Sparkles size={15} /></span>
+            <span className="desktop-brand__mark">
+              <Image alt="" aria-hidden height={18} src="/favicon.svg" width={18} />
+            </span>
             <span>AI 视频日记</span>
           </Link>
           <button aria-label="搜索" className="shell-icon-button" type="button">

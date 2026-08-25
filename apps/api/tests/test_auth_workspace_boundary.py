@@ -89,7 +89,6 @@ def _auth_enabled_settings(tmp_path) -> Settings:
     return Settings(
         deepseek_api_key="sk-test",
         supabase_url="https://example.supabase.co",
-        supabase_secret_key="service-role-secret",
         supabase_publishable_key="anon-key",
         database_path=str(tmp_path / "db.sqlite"),
     )
@@ -111,7 +110,7 @@ def auth_ctx(tmp_path):
     ctx._jwks_client = lambda: _fake_jwks_client(public_pem)
     # Product-endpoint tests that are unrelated to onboarding explicitly model
     # an already-completed workspace. Tests for the completion gate override it.
-    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
+    ctx.is_onboarding_complete = lambda user_id, workspace_id, access_token: True
     return ctx, settings, private_pem, public_pem
 
 
@@ -215,8 +214,7 @@ def test_resolve_workspace_prefers_owner_role(auth_ctx):
             return json.loads(self.content)
 
     with mock.patch("app.auth.httpx.get", return_value=FakeResponse()):
-        assert ctx.resolve_workspace_id("user-1") == "ws-owner"
-
+        assert ctx.resolve_workspace_id("user-1", "user-token") == "ws-owner"
 
 def test_resolve_workspace_returns_none_when_no_membership(auth_ctx):
     ctx, _, _, _ = auth_ctx
@@ -229,7 +227,7 @@ def test_resolve_workspace_returns_none_when_no_membership(auth_ctx):
             return json.loads(self.content)
 
     with mock.patch("app.auth.httpx.get", return_value=FakeResponse()):
-        assert ctx.resolve_workspace_id("user-1") is None
+        assert ctx.resolve_workspace_id("user-1", "user-token") is None
 
 
 def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
@@ -242,35 +240,27 @@ def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
     with mock.patch("app.auth.httpx.get", return_value=FakeResponse()), pytest.raises(
         ForbiddenError
     ):
-        ctx.resolve_workspace_id("user-1")
+        ctx.resolve_workspace_id("user-1", "user-token")
 
 
-def test_complete_onboarding_uses_trusted_service_key_and_scoped_row(auth_ctx):
+def test_complete_onboarding_uses_user_token_and_scoped_rpc(auth_ctx):
     ctx, _, _, _ = auth_ctx
 
     class FakeResponse:
         status_code = 200
-        content = b'[{"workspace_id":"ws-a"}]'
+        content = b"true"
 
         def json(self):
             return json.loads(self.content)
 
-    with mock.patch("app.auth.httpx.patch", return_value=FakeResponse()) as patch:
-        ctx.complete_onboarding("user-a", "ws-a")
+    with mock.patch("app.auth.httpx.post", return_value=FakeResponse()) as post:
+        ctx.complete_onboarding("user-a", "ws-a", "user-token")
 
-    _, kwargs = patch.call_args
-    assert kwargs["headers"]["Authorization"] == "Bearer service-role-secret"
-    assert kwargs["params"] == {
-        "workspace_id": "eq.ws-a",
-        "user_id": "eq.user-a",
-        "select": "workspace_id",
-    }
-    assert kwargs["json"]["identity_complete"] is True
-    assert kwargs["json"]["local_paths_complete"] is True
-    assert kwargs["json"]["ai_connection_complete"] is True
-    assert kwargs["json"]["health_check_complete"] is True
-    assert kwargs["json"]["first_episode_complete"] is True
-    assert kwargs["json"]["completed_at"]
+    args, kwargs = post.call_args
+    assert args[0].endswith("/rest/v1/rpc/complete_own_onboarding")
+    assert kwargs["headers"]["apikey"] == "anon-key"
+    assert kwargs["headers"]["Authorization"] == "Bearer user-token"
+    assert kwargs["json"] == {"target_workspace_id": "ws-a"}
 
 
 def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
@@ -287,7 +277,7 @@ def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
     # default to verify the trusted lookup's request scope.
     ctx.is_onboarding_complete = SupabaseAuthContext.is_onboarding_complete.__get__(ctx)
     with mock.patch("app.auth.httpx.get", return_value=FakeResponse()) as get:
-        assert ctx.is_onboarding_complete("user-a", "ws-a") is True
+        assert ctx.is_onboarding_complete("user-a", "ws-a", "user-token") is True
 
     _, kwargs = get.call_args
     assert kwargs["params"] == {
@@ -295,6 +285,7 @@ def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
         "user_id": "eq.user-a",
         "select": "completed_at",
     }
+    assert kwargs["headers"]["Authorization"] == "Bearer user-token"
 
 
 # ── Middleware: 401 vs 403 vs 200 ───────────────────────────────────────
@@ -336,7 +327,7 @@ def test_protected_endpoint_invalid_token_401(auth_ctx, monkeypatch):
 
 def test_protected_endpoint_no_workspace_403(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: None
+    ctx.resolve_workspace_id = lambda user_id, access_token: None
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
 
@@ -352,8 +343,8 @@ def test_protected_endpoint_no_workspace_403(auth_ctx, monkeypatch):
 
 def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
-    ctx.is_onboarding_complete = lambda user_id, workspace_id: True
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id, access_token: True
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
@@ -373,8 +364,8 @@ def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
 
 def test_incomplete_onboarding_cannot_call_product_api(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
-    ctx.is_onboarding_complete = lambda user_id, workspace_id: False
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
+    ctx.is_onboarding_complete = lambda user_id, workspace_id, access_token: False
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
 
@@ -391,7 +382,7 @@ def test_incomplete_onboarding_cannot_call_product_api(auth_ctx, monkeypatch):
 
 def test_incomplete_onboarding_can_reach_repair_endpoints(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     ctx.is_onboarding_complete = mock.Mock(return_value=False)
     ctx.complete_onboarding = mock.Mock()
     monkeypatch.setattr(main_module, "auth_context", ctx)
@@ -424,7 +415,7 @@ def test_onboarding_completion_rechecks_preflight_before_writing(
     monkeypatch,
 ):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     ctx.complete_onboarding = mock.Mock()
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
@@ -450,7 +441,7 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
     tmp_path,
 ):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     ctx.complete_onboarding = mock.Mock()
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
@@ -471,7 +462,7 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
     assert response.status_code == 200
     assert response.json() == {"workspace_id": "ws-a", "completed": True}
     assert len(repo.all(workspace_id="ws-a")) == 1
-    ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a")
+    ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a", token)
 
 
 def test_local_onboarding_completion_uses_local_workspace(monkeypatch, tmp_path):
@@ -628,7 +619,7 @@ def test_global_state_safely_initializes_when_file_missing(tmp_path, monkeypatch
 
 def test_request_body_workspace_id_is_ignored(auth_ctx, monkeypatch):
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-token"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-token"
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     repo = EpisodeRepository(database_path=settings.database_path)
@@ -664,7 +655,7 @@ def test_cross_workspace_isolation_through_http(auth_ctx, monkeypatch):
     episode_b = repo.create(workspace_id="ws-b")
 
     # Authenticate as ws-a and try to read ws-b's episode -> 404 (no leak).
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     token = _sign_token("user-a", key=private_pem)
     client = TestClient(main_module.app)
     response = client.get(
@@ -815,7 +806,7 @@ def test_endpoint_generation_fails_safe_without_context(auth_ctx, monkeypatch):
     """An authenticated request whose workspace context is lost must not
     silently generate against the reserved 'local' workspace."""
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     repo = EpisodeRepository(database_path=settings.database_path)
@@ -853,7 +844,7 @@ def test_authenticated_creator_profile_never_reads_local(auth_ctx, monkeypatch):
     from app.creator_profile import get_or_create_profile, upsert_creator_profile
 
     ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id: "ws-a"
+    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
     repo = EpisodeRepository(database_path=settings.database_path)

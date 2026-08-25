@@ -14,8 +14,7 @@ This module is the single trust boundary for the beta auth model:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -51,6 +50,7 @@ class AuthPrincipal:
     user_id: str
     workspace_id: str | None
     authenticated: bool = True
+    access_token: str | None = field(default=None, repr=False, compare=False)
 
 
 def extract_bearer_token(request: Request) -> str | None:
@@ -111,19 +111,22 @@ class SupabaseAuthContext:
         except jwt.InvalidTokenError as exc:
             raise UnauthorizedError("invalid or expired token") from exc
 
-    def resolve_workspace_id(self, user_id: str) -> str | None:
+    def _user_headers(self, access_token: str) -> dict[str, str]:
+        return {
+            "apikey": self._settings.supabase_publishable_key or "",
+            "Authorization": f"Bearer {access_token}",
+        }
+
+    def resolve_workspace_id(self, user_id: str, access_token: str) -> str | None:
         """Resolve the user's authorized workspace membership server-side.
 
-        Uses the service-role key so membership is authoritative and cannot
-        be forged by a client. Returns None when the user has no workspace.
+        Uses the caller's verified token and the public key, so Supabase RLS
+        remains the authority without shipping a service-role secret.
         """
         if not self.enabled:
             return None
         url = f"{self._settings.supabase_url.rstrip('/')}/rest/v1/workspace_members"
-        headers = {
-            "apikey": self._settings.supabase_secret_key,
-            "Authorization": f"Bearer {self._settings.supabase_secret_key}",
-        }
+        headers = self._user_headers(access_token)
         params = {
             "user_id": f"eq.{user_id}",
             "select": "workspace_id,role",
@@ -160,42 +163,33 @@ class SupabaseAuthContext:
         workspace_id = chosen.get("workspace_id")
         return str(workspace_id) if workspace_id else None
 
-    def complete_onboarding(self, user_id: str, workspace_id: str) -> None:
+    def complete_onboarding(
+        self,
+        user_id: str,
+        workspace_id: str,
+        access_token: str,
+    ) -> None:
         """Persist completion after the API has recomputed a ready preflight.
 
-        The service key stays inside the trusted Python process. Authenticated
-        browser clients only have column-level permission to update
-        ``identity_complete``, so they cannot forge the readiness flags or
-        ``completed_at`` through the Data API.
+        The RPC verifies ``auth.uid()`` and the caller's workspace membership.
+        The desktop never receives or stores a service-role secret.
         """
         if not self.enabled:
             raise OnboardingStateError("authentication is not enabled")
 
-        url = f"{self._settings.supabase_url.rstrip('/')}/rest/v1/onboarding_states"
+        url = (
+            f"{self._settings.supabase_url.rstrip('/')}"
+            "/rest/v1/rpc/complete_own_onboarding"
+        )
         headers = {
-            "apikey": self._settings.supabase_secret_key,
-            "Authorization": f"Bearer {self._settings.supabase_secret_key}",
+            **self._user_headers(access_token),
             "Content-Type": "application/json",
-            "Prefer": "return=representation",
         }
-        params = {
-            "workspace_id": f"eq.{workspace_id}",
-            "user_id": f"eq.{user_id}",
-            "select": "workspace_id",
-        }
-        payload = {
-            "identity_complete": True,
-            "local_paths_complete": True,
-            "ai_connection_complete": True,
-            "health_check_complete": True,
-            "first_episode_complete": True,
-            "completed_at": datetime.now(UTC).isoformat(),
-        }
+        payload = {"target_workspace_id": workspace_id}
         try:
-            response = httpx.patch(
+            response = httpx.post(
                 url,
                 headers=headers,
-                params=params,
                 json=payload,
                 timeout=10.0,
             )
@@ -203,31 +197,30 @@ class SupabaseAuthContext:
             logger.warning("onboarding completion update failed: %s", exc)
             raise OnboardingStateError("unable to persist onboarding state") from exc
 
-        rows = response.json() if response.content else []
-        if response.status_code != 200 or not isinstance(rows, list) or len(rows) != 1:
+        completed = response.json() if response.content else False
+        if response.status_code != 200 or completed is not True:
             logger.warning(
-                "onboarding completion update returned HTTP %s with %s rows",
+                "onboarding completion update returned HTTP %s",
                 response.status_code,
-                len(rows) if isinstance(rows, list) else "invalid",
             )
             raise OnboardingStateError("unable to persist onboarding state")
 
-    def is_onboarding_complete(self, user_id: str, workspace_id: str) -> bool:
+    def is_onboarding_complete(
+        self,
+        user_id: str,
+        workspace_id: str,
+        access_token: str,
+    ) -> bool:
         """Return whether the caller's resolved workspace finished onboarding.
 
-        This query deliberately uses the trusted service key, just like
-        membership resolution.  A direct request to the Python server must not
-        be able to bypass the completion gate that Next.js enforces for browser
-        traffic.
+        The caller token is verified before this query and RLS only exposes the
+        caller's own onboarding row.
         """
         if not self.enabled:
             return True
 
         url = f"{self._settings.supabase_url.rstrip('/')}/rest/v1/onboarding_states"
-        headers = {
-            "apikey": self._settings.supabase_secret_key,
-            "Authorization": f"Bearer {self._settings.supabase_secret_key}",
-        }
+        headers = self._user_headers(access_token)
         params = {
             "workspace_id": f"eq.{workspace_id}",
             "user_id": f"eq.{user_id}",
@@ -274,11 +267,12 @@ class SupabaseAuthContext:
         user_id = str(payload.get("sub") or "")
         if not user_id:
             raise UnauthorizedError("token missing subject claim")
-        workspace_id = self.resolve_workspace_id(user_id)
+        workspace_id = self.resolve_workspace_id(user_id, token)
         if workspace_id is None:
             raise ForbiddenError("no authorized workspace membership")
         return AuthPrincipal(
             user_id=user_id,
             workspace_id=workspace_id,
             authenticated=True,
+            access_token=token,
         )

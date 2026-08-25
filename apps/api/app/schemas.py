@@ -956,7 +956,6 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     topic_source_urls: list[str] | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
-    supabase_secret_key: str | None = None
     supabase_jwt_audience: str | None = None
 
 

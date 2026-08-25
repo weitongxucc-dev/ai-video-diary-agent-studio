@@ -48,6 +48,24 @@ function localModelEnv() {
   };
 }
 
+function distributionAuthEnv() {
+  const configPath = path.join(__dirname, 'assets', 'distribution-config.generated.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (config.authMode !== 'supabase') return {};
+    if (!config.supabaseUrl || !config.supabasePublishableKey) {
+      throw new Error('Supabase public distribution config is incomplete');
+    }
+    return {
+      SUPABASE_URL: config.supabaseUrl,
+      SUPABASE_PUBLISHABLE_KEY: config.supabasePublishableKey,
+    };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
   if (isDev) return null; // dev mode: user runs API separately
@@ -105,6 +123,7 @@ async function startApiServer() {
 
   const env = {
     ...process.env,
+    ...distributionAuthEnv(),
     ...localModelEnv(),
     API_PORT: String(apiPort),
     API_HOST: '127.0.0.1',
@@ -218,6 +237,7 @@ async function startNextServer() {
 
   const env = {
     ...process.env,
+    ...distributionAuthEnv(),
     PORT: String(nextPort),
     HOSTNAME: '127.0.0.1',
     API_PORT: String(apiPort),
