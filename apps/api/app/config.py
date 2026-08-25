@@ -126,6 +126,26 @@ def _default_local_whisper_model_path() -> str | None:
     return None
 
 
+def _default_model_root_path() -> str:
+    dotenv_override = os.getenv(_ENV_FILE_OVERRIDE_VAR)
+    if dotenv_override:
+        return str(Path(dotenv_override).expanduser().parent / "models")
+    return str(Path.home() / "Movies" / "AI视频日记" / "models")
+
+
+def _default_model_runtime_python_path(model_root_path: str | None = None) -> str:
+    root = Path(model_root_path or _default_model_root_path()).expanduser()
+    return str(root.parent / "model-runtime" / "bin" / "python")
+
+
+def _default_visual_model_worker_path() -> str:
+    return str(Path(__file__).resolve().parents[1] / "model_workers" / "chinese_clip_worker.py")
+
+
+def _default_voice_model_worker_path() -> str:
+    return str(Path(__file__).resolve().parents[1] / "model_workers" / "qwen3_tts_worker.py")
+
+
 def _default_hermes_radar_path() -> str:
     return str(Path.home() / "Desktop" / "product-hunt-raw" / "daily-reports")
 
@@ -208,6 +228,10 @@ class Settings:
     local_whisper_python_path: str | None = None
     local_whisper_model_path: str | None = None
     local_whisper_language: str = "zh"
+    model_root_path: str = _default_model_root_path()
+    model_runtime_python_path: str = _default_model_runtime_python_path()
+    visual_model_worker_path: str = _default_visual_model_worker_path()
+    voice_model_worker_path: str = _default_voice_model_worker_path()
     draft_background_music_path: str | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
@@ -231,6 +255,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         load_dotenv_files()
+        model_root_path = os.getenv("MODEL_ROOT_PATH") or _default_model_root_path()
         return cls(
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
@@ -290,6 +315,13 @@ class Settings:
                 "LOCAL_WHISPER_LANGUAGE",
                 cls.local_whisper_language,
             ),
+            model_root_path=model_root_path,
+            model_runtime_python_path=os.getenv("MODEL_RUNTIME_PYTHON_PATH")
+            or _default_model_runtime_python_path(model_root_path),
+            visual_model_worker_path=os.getenv("VISUAL_MODEL_WORKER_PATH")
+            or _default_visual_model_worker_path(),
+            voice_model_worker_path=os.getenv("VOICE_MODEL_WORKER_PATH")
+            or _default_voice_model_worker_path(),
             draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
@@ -302,7 +334,7 @@ class Settings:
         )
 
     def public_status(self) -> dict[str, Any]:
-        configured = bool(self.deepseek_api_key)
+        cloud_configured = bool(self.deepseek_api_key)
         obsidian_path = self.obsidian_vault_path
         obsidian_exists = bool(
             obsidian_path
@@ -314,10 +346,10 @@ class Settings:
         database_path = Path(self.database_path).expanduser()
         return {
             "llm": {
-                "provider": "deepseek",
-                "configured": configured,
-                "model": self.deepseek_model if configured else None,
-                "base_url": self.deepseek_base_url,
+                "provider": "deepseek" if cloud_configured else "local-extractive",
+                "configured": True,
+                "model": self.deepseek_model if cloud_configured else "source-grounded-v1",
+                "base_url": self.deepseek_base_url if cloud_configured else "local",
             },
             "obsidian": {
                 "configured": bool(obsidian_path),
@@ -427,6 +459,12 @@ class Settings:
                     "name": "DATABASE_PATH",
                     "configured": bool(self.database_path),
                     "value": self.database_path,
+                    "secret": False,
+                },
+                {
+                    "name": "MODEL_ROOT_PATH",
+                    "configured": bool(self.model_root_path),
+                    "value": self.model_root_path,
                     "secret": False,
                 },
                 {

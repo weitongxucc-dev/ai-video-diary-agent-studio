@@ -101,6 +101,71 @@ class TemplateTopicGenerator:
         ]
 
 
+class LocalSourceTopicGenerator:
+    """Extractive, source-grounded fallback for the offline product path.
+
+    This intentionally avoids pretending to be a full local LLM. It turns the
+    maintained source pool into conservative topic candidates and preserves a
+    traceable reference for every candidate. A downloaded local model can
+    replace this generator later without changing the Episode contract.
+    """
+
+    def __init__(
+        self,
+        vault: ObsidianVault,
+        external_source_provider: Callable[[], list[TopicSourceItem]] | None = None,
+    ) -> None:
+        self._vault = vault
+        self._external_source_provider = external_source_provider or list
+
+    def generate(
+        self,
+        day_number: int,
+        feedback_events: list[FeedbackEvent] | None = None,
+        template: ContentTemplate | None = None,
+    ) -> list[TopicCandidate]:
+        notes = self._vault.recent_notes(limit=16)
+        source_items = [note.to_topic_source() for note in notes]
+        source_items.extend(self._external_source_provider())
+        unique: list[TopicSourceItem] = []
+        seen: set[str] = set()
+        for item in source_items:
+            key = item.ref.strip() or f"{item.source_type}:{item.title}"
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        if not unique:
+            raise TopicGenerationConfigurationError("团队维护的选题来源池中没有可用内容")
+
+        candidates: list[TopicCandidate] = []
+        for index, item in enumerate(unique[:4]):
+            excerpt = _clean_source_text(item.excerpt)
+            sentences = _source_sentences(excerpt)
+            viewpoint = sentences[0] if sentences else f"这条信息值得从真实工作流角度进一步验证：{item.title}"
+            outline = sentences[:3]
+            outline.extend(
+                [
+                    f"这件事发生了什么：{item.title}",
+                    "它对真实内容生产流程的影响",
+                    "团队现在可以验证的一个具体动作",
+                ][: 3 - len(outline)]
+            )
+            candidates.append(
+                TopicCandidate(
+                    id=f"topic_{uuid4().hex[:6]}",
+                    title=item.title.strip() or f"来源选题 {day_number}-{index + 1}",
+                    core_viewpoint=viewpoint[:240],
+                    reason=f"候选选题直接来自「{item.title}」，未添加来源外的事实。",
+                    audience="关注 AI 工具、工作流和内容生产的中文用户",
+                    outline=outline,
+                    score=max(70, 88 - index * 4),
+                    source_refs=[SourceRef(item.source_type, item.title, item.ref)],
+                )
+            )
+        return candidates
+
+
 class DeepSeekTopicGenerator:
     def __init__(
         self,
@@ -376,14 +441,20 @@ def _content_template_payload(template: ContentTemplate | None) -> dict[str, obj
 
 
 def topic_generator_from_settings(settings: Settings, vault: ObsidianVault) -> TopicGenerator:
-    if settings.deepseek_api_key and (
+    has_sources = bool(
         vault.exists
         or settings.product_hunt_token
         or settings.topic_source_urls
         or settings.hermes_radar_path
-    ):
+    )
+    if settings.deepseek_api_key and has_sources:
         return DeepSeekTopicGenerator(
             settings,
+            vault,
+            external_source_provider=lambda: _external_topic_sources(settings),
+        )
+    if has_sources:
+        return LocalSourceTopicGenerator(
             vault,
             external_source_provider=lambda: _external_topic_sources(settings),
         )
@@ -405,3 +476,16 @@ def _external_topic_sources(settings: Settings) -> list[TopicSourceItem]:
         except ExternalSourceResponseError:
             pass
     return sources
+
+
+def _clean_source_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _source_sentences(value: str) -> list[str]:
+    parts = [
+        part.strip(" -\t")
+        for part in re.split(r"(?<=[。！？!?])\s*|\n+", value)
+        if part.strip(" -\t")
+    ]
+    return [part[:180] for part in parts if len(part) >= 8]

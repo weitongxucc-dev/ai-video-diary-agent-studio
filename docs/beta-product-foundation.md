@@ -24,8 +24,8 @@ NEXT_PUBLIC_AUTH_MODE=local
 Supabase 模式保留在代码中，目标旅程是：
 
 ```text
-管理员邀请
-→ 用户设置密码并登录
+管理员直接设置账号和初始密码
+→ 用户使用账号和密码登录
 → 服务端创建个人 workspace
 → 完成本地目录与模型预检
 → 服务端确认 onboarding 完成
@@ -34,7 +34,7 @@ Supabase 模式保留在代码中，目标旅程是：
 
 该模式必须满足：
 
-- 关闭公开注册，只允许管理员邀请。
+- 关闭公开注册，只允许管理员创建或重置账号；产品界面不出现邮箱、邮件邀请或邮件链接。
 - 浏览器不能伪造用户、workspace、readiness 或 onboarding 完成状态。
 - Python API 验证 Bearer JWT，并由服务端解析 workspace membership。
 - Supabase secret key 只存在于可信服务端，不得进入 Electron 或 `NEXT_PUBLIC_*`。
@@ -57,4 +57,4 @@ Supabase 模式保留在代码中，目标旅程是：
 3. 完成配置后进入本地工作台，重启后状态可恢复。
 4. API、Web 和 Worker 的启动、异常退出与关闭清理可验证。
 
-启用 Supabase 分发模式前，还必须验证邀请、登录、session 刷新、退出、重复 callback、服务端 onboarding gate 和两位用户的 workspace 隔离。
+启用 Supabase 分发模式前，还必须验证账号创建、密码登录、密码重置、session 刷新、退出、服务端 onboarding gate 和两位用户的 workspace 隔离。

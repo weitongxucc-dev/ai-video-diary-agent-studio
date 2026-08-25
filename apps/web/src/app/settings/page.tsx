@@ -1,26 +1,51 @@
 import Link from "next/link";
-import { updateRuntimeSettingsAction } from "@/app/actions";
+import {
+  createVoiceProfileAction,
+  setDefaultVoiceProfileAction,
+  updateProductionProfileAction,
+  updateRuntimeSettingsAction,
+} from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
-import { getRuntimeSettings } from "@/lib/api.server";
+import { ModelInstallPanel } from "@/components/ModelInstallPanel";
+import {
+  getLocalModels,
+  getProductionFoundation,
+  getRuntimeSettings,
+  getVoiceProfiles,
+} from "@/lib/api.server";
 import type {
+  LocalModelStatus,
+  ProductionFoundation,
   RuntimeSettingItem,
   RuntimeSettings,
   SystemStatus,
+  VoiceProfile,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 async function loadSettings(): Promise<{
   runtime: RuntimeSettings | null;
+  models: LocalModelStatus[];
+  foundation: ProductionFoundation | null;
+  voices: VoiceProfile[];
   offline: boolean;
 }> {
-  try {
-    return { runtime: await getRuntimeSettings(), offline: false };
-  } catch {
-    return { runtime: null, offline: true };
-  }
+  const [runtime, catalog, foundation, voiceCatalog] = await Promise.all([
+    getRuntimeSettings().catch(() => null),
+    getLocalModels().catch(() => ({ models: [] })),
+    getProductionFoundation().catch(() => null),
+    getVoiceProfiles().catch(() => ({ voices: [], total_count: 0 })),
+  ]);
+  return {
+    runtime,
+    models: catalog.models,
+    foundation,
+    voices: voiceCatalog.voices,
+    offline: runtime === null,
+  };
 }
 
 type SectionDef = {
@@ -52,7 +77,7 @@ const SECTIONS: SectionDef[] = [
     id: "paths",
     title: "本地目录",
     description:
-      "Obsidian、视频、剪映与数据库都要求本地路径存在；桌面端点击「选择目录」直接填入绝对路径，浏览器中请手动输入。",
+      "Obsidian、视频、剪映、数据库与本地模型都使用绝对路径；大模型建议放在空间充足的移动硬盘。",
     tone: "green",
   },
   {
@@ -165,6 +190,14 @@ function buildFields(
         kind: "directory",
         defaultValue: valueOf("DATABASE_PATH"),
         placeholder: "/Users/you/.ai-video-diary/studio.db",
+      },
+      {
+        name: "model_root_path",
+        label: "本地模型与缓存目录",
+        helper: "模型、运行环境和下载缓存会优先放在这里；移动硬盘未挂载时安装会直接停止，不会回退到内置硬盘。",
+        kind: "directory",
+        defaultValue: valueOf("MODEL_ROOT_PATH"),
+        placeholder: "/Volumes/External/AI视频日记/models",
       },
     ],
     asr: [
@@ -361,7 +394,8 @@ function FieldRow({ field }: { field: FieldDef }) {
 }
 
 export default async function SettingsPage() {
-  const { runtime, offline } = await loadSettings();
+  const { runtime, models, foundation, voices, offline } = await loadSettings();
+  const profile = foundation?.profile;
   const settingItems = runtime?.settings ?? [];
   const status = runtime?.status;
   const fields = buildFields(settingItems, runtime?.status ?? defaultStatus);
@@ -385,6 +419,112 @@ export default async function SettingsPage() {
               返回工作台
             </Link>
           </div>
+
+          {profile ? (
+            <div className="settings-product-block">
+              <div className="settings-product-heading">
+                <div>
+                  <span className="section-kicker">生产默认值</span>
+                  <h2>文案与成片</h2>
+                  <p>新内容默认以 90 秒为目标，但可按工作区设置制作 5 分钟或更长视频。</p>
+                </div>
+              </div>
+              <FormErrorBanner
+                action={updateProductionProfileAction}
+                className="settings-form settings-product-form"
+                emptyMessage="请检查生产默认值"
+              >
+                <div className="settings-grid">
+                  <label className="settings-field">
+                    <span>工作区名称</span>
+                    <input name="workspace_name" required defaultValue={profile.workspace_name} />
+                  </label>
+                  <label className="settings-field">
+                    <span>品牌名称</span>
+                    <input name="brand_name" defaultValue={profile.brand_name} />
+                  </label>
+                  <label className="settings-field">
+                    <span>最短成片（秒）</span>
+                    <input name="target_duration_min_seconds" type="number" min={5} max={1800} required defaultValue={profile.target_duration_min_seconds} />
+                    <small className="settings-field-helper">文案和混剪可接受的下限。</small>
+                  </label>
+                  <label className="settings-field">
+                    <span>最长成片（秒）</span>
+                    <input name="target_duration_max_seconds" type="number" min={5} max={1800} required defaultValue={profile.target_duration_max_seconds} />
+                    <small className="settings-field-helper">300 秒即 5 分钟，上限可设为 1800 秒。</small>
+                  </label>
+                  <label className="settings-field">
+                    <span>品牌模板</span>
+                    <input name="brand_template_name" defaultValue={profile.brand_template_name} />
+                  </label>
+                  <label className="settings-field">
+                    <span>字幕风格</span>
+                    <input name="subtitle_style" defaultValue={profile.subtitle_style} />
+                  </label>
+                </div>
+                <input type="hidden" name="brand_colors" value={profile.brand_colors.join(",")} />
+                <input type="hidden" name="intro_text" value={profile.intro_text} />
+                <input type="hidden" name="outro_text" value={profile.outro_text} />
+                <input type="hidden" name="background_music_path" value={profile.background_music_path ?? ""} />
+                <input type="hidden" name="voice_name" value={profile.voice_name} />
+                <input type="hidden" name="voice_reference_path" value={profile.voice_reference_path ?? ""} />
+                <input type="hidden" name="voice_reference_text" value={profile.voice_reference_text} />
+                <input type="hidden" name="source_urls" value={profile.source_urls.join("\n")} />
+                {profile.voice_consent_confirmed ? <input type="hidden" name="voice_consent_confirmed" value="on" /> : null}
+                {profile.use_obsidian ? <input type="hidden" name="use_obsidian" value="on" /> : null}
+                {profile.use_hermes ? <input type="hidden" name="use_hermes" value="on" /> : null}
+                {profile.cloud_enhancement_enabled ? <input type="hidden" name="cloud_enhancement_enabled" value="on" /> : null}
+                <div className="settings-actions">
+                  <button className="pixel-button" type="submit">保存生产默认值</button>
+                  <span>后续可在单个内容中临时覆盖时长。</span>
+                </div>
+              </FormErrorBanner>
+
+              <section className="settings-voice-section" aria-labelledby="voice-library-title">
+                <div className="settings-product-heading">
+                  <div>
+                    <span className="section-kicker">授权资产</span>
+                    <h2 id="voice-library-title">声音库</h2>
+                    <p>可保存多个声音。默认声音用于新内容，单个 Episode 仍可临时切换。</p>
+                  </div>
+                </div>
+                <div className="settings-voice-list">
+                  {voices.map((voice) => (
+                    <div className="settings-voice-row" key={voice.id}>
+                      <div className="settings-voice-copy">
+                        <strong>{voice.name}</strong>
+                        <span>{voice.is_default ? "默认声音" : "可选声音"} · {voice.status === "ready" ? "已就绪" : voice.message || voice.status}</span>
+                      </div>
+                      <audio controls preload="none" src={`/api/production/voices/${voice.id}/media`} />
+                      {voice.is_default ? <span className="settings-voice-default">当前默认</span> : (
+                        <form action={setDefaultVoiceProfileAction}>
+                          <input type="hidden" name="voice_profile_id" value={voice.id} />
+                          <input type="hidden" name="name" value={voice.name} />
+                          <input type="hidden" name="reference_audio_path" value={voice.reference_audio_path} />
+                          <input type="hidden" name="reference_text" value={voice.reference_text} />
+                          <input type="hidden" name="consent_confirmed" value={String(voice.consent_confirmed)} />
+                          <button className="pixel-button secondary" type="submit">设为默认</button>
+                        </form>
+                      )}
+                    </div>
+                  ))}
+                  {!voices.length ? <p className="settings-voice-empty">还没有可用声音，请添加已获授权的 WAV 参考音频。</p> : null}
+                </div>
+                <FormErrorBanner action={createVoiceProfileAction} className="settings-voice-create" emptyMessage="请补全声音授权信息">
+                  <div className="settings-grid">
+                    <label className="settings-field"><span>声音名称</span><input name="name" required placeholder="例如：张三旁白" /></label>
+                    <label className="settings-field"><span>WAV 参考音频</span><div className="settings-field-row"><input name="reference_audio_path" required placeholder="/Volumes/External/voices/name.wav" /><DirectoryPickerButton kind="wav" targetName="reference_audio_path" /></div><small className="settings-field-helper">仅记录原文件绝对路径，不复制到内置硬盘。</small></label>
+                    <label className="settings-field wide"><span>参考音频文字</span><textarea name="reference_text" required rows={3} placeholder="逐字填写参考音频中的内容" /></label>
+                  </div>
+                  <div className="settings-voice-consent">
+                    <label><input name="consent_confirmed" required type="checkbox" />我确认已获得该声音所有者授权</label>
+                    <label><input name="is_default" type="checkbox" />添加后设为默认声音</label>
+                  </div>
+                  <div className="settings-actions"><button className="pixel-button" type="submit">添加声音</button><span>模型就绪前会保留参考档案和可解释状态。</span></div>
+                </FormErrorBanner>
+              </section>
+            </div>
+          ) : null}
 
           <FormErrorBanner
             action={updateRuntimeSettingsAction}
@@ -418,6 +558,11 @@ export default async function SettingsPage() {
                 </fieldset>
               );
             })}
+
+            <ModelInstallPanel
+              modelRootPath={valueOfSetting(settingItems, "MODEL_ROOT_PATH")}
+              models={models}
+            />
 
             <div className="settings-actions">
               <button className="pixel-button" disabled={offline} type="submit">
@@ -454,6 +599,10 @@ export default async function SettingsPage() {
       </div>
     </AppShell>
   );
+}
+
+function valueOfSetting(settings: RuntimeSettingItem[], name: string): string {
+  return settings.find((entry) => entry.name === name)?.value ?? "";
 }
 
 const defaultStatus: SystemStatus = {

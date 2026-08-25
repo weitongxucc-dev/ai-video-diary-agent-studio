@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function updatePassword(formData: FormData): Promise<never> {
   const password = String(formData.get("password") ?? "");
   const confirmation = String(formData.get("password_confirmation") ?? "");
-  const mode = String(formData.get("mode") ?? "invite");
+  const mode = String(formData.get("mode") ?? "setup");
 
   if (password.length < 10 || password !== confirmation) {
     const params = new URLSearchParams({
@@ -22,7 +22,7 @@ export async function updatePassword(formData: FormData): Promise<never> {
     const supabase = await createClient();
     const { data } = await supabase.auth.getClaims();
     if (!data?.claims?.sub) {
-      failure = "邀请或恢复会话已失效，请重新打开邮件链接。";
+      failure = "账号设置会话已失效，请联系管理员重新设置。";
     } else {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) failure = readableAuthError(error);

@@ -26,6 +26,7 @@ FIELD_TO_ENV = {
     "draft_output_path": "DRAFT_OUTPUT_PATH",
     "jianying_draft_root_path": "JIANYING_DRAFT_ROOT_PATH",
     "database_path": "DATABASE_PATH",
+    "model_root_path": "MODEL_ROOT_PATH",
     "draft_background_music_path": "DRAFT_BACKGROUND_MUSIC_PATH",
     "supabase_url": "SUPABASE_URL",
     "supabase_publishable_key": "SUPABASE_PUBLISHABLE_KEY",

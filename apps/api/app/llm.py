@@ -31,6 +31,7 @@ class ScriptGenerator(Protocol):
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
     ) -> ScriptPackage:
         ...
 
@@ -53,6 +54,7 @@ class MissingScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
     ) -> ScriptPackage:
         raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
 
@@ -75,22 +77,25 @@ class TemplateScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
     ) -> ScriptPackage:
+        outline = [*topic.outline]
+        while len(outline) < 3:
+            outline.append("回到来源核对这个判断，不补充未经支持的事实。")
         return ScriptPackage(
             id=f"script_{uuid4().hex[:6]}",
-            hook=f"今天这个选题我想讲一个真实判断：{topic.core_viewpoint}",
+            hook=f"先说结论：{topic.core_viewpoint}",
             sections=[
-                ScriptSection("hook", "开头 3 秒钩子", 12, f"{topic.title} 这件事，表面看是技术问题，其实是产品生存问题。"),
-                ScriptSection("why", "为什么今天聊这个", 24, topic.reason),
-                ScriptSection("point_1", "原因 1", 36, topic.outline[0]),
-                ScriptSection("point_2", "原因 2", 36, topic.outline[1]),
-                ScriptSection("point_3", "原因 3", 36, topic.outline[2]),
-                ScriptSection("ending", "结尾金句", 18, "AI 产品最终比拼的不是演示效果，而是能不能进入真实生活和真实工作流。"),
+                ScriptSection("source", "信息来源", 8, topic.reason),
+                ScriptSection("point_1", "第一个信息点", 12, outline[0]),
+                ScriptSection("point_2", "第二个信息点", 12, outline[1]),
+                ScriptSection("point_3", "第三个信息点", 12, outline[2]),
+                ScriptSection("ending", "结尾判断", 8, f"所以我目前的判断是：{topic.core_viewpoint}"),
             ],
-            title_options=[topic.title, f"第 {day_number} 天：{topic.title}", f"一个 AI 产品判断：{topic.core_viewpoint}"],
+            title_options=[topic.title, f"今天值得关注：{topic.title}", f"一个可验证的判断：{topic.core_viewpoint}"],
             cover_copy=topic.title,
-            publish_copy=f"AI视频日记今天聊：{topic.title}。我的判断是：{topic.core_viewpoint}",
-            comment_prompt="你最近有没有遇到看起来很强、但自己不会天天用的 AI 产品？",
+            publish_copy=f"今天的来源选题：{topic.title}。当前判断：{topic.core_viewpoint}",
+            comment_prompt="你会如何验证这个判断？",
         )
 
     def regenerate_section(
@@ -168,6 +173,7 @@ class DeepSeekScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
     ) -> ScriptPackage:
         if not self._settings.deepseek_api_key:
             raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
@@ -175,8 +181,20 @@ class DeepSeekScriptGenerator:
         payload = {
             "model": self._settings.deepseek_model,
             "messages": [
-                {"role": "system", "content": self._system_prompt(template)},
-                {"role": "user", "content": self._user_prompt(topic, day_number, feedback_events or [], template)},
+                {
+                    "role": "system",
+                    "content": self._system_prompt(template, target_duration_seconds),
+                },
+                {
+                    "role": "user",
+                    "content": self._user_prompt(
+                        topic,
+                        day_number,
+                        feedback_events or [],
+                        template,
+                        target_duration_seconds,
+                    ),
+                },
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
@@ -308,7 +326,11 @@ class DeepSeekScriptGenerator:
             return ""
         return "以下来自创作者画像，请在生成内容时参考：" + " ".join(parts)
 
-    def _system_prompt(self, template: ContentTemplate | None = None) -> str:
+    def _system_prompt(
+        self,
+        template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
+    ) -> str:
         template_context = ""
         if template is not None:
             template_context = (
@@ -321,12 +343,18 @@ class DeepSeekScriptGenerator:
                 f"发布文案规则：{'；'.join(template.publish_copy_rules)}。"
             )
         profile_ctx = self._profile_context()
+        duration_context = (
+            f"本次用户指定目标时长为 {target_duration_seconds} 秒，以此为准。"
+            if target_duration_seconds is not None
+            else "未单独指定时，默认以栏目推荐时长为目标。"
+        )
         return (
             "你是一个中文 AI 视频日记口播编导，服务于技术型个人创作者。"
             "只输出 JSON，不要 Markdown，不要解释。"
             "JSON 字段必须包含 hook、sections、title_options、cover_copy、publish_copy、comment_prompt。"
             "sections 至少 5 段，每段包含 id、title、estimated_seconds、content。"
             f"{template_context}"
+            f"{duration_context}"
             "hook 必须作为独立字段输出，不要放入 sections。"
             "sections 要承接 hook 之后的正文结构，并尽量对齐本次栏目的脚本结构和 topic.outline。"
             "estimated_seconds 按约 180 字/分钟估算。"
@@ -352,6 +380,7 @@ class DeepSeekScriptGenerator:
         day_number: int,
         feedback_events: list[FeedbackEvent],
         template: ContentTemplate | None = None,
+        target_duration_seconds: int | None = None,
     ) -> str:
         sources = [
             {"type": source.source_type, "title": source.title, "ref": source.ref}
@@ -380,7 +409,11 @@ class DeepSeekScriptGenerator:
                 "recent_feedback": feedback,
                 "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
-                    f"生成总时长 {template.recommended_duration if template else '2 到 3 分钟'} 的中文口播稿。",
+                    (
+                        f"生成总时长约 {target_duration_seconds} 秒的中文口播稿。"
+                        if target_duration_seconds is not None
+                        else f"生成总时长 {template.recommended_duration if template else '默认约 90 秒'} 的中文口播稿。"
+                    ),
                     "hook 是独立字段",
                     "开头 3 秒要有明确冲突或判断。",
                     "sections 要与 topic.outline 或 content_template.script_structure 对齐。",
@@ -529,4 +562,4 @@ def _section_role(index: int, total: int) -> str:
 def script_generator_from_settings(settings: Settings) -> ScriptGenerator:
     if settings.deepseek_api_key:
         return DeepSeekScriptGenerator(settings)
-    return MissingScriptGenerator()
+    return TemplateScriptGenerator()

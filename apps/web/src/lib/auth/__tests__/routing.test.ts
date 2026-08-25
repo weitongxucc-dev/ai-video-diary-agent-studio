@@ -67,6 +67,11 @@ describe("auth routing", () => {
     expect(isOnboardingSupportPath("/topics")).toBe(false);
     expect(isOnboardingSupportApiPath("/api/onboarding/complete")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/settings/runtime")).toBe(true);
+    expect(isOnboardingSupportApiPath("/api/models")).toBe(true);
+    expect(
+      isOnboardingSupportApiPath("/api/models/chinese-clip/install"),
+    ).toBe(true);
+    expect(isOnboardingSupportApiPath("/api/model-install-jobs/abc")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/episodes/today")).toBe(false);
   });
 

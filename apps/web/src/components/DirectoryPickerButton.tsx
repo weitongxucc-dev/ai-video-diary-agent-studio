@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState, type MouseEvent } from "react";
-import { hasDirectoryPicker, pickDirectory } from "@/lib/directoryPicker";
+import {
+  hasDirectoryPicker,
+  hasWavFilePicker,
+  pickDirectory,
+  pickWavFile,
+} from "@/lib/directoryPicker";
 
 /**
  * Two writeback modes, exactly one must be provided:
@@ -9,9 +14,13 @@ import { hasDirectoryPicker, pickDirectory } from "@/lib/directoryPicker";
  *   - targetName: server-rendered uncontrolled forms (settings) get the
  *     sibling text input with that `name` updated in place.
  */
-type DirectoryPickerButtonProps =
+type WritebackProps =
   | { onPick: (path: string) => void; targetName?: never }
   | { onPick?: never; targetName: string };
+
+type DirectoryPickerButtonProps = WritebackProps & {
+  kind?: "directory" | "wav";
+};
 
 const BROWSER_HINT = "桌面端可选择目录；浏览器中请手动输入绝对路径。";
 
@@ -29,14 +38,16 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
   const [showBrowserHint, setShowBrowserHint] = useState(false);
 
   useEffect(() => {
-    setShowBrowserHint(!hasDirectoryPicker());
-  }, []);
+    setShowBrowserHint(
+      props.kind === "wav" ? !hasWavFilePicker() : !hasDirectoryPicker(),
+    );
+  }, [props.kind]);
 
   async function handleClick(event: MouseEvent<HTMLButtonElement>) {
     // React clears `currentTarget` once dispatch ends, so capture it before
     // awaiting the native dialog.
     const button = event.currentTarget;
-    const result = await pickDirectory();
+    const result = props.kind === "wav" ? await pickWavFile() : await pickDirectory();
     if (result.kind !== "picked") {
       return;
     }
@@ -59,7 +70,7 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
         onClick={handleClick}
         type="button"
       >
-        选择目录
+        {props.kind === "wav" ? "选择 WAV" : "选择目录"}
       </button>
       {showBrowserHint ? (
         <small className="settings-field-helper">{BROWSER_HINT}</small>

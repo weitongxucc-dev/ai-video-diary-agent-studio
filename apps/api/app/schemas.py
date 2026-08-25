@@ -135,8 +135,13 @@ class ScriptUpdateRequest(BaseModel):
     reason: str | None = None
 
 
+class ScriptGenerateRequest(BaseModel):
+    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
+
+
 class ScriptRegenerateRequest(BaseModel):
     reason: str | None = None
+    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
 
 
 class ScriptSectionRegenerateRequest(BaseModel):
@@ -247,6 +252,429 @@ class ContentTemplateResponse(BaseModel):
 
 class ContentTemplatesResponse(BaseModel):
     templates: list[ContentTemplateResponse]
+
+
+class ProductionProfileResponse(BaseModel):
+    workspace_id: str
+    workspace_name: str
+    brand_name: str
+    primary_platform: Literal["douyin"]
+    aspect_ratio: Literal["9:16"]
+    target_duration_min_seconds: int = Field(ge=5, le=1800)
+    target_duration_max_seconds: int = Field(ge=5, le=1800)
+    brand_template_name: str
+    brand_colors: list[str]
+    subtitle_style: str
+    intro_text: str
+    outro_text: str
+    background_music_path: str | None
+    voice_name: str
+    voice_reference_path: str | None
+    voice_reference_text: str
+    voice_consent_confirmed: bool
+    voice_model_status: Literal["pending", "ready", "blocked", "failed"]
+    voice_model_message: str
+    source_urls: list[str]
+    use_obsidian: bool
+    use_hermes: bool
+    factuality_gate_enabled: bool
+    cloud_enhancement_enabled: bool
+    updated_at: datetime
+
+
+class ProductionProfileUpdateRequest(BaseModel):
+    workspace_name: str = Field(min_length=1, max_length=80)
+    brand_name: str = Field(max_length=80)
+    brand_template_name: str = Field(max_length=80)
+    brand_colors: list[str] = Field(default_factory=list, max_length=8)
+    subtitle_style: str = Field(default="", max_length=240)
+    intro_text: str = Field(default="", max_length=240)
+    outro_text: str = Field(default="", max_length=240)
+    background_music_path: str | None = None
+    target_duration_min_seconds: int | None = Field(default=None, ge=5, le=1800)
+    target_duration_max_seconds: int | None = Field(default=None, ge=5, le=1800)
+    voice_name: str = Field(default="", max_length=80)
+    voice_reference_path: str | None = None
+    voice_reference_text: str = Field(default="", max_length=1000)
+    voice_consent_confirmed: bool = False
+    source_urls: list[str] = Field(default_factory=list, max_length=40)
+    use_obsidian: bool = True
+    use_hermes: bool = True
+    factuality_gate_enabled: bool = True
+    cloud_enhancement_enabled: bool = False
+
+
+class VoiceProfileResponse(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    reference_audio_path: str
+    reference_text: str
+    consent_confirmed: bool
+    is_default: bool
+    model_id: str
+    status: Literal["pending", "ready", "blocked", "failed"]
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class VoiceProfilesResponse(BaseModel):
+    voices: list[VoiceProfileResponse]
+    total_count: int
+
+
+class VoiceProfileUpsertRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    reference_audio_path: str = Field(min_length=1, max_length=2000)
+    reference_text: str = Field(min_length=1, max_length=2000)
+    consent_confirmed: bool = False
+    is_default: bool = False
+
+
+class EpisodeVoiceSelectionRequest(BaseModel):
+    voice_profile_id: str | None = Field(default=None, max_length=120)
+
+
+class EpisodeVoiceSelectionResponse(BaseModel):
+    episode_id: str
+    voice: VoiceProfileResponse | None
+    source: Literal["episode", "default", "legacy"]
+
+
+class MaterialSegmentResponse(BaseModel):
+    id: str
+    asset_id: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    description: str
+    transcript: str
+    visual_status: Literal["pending", "ready", "blocked", "failed"]
+    visual_model_id: str
+    visual_sample_count: int = Field(ge=0, le=3)
+    usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"]
+    suggested_usage_role: Literal["unassigned", "a_roll", "b_roll"]
+    usage_role_confidence: float = Field(ge=0, le=1)
+    usage_role_reason: str
+    review_status: Literal["raw", "approved", "rejected"]
+    system_tags: list[str]
+    user_tags: list[str]
+    collection_ids: list[str]
+    usage_count: int = Field(ge=0)
+    last_used_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialAssetResponse(BaseModel):
+    id: str
+    workspace_id: str
+    file_name: str
+    path: str
+    size_bytes: int = Field(ge=0)
+    modified_at: datetime
+    duration_seconds: float | None = Field(default=None, ge=0)
+    usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"]
+    suggested_usage_role: Literal["unassigned", "a_roll", "b_roll"]
+    usage_role_confidence: float = Field(ge=0, le=1)
+    usage_role_reason: str
+    review_status: Literal["raw", "approved", "rejected"]
+    rights_confirmed: bool
+    brand_safe: bool
+    analysis_status: Literal["pending", "ready", "blocked", "failed"]
+    analysis_message: str
+    segments: list[MaterialSegmentResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialLibraryResponse(BaseModel):
+    assets: list[MaterialAssetResponse]
+    total_count: int
+
+
+class MaterialCollectionResponse(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    parent_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialCollectionsResponse(BaseModel):
+    collections: list[MaterialCollectionResponse]
+    total_count: int
+
+
+class MaterialCollectionCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    parent_id: str | None = Field(default=None, max_length=120)
+
+
+class MaterialTagStatResponse(BaseModel):
+    tag: str
+    segment_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    usage_count: int = Field(ge=0)
+
+
+class MaterialLibraryInsightsResponse(BaseModel):
+    asset_count: int = Field(ge=0)
+    segment_count: int = Field(ge=0)
+    tags: list[MaterialTagStatResponse]
+    recommended_gaps: list[str]
+
+
+class MaterialReviewRequest(BaseModel):
+    review_status: Literal["raw", "approved", "rejected"]
+    usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] = "unassigned"
+    rights_confirmed: bool = False
+    brand_safe: bool = False
+
+
+class MaterialSegmentUpdateRequest(BaseModel):
+    description: str = Field(default="", max_length=1000)
+    transcript: str = Field(default="", max_length=10000)
+    review_status: Literal["raw", "approved", "rejected"] = "raw"
+    usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] | None = None
+    user_tags: list[str] | None = Field(default=None, max_length=50)
+    collection_ids: list[str] | None = Field(default=None, max_length=20)
+
+
+class ModelSpecResponse(BaseModel):
+    id: str
+    capability: str
+    display_name: str
+    repository: str
+    revision: str
+    license_name: str
+    license_url: str
+    approximate_download_bytes: int = Field(ge=0)
+
+
+class ModelRuntimeStatusResponse(BaseModel):
+    model: ModelSpecResponse
+    state: Literal[
+        "missing_runtime",
+        "missing_worker",
+        "not_installed",
+        "invalid",
+        "ready",
+    ]
+    ready: bool
+    message: str
+    model_path: str
+    runtime_python_path: str | None
+    worker_path: str | None
+
+
+class ModelCatalogResponse(BaseModel):
+    models: list[ModelRuntimeStatusResponse]
+
+
+class ModelInstallRequest(BaseModel):
+    license_accepted: bool = False
+
+
+class ModelInstallJobResponse(BaseModel):
+    id: str
+    model_id: str
+    display_name: str
+    status: Literal["queued", "running", "ready", "failed", "interrupted"]
+    phase: str
+    message: str
+    bytes_downloaded: int = Field(ge=0)
+    bytes_total: int = Field(ge=0)
+    progress: float = Field(ge=0, le=1)
+    license_name: str
+    license_url: str
+    license_accepted_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    model_root_path: str
+    external_volume: str | None
+    free_bytes: int = Field(ge=0)
+    required_bytes: int = Field(ge=0)
+
+
+class NarrationArtifactResponse(BaseModel):
+    episode_id: str
+    audio_path: str
+    duration_seconds: float = Field(gt=0)
+    sample_rate: int = Field(gt=0)
+    model_id: str
+    voice_profile_id: str | None = None
+    cache_key: str = ""
+
+
+class ProductionBlockerResponse(BaseModel):
+    code: str
+    message: str
+
+
+class ProductionReadinessResponse(BaseModel):
+    ready: bool
+    blockers: list[ProductionBlockerResponse]
+    asset_count: int
+    approved_asset_count: int
+    approved_segment_count: int
+    total_duration_seconds: float
+
+
+class ProductionBatchCreateRequest(BaseModel):
+    name: str = Field(default="", max_length=120)
+    target_count: int = Field(default=10, ge=1, le=50)
+
+
+class ProductionBatchItemResponse(BaseModel):
+    episode_id: str
+    status: Literal[
+        "queued",
+        "running",
+        "waiting_for_user",
+        "rendered",
+        "failed",
+        "interrupted",
+    ]
+    plan_id: str | None
+    narration_audio_path: str | None
+    output_path: str | None
+    message: str
+    attempts: int = Field(ge=0)
+    updated_at: datetime
+
+
+class ProductionBatchResponse(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    target_count: int
+    status: Literal[
+        "created",
+        "blocked",
+        "running",
+        "waiting_for_user",
+        "interrupted",
+        "ready",
+        "reviewed",
+        "failed",
+    ]
+    episode_ids: list[str]
+    items: list[ProductionBatchItemResponse]
+    blocker_codes: list[str]
+    message: str
+    rendered_count: int = Field(ge=0)
+    waiting_review_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductionBatchesResponse(BaseModel):
+    batches: list[ProductionBatchResponse]
+    total_count: int
+
+
+class NarrationCueResponse(BaseModel):
+    id: str
+    source_section_id: str
+    text: str
+    duration_seconds: float = Field(gt=0)
+
+
+class MontageClipResponse(BaseModel):
+    id: str
+    cue_id: str
+    asset_id: str
+    segment_id: str
+    source_path: str
+    source_start_seconds: float = Field(ge=0)
+    source_end_seconds: float = Field(gt=0)
+    timeline_start_seconds: float = Field(ge=0)
+    timeline_end_seconds: float = Field(gt=0)
+    match_score: float
+    match_reasons: list[str]
+    needs_confirmation: bool
+    role: Literal["a_roll", "b_roll"] = "b_roll"
+    locked: bool = False
+    manually_selected: bool = False
+
+
+class MontagePlanResponse(BaseModel):
+    id: str
+    workspace_id: str
+    batch_id: str
+    episode_id: str
+    script_title: str
+    status: Literal["waiting_for_user", "ready", "rendering", "rendered", "failed"]
+    cues: list[NarrationCueResponse]
+    clips: list[MontageClipResponse]
+    duration_seconds: float = Field(ge=0)
+    low_confidence_clip_count: int = Field(ge=0)
+    narration_audio_path: str | None
+    output_path: str | None
+    subtitle_path: str | None
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MontagePlansResponse(BaseModel):
+    plans: list[MontagePlanResponse]
+    total_count: int
+
+
+class MontagePlanCreateRequest(BaseModel):
+    episode_id: str = Field(min_length=1, max_length=80)
+    narration_audio_path: str | None = None
+
+
+class MontagePlanConfirmRequest(BaseModel):
+    clip_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class MontageClipUpdateRequest(BaseModel):
+    asset_id: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    source_start_seconds: float | None = Field(default=None, ge=0)
+    locked: bool | None = None
+    confirmed: bool | None = None
+
+
+class MontageClipOrderRequest(BaseModel):
+    clip_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class MontageClipCandidateResponse(BaseModel):
+    asset_id: str
+    segment_id: str
+    file_name: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    description: str
+    score: float = Field(ge=0, le=1)
+    reasons: list[str]
+
+
+class MontageRenderRequest(BaseModel):
+    narration_audio_path: str = Field(min_length=1)
+
+
+class ProductionEpisodeOptionResponse(BaseModel):
+    id: str
+    title: str
+    status: EpisodeStatus
+
+
+class ProductionFoundationResponse(BaseModel):
+    profile: ProductionProfileResponse
+    readiness: ProductionReadinessResponse
+    recent_batches: list[ProductionBatchResponse]
+    recent_montage_plans: list[MontagePlanResponse] = Field(default_factory=list)
+    eligible_episodes: list[ProductionEpisodeOptionResponse] = Field(default_factory=list)
 
 
 class RuntimeHealthSummaryResponse(BaseModel):
@@ -515,6 +943,7 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     draft_output_path: str | None = None
     jianying_draft_root_path: str | None = None
     database_path: str | None = None
+    model_root_path: str | None = None
     draft_background_music_path: str | None = None
     topic_source_urls: list[str] | None = None
     supabase_url: str | None = None

@@ -54,7 +54,7 @@ export async function GET(request: Request) {
       const passwordUrl = new URL("/auth/update-password", url);
       passwordUrl.searchParams.set(
         "mode",
-        rawType === "recovery" ? "recovery" : "invite",
+        rawType === "recovery" ? "recovery" : "setup",
       );
       return NextResponse.redirect(passwordUrl);
     }

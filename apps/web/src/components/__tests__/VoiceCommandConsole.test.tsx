@@ -38,8 +38,7 @@ describe("VoiceCommandConsoleView", () => {
     const props = renderView("idle", { transcript: "   " });
     const preview = screen.getByRole("button", { name: "预览指令" });
     expect(preview).toBeDisabled();
-    expect(preview).toHaveClass("pixel-control-button--secondary");
-    expect(preview).not.toHaveClass("pixel-control-button--primary");
+    expect(preview).toHaveClass("command-submit-button");
     fireEvent.keyDown(screen.getByRole("textbox", { name: "语音指令文本" }), {
       key: "Enter",
     });
@@ -55,14 +54,14 @@ describe("VoiceCommandConsoleView", () => {
     expect(props.onToggleRecording).toHaveBeenCalledOnce();
     const preview = screen.getByRole("button", { name: "预览指令" });
     expect(preview).toBeDisabled();
-    expect(preview).toHaveClass("pixel-control-button--secondary");
+    expect(preview).toHaveClass("command-submit-button");
   });
 
   it("keeps transcribing preview neutral and disabled", () => {
     renderView("transcribing");
     const preview = screen.getByRole("button", { name: "预览指令" });
     expect(preview).toBeDisabled();
-    expect(preview).toHaveClass("pixel-control-button--secondary");
+    expect(preview).toHaveClass("command-submit-button");
   });
 
   it("renders previewing as a busy, non-executable state", () => {
@@ -72,9 +71,7 @@ describe("VoiceCommandConsoleView", () => {
       "aria-busy",
       "true",
     );
-    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass(
-      "pixel-control-button--secondary",
-    );
+    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass("command-submit-button");
     expect(screen.queryByRole("button", { name: "确认并执行" })).not.toBeInTheDocument();
   });
 
@@ -82,10 +79,8 @@ describe("VoiceCommandConsoleView", () => {
     const props = renderView("waiting_for_user");
     expect(screen.getByRole("status")).toHaveTextContent("等待确认");
     const confirm = screen.getByRole("button", { name: "确认并执行" });
-    expect(confirm).toHaveClass("pixel-control-button--primary");
-    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass(
-      "pixel-control-button--secondary",
-    );
+    expect(confirm).toHaveClass("command-confirm-button");
+    expect(screen.getByRole("button", { name: "预览指令" })).toHaveClass("command-submit-button");
     fireEvent.click(confirm);
     expect(props.onExecute).toHaveBeenCalledOnce();
   });

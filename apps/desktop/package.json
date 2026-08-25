@@ -54,6 +54,7 @@
     "extraResources": [
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "dist/worker-server", "to": "worker-server" },
+      { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },
       { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] }
     ],
     "publish": {

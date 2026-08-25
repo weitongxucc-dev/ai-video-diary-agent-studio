@@ -10,6 +10,7 @@ def test_runtime_settings_updates_maps_known_fields_and_skips_blank_values():
             "deepseek_api_key": "   ",
             "deepseek_model": " deepseek-v4-flash ",
             "obsidian_vault_path": "/Users/example/Vault",
+            "model_root_path": "/Volumes/Models/AI视频日记/models",
             "unknown_field": "ignored",
             "topic_source_urls": [
                 " https://watcha.cn/ ",
@@ -22,8 +23,24 @@ def test_runtime_settings_updates_maps_known_fields_and_skips_blank_values():
     assert updates == {
         "DEEPSEEK_MODEL": "deepseek-v4-flash",
         "OBSIDIAN_VAULT_PATH": "/Users/example/Vault",
+        "MODEL_ROOT_PATH": "/Volumes/Models/AI视频日记/models",
         "TOPIC_SOURCE_URLS": "https://watcha.cn/,https://example.com/feed",
     }
+
+
+def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("MODEL_ROOT_PATH", "/Volumes/Models/AI视频日记/models")
+    monkeypatch.delenv("MODEL_RUNTIME_PYTHON_PATH", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.model_root_path == "/Volumes/Models/AI视频日记/models"
+    assert (
+        settings.model_runtime_python_path
+        == "/Volumes/Models/AI视频日记/model-runtime/bin/python"
+    )
 
 
 def test_runtime_settings_updates_omits_empty_topic_source_urls():

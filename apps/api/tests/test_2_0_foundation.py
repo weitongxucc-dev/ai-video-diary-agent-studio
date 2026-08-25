@@ -19,6 +19,10 @@ def test_content_templates_endpoint_returns_three_product_templates():
     for template in body["templates"]:
         assert template["name"]
         assert template["recommended_duration"]
+        assert all(
+            overlong not in template["recommended_duration"]
+            for overlong in ("120", "180", "240")
+        )
         assert template["topic_structure"]
         assert template["script_structure"]
         assert template["material_requirements"]
@@ -72,7 +76,8 @@ def test_runtime_health_endpoint_explains_status_and_repair_actions(tmp_path):
     body = response.json()
     items = {item["id"]: item for item in body["items"]}
     assert body["summary"]["total"] == len(body["items"])
-    assert items["deepseek"]["status"] == "missing"
+    assert items["deepseek"]["status"] == "degraded"
+    assert "本地" in items["deepseek"]["reason"]
     assert items["deepseek"]["impact"]
     assert items["deepseek"]["repair_action"]
     assert items["obsidian"]["status"] == "missing"

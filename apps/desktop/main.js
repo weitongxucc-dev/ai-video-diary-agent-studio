@@ -40,6 +40,14 @@ function ensureUserDotenv() {
   }
 }
 
+function localModelEnv() {
+  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
+  return {
+    VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
+    VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
+  };
+}
+
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
   if (isDev) return null; // dev mode: user runs API separately
@@ -97,6 +105,7 @@ async function startApiServer() {
 
   const env = {
     ...process.env,
+    ...localModelEnv(),
     API_PORT: String(apiPort),
     API_HOST: '127.0.0.1',
     AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
@@ -329,6 +338,7 @@ function startWorker() {
 
   const env = {
     ...process.env,
+    ...localModelEnv(),
     API_PORT: String(apiPort),
     HOST: '127.0.0.1',
     AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
@@ -388,6 +398,16 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  ipcMain.handle('open-wav-file', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: '选择授权声音参考音频',
+      filters: [{ name: 'WAV 音频', extensions: ['wav'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('open-path', async (_event, filePath) => {
     if (typeof filePath !== 'string' || filePath.length === 0) {
       throw new Error('invalid path');
@@ -420,14 +440,21 @@ function registerIpcHandlers() {
 
 // ── Window Management ──────────────────────────────────
 function createWindow() {
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    title: 'AI视频日记 Agent Studio',
-    backgroundColor: '#c0c0c0',
+    width: 1360,
+    height: 840,
+    minWidth: 1024,
+    minHeight: 700,
+    title: 'AI 视频日记',
+    backgroundColor: '#f7f7f5',
     show: false,
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 14, y: 15 },
+      vibrancy: 'sidebar',
+      visualEffectState: 'active',
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

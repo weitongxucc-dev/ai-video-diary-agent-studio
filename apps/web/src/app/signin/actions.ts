@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { createHash } from "node:crypto";
 import { bootstrapPersonalWorkspace } from "@/lib/auth/bootstrap";
 import { readableAuthError } from "@/lib/auth/errors";
 import { sanitizeNextPath } from "@/lib/auth/routing";
@@ -13,13 +14,22 @@ function signInErrorUrl(message: string, next: string | null): string {
 }
 
 export async function signIn(formData: FormData): Promise<never> {
-  const email = String(formData.get("email") ?? "").trim();
+  const account = String(formData.get("account") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = sanitizeNextPath(String(formData.get("next") ?? ""));
 
-  if (!email || !password) {
-    redirect(signInErrorUrl("请输入受邀邮箱和密码。", next));
+  if (!account || !password) {
+    redirect(signInErrorUrl("请输入账号和密码。", next));
   }
+
+  if (!/^[A-Za-z0-9._-]{3,32}$/.test(account)) {
+    redirect(signInErrorUrl("账号需为 3–32 位字母、数字、点、横线或下划线。", next));
+  }
+
+  // Supabase remains an internal identity provider during migration. Plain
+  // account names are deterministically mapped and the provider identifier is
+  // never exposed as a product login concept.
+  const email = `u_${createHash("sha256").update(account.normalize("NFKC").toLowerCase()).digest("hex").slice(0, 24)}@account.ai-video-diary.local`;
 
   let destination: string | null = null;
   let failure: string | null = null;
@@ -33,7 +43,7 @@ export async function signIn(formData: FormData): Promise<never> {
       if (userError || !data.user) {
         failure = readableAuthError(userError);
       } else {
-        const bootstrap = await bootstrapPersonalWorkspace(supabase, data.user.email);
+        const bootstrap = await bootstrapPersonalWorkspace(supabase, account);
         if (!bootstrap.ok) {
           failure = bootstrap.message;
         } else {

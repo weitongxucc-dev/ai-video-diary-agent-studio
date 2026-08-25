@@ -606,7 +606,57 @@ export type RuntimeSettingsUpdate = {
   draft_output_path?: string;
   jianying_draft_root_path?: string;
   database_path?: string;
+  model_root_path?: string;
   topic_source_urls?: string[];
+};
+
+export type LocalModelStatus = {
+  model: {
+    id: string;
+    capability: string;
+    display_name: string;
+    repository: string;
+    revision: string;
+    license_name: string;
+    license_url: string;
+    approximate_download_bytes: number;
+  };
+  state:
+    | "missing_runtime"
+    | "missing_worker"
+    | "not_installed"
+    | "invalid"
+    | "ready";
+  ready: boolean;
+  message: string;
+  model_path: string;
+  runtime_python_path: string | null;
+  worker_path: string | null;
+};
+
+export type LocalModelCatalog = {
+  models: LocalModelStatus[];
+};
+
+export type ModelInstallJob = {
+  id: string;
+  model_id: string;
+  display_name: string;
+  status: "queued" | "running" | "ready" | "failed" | "interrupted";
+  phase: string;
+  message: string;
+  bytes_downloaded: number;
+  bytes_total: number;
+  progress: number;
+  license_name: string;
+  license_url: string;
+  license_accepted_at: string;
+  created_at: string;
+  updated_at: string;
+  model_root_path: string;
+  external_volume: string | null;
+  free_bytes: number;
+  required_bytes: number;
 };
 
 export type DraftToolStatus = {
@@ -763,4 +813,247 @@ export type TemplateTrackSnapshot = {
   backgroundMusicConfigured: boolean;
   packageMetadata: string[] | null;
   packageImportStatus: string | null;
+};
+
+// ── Production workstation foundation ────────────────────────────
+
+export type ProductionProfile = {
+  workspace_id: string;
+  workspace_name: string;
+  brand_name: string;
+  primary_platform: "douyin";
+  aspect_ratio: "9:16";
+  target_duration_min_seconds: number;
+  target_duration_max_seconds: number;
+  brand_template_name: string;
+  brand_colors: string[];
+  subtitle_style: string;
+  intro_text: string;
+  outro_text: string;
+  background_music_path: string | null;
+  voice_name: string;
+  voice_reference_path: string | null;
+  voice_reference_text: string;
+  voice_consent_confirmed: boolean;
+  voice_model_status: "pending" | "ready" | "blocked" | "failed";
+  voice_model_message: string;
+  source_urls: string[];
+  use_obsidian: boolean;
+  use_hermes: boolean;
+  factuality_gate_enabled: boolean;
+  cloud_enhancement_enabled: boolean;
+  updated_at: string;
+};
+
+export type VoiceProfile = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  reference_audio_path: string;
+  reference_text: string;
+  consent_confirmed: boolean;
+  is_default: boolean;
+  model_id: string;
+  status: "pending" | "ready" | "blocked" | "failed";
+  message: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceProfiles = {
+  voices: VoiceProfile[];
+  total_count: number;
+};
+
+export type EpisodeVoiceSelection = {
+  episode_id: string;
+  voice: VoiceProfile | null;
+  source: "episode" | "default" | "legacy";
+};
+
+export type ProductionReadiness = {
+  ready: boolean;
+  blockers: { code: string; message: string }[];
+  asset_count: number;
+  approved_asset_count: number;
+  approved_segment_count: number;
+  total_duration_seconds: number;
+};
+
+export type ProductionBatch = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  target_count: number;
+  status:
+    | "created"
+    | "blocked"
+    | "running"
+    | "waiting_for_user"
+    | "interrupted"
+    | "ready"
+    | "reviewed"
+    | "failed";
+  episode_ids: string[];
+  items: {
+    episode_id: string;
+    status: "queued" | "running" | "waiting_for_user" | "rendered" | "failed" | "interrupted";
+    plan_id: string | null;
+    narration_audio_path: string | null;
+    output_path: string | null;
+    message: string;
+    attempts: number;
+    updated_at: string;
+  }[];
+  blocker_codes: string[];
+  message: string;
+  rendered_count: number;
+  waiting_review_count: number;
+  failed_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductionFoundation = {
+  profile: ProductionProfile;
+  readiness: ProductionReadiness;
+  recent_batches: ProductionBatch[];
+  recent_montage_plans: MontagePlan[];
+  eligible_episodes: { id: string; title: string; status: EpisodeStatus }[];
+};
+
+export type NarrationCue = {
+  id: string;
+  source_section_id: string;
+  text: string;
+  duration_seconds: number;
+};
+
+export type MontageClip = {
+  id: string;
+  cue_id: string;
+  asset_id: string;
+  segment_id: string;
+  source_path: string;
+  source_start_seconds: number;
+  source_end_seconds: number;
+  timeline_start_seconds: number;
+  timeline_end_seconds: number;
+  match_score: number;
+  match_reasons: string[];
+  needs_confirmation: boolean;
+  role: "a_roll" | "b_roll";
+  locked: boolean;
+  manually_selected: boolean;
+};
+
+export type MontageClipCandidate = {
+  asset_id: string;
+  segment_id: string;
+  file_name: string;
+  start_seconds: number;
+  end_seconds: number;
+  description: string;
+  score: number;
+  reasons: string[];
+};
+
+export type MontagePlan = {
+  id: string;
+  workspace_id: string;
+  batch_id: string;
+  episode_id: string;
+  script_title: string;
+  status: "waiting_for_user" | "ready" | "rendering" | "rendered" | "failed";
+  cues: NarrationCue[];
+  clips: MontageClip[];
+  duration_seconds: number;
+  low_confidence_clip_count: number;
+  narration_audio_path: string | null;
+  output_path: string | null;
+  subtitle_path: string | null;
+  message: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialSegment = {
+  id: string;
+  asset_id: string;
+  start_seconds: number;
+  end_seconds: number;
+  description: string;
+  transcript: string;
+  visual_status: "pending" | "ready" | "blocked" | "failed";
+  visual_model_id: string;
+  visual_sample_count: number;
+  usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+  suggested_usage_role: "unassigned" | "a_roll" | "b_roll";
+  usage_role_confidence: number;
+  usage_role_reason: string;
+  review_status: "raw" | "approved" | "rejected";
+  system_tags: string[];
+  user_tags: string[];
+  collection_ids: string[];
+  usage_count: number;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialAsset = {
+  id: string;
+  workspace_id: string;
+  file_name: string;
+  path: string;
+  size_bytes: number;
+  modified_at: string;
+  duration_seconds: number | null;
+  usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+  suggested_usage_role: "unassigned" | "a_roll" | "b_roll";
+  usage_role_confidence: number;
+  usage_role_reason: string;
+  review_status: "raw" | "approved" | "rejected";
+  rights_confirmed: boolean;
+  brand_safe: boolean;
+  analysis_status: "pending" | "ready" | "blocked" | "failed";
+  analysis_message: string;
+  segments: MaterialSegment[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialLibrary = {
+  assets: MaterialAsset[];
+  total_count: number;
+};
+
+export type MaterialCollection = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialCollections = {
+  collections: MaterialCollection[];
+  total_count: number;
+};
+
+export type MaterialTagStat = {
+  tag: string;
+  segment_count: number;
+  duration_seconds: number;
+  usage_count: number;
+};
+
+export type MaterialLibraryInsights = {
+  asset_count: number;
+  segment_count: number;
+  tags: MaterialTagStat[];
+  recommended_gaps: string[];
 };

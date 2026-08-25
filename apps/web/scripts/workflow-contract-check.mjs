@@ -6,7 +6,7 @@ const files = {
   script: new URL("../src/app/script/page.tsx", import.meta.url),
   sectionEditor: new URL("../src/components/ScriptSectionEditor.tsx", import.meta.url),
   topicCard: new URL("../src/components/TopicCandidateCard.tsx", import.meta.url),
-  agentPanel: new URL("../src/components/PixelAgentPanel.tsx", import.meta.url),
+  homeComposer: new URL("../src/components/HomeCommandComposer.tsx", import.meta.url),
   appShell: new URL("../src/components/AppShell.tsx", import.meta.url),
   api: new URL("../src/lib/api.ts", import.meta.url),
   types: new URL("../src/lib/types.ts", import.meta.url),
@@ -34,7 +34,7 @@ const [
   scriptPage,
   sectionEditor,
   topicCard,
-  agentPanel,
+  homeComposer,
   appShell,
   apiFile,
   typesFile,
@@ -101,19 +101,15 @@ if (
   failures.push("Script sections must submit feedback to the API.");
 }
 
-if (!homePage.includes("selected_topic_id")) {
-  failures.push("The workbench must distinguish unapproved topics from approved scripts.");
-}
-
 if (!typesFile.includes("hermes_radar")) {
   failures.push("SystemStatus must expose Hermes radar source status.");
 }
 
-if (!agentPanel.includes("Hermes 雷达") || !agentPanel.includes("hermes_radar")) {
-  failures.push("Agent panel must show real Hermes radar ingestion counts.");
+if (!homePage.includes("HomeCommandComposer") || !homeComposer.includes("previewVoiceCommand")) {
+  failures.push("The home workbench must provide a real preview-first command composer.");
 }
 
-for (const route of ["/templates", "/draft", "/knowledge", "/sources", "/learning", "/health", "/settings"]) {
+for (const route of ["/", "/production", "/library", "/templates", "/knowledge", "/sources", "/health", "/settings"]) {
   const routeBlock = `href: "${route}"`;
   const routeIndex = appShell.indexOf(routeBlock);
   if (routeIndex === -1) {
@@ -127,26 +123,11 @@ for (const route of ["/templates", "/draft", "/knowledge", "/sources", "/learnin
   }
 }
 
-const editPlanRoute = 'href: "/edit-plan"';
-const editPlanRouteIndex = appShell.indexOf(editPlanRoute);
-if (editPlanRouteIndex === -1) {
-  failures.push("AppShell must expose /edit-plan as the 2.0 visual edit plan route.");
-} else {
-  const nextRouteIndex = appShell.indexOf("},", editPlanRouteIndex);
-  const navSlice = appShell.slice(
-    editPlanRouteIndex,
-    nextRouteIndex === -1 ? editPlanRouteIndex + 120 : nextRouteIndex,
-  );
-  if (navSlice.includes("disabled: true")) {
-    failures.push("/edit-plan must not be disabled in the sidebar.");
-  }
-}
-
 if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceCommandConsole")) {
   failures.push("AppShell must render the reusable VoiceCommandConsole.");
 }
 
-for (const required of ["语音指令", "COMMAND", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
+for (const required of ["语音指令", "command-submit-button", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
   if (!voiceCommandConsole.includes(required)) {
     failures.push(`VoiceCommandConsole must include ${required}.`);
   }
@@ -168,8 +149,8 @@ for (const required of [".voice-command-console", ".edit-plan-page", ".video-pre
   }
 }
 
-if (!homePage.includes("primaryFlowHref") || !homePage.includes("href={primaryFlowHref}")) {
-  failures.push("The workbench primary CTA must route by approved/unapproved state.");
+if (!homePage.includes("waiting_for_user") || !homePage.includes("recent_batches")) {
+  failures.push("The workbench must prioritize waiting reviews and recent production batches.");
 }
 
 if (!actionsFile.includes("processVideoAndPackageAction")) {
@@ -262,10 +243,6 @@ if (!actionsFile.includes("updateRuntimeSettingsAction")) {
 
 if (!settingsPage.includes("updateRuntimeSettingsAction")) {
   failures.push("/settings must submit editable runtime settings, not just render a read-only snapshot.");
-}
-
-if (homePage.includes('href="/script"')) {
-  failures.push("The workbench must not link directly to /script without checking approval state.");
 }
 
 if (failures.length > 0) {

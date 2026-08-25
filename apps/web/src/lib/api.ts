@@ -8,17 +8,30 @@ import type {
   DraftStatus,
   EpisodeHistory,
   EpisodeStatus,
+  EpisodeVoiceSelection,
   FeedbackTargetType,
   FeedbackValue,
   FeedbackSummary,
   KnowledgeNote,
+  LocalModelCatalog,
+  ModelInstallJob,
   OnboardingCompletionResponse,
   PendingVideo,
+  MaterialAsset,
+  MaterialCollection,
+  MaterialCollections,
+  MaterialLibrary,
+  MaterialLibraryInsights,
+  MontagePlan,
+  MontageClipCandidate,
   Preferences,
   PreferenceCards,
   PreferenceEvidence,
   ProcessedVideo,
   ProductionChain,
+  ProductionBatch,
+  ProductionFoundation,
+  ProductionProfile,
   PublishFeedback,
   RetakeReport,
   RuntimeHealth,
@@ -35,6 +48,8 @@ import type {
   TopicEvidenceList,
   VideoProductionMode,
   VoiceCommandResponse,
+  VoiceProfile,
+  VoiceProfiles,
   VoiceTranscribeResult,
   WorkflowStatus,
 } from "./types";
@@ -102,6 +117,230 @@ export function getWorkflowStatus(): Promise<WorkflowStatus> {
   return request<WorkflowStatus>("/api/workflow/status");
 }
 
+export function getProductionFoundation(): Promise<ProductionFoundation> {
+  return request<ProductionFoundation>("/api/production/foundation");
+}
+
+export function getProductionMaterials(): Promise<MaterialLibrary> {
+  return request<MaterialLibrary>("/api/production/materials");
+}
+
+export function getMaterialLibraryInsights(): Promise<MaterialLibraryInsights> {
+  return request<MaterialLibraryInsights>("/api/production/materials/insights");
+}
+
+export function getMaterialCollections(): Promise<MaterialCollections> {
+  return request<MaterialCollections>("/api/production/material-collections");
+}
+
+export function createMaterialCollection(input: {
+  name: string;
+  parent_id?: string | null;
+}): Promise<MaterialCollection> {
+  return request<MaterialCollection>("/api/production/material-collections", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function scanProductionMaterials(): Promise<MaterialLibrary> {
+  return request<MaterialLibrary>("/api/production/materials/scan", {
+    method: "POST",
+  });
+}
+
+export function analyzeProductionMaterial(assetId: string): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/analyze`, {
+    method: "POST",
+  });
+}
+
+export function reviewProductionMaterial(
+  assetId: string,
+  input: {
+    review_status: "raw" | "approved" | "rejected";
+    usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+    rights_confirmed: boolean;
+    brand_safe: boolean;
+  },
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/review`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateProductionMaterialSegment(
+  assetId: string,
+  segmentId: string,
+  input: {
+    description: string;
+    transcript: string;
+    review_status: "raw" | "approved" | "rejected";
+    usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+    user_tags?: string[];
+    collection_ids?: string[];
+  },
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(
+    `/api/production/materials/${assetId}/segments/${segmentId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function updateProductionProfile(
+  input: Omit<
+    ProductionProfile,
+    | "workspace_id"
+    | "primary_platform"
+    | "aspect_ratio"
+    | "voice_model_status"
+    | "voice_model_message"
+    | "updated_at"
+  >,
+): Promise<ProductionProfile> {
+  return request<ProductionProfile>("/api/production/profile", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getVoiceProfiles(): Promise<VoiceProfiles> {
+  return request<VoiceProfiles>("/api/production/voices");
+}
+
+export function createVoiceProfile(input: {
+  name: string;
+  reference_audio_path: string;
+  reference_text: string;
+  consent_confirmed: boolean;
+  is_default: boolean;
+}): Promise<VoiceProfile> {
+  return request<VoiceProfile>("/api/production/voices", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateVoiceProfile(
+  voiceProfileId: string,
+  input: {
+    name: string;
+    reference_audio_path: string;
+    reference_text: string;
+    consent_confirmed: boolean;
+    is_default: boolean;
+  },
+): Promise<VoiceProfile> {
+  return request<VoiceProfile>(`/api/production/voices/${voiceProfileId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function selectEpisodeVoice(
+  episodeId: string,
+  voiceProfileId: string | null,
+): Promise<EpisodeVoiceSelection> {
+  return request<EpisodeVoiceSelection>(`/api/production/episodes/${episodeId}/voice`, {
+    method: "PUT",
+    body: JSON.stringify({ voice_profile_id: voiceProfileId }),
+  });
+}
+
+export function createProductionBatch(input: {
+  name: string;
+  target_count: number;
+}): Promise<ProductionBatch> {
+  return request<ProductionBatch>("/api/production/batches", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function runProductionBatch(batchId: string): Promise<ProductionBatch> {
+  return request<ProductionBatch>(`/api/production/batches/${batchId}/run`, {
+    method: "POST",
+  });
+}
+
+export function getProductionBatch(batchId: string): Promise<ProductionBatch> {
+  return request<ProductionBatch>(`/api/production/batches/${batchId}`);
+}
+
+export function getMontagePlan(planId: string): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}`);
+}
+
+export function getMontagePlans(batchId: string): Promise<{ plans: MontagePlan[]; total_count: number }> {
+  return request<{ plans: MontagePlan[]; total_count: number }>(
+    `/api/production/batches/${batchId}/montage-plans`,
+  );
+}
+
+export function getMontageClipCandidates(
+  planId: string,
+  clipId: string,
+): Promise<MontageClipCandidate[]> {
+  return request<MontageClipCandidate[]>(
+    `/api/production/montage-plans/${planId}/clips/${clipId}/candidates`,
+  );
+}
+
+export function updateMontageClip(
+  planId: string,
+  clipId: string,
+  input: {
+    asset_id?: string;
+    segment_id?: string;
+    source_start_seconds?: number;
+    locked?: boolean;
+    confirmed?: boolean;
+  },
+): Promise<MontagePlan> {
+  return request<MontagePlan>(
+    `/api/production/montage-plans/${planId}/clips/${clipId}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function reorderMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/clips/order`, {
+    method: "PUT",
+    body: JSON.stringify({ clip_ids: clipIds }),
+  });
+}
+
+export function createMontagePlan(
+  batchId: string,
+  input: { episode_id: string; narration_audio_path: string | null },
+): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/batches/${batchId}/montage-plans`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function confirmMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ clip_ids: clipIds }),
+  });
+}
+
+export function renderMontagePlan(
+  planId: string,
+  narrationAudioPath: string,
+): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/render`, {
+    method: "POST",
+    body: JSON.stringify({ narration_audio_path: narrationAudioPath }),
+  });
+}
+
 export function previewVoiceCommand(
   episodeId: string,
   transcript: string,
@@ -157,6 +396,26 @@ export function updateRuntimeSettings(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getLocalModels(): Promise<LocalModelCatalog> {
+  return request<LocalModelCatalog>("/api/models");
+}
+
+export function installLocalModel(modelId: string): Promise<ModelInstallJob> {
+  return request<ModelInstallJob>(
+    `/api/models/${encodeURIComponent(modelId)}/install`,
+    {
+      method: "POST",
+      body: JSON.stringify({ license_accepted: true }),
+    },
+  );
+}
+
+export function getModelInstallJob(jobId: string): Promise<ModelInstallJob> {
+  return request<ModelInstallJob>(
+    `/api/model-install-jobs/${encodeURIComponent(jobId)}`,
+  );
 }
 
 export function getKnowledgeNotes(query?: string): Promise<KnowledgeNote[]> {
