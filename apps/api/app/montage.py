@@ -252,8 +252,15 @@ class MontagePlanner:
                 cue_index == 0 or cue_index == len(cues) - 1
             )
             if use_a_roll:
+                duration_candidates = [
+                    item
+                    for item in a_roll_candidates
+                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+                ]
+                if not duration_candidates:
+                    raise ValueError("A-roll 镜头时长不足，无法完整覆盖对应旁白")
                 asset, segment = min(
-                    a_roll_candidates,
+                    duration_candidates,
                     key=lambda item: (
                         asset_usage.get(item[0].id, 0),
                         segment_usage.get(item[1].id, 0),
@@ -269,6 +276,13 @@ class MontagePlanner:
                 ]
                 role: Literal["a_roll", "b_roll"] = "a_roll"
             else:
+                duration_candidates = [
+                    item
+                    for item in b_roll_candidates
+                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+                ]
+                if not duration_candidates:
+                    raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
                 ranked = sorted(
                     (
                         _score_candidate(
@@ -282,15 +296,14 @@ class MontagePlanner:
                                 segment_vectors.get(segment.id),
                             ),
                         )
-                        for asset, segment in b_roll_candidates
+                        for asset, segment in duration_candidates
                     ),
                     key=lambda item: item[0],
                     reverse=True,
                 )
                 score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
                 role = "b_roll"
-            available = segment.end_seconds - segment.start_seconds
-            clip_duration = round(min(cue.duration_seconds, available), 3)
+            clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
                 and self.semantic_auto_confirm_threshold is not None
@@ -512,6 +525,11 @@ def _build_cues(
         raise ValueError("文案没有可用于时间线的旁白内容")
 
     raw_total = sum(weight for _, _, weight in entries)
+    if narration_duration_seconds is not None and narration_duration_seconds > max_seconds:
+        raise ValueError(
+            "实际配音时长"
+            f" {narration_duration_seconds:.1f} 秒，超过生产档案上限 {max_seconds} 秒"
+        )
     requested_total = narration_duration_seconds or min(max(raw_total, min_seconds), max_seconds)
     if not math.isfinite(requested_total) or requested_total <= 0:
         raise ValueError("旁白时长无效")

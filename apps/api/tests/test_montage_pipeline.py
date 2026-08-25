@@ -181,6 +181,43 @@ def test_planner_uses_real_narration_duration_for_timeline(tmp_path):
     assert plan.duration_seconds == pytest.approx(18.0, abs=0.01)
 
 
+def test_planner_never_truncates_cues_to_fit_short_segments(tmp_path):
+    asset = _asset(tmp_path)
+    asset.segments[0].end_seconds = 2.0
+    asset.segments[0].description = "人工智能工具正在改变团队效率"
+
+    plan = MontagePlanner().build(
+        workspace_id="workspace_a",
+        batch=_batch(),
+        episode=_episode(),
+        profile=_profile(),
+        assets=[asset],
+        narration_audio_path=str(tmp_path / "voice.wav"),
+        narration_duration_seconds=18.0,
+    )
+
+    cue_by_id = {cue.id: cue for cue in plan.cues}
+    assert all(
+        clip.timeline_end_seconds - clip.timeline_start_seconds
+        == pytest.approx(cue_by_id[clip.cue_id].duration_seconds, abs=0.001)
+        for clip in plan.clips
+    )
+    assert plan.duration_seconds == pytest.approx(18.0, abs=0.01)
+
+
+def test_planner_rejects_narration_longer_than_profile_limit(tmp_path):
+    with pytest.raises(ValueError, match="实际配音时长.*超过生产档案上限"):
+        MontagePlanner().build(
+            workspace_id="workspace_a",
+            batch=_batch(),
+            episode=_episode(),
+            profile=_profile(),
+            assets=[_asset(tmp_path)],
+            narration_audio_path=str(tmp_path / "voice.wav"),
+            narration_duration_seconds=91.0,
+        )
+
+
 def test_planner_keeps_duration_only_matches_waiting_for_confirmation(tmp_path):
     asset = _asset(tmp_path, with_metadata=False)
     asset.file_name = "素材001.mp4"

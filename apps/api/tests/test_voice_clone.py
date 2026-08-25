@@ -139,3 +139,88 @@ def test_narration_generator_enforces_consent_and_uses_safe_output_path(tmp_path
             episode=episode,
             profile=profile,
         )
+
+
+def test_narration_generator_rejects_overlong_script_before_voice_generation(tmp_path):
+    class Provider:
+        model_id = "voice-model"
+        ready = True
+        message = "ready"
+
+        def generate(self, **_kwargs):
+            raise AssertionError("overlong script must be rejected before synthesis")
+
+    episode = Episode(
+        id="episode_long",
+        day_number=1,
+        episode_date=date(2026, 8, 25),
+        status=EpisodeStatus.SCRIPT_APPROVED,
+        workspace_id="workspace_a",
+        script=ScriptPackage(
+            id="script_long",
+            hook="开头。",
+            sections=[ScriptSection("body", "正文", 100, "过长正文。")],
+            title_options=[],
+            cover_copy="",
+            publish_copy="",
+            comment_prompt="",
+        ),
+    )
+    profile = ProductionProfile(
+        workspace_id="workspace_a",
+        target_duration_max_seconds=90,
+        voice_reference_path=str(tmp_path / "reference.wav"),
+        voice_reference_text="参考文字",
+        voice_consent_confirmed=True,
+    )
+
+    with pytest.raises(ValueError, match="文案预计时长.*超过生产档案上限"):
+        NarrationGenerator(tmp_path / "outputs", Provider()).generate(
+            workspace_id="workspace_a",
+            episode=episode,
+            profile=profile,
+        )
+
+
+def test_narration_generator_rejects_overlong_generated_audio(tmp_path):
+    class Provider:
+        model_id = "voice-model"
+        ready = True
+        message = "ready"
+
+        def generate(self, *, output_path, **_kwargs):
+            output = Path(output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"audio")
+            return VoiceCloneResult(str(output), 95.0, 24000)
+
+    episode = Episode(
+        id="episode_audio_long",
+        day_number=1,
+        episode_date=date(2026, 8, 25),
+        status=EpisodeStatus.SCRIPT_APPROVED,
+        workspace_id="workspace_a",
+        script=ScriptPackage(
+            id="script_short",
+            hook="开头。",
+            sections=[ScriptSection("body", "正文", 20, "正文。")],
+            title_options=[],
+            cover_copy="",
+            publish_copy="",
+            comment_prompt="",
+        ),
+    )
+    profile = ProductionProfile(
+        workspace_id="workspace_a",
+        target_duration_max_seconds=90,
+        voice_reference_path=str(tmp_path / "reference.wav"),
+        voice_reference_text="参考文字",
+        voice_consent_confirmed=True,
+    )
+
+    with pytest.raises(ValueError, match="实际配音时长.*超过生产档案上限"):
+        NarrationGenerator(tmp_path / "outputs", Provider()).generate(
+            workspace_id="workspace_a",
+            episode=episode,
+            profile=profile,
+        )

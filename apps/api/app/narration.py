@@ -50,6 +50,13 @@ class NarrationGenerator:
             raise ValueError("尚未填写声音参考文字")
         if not self.provider.ready:
             raise ValueError(self.provider.message)
+        estimated_seconds = _estimated_narration_seconds(episode)
+        if estimated_seconds > profile.target_duration_max_seconds:
+            raise ValueError(
+                "文案预计时长"
+                f" {estimated_seconds:.0f} 秒，超过生产档案上限"
+                f" {profile.target_duration_max_seconds} 秒；请先压缩并重新确认文案"
+            )
         narration_text = _episode_narration_text(episode)
         safe_workspace = _safe_component(workspace_id)
         output_path = (
@@ -64,6 +71,12 @@ class NarrationGenerator:
             reference_text=profile.voice_reference_text,
             output_path=output_path,
         )
+        if result.duration_seconds > profile.target_duration_max_seconds:
+            raise ValueError(
+                "实际配音时长"
+                f" {result.duration_seconds:.1f} 秒，超过生产档案上限"
+                f" {profile.target_duration_max_seconds} 秒；请先压缩并重新确认文案"
+            )
         return NarrationArtifact(
             episode_id=episode.id,
             audio_path=result.audio_path,
@@ -79,6 +92,17 @@ def _episode_narration_text(episode: Episode) -> str:
     parts = [episode.script.hook.strip()]
     parts.extend(section.content.strip() for section in episode.script.sections)
     return "\n".join(part for part in parts if part)
+
+
+def _estimated_narration_seconds(episode: Episode) -> float:
+    if episode.script is None:
+        return 0.0
+    hook_seconds = 5.0 if episode.script.hook.strip() else 0.0
+    return hook_seconds + sum(
+        max(0.0, float(section.estimated_seconds))
+        for section in episode.script.sections
+        if section.content.strip()
+    )
 
 
 def _safe_component(value: str) -> str:

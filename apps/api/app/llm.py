@@ -332,6 +332,7 @@ class DeepSeekScriptGenerator:
             "hook 必须作为独立字段输出，不要放入 sections。"
             "sections 要承接 hook 之后的正文结构，并尽量对齐本次栏目的脚本结构和 topic.outline。"
             "estimated_seconds 按约 180 字/分钟估算。"
+            "所有 sections 的 estimated_seconds 总和不得超过 85 秒，给独立 hook 预留 5 秒。"
             "口播要像真人日记：直接、具体、有判断，不要营销腔。"
             "不要使用动物、怪物、玄幻、热血鸡汤类比。"
             + (f" {profile_ctx}" if profile_ctx else "")
@@ -382,12 +383,13 @@ class DeepSeekScriptGenerator:
                 "recent_feedback": feedback,
                 "preference_memory": preference_memory_payload(feedback_events),
                 "requirements": [
-                    f"生成总时长 {template.recommended_duration if template else '2 到 3 分钟'} 的中文口播稿。",
+                    f"生成总时长 {template.recommended_duration if template else '30 到 90 秒'} 的中文口播稿。",
                     "hook 是独立字段",
                     "开头 3 秒要有明确冲突或判断。",
                     "sections 要与 topic.outline 或 content_template.script_structure 对齐。",
                     "优先遵守 preference_memory：prefer 是应该强化的表达方式，avoid 是应该避开的表达方式。",
                     "estimated_seconds 按约 180 字/分钟估算。",
+                    "所有 sections 的 estimated_seconds 总和不得超过 85 秒，独立 hook 按 5 秒计算。",
                     "保留三段核心原因，每段都要有一句可直接口播的内容。",
                     "生成 3 个标题候选、1 条封面文案、1 条发布文案、1 条评论引导。",
                 ],

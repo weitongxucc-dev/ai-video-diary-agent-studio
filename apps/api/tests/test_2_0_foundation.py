@@ -19,6 +19,10 @@ def test_content_templates_endpoint_returns_three_product_templates():
     for template in body["templates"]:
         assert template["name"]
         assert template["recommended_duration"]
+        assert all(
+            overlong not in template["recommended_duration"]
+            for overlong in ("120", "180", "240")
+        )
         assert template["topic_structure"]
         assert template["script_structure"]
         assert template["material_requirements"]
