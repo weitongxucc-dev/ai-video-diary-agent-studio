@@ -58,6 +58,7 @@ def create_account(
     headers = {
         "apikey": admin_secret,
         "Content-Type": "application/json",
+        "User-Agent": "AI-Video-Diary-Account-Admin/0.1",
     }
     # Legacy service_role keys are JWTs and need the bearer header. New
     # sb_secret keys are API keys, not JWTs, and must stay in apikey only.
