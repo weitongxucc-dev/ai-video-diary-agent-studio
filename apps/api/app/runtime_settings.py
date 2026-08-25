@@ -9,6 +9,10 @@ LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 FIELD_TO_ENV = {
+    "llm_provider": "LLM_PROVIDER",
+    "llm_api_key": "LLM_API_KEY",
+    "llm_base_url": "LLM_BASE_URL",
+    "llm_model": "LLM_MODEL",
     "deepseek_api_key": "DEEPSEEK_API_KEY",
     "deepseek_model": "DEEPSEEK_MODEL",
     "product_hunt_token": "PRODUCT_HUNT_TOKEN",
@@ -27,6 +31,7 @@ FIELD_TO_ENV = {
     "jianying_draft_root_path": "JIANYING_DRAFT_ROOT_PATH",
     "database_path": "DATABASE_PATH",
     "model_root_path": "MODEL_ROOT_PATH",
+    "temporary_root_path": "TEMPORARY_ROOT_PATH",
     "draft_background_music_path": "DRAFT_BACKGROUND_MUSIC_PATH",
     "supabase_url": "SUPABASE_URL",
     "supabase_publishable_key": "SUPABASE_PUBLISHABLE_KEY",
@@ -45,6 +50,11 @@ def runtime_settings_updates(payload: Mapping[str, object]) -> dict[str, str]:
         value = payload.get(field)
         if isinstance(value, str) and value.strip():
             updates[env_key] = value.strip()
+
+    if "LLM_API_KEY" in updates:
+        provider = payload.get("llm_provider")
+        if isinstance(provider, str) and provider.strip():
+            updates["LLM_API_KEY_PROVIDER"] = provider.strip().lower()
 
     topic_source_urls = payload.get("topic_source_urls")
     if isinstance(topic_source_urls, list):

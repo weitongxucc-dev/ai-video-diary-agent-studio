@@ -614,3 +614,23 @@ def test_material_media_and_batch_detail_are_workspace_scoped(tmp_path, monkeypa
     batch_detail = client.get(f"/api/production/batches/{batch.id}")
     assert batch_detail.status_code == 200
     assert batch_detail.json()["name"] == "Review batch"
+
+
+def test_material_library_endpoint_is_paginated(tmp_path, monkeypatch):
+    production = _repository(tmp_path)
+    for index in range(3):
+        (production.video_library_path / f"clip-{index}.mp4").write_bytes(b"video")
+    production.scan_library(LEGACY_WORKSPACE_ID)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    client = TestClient(main_module.app)
+
+    first = client.get("/api/production/materials?limit=2&offset=0")
+    second = client.get("/api/production/materials?limit=2&offset=2")
+
+    assert first.status_code == 200
+    assert first.json()["total_count"] == 3
+    assert len(first.json()["assets"]) == 2
+    assert first.json()["has_more"] is True
+    assert second.status_code == 200
+    assert len(second.json()["assets"]) == 1
+    assert second.json()["has_more"] is False

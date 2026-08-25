@@ -602,6 +602,44 @@ class ProductionRepository:
             ).fetchall()
         return [self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows]
 
+    def list_assets_page(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+        query: str | None = None,
+        review_status: str | None = None,
+    ) -> tuple[list[MaterialAsset], int]:
+        clauses = ["workspace_id = ?"]
+        parameters: list[object] = [workspace_id]
+        if query:
+            clauses.append("LOWER(payload) LIKE ?")
+            parameters.append(f"%{query.strip().lower()}%")
+        if review_status:
+            clauses.append("json_extract(payload, '$.review_status') = ?")
+            parameters.append(review_status)
+        where_clause = " AND ".join(clauses)
+        with self._connect() as conn:
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM material_assets WHERE {where_clause}",
+                    parameters,
+                ).fetchone()[0]
+            )
+            rows = conn.execute(
+                f"""
+                SELECT payload FROM material_assets
+                WHERE {where_clause} ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*parameters, limit, offset),
+            ).fetchall()
+        assets = [
+            self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows
+        ]
+        return assets, total
+
     def get_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
         with self._connect() as conn:
             row = conn.execute(

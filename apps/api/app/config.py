@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -30,6 +31,27 @@ def _repo_root() -> Path:
 
 def runtime_env_file_path() -> Path:
     return _resolve_dotenv_path()
+
+
+def configure_process_temporary_directory(settings: Settings) -> Path:
+    """Route Python and child-process scratch files to the configured data disk."""
+    root = settings.effective_temporary_root_path.resolve()
+    if root.parent.is_dir():
+        root.mkdir(parents=False, exist_ok=True)
+        os.environ["TMPDIR"] = str(root)
+        tempfile.tempdir = str(root)
+        return root
+
+    # An explicitly configured data disk must fail closed when it disappears.
+    # Unconfigured development and CI environments may keep their OS temp root.
+    strict_external_path = (
+        settings.temporary_root_path is not None or settings.model_root_path_configured
+    )
+    if strict_external_path:
+        os.environ["TMPDIR"] = str(root)
+        tempfile.tempdir = str(root)
+        return root
+    return Path(tempfile.gettempdir())
 
 
 def load_dotenv_files() -> None:
@@ -205,6 +227,11 @@ def _hermes_radar_status(path: str | None) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Settings:
+    llm_provider: str | None = None
+    llm_api_key: str | None = None
+    llm_api_key_provider: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
@@ -229,6 +256,8 @@ class Settings:
     local_whisper_model_path: str | None = None
     local_whisper_language: str = "zh"
     model_root_path: str = _default_model_root_path()
+    model_root_path_configured: bool = False
+    temporary_root_path: str | None = None
     model_runtime_python_path: str = _default_model_runtime_python_path()
     visual_model_worker_path: str = _default_visual_model_worker_path()
     voice_model_worker_path: str = _default_voice_model_worker_path()
@@ -238,6 +267,43 @@ class Settings:
     supabase_secret_key: str | None = None
     supabase_jwt_audience: str = "authenticated"
     supabase_jwt_issuer: str | None = None
+
+    @property
+    def effective_llm_provider(self) -> str:
+        return (self.llm_provider or "deepseek").strip().lower()
+
+    @property
+    def effective_llm_api_key(self) -> str | None:
+        if self.llm_api_key:
+            owner = (self.llm_api_key_provider or "").strip().lower()
+            if not owner or owner == self.effective_llm_provider:
+                return self.llm_api_key
+        if self.effective_llm_provider == "deepseek":
+            return self.deepseek_api_key
+        return None
+
+    @property
+    def effective_llm_base_url(self) -> str:
+        return (self.llm_base_url or self.deepseek_base_url).rstrip("/")
+
+    @property
+    def effective_llm_model(self) -> str:
+        return self.llm_model or self.deepseek_model
+
+    @property
+    def llm_configured(self) -> bool:
+        provider = self.effective_llm_provider
+        has_connection = bool(self.effective_llm_base_url and self.effective_llm_model)
+        return has_connection and (
+            provider in {"ollama", "custom"} or bool(self.effective_llm_api_key)
+        )
+
+    @property
+    def effective_temporary_root_path(self) -> Path:
+        configured = self.temporary_root_path
+        if configured:
+            return Path(configured).expanduser()
+        return Path(self.model_root_path).expanduser().parent / "temporary"
 
     @property
     def auth_enabled(self) -> bool:
@@ -257,6 +323,11 @@ class Settings:
         load_dotenv_files()
         model_root_path = os.getenv("MODEL_ROOT_PATH") or _default_model_root_path()
         return cls(
+            llm_provider=os.getenv("LLM_PROVIDER"),
+            llm_api_key=os.getenv("LLM_API_KEY"),
+            llm_api_key_provider=os.getenv("LLM_API_KEY_PROVIDER"),
+            llm_base_url=os.getenv("LLM_BASE_URL"),
+            llm_model=os.getenv("LLM_MODEL"),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
             deepseek_model=os.getenv("DEEPSEEK_MODEL", cls.deepseek_model),
@@ -316,6 +387,8 @@ class Settings:
                 cls.local_whisper_language,
             ),
             model_root_path=model_root_path,
+            model_root_path_configured=bool(os.getenv("MODEL_ROOT_PATH")),
+            temporary_root_path=os.getenv("TEMPORARY_ROOT_PATH"),
             model_runtime_python_path=os.getenv("MODEL_RUNTIME_PYTHON_PATH")
             or _default_model_runtime_python_path(model_root_path),
             visual_model_worker_path=os.getenv("VISUAL_MODEL_WORKER_PATH")
@@ -334,7 +407,7 @@ class Settings:
         )
 
     def public_status(self) -> dict[str, Any]:
-        cloud_configured = bool(self.deepseek_api_key)
+        cloud_configured = self.llm_configured
         obsidian_path = self.obsidian_vault_path
         obsidian_exists = bool(
             obsidian_path
@@ -346,10 +419,10 @@ class Settings:
         database_path = Path(self.database_path).expanduser()
         return {
             "llm": {
-                "provider": "deepseek" if cloud_configured else "local-extractive",
-                "configured": True,
-                "model": self.deepseek_model if cloud_configured else "source-grounded-v1",
-                "base_url": self.deepseek_base_url if cloud_configured else "local",
+                "provider": self.effective_llm_provider if cloud_configured else "local-extractive",
+                "configured": cloud_configured,
+                "model": self.effective_llm_model if cloud_configured else "source-grounded-v1",
+                "base_url": self.effective_llm_base_url if cloud_configured else "local",
             },
             "obsidian": {
                 "configured": bool(obsidian_path),
@@ -408,6 +481,30 @@ class Settings:
         return {
             "settings": [
                 {
+                    "name": "LLM_PROVIDER",
+                    "configured": True,
+                    "value": self.effective_llm_provider,
+                    "secret": False,
+                },
+                {
+                    "name": "LLM_API_KEY",
+                    "configured": bool(self.effective_llm_api_key),
+                    "value": "已配置" if self.effective_llm_api_key else "未配置",
+                    "secret": True,
+                },
+                {
+                    "name": "LLM_BASE_URL",
+                    "configured": bool(self.effective_llm_base_url),
+                    "value": self.effective_llm_base_url,
+                    "secret": False,
+                },
+                {
+                    "name": "LLM_MODEL",
+                    "configured": bool(self.effective_llm_model),
+                    "value": self.effective_llm_model,
+                    "secret": False,
+                },
+                {
                     "name": "DEEPSEEK_API_KEY",
                     "configured": bool(self.deepseek_api_key),
                     "value": "已配置" if self.deepseek_api_key else "未配置",
@@ -465,6 +562,12 @@ class Settings:
                     "name": "MODEL_ROOT_PATH",
                     "configured": bool(self.model_root_path),
                     "value": self.model_root_path,
+                    "secret": False,
+                },
+                {
+                    "name": "TEMPORARY_ROOT_PATH",
+                    "configured": bool(self.effective_temporary_root_path),
+                    "value": str(self.effective_temporary_root_path),
                     "secret": False,
                 },
                 {

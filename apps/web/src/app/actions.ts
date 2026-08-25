@@ -65,6 +65,7 @@ const DIRECTORY_FIELD_NAMES: ReadonlySet<string> = new Set([
   "jianying_draft_root_path",
   "database_path",
   "model_root_path",
+  "temporary_root_path",
 ]);
 
 function requiredString(formData: FormData, key: string): string {
@@ -85,7 +86,9 @@ function feedbackValue(formData: FormData): FeedbackValue {
   return value;
 }
 
-function optionalFeedbackValue(value: FormDataEntryValue | null): FeedbackValue | null {
+function optionalFeedbackValue(
+  value: FormDataEntryValue | null,
+): FeedbackValue | null {
   if (value === "up" || value === "down") {
     return value;
   }
@@ -151,7 +154,9 @@ function scriptFromFormData(formData: FormData): ScriptPackage {
         requiredString(formData, `section_seconds:${sectionId}`),
       ),
       content: requiredString(formData, `section_content:${sectionId}`),
-      feedback: optionalFeedbackValue(formData.get(`section_feedback:${sectionId}`)),
+      feedback: optionalFeedbackValue(
+        formData.get(`section_feedback:${sectionId}`),
+      ),
     })),
     title_options: titleOptions,
     cover_copy: requiredString(formData, "cover_copy"),
@@ -302,7 +307,10 @@ export async function regenerateScriptAction(formData: FormData) {
   const episodeId = requiredString(formData, "episode_id");
 
   try {
-    await regenerateEpisodeScript(episodeId, optionalString(formData, "reason"));
+    await regenerateEpisodeScript(
+      episodeId,
+      optionalString(formData, "reason"),
+    );
     revalidatePath("/script");
     redirectWithToast("/script", "success", "口播稿已整体重新生成");
   } catch (err) {
@@ -484,11 +492,7 @@ export async function processAdHocVideoBatchAction(formData: FormData) {
   try {
     await processAdHocEpisodeVideoBatch(episodeId, fileNames);
     revalidatePath("/video");
-    redirectWithToast(
-      "/video",
-      "success",
-      `已合并 ${fileNames.length} 段视频`,
-    );
+    redirectWithToast("/video", "success", `已合并 ${fileNames.length} 段视频`);
   } catch (err) {
     redirectWithToast(
       "/video",
@@ -652,7 +656,8 @@ export async function restorePreferenceCardAction(formData: FormData) {
 
 export async function createDraftPackageAction(formData: FormData) {
   const value = formData.get("video_file_name");
-  const fileName = typeof value === "string" && value.length > 0 ? value : undefined;
+  const fileName =
+    typeof value === "string" && value.length > 0 ? value : undefined;
 
   try {
     await createDraftPackage(fileName);
@@ -725,7 +730,8 @@ export async function revertEditPlanSegmentDecisionAction(formData: FormData) {
 
 export async function importDraftPackageAction(formData: FormData) {
   const value = formData.get("package_name");
-  const packageName = typeof value === "string" && value.length > 0 ? value : undefined;
+  const packageName =
+    typeof value === "string" && value.length > 0 ? value : undefined;
 
   try {
     await importDraftPackage(packageName);
@@ -784,8 +790,22 @@ export async function ingestManualLinkAction(formData: FormData) {
 }
 
 export async function updateRuntimeSettingsAction(formData: FormData) {
-  type RuntimeTextField = Exclude<keyof RuntimeSettingsUpdate, "topic_source_urls">;
+  const requestedSection = formData.get("settings_section");
+  const section =
+    typeof requestedSection === "string" &&
+    ["model", "paths", "asr", "sources"].includes(requestedSection)
+      ? requestedSection
+      : "model";
+  const destination = `/settings?section=${section}`;
+  type RuntimeTextField = Exclude<
+    keyof RuntimeSettingsUpdate,
+    "topic_source_urls"
+  >;
   const textFieldNames: RuntimeTextField[] = [
+    "llm_provider",
+    "llm_api_key",
+    "llm_base_url",
+    "llm_model",
     "deepseek_api_key",
     "deepseek_model",
     "product_hunt_token",
@@ -804,6 +824,7 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
     "jianying_draft_root_path",
     "database_path",
     "model_root_path",
+    "temporary_root_path",
   ];
   const payload: RuntimeSettingsUpdate = {};
 
@@ -838,10 +859,10 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
 
     await updateRuntimeSettings(payload);
     revalidatePath("/settings");
-    redirectWithToast("/settings", "success", "配置已保存");
+    redirectWithToast(destination, "success", "配置已保存");
   } catch (err) {
     redirectWithToast(
-      "/settings",
+      destination,
       "error",
       `保存配置失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -905,7 +926,9 @@ export async function reviewProductionMaterialAction(formData: FormData) {
   redirectWithToast("/production", "success", "素材审核状态已更新");
 }
 
-export async function updateProductionMaterialSegmentAction(formData: FormData) {
+export async function updateProductionMaterialSegmentAction(
+  formData: FormData,
+) {
   const assetId = requiredString(formData, "asset_id");
   const segmentId = requiredString(formData, "segment_id");
   const status = requiredString(formData, "review_status");
@@ -949,7 +972,9 @@ export async function updateProductionProfileAction(formData: FormData) {
       target_duration_max_seconds: Number(
         requiredString(formData, "target_duration_max_seconds"),
       ),
-      brand_template_name: String(formData.get("brand_template_name") ?? "").trim(),
+      brand_template_name: String(
+        formData.get("brand_template_name") ?? "",
+      ).trim(),
       brand_colors: String(formData.get("brand_colors") ?? "")
         .split(/[\n,]/)
         .map((value) => value.trim())
@@ -957,16 +982,21 @@ export async function updateProductionProfileAction(formData: FormData) {
       subtitle_style: String(formData.get("subtitle_style") ?? "").trim(),
       intro_text: String(formData.get("intro_text") ?? "").trim(),
       outro_text: String(formData.get("outro_text") ?? "").trim(),
-      background_music_path: optionalString(formData, "background_music_path") ?? null,
+      background_music_path:
+        optionalString(formData, "background_music_path") ?? null,
       voice_name: String(formData.get("voice_name") ?? "").trim(),
-      voice_reference_path: optionalString(formData, "voice_reference_path") ?? null,
-      voice_reference_text: String(formData.get("voice_reference_text") ?? "").trim(),
+      voice_reference_path:
+        optionalString(formData, "voice_reference_path") ?? null,
+      voice_reference_text: String(
+        formData.get("voice_reference_text") ?? "",
+      ).trim(),
       voice_consent_confirmed: formData.get("voice_consent_confirmed") === "on",
       source_urls: sourceUrls,
       use_obsidian: formData.get("use_obsidian") === "on",
       use_hermes: formData.get("use_hermes") === "on",
       factuality_gate_enabled: true,
-      cloud_enhancement_enabled: formData.get("cloud_enhancement_enabled") === "on",
+      cloud_enhancement_enabled:
+        formData.get("cloud_enhancement_enabled") === "on",
     });
   } catch (err) {
     redirectWithToast(
@@ -984,7 +1014,10 @@ export async function createVoiceProfileAction(formData: FormData) {
   try {
     await createVoiceProfile({
       name: requiredString(formData, "name").trim(),
-      reference_audio_path: requiredString(formData, "reference_audio_path").trim(),
+      reference_audio_path: requiredString(
+        formData,
+        "reference_audio_path",
+      ).trim(),
       reference_text: requiredString(formData, "reference_text").trim(),
       consent_confirmed: formData.get("consent_confirmed") === "on",
       is_default: formData.get("is_default") === "on",
@@ -1069,7 +1102,8 @@ export async function createMontagePlanAction(formData: FormData) {
     );
     const plan = await createMontagePlan(batchId, {
       episode_id: episodeId,
-      narration_audio_path: optionalString(formData, "narration_audio_path") ?? null,
+      narration_audio_path:
+        optionalString(formData, "narration_audio_path") ?? null,
     });
     successKind = plan.status === "waiting_for_user" ? "info" : "success";
     successMessage = plan.message;
@@ -1086,7 +1120,9 @@ export async function createMontagePlanAction(formData: FormData) {
 
 export async function confirmMontageClipsAction(formData: FormData) {
   const planId = requiredString(formData, "plan_id");
-  const clipIds = requiredString(formData, "clip_ids").split(",").filter(Boolean);
+  const clipIds = requiredString(formData, "clip_ids")
+    .split(",")
+    .filter(Boolean);
   let successMessage = "镜头已确认";
   try {
     const plan = await confirmMontageClips(planId, clipIds);

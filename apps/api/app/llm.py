@@ -175,11 +175,11 @@ class DeepSeekScriptGenerator:
         template: ContentTemplate | None = None,
         target_duration_seconds: int | None = None,
     ) -> ScriptPackage:
-        if not self._settings.deepseek_api_key:
-            raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
+        if not self._settings.llm_configured:
+            raise LLMConfigurationError("LLM provider is not configured")
 
         payload = {
-            "model": self._settings.deepseek_model,
+            "model": self._settings.effective_llm_model,
             "messages": [
                 {
                     "role": "system",
@@ -200,8 +200,12 @@ class DeepSeekScriptGenerator:
             "temperature": 0.7,
             "max_tokens": 2400,
         }
-        url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
+        url = f"{self._settings.effective_llm_base_url}/chat/completions"
+        headers = {}
+        if self._settings.effective_llm_api_key:
+            headers["Authorization"] = (
+                f"Bearer {self._settings.effective_llm_api_key}"
+            )
 
         response = _httpx_post_with_retry(
             url, payload, headers, self._timeout, self._transport
@@ -229,14 +233,14 @@ class DeepSeekScriptGenerator:
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
     ) -> ScriptSection:
-        if not self._settings.deepseek_api_key:
-            raise LLMConfigurationError("DEEPSEEK_API_KEY is not configured")
+        if not self._settings.llm_configured:
+            raise LLMConfigurationError("LLM provider is not configured")
 
         current = next(
             section for section in current_script.sections if section.id == section_id
         )
         payload = {
-            "model": self._settings.deepseek_model,
+            "model": self._settings.effective_llm_model,
             "messages": [
                 {"role": "system", "content": self._section_system_prompt(template)},
                 {
@@ -255,8 +259,12 @@ class DeepSeekScriptGenerator:
             "temperature": 0.7,
             "max_tokens": 900,
         }
-        url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
+        url = f"{self._settings.effective_llm_base_url}/chat/completions"
+        headers = {}
+        if self._settings.effective_llm_api_key:
+            headers["Authorization"] = (
+                f"Bearer {self._settings.effective_llm_api_key}"
+            )
 
         response = _httpx_post_with_retry(
             url, payload, headers, self._timeout, self._transport
@@ -560,6 +568,6 @@ def _section_role(index: int, total: int) -> str:
 
 
 def script_generator_from_settings(settings: Settings) -> ScriptGenerator:
-    if settings.deepseek_api_key:
+    if settings.llm_configured:
         return DeepSeekScriptGenerator(settings)
     return TemplateScriptGenerator()

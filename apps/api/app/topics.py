@@ -187,15 +187,15 @@ class DeepSeekTopicGenerator:
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
     ) -> list[TopicCandidate]:
-        if not self._settings.deepseek_api_key:
-            raise TopicGenerationConfigurationError("DEEPSEEK_API_KEY is not configured")
+        if not self._settings.llm_configured:
+            raise TopicGenerationConfigurationError("LLM provider is not configured")
         notes = self._vault.recent_notes(limit=16)
         source_items = [note.to_topic_source() for note in notes] + self._external_source_provider()
         if not source_items:
             raise TopicGenerationConfigurationError("No topic sources are available")
 
         payload = {
-            "model": self._settings.deepseek_model,
+            "model": self._settings.effective_llm_model,
             "messages": [
                 {"role": "system", "content": self._system_prompt(template)},
                 {"role": "user", "content": self._user_prompt(day_number, source_items, feedback_events or [], template)},
@@ -204,8 +204,12 @@ class DeepSeekTopicGenerator:
             "temperature": 0.75,
             "max_tokens": 3200,
         }
-        url = f"{self._settings.deepseek_base_url.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._settings.deepseek_api_key}"}
+        url = f"{self._settings.effective_llm_base_url}/chat/completions"
+        headers = {}
+        if self._settings.effective_llm_api_key:
+            headers["Authorization"] = (
+                f"Bearer {self._settings.effective_llm_api_key}"
+            )
 
         with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
             response = client.post(url, json=payload, headers=headers)
@@ -447,7 +451,7 @@ def topic_generator_from_settings(settings: Settings, vault: ObsidianVault) -> T
         or settings.topic_source_urls
         or settings.hermes_radar_path
     )
-    if settings.deepseek_api_key and has_sources:
+    if settings.llm_configured and has_sources:
         return DeepSeekTopicGenerator(
             settings,
             vault,

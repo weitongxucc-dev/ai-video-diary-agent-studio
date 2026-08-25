@@ -28,6 +28,27 @@ def test_runtime_settings_updates_maps_known_fields_and_skips_blank_values():
     }
 
 
+def test_runtime_settings_supports_openai_compatible_provider_fields():
+    updates = runtime_settings_updates(
+        {
+            "llm_provider": " openrouter ",
+            "llm_api_key": " sk-or-secret ",
+            "llm_base_url": " https://openrouter.ai/api/v1 ",
+            "llm_model": " anthropic/claude-sonnet-4.6 ",
+            "temporary_root_path": " /Volumes/Media/AI视频日记/temporary ",
+        }
+    )
+
+    assert updates == {
+        "LLM_PROVIDER": "openrouter",
+        "LLM_API_KEY": "sk-or-secret",
+        "LLM_API_KEY_PROVIDER": "openrouter",
+        "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        "LLM_MODEL": "anthropic/claude-sonnet-4.6",
+        "TEMPORARY_ROOT_PATH": "/Volumes/Media/AI视频日记/temporary",
+    }
+
+
 def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
     from app.config import Settings
 
@@ -41,6 +62,24 @@ def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
         settings.model_runtime_python_path
         == "/Volumes/Models/AI视频日记/model-runtime/bin/python"
     )
+
+
+def test_unconfigured_missing_model_root_keeps_operating_system_temp(tmp_path, monkeypatch):
+    import tempfile
+
+    from app.config import Settings, configure_process_temporary_directory
+
+    original_tempdir = tempfile.tempdir
+    monkeypatch.delenv("TMPDIR", raising=False)
+    tempfile.tempdir = None
+    try:
+        selected = configure_process_temporary_directory(
+            Settings(model_root_path=str(tmp_path / "missing" / "models"))
+        )
+        assert selected.is_dir()
+        assert "missing" not in str(selected)
+    finally:
+        tempfile.tempdir = original_tempdir
 
 
 def test_runtime_settings_updates_omits_empty_topic_source_urls():

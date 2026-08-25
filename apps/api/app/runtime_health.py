@@ -119,12 +119,15 @@ def _health_item(
 
 
 def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
-    if settings.deepseek_api_key:
+    if settings.llm_configured:
         return _health_item(
             item_id="deepseek",
-            label="DeepSeek",
+            label="AI 文案模型",
             status="ready",
-            reason=f"已配置模型 {settings.deepseek_model}",
+            reason=(
+                f"已配置 {settings.effective_llm_provider} / "
+                f"{settings.effective_llm_model}"
+            ),
             impact="可生成选题、脚本和语音指令草案。",
             repair_action="无需处理。",
             checked_at=checked_at,
@@ -133,9 +136,9 @@ def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
         item_id="deepseek",
         label="云端文案增强",
         status="degraded",
-        reason="未配置 DeepSeek，当前使用本地来源摘要生成器。",
+        reason="未配置外部模型，当前使用本地来源摘要生成器。",
         impact="本地闭环可用，但文案的表达丰富度较低。",
-        repair_action="可选：在设置页填写自有 DeepSeek API Key 开启云端增强。",
+        repair_action="可选：在设置页连接自有模型服务开启云端增强。",
         fix_command=None,
         checked_at=checked_at,
     )

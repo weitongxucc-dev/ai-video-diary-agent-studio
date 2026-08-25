@@ -589,6 +589,10 @@ export type RuntimeSettings = {
 };
 
 export type RuntimeSettingsUpdate = {
+  llm_provider?: string;
+  llm_api_key?: string;
+  llm_base_url?: string;
+  llm_model?: string;
   deepseek_api_key?: string;
   deepseek_model?: string;
   product_hunt_token?: string;
@@ -607,6 +611,7 @@ export type RuntimeSettingsUpdate = {
   jianying_draft_root_path?: string;
   database_path?: string;
   model_root_path?: string;
+  temporary_root_path?: string;
   topic_source_urls?: string[];
 };
 
@@ -1028,6 +1033,9 @@ export type MaterialAsset = {
 export type MaterialLibrary = {
   assets: MaterialAsset[];
   total_count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 };
 
 export type MaterialCollection = {
