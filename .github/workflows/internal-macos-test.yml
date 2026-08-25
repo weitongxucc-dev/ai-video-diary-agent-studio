@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -182,13 +182,38 @@ jobs:
           rm -rf "$dmg_root"
 
           cd "$output_dir"
-          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS.txt
+          shasum -a 256 ./*.dmg ./*.zip > "SHA256SUMS-${{ matrix.arch }}.txt"
           ls -lh
 
       - name: Upload internal test package
+        id: artifact-upload
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: AI视频日记-internal-${{ matrix.arch }}
           path: internal-test-${{ matrix.arch }}/
           retention-days: 7
           if-no-files-found: error
+
+      - name: Fall back to a private draft release
+        if: steps.artifact-upload.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="internal-${GITHUB_SHA:0:7}"
+          for attempt in 1 2 3; do
+            if gh release view "$release_tag" >/dev/null 2>&1; then
+              break
+            fi
+            gh release create "$release_tag" \
+              --draft \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "Internal test ${GITHUB_SHA:0:7}" \
+              --notes "Ad-hoc signed internal test packages. Not notarized for public release." \
+              && break
+            sleep $((attempt * 2))
+          done
+          gh release view "$release_tag" >/dev/null
+          gh release upload "$release_tag" internal-test-${{ matrix.arch }}/* --clobber

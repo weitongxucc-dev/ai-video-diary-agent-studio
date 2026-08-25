@@ -10,8 +10,9 @@
 - 使用 uv 管理的 Python 3.11.15 构建 API 与 Worker。
 - 校验二进制架构。
 - 对 `.app` 做 ad-hoc 签名并启动打包后的 API 健康 smoke。
-- 生成 DMG、ZIP 和 `SHA256SUMS.txt`。
+- 生成 DMG、ZIP 和按架构命名的 `SHA256SUMS-<arch>.txt`。
 - Artifact 仅保留 7 天。
+- Artifact 配额不可用时，产物会转存到与提交绑定的 GitHub 草稿预发布；草稿不会公开展示。
 
 这类包只供可信测试者使用，不具备 Developer ID 信任和 Apple 公证，不能作为公开 Release。
 
