@@ -3,8 +3,10 @@ import { updateRuntimeSettingsAction } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
-import { getRuntimeSettings } from "@/lib/api.server";
+import { ModelInstallPanel } from "@/components/ModelInstallPanel";
+import { getLocalModels, getRuntimeSettings } from "@/lib/api.server";
 import type {
+  LocalModelStatus,
   RuntimeSettingItem,
   RuntimeSettings,
   SystemStatus,
@@ -14,12 +16,15 @@ export const dynamic = "force-dynamic";
 
 async function loadSettings(): Promise<{
   runtime: RuntimeSettings | null;
+  models: LocalModelStatus[];
   offline: boolean;
 }> {
   try {
-    return { runtime: await getRuntimeSettings(), offline: false };
+    const runtime = await getRuntimeSettings();
+    const catalog = await getLocalModels().catch(() => ({ models: [] }));
+    return { runtime, models: catalog.models, offline: false };
   } catch {
-    return { runtime: null, offline: true };
+    return { runtime: null, models: [], offline: true };
   }
 }
 
@@ -52,7 +57,7 @@ const SECTIONS: SectionDef[] = [
     id: "paths",
     title: "本地目录",
     description:
-      "Obsidian、视频、剪映与数据库都要求本地路径存在；桌面端点击「选择目录」直接填入绝对路径，浏览器中请手动输入。",
+      "Obsidian、视频、剪映、数据库与本地模型都使用绝对路径；大模型建议放在空间充足的移动硬盘。",
     tone: "green",
   },
   {
@@ -165,6 +170,14 @@ function buildFields(
         kind: "directory",
         defaultValue: valueOf("DATABASE_PATH"),
         placeholder: "/Users/you/.ai-video-diary/studio.db",
+      },
+      {
+        name: "model_root_path",
+        label: "本地模型与缓存目录",
+        helper: "模型、运行环境和下载缓存会优先放在这里；移动硬盘未挂载时安装会直接停止，不会回退到内置硬盘。",
+        kind: "directory",
+        defaultValue: valueOf("MODEL_ROOT_PATH"),
+        placeholder: "/Volumes/External/AI视频日记/models",
       },
     ],
     asr: [
@@ -361,7 +374,7 @@ function FieldRow({ field }: { field: FieldDef }) {
 }
 
 export default async function SettingsPage() {
-  const { runtime, offline } = await loadSettings();
+  const { runtime, models, offline } = await loadSettings();
   const settingItems = runtime?.settings ?? [];
   const status = runtime?.status;
   const fields = buildFields(settingItems, runtime?.status ?? defaultStatus);
@@ -419,6 +432,11 @@ export default async function SettingsPage() {
               );
             })}
 
+            <ModelInstallPanel
+              modelRootPath={valueOfSetting(settingItems, "MODEL_ROOT_PATH")}
+              models={models}
+            />
+
             <div className="settings-actions">
               <button className="pixel-button" disabled={offline} type="submit">
                 保存配置
@@ -454,6 +472,10 @@ export default async function SettingsPage() {
       </div>
     </AppShell>
   );
+}
+
+function valueOfSetting(settings: RuntimeSettingItem[], name: string): string {
+  return settings.find((entry) => entry.name === name)?.value ?? "";
 }
 
 const defaultStatus: SystemStatus = {

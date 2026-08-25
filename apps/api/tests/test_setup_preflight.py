@@ -114,8 +114,8 @@ def test_preflight_all_ready_with_mock_ffmpeg(tmp_path, monkeypatch):
 # ── Missing API key ─────────────────────────────────────────────────────
 
 
-def test_preflight_missing_deepseek_key_blocks():
-    """No DeepSeek key → overall blocked and deepseek check is missing."""
+def test_preflight_missing_deepseek_key_uses_local_degraded_mode():
+    """No DeepSeek key keeps the local source-grounded generator available."""
     settings = Settings(deepseek_api_key=None)
 
     with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
@@ -123,7 +123,8 @@ def test_preflight_missing_deepseek_key_blocks():
 
     assert result["overall"] == "blocked"
     deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
-    assert deepseek["status"] == "missing"
+    assert deepseek["status"] == "degraded"
+    assert "本地" in deepseek["summary"]
     assert "未配置" in deepseek["summary"]
 
 
@@ -341,8 +342,8 @@ def test_preflight_non_critical_degraded_does_not_block(tmp_path):
 # ── Not applicable vs missing ───────────────────────────────────────────
 
 
-def test_preflight_obsidian_not_configured_is_missing():
-    """When obsidian path is empty/falsy, it's missing (not 'not_applicable')."""
+def test_preflight_obsidian_not_configured_is_degraded():
+    """Obsidian is optional when the maintained external source pool is used."""
     settings = Settings(
         deepseek_api_key="sk-test",
         obsidian_vault_path="",
@@ -353,7 +354,7 @@ def test_preflight_obsidian_not_configured_is_missing():
         result = setup_preflight(settings)
 
     obsidian = next(c for c in result["checks"] if c["id"] == "obsidian")
-    assert obsidian["status"] == "missing"
+    assert obsidian["status"] == "degraded"
 
 
 # ── Secrets and paths are never leaked ─────────────────────────────────

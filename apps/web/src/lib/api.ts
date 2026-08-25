@@ -12,13 +12,21 @@ import type {
   FeedbackValue,
   FeedbackSummary,
   KnowledgeNote,
+  LocalModelCatalog,
+  ModelInstallJob,
   OnboardingCompletionResponse,
   PendingVideo,
+  MaterialAsset,
+  MaterialLibrary,
+  MontagePlan,
   Preferences,
   PreferenceCards,
   PreferenceEvidence,
   ProcessedVideo,
   ProductionChain,
+  ProductionBatch,
+  ProductionFoundation,
+  ProductionProfile,
   PublishFeedback,
   RetakeReport,
   RuntimeHealth,
@@ -102,6 +110,122 @@ export function getWorkflowStatus(): Promise<WorkflowStatus> {
   return request<WorkflowStatus>("/api/workflow/status");
 }
 
+export function getProductionFoundation(): Promise<ProductionFoundation> {
+  return request<ProductionFoundation>("/api/production/foundation");
+}
+
+export function getProductionMaterials(): Promise<MaterialLibrary> {
+  return request<MaterialLibrary>("/api/production/materials");
+}
+
+export function scanProductionMaterials(): Promise<MaterialLibrary> {
+  return request<MaterialLibrary>("/api/production/materials/scan", {
+    method: "POST",
+  });
+}
+
+export function analyzeProductionMaterial(assetId: string): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/analyze`, {
+    method: "POST",
+  });
+}
+
+export function reviewProductionMaterial(
+  assetId: string,
+  input: {
+    review_status: "raw" | "approved" | "rejected";
+    usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+    rights_confirmed: boolean;
+    brand_safe: boolean;
+  },
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/review`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateProductionMaterialSegment(
+  assetId: string,
+  segmentId: string,
+  input: {
+    description: string;
+    transcript: string;
+    review_status: "raw" | "approved" | "rejected";
+    usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
+  },
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(
+    `/api/production/materials/${assetId}/segments/${segmentId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function updateProductionProfile(
+  input: Omit<
+    ProductionProfile,
+    | "workspace_id"
+    | "primary_platform"
+    | "aspect_ratio"
+    | "target_duration_min_seconds"
+    | "target_duration_max_seconds"
+    | "voice_model_status"
+    | "voice_model_message"
+    | "updated_at"
+  >,
+): Promise<ProductionProfile> {
+  return request<ProductionProfile>("/api/production/profile", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function createProductionBatch(input: {
+  name: string;
+  target_count: number;
+}): Promise<ProductionBatch> {
+  return request<ProductionBatch>("/api/production/batches", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function runProductionBatch(batchId: string): Promise<ProductionBatch> {
+  return request<ProductionBatch>(`/api/production/batches/${batchId}/run`, {
+    method: "POST",
+  });
+}
+
+export function createMontagePlan(
+  batchId: string,
+  input: { episode_id: string; narration_audio_path: string | null },
+): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/batches/${batchId}/montage-plans`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function confirmMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ clip_ids: clipIds }),
+  });
+}
+
+export function renderMontagePlan(
+  planId: string,
+  narrationAudioPath: string,
+): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/render`, {
+    method: "POST",
+    body: JSON.stringify({ narration_audio_path: narrationAudioPath }),
+  });
+}
+
 export function previewVoiceCommand(
   episodeId: string,
   transcript: string,
@@ -157,6 +281,26 @@ export function updateRuntimeSettings(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getLocalModels(): Promise<LocalModelCatalog> {
+  return request<LocalModelCatalog>("/api/models");
+}
+
+export function installLocalModel(modelId: string): Promise<ModelInstallJob> {
+  return request<ModelInstallJob>(
+    `/api/models/${encodeURIComponent(modelId)}/install`,
+    {
+      method: "POST",
+      body: JSON.stringify({ license_accepted: true }),
+    },
+  );
+}
+
+export function getModelInstallJob(jobId: string): Promise<ModelInstallJob> {
+  return request<ModelInstallJob>(
+    `/api/model-install-jobs/${encodeURIComponent(jobId)}`,
+  );
 }
 
 export function getKnowledgeNotes(query?: string): Promise<KnowledgeNote[]> {

@@ -27,10 +27,11 @@ def setup_preflight(settings: Settings) -> dict:
         _asr_check(settings),
     ]
 
-    critical = {"deepseek", "ffmpeg", "asr"}
-    any_missing_or_invalid = any(
+    critical = {"video_inbox", "video_output", "ffmpeg", "asr"}
+    critical_missing_or_invalid = any(
         check["status"] in ("missing", "invalid")
         for check in checks
+        if check["id"] in critical
     )
     critical_ready = all(
         check["status"] == "ready"
@@ -38,7 +39,7 @@ def setup_preflight(settings: Settings) -> dict:
         if check["id"] in critical
     )
 
-    overall_ready = critical_ready and not any_missing_or_invalid
+    overall_ready = critical_ready and not critical_missing_or_invalid
 
     return {
         "overall": "ready" if overall_ready else "blocked",
@@ -84,11 +85,11 @@ def _deepseek_check(settings: Settings) -> dict:
         )
     return _preflight_item(
         item_id="deepseek",
-        label="DeepSeek API",
-        status="missing",
-        summary="未配置 DEEPSEEK_API_KEY",
-        impact="无法生成选题、脚本和语音指令草案。",
-        repair_action="在设置 → API 密钥中填写 DeepSeek API Key 后保存。",
+        label="云端文案增强",
+        status="degraded",
+        summary="未配置 DeepSeek，使用本地来源摘要生成器",
+        impact="本地选题和文案仍可生成，表达丰富度可能较低。",
+        repair_action="可选：填写自有 DeepSeek API Key 开启云端增强。",
         settings_target="deepseek_api_key",
     )
 
@@ -98,7 +99,7 @@ def _obsidian_check(settings: Settings) -> dict:
         return _preflight_item(
             item_id="obsidian",
             label="Obsidian 知识库",
-            status="missing",
+            status="degraded",
             summary="未配置 OBSIDIAN_VAULT_PATH",
             impact="无法摄入知识库笔记作为选题上下文。",
             repair_action="在设置页选择 Obsidian Vault 目录。",

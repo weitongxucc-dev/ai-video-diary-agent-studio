@@ -40,6 +40,14 @@ function ensureUserDotenv() {
   }
 }
 
+function localModelEnv() {
+  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
+  return {
+    VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
+    VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
+  };
+}
+
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
   if (isDev) return null; // dev mode: user runs API separately
@@ -97,6 +105,7 @@ async function startApiServer() {
 
   const env = {
     ...process.env,
+    ...localModelEnv(),
     API_PORT: String(apiPort),
     API_HOST: '127.0.0.1',
     AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
@@ -329,6 +338,7 @@ function startWorker() {
 
   const env = {
     ...process.env,
+    ...localModelEnv(),
     API_PORT: String(apiPort),
     HOST: '127.0.0.1',
     AI_VIDEO_DIARY_DOTENV: userDotenvPath(),

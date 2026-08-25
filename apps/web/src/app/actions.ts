@@ -6,7 +6,10 @@ import {
   approveScript,
   approveTopic,
   archiveSources,
+  confirmMontageClips,
+  createMontagePlan,
   createEpisodeDraft,
+  createProductionBatch,
   createDraftPackage,
   disablePreferenceCard,
   generateTopics,
@@ -18,6 +21,7 @@ import {
   processAdHocEpisodeVideoBatch,
   processEpisodeVideo,
   processVideo,
+  analyzeProductionMaterial,
   regenerateEpisodeScript,
   regenerateEpisodeScriptSection,
   regenerateTopics,
@@ -27,9 +31,15 @@ import {
   revertFeedbackEvent,
   sendFeedback,
   selectEpisodeContentTemplate,
+  scanProductionMaterials,
   syncSourceItems,
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
+  updateProductionProfile,
+  updateProductionMaterialSegment,
+  reviewProductionMaterial,
+  renderMontagePlan,
+  runProductionBatch,
   uploadEpisodeVideo,
   updatePublishMetrics,
   updateRuntimeSettings,
@@ -51,6 +61,7 @@ const DIRECTORY_FIELD_NAMES: ReadonlySet<string> = new Set([
   "draft_output_path",
   "jianying_draft_root_path",
   "database_path",
+  "model_root_path",
 ]);
 
 function requiredString(formData: FormData, key: string): string {
@@ -789,6 +800,7 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
     "draft_output_path",
     "jianying_draft_root_path",
     "database_path",
+    "model_root_path",
   ];
   const payload: RuntimeSettingsUpdate = {};
 
@@ -831,4 +843,226 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
       `保存配置失败：${safeErrorMessage(err, "未知错误")}`,
     );
   }
+}
+
+export async function scanProductionMaterialsAction() {
+  try {
+    await scanProductionMaterials();
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `扫描素材失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", "素材库已扫描");
+}
+
+export async function analyzeProductionMaterialAction(formData: FormData) {
+  const assetId = requiredString(formData, "asset_id");
+  try {
+    await analyzeProductionMaterial(assetId);
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `镜头分析失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", "镜头分析已完成");
+}
+
+export async function reviewProductionMaterialAction(formData: FormData) {
+  const assetId = requiredString(formData, "asset_id");
+  const status = requiredString(formData, "review_status");
+  if (status !== "raw" && status !== "approved" && status !== "rejected") {
+    throw new Error("Invalid material review status");
+  }
+  const usageRole = requiredString(formData, "usage_role");
+  if (!["unassigned", "a_roll", "b_roll", "exclude"].includes(usageRole)) {
+    throw new Error("Invalid material usage role");
+  }
+  try {
+    await reviewProductionMaterial(assetId, {
+      review_status: usageRole === "exclude" ? "rejected" : status,
+      usage_role: usageRole as "unassigned" | "a_roll" | "b_roll" | "exclude",
+      rights_confirmed: formData.get("rights_confirmed") === "on",
+      brand_safe: formData.get("brand_safe") === "on",
+    });
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `素材审核失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", "素材审核状态已更新");
+}
+
+export async function updateProductionMaterialSegmentAction(formData: FormData) {
+  const assetId = requiredString(formData, "asset_id");
+  const segmentId = requiredString(formData, "segment_id");
+  const status = requiredString(formData, "review_status");
+  if (status !== "raw" && status !== "approved" && status !== "rejected") {
+    throw new Error("Invalid material segment status");
+  }
+  const usageRole = requiredString(formData, "usage_role");
+  if (!["unassigned", "a_roll", "b_roll", "exclude"].includes(usageRole)) {
+    throw new Error("Invalid material segment usage role");
+  }
+  try {
+    await updateProductionMaterialSegment(assetId, segmentId, {
+      description: String(formData.get("description") ?? "").trim(),
+      transcript: String(formData.get("transcript") ?? "").trim(),
+      review_status: status,
+      usage_role: usageRole as "unassigned" | "a_roll" | "b_roll" | "exclude",
+    });
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `保存镜头信息失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", "镜头语义和审核状态已保存");
+}
+
+export async function updateProductionProfileAction(formData: FormData) {
+  const sourceUrls = String(formData.get("source_urls") ?? "")
+    .split(/[\n,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  try {
+    await updateProductionProfile({
+      workspace_name: requiredString(formData, "workspace_name"),
+      brand_name: String(formData.get("brand_name") ?? "").trim(),
+      brand_template_name: String(formData.get("brand_template_name") ?? "").trim(),
+      brand_colors: String(formData.get("brand_colors") ?? "")
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      subtitle_style: String(formData.get("subtitle_style") ?? "").trim(),
+      intro_text: String(formData.get("intro_text") ?? "").trim(),
+      outro_text: String(formData.get("outro_text") ?? "").trim(),
+      background_music_path: optionalString(formData, "background_music_path") ?? null,
+      voice_name: String(formData.get("voice_name") ?? "").trim(),
+      voice_reference_path: optionalString(formData, "voice_reference_path") ?? null,
+      voice_reference_text: String(formData.get("voice_reference_text") ?? "").trim(),
+      voice_consent_confirmed: formData.get("voice_consent_confirmed") === "on",
+      source_urls: sourceUrls,
+      use_obsidian: formData.get("use_obsidian") === "on",
+      use_hermes: formData.get("use_hermes") === "on",
+      factuality_gate_enabled: true,
+      cloud_enhancement_enabled: formData.get("cloud_enhancement_enabled") === "on",
+    });
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `保存生产配置失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", "生产基础配置已保存");
+}
+
+export async function createProductionBatchAction(formData: FormData) {
+  const requestedCount = Number(requiredString(formData, "target_count"));
+  let successKind: ToastKind = "success";
+  let successMessage = "生产批次已创建";
+  try {
+    const batch = await createProductionBatch({
+      name: String(formData.get("name") ?? "").trim(),
+      target_count: Number.isFinite(requestedCount) ? requestedCount : 10,
+    });
+    successKind = batch.status === "blocked" ? "info" : "success";
+    successMessage = batch.message;
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `创建批次失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", successKind, successMessage);
+}
+
+export async function runProductionBatchAction(formData: FormData) {
+  const batchId = requiredString(formData, "batch_id");
+  try {
+    const batch = await runProductionBatch(batchId);
+    revalidatePath("/production");
+    redirectWithToast("/production", "success", batch.message);
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `启动批量生产失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+}
+
+export async function createMontagePlanAction(formData: FormData) {
+  const batchId = requiredString(formData, "batch_id");
+  let successKind: ToastKind = "success";
+  let successMessage = "混剪时间线已生成";
+  try {
+    const plan = await createMontagePlan(batchId, {
+      episode_id: requiredString(formData, "episode_id"),
+      narration_audio_path: optionalString(formData, "narration_audio_path") ?? null,
+    });
+    successKind = plan.status === "waiting_for_user" ? "info" : "success";
+    successMessage = plan.message;
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `生成混剪计划失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", successKind, successMessage);
+}
+
+export async function confirmMontageClipsAction(formData: FormData) {
+  const planId = requiredString(formData, "plan_id");
+  const clipIds = requiredString(formData, "clip_ids").split(",").filter(Boolean);
+  let successMessage = "镜头已确认";
+  try {
+    const plan = await confirmMontageClips(planId, clipIds);
+    successMessage = plan.message;
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `确认镜头失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", successMessage);
+}
+
+export async function renderMontagePlanAction(formData: FormData) {
+  const planId = requiredString(formData, "plan_id");
+  let successMessage = "初版成片已生成";
+  try {
+    const plan = await renderMontagePlan(
+      planId,
+      requiredString(formData, "narration_audio_path"),
+    );
+    successMessage = plan.message;
+  } catch (err) {
+    redirectWithToast(
+      "/production",
+      "error",
+      `渲染初版成片失败：${safeErrorMessage(err, "未知错误")}`,
+    );
+  }
+  revalidatePath("/production");
+  redirectWithToast("/production", "success", successMessage);
 }

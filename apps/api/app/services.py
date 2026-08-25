@@ -44,11 +44,12 @@ class EpisodeService:
                 episode.status = EpisodeStatus.TOPICS_READY
             return episode
 
-        episode.topics = self._topic_generator.generate(
+        generated = self._topic_generator.generate(
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
         )
+        episode.topics = self._topics_with_evidence(generated)
         episode.status = EpisodeStatus.TOPICS_READY
         return episode
 
@@ -109,11 +110,12 @@ class EpisodeService:
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
     ) -> Episode:
-        episode.topics = self._topic_generator.generate(
+        generated = self._topic_generator.generate(
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
         )
+        episode.topics = self._topics_with_evidence(generated)
         episode.selected_topic_id = None
         episode.script = None
         episode.script_versions = []
@@ -143,6 +145,7 @@ class EpisodeService:
             return episode
 
         selected = self._selected_topic(episode)
+        self._require_topic_evidence(selected)
         script = self._script_generator.generate(
             selected,
             day_number=episode.day_number,
@@ -156,6 +159,27 @@ class EpisodeService:
             reason="initial generation",
         )
         return episode
+
+    def _topics_with_evidence(
+        self,
+        topics: list[TopicCandidate],
+    ) -> list[TopicCandidate]:
+        grounded = [
+            topic
+            for topic in topics
+            if topic.source_refs
+            and all(source.title.strip() and source.ref.strip() for source in topic.source_refs)
+        ]
+        if not grounded:
+            raise ValueError("事实门禁已阻断：候选选题没有可追溯来源")
+        return grounded
+
+    def _require_topic_evidence(self, topic: TopicCandidate) -> None:
+        if not topic.source_refs or any(
+            not source.title.strip() or not source.ref.strip()
+            for source in topic.source_refs
+        ):
+            raise ValueError("事实门禁已阻断：选中选题缺少可追溯来源")
 
     def update_script(
         self,
@@ -193,6 +217,7 @@ class EpisodeService:
         reason: str | None = None,
     ) -> Episode:
         selected = self._selected_topic(episode)
+        self._require_topic_evidence(selected)
         script = self._script_generator.generate(
             selected,
             day_number=episode.day_number,
@@ -219,6 +244,7 @@ class EpisodeService:
             raise ValueError("script section not found")
 
         selected = self._selected_topic(episode)
+        self._require_topic_evidence(selected)
         replacement = self._script_generator.regenerate_section(
             selected,
             episode.script,

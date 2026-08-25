@@ -76,21 +76,23 @@ class TemplateScriptGenerator:
         feedback_events: list[FeedbackEvent] | None = None,
         template: ContentTemplate | None = None,
     ) -> ScriptPackage:
+        outline = [*topic.outline]
+        while len(outline) < 3:
+            outline.append("回到来源核对这个判断，不补充未经支持的事实。")
         return ScriptPackage(
             id=f"script_{uuid4().hex[:6]}",
-            hook=f"今天这个选题我想讲一个真实判断：{topic.core_viewpoint}",
+            hook=f"先说结论：{topic.core_viewpoint}",
             sections=[
-                ScriptSection("hook", "开头 3 秒钩子", 12, f"{topic.title} 这件事，表面看是技术问题，其实是产品生存问题。"),
-                ScriptSection("why", "为什么今天聊这个", 24, topic.reason),
-                ScriptSection("point_1", "原因 1", 36, topic.outline[0]),
-                ScriptSection("point_2", "原因 2", 36, topic.outline[1]),
-                ScriptSection("point_3", "原因 3", 36, topic.outline[2]),
-                ScriptSection("ending", "结尾金句", 18, "AI 产品最终比拼的不是演示效果，而是能不能进入真实生活和真实工作流。"),
+                ScriptSection("source", "信息来源", 8, topic.reason),
+                ScriptSection("point_1", "第一个信息点", 12, outline[0]),
+                ScriptSection("point_2", "第二个信息点", 12, outline[1]),
+                ScriptSection("point_3", "第三个信息点", 12, outline[2]),
+                ScriptSection("ending", "结尾判断", 8, f"所以我目前的判断是：{topic.core_viewpoint}"),
             ],
-            title_options=[topic.title, f"第 {day_number} 天：{topic.title}", f"一个 AI 产品判断：{topic.core_viewpoint}"],
+            title_options=[topic.title, f"今天值得关注：{topic.title}", f"一个可验证的判断：{topic.core_viewpoint}"],
             cover_copy=topic.title,
-            publish_copy=f"AI视频日记今天聊：{topic.title}。我的判断是：{topic.core_viewpoint}",
-            comment_prompt="你最近有没有遇到看起来很强、但自己不会天天用的 AI 产品？",
+            publish_copy=f"今天的来源选题：{topic.title}。当前判断：{topic.core_viewpoint}",
+            comment_prompt="你会如何验证这个判断？",
         )
 
     def regenerate_section(
@@ -529,4 +531,4 @@ def _section_role(index: int, total: int) -> str:
 def script_generator_from_settings(settings: Settings) -> ScriptGenerator:
     if settings.deepseek_api_key:
         return DeepSeekScriptGenerator(settings)
-    return MissingScriptGenerator()
+    return TemplateScriptGenerator()

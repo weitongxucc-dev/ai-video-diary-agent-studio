@@ -21,11 +21,11 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { href: "/", label: "今日工作台", icon: "desk" },
-  { href: "/topics", label: "选题", icon: "note" },
+  { href: "/production", label: "批量生产", icon: "desk" },
+  { href: "/topics", label: "选题批次", icon: "note" },
   { href: "/script", label: "脚本", icon: "script" },
-  { href: "/video", label: "视频", icon: "video" },
-  { href: "/edit-plan", label: "剪辑计划", icon: "clip" },
+  { href: "/video", label: "素材处理", icon: "video" },
+  { href: "/edit-plan", label: "成片审核", icon: "clip" },
   { href: "/draft", label: "剪映草稿", icon: "cover" },
   { href: "/history", label: "发布反馈", icon: "publish" },
   { href: "/health", label: "运行状态", icon: "check" },
@@ -33,6 +33,7 @@ const navItems: NavItem[] = [
 
 const routeLabels = [
   ...navItems,
+  { href: "/", label: "Episode 工作台" },
   { href: "/templates", label: "内容模板" },
   { href: "/knowledge", label: "知识库" },
   { href: "/sources", label: "信息源" },
@@ -119,21 +120,19 @@ export function AppShell({
           className={`app-shell${inspector ? " has-inspector" : ""}${inspectorOpen ? " inspector-open" : ""}`}
         >
           <aside className="sidebar" data-scroll-region="sidebar-y">
-            <Link aria-label="返回今日工作台" className="brand" href="/">
+            <Link aria-label="返回批量生产台" className="brand" href="/production">
               <span className="pixel-logo">
                 <PixelIcon name="agent" />
               </span>
               <span className="brand-copy">
                 <strong>AI 视频日记</strong>
-                <span>生产流程</span>
+                <span>本地 AI 内容生产工作站</span>
               </span>
             </Link>
-            <nav aria-label="Episode 生产导航">
+            <nav aria-label="批量内容生产导航">
               {navItems.map((item) => {
                 const active =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href);
+                  pathname.startsWith(item.href);
 
                 return (
                   <Link

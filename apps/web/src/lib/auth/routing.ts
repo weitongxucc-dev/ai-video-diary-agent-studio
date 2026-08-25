@@ -45,7 +45,12 @@ export function isOnboardingSupportPath(pathname: string): boolean {
 }
 
 export function isOnboardingSupportApiPath(pathname: string): boolean {
-  return ONBOARDING_SUPPORT_API_PATHS.has(pathname);
+  return (
+    ONBOARDING_SUPPORT_API_PATHS.has(pathname) ||
+    pathname === "/api/models" ||
+    pathname.startsWith("/api/models/") ||
+    pathname.startsWith("/api/model-install-jobs/")
+  );
 }
 
 export function trustedApiHeaders(

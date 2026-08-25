@@ -1,6 +1,6 @@
 # AI 视频日记 Agent Studio
 
-面向个人创作者的本地视频生产工作站。它把信息摄入、选题、脚本、视频处理、剪辑决策、剪映草稿和发布反馈串成一条可检查、可确认、可回滚的 Episode 工作流。
+**本地 AI 内容生产工作站。** 面向由一名操作员负责出片的知识内容团队，把维护的信息源、授权声音、已审核素材、自动选题、文案、视频处理和剪映草稿串成一条可检查、可阻断、可回滚的生产链。
 
 ## 当前状态
 
@@ -13,22 +13,27 @@
 
 这不是公开发行版。真实客户端验收、签名公证、自动更新和小规模用户反馈仍是发布门禁。
 
-## 核心流程
+## 目标生产流程
 
 ```text
-信息源 / Obsidian
-→ 选题确认
-→ 脚本生成与版本编辑
-→ 视频导入与转写
-→ 剪辑计划确认
-→ 字幕 / 封面 / 剪映草稿
-→ 人工发布
-→ 反馈与偏好记忆
+团队维护的信息源
+→ 事实门禁下的自动选题与文案
+→ 授权声音配音
+→ 已审核素材库选片
+→ 固定品牌模板编排
+→ 9:16、30–90 秒初版成片
+→ 最终成片审核
+→ MP4 / 字幕 / 剪映兼容草稿
 ```
 
 主要能力包括：
 
-- DeepSeek 驱动的选题、脚本和段落改写。
+- 原始素材与已审核可用素材的分层管理。
+- ffmpeg 镜头切分、时长探测和可恢复的分析状态。
+- 固定品牌档案、授权声音档案、来源池和生产批次门禁。
+- 文案分段、已审核镜头检索、可追溯匹配评分和低置信人工确认。
+- FFmpeg 9:16 时间线渲染、旁白合成及独立 SRT 字幕输出。
+- 无云端 Key 时的本地来源型选题/文案降级，以及用户自带 DeepSeek Key 的可选增强。
 - Obsidian、Hermes 日报、Product Hunt 与外部链接信息源。
 - SQLite Episode 持久化、Creator Profile 和可撤销偏好记忆。
 - ffmpeg、本地 Whisper 与腾讯云 ASR 视频处理链路。
@@ -71,7 +76,7 @@ corepack pnpm dev:worker
 完整模板见 [`.env.example`](.env.example)。最小可用配置是：
 
 - `NEXT_PUBLIC_AUTH_MODE=local`：仅用于可信的本机开发/内部测试；否则必须配置 Supabase 模式。
-- `DEEPSEEK_API_KEY`：选题和脚本生成。
+- `DEEPSEEK_API_KEY`：可选的云端文案增强；未配置时使用本地来源型生成器。
 - `DATABASE_PATH`：本地 Episode 数据库。
 - `VIDEO_INBOX_PATH`、`VIDEO_OUTPUT_PATH`、`DRAFT_OUTPUT_PATH`：本地视频流程目录。
 - `OBSIDIAN_VAULT_PATH`：可选的本地知识库。
@@ -94,6 +99,9 @@ corepack pnpm run test:api
 
 ## 已知边界
 
+- Chinese-CLIP 多帧向量提取、缓存失效和文案匹配已经接入独立模型进程；自动放行阈值仍需真实素材基准校准。
+- Qwen3-TTS 授权声音克隆、参考文字校验及真实配音时长回填已经接入；模型运行环境和权重仍需手动准备，产品内下载器尚未完成。
+- 时间线与 FFmpeg 渲染已接入，但整个批次的无人值守执行器尚未接入。
 - 剪映 10.7 加密草稿仍只能使用兼容桥和可追踪素材包，不能声称原生写入成功。
 - 真实麦克风采集尚未接入；命令台接收文本或已有转写结果。
 - 腾讯 ASR 大文件尚未接入 COS/URL 模式。
@@ -103,6 +111,8 @@ corepack pnpm run test:api
 
 - [`DESIGN.md`](DESIGN.md)：唯一视觉与交互源文件。
 - [`docs/product-requirements.md`](docs/product-requirements.md)：当前产品范围与发布门禁。
+
+本地 Chinese-CLIP 与 Qwen3-TTS 在「设置 → 本地模型安装」中逐个安装。安装器会先要求用户确认许可证，检查剩余空间，并将运行环境、权重、断点文件与 pip/Hugging Face/Torch 缓存放在所选模型目录附近。`/Volumes/<name>` 未挂载时会阻止安装，不会静默改用内置硬盘。
 - [`docs/beta-product-foundation.md`](docs/beta-product-foundation.md)：内部与分发模式的身份、首启边界。
 - [`docs/auth-workspace-boundary.md`](docs/auth-workspace-boundary.md)：Supabase 模式的后端安全边界。
 - [`apps/desktop/RELEASE.md`](apps/desktop/RELEASE.md)：内测构建和正式发布流程。

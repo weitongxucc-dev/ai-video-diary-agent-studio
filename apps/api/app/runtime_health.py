@@ -9,36 +9,27 @@ from app.models import utc_now
 
 
 def _feature_gates(settings: Settings) -> list[dict[str, Any]]:
-    llm_available = bool(settings.deepseek_api_key)
     ffmpeg_available = shutil.which("ffmpeg") is not None
     return [
         {
             "feature": "generate-topics",
-            "available": llm_available,
-            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
-            if not llm_available
-            else "",
+            "available": True,
+            "reason": "",
         },
         {
             "feature": "generate-script",
-            "available": llm_available,
-            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
-            if not llm_available
-            else "",
+            "available": True,
+            "reason": "",
         },
         {
             "feature": "regenerate-section",
-            "available": llm_available,
-            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
-            if not llm_available
-            else "",
+            "available": True,
+            "reason": "",
         },
         {
             "feature": "regenerate-script",
-            "available": llm_available,
-            "reason": "AI 模型未配置，请先在设置中配置 DeepSeek API Key"
-            if not llm_available
-            else "",
+            "available": True,
+            "reason": "",
         },
         {
             "feature": "process-video",
@@ -140,12 +131,12 @@ def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
         )
     return _health_item(
         item_id="deepseek",
-        label="DeepSeek",
-        status="missing",
-        reason="未配置 DEEPSEEK_API_KEY。",
-        impact="无法调用真实模型生成选题、脚本和语音指令草案。",
-        repair_action="在设置页填写 DeepSeek API Key 后保存。",
-        fix_command="在 https://platform.deepseek.com 注册获取 API Key",
+        label="云端文案增强",
+        status="degraded",
+        reason="未配置 DeepSeek，当前使用本地来源摘要生成器。",
+        impact="本地闭环可用，但文案的表达丰富度较低。",
+        repair_action="可选：在设置页填写自有 DeepSeek API Key 开启云端增强。",
+        fix_command=None,
         checked_at=checked_at,
     )
 

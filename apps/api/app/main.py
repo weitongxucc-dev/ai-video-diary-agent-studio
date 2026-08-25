@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +38,9 @@ from app.llm import (
     LLMResponseError,
     script_generator_from_settings,
 )
+from app.montage import MontagePlanner, MontageRenderer, MontageRepository
+from app.model_installer import ModelInstallError, ModelInstaller
+from app.model_runtime import ModelCatalog, QWEN3_TTS_06B_BASE_8BIT
 from app.models import (
     Episode,
     EpisodeIntakeMode,
@@ -46,8 +51,15 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
+from app.narration import NarrationGenerator
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
+from app.production import (
+    ProductionBatch,
+    ProductionBatchItem,
+    ProductionProfile,
+    ProductionRepository,
+)
 from app.repository import (
     LEGACY_WORKSPACE_ID,
     EpisodeRepository,
@@ -102,8 +114,27 @@ from app.schemas import (
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
+    MaterialAssetResponse,
+    MaterialLibraryResponse,
+    MaterialReviewRequest,
+    MaterialSegmentUpdateRequest,
+    ModelCatalogResponse,
+    ModelInstallJobResponse,
+    ModelInstallRequest,
+    NarrationArtifactResponse,
+    MontagePlanConfirmRequest,
+    MontagePlanCreateRequest,
+    MontagePlanResponse,
+    MontagePlansResponse,
+    MontageRenderRequest,
+    ProductionBatchCreateRequest,
+    ProductionBatchResponse,
+    ProductionBatchesResponse,
     ProductionChainResponse,
+    ProductionFoundationResponse,
     ProductionModeRequest,
+    ProductionProfileResponse,
+    ProductionProfileUpdateRequest,
     PublishMetricsUpdateRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
@@ -139,6 +170,8 @@ from app.topics import (
 from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
 from app.video_pipeline import video_processing_pipeline_from_settings
+from app.visual_semantics import visual_semantic_provider_from_catalog
+from app.voice_clone import voice_clone_provider_from_catalog
 from app.voice import transcribe_audio_bytes
 from app.voice_commands import VoiceCommandPlan, parse_voice_command
 from app.workflow import LangGraphEpisodeWorkflow
@@ -195,6 +228,30 @@ async def global_exception_handler(request: Request, exc: Exception):
 settings = Settings.from_env()
 set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
+model_catalog = ModelCatalog(
+    settings.model_root_path,
+    settings.model_runtime_python_path,
+    settings.visual_model_worker_path,
+    settings.voice_model_worker_path,
+)
+model_installer = ModelInstaller(
+    model_catalog,
+    on_complete=lambda: _reload_runtime_dependencies(),
+)
+visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
+voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
+production_repo = ProductionRepository(
+    database_path=settings.database_path,
+    video_library_path=settings.video_inbox_path,
+    visual_provider=visual_semantic_provider,
+)
+montage_repo = MontageRepository(settings.database_path)
+montage_planner = MontagePlanner(
+    semantic_provider=visual_semantic_provider,
+    visual_feature_loader=production_repo.get_visual_feature,
+)
+montage_renderer = MontageRenderer(settings.video_output_path)
+narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
 video_processor = FfmpegVideoProcessor(settings)
@@ -207,6 +264,7 @@ service = EpisodeService(
 )
 workflow = LangGraphEpisodeWorkflow(service)
 video_job_runner = VideoJobRunner()
+batch_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
 source_tracker = SourceTracker(video_inbox)
 manual_source_items: list[TopicSourceItem] = []
@@ -231,7 +289,16 @@ PUBLIC_AUTH_PATHS: set[str] = {
 ONBOARDING_REPAIR_PATHS: set[str] = {
     "/api/onboarding/complete",
     "/api/settings/runtime",
+    "/api/models",
 }
+
+
+def is_onboarding_repair_path(path: str) -> bool:
+    return (
+        path in ONBOARDING_REPAIR_PATHS
+        or path.startswith("/api/models/")
+        or path.startswith("/api/model-install-jobs/")
+    )
 
 
 def current_workspace_id(request: Request) -> str:
@@ -247,6 +314,62 @@ def current_workspace_id(request: Request) -> str:
     if principal is not None and principal.workspace_id:
         return principal.workspace_id
     return active_workspace_id()
+
+
+def production_profile_with_model_status(workspace_id: str) -> ProductionProfile:
+    profile = production_repo.get_profile(workspace_id)
+    status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
+    model_status = "ready" if status.ready else (
+        "failed" if status.state == "invalid" else "blocked"
+    )
+    return replace(
+        profile,
+        voice_model_status=model_status,
+        voice_model_message=status.message,
+    )
+
+
+@app.get("/api/models", response_model=ModelCatalogResponse)
+def list_local_models() -> ModelCatalogResponse:
+    return ModelCatalogResponse(
+        models=[status.as_dict() for status in model_catalog.list_statuses()]
+    )
+
+
+@app.post(
+    "/api/models/{model_id}/install",
+    response_model=ModelInstallJobResponse,
+    status_code=202,
+)
+def install_local_model(
+    request: Request,
+    model_id: str,
+    payload: ModelInstallRequest,
+) -> ModelInstallJobResponse:
+    client_host = request.client.host if request.client else None
+    if not is_local_client_host(client_host):
+        raise HTTPException(
+            status_code=403,
+            detail="local models can only be installed from a local client",
+        )
+    try:
+        job = model_installer.start(
+            model_id,
+            license_accepted=payload.license_accepted,
+        )
+    except ModelInstallError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ModelInstallJobResponse.model_validate(job)
+
+
+@app.get(
+    "/api/model-install-jobs/{job_id}",
+    response_model=ModelInstallJobResponse,
+)
+def get_model_install_job(job_id: str) -> ModelInstallJobResponse:
+    return ModelInstallJobResponse.model_validate(model_installer.get_job(job_id))
 
 
 @app.middleware("http")
@@ -270,7 +393,7 @@ async def auth_boundary_middleware(request: Request, call_next):
         request.state.principal = auth_context.authenticate(request)
         principal = request.state.principal
         if (
-            path not in ONBOARDING_REPAIR_PATHS
+            not is_onboarding_repair_path(path)
             and not auth_context.is_onboarding_complete(
                 principal.user_id,
                 principal.workspace_id or LEGACY_WORKSPACE_ID,
@@ -388,6 +511,738 @@ def get_content_templates() -> ContentTemplatesResponse:
     )
 
 
+@app.get(
+    "/api/production/foundation",
+    response_model=ProductionFoundationResponse,
+)
+def get_production_foundation(request: Request) -> ProductionFoundationResponse:
+    workspace_id = current_workspace_id(request)
+    profile = production_profile_with_model_status(workspace_id)
+    return ProductionFoundationResponse(
+        profile=ProductionProfileResponse.model_validate(
+            profile,
+            from_attributes=True,
+        ),
+        readiness=production_repo.readiness(workspace_id, profile=profile),
+        recent_batches=[
+            ProductionBatchResponse.model_validate(batch, from_attributes=True)
+            for batch in (
+                _recover_production_batch_if_needed(item)
+                for item in production_repo.list_batches(workspace_id)[:8]
+            )
+        ],
+        recent_montage_plans=[
+            MontagePlanResponse.model_validate(plan, from_attributes=True)
+            for plan in montage_repo.recent(workspace_id, limit=8)
+        ],
+        eligible_episodes=[
+            {
+                "id": episode.id,
+                "title": (
+                    episode.script.title_options[0]
+                    if episode.script and episode.script.title_options
+                    else f"Episode {episode.day_number}"
+                ),
+                "status": episode.status,
+            }
+            for episode in repo.all(workspace_id=workspace_id)
+            if episode.script is not None
+            and episode.status
+            in {
+                EpisodeStatus.SCRIPT_APPROVED,
+                EpisodeStatus.WAITING_VIDEO,
+                EpisodeStatus.VIDEO_PROCESSING,
+                EpisodeStatus.DRAFT_READY,
+                EpisodeStatus.PUBLISHED,
+            }
+        ][:50],
+    )
+
+
+@app.put(
+    "/api/production/profile",
+    response_model=ProductionProfileResponse,
+)
+def update_production_profile(
+    request: Request,
+    payload: ProductionProfileUpdateRequest,
+) -> ProductionProfileResponse:
+    workspace_id = current_workspace_id(request)
+    current = production_repo.get_profile(workspace_id)
+    updates = payload.model_dump()
+    voice_runtime_status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
+    profile = ProductionProfile(
+        workspace_id=workspace_id,
+        workspace_name=str(updates["workspace_name"]).strip(),
+        brand_name=str(updates["brand_name"]).strip(),
+        primary_platform="douyin",
+        aspect_ratio="9:16",
+        target_duration_min_seconds=current.target_duration_min_seconds,
+        target_duration_max_seconds=current.target_duration_max_seconds,
+        brand_template_name=str(updates["brand_template_name"]).strip(),
+        brand_colors=[str(item).strip() for item in updates["brand_colors"] if str(item).strip()],
+        subtitle_style=str(updates["subtitle_style"]).strip(),
+        intro_text=str(updates["intro_text"]).strip(),
+        outro_text=str(updates["outro_text"]).strip(),
+        background_music_path=updates["background_music_path"],
+        voice_name=str(updates["voice_name"]).strip(),
+        voice_reference_path=updates["voice_reference_path"],
+        voice_reference_text=str(updates["voice_reference_text"]).strip(),
+        voice_consent_confirmed=bool(updates["voice_consent_confirmed"]),
+        # Model readiness is maintained by the local model lifecycle, never by
+        # an untrusted profile update from the browser.
+        voice_model_status=(
+            "ready"
+            if voice_runtime_status.ready
+            else (
+                "failed"
+                if voice_runtime_status.state == "invalid"
+                else "blocked"
+            )
+        ),
+        voice_model_message=voice_runtime_status.message,
+        source_urls=[str(item).strip() for item in updates["source_urls"] if str(item).strip()],
+        use_obsidian=bool(updates["use_obsidian"]),
+        use_hermes=bool(updates["use_hermes"]),
+        factuality_gate_enabled=bool(updates["factuality_gate_enabled"]),
+        cloud_enhancement_enabled=bool(updates["cloud_enhancement_enabled"]),
+    )
+    if profile.voice_consent_confirmed and not profile.voice_reference_path:
+        raise HTTPException(status_code=400, detail="确认声音授权时必须选择参考音频")
+    if profile.voice_consent_confirmed and not profile.voice_reference_text:
+        raise HTTPException(status_code=400, detail="确认声音授权时必须填写参考音频对应文字")
+    if profile.voice_reference_path:
+        reference_path = Path(profile.voice_reference_path).expanduser()
+        if not reference_path.is_file():
+            raise HTTPException(status_code=400, detail="声音参考文件不存在")
+    saved = production_repo.save_profile(profile)
+    return ProductionProfileResponse.model_validate(saved, from_attributes=True)
+
+
+@app.get(
+    "/api/production/materials",
+    response_model=MaterialLibraryResponse,
+)
+def list_production_materials(request: Request) -> MaterialLibraryResponse:
+    assets = production_repo.list_assets(current_workspace_id(request))
+    return MaterialLibraryResponse(
+        assets=[
+            MaterialAssetResponse.model_validate(asset, from_attributes=True)
+            for asset in assets
+        ],
+        total_count=len(assets),
+    )
+
+
+@app.post(
+    "/api/production/materials/scan",
+    response_model=MaterialLibraryResponse,
+)
+def scan_production_materials(request: Request) -> MaterialLibraryResponse:
+    workspace_id = current_workspace_id(request)
+    production_repo.scan_library(workspace_id)
+    assets = production_repo.list_assets(workspace_id)
+    return MaterialLibraryResponse(
+        assets=[
+            MaterialAssetResponse.model_validate(asset, from_attributes=True)
+            for asset in assets
+        ],
+        total_count=len(assets),
+    )
+
+
+@app.post(
+    "/api/production/materials/{asset_id}/analyze",
+    response_model=MaterialAssetResponse,
+)
+def analyze_production_material(
+    asset_id: str,
+    request: Request,
+) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.analyze_asset(current_workspace_id(request), asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+
+
+@app.put(
+    "/api/production/materials/{asset_id}/review",
+    response_model=MaterialAssetResponse,
+)
+def review_production_material(
+    asset_id: str,
+    request: Request,
+    payload: MaterialReviewRequest,
+) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.update_asset_review(
+            current_workspace_id(request),
+            asset_id,
+            review_status=payload.review_status,
+            rights_confirmed=payload.rights_confirmed,
+            brand_safe=payload.brand_safe,
+            usage_role=payload.usage_role,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+
+
+@app.put(
+    "/api/production/materials/{asset_id}/segments/{segment_id}",
+    response_model=MaterialAssetResponse,
+)
+def update_production_material_segment(
+    asset_id: str,
+    segment_id: str,
+    request: Request,
+    payload: MaterialSegmentUpdateRequest,
+) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.update_segment(
+            current_workspace_id(request),
+            asset_id,
+            segment_id,
+            description=payload.description,
+            transcript=payload.transcript,
+            review_status=payload.review_status,
+            usage_role=payload.usage_role,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material segment not found") from exc
+    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+
+
+@app.get(
+    "/api/production/batches",
+    response_model=ProductionBatchesResponse,
+)
+def list_production_batches(request: Request) -> ProductionBatchesResponse:
+    batches = [
+        _recover_production_batch_if_needed(batch)
+        for batch in production_repo.list_batches(current_workspace_id(request))
+    ]
+    return ProductionBatchesResponse(
+        batches=[
+            ProductionBatchResponse.model_validate(batch, from_attributes=True)
+            for batch in batches
+        ],
+        total_count=len(batches),
+    )
+
+
+@app.post(
+    "/api/production/batches",
+    response_model=ProductionBatchResponse,
+)
+def create_production_batch(
+    request: Request,
+    payload: ProductionBatchCreateRequest,
+) -> ProductionBatchResponse:
+    workspace_id = current_workspace_id(request)
+    batch = production_repo.create_batch(
+        workspace_id,
+        name=payload.name,
+        target_count=payload.target_count,
+        profile=production_profile_with_model_status(workspace_id),
+    )
+    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+
+
+@app.post(
+    "/api/production/batches/{batch_id}/run",
+    response_model=ProductionBatchResponse,
+    status_code=202,
+)
+def run_production_batch(
+    batch_id: str,
+    request: Request,
+) -> ProductionBatchResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        batch = _recover_production_batch_if_needed(
+            production_repo.get_batch(workspace_id, batch_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="production batch not found") from exc
+    if batch_job_runner.is_active(batch.id):
+        return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+    if batch.status in {"ready", "reviewed"}:
+        return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+
+    profile = production_profile_with_model_status(workspace_id)
+    readiness = production_repo.readiness(workspace_id, profile=profile)
+    blockers = [str(item["code"]) for item in readiness["blockers"]]
+    if blockers:
+        batch.status = "blocked"
+        batch.blocker_codes = blockers
+        batch.message = "生产基础尚未就绪，修复阻断后再继续。"
+        production_repo.save_batch(batch)
+        raise HTTPException(status_code=409, detail=batch.message)
+
+    batch.status = "running"
+    batch.blocker_codes = []
+    batch.started_at = batch.started_at or utc_now()
+    batch.finished_at = None
+    batch.message = "批次已进入串行队列，正在准备第一条内容。"
+    production_repo.save_batch(batch)
+    submitted = batch_job_runner.submit(
+        batch.id,
+        lambda: _complete_production_batch(workspace_id, batch.id),
+        workspace_id=workspace_id,
+    )
+    if not submitted:
+        batch = production_repo.get_batch(workspace_id, batch.id)
+    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+
+
+def _recover_production_batch_if_needed(batch: ProductionBatch) -> ProductionBatch:
+    if (
+        batch.status != "running"
+        or batch.started_at is None
+        or batch_job_runner.is_active(batch.id)
+    ):
+        return batch
+    for item in batch.items:
+        if item.status == "running":
+            item.status = "interrupted"
+            item.message = "应用重启导致任务中断，可从当前条目继续。"
+            item.updated_at = utc_now()
+    batch.status = "interrupted"
+    batch.finished_at = utc_now()
+    batch.message = "上次批量任务已中断，点击继续后会保留已生成成片。"
+    return production_repo.save_batch(batch)
+
+
+def _eligible_batch_episodes(workspace_id: str) -> list[Episode]:
+    allowed = {
+        EpisodeStatus.SCRIPT_APPROVED,
+        EpisodeStatus.WAITING_VIDEO,
+        EpisodeStatus.VIDEO_PROCESSING,
+        EpisodeStatus.DRAFT_READY,
+        EpisodeStatus.PUBLISHED,
+    }
+    return [
+        episode
+        for episode in repo.all(workspace_id=workspace_id)
+        if episode.script is not None and episode.status in allowed
+    ]
+
+
+def _complete_production_batch(workspace_id: str, batch_id: str) -> None:
+    try:
+        batch = production_repo.get_batch(workspace_id, batch_id)
+        eligible = _eligible_batch_episodes(workspace_id)
+        known_ids = {item.episode_id for item in batch.items}
+        for episode in eligible:
+            if len(batch.items) >= batch.target_count:
+                break
+            if episode.id not in known_ids:
+                batch.items.append(ProductionBatchItem(episode_id=episode.id))
+                known_ids.add(episode.id)
+        production_repo.save_batch(batch)
+
+        for item in batch.items[: batch.target_count]:
+            if item.status == "rendered":
+                continue
+            item.status = "running"
+            item.attempts += 1
+            item.updated_at = utc_now()
+            item.message = "正在生成旁白与混剪时间线。"
+            batch.status = "running"
+            batch.message = (
+                f"正在处理 {item.episode_id}；"
+                f"已完成 {batch.rendered_count}/{batch.target_count} 条。"
+            )
+            production_repo.save_batch(batch)
+            try:
+                _process_production_batch_item(workspace_id, batch, item)
+            except Exception as exc:
+                item.status = "failed"
+                item.message = str(exc)
+                item.updated_at = utc_now()
+                logger.exception(
+                    "production batch item failed: batch=%s episode=%s",
+                    batch.id,
+                    item.episode_id,
+                )
+            production_repo.save_batch(batch)
+        _finalize_production_batch(workspace_id, batch_id, len(eligible))
+    except Exception:
+        logger.exception("production batch failed: %s", batch_id)
+        try:
+            batch = production_repo.get_batch(workspace_id, batch_id)
+            batch.status = "failed"
+            batch.finished_at = utc_now()
+            batch.message = "批量执行器异常停止，已完成条目会保留，可重试。"
+            production_repo.save_batch(batch)
+        except Exception:
+            logger.exception("unable to persist failed production batch: %s", batch_id)
+
+
+def _process_production_batch_item(
+    workspace_id: str,
+    batch: ProductionBatch,
+    item: ProductionBatchItem,
+) -> None:
+    episode = repo.get(item.episode_id, workspace_id=workspace_id)
+    if episode.id not in batch.episode_ids:
+        batch.episode_ids.append(episode.id)
+    existing = next(
+        (
+            plan
+            for plan in montage_repo.list_for_batch(workspace_id, batch.id)
+            if plan.episode_id == episode.id and plan.status != "failed"
+        ),
+        None,
+    )
+    if existing is not None and existing.status == "rendered":
+        item.status = "rendered"
+        item.plan_id = existing.id
+        item.narration_audio_path = existing.narration_audio_path
+        item.output_path = existing.output_path
+        item.message = "已复用完成的初版成片。"
+        item.updated_at = utc_now()
+        return
+    if existing is not None and existing.status == "waiting_for_user":
+        item.status = "waiting_for_user"
+        item.plan_id = existing.id
+        item.narration_audio_path = existing.narration_audio_path
+        item.message = existing.message
+        item.updated_at = utc_now()
+        return
+
+    plan = existing
+    if plan is None or not plan.narration_audio_path:
+        profile = production_profile_with_model_status(workspace_id)
+        narration = narration_generator.generate(
+            workspace_id=workspace_id,
+            episode=episode,
+            profile=profile,
+        )
+        rebuilt = montage_planner.build(
+            workspace_id=workspace_id,
+            batch=batch,
+            episode=episode,
+            profile=profile,
+            assets=production_repo.list_assets(workspace_id),
+            narration_audio_path=narration.audio_path,
+            narration_duration_seconds=narration.duration_seconds,
+        )
+        if plan is not None:
+            rebuilt.id = plan.id
+            rebuilt.created_at = plan.created_at
+        plan = montage_repo.save(rebuilt)
+        if episode.id not in batch.episode_ids:
+            batch.episode_ids.append(episode.id)
+
+    item.plan_id = plan.id
+    item.narration_audio_path = plan.narration_audio_path
+    if plan.status == "waiting_for_user":
+        item.status = "waiting_for_user"
+        item.message = plan.message
+        item.updated_at = utc_now()
+        return
+    if not plan.narration_audio_path:
+        raise ValueError("混剪计划没有可用的旁白音频。")
+    rendered = montage_renderer.render(plan, plan.narration_audio_path)
+    montage_repo.save(rendered)
+    item.status = "rendered"
+    item.output_path = rendered.output_path
+    item.message = rendered.message
+    item.updated_at = utc_now()
+
+
+def _finalize_production_batch(
+    workspace_id: str,
+    batch_id: str,
+    eligible_count: int,
+) -> ProductionBatch:
+    batch = production_repo.get_batch(workspace_id, batch_id)
+    batch.finished_at = utc_now()
+    if batch.rendered_count >= batch.target_count:
+        batch.status = "ready"
+        batch.message = "批次初版成片已全部生成，等待最终审核。"
+    elif batch.waiting_review_count:
+        batch.status = "waiting_for_user"
+        batch.message = (
+            f"已生成 {batch.rendered_count}/{batch.target_count} 条；"
+            f"有 {batch.waiting_review_count} 条时间线等待镜头确认。"
+        )
+    elif batch.failed_count and batch.rendered_count == 0:
+        batch.status = "failed"
+        batch.message = (
+            f"本轮 {batch.failed_count} 条失败，修复原因后可继续，"
+            "已完成结果不会重做。"
+        )
+    else:
+        batch.status = "created"
+        failure_message = (
+            f"本轮 {batch.failed_count} 条失败，可修复后继续；"
+            if batch.failed_count
+            else ""
+        )
+        batch.message = (
+            f"已生成 {batch.rendered_count}/{batch.target_count} 条；"
+            f"{failure_message}当前有 {eligible_count} 条已确认文案。"
+        )
+    return production_repo.save_batch(batch)
+
+
+@app.post(
+    "/api/production/episodes/{episode_id}/narration",
+    response_model=NarrationArtifactResponse,
+)
+def generate_production_narration(
+    episode_id: str,
+    request: Request,
+) -> NarrationArtifactResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        episode = repo.get(episode_id, workspace_id=workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="episode not found") from exc
+    artifact = narration_generator.generate(
+        workspace_id=workspace_id,
+        episode=episode,
+        profile=production_profile_with_model_status(workspace_id),
+    )
+    return NarrationArtifactResponse.model_validate(artifact, from_attributes=True)
+
+
+@app.get(
+    "/api/production/batches/{batch_id}/montage-plans",
+    response_model=MontagePlansResponse,
+)
+def list_production_montage_plans(
+    batch_id: str,
+    request: Request,
+) -> MontagePlansResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_batch(workspace_id, batch_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="production batch not found") from exc
+    plans = montage_repo.list_for_batch(workspace_id, batch_id)
+    return MontagePlansResponse(
+        plans=[
+            MontagePlanResponse.model_validate(plan, from_attributes=True)
+            for plan in plans
+        ],
+        total_count=len(plans),
+    )
+
+
+@app.post(
+    "/api/production/batches/{batch_id}/montage-plans",
+    response_model=MontagePlanResponse,
+)
+def create_production_montage_plan(
+    batch_id: str,
+    request: Request,
+    payload: MontagePlanCreateRequest,
+) -> MontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        batch = production_repo.get_batch(workspace_id, batch_id)
+        episode = repo.get(payload.episode_id, workspace_id=workspace_id)
+        existing_plan = next(
+            (
+                item
+                for item in montage_repo.list_for_batch(workspace_id, batch_id)
+                if item.episode_id == episode.id and item.status != "failed"
+            ),
+            None,
+        )
+        if existing_plan is not None:
+            raise ValueError("该 Episode 已存在可恢复的混剪计划")
+        profile = production_profile_with_model_status(workspace_id)
+        narration_audio_path = payload.narration_audio_path
+        audio_duration = None
+        if narration_audio_path:
+            audio_duration = montage_renderer.audio_duration(narration_audio_path)
+        elif voice_clone_provider.ready and profile.voice_consent_confirmed:
+            narration = narration_generator.generate(
+                workspace_id=workspace_id,
+                episode=episode,
+                profile=profile,
+            )
+            narration_audio_path = narration.audio_path
+            audio_duration = narration.duration_seconds
+        plan = montage_planner.build(
+            workspace_id=workspace_id,
+            batch=batch,
+            episode=episode,
+            profile=profile,
+            assets=production_repo.list_assets(workspace_id),
+            narration_audio_path=narration_audio_path,
+            narration_duration_seconds=audio_duration,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="batch or episode not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    montage_repo.save(plan)
+    if episode.id not in batch.episode_ids:
+        batch.episode_ids.append(episode.id)
+    batch_item = next(
+        (item for item in batch.items if item.episode_id == episode.id),
+        None,
+    )
+    if batch_item is None:
+        batch_item = ProductionBatchItem(episode_id=episode.id)
+        batch.items.append(batch_item)
+    batch_item.plan_id = plan.id
+    batch_item.narration_audio_path = plan.narration_audio_path
+    batch_item.status = "waiting_for_user" if plan.status == "waiting_for_user" else "queued"
+    batch_item.message = plan.message
+    batch_item.updated_at = utc_now()
+    batch.status = "waiting_for_user" if plan.status == "waiting_for_user" else "created"
+    batch.message = (
+        "混剪时间线等待镜头确认。"
+        if plan.status == "waiting_for_user"
+        else "混剪时间线已就绪，等待渲染。"
+    )
+    production_repo.save_batch(batch)
+    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+
+
+@app.post(
+    "/api/production/montage-plans/{plan_id}/confirm",
+    response_model=MontagePlanResponse,
+)
+def confirm_production_montage_clips(
+    plan_id: str,
+    request: Request,
+    payload: MontagePlanConfirmRequest,
+) -> MontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = montage_repo.get(workspace_id, plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    requested = set(payload.clip_ids)
+    known = {clip.id for clip in plan.clips}
+    if not requested <= known:
+        raise HTTPException(status_code=400, detail="montage clip not found")
+    for clip in plan.clips:
+        if clip.id in requested and clip.needs_confirmation:
+            clip.needs_confirmation = False
+            clip.match_reasons.append("已由用户确认")
+    plan.low_confidence_clip_count = sum(clip.needs_confirmation for clip in plan.clips)
+    if plan.low_confidence_clip_count == 0:
+        plan.status = "ready"
+        plan.message = "所有低置信镜头已确认，可以进入渲染。"
+    else:
+        plan.message = f"仍有 {plan.low_confidence_clip_count} 个镜头等待确认。"
+    montage_repo.save(plan)
+    batch = production_repo.get_batch(workspace_id, plan.batch_id)
+    batch_item = next(
+        (item for item in batch.items if item.episode_id == plan.episode_id),
+        None,
+    )
+    if batch_item is None:
+        batch_item = ProductionBatchItem(episode_id=plan.episode_id)
+        batch.items.append(batch_item)
+    batch_item.plan_id = plan.id
+    batch_item.status = "queued" if plan.status == "ready" else "waiting_for_user"
+    batch_item.message = plan.message
+    batch_item.updated_at = utc_now()
+    batch.status = "created" if plan.status == "ready" else "waiting_for_user"
+    batch.message = (
+        "混剪时间线已就绪，等待渲染。"
+        if plan.status == "ready"
+        else "混剪时间线仍有镜头等待确认。"
+    )
+    production_repo.save_batch(batch)
+    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+
+
+@app.post(
+    "/api/production/montage-plans/{plan_id}/render",
+    response_model=MontagePlanResponse,
+)
+def render_production_montage_plan(
+    plan_id: str,
+    request: Request,
+    payload: MontageRenderRequest,
+) -> MontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = montage_repo.get(workspace_id, plan_id)
+        audio_duration = montage_renderer.audio_duration(payload.narration_audio_path)
+        if abs(audio_duration - plan.duration_seconds) > 0.5:
+            batch = production_repo.get_batch(workspace_id, plan.batch_id)
+            episode = repo.get(plan.episode_id, workspace_id=workspace_id)
+            rebuilt = montage_planner.build(
+                workspace_id=workspace_id,
+                batch=batch,
+                episode=episode,
+                profile=production_repo.get_profile(workspace_id),
+                assets=production_repo.list_assets(workspace_id),
+                narration_audio_path=payload.narration_audio_path,
+                narration_duration_seconds=audio_duration,
+            )
+            rebuilt.id = plan.id
+            rebuilt.created_at = plan.created_at
+            plan = montage_repo.save(rebuilt)
+            if plan.status != "ready":
+                batch_item = next(
+                    (item for item in batch.items if item.episode_id == plan.episode_id),
+                    None,
+                )
+                if batch_item is None:
+                    batch_item = ProductionBatchItem(episode_id=plan.episode_id)
+                    batch.items.append(batch_item)
+                batch_item.plan_id = plan.id
+                batch_item.status = "waiting_for_user"
+                batch_item.narration_audio_path = plan.narration_audio_path
+                batch_item.message = plan.message
+                batch_item.updated_at = utc_now()
+                batch.status = "waiting_for_user"
+                batch.message = "已按真实旁白时长重排时间线，等待镜头确认。"
+                production_repo.save_batch(batch)
+                raise HTTPException(
+                    status_code=409,
+                    detail="旁白时长与原计划不同，已重新生成时间线；请确认低置信镜头后再渲染",
+                )
+        rendered = montage_renderer.render(plan, payload.narration_audio_path)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        montage_repo.save(plan)
+        raise HTTPException(status_code=500, detail=plan.message) from exc
+
+    montage_repo.save(rendered)
+    batch = production_repo.get_batch(workspace_id, rendered.batch_id)
+    batch_item = next(
+        (item for item in batch.items if item.episode_id == rendered.episode_id),
+        None,
+    )
+    if batch_item is None:
+        batch_item = ProductionBatchItem(episode_id=rendered.episode_id)
+        batch.items.append(batch_item)
+    batch_item.plan_id = rendered.id
+    batch_item.status = "rendered"
+    batch_item.narration_audio_path = rendered.narration_audio_path
+    batch_item.output_path = rendered.output_path
+    batch_item.message = rendered.message
+    batch_item.updated_at = utc_now()
+    rendered_count = batch.rendered_count
+    batch.status = "ready" if rendered_count >= batch.target_count else "created"
+    batch.message = (
+        "批次初版成片已全部生成，等待最终审核。"
+        if batch.status == "ready"
+        else f"已生成 {rendered_count}/{batch.target_count} 条初版成片，可继续批量生产。"
+    )
+    production_repo.save_batch(batch)
+    return MontagePlanResponse.model_validate(rendered, from_attributes=True)
+
+
 @app.get("/api/version")
 async def get_version():
     """Return the current API version, build info, and completed phases."""
@@ -439,16 +1294,14 @@ async def get_version():
 
 def _require_feature(feature: str) -> None:
     """Raise 503 if a required feature gate is not available."""
-    import os as _os
     import shutil as _shutil
 
-    llm_available = bool(settings.deepseek_api_key or _os.getenv("DEEPSEEK_API_KEY"))
     ffmpeg_available = _shutil.which("ffmpeg") is not None
     gates: dict[str, tuple[bool, str]] = {
-        "generate-topics": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
-        "generate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
-        "regenerate-section": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
-        "regenerate-script": (llm_available, "AI 模型未配置，请先在设置中配置 DeepSeek API Key"),
+        "generate-topics": (True, ""),
+        "generate-script": (True, ""),
+        "regenerate-section": (True, ""),
+        "regenerate-script": (True, ""),
         "process-video": (ffmpeg_available, "ffmpeg 未安装，请运行 brew install ffmpeg"),
     }
     available, reason = gates.get(feature, (True, ""))
@@ -549,11 +1402,15 @@ def update_runtime_settings(
 @app.get("/api/is_setup")
 async def is_setup():
     """Check whether the minimum backend configuration is ready."""
-    settings = Settings.from_env()
-    missing: list[str] = []
-    if not settings.deepseek_api_key:
-        missing.append("deepseek_api_key")
-    configured = len(missing) == 0
+    current_settings = Settings.from_env()
+    preflight = setup_preflight(current_settings)
+    missing = [
+        str(check["id"])
+        for check in preflight["checks"]
+        if check["status"] in {"missing", "invalid"}
+        and check["id"] in {"video_inbox", "video_output", "ffmpeg", "asr"}
+    ]
+    configured = preflight["overall"] == "ready"
     return {
         "configured": configured,
         "missing": missing,
@@ -562,12 +1419,36 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
+    global settings, repo, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, production_repo, montage_repo, montage_planner, montage_renderer, narration_generator, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
 
     settings = Settings.from_env()
     set_auth_enabled(settings.auth_enabled)
     auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)
+    model_catalog = ModelCatalog(
+        settings.model_root_path,
+        settings.model_runtime_python_path,
+        settings.visual_model_worker_path,
+        settings.voice_model_worker_path,
+    )
+    model_installer = ModelInstaller(
+        model_catalog,
+        on_complete=lambda: _reload_runtime_dependencies(),
+    )
+    visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
+    voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
+    production_repo = ProductionRepository(
+        database_path=settings.database_path,
+        video_library_path=settings.video_inbox_path,
+        visual_provider=visual_semantic_provider,
+    )
+    montage_repo = MontageRepository(settings.database_path)
+    montage_planner = MontagePlanner(
+        semantic_provider=visual_semantic_provider,
+        visual_feature_loader=production_repo.get_visual_feature,
+    )
+    montage_renderer = MontageRenderer(settings.video_output_path)
+    narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)
     video_processor = FfmpegVideoProcessor(settings)
