@@ -33,7 +33,7 @@ describe("auth configuration and errors", () => {
 
   it("translates known auth failures and hides raw unknown errors", () => {
     expect(readableAuthError(new Error("Invalid login credentials"))).toContain(
-      "邮箱或密码不正确",
+      "账号或密码不正确",
     );
     expect(readableAuthError(new Error("postgres secret detail"))).not.toContain(
       "postgres secret detail",

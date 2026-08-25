@@ -590,3 +590,65 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
         text=True,
     ).stdout.strip()
     assert dimensions == "1080x1920"
+
+
+def test_montage_review_api_supports_candidates_trim_lock_and_confirm(tmp_path, monkeypatch):
+    workspace_id = LEGACY_WORKSPACE_ID
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    for segment in asset.segments:
+        segment.usage_role = "b_roll"
+    production._save_asset(asset)
+    plan = MontagePlan(
+        id="montage_review",
+        workspace_id=workspace_id,
+        batch_id="batch_review",
+        episode_id="episode_review",
+        script_title="Review",
+        status="waiting_for_user",
+        cues=[NarrationCue("cue_review", "hook", "人工智能工具演示", 4.0)],
+        clips=[
+            MontageClip(
+                id="clip_review",
+                cue_id="cue_review",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path=asset.path,
+                source_start_seconds=0,
+                source_end_seconds=4,
+                timeline_start_seconds=0,
+                timeline_end_seconds=4,
+                match_score=0.2,
+                match_reasons=["low confidence"],
+                needs_confirmation=True,
+            )
+        ],
+        duration_seconds=4,
+        low_confidence_clip_count=1,
+    )
+    montage = MontageRepository(tmp_path / "studio.sqlite3")
+    montage.save(plan)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "montage_repo", montage)
+    client = TestClient(main_module.app)
+
+    candidates = client.get(
+        "/api/production/montage-plans/montage_review/clips/clip_review/candidates"
+    )
+    assert candidates.status_code == 200
+    assert candidates.json()
+
+    updated = client.patch(
+        "/api/production/montage-plans/montage_review/clips/clip_review",
+        json={"source_start_seconds": 1.0, "locked": True, "confirmed": True},
+    )
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["status"] == "ready"
+    assert payload["clips"][0]["source_start_seconds"] == 1.0
+    assert payload["clips"][0]["source_end_seconds"] == 5.0
+    assert payload["clips"][0]["locked"] is True
+    assert payload["clips"][0]["needs_confirmation"] is False

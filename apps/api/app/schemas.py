@@ -512,6 +512,8 @@ class MontageClipResponse(BaseModel):
     match_reasons: list[str]
     needs_confirmation: bool
     role: Literal["a_roll", "b_roll"] = "b_roll"
+    locked: bool = False
+    manually_selected: bool = False
 
 
 class MontagePlanResponse(BaseModel):
@@ -545,6 +547,29 @@ class MontagePlanCreateRequest(BaseModel):
 
 class MontagePlanConfirmRequest(BaseModel):
     clip_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class MontageClipUpdateRequest(BaseModel):
+    asset_id: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    source_start_seconds: float | None = Field(default=None, ge=0)
+    locked: bool | None = None
+    confirmed: bool | None = None
+
+
+class MontageClipOrderRequest(BaseModel):
+    clip_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class MontageClipCandidateResponse(BaseModel):
+    asset_id: str
+    segment_id: str
+    file_name: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    description: str
+    score: float = Field(ge=0, le=1)
+    reasons: list[str]
 
 
 class MontageRenderRequest(BaseModel):

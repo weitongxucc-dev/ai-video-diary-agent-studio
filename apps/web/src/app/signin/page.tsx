@@ -1,81 +1,41 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { LockKeyhole, Sparkles, UserRound } from "lucide-react";
 import { signIn } from "./actions";
-import { PixelButton } from "@/components/PixelPrimitives";
 import { getSupabasePublicConfig } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 
-type SignInPageProps = {
-  searchParams?: Promise<{ error?: string; next?: string }>;
-};
+type SignInPageProps = { searchParams?: Promise<{ error?: string; next?: string }> };
 
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const params = searchParams ? await searchParams : {};
   const config = getSupabasePublicConfig();
-
   if (config.ok) {
     try {
       const supabase = await createClient();
       const { data } = await supabase.auth.getClaims();
       if (data?.claims?.sub) redirect("/");
-    } catch {
-      // Render the sign-in form with a useful error instead of crashing.
-    }
+    } catch { /* Render a recoverable sign-in state. */ }
   }
-
   const error = !config.ok
-    ? config.message
+    ? "账号服务尚未配置，请联系管理员完成部署设置。"
     : params.error === "configuration"
-      ? "登录服务配置不完整。请联系内测管理员检查 Supabase 环境变量。"
+      ? "账号服务暂时不可用，请联系管理员检查配置。"
       : params.error;
 
   return (
-    <main className="auth-page">
-      <section className="pixel-card auth-card" aria-labelledby="signin-heading">
-        <span className="section-kicker">Invite-only Beta</span>
-        <h1 id="signin-heading">登录 AI 视频日记</h1>
-        <p>使用管理员邀请的邮箱和你设置的密码登录。这里不提供公开注册。</p>
-
-        {error ? (
-          <div className="welcome-feedback red" role="alert">
-            {error}
-          </div>
-        ) : null}
-
-        <form action={signIn} className="auth-form">
+    <main className="modern-auth-page">
+      <section className="modern-auth-card" aria-labelledby="signin-heading">
+        <div className="modern-auth-brand"><span><Sparkles size={17} /></span><strong>AI 视频日记</strong></div>
+        <div className="modern-auth-heading"><span>桌面账号</span><h1 id="signin-heading">登录工作区</h1><p>输入管理员为你设置的账号和密码。</p></div>
+        {error ? <div className="modern-auth-error" role="alert">{error}</div> : null}
+        <form action={signIn} className="modern-auth-form">
           <input name="next" type="hidden" value={params.next ?? ""} />
-          <label className="auth-field">
-            <span>受邀邮箱</span>
-            <input
-              autoComplete="email"
-              name="email"
-              placeholder="you@example.com"
-              required
-              type="email"
-            />
-          </label>
-          <label className="auth-field">
-            <span>密码</span>
-            <input
-              autoComplete="current-password"
-              minLength={10}
-              name="password"
-              required
-              type="password"
-            />
-          </label>
-          <PixelButton disabled={!config.ok} type="submit" variant="primary">
-            登录并继续
-          </PixelButton>
+          <label><span>账号</span><div><UserRound size={16} /><input autoCapitalize="none" autoComplete="username" maxLength={32} minLength={3} name="account" pattern="[A-Za-z0-9._-]{3,32}" placeholder="例如：dujiangyan" required spellCheck={false} type="text" /></div></label>
+          <label><span>密码</span><div><LockKeyhole size={16} /><input autoComplete="current-password" minLength={10} name="password" required type="password" /></div></label>
+          <button disabled={!config.ok} type="submit">登录</button>
         </form>
-
-        <div className="auth-help">
-          <p>没有邀请或链接已失效？请联系内测管理员重新发送。</p>
-          <nav aria-label="法律信息">
-            <Link href="/privacy">隐私政策</Link>
-            <Link href="/terms">使用条款</Link>
-          </nav>
-        </div>
+        <div className="modern-auth-help"><p>忘记账号或密码？请让工作区管理员直接重置。</p><nav aria-label="法律信息"><Link href="/privacy">隐私政策</Link><Link href="/terms">使用条款</Link></nav></div>
       </section>
     </main>
   );

@@ -919,6 +919,19 @@ export type MontageClip = {
   match_reasons: string[];
   needs_confirmation: boolean;
   role: "a_roll" | "b_roll";
+  locked: boolean;
+  manually_selected: boolean;
+};
+
+export type MontageClipCandidate = {
+  asset_id: string;
+  segment_id: string;
+  file_name: string;
+  start_seconds: number;
+  end_seconds: number;
+  description: string;
+  score: number;
+  reasons: string[];
 };
 
 export type MontagePlan = {

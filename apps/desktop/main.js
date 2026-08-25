@@ -430,14 +430,21 @@ function registerIpcHandlers() {
 
 // ── Window Management ──────────────────────────────────
 function createWindow() {
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    title: 'AI视频日记 Agent Studio',
-    backgroundColor: '#c0c0c0',
+    width: 1360,
+    height: 840,
+    minWidth: 1024,
+    minHeight: 700,
+    title: 'AI 视频日记',
+    backgroundColor: '#f7f7f5',
     show: false,
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 14, y: 15 },
+      vibrancy: 'sidebar',
+      visualEffectState: 'active',
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

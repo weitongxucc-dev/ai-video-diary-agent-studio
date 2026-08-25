@@ -19,6 +19,7 @@ import type {
   MaterialAsset,
   MaterialLibrary,
   MontagePlan,
+  MontageClipCandidate,
   Preferences,
   PreferenceCards,
   PreferenceEvidence,
@@ -196,6 +197,53 @@ export function createProductionBatch(input: {
 export function runProductionBatch(batchId: string): Promise<ProductionBatch> {
   return request<ProductionBatch>(`/api/production/batches/${batchId}/run`, {
     method: "POST",
+  });
+}
+
+export function getProductionBatch(batchId: string): Promise<ProductionBatch> {
+  return request<ProductionBatch>(`/api/production/batches/${batchId}`);
+}
+
+export function getMontagePlan(planId: string): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}`);
+}
+
+export function getMontagePlans(batchId: string): Promise<{ plans: MontagePlan[]; total_count: number }> {
+  return request<{ plans: MontagePlan[]; total_count: number }>(
+    `/api/production/batches/${batchId}/montage-plans`,
+  );
+}
+
+export function getMontageClipCandidates(
+  planId: string,
+  clipId: string,
+): Promise<MontageClipCandidate[]> {
+  return request<MontageClipCandidate[]>(
+    `/api/production/montage-plans/${planId}/clips/${clipId}/candidates`,
+  );
+}
+
+export function updateMontageClip(
+  planId: string,
+  clipId: string,
+  input: {
+    asset_id?: string;
+    segment_id?: string;
+    source_start_seconds?: number;
+    locked?: boolean;
+    confirmed?: boolean;
+  },
+): Promise<MontagePlan> {
+  return request<MontagePlan>(
+    `/api/production/montage-plans/${planId}/clips/${clipId}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function reorderMontageClips(planId: string, clipIds: string[]): Promise<MontagePlan> {
+  return request<MontagePlan>(`/api/production/montage-plans/${planId}/clips/order`, {
+    method: "PUT",
+    body: JSON.stringify({ clip_ids: clipIds }),
   });
 }
 

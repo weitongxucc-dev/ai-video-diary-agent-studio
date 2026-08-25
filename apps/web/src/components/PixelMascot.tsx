@@ -1,14 +1,7 @@
+import { Bot, UserRound } from "lucide-react";
+
+/** Compatibility name retained for route stability; the pixel artwork is retired. */
 export function PixelMascot({ variant = "agent" }: { variant?: "agent" | "creator" }) {
-  return (
-    <span className={`pixel-mascot pixel-mascot-${variant}`} aria-hidden="true">
-      <span className="pixel-mascot-head">
-        <span className="pixel-mascot-eye left" />
-        <span className="pixel-mascot-eye right" />
-        <span className="pixel-mascot-mouth" />
-      </span>
-      <span className="pixel-mascot-body" />
-      <span className="pixel-mascot-arm left" />
-      <span className="pixel-mascot-arm right" />
-    </span>
-  );
+  const Icon = variant === "creator" ? UserRound : Bot;
+  return <span className={`modern-mascot modern-mascot--${variant}`} aria-hidden="true"><Icon size={28} strokeWidth={1.65} /></span>;
 }

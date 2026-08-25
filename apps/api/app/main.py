@@ -123,6 +123,9 @@ from app.schemas import (
     ModelInstallRequest,
     NarrationArtifactResponse,
     MontagePlanConfirmRequest,
+    MontageClipCandidateResponse,
+    MontageClipOrderRequest,
+    MontageClipUpdateRequest,
     MontagePlanCreateRequest,
     MontagePlanResponse,
     MontagePlansResponse,
@@ -634,6 +637,44 @@ def list_production_materials(request: Request) -> MaterialLibraryResponse:
     )
 
 
+@app.get(
+    "/api/production/materials/{asset_id}",
+    response_model=MaterialAssetResponse,
+)
+def get_production_material(
+    asset_id: str,
+    request: Request,
+) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+
+
+@app.get("/api/production/materials/{asset_id}/media")
+def stream_production_material(asset_id: str, request: Request) -> FileResponse:
+    """Stream a workspace-scoped library asset for the desktop review player."""
+    try:
+        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    root = Path(settings.video_inbox_path).expanduser().resolve()
+    path = Path(asset.path).expanduser().resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="material asset is outside the library") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="material file not found")
+    media_type = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".m4v": "video/x-m4v",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
+
+
 @app.post(
     "/api/production/materials/scan",
     response_model=MaterialLibraryResponse,
@@ -747,6 +788,23 @@ def create_production_batch(
         target_count=payload.target_count,
         profile=production_profile_with_model_status(workspace_id),
     )
+    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+
+
+@app.get(
+    "/api/production/batches/{batch_id}",
+    response_model=ProductionBatchResponse,
+)
+def get_production_batch(
+    batch_id: str,
+    request: Request,
+) -> ProductionBatchResponse:
+    try:
+        batch = _recover_production_batch_if_needed(
+            production_repo.get_batch(current_workspace_id(request), batch_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="production batch not found") from exc
     return ProductionBatchResponse.model_validate(batch, from_attributes=True)
 
 
@@ -1157,6 +1215,186 @@ def confirm_production_montage_clips(
         else "混剪时间线仍有镜头等待确认。"
     )
     production_repo.save_batch(batch)
+    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+
+
+@app.get(
+    "/api/production/montage-plans/{plan_id}",
+    response_model=MontagePlanResponse,
+)
+def get_production_montage_plan(
+    plan_id: str,
+    request: Request,
+) -> MontagePlanResponse:
+    try:
+        plan = montage_repo.get(current_workspace_id(request), plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+
+
+def _refresh_montage_review_state(plan) -> None:
+    plan.low_confidence_clip_count = sum(clip.needs_confirmation for clip in plan.clips)
+    plan.status = "ready" if plan.low_confidence_clip_count == 0 else "waiting_for_user"
+    plan.output_path = None
+    plan.subtitle_path = None
+    plan.message = (
+        "镜头审核已完成，可以重新渲染。"
+        if plan.status == "ready"
+        else f"仍有 {plan.low_confidence_clip_count} 个镜头等待确认。"
+    )
+
+
+@app.get(
+    "/api/production/montage-plans/{plan_id}/clips/{clip_id}/candidates",
+    response_model=list[MontageClipCandidateResponse],
+)
+def list_production_montage_clip_candidates(
+    plan_id: str,
+    clip_id: str,
+    request: Request,
+) -> list[MontageClipCandidateResponse]:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = montage_repo.get(workspace_id, plan_id)
+        clip = next(item for item in plan.clips if item.id == clip_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="montage clip not found") from exc
+    cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
+    cue_tokens = set((cue.text if cue else "").lower())
+    candidates: list[MontageClipCandidateResponse] = []
+    for asset in production_repo.list_assets(workspace_id):
+        if asset.review_status != "approved" or not asset.rights_confirmed or not asset.brand_safe:
+            continue
+        for segment in asset.segments:
+            if segment.review_status != "approved" or segment.usage_role not in {"a_roll", "b_roll"}:
+                continue
+            available = segment.end_seconds - segment.start_seconds
+            slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+            if available + 1e-6 < slot_duration:
+                continue
+            description = (segment.description or segment.transcript or asset.file_name).strip()
+            overlap = len(cue_tokens & set(description.lower())) / max(1, len(cue_tokens))
+            score = max(0.0, min(1.0, overlap * 0.7 + min(1.0, available / max(slot_duration, 0.1)) * 0.3))
+            candidates.append(MontageClipCandidateResponse(
+                asset_id=asset.id,
+                segment_id=segment.id,
+                file_name=asset.file_name,
+                start_seconds=segment.start_seconds,
+                end_seconds=segment.end_seconds,
+                description=description,
+                score=round(score, 3),
+                reasons=["已通过版权和品牌审核", "时长满足当前旁白时间槽"],
+            ))
+    candidates.sort(key=lambda item: (item.asset_id == clip.asset_id and item.segment_id == clip.segment_id, item.score), reverse=True)
+    return candidates[:24]
+
+
+@app.patch(
+    "/api/production/montage-plans/{plan_id}/clips/{clip_id}",
+    response_model=MontagePlanResponse,
+)
+def update_production_montage_clip(
+    plan_id: str,
+    clip_id: str,
+    request: Request,
+    payload: MontageClipUpdateRequest,
+) -> MontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = montage_repo.get(workspace_id, plan_id)
+        clip = next(item for item in plan.clips if item.id == clip_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="montage clip not found") from exc
+    if plan.status == "rendering":
+        raise HTTPException(status_code=409, detail="montage plan is rendering")
+    asset_id = payload.asset_id or clip.asset_id
+    segment_id = payload.segment_id or clip.segment_id
+    if payload.asset_id is not None or payload.segment_id is not None:
+        try:
+            asset = production_repo.get_asset(workspace_id, asset_id)
+            segment = next(item for item in asset.segments if item.id == segment_id)
+        except (KeyError, StopIteration) as exc:
+            raise HTTPException(status_code=404, detail="material segment not found") from exc
+        if asset.review_status != "approved" or not asset.rights_confirmed or not asset.brand_safe or segment.review_status != "approved":
+            raise HTTPException(status_code=409, detail="material segment has not passed review")
+        clip.asset_id = asset.id
+        clip.segment_id = segment.id
+        clip.source_path = asset.path
+        clip.role = "a_roll" if segment.usage_role == "a_roll" else "b_roll"
+        clip.match_reasons = ["由用户替换", "已通过版权和品牌审核"]
+        clip.match_score = 1.0
+        clip.manually_selected = True
+    else:
+        asset = production_repo.get_asset(workspace_id, clip.asset_id)
+        segment = next((item for item in asset.segments if item.id == clip.segment_id), None)
+        if segment is None:
+            raise HTTPException(status_code=404, detail="material segment not found")
+    slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    source_start = payload.source_start_seconds if payload.source_start_seconds is not None else max(segment.start_seconds, clip.source_start_seconds)
+    source_end = source_start + slot_duration
+    if source_start < segment.start_seconds - 1e-6 or source_end > segment.end_seconds + 1e-6:
+        raise HTTPException(status_code=400, detail="trim range exceeds the reviewed segment")
+    clip.source_start_seconds = round(source_start, 3)
+    clip.source_end_seconds = round(source_end, 3)
+    if payload.locked is not None:
+        clip.locked = payload.locked
+    if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
+        clip.needs_confirmation = False
+    _refresh_montage_review_state(plan)
+    montage_repo.save(plan)
+    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+
+
+@app.put(
+    "/api/production/montage-plans/{plan_id}/clips/order",
+    response_model=MontagePlanResponse,
+)
+def reorder_production_montage_clips(
+    plan_id: str,
+    request: Request,
+    payload: MontageClipOrderRequest,
+) -> MontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = montage_repo.get(workspace_id, plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    if set(payload.clip_ids) != {clip.id for clip in plan.clips} or len(payload.clip_ids) != len(plan.clips):
+        raise HTTPException(status_code=400, detail="clip order must contain every clip exactly once")
+    by_id = {clip.id: clip for clip in plan.clips}
+    for index, current in enumerate(plan.clips):
+        if current.locked and payload.clip_ids[index] != current.id:
+            raise HTTPException(status_code=409, detail="locked clips cannot be moved")
+    sources = [
+        {
+            "asset_id": by_id[clip_id].asset_id,
+            "segment_id": by_id[clip_id].segment_id,
+            "source_path": by_id[clip_id].source_path,
+            "source_start_seconds": by_id[clip_id].source_start_seconds,
+            "source_end_seconds": by_id[clip_id].source_end_seconds,
+            "match_score": by_id[clip_id].match_score,
+            "match_reasons": list(by_id[clip_id].match_reasons),
+            "needs_confirmation": by_id[clip_id].needs_confirmation,
+            "role": by_id[clip_id].role,
+        }
+        for clip_id in payload.clip_ids
+    ]
+    for target, source in zip(plan.clips, sources, strict=True):
+        if target.locked:
+            continue
+        target.asset_id = str(source["asset_id"])
+        target.segment_id = str(source["segment_id"])
+        target.source_path = str(source["source_path"])
+        target.source_start_seconds = float(source["source_start_seconds"])
+        target.source_end_seconds = float(source["source_end_seconds"])
+        target.match_score = float(source["match_score"])
+        target.match_reasons = [*source["match_reasons"], "由用户调整视觉顺序"]
+        target.needs_confirmation = bool(source["needs_confirmation"])
+        target.role = source["role"]
+        target.manually_selected = True
+    _refresh_montage_review_state(plan)
+    montage_repo.save(plan)
     return MontagePlanResponse.model_validate(plan, from_attributes=True)
 
 

@@ -8,7 +8,7 @@
 
 - Next.js 15 工作台、FastAPI API、自动化 Worker 和 Electron 桌面壳已经连通。
 - 内部 macOS 构建显式使用 `NEXT_PUBLIC_AUTH_MODE=local`，面向可信测试者，不依赖 Supabase 登录。
-- Supabase 邀请登录、JWT 校验和 workspace 隔离仍保留，用于后续分发模式；只有显式配置后才启用。
+- 分发模式只向用户呈现账号与密码；Supabase JWT 和 workspace 隔离作为内部实现，只有显式配置后才启用。
 - GitHub Actions 可以分别生成 arm64 与 x64 内测包；正式发布必须通过 Developer ID 签名和 Apple 公证。
 
 这不是公开发行版。真实客户端验收、签名公证、自动更新和小规模用户反馈仍是发布门禁。
@@ -88,7 +88,7 @@ corepack pnpm dev:worker
 
 ```bash
 corepack pnpm run test:web-contract
-corepack pnpm run test:pixel-style
+corepack pnpm run test:design-system
 corepack pnpm run test:web
 corepack pnpm run lint:web
 corepack pnpm run build:web

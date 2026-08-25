@@ -1,14 +1,8 @@
 "use client";
 
-import { Mic, MicOff } from "lucide-react";
+import { ChevronDown, ChevronUp, LoaderCircle, Mic, MicOff, Send, Sparkles, Trash2 } from "lucide-react";
 import type { KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PixelIcon } from "@/components/PixelIcon";
-import {
-  PixelButton,
-  PixelStatus,
-  type PixelStatusKind,
-} from "@/components/PixelPrimitives";
 import {
   executeVoiceCommand,
   getTodayEpisode,
@@ -73,18 +67,6 @@ const viewStateLabels: Record<VoiceCommandViewState, string> = {
   waiting_for_user: "等待确认",
 };
 
-const viewStateKinds: Record<VoiceCommandViewState, PixelStatusKind> = {
-  blocked: "blocked",
-  executing: "running",
-  failed: "failed",
-  idle: "idle",
-  previewing: "running",
-  recording: "running",
-  succeeded: "succeeded",
-  transcribing: "running",
-  waiting_for_user: "waiting_for_user",
-};
-
 function formatDuration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
@@ -125,16 +107,9 @@ export function VoiceCommandConsoleView({
       aria-label="语音指令控制台"
       className={`voice-command-console${expanded ? " is-expanded" : ""}`}
     >
-      <div className="voice-command-status">
-        <PixelIcon name="agent" />
-        <div>
-          <strong>COMMAND DOCK</strong>
-          <span>{contextLabel}</span>
-        </div>
-      </div>
-
       <div className="voice-command-line">
-        <label htmlFor="voice-command-input">&gt;</label>
+        <Sparkles aria-hidden="true" className="voice-command-spark" size={16} />
+        <label className="sr-only" htmlFor="voice-command-input">生产指令</label>
         <input
           aria-label="语音指令文本"
           disabled={isProcessing}
@@ -173,29 +148,35 @@ export function VoiceCommandConsoleView({
             </span>
           ) : null}
         </button>
+        <button
+          aria-busy={viewState === "previewing"}
+          aria-label="预览指令"
+          className="command-submit-button"
+          disabled={!canPreview}
+          onClick={onPreview}
+          title="预览指令"
+          type="button"
+        >
+          {viewState === "previewing" ? <LoaderCircle className="is-spinning" size={15} /> : <Send size={15} />}
+        </button>
       </div>
 
       <div className="voice-command-actions">
-        <div aria-live="polite" role="status">
-          <PixelStatus kind={viewStateKinds[viewState]} label={statusLabel} />
+        <div aria-live="polite" className={`command-status command-status--${viewState}`} role="status">
+          <span aria-hidden="true" />
+          {statusLabel}
+          <small>{contextLabel}</small>
         </div>
-        <PixelButton
-          disabled={!canPreview}
-          loading={viewState === "previewing"}
-          onClick={onPreview}
-          variant="secondary"
-        >
-          预览指令
-        </PixelButton>
-        <PixelButton
+        <button
           aria-controls="voice-command-details"
           aria-expanded={expanded}
+          className="command-detail-button"
           onClick={onToggleExpanded}
-          size="compact"
-          variant="secondary"
+          type="button"
         >
+          {expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
           {expanded ? "收起详情" : "展开详情"}
-        </PixelButton>
+        </button>
       </div>
 
       <div
@@ -221,21 +202,23 @@ export function VoiceCommandConsoleView({
 
         <div className="voice-command-confirm-actions">
           {viewState === "waiting_for_user" ? (
-            <PixelButton
+            <button
+              className="command-confirm-button"
               disabled={!transcript.trim()}
               onClick={onExecute}
-              variant="primary"
+              type="button"
             >
               确认并执行
-            </PixelButton>
+            </button>
           ) : null}
-          <PixelButton
+          <button
+            className="command-clear-button"
             disabled={isProcessing || isRecording}
             onClick={onClear}
-            variant="secondary"
+            type="button"
           >
-            清除指令
-          </PixelButton>
+            <Trash2 size={13} />清除指令
+          </button>
         </div>
       </div>
     </section>

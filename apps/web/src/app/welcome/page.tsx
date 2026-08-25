@@ -284,8 +284,8 @@ export default function WelcomePage() {
   );
 
   return (
-    <div className="retro-desktop-shell">
-      <div className="retro-window-frame">
+    <div className="onboarding-desktop">
+      <div className="onboarding-window">
         <main className="welcome-page">
           <header className="welcome-header pixel-card">
             <div className="welcome-header-main">

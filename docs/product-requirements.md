@@ -53,7 +53,7 @@
 产品支持两个明确模式：
 
 - `local`：仅内部 macOS 构建启用，面向可信测试者；不要求登录，所有记录属于保留的本地 workspace。
-- `supabase`：后续分发模式；使用邀请制账号、JWT、workspace membership 和服务端首启门禁。
+- `supabase`：后续分发模式；产品界面只使用账号与密码，JWT、workspace membership 和首启门禁属于内部实现。
 
 本地视频、Obsidian 原文、剪映草稿和 AI Key 默认留在本机。任何云端同步都必须有明确的数据范围，不能把本地目录或秘密值上传到 Supabase。
 
@@ -83,7 +83,7 @@
 
 公开发布还必须：
 
-1. 启用并验证邀请制 Supabase 模式及跨 workspace 隔离。
+1. 启用并验证账号密码模式及跨 workspace 隔离，产品界面不得依赖邮箱邀请或邮件链接。
 2. 通过独立安全审核。
 3. 使用 Developer ID 签名并完成 Apple 公证、Gatekeeper 和 stapler 验证。
 4. 验证自动更新和可执行的回滚方案。

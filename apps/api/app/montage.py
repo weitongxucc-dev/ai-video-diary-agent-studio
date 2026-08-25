@@ -55,6 +55,8 @@ class MontageClip:
     match_reasons: list[str]
     needs_confirmation: bool
     role: Literal["a_roll", "b_roll"] = "b_roll"
+    locked: bool = False
+    manually_selected: bool = False
 
 
 @dataclass

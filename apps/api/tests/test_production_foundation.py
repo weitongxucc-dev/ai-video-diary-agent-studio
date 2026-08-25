@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.model_runtime import ModelCatalog
 from app.production import ProductionProfile, ProductionRepository
+from app.repository import LEGACY_WORKSPACE_ID
 from app.visual_semantics import VisualEmbedding
 
 
@@ -347,3 +349,31 @@ def test_profile_api_cannot_claim_voice_model_is_ready(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["voice_model_status"] == "blocked"
     assert response.json()["voice_model_message"] != "client says ready"
+
+
+def test_material_media_and_batch_detail_are_workspace_scoped(tmp_path, monkeypatch):
+    production = _repository(tmp_path)
+    video = production.video_library_path / "preview.mp4"
+    video.write_bytes(b"video preview bytes")
+    asset = production.scan_library(LEGACY_WORKSPACE_ID)[0]
+    batch = production.create_batch(LEGACY_WORKSPACE_ID, name="Review batch", target_count=2)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        replace(main_module.settings, video_inbox_path=str(production.video_library_path)),
+    )
+    client = TestClient(main_module.app)
+
+    detail = client.get(f"/api/production/materials/{asset.id}")
+    assert detail.status_code == 200
+    assert detail.json()["file_name"] == "preview.mp4"
+
+    media = client.get(f"/api/production/materials/{asset.id}/media")
+    assert media.status_code == 200
+    assert media.content == b"video preview bytes"
+    assert media.headers["content-type"].startswith("video/mp4")
+
+    batch_detail = client.get(f"/api/production/batches/{batch.id}")
+    assert batch_detail.status_code == 200
+    assert batch_detail.json()["name"] == "Review batch"

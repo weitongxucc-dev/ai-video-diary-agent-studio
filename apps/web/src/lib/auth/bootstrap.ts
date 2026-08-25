@@ -17,18 +17,17 @@ export type BootstrapResult =
 export const WORKSPACE_BOOTSTRAP_ERROR =
   "账号已登录，但个人工作区初始化失败。请稍后重试；问题持续时请联系内测管理员。";
 
-function personalWorkspaceName(email: string | undefined): string {
-  const emailName = email?.split("@")[0]?.trim();
-  const ownerName = emailName || "我的";
+function personalWorkspaceName(account: string | undefined): string {
+  const ownerName = account?.split("@")[0]?.trim() || "我的";
   return `${ownerName.slice(0, 68)}的创作空间`;
 }
 
 export async function bootstrapPersonalWorkspace(
   client: BootstrapClient,
-  email?: string,
+  account?: string,
 ): Promise<BootstrapResult> {
   const { data, error } = await client.rpc("bootstrap_personal_workspace", {
-    workspace_name: personalWorkspaceName(email),
+    workspace_name: personalWorkspaceName(account),
   });
 
   const bootstrap = data?.[0];
