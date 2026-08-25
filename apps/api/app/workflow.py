@@ -37,6 +37,7 @@ class EpisodeWorkflowState(TypedDict, total=False):
     version_id: str
     feedback_event_id: str
     reason: str | None
+    target_duration_seconds: int
     video: Any
     videos: list[Any]
     package_name: str
@@ -148,6 +149,7 @@ class LangGraphEpisodeWorkflow:
             "episode": self._service.generate_script(
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
+                target_duration_seconds=state.get("target_duration_seconds"),
             )
         }
 
@@ -166,6 +168,7 @@ class LangGraphEpisodeWorkflow:
                 state["episode"],
                 feedback_history=state.get("feedback_history"),
                 reason=state.get("reason"),
+                target_duration_seconds=state.get("target_duration_seconds"),
             )
         }
 

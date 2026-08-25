@@ -133,6 +133,7 @@ class EpisodeService:
         self,
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
+        target_duration_seconds: int | None = None,
     ) -> Episode:
         if episode.script is not None:
             if episode.status in {
@@ -146,11 +147,17 @@ class EpisodeService:
 
         selected = self._selected_topic(episode)
         self._require_topic_evidence(selected)
+        generation_options = (
+            {"target_duration_seconds": target_duration_seconds}
+            if target_duration_seconds is not None
+            else {}
+        )
         script = self._script_generator.generate(
             selected,
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            **generation_options,
         )
         self._record_script_version(
             episode,
@@ -215,14 +222,21 @@ class EpisodeService:
         episode: Episode,
         feedback_history: list[FeedbackEvent] | None = None,
         reason: str | None = None,
+        target_duration_seconds: int | None = None,
     ) -> Episode:
         selected = self._selected_topic(episode)
         self._require_topic_evidence(selected)
+        generation_options = (
+            {"target_duration_seconds": target_duration_seconds}
+            if target_duration_seconds is not None
+            else {}
+        )
         script = self._script_generator.generate(
             selected,
             day_number=episode.day_number,
             feedback_events=self._active_feedback(episode, feedback_history),
             template=self._content_template(episode),
+            **generation_options,
         )
         return self._record_script_version(
             episode,

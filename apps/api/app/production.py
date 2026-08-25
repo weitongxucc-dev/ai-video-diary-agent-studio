@@ -55,6 +55,15 @@ _B_ROLL_PROMPTS = (
     "城市街景、办公环境或物品的空镜头",
 )
 _ROLE_SUGGESTION_MARGIN = 0.02
+DEFAULT_MATERIAL_TAXONOMY = (
+    "场景:办公",
+    "场景:户外",
+    "物体:电脑",
+    "动作:打字",
+    "内容:软件界面",
+    "主体:人物",
+    "镜头:特写",
+)
 
 
 @dataclass
@@ -73,6 +82,11 @@ class MaterialSegment:
     usage_role_confidence: float = 0.0
     usage_role_reason: str = ""
     review_status: AssetReviewStatus = "raw"
+    system_tags: list[str] = field(default_factory=list)
+    user_tags: list[str] = field(default_factory=list)
+    collection_ids: list[str] = field(default_factory=list)
+    usage_count: int = 0
+    last_used_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -126,6 +140,47 @@ class ProductionProfile:
     use_hermes: bool = True
     factuality_gate_enabled: bool = True
     cloud_enhancement_enabled: bool = False
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class VoiceProfile:
+    id: str
+    workspace_id: str
+    name: str
+    reference_audio_path: str
+    reference_text: str
+    consent_confirmed: bool
+    is_default: bool = False
+    model_id: str = "qwen3-tts-12hz-0.6b-base-8bit"
+    status: AnalysisStatus = "pending"
+    message: str = "等待声音模型检查。"
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class NarrationArtifactRecord:
+    id: str
+    workspace_id: str
+    episode_id: str
+    script_id: str
+    voice_profile_id: str | None
+    cache_key: str
+    audio_path: str
+    duration_seconds: float
+    sample_rate: int
+    model_id: str
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class MaterialCollection:
+    id: str
+    workspace_id: str
+    name: str
+    parent_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
 
@@ -240,6 +295,51 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_production_batches_workspace
                     ON production_batches(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS voice_profiles (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_voice_profiles_workspace
+                    ON voice_profiles(workspace_id, is_default DESC, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS episode_voice_selections (
+                    workspace_id TEXT NOT NULL,
+                    episode_id TEXT NOT NULL,
+                    voice_profile_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, episode_id)
+                );
+                CREATE TABLE IF NOT EXISTS narration_artifacts (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    cache_key TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(workspace_id, cache_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_narration_artifacts_episode
+                    ON narration_artifacts(workspace_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS material_collections (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_material_collections_workspace
+                    ON material_collections(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS material_segment_usage (
+                    workspace_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    clip_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    segment_id TEXT NOT NULL,
+                    used_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, plan_id, clip_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_material_usage_segment
+                    ON material_segment_usage(workspace_id, segment_id, used_at DESC);
                 """
             )
 
@@ -268,6 +368,213 @@ class ProductionRepository:
                 (profile.workspace_id, payload, profile.updated_at.isoformat()),
             )
         return profile
+
+    def list_voice_profiles(self, workspace_id: str) -> list[VoiceProfile]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload, is_default FROM voice_profiles
+                WHERE workspace_id = ? ORDER BY is_default DESC, updated_at DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        profiles: list[VoiceProfile] = []
+        for row in rows:
+            data = json.loads(str(row["payload"]))
+            data["is_default"] = bool(row["is_default"])
+            profiles.append(self._voice_profile_from_payload(data))
+        return profiles
+
+    def get_voice_profile(self, workspace_id: str, voice_profile_id: str) -> VoiceProfile:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload, is_default FROM voice_profiles
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (workspace_id, voice_profile_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(voice_profile_id)
+        data = json.loads(str(row["payload"]))
+        data["is_default"] = bool(row["is_default"])
+        return self._voice_profile_from_payload(data)
+
+    def save_voice_profile(self, voice: VoiceProfile) -> VoiceProfile:
+        voice.updated_at = utc_now()
+        with self._connect() as conn:
+            if voice.is_default:
+                conn.execute(
+                    "UPDATE voice_profiles SET is_default = 0 WHERE workspace_id = ?",
+                    (voice.workspace_id,),
+                )
+            conn.execute(
+                """
+                INSERT INTO voice_profiles (id, workspace_id, is_default, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    is_default = excluded.is_default,
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    voice.id,
+                    voice.workspace_id,
+                    int(voice.is_default),
+                    _json_payload(voice),
+                    voice.updated_at.isoformat(),
+                ),
+            )
+        return voice
+
+    def select_episode_voice(
+        self,
+        workspace_id: str,
+        episode_id: str,
+        voice_profile_id: str | None,
+    ) -> VoiceProfile | None:
+        with self._connect() as conn:
+            if voice_profile_id is None:
+                conn.execute(
+                    "DELETE FROM episode_voice_selections WHERE workspace_id = ? AND episode_id = ?",
+                    (workspace_id, episode_id),
+                )
+                return None
+            voice = self.get_voice_profile(workspace_id, voice_profile_id)
+            conn.execute(
+                """
+                INSERT INTO episode_voice_selections
+                    (workspace_id, episode_id, voice_profile_id, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(workspace_id, episode_id) DO UPDATE SET
+                    voice_profile_id = excluded.voice_profile_id,
+                    updated_at = excluded.updated_at
+                """,
+                (workspace_id, episode_id, voice.id, utc_now().isoformat()),
+            )
+        return voice
+
+    def selected_episode_voice_id(
+        self,
+        workspace_id: str,
+        episode_id: str,
+    ) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT voice_profile_id FROM episode_voice_selections
+                WHERE workspace_id = ? AND episode_id = ?
+                """,
+                (workspace_id, episode_id),
+            ).fetchone()
+        return str(row["voice_profile_id"]) if row is not None else None
+
+    def resolve_voice_profile(
+        self,
+        workspace_id: str,
+        episode_id: str,
+    ) -> VoiceProfile | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT voice_profile_id FROM episode_voice_selections
+                WHERE workspace_id = ? AND episode_id = ?
+                """,
+                (workspace_id, episode_id),
+            ).fetchone()
+        if row is not None:
+            return self.get_voice_profile(workspace_id, str(row["voice_profile_id"]))
+        profiles = self.list_voice_profiles(workspace_id)
+        return next((voice for voice in profiles if voice.is_default), None)
+
+    def get_narration_artifact(
+        self,
+        workspace_id: str,
+        cache_key: str,
+    ) -> NarrationArtifactRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM narration_artifacts
+                WHERE workspace_id = ? AND cache_key = ?
+                """,
+                (workspace_id, cache_key),
+            ).fetchone()
+        if row is None:
+            return None
+        record = self._narration_artifact_from_payload(json.loads(str(row["payload"])))
+        if not Path(record.audio_path).is_file():
+            return None
+        return record
+
+    def save_narration_artifact(
+        self,
+        artifact: NarrationArtifactRecord,
+    ) -> NarrationArtifactRecord:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
+                    id = excluded.id,
+                    payload = excluded.payload,
+                    created_at = excluded.created_at
+                """,
+                (
+                    artifact.id,
+                    artifact.workspace_id,
+                    artifact.cache_key,
+                    _json_payload(artifact),
+                    artifact.created_at.isoformat(),
+                ),
+            )
+        return artifact
+
+    def list_collections(self, workspace_id: str) -> list[MaterialCollection]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM material_collections
+                WHERE workspace_id = ? ORDER BY updated_at DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [
+            self._collection_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def save_collection(self, collection: MaterialCollection) -> MaterialCollection:
+        if collection.parent_id is not None:
+            parent = next(
+                (
+                    item
+                    for item in self.list_collections(collection.workspace_id)
+                    if item.id == collection.parent_id
+                ),
+                None,
+            )
+            if parent is None:
+                raise KeyError(collection.parent_id)
+        collection.updated_at = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO material_collections (id, workspace_id, payload, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    collection.id,
+                    collection.workspace_id,
+                    _json_payload(collection),
+                    collection.updated_at.isoformat(),
+                ),
+            )
+        return collection
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
         if not self.video_library_path.exists() or not self.video_library_path.is_dir():
@@ -335,6 +642,8 @@ class ProductionRepository:
             asset.analysis_status = "ready"
             visual_message = self._analyze_visual_semantics(asset, path)
             role_message = self._suggest_usage_roles(asset)
+            for segment in asset.segments:
+                segment.system_tags = _infer_system_tags(asset, segment)
             asset.analysis_message = (
                 f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message}"
             ).strip()
@@ -415,6 +724,8 @@ class ProductionRepository:
         transcript: str,
         review_status: AssetReviewStatus,
         usage_role: AssetUsageRole | None = None,
+        user_tags: list[str] | None = None,
+        collection_ids: list[str] | None = None,
     ) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
         segment = next((item for item in asset.segments if item.id == segment_id), None)
@@ -424,13 +735,100 @@ class ProductionRepository:
             raise ValueError("素材文件尚未进入可用库")
         segment.description = description.strip()
         segment.transcript = transcript.strip()
+        segment.system_tags = _infer_system_tags(asset, segment)
         if usage_role is not None:
             segment.usage_role = usage_role
             if usage_role == "exclude":
                 review_status = "rejected"
+        if user_tags is not None:
+            segment.user_tags = _normalized_labels(user_tags)
+        if collection_ids is not None:
+            known_collections = {
+                item.id for item in self.list_collections(workspace_id)
+            }
+            if not set(collection_ids) <= known_collections:
+                raise ValueError("标签夹不存在或不属于当前工作区")
+            segment.collection_ids = list(dict.fromkeys(collection_ids))
         segment.review_status = review_status
         segment.updated_at = utc_now()
         return self._save_asset(asset)
+
+    def record_segment_usage(
+        self,
+        workspace_id: str,
+        asset_id: str,
+        segment_id: str,
+        *,
+        plan_id: str | None = None,
+        clip_id: str | None = None,
+    ) -> MaterialAsset:
+        asset = self.get_asset(workspace_id, asset_id)
+        segment = next((item for item in asset.segments if item.id == segment_id), None)
+        if segment is None:
+            raise KeyError(segment_id)
+        usage_plan_id = plan_id or f"manual_{uuid4().hex}"
+        usage_clip_id = clip_id or f"clip_{uuid4().hex}"
+        used_at = utc_now()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO material_segment_usage
+                    (workspace_id, plan_id, clip_id, asset_id, segment_id, used_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    workspace_id,
+                    usage_plan_id,
+                    usage_clip_id,
+                    asset_id,
+                    segment_id,
+                    used_at.isoformat(),
+                ),
+            )
+        if cursor.rowcount == 0:
+            return asset
+        segment.usage_count += 1
+        segment.last_used_at = used_at
+        segment.updated_at = used_at
+        return self._save_asset(asset)
+
+    def library_insights(self, workspace_id: str) -> dict[str, object]:
+        assets = self.list_assets(workspace_id)
+        segments = [segment for asset in assets for segment in asset.segments]
+        stats: dict[str, dict[str, object]] = {}
+        for segment in segments:
+            duration = max(0.0, segment.end_seconds - segment.start_seconds)
+            for tag in {*segment.system_tags, *segment.user_tags}:
+                item = stats.setdefault(
+                    tag,
+                    {"tag": tag, "segment_count": 0, "duration_seconds": 0.0, "usage_count": 0},
+                )
+                item["segment_count"] = int(item["segment_count"]) + 1
+                item["duration_seconds"] = float(item["duration_seconds"]) + duration
+                item["usage_count"] = int(item["usage_count"]) + segment.usage_count
+        for tag in DEFAULT_MATERIAL_TAXONOMY:
+            stats.setdefault(
+                tag,
+                {"tag": tag, "segment_count": 0, "duration_seconds": 0.0, "usage_count": 0},
+            )
+        ordered = sorted(
+            stats.values(),
+            key=lambda item: (-int(item["segment_count"]), str(item["tag"])),
+        )
+        return {
+            "asset_count": len(assets),
+            "segment_count": len(segments),
+            "tags": [
+                {**item, "duration_seconds": round(float(item["duration_seconds"]), 3)}
+                for item in ordered
+            ],
+            "recommended_gaps": [
+                str(item["tag"])
+                for item in ordered
+                if int(item["segment_count"]) == 0
+                and str(item["tag"]) in DEFAULT_MATERIAL_TAXONOMY
+            ],
+        }
 
     def create_batch(
         self,
@@ -525,6 +923,14 @@ class ProductionRepository:
             and effective_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
+        default_voice = next(
+            (
+                voice
+                for voice in self.list_voice_profiles(workspace_id)
+                if voice.is_default
+            ),
+            None,
+        )
         if not profile.brand_name or not profile.brand_template_name:
             blockers.append(
                 {
@@ -532,14 +938,29 @@ class ProductionRepository:
                     "message": "尚未配置品牌名称和固定视觉模板。",
                 }
             )
-        if not profile.voice_consent_confirmed:
+        voice_consent_confirmed = (
+            default_voice.consent_confirmed
+            if default_voice is not None
+            else profile.voice_consent_confirmed
+        )
+        voice_reference_path = (
+            default_voice.reference_audio_path
+            if default_voice is not None
+            else profile.voice_reference_path
+        )
+        voice_reference_text = (
+            default_voice.reference_text
+            if default_voice is not None
+            else profile.voice_reference_text
+        )
+        if not voice_consent_confirmed:
             blockers.append(
                 {
                     "code": "voice_consent_missing",
                     "message": "授权声音尚未确认授权。",
                 }
             )
-        elif not profile.voice_reference_path or not profile.voice_reference_text.strip():
+        elif not voice_reference_path or not voice_reference_text.strip():
             blockers.append(
                 {
                     "code": "voice_reference_missing",
@@ -912,17 +1333,38 @@ class ProductionRepository:
         return ProductionProfile(**data)
 
     @staticmethod
+    def _voice_profile_from_payload(data: dict[str, object]) -> VoiceProfile:
+        data = _with_datetime(data, "created_at", "updated_at")
+        return VoiceProfile(**data)
+
+    @staticmethod
+    def _narration_artifact_from_payload(
+        data: dict[str, object],
+    ) -> NarrationArtifactRecord:
+        data = _with_datetime(data, "created_at")
+        return NarrationArtifactRecord(**data)
+
+    @staticmethod
+    def _collection_from_payload(data: dict[str, object]) -> MaterialCollection:
+        data = _with_datetime(data, "created_at", "updated_at")
+        return MaterialCollection(**data)
+
+    @staticmethod
     def _asset_from_payload(data: dict[str, object]) -> MaterialAsset:
         segment_payloads = data.pop("segments", [])
         data = _with_datetime(data, "modified_at", "created_at", "updated_at")
         segments = [
             MaterialSegment(
-                **_with_datetime(segment, "created_at", "updated_at")
+                **_with_datetime(segment, "last_used_at", "created_at", "updated_at")
             )
             for segment in segment_payloads
             if isinstance(segment, dict)
         ]
-        return MaterialAsset(**data, segments=segments)
+        asset = MaterialAsset(**data, segments=segments)
+        for segment in asset.segments:
+            if not segment.system_tags:
+                segment.system_tags = _infer_system_tags(asset, segment)
+        return asset
 
     @staticmethod
     def _batch_from_payload(data: dict[str, object]) -> ProductionBatch:
@@ -978,6 +1420,40 @@ def _with_datetime(data: dict[str, object], *keys: str) -> dict[str, object]:
         if isinstance(value, str):
             converted[key] = datetime.fromisoformat(value)
     return converted
+
+
+def _normalized_labels(values: list[str]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            value.strip()[:80]
+            for value in values
+            if value.strip()
+        )
+    )
+
+
+def _infer_system_tags(
+    asset: MaterialAsset,
+    segment: MaterialSegment,
+) -> list[str]:
+    text = f"{asset.file_name} {segment.description} {segment.transcript}".lower()
+    role = effective_segment_usage_role(asset, segment)
+    if role == "unassigned":
+        role = segment.suggested_usage_role
+    tags = [f"用途:{role}"] if role != "unassigned" else []
+    rules = {
+        "场景:办公": ("办公", "office", "workspace", "desk"),
+        "物体:电脑": ("电脑", "笔记本", "laptop", "computer", "keyboard"),
+        "动作:打字": ("打字", "键盘", "typing", "keyboard"),
+        "内容:软件界面": ("软件", "界面", "screen", "app", "website"),
+        "场景:户外": ("户外", "街道", "风景", "outdoor", "street", "nature"),
+        "主体:人物": ("人物", "人脸", "口播", "person", "face", "talking"),
+        "镜头:特写": ("特写", "close-up", "closeup"),
+    }
+    for tag, keywords in rules.items():
+        if any(keyword in text for keyword in keywords):
+            tags.append(tag)
+    return _normalized_labels(tags)
 
 
 def _segment_id(asset_id: str, start: float, end: float) -> str:

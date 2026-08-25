@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,14 +52,17 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
-from app.narration import NarrationGenerator
+from app.narration import NarrationArtifact, NarrationGenerator
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
 from app.production import (
     ProductionBatch,
     ProductionBatchItem,
+    NarrationArtifactRecord,
+    MaterialCollection,
     ProductionProfile,
     ProductionRepository,
+    VoiceProfile,
 )
 from app.repository import (
     LEGACY_WORKSPACE_ID,
@@ -95,6 +99,8 @@ from app.schemas import (
     EpisodeListResponse,
     EpisodeResponse,
     EpisodeSummaryResponse,
+    EpisodeVoiceSelectionRequest,
+    EpisodeVoiceSelectionResponse,
     FeedbackEventResponse,
     FeedbackRequest,
     FeedbackRevertRequest,
@@ -115,7 +121,11 @@ from app.schemas import (
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
     MaterialAssetResponse,
+    MaterialCollectionCreateRequest,
+    MaterialCollectionResponse,
+    MaterialCollectionsResponse,
     MaterialLibraryResponse,
+    MaterialLibraryInsightsResponse,
     MaterialReviewRequest,
     MaterialSegmentUpdateRequest,
     ModelCatalogResponse,
@@ -144,6 +154,7 @@ from app.schemas import (
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
     ScriptRegenerateRequest,
+    ScriptGenerateRequest,
     ScriptSectionRegenerateRequest,
     ScriptUpdateRequest,
     ScriptVersionRevertRequest,
@@ -160,6 +171,9 @@ from app.schemas import (
     UploadVideoRequest,
     VoiceCommandRequest,
     VoiceCommandResponse,
+    VoiceProfileResponse,
+    VoiceProfilesResponse,
+    VoiceProfileUpsertRequest,
     VoiceTranscriptionResponse,
     WorkflowStatusResponse,
 )
@@ -573,6 +587,18 @@ def update_production_profile(
     workspace_id = current_workspace_id(request)
     current = production_repo.get_profile(workspace_id)
     updates = payload.model_dump()
+    duration_min = (
+        int(updates["target_duration_min_seconds"])
+        if updates["target_duration_min_seconds"] is not None
+        else current.target_duration_min_seconds
+    )
+    duration_max = (
+        int(updates["target_duration_max_seconds"])
+        if updates["target_duration_max_seconds"] is not None
+        else current.target_duration_max_seconds
+    )
+    if duration_min > duration_max:
+        raise HTTPException(status_code=400, detail="目标时长下限不能大于上限")
     voice_runtime_status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
     profile = ProductionProfile(
         workspace_id=workspace_id,
@@ -580,8 +606,8 @@ def update_production_profile(
         brand_name=str(updates["brand_name"]).strip(),
         primary_platform="douyin",
         aspect_ratio="9:16",
-        target_duration_min_seconds=current.target_duration_min_seconds,
-        target_duration_max_seconds=current.target_duration_max_seconds,
+        target_duration_min_seconds=duration_min,
+        target_duration_max_seconds=duration_max,
         brand_template_name=str(updates["brand_template_name"]).strip(),
         brand_colors=[str(item).strip() for item in updates["brand_colors"] if str(item).strip()],
         subtitle_style=str(updates["subtitle_style"]).strip(),
@@ -620,6 +646,210 @@ def update_production_profile(
             raise HTTPException(status_code=400, detail="声音参考文件不存在")
     saved = production_repo.save_profile(profile)
     return ProductionProfileResponse.model_validate(saved, from_attributes=True)
+
+
+def _voice_profile_from_request(
+    workspace_id: str,
+    payload: VoiceProfileUpsertRequest,
+    current: VoiceProfile | None = None,
+) -> VoiceProfile:
+    reference_path = Path(payload.reference_audio_path).expanduser()
+    if not reference_path.is_file():
+        raise HTTPException(status_code=400, detail="声音参考文件不存在")
+    if reference_path.suffix.lower() != ".wav":
+        raise HTTPException(status_code=400, detail="声音参考文件必须是 WAV")
+    if payload.consent_confirmed and not payload.reference_text.strip():
+        raise HTTPException(status_code=400, detail="确认声音授权时必须填写参考文字")
+    runtime = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
+    existing = _voice_profiles_with_legacy_migration(workspace_id)
+    return VoiceProfile(
+        id=current.id if current is not None else f"voice_{uuid4().hex[:10]}",
+        workspace_id=workspace_id,
+        name=payload.name.strip(),
+        reference_audio_path=str(reference_path),
+        reference_text=payload.reference_text.strip(),
+        consent_confirmed=payload.consent_confirmed,
+        is_default=payload.is_default or (current is None and not existing),
+        model_id=QWEN3_TTS_06B_BASE_8BIT.id,
+        status=("ready" if runtime.ready else "failed" if runtime.state == "invalid" else "blocked"),
+        message=runtime.message,
+        created_at=current.created_at if current is not None else utc_now(),
+    )
+
+
+def _voice_profiles_with_legacy_migration(workspace_id: str) -> list[VoiceProfile]:
+    voices = production_repo.list_voice_profiles(workspace_id)
+    if voices:
+        return voices
+    profile = production_repo.get_profile(workspace_id)
+    if not profile.voice_reference_path or not profile.voice_reference_text.strip():
+        return []
+    runtime = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
+    migrated = VoiceProfile(
+        id=f"voice_{uuid4().hex[:10]}",
+        workspace_id=workspace_id,
+        name=profile.voice_name.strip() or "默认声音",
+        reference_audio_path=profile.voice_reference_path,
+        reference_text=profile.voice_reference_text,
+        consent_confirmed=profile.voice_consent_confirmed,
+        is_default=True,
+        model_id=QWEN3_TTS_06B_BASE_8BIT.id,
+        status=("ready" if runtime.ready else "failed" if runtime.state == "invalid" else "blocked"),
+        message=runtime.message,
+        created_at=profile.updated_at,
+    )
+    production_repo.save_voice_profile(migrated)
+    return [migrated]
+
+
+@app.get("/api/production/voices", response_model=VoiceProfilesResponse)
+def list_production_voices(request: Request) -> VoiceProfilesResponse:
+    voices = _voice_profiles_with_legacy_migration(current_workspace_id(request))
+    return VoiceProfilesResponse(
+        voices=[
+            VoiceProfileResponse.model_validate(voice, from_attributes=True)
+            for voice in voices
+        ],
+        total_count=len(voices),
+    )
+
+
+@app.post("/api/production/voices", response_model=VoiceProfileResponse)
+def create_production_voice(
+    request: Request,
+    payload: VoiceProfileUpsertRequest,
+) -> VoiceProfileResponse:
+    voice = _voice_profile_from_request(current_workspace_id(request), payload)
+    saved = production_repo.save_voice_profile(voice)
+    return VoiceProfileResponse.model_validate(saved, from_attributes=True)
+
+
+@app.put(
+    "/api/production/voices/{voice_profile_id}",
+    response_model=VoiceProfileResponse,
+)
+def update_production_voice(
+    voice_profile_id: str,
+    request: Request,
+    payload: VoiceProfileUpsertRequest,
+) -> VoiceProfileResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        current = production_repo.get_voice_profile(workspace_id, voice_profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice profile not found") from exc
+    saved = production_repo.save_voice_profile(
+        _voice_profile_from_request(workspace_id, payload, current)
+    )
+    return VoiceProfileResponse.model_validate(saved, from_attributes=True)
+
+
+def _episode_voice_selection_response(
+    workspace_id: str,
+    episode_id: str,
+) -> EpisodeVoiceSelectionResponse:
+    selected_id = production_repo.selected_episode_voice_id(workspace_id, episode_id)
+    voice = production_repo.resolve_voice_profile(workspace_id, episode_id)
+    return EpisodeVoiceSelectionResponse(
+        episode_id=episode_id,
+        voice=(
+            VoiceProfileResponse.model_validate(voice, from_attributes=True)
+            if voice is not None
+            else None
+        ),
+        source="episode" if selected_id else "default" if voice is not None else "legacy",
+    )
+
+
+@app.get(
+    "/api/production/episodes/{episode_id}/voice",
+    response_model=EpisodeVoiceSelectionResponse,
+)
+def get_episode_voice_selection(
+    episode_id: str,
+    request: Request,
+) -> EpisodeVoiceSelectionResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        repo.get(episode_id, workspace_id=workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="episode not found") from exc
+    return _episode_voice_selection_response(workspace_id, episode_id)
+
+
+@app.put(
+    "/api/production/episodes/{episode_id}/voice",
+    response_model=EpisodeVoiceSelectionResponse,
+)
+def update_episode_voice_selection(
+    episode_id: str,
+    request: Request,
+    payload: EpisodeVoiceSelectionRequest,
+) -> EpisodeVoiceSelectionResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        repo.get(episode_id, workspace_id=workspace_id)
+        production_repo.select_episode_voice(
+            workspace_id,
+            episode_id,
+            payload.voice_profile_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="episode or voice profile not found") from exc
+    return _episode_voice_selection_response(workspace_id, episode_id)
+
+
+@app.get(
+    "/api/production/material-collections",
+    response_model=MaterialCollectionsResponse,
+)
+def list_material_collections(request: Request) -> MaterialCollectionsResponse:
+    collections = production_repo.list_collections(current_workspace_id(request))
+    return MaterialCollectionsResponse(
+        collections=[
+            MaterialCollectionResponse.model_validate(item, from_attributes=True)
+            for item in collections
+        ],
+        total_count=len(collections),
+    )
+
+
+@app.post(
+    "/api/production/material-collections",
+    response_model=MaterialCollectionResponse,
+)
+def create_material_collection(
+    request: Request,
+    payload: MaterialCollectionCreateRequest,
+) -> MaterialCollectionResponse:
+    workspace_id = current_workspace_id(request)
+    collection = MaterialCollection(
+        id=f"collection_{uuid4().hex[:10]}",
+        workspace_id=workspace_id,
+        name=payload.name.strip(),
+        parent_id=payload.parent_id,
+    )
+    try:
+        saved = production_repo.save_collection(collection)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="parent collection not found") from exc
+    return MaterialCollectionResponse.model_validate(saved, from_attributes=True)
+
+
+@app.get(
+    "/api/production/materials/insights",
+    response_model=MaterialLibraryInsightsResponse,
+)
+def get_material_library_insights(
+    request: Request,
+) -> MaterialLibraryInsightsResponse:
+    workspace_id = current_workspace_id(request)
+    for plan in montage_repo.recent(workspace_id, limit=50):
+        if plan.status == "rendered":
+            _record_montage_usage(workspace_id, plan)
+    return MaterialLibraryInsightsResponse.model_validate(
+        production_repo.library_insights(workspace_id)
+    )
 
 
 @app.get(
@@ -749,6 +979,8 @@ def update_production_material_segment(
             transcript=payload.transcript,
             review_status=payload.review_status,
             usage_role=payload.usage_role,
+            user_tags=payload.user_tags,
+            collection_ids=payload.collection_ids,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material segment not found") from exc
@@ -974,11 +1206,7 @@ def _process_production_batch_item(
     plan = existing
     if plan is None or not plan.narration_audio_path:
         profile = production_profile_with_model_status(workspace_id)
-        narration = narration_generator.generate(
-            workspace_id=workspace_id,
-            episode=episode,
-            profile=profile,
-        )
+        narration = _narration_for_episode(workspace_id, episode, profile)
         rebuilt = montage_planner.build(
             workspace_id=workspace_id,
             batch=batch,
@@ -1006,6 +1234,7 @@ def _process_production_batch_item(
         raise ValueError("混剪计划没有可用的旁白音频。")
     rendered = montage_renderer.render(plan, plan.narration_audio_path)
     montage_repo.save(rendered)
+    _record_montage_usage(workspace_id, rendered)
     item.status = "rendered"
     item.output_path = rendered.output_path
     item.message = rendered.message
@@ -1048,6 +1277,63 @@ def _finalize_production_batch(
     return production_repo.save_batch(batch)
 
 
+def _narration_for_episode(
+    workspace_id: str,
+    episode: Episode,
+    profile: ProductionProfile | None = None,
+) -> NarrationArtifact:
+    profile = profile or production_profile_with_model_status(workspace_id)
+    voice_profile = production_repo.resolve_voice_profile(workspace_id, episode.id)
+    cache_key = narration_generator.cache_key(
+        episode=episode,
+        profile=profile,
+        voice_profile=voice_profile,
+    )
+    cached = production_repo.get_narration_artifact(workspace_id, cache_key)
+    if cached is not None:
+        return NarrationArtifact(
+            episode_id=cached.episode_id,
+            audio_path=cached.audio_path,
+            duration_seconds=cached.duration_seconds,
+            sample_rate=cached.sample_rate,
+            model_id=cached.model_id,
+            voice_profile_id=cached.voice_profile_id,
+            cache_key=cached.cache_key,
+        )
+    artifact = narration_generator.generate(
+        workspace_id=workspace_id,
+        episode=episode,
+        profile=profile,
+        voice_profile=voice_profile,
+    )
+    production_repo.save_narration_artifact(
+        NarrationArtifactRecord(
+            id=f"narration_{artifact.cache_key[:16]}",
+            workspace_id=workspace_id,
+            episode_id=episode.id,
+            script_id=episode.script.id if episode.script is not None else "",
+            voice_profile_id=artifact.voice_profile_id,
+            cache_key=artifact.cache_key,
+            audio_path=artifact.audio_path,
+            duration_seconds=artifact.duration_seconds,
+            sample_rate=artifact.sample_rate,
+            model_id=artifact.model_id,
+        )
+    )
+    return artifact
+
+
+def _record_montage_usage(workspace_id: str, plan) -> None:
+    for clip in plan.clips:
+        production_repo.record_segment_usage(
+            workspace_id,
+            clip.asset_id,
+            clip.segment_id,
+            plan_id=plan.id,
+            clip_id=clip.id,
+        )
+
+
 @app.post(
     "/api/production/episodes/{episode_id}/narration",
     response_model=NarrationArtifactResponse,
@@ -1061,11 +1347,10 @@ def generate_production_narration(
         episode = repo.get(episode_id, workspace_id=workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="episode not found") from exc
-    artifact = narration_generator.generate(
-        workspace_id=workspace_id,
-        episode=episode,
-        profile=production_profile_with_model_status(workspace_id),
-    )
+    try:
+        artifact = _narration_for_episode(workspace_id, episode)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return NarrationArtifactResponse.model_validate(artifact, from_attributes=True)
 
 
@@ -1121,11 +1406,7 @@ def create_production_montage_plan(
         if narration_audio_path:
             audio_duration = montage_renderer.audio_duration(narration_audio_path)
         elif voice_clone_provider.ready and profile.voice_consent_confirmed:
-            narration = narration_generator.generate(
-                workspace_id=workspace_id,
-                episode=episode,
-                profile=profile,
-            )
+            narration = _narration_for_episode(workspace_id, episode, profile)
             narration_audio_path = narration.audio_path
             audio_duration = narration.duration_seconds
         plan = montage_planner.build(
@@ -1456,6 +1737,7 @@ def render_production_montage_plan(
         raise HTTPException(status_code=500, detail=plan.message) from exc
 
     montage_repo.save(rendered)
+    _record_montage_usage(workspace_id, rendered)
     batch = production_repo.get_batch(workspace_id, rendered.batch_id)
     batch_item = next(
         (item for item in batch.items if item.episode_id == rendered.episode_id),
@@ -2193,7 +2475,10 @@ def approve_topic(episode_id: str, request: ApproveTopicRequest) -> EpisodeRespo
 
 
 @app.post("/api/episodes/{episode_id}/generate-script", response_model=EpisodeResponse)
-def generate_script(episode_id: str) -> EpisodeResponse:
+def generate_script(
+    episode_id: str,
+    request: ScriptGenerateRequest | None = None,
+) -> EpisodeResponse:
     episode = get_episode_or_404(episode_id)
     if episode.selected_topic_id is None:
         raise HTTPException(status_code=400, detail="approve a topic first")
@@ -2202,6 +2487,9 @@ def generate_script(episode_id: str) -> EpisodeResponse:
             "generate_script",
             episode,
             feedback_history=feedback_history_for(episode_id),
+            target_duration_seconds=(
+                request.target_duration_seconds if request is not None else None
+            ),
         )
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -2240,6 +2528,7 @@ def regenerate_episode_script(
             get_episode_or_404(episode_id),
             feedback_history=feedback_history_for(episode_id),
             reason=request.reason,
+            target_duration_seconds=request.target_duration_seconds,
         )
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

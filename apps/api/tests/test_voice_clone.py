@@ -6,7 +6,7 @@ import pytest
 
 from app.models import Episode, EpisodeStatus, ScriptPackage, ScriptSection
 from app.narration import NarrationGenerator
-from app.production import ProductionProfile
+from app.production import ProductionProfile, VoiceProfile
 from app.voice_clone import (
     Qwen3TTSSubprocessProvider,
     VoiceCloneError,
@@ -224,3 +224,58 @@ def test_narration_generator_rejects_overlong_generated_audio(tmp_path):
             episode=episode,
             profile=profile,
         )
+
+
+def test_narration_generator_uses_selected_voice_and_versioned_output(tmp_path):
+    captured = []
+
+    class Provider:
+        model_id = "voice-model"
+        ready = True
+        message = "ready"
+
+        def generate(self, *, reference_audio_path, reference_text, output_path, **_kwargs):
+            captured.append((reference_audio_path, reference_text))
+            output = Path(output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"audio")
+            return VoiceCloneResult(str(output), 8.0, 24000)
+
+    episode = Episode(
+        id="episode_voice",
+        day_number=1,
+        episode_date=date(2026, 8, 25),
+        status=EpisodeStatus.SCRIPT_APPROVED,
+        workspace_id="workspace_a",
+        script=ScriptPackage(
+            id="script_voice",
+            hook="开头。",
+            sections=[ScriptSection("body", "正文", 8, "正文。")],
+            title_options=[],
+            cover_copy="",
+            publish_copy="",
+            comment_prompt="",
+        ),
+    )
+    reference = tmp_path / "person-b.wav"
+    reference.write_bytes(b"wav")
+    voice = VoiceProfile(
+        id="person_b",
+        workspace_id="workspace_a",
+        name="B",
+        reference_audio_path=str(reference),
+        reference_text="B 的参考文字",
+        consent_confirmed=True,
+    )
+    generator = NarrationGenerator(tmp_path / "outputs", Provider())
+    artifact = generator.generate(
+        workspace_id="workspace_a",
+        episode=episode,
+        profile=ProductionProfile(workspace_id="workspace_a"),
+        voice_profile=voice,
+    )
+
+    assert captured == [(str(reference), "B 的参考文字")]
+    assert artifact.voice_profile_id == "person_b"
+    assert artifact.cache_key
+    assert "episode_voice_person_b_" in artifact.audio_path

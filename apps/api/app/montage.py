@@ -616,6 +616,7 @@ def _score_candidate(
     if segment_usage == 0:
         score += 0.08
     score -= min(0.36, segment_usage * 0.22 + asset_usage * 0.04)
+    score -= min(0.3, segment.usage_count * 0.05)
     reasons = [
         f"语义词重合 {round(lexical_score * 100)}%",
         f"镜头时长适配 {round(duration_score * 100)}%",
@@ -626,6 +627,8 @@ def _score_candidate(
         reasons.append("优先使用未重复镜头")
     else:
         reasons.append("素材不足，存在重复使用")
+    if segment.usage_count:
+        reasons.append(f"历史成片已使用 {segment.usage_count} 次，降低重复优先级")
     return score, lexical_score, visual_score, asset, segment, reasons
 
 

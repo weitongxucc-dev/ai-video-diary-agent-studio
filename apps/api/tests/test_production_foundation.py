@@ -6,8 +6,16 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.model_runtime import ModelCatalog
-from app.production import ProductionProfile, ProductionRepository
-from app.repository import LEGACY_WORKSPACE_ID
+from app.models import EpisodeStatus, ScriptPackage, ScriptSection
+from app.narration import NarrationArtifact
+from app.production import (
+    MaterialCollection,
+    NarrationArtifactRecord,
+    ProductionProfile,
+    ProductionRepository,
+    VoiceProfile,
+)
+from app.repository import EpisodeRepository, LEGACY_WORKSPACE_ID
 from app.visual_semantics import VisualEmbedding
 
 
@@ -349,6 +357,231 @@ def test_profile_api_cannot_claim_voice_model_is_ready(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["voice_model_status"] == "blocked"
     assert response.json()["voice_model_message"] != "client says ready"
+
+
+def test_profile_duration_is_configurable_beyond_ninety_seconds(tmp_path, monkeypatch):
+    production = _repository(tmp_path)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
+    client = TestClient(main_module.app)
+
+    response = client.put(
+        "/api/production/profile",
+        json={
+            "workspace_name": "Studio",
+            "brand_name": "Brand",
+            "brand_template_name": "Vertical",
+            "target_duration_min_seconds": 240,
+            "target_duration_max_seconds": 300,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["target_duration_min_seconds"] == 240
+    assert response.json()["target_duration_max_seconds"] == 300
+
+
+def test_multiple_voice_profiles_support_default_and_episode_override(tmp_path):
+    production = _repository(tmp_path)
+    reference_a = tmp_path / "voice-a.wav"
+    reference_b = tmp_path / "voice-b.wav"
+    reference_a.write_bytes(b"a")
+    reference_b.write_bytes(b"b")
+    voice_a = production.save_voice_profile(
+        VoiceProfile(
+            id="voice_a",
+            workspace_id="workspace_a",
+            name="A",
+            reference_audio_path=str(reference_a),
+            reference_text="声音 A",
+            consent_confirmed=True,
+            is_default=True,
+        )
+    )
+    voice_b = production.save_voice_profile(
+        VoiceProfile(
+            id="voice_b",
+            workspace_id="workspace_a",
+            name="B",
+            reference_audio_path=str(reference_b),
+            reference_text="声音 B",
+            consent_confirmed=True,
+        )
+    )
+
+    assert production.resolve_voice_profile("workspace_a", "episode_1") == voice_a
+    production.select_episode_voice("workspace_a", "episode_1", voice_b.id)
+    assert production.resolve_voice_profile("workspace_a", "episode_1").id == "voice_b"
+    production.select_episode_voice("workspace_a", "episode_1", None)
+    assert production.resolve_voice_profile("workspace_a", "episode_1").id == "voice_a"
+
+
+def test_voice_profile_api_selects_default_and_episode_override(tmp_path, monkeypatch):
+    production = _repository(tmp_path)
+    episodes = EpisodeRepository(database_path=tmp_path / "episodes.sqlite3")
+    episode = episodes.create(workspace_id=LEGACY_WORKSPACE_ID)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "repo", episodes)
+    monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
+    client = TestClient(main_module.app)
+    reference_a = tmp_path / "api-a.wav"
+    reference_b = tmp_path / "api-b.wav"
+    reference_a.write_bytes(b"a")
+    reference_b.write_bytes(b"b")
+
+    first = client.post(
+        "/api/production/voices",
+        json={
+            "name": "A",
+            "reference_audio_path": str(reference_a),
+            "reference_text": "声音 A",
+            "consent_confirmed": True,
+        },
+    )
+    second = client.post(
+        "/api/production/voices",
+        json={
+            "name": "B",
+            "reference_audio_path": str(reference_b),
+            "reference_text": "声音 B",
+            "consent_confirmed": True,
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["is_default"] is True
+    assert second.status_code == 200
+    selected = client.put(
+        f"/api/production/episodes/{episode.id}/voice",
+        json={"voice_profile_id": second.json()["id"]},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["source"] == "episode"
+    assert selected.json()["voice"]["name"] == "B"
+
+
+def test_narration_artifact_cache_requires_existing_audio(tmp_path):
+    production = _repository(tmp_path)
+    audio = tmp_path / "narration.wav"
+    audio.write_bytes(b"audio")
+    record = NarrationArtifactRecord(
+        id="narration_1",
+        workspace_id="workspace_a",
+        episode_id="episode_1",
+        script_id="script_1",
+        voice_profile_id="voice_a",
+        cache_key="cache_1",
+        audio_path=str(audio),
+        duration_seconds=12.0,
+        sample_rate=24000,
+        model_id="voice-model",
+    )
+    production.save_narration_artifact(record)
+
+    assert production.get_narration_artifact("workspace_a", "cache_1") == record
+    audio.unlink()
+    assert production.get_narration_artifact("workspace_a", "cache_1") is None
+
+
+def test_narration_generation_reuses_persisted_artifact(tmp_path, monkeypatch):
+    production = _repository(tmp_path)
+    episodes = EpisodeRepository(database_path=tmp_path / "cache-episodes.sqlite3")
+    episode = episodes.create(workspace_id="workspace_a")
+    episode.status = EpisodeStatus.SCRIPT_APPROVED
+    episode.script = ScriptPackage(
+        id="script_cache",
+        hook="开头。",
+        sections=[ScriptSection("body", "正文", 8, "正文。")],
+        title_options=[],
+        cover_copy="",
+        publish_copy="",
+        comment_prompt="",
+    )
+    reference = tmp_path / "cache-voice.wav"
+    reference.write_bytes(b"voice")
+    profile = ProductionProfile(
+        workspace_id="workspace_a",
+        voice_reference_path=str(reference),
+        voice_reference_text="参考文字",
+        voice_consent_confirmed=True,
+    )
+
+    class Generator:
+        calls = 0
+
+        def cache_key(self, **_kwargs):
+            return "stable-cache-key"
+
+        def generate(self, **_kwargs):
+            self.calls += 1
+            output = tmp_path / "cached.wav"
+            output.write_bytes(b"audio")
+            return NarrationArtifact(
+                episode_id=episode.id,
+                audio_path=str(output),
+                duration_seconds=8.0,
+                sample_rate=24000,
+                model_id="voice-model",
+                cache_key="stable-cache-key",
+            )
+
+    generator = Generator()
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "narration_generator", generator)
+
+    first = main_module._narration_for_episode("workspace_a", episode, profile)
+    second = main_module._narration_for_episode("workspace_a", episode, profile)
+
+    assert first.audio_path == second.audio_path
+    assert generator.calls == 1
+
+
+def test_material_tags_collections_usage_and_gap_insights(tmp_path):
+    production = _repository(tmp_path)
+    video = production.video_library_path / "office_laptop_typing.mp4"
+    video.write_bytes(b"video")
+    asset = production.scan_library("workspace_a")[0]
+    asset = production.analyze_asset("workspace_a", asset.id)
+    segment = asset.segments[0]
+    collection = production.save_collection(
+        MaterialCollection(
+            id="collection_work",
+            workspace_id="workspace_a",
+            name="办公素材",
+        )
+    )
+    asset = production.update_segment(
+        "workspace_a",
+        asset.id,
+        segment.id,
+        description="办公室里使用笔记本电脑打字",
+        transcript="",
+        review_status="raw",
+        user_tags=["创业", "  创业  "],
+        collection_ids=[collection.id],
+    )
+    production.record_segment_usage(
+        "workspace_a",
+        asset.id,
+        segment.id,
+        plan_id="plan_1",
+        clip_id="clip_1",
+    )
+    production.record_segment_usage(
+        "workspace_a",
+        asset.id,
+        segment.id,
+        plan_id="plan_1",
+        clip_id="clip_1",
+    )
+    saved_segment = production.get_asset("workspace_a", asset.id).segments[0]
+    insights = production.library_insights("workspace_a")
+
+    assert saved_segment.user_tags == ["创业"]
+    assert saved_segment.collection_ids == [collection.id]
+    assert saved_segment.usage_count == 1
+    assert any(item["tag"] == "创业" for item in insights["tags"])
+    assert "场景:户外" in insights["recommended_gaps"]
 
 
 def test_material_media_and_batch_detail_are_workspace_scoped(tmp_path, monkeypatch):

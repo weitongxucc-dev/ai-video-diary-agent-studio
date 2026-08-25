@@ -299,6 +299,7 @@ def test_deepseek_script_prompt_includes_template_rules_and_keeps_hook_separate(
         topic,
         day_number=7,
         template=get_content_template("tool_review"),
+        target_duration_seconds=300,
     )
 
     system_prompt = captured["payload"]["messages"][0]["content"]
@@ -306,7 +307,9 @@ def test_deepseek_script_prompt_includes_template_rules_and_keeps_hook_separate(
     assert script.hook == "这个工具我试完以后，反而更谨慎了。"
     assert "AI 工具测评" in system_prompt
     assert "工具名必须出现" in system_prompt
+    assert "目标时长为 300 秒" in system_prompt
     assert "hook 是独立字段" in user_prompt["requirements"]
+    assert "约 300 秒" in user_prompt["requirements"][0]
     assert user_prompt["content_template"]["script_structure"][0] == "结论先行"
 
 

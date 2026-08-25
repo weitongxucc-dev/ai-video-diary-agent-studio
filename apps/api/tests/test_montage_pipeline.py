@@ -234,6 +234,23 @@ def test_planner_keeps_duration_only_matches_waiting_for_confirmation(tmp_path):
     assert any(clip.needs_confirmation for clip in plan.clips)
 
 
+def test_planner_penalizes_segments_reused_in_historical_renders(tmp_path):
+    asset = _asset(tmp_path)
+    for segment in asset.segments:
+        segment.description = "人工智能工具和自动化工作流程"
+    asset.segments[0].usage_count = 10
+
+    plan = MontagePlanner().build(
+        workspace_id="workspace_a",
+        batch=_batch(),
+        episode=_episode(),
+        profile=_profile(),
+        assets=[asset],
+    )
+
+    assert plan.clips[0].segment_id != asset.segments[0].id
+
+
 def test_planner_does_not_use_talking_head_assets_as_b_roll(tmp_path):
     asset = _asset(tmp_path)
     asset.usage_role = "a_roll"

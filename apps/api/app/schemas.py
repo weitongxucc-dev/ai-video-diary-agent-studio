@@ -135,8 +135,13 @@ class ScriptUpdateRequest(BaseModel):
     reason: str | None = None
 
 
+class ScriptGenerateRequest(BaseModel):
+    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
+
+
 class ScriptRegenerateRequest(BaseModel):
     reason: str | None = None
+    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
 
 
 class ScriptSectionRegenerateRequest(BaseModel):
@@ -255,8 +260,8 @@ class ProductionProfileResponse(BaseModel):
     brand_name: str
     primary_platform: Literal["douyin"]
     aspect_ratio: Literal["9:16"]
-    target_duration_min_seconds: int = Field(ge=30, le=90)
-    target_duration_max_seconds: int = Field(ge=30, le=90)
+    target_duration_min_seconds: int = Field(ge=5, le=1800)
+    target_duration_max_seconds: int = Field(ge=5, le=1800)
     brand_template_name: str
     brand_colors: list[str]
     subtitle_style: str
@@ -286,6 +291,8 @@ class ProductionProfileUpdateRequest(BaseModel):
     intro_text: str = Field(default="", max_length=240)
     outro_text: str = Field(default="", max_length=240)
     background_music_path: str | None = None
+    target_duration_min_seconds: int | None = Field(default=None, ge=5, le=1800)
+    target_duration_max_seconds: int | None = Field(default=None, ge=5, le=1800)
     voice_name: str = Field(default="", max_length=80)
     voice_reference_path: str | None = None
     voice_reference_text: str = Field(default="", max_length=1000)
@@ -295,6 +302,44 @@ class ProductionProfileUpdateRequest(BaseModel):
     use_hermes: bool = True
     factuality_gate_enabled: bool = True
     cloud_enhancement_enabled: bool = False
+
+
+class VoiceProfileResponse(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    reference_audio_path: str
+    reference_text: str
+    consent_confirmed: bool
+    is_default: bool
+    model_id: str
+    status: Literal["pending", "ready", "blocked", "failed"]
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class VoiceProfilesResponse(BaseModel):
+    voices: list[VoiceProfileResponse]
+    total_count: int
+
+
+class VoiceProfileUpsertRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    reference_audio_path: str = Field(min_length=1, max_length=2000)
+    reference_text: str = Field(min_length=1, max_length=2000)
+    consent_confirmed: bool = False
+    is_default: bool = False
+
+
+class EpisodeVoiceSelectionRequest(BaseModel):
+    voice_profile_id: str | None = Field(default=None, max_length=120)
+
+
+class EpisodeVoiceSelectionResponse(BaseModel):
+    episode_id: str
+    voice: VoiceProfileResponse | None
+    source: Literal["episode", "default", "legacy"]
 
 
 class MaterialSegmentResponse(BaseModel):
@@ -312,6 +357,11 @@ class MaterialSegmentResponse(BaseModel):
     usage_role_confidence: float = Field(ge=0, le=1)
     usage_role_reason: str
     review_status: Literal["raw", "approved", "rejected"]
+    system_tags: list[str]
+    user_tags: list[str]
+    collection_ids: list[str]
+    usage_count: int = Field(ge=0)
+    last_used_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -343,6 +393,39 @@ class MaterialLibraryResponse(BaseModel):
     total_count: int
 
 
+class MaterialCollectionResponse(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    parent_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialCollectionsResponse(BaseModel):
+    collections: list[MaterialCollectionResponse]
+    total_count: int
+
+
+class MaterialCollectionCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    parent_id: str | None = Field(default=None, max_length=120)
+
+
+class MaterialTagStatResponse(BaseModel):
+    tag: str
+    segment_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    usage_count: int = Field(ge=0)
+
+
+class MaterialLibraryInsightsResponse(BaseModel):
+    asset_count: int = Field(ge=0)
+    segment_count: int = Field(ge=0)
+    tags: list[MaterialTagStatResponse]
+    recommended_gaps: list[str]
+
+
 class MaterialReviewRequest(BaseModel):
     review_status: Literal["raw", "approved", "rejected"]
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] = "unassigned"
@@ -355,6 +438,8 @@ class MaterialSegmentUpdateRequest(BaseModel):
     transcript: str = Field(default="", max_length=10000)
     review_status: Literal["raw", "approved", "rejected"] = "raw"
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] | None = None
+    user_tags: list[str] | None = Field(default=None, max_length=50)
+    collection_ids: list[str] | None = Field(default=None, max_length=20)
 
 
 class ModelSpecResponse(BaseModel):
@@ -419,6 +504,8 @@ class NarrationArtifactResponse(BaseModel):
     duration_seconds: float = Field(gt=0)
     sample_rate: int = Field(gt=0)
     model_id: str
+    voice_profile_id: str | None = None
+    cache_key: str = ""
 
 
 class ProductionBlockerResponse(BaseModel):
