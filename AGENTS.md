@@ -1,5 +1,69 @@
 # Agent instructions
 
-Before changing any UI, visual CSS, shared component, desktop chrome, screenshot test, or product copy in this repository, read the root [DESIGN.md](DESIGN.md) in full.
+本文件只放每次任务都必须遵守的规则。不要在启动时读取整个仓库或整个
+`docs/`；按任务路由逐步加载。
 
-`DESIGN.md` is the mandatory design source of truth. It takes precedence over older visual guidance where the documents conflict. Do not introduce new UI tokens, responsive behavior, panel patterns, or page-level visual systems without first mapping them to that document.
+## 1. 默认工作方式
+
+- 先确认用户目标、允许修改的范围和可见验收结果，再查看最相关的代码或文档。
+- 需求不确定时选择最小、可撤销的做法；只有错误代价高或会扩大授权范围时才提问。
+- 优先修改现有代码；没有明确复用需求，不新增抽象层、兼容层、依赖或配置开关。
+- 保护脏树。现有改动属于用户，先看相关 diff，不 reset、checkout、覆盖或顺手整理无关文件。
+- 当前代码、Git、workflow、CI、Release 和实时服务分别是运行状态的事实源；静态文档不维护“当前完成度”副本。
+
+## 2. 渐进式文档路由
+
+先读目标文件和直接入口；只有出现范围、交互、安全或发布决策时再加载对应权威：
+
+| 任务 | 必读文档 |
+| --- | --- |
+| 产品定位、对象或能力边界 | [`docs/product-requirements.md`](docs/product-requirements.md) |
+| 领域名词、对象关系或任务状态 | [`docs/domain-model.md`](docs/domain-model.md) |
+| UI、页面结构、视觉 CSS、组件、功能命名或截图 | [`DESIGN.md`](DESIGN.md)；涉及对象状态时再读 `domain-model.md` 的目标章节 |
+| 跨 Web、API、Worker、桌面壳或外部服务 | [`docs/system-architecture.md`](docs/system-architecture.md) |
+| 产品验收或端到端完成判断 | [`docs/product-requirements.md`](docs/product-requirements.md) 的相关章节 |
+| 认证、首启或 workspace 隔离 | [`docs/auth-workspace-boundary.md`](docs/auth-workspace-boundary.md) |
+| Electron 开发或打包 | [`apps/desktop/README.md`](apps/desktop/README.md) |
+| 签名、分发或 Release | [`apps/desktop/RELEASE.md`](apps/desktop/RELEASE.md) 和实际 workflow |
+| 跨模块并行、迁移或高风险任务 | [`docs/development-workflow.md`](docs/development-workflow.md) |
+| 文档治理 | [`docs/README.md`](docs/README.md) 和目标文档 |
+
+不要为了“全面了解”读取所有文档。下层文档只能链接上层权威，不能复制它的规则。
+
+## 3. 任务难度与并行
+
+- **简单任务**：单点查询、文案、小修复或单文件改动。单线程直接完成，不创建代理和长计划。
+- **常规任务**：一个模块内的功能或修复。由主线程实现并做最小相关验证。
+- **复杂任务**：至少有两个可独立交付的工作流，涉及多个边界清晰的模块，且并行收益大于协调成本。主线程先写拆分和验收，再分配 2–3 个并行代理。
+- **高风险任务**：认证、数据迁移、发布、签名、删除、跨工作区或不可逆操作。主线程保持决策权，先做只读核验和风险门禁；并行代理只承担边界清晰的调查或实现。
+
+不得为了表现“多线程”而拆分顺序依赖任务。一个文件同一时间只有一个写入负责人。主线程负责需求解释、派工、冲突处理、diff 审核、集成验证和最终结论；子线程不得自行扩大范围或把未验证结果当完成。
+
+- 并行执行中发现产品、领域、架构、安全或共享接口的既有权威有误时，子线程只提交证据和变更建议，由主线程判断影响、必要时与用户确认，并更新唯一权威。
+- 收到 `HOLD_FOR_AUTHORITY_UPDATE` 的线程必须在当前不可中断操作结束后停止新增修改并回报已有 diff；收到 `AUTHORITY_CHANGED` 后，旧任务契约即失效，必须重读指定章节并完成 `REBASE_ACK` 后再继续。
+- 当前权威只来自 `docs/README.md` 登记的活动文档。`docs/archive/` 是隔离区，除非任务明确要求历史追溯，否则禁止读取或引用其中内容。
+
+详细协议只在复杂或高风险任务中读取 `docs/development-workflow.md`。
+
+## 4. 避免无效 Token 与无效工作
+
+- 搜索先用 `rg`、`rg --files` 和标题定位，再读取命中附近；不默认扫描 `build/`、依赖目录、全部日志或完整 Git 历史。
+- 命令输出要限定文件、行数和 token；结果足够做决定后停止继续搜集。
+- 不重复转述用户需求、整份文档或工具输出；进度更新只报告新事实、决策和阻断。
+- 不运行与改动无关的全量测试、构建或打包。先跑最小相关检查，风险需要时再升级。
+- 不创建“以后也许有用”的计划、样板、兼容代码、文档副本或状态快照。
+
+## 5. 避免防御性编程
+
+- 只为已定义的契约、真实出现的失败或明确的信任边界编码。
+- 不增加无依据的 `try/catch`、静默回退、重复校验、宽泛空值兜底、猜测式兼容分支或吞错日志。
+- UI、API、Worker 和桌面壳共享同一业务不变量；不要在各层复制不同版本的规则。
+- 认证、文件系统、外部模型、平台发布、持久化和子进程属于真实边界，必须显式校验并给出可执行错误；不能伪造成功。
+- 每个新增保护分支都应能说明保护的具体不变量，并由一个最小测试或可复现实证覆盖。
+
+## 6. 完成与验收
+
+- 完成前检查 diff 是否只覆盖请求范围，并运行最小相关测试。
+- UI 变更必须验证 screenshot-visible 行为；隐藏状态、构建成功或测试数量不能替代可见验收。
+- 文档变更必须检查相对链接、唯一权威、重复规则和已删除文档的引用。
+- 不能验证的部分要准确说明，不用“应该没问题”代替证据。

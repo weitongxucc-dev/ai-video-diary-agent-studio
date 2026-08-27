@@ -1,14 +1,63 @@
-# 文档索引
+# 文档权威与路由
 
-主线只保留当前仍然生效的文档：
+本目录只保留长期有效的权威文档。Agent 和开发者必须按任务逐步加载，不默认读取整个 `docs/`、README、CHANGELOG 或 Git 历史。
 
-| 文档 | 职责 |
-| --- | --- |
-| [`../DESIGN.md`](../DESIGN.md) | 唯一视觉与交互规范 |
-| [`product-requirements.md`](product-requirements.md) | 产品范围、主流程与发布门禁 |
-| [`beta-product-foundation.md`](beta-product-foundation.md) | 内部模式、分发模式与首启边界 |
-| [`auth-workspace-boundary.md`](auth-workspace-boundary.md) | Supabase 模式的认证和数据隔离 |
-| [`../apps/desktop/README.md`](../apps/desktop/README.md) | 桌面开发与构建 |
-| [`../apps/desktop/RELEASE.md`](../apps/desktop/RELEASE.md) | 内测包与正式发布 |
+## 权威地图
 
-历史 PRD、原型计划、阶段性交付清单、审查报告和截图不在主线长期维护。需要追溯时使用 Git 历史，避免让过时快照继续充当需求来源。
+| 领域 | 唯一权威 | 读取触发条件 |
+| --- | --- | --- |
+| Agent 工作纪律、渐进加载和任务分级 | [`../AGENTS.md`](../AGENTS.md) | 每个 Agent 任务自动生效 |
+| 产品定位、用户结果、能力边界和端到端验收 | [`product-requirements.md`](product-requirements.md) | 产品范围或完成判断发生变化 |
+| 业务名词、对象关系、状态机和转换语义 | [`domain-model.md`](domain-model.md) | 数据结构、API 契约或工作流状态发生变化 |
+| 模块责任、跨进程数据流、模型与平台适配 | [`system-architecture.md`](system-architecture.md) | 变更跨越两个以上运行模块或外部服务 |
+| UI 信息架构、三栏职责、功能命名和视觉系统 | [`../DESIGN.md`](../DESIGN.md) | UI、产品文案、组件或截图验收 |
+| 任务拆分、并行代理、审核、验证和文档治理 | [`development-workflow.md`](development-workflow.md) | 复杂、高风险或跨模块任务 |
+| 账号、首启和 workspace 安全不变量 | [`auth-workspace-boundary.md`](auth-workspace-boundary.md) | 认证、授权或数据隔离变更 |
+| Electron 开发与运行结构 | [`../apps/desktop/README.md`](../apps/desktop/README.md) | 桌面调试、进程或打包实现 |
+| 构建、签名、公证和分发 | [`../apps/desktop/RELEASE.md`](../apps/desktop/RELEASE.md) 与实际 workflow | 生成或交付安装包 |
+
+## 有效文档与隔离区
+
+- 上表及其直接链接的项目文档构成当前有效权威。`docs/design/` 只保存由 `DESIGN.md` 解释的视觉参考资产，不独立定义产品规则。
+- `docs/archive/` 是非当前资料的隔离区，不属于渐进加载路径。除非任务明确要求历史追溯，Agent 搜索、读取和 Authority Snapshot 都必须排除该目录。
+- 普通旧版本默认从活动目录删除，由 Git 历史追溯。只有外部签收、法律合规、重要迁移或无法从 Git 重建的证据可以进入隔离区，具体规则见 [`archive/README.md`](archive/README.md)。
+
+## 常见加载组合
+
+- 小型代码修复：目标代码和相邻测试；出现契约疑问时才补读一份领域权威。
+- 新产品能力：`product-requirements.md` 的目标章节；涉及对象状态时补读 `domain-model.md`。
+- UI 页面：`DESIGN.md` 的目标页面；只有范围不明确时才读产品需求。
+- 跨 Web/API/Worker：`system-architecture.md` 的目标边界和直接相关代码，不读全部产品文档。
+- 认证或发布：读取各自技术权威和实际实现；不要用产品文档推断当前运行状态。
+- 文档治理：本文件和目标文档；只有发现跨域冲突时才加载第二份权威。
+
+## 文档生命周期
+
+1. 一条规则只能由一份文档拥有。其他文件使用链接和一句上下文，不复制正文。
+2. 产品文档描述稳定目标和不变量，不记录“已完成百分比”、临时缺口、测试次数或某个构建包状态。
+3. 代码、配置、Git、CI、Release 和实时服务分别证明实现与运行状态；README 只做人类开发入口，CHANGELOG 只记录已发布变化。
+4. 新增文档前先确认现有权威无法容纳该规则。没有独立读者、生命周期和责任边界时，不新增文件。
+5. 规则被替代时，同一次权威变更必须更新新规则、删除活动文档中的旧表述并修复引用；不能把新旧规则并排保留给 Agent 自行判断。
+6. 被整体替代且没有独立保留价值的文档直接删除，由 Git 记录历史；确需留存的文件移入 `docs/archive/`，并标注当前权威、归档原因、日期和默认禁止 Agent 读取。
+7. 临时计划、Agent handoff、审查快照和运行日志不进入活动文档或隔离归档；任务完成后删除，或留在 Issue、PR、Actions 和 Release。
+
+## 权威变更事务
+
+1. 用户、主线程或子线程发现既有设计不成立时，先判断是否改变产品、领域、架构、安全或共享接口；纯局部实现调整不触发文档事务。
+2. 主线程是并行波次中唯一的共享权威写入者。子线程提交 `CHANGE_PROPOSAL`，不得一边修改共享规则一边继续扩大实现。
+3. 变化会使正在执行的任务契约失效时，主线程先向受影响线程发送 `HOLD_FOR_AUTHORITY_UPDATE`；不受影响线程继续工作。
+4. 涉及产品范围、主流程、数据归属、安全、外部付费能力或大量废弃已完成工作的变化，必须先由用户确认。
+5. 主线程在暂停窗口内一次完成权威修改、旧内容退役、引用修复和文档验证，然后生成新的任务契约版本或文件指纹。
+6. 受影响线程收到 `AUTHORITY_CHANGED` 后，必须重读指定章节、评估已有 diff，并回报 `REBASE_ACK`；未完成重新绑定前不得恢复实现。
+7. 变化推翻目标、核心对象、状态机或验收方式时，不在旧上下文上持续打补丁；旧线程只交接可保留改动，主线程使用干净任务契约重新启动工作。
+
+完整分级、消息格式和暂停/恢复协议由 [`development-workflow.md`](development-workflow.md) 的 ACT 章节拥有。
+
+## 文档变更验收
+
+- 相对链接可以解析，删除文件没有残留引用。
+- 同一个术语在产品、设计、领域和代码中含义一致。
+- 没有把实现细节提升为产品承诺，也没有把产品范围藏在实现 README 中。
+- 新规则有唯一归属；没有为了“更保险”复制到多个文件。
+- 活动文档不引用已删除的旧权威，也不把 `docs/archive/` 内容作为当前决策依据。
+- 权威变更影响的活动任务已收到新版本，并完成重新绑定或明确终止。

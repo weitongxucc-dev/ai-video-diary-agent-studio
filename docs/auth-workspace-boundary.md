@@ -1,90 +1,89 @@
-# 后端认证与工作区边界（Beta）
+# 认证、首启与工作区边界
 
-本文档描述 `apps/api` 在 Supabase 分发模式下执行的身份与工作区边界。内部 macOS 测试包显式使用 `NEXT_PUBLIC_AUTH_MODE=local`，只操作保留的本地 workspace；它不经过下述登录流程，也不能用于公开分发。
+状态：安全不变量权威
+职责：定义账号、workspace、首启和本地资源的信任边界。公开端点、表结构和环境变量的当前集合以代码、迁移和 .env.example 为准，不在本文复制清单。
 
-## 信任模型
+## 1. 身份模式
 
-- **身份**：Supabase Auth 的永久用户。后端只信任通过 Bearer JWT 验证得到的 `sub`。
-- **JWT 验证**：本地离线验证，JWKS 来自
-  `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`，只接受 Supabase 的非对称
-  `ES256` / `RS256` 签名，并校验 `iss`（默认 `{SUPABASE_URL}/auth/v1`）、
-  `aud`（默认 `authenticated`）、`exp` 与 `sub`。
-- **工作区解析**：后端使用已验证的用户 access token 和 publishable key 调用
-  Supabase Data API `workspace_members` 表，RLS 只返回该用户被授权的工作区，
-  并优先 `owner` 角色。
-  客户端请求体中的 `user_id` / `workspace_id` 一律忽略。
-- **公开端点**：只有真正的“登录前/本机就绪”探测保持公开，包括
-  `/api/runtime/health`、`/api/setup/preflight`、`/api/is_setup`、
-  `/api/system/status`、`/api/version`、`/api/workflow/status`、
-  `/api/content-templates`。其余产品数据端点都需要有效令牌。
-- **首启完成**：`POST /api/onboarding/complete` 不接受客户端的
-  `ready` 或步骤布尔值。后端先重新运行本机 preflight，只在结果仍为
-  `ready` 时幂等创建当日首条 Episode，再用当前用户 access token 调用
-  `complete_own_onboarding` RPC。RPC 校验 `auth.uid()` 和工作区成员关系。
-- **首启门禁**：Python API 会以当前用户身份读取已解析 workspace 的
-  `completed_at`。未完成首启的用户即使直接访问本机 API，也只能调用
-  `/api/onboarding/complete` 与 `/api/settings/runtime` 修复首启，不能绕过
-  Next.js 的页面门禁访问产品数据。
+交付配置必须显式声明一种模式：
 
-## HTTP 语义
+- local：只用于本机开发或受控诊断；不显示登录，只操作保留的 local workspace，不具备多用户隔离能力。
+- supabase：用于交付给独立测试者或用户；界面只显示管理员创建的账号和密码。
 
-- **401 Unauthorized**：缺失、格式错误、过期或无法验证的令牌。
-- **403 Forbidden**：令牌有效，但该用户没有任何被授权的工作区成员关系、
-  无法解析首启状态，或尚未完成首启却访问非修复 API。
-- **404 Not Found**：资源属于其它工作区时返回 404，避免泄露资源存在性。
+Web 分发配置与 API 认证配置必须一致。API 只有在 Supabase URL 和 publishable key 成对有效时才能启用 Supabase 校验；声明为 supabase 但配置缺失时，构建或首启预检必须阻断，不能静默降级为 local。开发者未声明分发模式且没有 Supabase 配置时可以运行 local，但不得把该行为包装成账号分发版。
 
-## 数据分区
+身份配置入口以 apps/api/app/config.py、Web 认证配置和实际构建 workflow 为准。
 
-- SQLite `episodes` 与 `creator_profile` 表新增 `workspace_id` 列，并以
-  `(workspace_id, episode_date)` 唯一约束替换原先全局唯一的 `episode_date`。
-- 所有持久化记录（episode、创作者画像、偏好状态、信息源同步状态）都按
-  `workspace_id` 分区。
-- **旧数据安全迁移**：迁移前没有 `workspace_id` 的历史行被归入保留的
-  `local` 工作区。任何经过认证的账号都无法看到 `local` 工作区的数据，
-  从而杜绝静默的跨账号可见性。
-- 未配置 Supabase（`SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` 为空）时，后端保持
-  本地单用户模式，所有记录写入 `local` 工作区，行为与旧版本一致。
+## 2. 信任模型
 
-## 生成链路的失败安全（fail-safe）
+- 后端只信任通过 Bearer JWT 验证得到的用户标识，不信任客户端提交的 user_id、workspace_id、ready 或 completed。
+- JWT 只接受配置允许的非对称签名算法，并校验 issuer、audience、过期时间和 subject。
+- 后端使用已验证的用户身份解析 workspace membership；客户端不能选择一个自己不属于的 workspace。
+- 产品数据端点默认需要身份和已完成首启。登录前健康检查与修复端点采用显式 allowlist，当前列表由 apps/api/app/main.py 和对应测试拥有，本文不复制。
+- 资源属于其他 workspace 时返回 404，避免泄露资源存在性。
 
-- 认证启用后，仓库查询与创作者画像读取都必须从“活动工作区上下文”解析
-  workspace，绝不隐式回退到保留的 `local` 工作区。上下文丢失时抛出
-  `WorkspaceContextRequiredError`，让生成请求失败而不是把他人画像注入提示词。
-- HTTP 中间件为每个产品数据请求设置工作区上下文；后台视频任务由
-  `VideoJobRunner.submit` 显式重设上下文；本地自动化 Worker 则用
-  `_local_workspace_scope()` 显式声明自己只操作 `local` 工作区。
-- 创作者画像（`/api/creator-profile*`）与 LLM 提示词注入
-  （`DeepSeekScriptGenerator._profile_context`）都显式按活动工作区读取，
-  两个工作区的画像/提示词不会交叉。
+HTTP 语义：
 
-## 环境变量
+- 401：令牌缺失、格式错误、过期或无法验证；
+- 403：身份有效，但没有可用 workspace、首启未完成或操作不被授权；
+- 404：对象不存在，或属于其他 workspace；
+- 409：当前状态不允许该命令，或幂等键与已有请求冲突。
 
-见 `.env.example` 中的“内测账号与工作区”小节：
-`NEXT_PUBLIC_AUTH_MODE`、
-`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、
-`SUPABASE_JWT_AUDIENCE`、`SUPABASE_JWT_ISSUER`。
+## 3. 首启门禁
 
-## 管理员创建测试账号
+客户端只能发起“完成首启”，不能提交 ready 结果。服务端必须在当前机器上重新运行核心预检，确认素材输入、成片输出和 ffmpeg 等最小视频链路可用，再幂等创建用户可见的首个创作任务记录并完成 workspace onboarding。
 
-测试者只接触产品账号和初始密码，不接触邮箱或 Supabase。管理员在受信任终端中
-临时设置项目 URL 和 Supabase secret key（旧项目也可用 service-role key），然后运行：
+可选的 ASR、知识库连接、剪映、外部模型、图片模型、人物服务和平台连接不作为全局首启硬门禁。它们在对应功能入口做能力级预检，并清楚说明影响范围和修复动作。
 
-```bash
-cd apps/api
-SUPABASE_URL=https://your-project.supabase.co \
-SUPABASE_ADMIN_SECRET_KEY=your-secret-key \
-uv run python -m app.account_admin tester01 --generate-password
-```
+未完成首启的用户只能访问身份、核心预检和首启修复所需的有限能力，不能直接调用产品数据端点绕过 Web 页面。
 
-管理员 secret 仅供该命令调用 Supabase Admin API；不要写进仓库、应用 `.env`、
-GitHub Actions 构建变量或安装包。应用运行时只需要 URL 和 publishable key。
+## 4. Workspace 分区
 
-## 已知风险
+- 所有任务、模板、人物、偏好、来源、素材元数据、自动任务、发布和监控记录都属于一个明确 workspace。
+- Repository 的每个查询和写入必须从已验证的活动 workspace 上下文取得范围；不能接受调用方随意传入 workspace 绕过上下文。
+- 认证模式中如果活动 workspace 上下文丢失，操作必须失败，不得回退到 local。
+- 历史上没有 workspace_id 的本地数据只归入保留的 local workspace；认证账号不能自动继承或看见这些数据。
+- 实际表和迁移由 apps/api/app/repository.py、models.py、schemas.py 与 supabase/migrations 共同证明；修改时必须有跨 workspace 负向测试。
 
-- 每次产品数据请求都会向 Supabase Data API 发起一次成员关系查询（网络往返）。
-  这是非阻断的性能优化项：当前不缓存以避免任何可能的跨账号缓存污染；
-  后续只能引入按用户严格隔离的缓存，不能使用进程级全局缓存。
-- 视频/草稿文件仍为本机磁盘路径，不按工作区分区（属本机资源，不跨账号同步）。
-- 本地自动化 Worker 在认证启用时仍显式运行于 `local` 工作区（本地单机守护
-  进程，不触碰任何登录账号数据）；如内测版不需要本地定时自动化，可考虑在
-  认证启用时禁用该 Worker。
+## 5. 后台任务
+
+- Worker、视频任务和自动任务在提交时固定 workspace、用户或明确的 local 作用域。
+- 任务恢复、重试和定时触发继续使用原 workspace，不能从当前登录用户或全局变量重新猜测。
+- 缺少身份或 workspace 上下文时不读写登录账号数据。
+- 缓存、模型结果和配音键如果包含私人内容，至少按 workspace 和决定结果的模型/版本隔离。
+- 进程级缓存不得产生跨用户命中；任何 membership 缓存必须以已验证用户和 workspace 为键并有有界有效期。
+
+## 6. 本地文件与云端边界
+
+本地视频、音频、图片、草稿、模型、缓存和密钥不会因为有 Supabase 账号就自动上传。workspace 隔离也不等于操作系统用户隔离：同一 macOS 用户下的不同产品账号可能获得相同目录的系统权限。
+
+因此：
+
+- 每个本地文件引用还必须经过工作区授权根目录和用途检查；
+- 云端模型或发布平台需要上传内容时，界面说明发送范围并取得相应授权；
+- 密钥不进入数据库普通字段、日志、截图、构建变量或安装包；
+- 删除本地文件前解析精确目标并说明影响与可恢复性。
+
+## 7. 管理员账号
+
+测试者只接触产品账号和初始密码，不接触邮箱或 Supabase。管理员在受信任终端临时设置项目 URL 和管理员 secret，然后运行：
+
+    cd apps/api
+    SUPABASE_URL=https://your-project.supabase.co \
+    SUPABASE_ADMIN_SECRET_KEY=your-secret-key \
+    uv run python -m app.account_admin tester01 --generate-password
+
+管理员 secret 只供该命令调用 Supabase Admin API；不得写入仓库、应用环境文件、GitHub Actions 普通构建变量或安装包。应用运行时只使用 URL 和 publishable key。
+
+## 8. 最小安全验收
+
+任何认证或 workspace 改动至少证明：
+
+1. 无令牌、坏令牌和过期令牌不能读取产品数据。
+2. 用户 A 不能读取、修改、推断或触发用户 B 的对象。
+3. 客户端伪造 user_id、workspace_id、ready 或 completed 无效。
+4. 声明 supabase 但配置缺失会阻断，不会进入 local。
+5. 首启只能由服务端当前预检结果完成。
+6. 后台任务、重试和缓存不会丢失或切换 workspace。
+7. local 历史数据不会暴露给认证账号。
+8. 两个真实测试账号在登录、session 恢复、退出和再次启动后仍保持隔离。
