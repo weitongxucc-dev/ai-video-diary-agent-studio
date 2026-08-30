@@ -77,10 +77,10 @@ describe("HomePage CreationTask projection", () => {
     expect(screen.getByRole("link", { name: /failed 任务选题：需要处理需要处理/ })).toBeInTheDocument();
 
     const runBoard = within(screen.getByTestId("run-board"));
-    expect(runBoard.getByText("等待开始").parentElement).toHaveTextContent("等待开始1项任务");
-    expect(runBoard.getByText("进行中或待确认").parentElement).toHaveTextContent("进行中或待确认2项任务");
-    expect(runBoard.getByText("需要处理").parentElement).toHaveTextContent("需要处理1项任务");
-    expect(runBoard.getByText("已完成").parentElement).toHaveTextContent("已完成1项任务");
+    expect(runBoard.getByText("等待开始").parentElement).toHaveTextContent("等待开始1项");
+    expect(runBoard.getByText("进行中或待确认").parentElement).toHaveTextContent("进行中或待确认2项");
+    expect(runBoard.getByText("需要处理").parentElement).toHaveTextContent("需要处理1项");
+    expect(runBoard.getByText("已完成").parentElement).toHaveTextContent("已完成1项");
     expect(screen.getAllByRole("heading", { level: 2, name: "创作任务" })).toHaveLength(1);
   });
 });

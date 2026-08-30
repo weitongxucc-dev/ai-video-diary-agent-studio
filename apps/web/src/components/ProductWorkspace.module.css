@@ -1,9 +1,7 @@
-.page { width: min(100%, 1160px); margin: 0 auto; padding: 30px 28px 72px; }
-.pageHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 20px; }
-.pageHeader > div { min-width: 0; }
+.page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
+.pageHeader { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 12px; }
 .eyebrow, .objectEyebrow, .sectionHeading span { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.pageHeader h1 { margin: 4px 0 6px; font-size: clamp(24px, 2.2vw, 30px); font-weight: 500; letter-spacing: -.025em; line-height: 1.2; }
-.pageHeader p { max-width: 700px; margin: 0; color: var(--text-2); font-size: 14px; }
+.pageHeader h1 { margin: 0; font-size: 23px; font-weight: 500; letter-spacing: -.02em; line-height: 1.25; }
 
 .primaryButton, .secondaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); }
@@ -11,21 +9,21 @@
 button.secondaryButton { cursor: pointer; }
 .secondaryButton:disabled { cursor: not-allowed; opacity: .5; }
 
-.tabs { display: flex; min-height: 46px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
-.tabs button { display: inline-flex; min-height: 45px; align-items: center; gap: 7px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
+.tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
+.tabs button { display: inline-flex; min-height: 39px; align-items: center; gap: 7px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
 .tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 500; }
 
-.templateCatalog, .recordList { padding-top: 24px; }
-.sectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.templateCatalog, .recordList { padding-top: 16px; }
+.sectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .sectionHeading h2 { margin: 2px 0 0; font-size: 18px; font-weight: 500; }
 .sectionHeading p { margin: 0; color: var(--text-3); font-size: 12px; }
 
 .templateGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.templateCard { position: relative; display: grid; grid-template-columns: 104px minmax(0, 1fr) 18px; gap: 16px; align-items: center; min-width: 0; min-height: 150px; padding: 15px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); cursor: pointer; text-align: left; transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
+.templateCard { position: relative; display: grid; grid-template-columns: 90px minmax(0, 1fr) 18px; gap: 12px; align-items: center; min-width: 0; min-height: 126px; padding: 12px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); cursor: pointer; text-align: left; transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
 .templateCard:hover { border-color: var(--border-2); background: var(--surface-2); transform: translateY(-1px); }
 .templateCard.selectedCard { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-1)); background: color-mix(in srgb, var(--accent) 5%, var(--surface-1)); }
-.templateVisual { position: relative; display: grid; width: 104px; height: 118px; align-content: end; gap: 7px; padding: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px; background: color-mix(in srgb, currentColor 8%, var(--surface-2)); color: var(--accent); }
+.templateVisual { position: relative; display: grid; width: 90px; height: 100px; align-content: end; gap: 6px; padding: 11px; overflow: hidden; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px; background: color-mix(in srgb, currentColor 8%, var(--surface-2)); color: var(--accent); }
 .toneAmber .templateVisual { color: var(--warning); }
 .toneGreen .templateVisual { color: var(--success); }
 .toneBlue .templateVisual { color: var(--accent); }
@@ -35,15 +33,12 @@ button.secondaryButton { cursor: pointer; }
 .templateVisual i:nth-of-type(3) { width: 48%; }
 .templateCopy { display: grid; min-width: 0; gap: 6px; }
 .templateMeta { display: flex; align-items: center; gap: 5px; color: var(--text-3); font-size: 12px; }
-.templateCopy strong { font-size: 17px; font-weight: 500; }
+.templateCopy strong { font-size: 15px; font-weight: 500; }
 .templateCopy small { display: -webkit-box; overflow: hidden; color: var(--text-2); font-size: 13px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .structureLine { display: flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .cardArrow { color: var(--text-3); }
 .selectedCard .cardArrow { color: var(--accent); }
-.catalogFooter { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 13px 0; border-top: 1px solid var(--border-1); color: var(--text-2); font-size: 12px; }
-.catalogFooter svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
-
-.emptyStage { display: flex; min-height: 240px; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; padding: 32px; border: 1px dashed var(--border-2); border-radius: 10px; background: color-mix(in srgb, var(--surface-2) 58%, var(--surface-1)); }
+.emptyStage { display: flex; min-height: 160px; align-items: center; justify-content: center; gap: 16px; margin-top: 16px; padding: 24px; border: 1px dashed var(--border-2); border-radius: 10px; background: color-mix(in srgb, var(--surface-2) 58%, var(--surface-1)); }
 .emptyStage > div { max-width: 480px; }
 .emptyStage h2 { margin: 0; font-size: 17px; font-weight: 500; }
 .emptyStage p { margin: 5px 0 0; color: var(--text-2); font-size: 13px; }
@@ -71,7 +66,7 @@ button.secondaryButton { cursor: pointer; }
 .capabilityBanner strong { font-size: 13px; font-weight: 500; }
 .capabilityBanner p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 .capabilityBanner a { display: inline-flex; align-items: center; gap: 5px; color: var(--text-1); font-size: 12px; font-weight: 500; text-decoration: none; }
-.summaryRow { display: flex; gap: 24px; padding: 18px 2px 10px; color: var(--text-2); font-size: 12px; }
+.summaryRow { display: flex; gap: 24px; padding: 12px 2px 8px; color: var(--text-2); font-size: 12px; }
 .summaryRow span { display: inline-flex; align-items: baseline; gap: 6px; }
 .summaryRow strong { color: var(--text-1); font-size: 20px; font-weight: 500; }
 
@@ -106,7 +101,6 @@ button.secondaryButton { cursor: pointer; }
 @media (max-width: 1120px) { .templateGrid { grid-template-columns: 1fr; } }
 @media (max-width: 780px) {
   .page { padding-right: 20px; padding-left: 20px; }
-  .pageHeader { align-items: flex-start; flex-direction: column; }
   .capabilityBanner { grid-template-columns: 38px minmax(0, 1fr); }
   .capabilityBanner a { grid-column: 2; }
   .templateCard { grid-template-columns: 88px minmax(0, 1fr) 16px; }

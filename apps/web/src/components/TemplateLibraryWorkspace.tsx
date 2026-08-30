@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {
   ArrowRight, BookOpenCheck, Clock3, GraduationCap, History, Layers3,
-  Library, ListChecks, MonitorPlay, Sparkles, Video, Wrench,
+  Library, ListChecks, Sparkles, Video, Wrench,
 } from "lucide-react";
 import { type ComponentType, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -81,8 +81,8 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
     <AppShell inspector={inspector} inspectorTitle="模板详情">
       <div className={styles.page}>
         <header className={styles.pageHeader}>
-          <div><span className={styles.eyebrow}>视频模板</span><h1>选择一种成熟的制作结构</h1><p>模板决定内容怎么讲、需要什么素材，以及后续检查什么；不会替你虚构人物、声音或平台能力。</p></div>
-          <Link className={styles.primaryButton} href="/production?new=1"><Sparkles size={16} /> 从目标开始制作</Link>
+          <h1>视频模板</h1>
+          <Link className={styles.primaryButton} href="/production?new=1"><Sparkles size={16} /> 开始创作</Link>
         </header>
 
         <nav aria-label="模板视图" className={styles.tabs}>
@@ -112,7 +112,6 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
                   );
                 })}
               </div>
-              <footer className={styles.catalogFooter}><MonitorPlay size={16} /><span>模板只定义结构。开始任务后仍会根据当前资料、素材、人物声音和模型状态进行预检。</span></footer>
             </div>
           )
         ) : <UnavailableLibrary view={view} />}

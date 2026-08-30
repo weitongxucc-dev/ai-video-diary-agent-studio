@@ -68,7 +68,7 @@ export function PublishingWorkspace() {
       <span className={styles.objectEyebrow}>当前创作任务</span><h3>{selected.name}</h3>
       <span className={`${styles.stateBadge} ${taskState(selected).tone}`}>{taskState(selected).label}</span>
       <dl><div><dt>当前阶段</dt><dd>{stageLabels[selected.stage]}</dd></div><div><dt>整体进度</dt><dd>{selected.progress}%</dd></div><div><dt>最后更新</dt><dd>{formatTime(selected.updated_at)}</dd></div><div><dt>本地成片</dt><dd>{selected.output_ready ? "已生成，可检查" : "尚未生成"}</dd></div></dl>
-      {selected.stage_reason ? <section className={styles.inspectorNotice}><strong>{selected.stage_impact || "当前任务需要处理"}</strong><p>{selected.stage_reason}</p>{selected.stage_repair_action ? <p>处理方式：{selected.stage_repair_action}</p> : null}</section> : null}
+      {selected.stage_reason ? <section className={styles.inspectorNotice}><strong>{selected.stage_impact || "当前任务需要处理"}</strong>{selected.stage_repair_action ? <p>处理方式：{selected.stage_repair_action}</p> : null}</section> : null}
       <Link className={styles.primaryButton} href={`/tasks/${encodeURIComponent(selected.id)}`}>打开创作任务 <ArrowRight size={15} /></Link>
       <section className={styles.inspectorMuted}><strong>平台能力</strong><p>平台发布、定时发布和发布后监控尚未接入；本页不会把本地成片计为已发布。</p></section>
     </div>
@@ -77,7 +77,7 @@ export function PublishingWorkspace() {
   return (
     <AppShell creationTasks={tasks} inspector={inspector} inspectorTitle="记录详情">
       <div className={styles.page}>
-        <header className={styles.pageHeader}><div><span className={styles.eyebrow}>发布与数据</span><h1>成片记录与发布准备</h1><p>集中检查真实创作进度、本地成片和待处理事项；平台连接完成后再进入发布与监控。</p></div><button className={styles.secondaryButton} disabled={loading} onClick={() => void refresh()} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={15} /> 刷新记录</button></header>
+        <header className={styles.pageHeader}><h1>发布与数据</h1><button className={styles.secondaryButton} disabled={loading} onClick={() => void refresh()} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={15} /> 刷新</button></header>
         <section className={styles.capabilityBanner}><span><Signal size={18} /></span><div><strong>平台发布与监控尚未接入</strong><p>当前只展示本地创作任务的真实状态，不显示虚构播放量、点赞量或发布成功数。</p></div><Link href="/health">查看运行情况 <ArrowRight size={14} /></Link></section>
         <div className={styles.summaryRow} aria-label="真实任务摘要"><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{attentionCount}</strong> 需要处理</span><span><strong>{readyCount}</strong> 成片就绪</span></div>
         <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setFilter(item.id)} type="button">{item.label}</button>)}</nav>

@@ -98,7 +98,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     expect(await screen.findByText(/第 1 次/)).toBeInTheDocument();
 
     api.listMediaPreviews.mockResolvedValue({ items: [failedVoicePreview], total_count: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await screen.findByRole("button", { name: "重新生成声音预览" });
     expect(screen.queryByLabelText("声音预览")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重新生成声音预览" }));

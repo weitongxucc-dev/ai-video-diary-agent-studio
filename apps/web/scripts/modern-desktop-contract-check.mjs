@@ -94,11 +94,15 @@ for (const required of ["defaultInspector", "已创建任务", "等待开始", "
   if (!production.includes(required)) failures.push(`production is missing the CreationTask or history-task boundary: ${required}`);
 }
 
-for (const required of ["/production?", 'new: "1"', "goal: normalizedGoal", "检查可用内容", "不会生成选题、文案或成片"]) {
+for (const required of ["/production?", 'new: "1"', "goal: normalizedGoal", "检查可用内容", "下一步只检查可用内容，不会直接开始生成"]) {
   if (!composer.includes(required)) failures.push(`home command composer is missing the CreationPlan entry: ${required}`);
 }
-for (const retired of ["previewVoiceCommand", "executeVoiceCommand", "VoiceCommandResponse", "createProductionBatch"]) {
+for (const retired of ["previewVoiceCommand", "executeVoiceCommand", "VoiceCommandResponse", "createProductionBatch", "添加素材", "语音输入"]) {
   if (`${composer}\n${api}`.includes(retired)) failures.push(`home CreationPlan path still consumes a retired helper: ${retired}`);
+}
+
+for (const retired of [".modern-home__eyebrow", ".home-plan-readiness", ".home-composer__availability", ".composer-icon-button", ".home-run-board__notifications"]) {
+  if (overrides.includes(retired)) failures.push(`modern desktop CSS still contains a retired empty-space selector: ${retired}`);
 }
 
 for (const required of ["scanProductionMaterials", "reviewProductionMaterial", "素材库", "/media"]) {

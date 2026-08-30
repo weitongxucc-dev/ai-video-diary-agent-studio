@@ -507,11 +507,7 @@ export function MaterialLibraryWorkspace({
     <AppShell inspector={inspector} inspectorTitle="素材详情">
       <div className="modern-library">
         <header className="modern-library__header">
-          <div>
-            <span>素材资产</span>
-            <h1>素材库</h1>
-            <p>理解长视频中的可用片段，管理覆盖、缺口和镜头复用。</p>
-          </div>
+          <h1>素材库</h1>
           <button
             className="modern-primary-button"
             disabled={busy !== null}
@@ -529,19 +525,18 @@ export function MaterialLibraryWorkspace({
 
         <section
           className="library-coverage"
-          aria-labelledby="library-coverage-title"
+          aria-label="素材覆盖"
         >
           <div className="library-coverage__summary">
-            <span id="library-coverage-title">素材覆盖</span>
             <strong>{insights.segment_count} 个片段</strong>
             <small>{insights.asset_count} 个文件</small>
           </div>
           <div className="library-coverage__tags">
-            {insights.tags.slice(0, 6).map((entry) => (
+            {insights.tags.slice(0, 3).map((entry) => (
               <span key={entry.tag}>
                 <strong>{tagLabel(entry.tag)}</strong>
                 <small>
-                  {entry.segment_count} 段 · 已用 {entry.usage_count} 次
+                  {entry.segment_count} 段
                 </small>
               </span>
             ))}

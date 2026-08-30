@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Mic, Paperclip, Sparkles } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 type HomeCommandComposerProps = {
@@ -35,11 +35,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation }:
       </div>
 
       <div className="home-composer__toolbar">
-        <div className="home-composer__context">
-          <button aria-label="添加素材" className="composer-icon-button" disabled type="button"><Paperclip size={16} /></button>
-          <button aria-label="语音输入" className="composer-icon-button" disabled type="button"><Mic size={16} /></button>
-          <span className="home-composer__availability">先检查当前可用的资料、素材、声音与模型，再由你确认创建任务</span>
-        </div>
+        <p className="home-composer__hint" role="status">{goal.trim() ? "下一步只检查可用内容，不会直接开始生成。" : "输入目标后，系统会先检查素材、声音和模型。"}</p>
         <button
           aria-label="检查可用内容"
           className="composer-submit"
@@ -50,8 +46,6 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation }:
           <span>检查可用内容</span>
         </button>
       </div>
-
-      <p className="home-composer__hint" role="status">{goal.trim() ? "将先进行只读检查，不会生成选题、文案或成片。" : "先写下制作目标，再检查当前工作区可用的内容。"}</p>
     </form>
   );
 }

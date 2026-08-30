@@ -26,7 +26,8 @@ describe("PublishingWorkspace", () => {
     render(<PublishingWorkspace />);
     expect((await screen.findAllByText("新品讲解视频")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("需要处理").length).toBeGreaterThan(0);
-    expect(screen.getByText("缺少已授权声音")).toBeInTheDocument();
+    expect(screen.getByText("暂时不能生成配音")).toBeInTheDocument();
+    expect(screen.queryByText("缺少已授权声音")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /打开创作任务/ })).toHaveAttribute("href", "/tasks/task-1");
     expect(screen.getByText(/不显示虚构播放量、点赞量或发布成功数/)).toBeInTheDocument();
     expect(screen.queryByText("已发布", { exact: true })).not.toBeInTheDocument();

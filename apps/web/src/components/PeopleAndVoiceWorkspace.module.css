@@ -1,15 +1,14 @@
-.page { width: min(100%, 1160px); margin: 0 auto; padding: 30px 28px 72px; }
-.header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 20px; }
-.header > div > span, .sectionHeader span, .editor header span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.header h1 { margin: 4px 0 6px; font-size: clamp(24px, 2.2vw, 30px); font-weight: 500; letter-spacing: -.025em; line-height: 1.2; }
-.header p { max-width: 720px; margin: 0; color: var(--text-2); font-size: 14px; }
+.page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
+.header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 12px; }
+.sectionHeader span, .editor header span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
+.header h1 { margin: 0; font-size: 23px; font-weight: 500; letter-spacing: -.02em; line-height: 1.25; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
 .secondaryButton:disabled, .primaryButton:disabled { cursor: not-allowed; opacity: .5; }
 
-.tabs { display: flex; min-height: 46px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
-.tabs button { min-height: 45px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
+.tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
+.tabs button { min-height: 39px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
 .tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 500; }
 
@@ -23,7 +22,8 @@
 .serviceEmpty strong { display: block; color: var(--text-1); font-size: 15px; font-weight: 500; }
 .serviceEmpty p { margin: 4px 0 0; font-size: 13px; }
 
-.workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 570px; margin-top: 20px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 520px; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.singleStage { width: min(100%, 900px); min-height: 0; grid-template-columns: minmax(0, 1fr); margin-right: auto; margin-left: auto; }
 .objectRail { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
 .objectRail > header { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
 .objectRail > header > div { display: grid; }
@@ -41,7 +41,7 @@
 .objectList button > svg { color: var(--text-3); }
 
 .stage { min-width: 0; background: var(--surface-1); }
-.preview { display: grid; min-height: 570px; align-content: center; justify-items: center; gap: 8px; padding: 28px; text-align: center; }
+.preview { display: grid; min-height: 520px; align-content: center; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
 .previewIcon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); color: var(--accent); }
 .preview > strong { font-size: 19px; font-weight: 500; }
 .preview > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: 13px; }
@@ -60,17 +60,17 @@
 .previewHistory h4 { margin: 0; font-size: 12px; font-weight: 500; }
 .previewHistory p { margin: 5px 0 0; color: var(--text-3); font-size: 11px; }
 
-.editor { min-height: 570px; padding: 22px; }
-.editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
+.editor { min-height: 0; padding: 18px; }
+.editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-1); }
 .editor h2 { margin: 3px 0 4px; font-size: 19px; font-weight: 500; }
 .editor header p { margin: 0; color: var(--text-2); font-size: 12px; }
-.editorForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding-top: 18px; }
+.editorForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .editorForm label, .inlineForm label, .voiceReference { display: grid; gap: 5px; min-width: 0; }
 .editorForm label > span, .inlineForm label > span, .voiceReference label > span { color: var(--text-2); font-size: 12px; }
-.editorForm input, .editorForm select, .editorForm textarea, .inlineForm input, .inlineForm select { width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
+.editorForm input, .editorForm select, .editorForm textarea, .inlineForm input, .inlineForm select { width: 100%; min-width: 0; min-height: 38px; padding: 7px 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
 .editorForm textarea { resize: vertical; }
 .fullField, .authorizationFields { grid-column: 1 / -1; }
-.authorizationFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 2px 0 0; padding: 14px; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-2); }
+.authorizationFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 11px 12px; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-2); }
 .authorizationFields legend { padding: 0 5px; color: var(--text-2); font-size: 12px; }
 .authorizationFields p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: 11px; }
 .editorForm > .primaryButton { grid-column: 2; justify-self: end; }
@@ -82,7 +82,7 @@
 .empty { display: flex; align-items: flex-start; gap: 9px; padding: 18px 12px; color: var(--text-3); }
 .empty strong { color: var(--text-1); font-size: 13px; font-weight: 500; }
 .empty p { margin: 3px 0 0; color: var(--text-2); font-size: 11px; }
-.fullStage { margin-top: 20px; padding: 22px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.fullStage { margin-top: 14px; padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .sectionHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
 .sectionHeader h2 { margin: 3px 0 2px; font-size: 19px; font-weight: 500; }
 .sectionHeader p { margin: 0; color: var(--text-2); font-size: 12px; }
@@ -112,7 +112,6 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 780px) {
   .page { padding-right: 20px; padding-left: 20px; }
-  .header { align-items: flex-start; flex-direction: column; }
   .workspace { grid-template-columns: 200px minmax(0, 1fr); }
   .editorForm, .authorizationFields { grid-template-columns: 1fr; }
   .fullField, .authorizationFields, .authorizationFields p, .editorForm > .primaryButton { grid-column: 1; }

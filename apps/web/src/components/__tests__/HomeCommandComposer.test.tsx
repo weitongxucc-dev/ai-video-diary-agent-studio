@@ -10,7 +10,7 @@ describe("HomeCommandComposer", () => {
     render(<HomeCommandComposer assignLocation={assignLocation} />);
 
     expect(screen.getByRole("button", { name: "检查可用内容" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("先写下制作目标");
+    expect(screen.getByRole("status")).toHaveTextContent("输入目标后，系统会先检查素材、声音和模型");
 
     fireEvent.change(screen.getByRole("textbox", { name: "制作指令" }), {
       target: { value: "用已审核素材制作一条竖版产品视频" },
