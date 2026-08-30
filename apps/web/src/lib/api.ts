@@ -4,6 +4,11 @@ import type {
   CreationPlanInput,
   CreationPlanPreview,
   CreationTasksResponse,
+  CreationTaskWorkspace,
+  CreationTaskScriptsResponse,
+  CreationTaskScriptSection,
+  CreationTaskNarration,
+  CreationTaskMontage,
   CreationTaskTopicsResponse,
   Episode,
   EditPlan,
@@ -127,6 +132,15 @@ const creationPlanErrorTitles: Record<string, string> = {
   capability_unavailable: "当前文字模型不可用",
   creation_task_topic_stage_conflict: "当前创作任务不能重复开始选题",
   creation_task_topic_confirmation_conflict: "当前选题不能被确认",
+  confirmed_topic_missing: "请先确认选题",
+  creation_task_script_stage_conflict: "当前任务不能生成文案",
+  creation_task_script_confirmation_conflict: "当前文案不能被确认",
+  creation_task_narration_conflict: "当前任务不能生成配音",
+  voice_identity_missing: "缺少已授权的声音版本",
+  voice_reference_wav_unavailable: "授权声音的 WAV 不可用",
+  narration_generation_failed: "中文配音生成失败",
+  creation_task_montage_conflict: "当前任务不能生成故事板",
+  montage_plan_failed: "故事板生成失败",
   provider_output_invalid: "文字模型返回的选题无法使用",
 };
 
@@ -400,6 +414,84 @@ export function confirmCreationTaskTopic(
 ): Promise<CreationTaskTopicsResponse> {
   return creationPlanRequest<CreationTaskTopicsResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/topics/${encodeURIComponent(topicId)}/confirm`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
+  return creationPlanRequest<CreationTaskWorkspace>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}`,
+  );
+}
+
+export function getCreationTaskScripts(taskId: string): Promise<CreationTaskScriptsResponse> {
+  return creationPlanRequest<CreationTaskScriptsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts`,
+  );
+}
+
+export function generateCreationTaskScript(taskId: string): Promise<CreationTaskScriptsResponse> {
+  return creationPlanRequest<CreationTaskScriptsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function confirmCreationTaskScript(
+  taskId: string,
+  scriptId: string,
+  input: { title: string; sections: CreationTaskScriptSection[] },
+): Promise<CreationTaskScriptsResponse> {
+  return creationPlanRequest<CreationTaskScriptsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/confirm`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function generateCreationTaskNarration(taskId: string): Promise<CreationTaskNarration> {
+  return creationPlanRequest<CreationTaskNarration>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/narration/generate`,
+    { method: "POST" },
+  );
+}
+
+export function createCreationTaskMontagePlan(taskId: string): Promise<CreationTaskMontage> {
+  return creationPlanRequest<CreationTaskMontage>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`,
+    { method: "POST" },
+  );
+}
+
+export function updateCreationTaskMontageClip(
+  taskId: string,
+  clipId: string,
+  input: {
+    asset_id?: string;
+    segment_id?: string;
+    source_start_seconds?: number;
+    position?: number;
+    locked?: boolean;
+    confirmed?: boolean;
+  },
+): Promise<CreationTaskMontage> {
+  return creationPlanRequest<CreationTaskMontage>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function getCreationTaskMontageClipCandidates(
+  taskId: string,
+  clipId: string,
+): Promise<MontageClipCandidate[]> {
+  return creationPlanRequest<MontageClipCandidate[]>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}/candidates`,
+  );
+}
+
+export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskMontage> {
+  return creationPlanRequest<CreationTaskMontage>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/render`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }

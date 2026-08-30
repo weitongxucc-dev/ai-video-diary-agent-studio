@@ -41,7 +41,7 @@ import { CreationTaskTopicWorkspace } from "@/components/CreationTaskTopicWorksp
 function topics(overrides: Partial<CreationTaskTopicsResponse> = {}): CreationTaskTopicsResponse {
   return {
     task: {
-      id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: "制作产品观察视频", stage: "topic", stage_status: "not_started", status: "created", progress: 10, recovery_point: "topic", selected_topic_id: null, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z",
+      id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: "制作产品观察视频", stage: "topic", stage_status: "not_started", status: "created", progress: 10, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z",
     },
     candidates: [],
     evidence_references: [],

@@ -73,7 +73,7 @@ function state(batch: ProductionBatch) {
 }
 
 function CreationTaskRow({ task }: { task: CreationTask }) {
-  const taskState = creationTaskStatusPresentation(task.stage_status);
+  const taskState = creationTaskStatusPresentation(task.stage_status, task.stage);
   const TaskStateIcon = taskState.tone === "success" ? CheckCircle2 : taskState.tone === "running" ? LoaderCircle : taskState.tone === "warning" || taskState.tone === "danger" ? AlertCircle : Clock3;
   return (
     <article className="queue-row" key={task.id}>

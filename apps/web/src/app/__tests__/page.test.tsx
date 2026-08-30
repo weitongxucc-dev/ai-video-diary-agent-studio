@@ -34,6 +34,10 @@ function task(stageStatus: CreationTask["stage_status"]): CreationTask {
     progress: 0,
     recovery_point: "topic",
     selected_topic_id: null,
+    confirmed_script_id: null,
+    narration_cache_key: null,
+    montage_plan_id: null,
+    output_ready: false,
     stage_reason: null,
     stage_impact: null,
     stage_repair_action: null,
@@ -67,16 +71,16 @@ describe("HomePage CreationTask projection", () => {
     render(await HomePage());
 
     expect(screen.getByRole("link", { name: /not_started 任务选题：未开始等待开始/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /running 任务选题：生成中选题生成中/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /running 任务选题：处理中选题处理中/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /waiting_for_user 任务选题：等待确认等待确认/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /completed 任务选题：已完成选题已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /completed 任务选题：已完成已完成/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /failed 任务选题：需要处理需要处理/ })).toBeInTheDocument();
 
     const runBoard = within(screen.getByTestId("run-board"));
     expect(runBoard.getByText("等待开始").parentElement).toHaveTextContent("等待开始1项任务");
     expect(runBoard.getByText("进行中或待确认").parentElement).toHaveTextContent("进行中或待确认2项任务");
     expect(runBoard.getByText("需要处理").parentElement).toHaveTextContent("需要处理1项任务");
-    expect(runBoard.getByText("选题已完成").parentElement).toHaveTextContent("选题已完成1项任务");
+    expect(runBoard.getByText("已完成").parentElement).toHaveTextContent("已完成1项任务");
     expect(screen.getAllByRole("heading", { level: 2, name: "创作任务" })).toHaveLength(1);
   });
 });

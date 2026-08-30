@@ -174,7 +174,6 @@ class VoiceProfile:
 class NarrationArtifactRecord:
     id: str
     workspace_id: str
-    episode_id: str
     script_id: str
     voice_profile_id: str | None
     cache_key: str
@@ -182,6 +181,10 @@ class NarrationArtifactRecord:
     duration_seconds: float
     sample_rate: int
     model_id: str
+    episode_id: str | None = None
+    task_id: str | None = None
+    language: str = "zh"
+    pronunciation_version: str = ""
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -369,7 +372,7 @@ class CreationTask:
     plan_id: str
     name: str
     scenario: str
-    stage: Literal["topic"] = "topic"
+    stage: Literal["topic", "script", "narration", "montage", "review"] = "topic"
     stage_status: Literal[
         "not_started", "running", "waiting_for_user", "completed", "failed"
     ] = "not_started"
@@ -377,6 +380,10 @@ class CreationTask:
     progress: int = 0
     recovery_point: str = "topic"
     selected_topic_id: str | None = None
+    confirmed_script_id: str | None = None
+    narration_cache_key: str | None = None
+    montage_plan_id: str | None = None
+    output_ready: bool = False
     stage_reason: str | None = None
     stage_impact: str | None = None
     stage_repair_action: str | None = None
@@ -436,6 +443,54 @@ class TopicEvidenceReference:
     authorization_or_license: str
     source_url: str | None
     created_at: datetime = field(default_factory=utc_now)
+
+
+ScriptGenerationRunStatus = Literal["running", "succeeded", "failed"]
+ScriptSelectionStatus = Literal["draft", "confirmed"]
+
+
+@dataclass
+class ScriptGenerationRun:
+    id: str
+    workspace_id: str
+    task_id: str
+    plan_id: str
+    topic_id: str
+    status: ScriptGenerationRunStatus
+    route_snapshot: dict[str, object]
+    prompt_schema_version: str
+    input_references: list[dict[str, object]]
+    reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    retryable: bool | None = None
+    started_at: datetime = field(default_factory=utc_now)
+    finished_at: datetime | None = None
+
+
+@dataclass
+class CreationTaskScriptSection:
+    id: str
+    title: str
+    content: str
+    visual_prompt: str
+    evidence_reference_ids: list[str]
+
+
+@dataclass
+class CreationTaskScript:
+    id: str
+    workspace_id: str
+    task_id: str
+    run_id: str
+    topic_id: str
+    title: str
+    language: Literal["zh-CN"]
+    sections: list[CreationTaskScriptSection]
+    selection_status: ScriptSelectionStatus = "draft"
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    confirmed_at: datetime | None = None
 
 
 class ProductionRepository:
@@ -688,6 +743,38 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_topic_evidence_candidate
                     ON topic_evidence_references(workspace_id, candidate_id, created_at ASC);
+                CREATE TABLE IF NOT EXISTS script_generation_runs (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    topic_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_script_generation_runs_task
+                    ON script_generation_runs(workspace_id, task_id, started_at DESC);
+                CREATE TABLE IF NOT EXISTS creation_task_scripts (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_creation_task_scripts_task
+                    ON creation_task_scripts(workspace_id, task_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS creation_task_montage_plans (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(workspace_id, task_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_creation_task_montage_task
+                    ON creation_task_montage_plans(workspace_id, task_id, updated_at DESC);
                 CREATE TABLE IF NOT EXISTS voice_profiles (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -2694,7 +2781,10 @@ class ProductionRepository:
             candidate = self._topic_candidate_from_payload(
                 json.loads(str(candidate_row["payload"]))
             )
-            if task.selected_topic_id == candidate_id and task.stage_status == "completed":
+            if (
+                task.selected_topic_id == candidate_id
+                and candidate.selection_status == "confirmed"
+            ):
                 return task, candidate
             if task.selected_topic_id is not None:
                 raise ValueError("当前创作任务已经确认了另一个选题")
@@ -2703,10 +2793,15 @@ class ProductionRepository:
             now = utc_now()
             candidate.selection_status = "confirmed"
             task.selected_topic_id = candidate.id
-            task.stage_status = "completed"
-            task.status = "completed"
+            task.stage = "script"
+            task.stage_status = "not_started"
+            task.status = "running"
             task.progress = max(task.progress, 20)
             task.recovery_point = "script"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
             task.updated_at = now
             conn.execute(
                 "UPDATE topic_candidates SET payload = ? WHERE id = ?",
@@ -2732,6 +2827,575 @@ class ProductionRepository:
                 if candidate.id == candidate_id
             ),
         )
+
+    def start_script_generation(
+        self,
+        run: ScriptGenerationRun,
+    ) -> tuple[CreationTask, ScriptGenerationRun]:
+        if run.status != "running":
+            raise ValueError("文案运行必须以 running 状态开始")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+            if task.plan_id != run.plan_id or task.selected_topic_id != run.topic_id:
+                raise ValueError("文案运行与已确认选题不一致")
+            if task.stage != "script" or task.stage_status not in {"not_started", "failed"}:
+                raise ValueError("当前创作任务不允许再次开始生成文案")
+            now = utc_now()
+            task.stage_status = "running"
+            task.status = "running"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = now
+            conn.execute(
+                """
+                INSERT INTO script_generation_runs
+                    (id, workspace_id, task_id, plan_id, topic_id, payload, started_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.id,
+                    run.workspace_id,
+                    run.task_id,
+                    run.plan_id,
+                    run.topic_id,
+                    _json_payload(run),
+                    run.started_at.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_script_generation_run(run.workspace_id, run.id),
+        )
+
+    def complete_script_generation(
+        self,
+        run_id: str,
+        script: CreationTaskScript,
+    ) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
+        if not script.title.strip() or not script.sections:
+            raise ValueError("文案必须包含标题和正文")
+        if any(
+            not section.id.strip()
+            or not section.title.strip()
+            or not section.content.strip()
+            or not section.visual_prompt.strip()
+            or not section.evidence_reference_ids
+            for section in script.sections
+        ):
+            raise ValueError("文案段落必须包含画面建议和来源证据")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM script_generation_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            run = self._script_generation_run_from_payload(json.loads(str(row["payload"])))
+            if run.status != "running":
+                raise ValueError("文案运行不是可完成状态")
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            if (
+                script.workspace_id != run.workspace_id
+                or script.task_id != run.task_id
+                or script.run_id != run.id
+                or script.topic_id != run.topic_id
+                or task.stage != "script"
+                or task.stage_status != "running"
+            ):
+                raise ValueError("文案与当前创作任务不一致")
+            allowed_references = {
+                str(item["reference_id"])
+                for item in run.input_references
+                if isinstance(item, dict) and item.get("reference_id")
+            }
+            used_references = {
+                reference_id
+                for section in script.sections
+                for reference_id in section.evidence_reference_ids
+            }
+            if not used_references.issubset(allowed_references):
+                raise ValueError("文案引用了本次模型输入之外的资料")
+            now = utc_now()
+            run.status = "succeeded"
+            run.route_snapshot = {
+                **run.route_snapshot,
+                "availability": "succeeded",
+                "checked_at": now,
+            }
+            run.finished_at = now
+            script.updated_at = now
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = max(task.progress, 35)
+            task.updated_at = now
+            conn.execute(
+                "UPDATE script_generation_runs SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json_payload(run), now.isoformat(), run.id),
+            )
+            conn.execute(
+                """
+                INSERT INTO creation_task_scripts
+                    (id, workspace_id, task_id, run_id, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    script.id,
+                    script.workspace_id,
+                    script.task_id,
+                    script.run_id,
+                    _json_payload(script),
+                    now.isoformat(),
+                ),
+            )
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_script_generation_run(run.workspace_id, run.id),
+            self.get_creation_task_script(run.workspace_id, script.id),
+        )
+
+    def fail_script_generation(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+        provider_attempted: bool = False,
+    ) -> tuple[CreationTask, ScriptGenerationRun]:
+        if not all(value.strip() for value in (reason, impact, repair_action)):
+            raise ValueError("文案失败必须包含原因、影响和修复动作")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM script_generation_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            run = self._script_generation_run_from_payload(json.loads(str(row["payload"])))
+            if run.status != "running":
+                raise ValueError("文案运行不是可失败状态")
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            now = utc_now()
+            run.status = "failed"
+            run.reason = reason
+            run.impact = impact
+            run.repair_action = repair_action
+            run.retryable = retryable
+            run.finished_at = now
+            if provider_attempted:
+                run.route_snapshot = {
+                    **run.route_snapshot,
+                    "availability": "failed",
+                    "checked_at": now,
+                }
+            task.stage_status = "failed"
+            task.status = "failed"
+            task.recovery_point = "script"
+            task.stage_reason = reason
+            task.stage_impact = impact
+            task.stage_repair_action = repair_action
+            task.stage_retryable = retryable
+            task.updated_at = now
+            conn.execute(
+                "UPDATE script_generation_runs SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json_payload(run), now.isoformat(), run.id),
+            )
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_script_generation_run(run.workspace_id, run.id),
+        )
+
+    def get_script_generation_run(
+        self, workspace_id: str, run_id: str
+    ) -> ScriptGenerationRun:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM script_generation_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, run_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return self._script_generation_run_from_payload(json.loads(str(row["payload"])))
+
+    def latest_script_generation_run(
+        self, workspace_id: str, task_id: str
+    ) -> ScriptGenerationRun | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM script_generation_runs
+                WHERE workspace_id = ? AND task_id = ?
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (workspace_id, task_id),
+            ).fetchone()
+        return (
+            self._script_generation_run_from_payload(json.loads(str(row["payload"])))
+            if row is not None
+            else None
+        )
+
+    def list_creation_task_scripts(
+        self, workspace_id: str, task_id: str
+    ) -> list[CreationTaskScript]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM creation_task_scripts
+                WHERE workspace_id = ? AND task_id = ? ORDER BY updated_at DESC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [
+            self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def get_creation_task_script(
+        self, workspace_id: str, script_id: str
+    ) -> CreationTaskScript:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND id = ?",
+                (workspace_id, script_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(script_id)
+        return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+
+    def confirm_creation_task_script(
+        self,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        *,
+        title: str,
+        sections: list[CreationTaskScriptSection],
+    ) -> tuple[CreationTask, CreationTaskScript]:
+        if not title.strip() or not sections or any(
+            not section.content.strip() or not section.evidence_reference_ids
+            for section in sections
+        ):
+            raise ValueError("确认文案必须包含正文和来源证据")
+        with self._connect() as conn:
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            script_row = conn.execute(
+                "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? AND id = ?",
+                (workspace_id, task_id, script_id),
+            ).fetchone()
+            if task_row is None or script_row is None:
+                raise KeyError(script_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
+            if task.confirmed_script_id == script_id and script.selection_status == "confirmed":
+                return task, script
+            if task.stage != "script" or task.stage_status != "waiting_for_user":
+                raise ValueError("当前创作任务不在等待确认文案状态")
+            allowed_references = {
+                reference_id
+                for original in script.sections
+                for reference_id in original.evidence_reference_ids
+            }
+            used_references = {
+                reference_id for section in sections for reference_id in section.evidence_reference_ids
+            }
+            if not used_references.issubset(allowed_references):
+                raise ValueError("编辑后的文案引用了生成时未使用的资料")
+            now = utc_now()
+            script.title = title.strip()
+            script.sections = sections
+            script.selection_status = "confirmed"
+            script.confirmed_at = now
+            script.updated_at = now
+            task.confirmed_script_id = script.id
+            task.stage = "narration"
+            task.stage_status = "not_started"
+            task.status = "running"
+            task.progress = max(task.progress, 40)
+            task.recovery_point = "narration"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = now
+            conn.execute(
+                "UPDATE creation_task_scripts SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json_payload(script), now.isoformat(), script.id),
+            )
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        return self.get_creation_task(workspace_id, task_id), self.get_creation_task_script(
+            workspace_id, script_id
+        )
+
+    def start_creation_task_narration(
+        self, workspace_id: str, task_id: str
+    ) -> CreationTask:
+        return self._start_creation_task_stage(workspace_id, task_id, "narration")
+
+    def start_creation_task_montage(
+        self, workspace_id: str, task_id: str
+    ) -> CreationTask:
+        return self._start_creation_task_stage(workspace_id, task_id, "montage")
+
+    def resolve_creation_task_narration_inputs(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        voice_profile_id: str,
+        voice_version: str | None = None,
+    ) -> VersionedNarrationInputs:
+        return self.resolve_narration_inputs(
+            workspace_id=workspace_id,
+            episode_id=task_id,
+            voice_profile_id=voice_profile_id,
+            voice_version=voice_version,
+        )
+
+    def complete_creation_task_narration(
+        self, artifact: NarrationArtifactRecord
+    ) -> tuple[CreationTask, NarrationArtifactRecord]:
+        if artifact.task_id is None:
+            raise ValueError("创作任务配音必须关联 task_id")
+        if not Path(artifact.audio_path).is_file() or Path(artifact.audio_path).stat().st_size == 0:
+            raise ValueError("声音克隆没有生成有效 WAV")
+        with self._connect() as conn:
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (artifact.workspace_id, artifact.task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(artifact.task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            if (
+                task.stage != "narration"
+                or task.stage_status != "running"
+                or task.confirmed_script_id != artifact.script_id
+            ):
+                raise ValueError("配音产物与当前创作任务不一致")
+            now = utc_now()
+            conn.execute(
+                """
+                INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
+                    id = excluded.id, payload = excluded.payload, created_at = excluded.created_at
+                """,
+                (
+                    artifact.id,
+                    artifact.workspace_id,
+                    artifact.cache_key,
+                    _json_payload(artifact),
+                    artifact.created_at.isoformat(),
+                ),
+            )
+            task.narration_cache_key = artifact.cache_key
+            task.stage = "montage"
+            task.stage_status = "not_started"
+            task.status = "running"
+            task.progress = max(task.progress, 60)
+            task.recovery_point = "montage"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = now
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        saved = self.get_narration_artifact(artifact.workspace_id, artifact.cache_key)
+        if saved is None:
+            raise ValueError("配音产物持久化失败")
+        return self.get_creation_task(artifact.workspace_id, artifact.task_id), saved
+
+    def save_creation_task_montage_plan(
+        self,
+        workspace_id: str,
+        task_id: str,
+        plan_id: str,
+        payload: dict[str, object],
+    ) -> tuple[CreationTask, dict[str, object]]:
+        status = str(payload.get("status", ""))
+        if status not in {"waiting_for_user", "ready", "rendering", "rendered", "failed"}:
+            raise ValueError("混剪计划状态无效")
+        with self._connect() as conn:
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            if task.stage not in {"montage", "review"}:
+                raise ValueError("当前创作任务不在剪辑或成片检查阶段")
+            if str(payload.get("task_id", "")) != task.id:
+                raise ValueError("混剪计划与当前创作任务不一致")
+            now = utc_now()
+            payload = {**payload, "updated_at": now.isoformat()}
+            conn.execute(
+                """
+                INSERT INTO creation_task_montage_plans
+                    (id, workspace_id, task_id, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, task_id) DO UPDATE SET
+                    id = excluded.id, payload = excluded.payload, updated_at = excluded.updated_at
+                """,
+                (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
+            )
+            task.montage_plan_id = plan_id
+            if status == "rendering":
+                task.stage = "montage"
+                task.stage_status = "running"
+                task.status = "running"
+            elif status == "rendered":
+                task.stage = "review"
+                task.stage_status = "waiting_for_user"
+                task.status = "waiting_for_user"
+                task.progress = max(task.progress, 90)
+                task.recovery_point = "review"
+                task.output_ready = True
+            elif status == "failed":
+                task.stage = "montage"
+                task.stage_status = "failed"
+                task.status = "failed"
+                task.recovery_point = "montage"
+                task.stage_reason = "render_failed"
+                task.stage_impact = "未生成可检查的成片。"
+                task.stage_repair_action = str(payload.get("message") or "检查 FFmpeg 日志后重试。")
+                task.stage_retryable = True
+            else:
+                task.stage = "montage"
+                task.stage_status = "waiting_for_user"
+                task.status = "waiting_for_user"
+                task.progress = max(task.progress, 70 if status == "waiting_for_user" else 75)
+            task.updated_at = now
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+            )
+        return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(
+            workspace_id, task_id
+        )
+
+    def get_creation_task_montage_plan(
+        self, workspace_id: str, task_id: str
+    ) -> dict[str, object]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_task_montage_plans WHERE workspace_id = ? AND task_id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        payload = json.loads(str(row["payload"]))
+        if not isinstance(payload, dict):
+            raise ValueError("混剪计划持久化内容无效")
+        return payload
+
+    def fail_creation_task_stage(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        stage: Literal["narration", "montage"],
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> CreationTask:
+        if not all(value.strip() for value in (reason, impact, repair_action)):
+            raise ValueError("阶段失败必须包含原因、影响和修复动作")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+            if task.stage != stage:
+                raise ValueError("任务当前阶段与失败阶段不一致")
+            task.stage_status = "failed"
+            task.status = "failed"
+            task.recovery_point = stage
+            task.stage_reason = reason
+            task.stage_impact = impact
+            task.stage_repair_action = repair_action
+            task.stage_retryable = retryable
+            task.updated_at = utc_now()
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+            )
+        return self.get_creation_task(workspace_id, task_id)
+
+    def _start_creation_task_stage(
+        self,
+        workspace_id: str,
+        task_id: str,
+        stage: Literal["narration", "montage"],
+    ) -> CreationTask:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+            if task.stage != stage or task.stage_status not in {"not_started", "failed"}:
+                raise ValueError("当前创作任务不能开始该阶段")
+            task.stage_status = "running"
+            task.status = "running"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = utc_now()
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+            )
+        return self.get_creation_task(workspace_id, task_id)
 
     def readiness(
         self,
@@ -3347,6 +4011,28 @@ class ProductionRepository:
         data: dict[str, object],
     ) -> TopicEvidenceReference:
         return TopicEvidenceReference(**_with_datetime(data, "created_at"))
+
+    @staticmethod
+    def _script_generation_run_from_payload(
+        data: dict[str, object],
+    ) -> ScriptGenerationRun:
+        return ScriptGenerationRun(
+            **_with_datetime(data, "started_at", "finished_at")
+        )
+
+    @staticmethod
+    def _creation_task_script_from_payload(
+        data: dict[str, object],
+    ) -> CreationTaskScript:
+        section_payloads = data.pop("sections", [])
+        return CreationTaskScript(
+            **_with_datetime(data, "created_at", "updated_at", "confirmed_at"),
+            sections=[
+                CreationTaskScriptSection(**section)
+                for section in section_payloads
+                if isinstance(section, dict)
+            ],
+        )
 
 
 def _json_payload(value: object) -> str:

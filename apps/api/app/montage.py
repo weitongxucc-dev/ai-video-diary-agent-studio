@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
+    CreationTaskScript,
     MaterialAsset,
     MaterialSegment,
     ProductionBatch,
@@ -77,6 +78,26 @@ class MontagePlan:
     workspace_id: str
     batch_id: str
     episode_id: str
+    script_title: str
+    status: MontagePlanStatus
+    cues: list[NarrationCue]
+    clips: list[MontageClip]
+    duration_seconds: float
+    low_confidence_clip_count: int
+    narration_audio_path: str | None = None
+    output_path: str | None = None
+    subtitle_path: str | None = None
+    message: str = ""
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class CreationTaskMontagePlan:
+    id: str
+    workspace_id: str
+    task_id: str
+    script_id: str
     script_title: str
     status: MontagePlanStatus
     cues: list[NarrationCue]
@@ -368,6 +389,167 @@ class MontagePlanner:
             ),
         )
 
+    def build_for_creation_task(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        script: CreationTaskScript,
+        profile: ProductionProfile,
+        assets: list[MaterialAsset],
+        media_reference_for_asset: Callable[[str], str],
+        narration_audio_path: str,
+        narration_duration_seconds: float,
+    ) -> CreationTaskMontagePlan:
+        if script.workspace_id != workspace_id or script.task_id != task_id:
+            raise ValueError("文案不属于当前创作任务")
+        if script.selection_status != "confirmed":
+            raise ValueError("只有已确认文案才能生成剪辑计划")
+        if not narration_audio_path.startswith("narration://artifact/"):
+            raise ValueError("剪辑计划必须引用已持久化的创作任务配音")
+        b_roll_candidates = [
+            (asset, segment)
+            for asset in assets
+            if asset.workspace_id == workspace_id
+            and asset.review_status == "approved"
+            and asset.rights_confirmed
+            and asset.brand_safe
+            for segment in asset.segments
+            if segment.review_status == "approved"
+            and effective_segment_usage_role(asset, segment) == "b_roll"
+            and segment.end_seconds - segment.start_seconds >= 0.75
+        ]
+        if not b_roll_candidates:
+            raise ValueError("可用素材库中没有已审核的 B-roll 镜头")
+        a_roll_candidates = [
+            (asset, segment)
+            for asset in assets
+            if asset.workspace_id == workspace_id
+            and asset.review_status == "approved"
+            and asset.rights_confirmed
+            and asset.brand_safe
+            for segment in asset.segments
+            if segment.review_status == "approved"
+            and effective_segment_usage_role(asset, segment) == "a_roll"
+            and segment.end_seconds - segment.start_seconds >= 0.75
+        ]
+        cues = _build_creation_task_cues(
+            script,
+            min_seconds=profile.target_duration_min_seconds,
+            max_seconds=profile.target_duration_max_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+        )
+        cue_vectors, segment_vectors = self._semantic_vectors(
+            workspace_id, cues, b_roll_candidates
+        )
+        clips: list[MontageClip] = []
+        segment_usage: dict[str, int] = {}
+        asset_usage: dict[str, int] = {}
+        timeline_cursor = 0.0
+        for cue_index, cue in enumerate(cues):
+            use_a_roll = bool(a_roll_candidates) and (
+                cue_index == 0 or cue_index == len(cues) - 1
+            )
+            if use_a_roll:
+                duration_candidates = [
+                    item
+                    for item in a_roll_candidates
+                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+                ]
+                if not duration_candidates:
+                    raise ValueError("A-roll 镜头时长不足，无法完整覆盖对应旁白")
+                asset, segment = min(
+                    duration_candidates,
+                    key=lambda item: (
+                        asset_usage.get(item[0].id, 0),
+                        segment_usage.get(item[1].id, 0),
+                        item[1].start_seconds,
+                    ),
+                )
+                score = 1.0
+                lexical_score = 1.0
+                visual_score = None
+                reasons = ["人物主镜头作为叙事锚点", "片头或片尾保留人物出镜"]
+                role: Literal["a_roll", "b_roll"] = "a_roll"
+            else:
+                duration_candidates = [
+                    item
+                    for item in b_roll_candidates
+                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+                ]
+                if not duration_candidates:
+                    raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
+                ranked = sorted(
+                    (
+                        _score_candidate(
+                            cue,
+                            asset,
+                            segment,
+                            segment_usage.get(segment.id, 0),
+                            asset_usage.get(asset.id, 0),
+                            visual_score=_cosine_similarity(
+                                cue_vectors.get(cue.id), segment_vectors.get(segment.id)
+                            ),
+                        )
+                        for asset, segment in duration_candidates
+                    ),
+                    key=lambda item: item[0],
+                    reverse=True,
+                )
+                score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
+                role = "b_roll"
+            clip_duration = round(cue.duration_seconds, 3)
+            semantic_confirmed = (
+                visual_score is not None
+                and self.semantic_auto_confirm_threshold is not None
+                and visual_score >= self.semantic_auto_confirm_threshold
+            )
+            needs_confirmation = (
+                role == "b_roll" and lexical_score < 0.12 and not semantic_confirmed
+            )
+            clips.append(
+                MontageClip(
+                    id=f"clip_{uuid4().hex[:10]}",
+                    cue_id=cue.id,
+                    asset_id=asset.id,
+                    segment_id=segment.id,
+                    source_path=media_reference_for_asset(asset.id),
+                    source_start_seconds=segment.start_seconds,
+                    source_end_seconds=round(segment.start_seconds + clip_duration, 3),
+                    timeline_start_seconds=round(timeline_cursor, 3),
+                    timeline_end_seconds=round(timeline_cursor + clip_duration, 3),
+                    match_score=round(score, 3),
+                    match_reasons=reasons,
+                    needs_confirmation=needs_confirmation,
+                    role=role,
+                )
+            )
+            timeline_cursor += clip_duration
+            segment_usage[segment.id] = segment_usage.get(segment.id, 0) + 1
+            asset_usage[asset.id] = asset_usage.get(asset.id, 0) + 1
+        low_confidence_count = sum(clip.needs_confirmation for clip in clips)
+        status: MontagePlanStatus = (
+            "ready" if low_confidence_count == 0 else "waiting_for_user"
+        )
+        return CreationTaskMontagePlan(
+            id=f"task_montage_{uuid4().hex[:10]}",
+            workspace_id=workspace_id,
+            task_id=task_id,
+            script_id=script.id,
+            script_title=script.title,
+            status=status,
+            cues=cues,
+            clips=clips,
+            duration_seconds=round(timeline_cursor, 3),
+            low_confidence_clip_count=low_confidence_count,
+            narration_audio_path=narration_audio_path,
+            message=(
+                "镜头均有文案或画面语义依据，可以进入渲染。"
+                if status == "ready"
+                else f"有 {low_confidence_count} 个低置信镜头需要确认或替换。"
+            ),
+        )
+
     def _semantic_vectors(
         self,
         workspace_id: str,
@@ -413,15 +595,25 @@ class MontageRenderer:
             raise ValueError("旁白音频时长无效")
         return duration
 
-    def render(self, plan: MontagePlan, audio_path: str | Path) -> MontagePlan:
+    def render(
+        self,
+        plan: MontagePlan | CreationTaskMontagePlan,
+        audio_path: str | Path,
+    ) -> MontagePlan | CreationTaskMontagePlan:
         if plan.status != "ready":
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
         if not plan.clips:
             raise ValueError("混剪计划没有镜头")
         narration_path = self._validated_audio_path(audio_path)
         self.output_path.mkdir(parents=True, exist_ok=True)
-        output_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}_preview.mp4"
-        subtitle_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}.srt"
+        if isinstance(plan, CreationTaskMontagePlan):
+            task_output_root = self.output_path / "creation-tasks" / _safe_path_component(plan.task_id)
+            task_output_root.mkdir(parents=True, exist_ok=True)
+            output_path = task_output_root / "preview.mp4"
+            subtitle_path = task_output_root / "subtitles.srt"
+        else:
+            output_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}_preview.mp4"
+            subtitle_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}.srt"
         subtitle_path.write_text(_plan_to_srt(plan), encoding="utf-8")
 
         plan.status = "rendering"
@@ -441,12 +633,12 @@ class MontageRenderer:
         plan.status = "rendered"
         plan.output_path = str(output_path)
         plan.subtitle_path = str(subtitle_path)
-        plan.message = "9:16 初版成片和 SRT 字幕已生成，等待最终审核。"
+        plan.message = "9:16 初版成片和 SRT 字幕已生成，等待检查。"
         return plan
 
     def build_command(
         self,
-        plan: MontagePlan,
+        plan: MontagePlan | CreationTaskMontagePlan,
         audio_path: Path,
         output_path: Path,
     ) -> list[str]:
@@ -574,6 +766,47 @@ def _build_cues(
     return cues
 
 
+def _build_creation_task_cues(
+    script: CreationTaskScript,
+    *,
+    min_seconds: int,
+    max_seconds: int,
+    narration_duration_seconds: float,
+) -> list[NarrationCue]:
+    if narration_duration_seconds > max_seconds:
+        raise ValueError(
+            f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
+        )
+    if narration_duration_seconds <= 0:
+        raise ValueError("旁白时长无效")
+    entries: list[tuple[str, str, float]] = []
+    for section in script.sections:
+        parts = _split_narration(section.content)
+        for part in parts:
+            entries.append((section.id, part, max(1.0, float(len(part)))))
+    if not entries:
+        raise ValueError("文案没有可用于时间线的旁白内容")
+    raw_total = sum(weight for _, _, weight in entries)
+    requested_total = narration_duration_seconds
+    scale = requested_total / raw_total
+    cues: list[NarrationCue] = []
+    for section_id, text, weight in entries:
+        scaled_duration = max(0.75, weight * scale)
+        part_count = max(1, math.ceil(scaled_duration / 8.0))
+        text_parts = _split_text_evenly(text, part_count)
+        part_duration = scaled_duration / len(text_parts)
+        for text_part in text_parts:
+            cues.append(
+                NarrationCue(
+                    id=f"cue_{len(cues) + 1:03d}",
+                    source_section_id=section_id,
+                    text=text_part,
+                    duration_seconds=round(part_duration, 3),
+                )
+            )
+    return cues
+
+
 def _split_narration(text: str) -> list[str]:
     sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])\s*", text) if item.strip()]
     chunks: list[str] = []
@@ -677,7 +910,7 @@ def _tokens(value: str) -> set[str]:
     return ascii_tokens | chinese_tokens
 
 
-def _plan_to_srt(plan: MontagePlan) -> str:
+def _plan_to_srt(plan: MontagePlan | CreationTaskMontagePlan) -> str:
     cue_by_id = {cue.id: cue for cue in plan.cues}
     lines: list[str] = []
     for index, clip in enumerate(plan.clips, start=1):
@@ -781,6 +1014,33 @@ def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def creation_task_montage_plan_to_payload(
+    plan: CreationTaskMontagePlan,
+) -> dict[str, object]:
+    return json.loads(json.dumps(asdict(plan), ensure_ascii=False, default=_json_default))
+
+
+def creation_task_montage_plan_from_payload(
+    data: dict[str, object],
+) -> CreationTaskMontagePlan:
+    payload = dict(data)
+    cue_payloads = payload.pop("cues", [])
+    clip_payloads = payload.pop("clips", [])
+    for key in ("created_at", "updated_at"):
+        if isinstance(payload.get(key), str):
+            payload[key] = datetime.fromisoformat(str(payload[key]))
+    return CreationTaskMontagePlan(
+        **payload,
+        cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
+        clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
+    )
+
+
+def _safe_path_component(value: str) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
+    return clean[:80] or "task"
 
 
 def _plan_from_payload(data: dict[str, object]) -> MontagePlan:

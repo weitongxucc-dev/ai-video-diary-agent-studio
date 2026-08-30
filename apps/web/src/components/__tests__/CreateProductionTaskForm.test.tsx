@@ -124,7 +124,7 @@ describe("CreateProductionTaskForm", () => {
       id: "plan-1",
       workspace_id: "workspace-1",
       status: "confirmed",
-      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
+      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
       created_at: "2026-08-29T00:00:00Z",
       confirmed_at: "2026-08-29T00:00:00Z",
       updated_at: "2026-08-29T00:00:00Z",
@@ -142,6 +142,6 @@ describe("CreateProductionTaskForm", () => {
       duration_target_seconds: 60,
       preflight_fingerprint: "f".repeat(64),
     }));
-    expect(mocks.assignLocation).toHaveBeenCalledWith("/production?plan=plan-1&toast=success&toast_message=%E5%88%9B%E4%BD%9C%E4%BB%BB%E5%8A%A1%E5%B7%B2%E5%88%9B%E5%BB%BA%EF%BC%8C%E9%80%89%E9%A2%98%E5%B0%9A%E6%9C%AA%E5%BC%80%E5%A7%8B%E3%80%82");
+    expect(mocks.assignLocation).toHaveBeenCalledWith("/tasks/task-1?toast=success&toast_message=%E5%88%9B%E4%BD%9C%E4%BB%BB%E5%8A%A1%E5%B7%B2%E5%88%9B%E5%BB%BA%EF%BC%8C%E9%80%89%E9%A2%98%E5%B0%9A%E6%9C%AA%E5%BC%80%E5%A7%8B%E3%80%82");
   });
 });

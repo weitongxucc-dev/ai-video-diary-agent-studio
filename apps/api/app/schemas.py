@@ -730,7 +730,7 @@ class CreationTaskResponse(BaseModel):
     plan_id: str
     name: str
     scenario: str
-    stage: Literal["topic"]
+    stage: Literal["topic", "script", "narration", "montage", "review"]
     stage_status: Literal[
         "not_started", "running", "waiting_for_user", "completed", "failed"
     ]
@@ -738,6 +738,10 @@ class CreationTaskResponse(BaseModel):
     progress: int = Field(ge=0, le=100)
     recovery_point: str
     selected_topic_id: str | None
+    confirmed_script_id: str | None
+    narration_cache_key: str | None
+    montage_plan_id: str | None
+    output_ready: bool
     stage_reason: str | None
     stage_impact: str | None
     stage_repair_action: str | None
@@ -829,6 +833,138 @@ class CreationTaskTopicsResponse(BaseModel):
     egress_preflight: TopicEgressPreflightResponse
 
 
+class CreationTaskScriptGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreationTaskScriptSectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=4000)
+    visual_prompt: str = Field(min_length=1, max_length=1000)
+    evidence_reference_ids: list[str] = Field(min_length=1, max_length=12)
+
+
+class CreationTaskScriptConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    sections: list[CreationTaskScriptSectionRequest] = Field(min_length=1, max_length=20)
+
+
+class CreationTaskScriptSectionResponse(BaseModel):
+    id: str
+    title: str
+    content: str
+    visual_prompt: str
+    evidence_reference_ids: list[str]
+
+
+class CreationTaskScriptGenerationRunResponse(BaseModel):
+    id: str
+    status: Literal["running", "succeeded", "failed"]
+    route_snapshot: TopicRouteSnapshotResponse
+    reason: str | None
+    impact: str | None
+    repair_action: str | None
+    retryable: bool | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class CreationTaskScriptResponse(BaseModel):
+    id: str
+    task_id: str
+    run_id: str
+    topic_id: str
+    title: str
+    language: Literal["zh-CN"]
+    sections: list[CreationTaskScriptSectionResponse]
+    selection_status: Literal["draft", "confirmed"]
+    created_at: datetime
+    updated_at: datetime
+    confirmed_at: datetime | None
+
+
+class CreationTaskScriptsResponse(BaseModel):
+    task: CreationTaskResponse
+    scripts: list[CreationTaskScriptResponse]
+    latest_run: CreationTaskScriptGenerationRunResponse | None
+    route_preflight: TopicRouteSnapshotResponse
+
+
+class CreationTaskNarrationResponse(BaseModel):
+    task: CreationTaskResponse
+    script_id: str
+    audio_reference: str
+    duration_seconds: float = Field(gt=0)
+    sample_rate: int = Field(gt=0)
+    model_id: str
+    voice_profile_id: str
+    language: Literal["zh"]
+    pronunciation_version: str
+
+
+class CreationTaskMontageClipResponse(BaseModel):
+    id: str
+    cue_id: str
+    asset_id: str
+    segment_id: str
+    source_reference: str
+    source_start_seconds: float = Field(ge=0)
+    source_end_seconds: float = Field(gt=0)
+    timeline_start_seconds: float = Field(ge=0)
+    timeline_end_seconds: float = Field(gt=0)
+    match_score: float
+    match_reasons: list[str]
+    needs_confirmation: bool
+    role: Literal["a_roll", "b_roll"]
+    locked: bool
+    manually_selected: bool
+
+
+class CreationTaskNarrationCueResponse(BaseModel):
+    id: str
+    source_section_id: str
+    text: str
+    duration_seconds: float = Field(gt=0)
+
+
+class CreationTaskMontagePlanResponse(BaseModel):
+    id: str
+    task_id: str
+    script_id: str
+    script_title: str
+    status: Literal["waiting_for_user", "ready", "rendering", "rendered", "failed"]
+    cues: list[CreationTaskNarrationCueResponse]
+    clips: list[CreationTaskMontageClipResponse]
+    duration_seconds: float = Field(gt=0)
+    low_confidence_clip_count: int = Field(ge=0)
+    narration_reference: str
+    output_url: str | None
+    subtitle_url: str | None
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreationTaskMontageRenderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreationTaskMontageClipUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    source_start_seconds: float | None = Field(default=None, ge=0)
+    position: int | None = Field(default=None, ge=0, le=99)
+    locked: bool | None = None
+    confirmed: bool | None = None
+
+
 class CreationPlanPreviewResponse(BaseModel):
     goal: str
     name: str
@@ -858,6 +994,16 @@ class CreationPlanResponse(CreationPlanPreviewResponse):
     created_at: datetime
     confirmed_at: datetime
     updated_at: datetime
+
+
+class CreationTaskWorkspaceResponse(BaseModel):
+    task: CreationTaskResponse
+    plan: CreationPlanPreviewResponse
+    selected_topic: CreationTaskTopicCandidateResponse | None
+    topic_evidence: list[TopicEvidenceReferenceResponse]
+    scripts: list[CreationTaskScriptResponse]
+    narration: CreationTaskNarrationResponse | None
+    montage: CreationTaskMontagePlanResponse | None
 
 
 class NarrationCueResponse(BaseModel):

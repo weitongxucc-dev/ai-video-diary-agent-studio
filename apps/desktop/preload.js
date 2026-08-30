@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDirectory: () => ipcRenderer.invoke('open-directory'),
   openWavFile: () => ipcRenderer.invoke('open-wav-file'),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
+  saveRenderedVideo: (taskId) => ipcRenderer.invoke('save-rendered-video', taskId),
 
   // Help
   onOpenHelp: (callback) => ipcRenderer.on('open-help', callback),

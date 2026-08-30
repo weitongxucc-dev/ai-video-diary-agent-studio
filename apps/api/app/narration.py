@@ -24,11 +24,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class NarrationArtifact:
-    episode_id: str
     audio_path: str
     duration_seconds: float
     sample_rate: int
     model_id: str
+    episode_id: str | None = None
+    task_id: str | None = None
+    script_id: str | None = None
     voice_profile_id: str | None = None
     cache_key: str = ""
     language: str = "zh"
@@ -232,6 +234,133 @@ class NarrationGenerator:
             pronunciation_entries=inputs.pronunciation_entries,
             resolved_reference_audio_path=resolved_reference_audio_path,
         )
+
+    def generate_for_creation_task(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        narration_text: str,
+        max_duration_seconds: int,
+        voice_identity: VersionedVoiceProfile,
+        pronunciation_entries: tuple[PronunciationEntry, ...],
+        resolved_reference_audio_path: str | Path,
+    ) -> NarrationArtifact:
+        """Generate a real CreationTask WAV without constructing an Episode."""
+
+        text = narration_text.strip()
+        if not text:
+            raise ValueError("已确认文案没有可配音正文")
+        if voice_identity.workspace_id != workspace_id:
+            raise ValueError("声音版本不属于当前工作区")
+        if voice_identity.language != "zh":
+            raise ValueError("本地真成片 v0.1 只支持中文声音克隆")
+        authorization_failure = voice_identity.authorization.failure_for(
+            content_type="voice", usage_scope="narration"
+        )
+        if authorization_failure is not None:
+            raise ValueError(f"声音授权不可用：{authorization_failure}")
+        reference_text = voice_identity.reference_text.strip()
+        if not reference_text:
+            raise ValueError("声音版本缺少参考文字")
+        reference_path = Path(resolved_reference_audio_path).expanduser().resolve()
+        if not reference_path.is_file() or reference_path.suffix.lower() != ".wav":
+            raise ValueError("声音参考文件必须是当前工作区已授权的 WAV")
+        if reference_path.stat().st_size == 0:
+            raise ValueError("声音参考 WAV 为空")
+        if _estimated_text_seconds(text) > max_duration_seconds:
+            raise ValueError("文案预计时长超过创作方案上限，请先压缩并重新确认文案")
+        pronunciation_dictionary = _pronunciation_dictionary(
+            entries=pronunciation_entries,
+            workspace_id=workspace_id,
+            person_profile_id=voice_identity.person_profile_id,
+            task_id=task_id,
+        )
+        preflight_failure = text_to_speech_preflight(
+            self.provider,
+            language="zh",
+            pronunciation_dictionary=pronunciation_dictionary,
+        )
+        if preflight_failure is not None:
+            raise VoiceCloneError(preflight_failure)
+        cache_key = self.creation_task_cache_key(
+            workspace_id=workspace_id,
+            task_id=task_id,
+            script_id=script_id,
+            narration_text=text,
+            voice_identity=voice_identity,
+            pronunciation_dictionary=pronunciation_dictionary,
+        )
+        output_path = (
+            self.output_root
+            / "creation-tasks"
+            / _safe_component(workspace_id)
+            / _safe_component(task_id)
+            / f"narration_{cache_key[:12]}.wav"
+        )
+        result: VoiceCloneResult = self.provider.generate(
+            text=text,
+            reference_audio_path=reference_path,
+            reference_text=reference_text,
+            output_path=output_path,
+            language="zh",
+            pronunciation_dictionary=pronunciation_dictionary,
+        )
+        resolved_output = output_path.resolve()
+        if (
+            Path(result.audio_path).resolve() != resolved_output
+            or not resolved_output.is_file()
+            or resolved_output.stat().st_size == 0
+        ):
+            raise ValueError("声音克隆没有生成当前创作任务的 WAV")
+        if result.duration_seconds > max_duration_seconds:
+            resolved_output.unlink(missing_ok=True)
+            raise ValueError("实际配音时长超过创作方案上限，请先压缩并重新确认文案")
+        return NarrationArtifact(
+            task_id=task_id,
+            script_id=script_id,
+            audio_path=str(resolved_output),
+            duration_seconds=result.duration_seconds,
+            sample_rate=result.sample_rate,
+            model_id=self.provider.model_id,
+            voice_profile_id=voice_identity.id,
+            cache_key=cache_key,
+            language="zh",
+            pronunciation_version=_pronunciation_version(pronunciation_dictionary),
+        )
+
+    def creation_task_cache_key(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        narration_text: str,
+        voice_identity: VersionedVoiceProfile,
+        pronunciation_dictionary: dict[str, str],
+    ) -> str:
+        payload = {
+            "workspace_id": workspace_id,
+            "task_id": task_id,
+            "script_id": script_id,
+            "text": narration_text,
+            "voice": {
+                "id": voice_identity.id,
+                "version": voice_identity.version,
+                "person_profile_id": voice_identity.person_profile_id,
+                "person_version": voice_identity.person_version,
+                "model_id": voice_identity.model_id,
+                "authorization_id": voice_identity.authorization.id,
+                "authorization_version": voice_identity.authorization.version,
+                "authorization_status": voice_identity.authorization.status,
+            },
+            "pronunciation_dictionary": pronunciation_dictionary,
+            "provider_model_id": self.provider.model_id,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
     def cache_key(
         self,
@@ -530,6 +659,12 @@ def _estimated_narration_seconds(episode: Episode) -> float:
         for section in episode.script.sections
         if section.content.strip()
     )
+
+
+def _estimated_text_seconds(text: str) -> float:
+    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_words = len(re.findall(r"[A-Za-z0-9]+", text))
+    return chinese_chars / 4.0 + latin_words / 2.5
 
 
 def _safe_component(value: str) -> str:

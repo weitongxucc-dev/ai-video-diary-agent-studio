@@ -18,6 +18,7 @@ from app.models import (
     utc_now,
 )
 from app.montage import (
+    CreationTaskMontagePlan,
     MontageClip,
     MontagePlan,
     MontagePlanner,
@@ -25,9 +26,13 @@ from app.montage import (
     MontageRenderer,
     MontageRepository,
     NarrationCue,
+    creation_task_montage_plan_from_payload,
+    creation_task_montage_plan_to_payload,
 )
 from app.narration import NarrationArtifact
 from app.production import (
+    CreationTaskScript,
+    CreationTaskScriptSection,
     MaterialAsset,
     MaterialSegment,
     NarrationArtifactRecord,
@@ -734,6 +739,120 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
     }
     video = next(stream for stream in streams if stream["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1080, 1920)
+
+
+def test_creation_task_planner_uses_confirmed_script_and_logical_material_references(tmp_path):
+    script = CreationTaskScript(
+        id="script_task",
+        workspace_id="workspace_a",
+        task_id="task_1",
+        run_id="run_1",
+        topic_id="topic_1",
+        title="任务文案",
+        language="zh-CN",
+        selection_status="confirmed",
+        sections=[
+            CreationTaskScriptSection(
+                id="section_task",
+                title="正文",
+                content="人工智能工具正在改变团队效率。",
+                visual_prompt="人工智能工具界面",
+                evidence_reference_ids=["knowledge:1:v1"],
+            )
+        ],
+    )
+    asset = _asset(tmp_path)
+    plan = MontagePlanner().build_for_creation_task(
+        workspace_id="workspace_a",
+        task_id="task_1",
+        script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"),
+        assets=[asset],
+        media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
+        narration_audio_path="narration://artifact/cache_1",
+        narration_duration_seconds=6.0,
+    )
+
+    assert plan.task_id == "task_1"
+    assert plan.script_id == script.id
+    assert plan.clips
+    assert all(clip.source_path.startswith("workspace://") for clip in plan.clips)
+    restored = creation_task_montage_plan_from_payload(
+        creation_task_montage_plan_to_payload(plan)
+    )
+    assert restored == plan
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg is not installed",
+)
+def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
+    video_path = tmp_path / "source-task.mp4"
+    audio_path = tmp_path / "voice-task.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=navy:s=640x360:d=1.2",
+            "-pix_fmt",
+            "yuv420p",
+            str(video_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1.2",
+            str(audio_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    plan = CreationTaskMontagePlan(
+        id="task_montage_real",
+        workspace_id="workspace_a",
+        task_id="task_real",
+        script_id="script_real",
+        script_title="真实任务渲染",
+        status="ready",
+        cues=[NarrationCue("cue_001", "section_1", "真实任务字幕", 1.2)],
+        clips=[
+            MontageClip(
+                id="clip_real",
+                cue_id="cue_001",
+                asset_id="asset_real",
+                segment_id="segment_real",
+                source_path=str(video_path),
+                source_start_seconds=0,
+                source_end_seconds=1.2,
+                timeline_start_seconds=0,
+                timeline_end_seconds=1.2,
+                match_score=1,
+                match_reasons=["test"],
+                needs_confirmation=False,
+            )
+        ],
+        duration_seconds=1.2,
+        low_confidence_clip_count=0,
+    )
+
+    rendered = MontageRenderer(tmp_path / "output").render(plan, audio_path)
+
+    assert Path(rendered.output_path or "").is_file()
+    assert Path(rendered.subtitle_path or "").read_text(encoding="utf-8").find(
+        "真实任务字幕"
+    ) >= 0
+    assert Path(rendered.output_path or "").parent.name == "task_real"
 
 
 def test_montage_review_api_supports_candidates_trim_lock_and_confirm(tmp_path, monkeypatch):

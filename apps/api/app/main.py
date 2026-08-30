@@ -5,7 +5,7 @@ import json
 import logging
 import subprocess
 from collections import Counter
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -66,7 +66,14 @@ from app.models import (
     VideoJobStatus,
     utc_now,
 )
-from app.montage import MontagePlanner, MontageRenderer, MontageRepository
+from app.montage import (
+    CreationTaskMontagePlan,
+    MontagePlanner,
+    MontageRenderer,
+    MontageRepository,
+    creation_task_montage_plan_from_payload,
+    creation_task_montage_plan_to_payload,
+)
 from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
@@ -79,6 +86,8 @@ from app.production import (
     CreationPlanSourceReference,
     CreationPlanVoiceReference,
     CreationTask,
+    CreationTaskScript,
+    CreationTaskScriptSection,
     MediaAuthorityError,
     MaterialCollection,
     NarrationArtifactRecord,
@@ -86,10 +95,12 @@ from app.production import (
     ProductionBatchItem,
     ProductionProfile,
     ProductionRepository,
+    ScriptGenerationRun,
     TopicCandidate as CreationTaskTopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
     VoiceProfile,
+    effective_segment_usage_role,
 )
 from app.voice_clone import VoiceCloneError
 from app.repository import (
@@ -123,6 +134,14 @@ from app.schemas import (
     CreationTaskTopicConfirmRequest,
     CreationTaskTopicGenerateRequest,
     CreationTaskTopicsResponse,
+    CreationTaskScriptConfirmRequest,
+    CreationTaskScriptGenerateRequest,
+    CreationTaskScriptsResponse,
+    CreationTaskNarrationResponse,
+    CreationTaskMontagePlanResponse,
+    CreationTaskMontageClipUpdateRequest,
+    CreationTaskMontageRenderRequest,
+    CreationTaskWorkspaceResponse,
     CreationTasksResponse,
     CreatorProfileLearnResult,
     CreatorProfileResponse,
@@ -259,11 +278,15 @@ from app.sources import (
     sync_source_connector,
 )
 from app.topics import (
+    CreationTaskGeneratedScript,
     CreationTaskGeneratedTopic,
+    CreationTaskScriptGenerationError,
+    CreationTaskScriptInput,
     CreationTaskTopicGenerationError,
     CreationTaskTopicInput,
     CreationTaskTopicSource,
     OpenAICompatibleCreationTaskTopicGenerator,
+    OpenAICompatibleCreationTaskScriptGenerator,
     TopicGenerationConfigurationError,
     TopicGenerationResponseError,
     topic_generator_from_settings,
@@ -1875,14 +1898,18 @@ def _creation_plan_preflight(
         if asset.review_status == "approved"
         and asset.rights_confirmed
         and asset.brand_safe
-        and asset.usage_role in {"a_roll", "b_roll"}
+        and any(
+            segment.review_status == "approved"
+            and effective_segment_usage_role(asset, segment) in {"a_roll", "b_roll"}
+            for segment in asset.segments
+        )
     ]
     approved_clips = [
         segment
         for asset in approved_assets
         for segment in asset.segments
         if segment.review_status == "approved"
-        and segment.usage_role == "b_roll"
+        and effective_segment_usage_role(asset, segment) == "b_roll"
     ]
     language_to_voice_language = {
         "zh-CN": "zh",
@@ -1909,8 +1936,23 @@ def _creation_plan_preflight(
     selected_voice = None
     pronunciation_references: list[CreationPlanPronunciationReference] = []
     person_authorization_failure: str | None = None
+    voice_media_failure: str | None = None
     if selected_voice_pair is not None:
         voice, authorization = selected_voice_pair
+        try:
+            reference_audio = production_repo.resolve_workspace_media_reference(
+                workspace_id,
+                voice.reference_audio_path,
+                require_registered=True,
+            )
+            if (
+                reference_audio.suffix.lower() != ".wav"
+                or not reference_audio.is_file()
+                or reference_audio.stat().st_size == 0
+            ):
+                voice_media_failure = "voice_reference_wav_unavailable"
+        except (MediaAuthorityError, OSError):
+            voice_media_failure = "voice_reference_wav_unavailable"
         person = production_repo.get_person_profile(
             workspace_id,
             voice.person_profile_id,
@@ -1995,6 +2037,16 @@ def _creation_plan_preflight(
                     reason="voice_model_unavailable",
                     impact="当前方案不能进入配音阶段，但可先创建任务并进行选题。",
                     repair_action="安装或修复所选声音版本要求的模型后，再从配音阶段继续。",
+                    stage="narration",
+                    blocks_confirmation=False,
+                )
+            )
+        if voice_media_failure is not None:
+            blockers.append(
+                CreationPlanBlocker(
+                    reason=voice_media_failure,
+                    impact="当前声音版本没有可读取的已授权 WAV，配音阶段会停止。",
+                    repair_action="在人物与声音中重新选择当前工作区已批准的 WAV 参考素材。",
                     stage="narration",
                     blocks_confirmation=False,
                 )
@@ -2353,6 +2405,14 @@ def _creation_task_topic_generator_from_settings() -> OpenAICompatibleCreationTa
     )
 
 
+def _creation_task_script_generator_from_settings() -> OpenAICompatibleCreationTaskScriptGenerator:
+    return OpenAICompatibleCreationTaskScriptGenerator(
+        base_url=settings.effective_llm_base_url,
+        model=settings.effective_llm_model,
+        api_key=settings.effective_llm_api_key,
+    )
+
+
 def _projected_topic_route_snapshot(
     current_snapshot: dict[str, object],
     latest_run: TopicGenerationRun | None,
@@ -2432,6 +2492,161 @@ def _creation_task_topic_response(
                 "impact": preflight_error.impact if preflight_error else None,
                 "repair_action": preflight_error.repair_action if preflight_error else None,
             },
+        }
+    )
+
+
+def _creation_task_scripts_response(
+    workspace_id: str,
+    task: CreationTask,
+) -> CreationTaskScriptsResponse:
+    latest_run = production_repo.latest_script_generation_run(workspace_id, task.id)
+    route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(), latest_run)
+    return CreationTaskScriptsResponse.model_validate(
+        {
+            "task": task.__dict__,
+            "scripts": [asdict(script) for script in production_repo.list_creation_task_scripts(workspace_id, task.id)],
+            "latest_run": latest_run.__dict__ if latest_run is not None else None,
+            "route_preflight": route_snapshot,
+        }
+    )
+
+
+def _creation_task_narration_response(
+    task: CreationTask,
+    artifact: NarrationArtifactRecord,
+) -> CreationTaskNarrationResponse:
+    if artifact.task_id != task.id or artifact.voice_profile_id is None:
+        raise ValueError("配音产物与当前创作任务不一致")
+    return CreationTaskNarrationResponse.model_validate(
+        {
+            "task": task.__dict__,
+            "script_id": artifact.script_id,
+            "audio_reference": production_repo.narration_artifact_reference(artifact.cache_key),
+            "duration_seconds": artifact.duration_seconds,
+            "sample_rate": artifact.sample_rate,
+            "model_id": artifact.model_id,
+            "voice_profile_id": artifact.voice_profile_id,
+            "language": artifact.language,
+            "pronunciation_version": artifact.pronunciation_version,
+        }
+    )
+
+
+def _creation_task_montage_response(
+    plan: CreationTaskMontagePlan,
+) -> CreationTaskMontagePlanResponse:
+    return CreationTaskMontagePlanResponse.model_validate(
+        {
+            "id": plan.id,
+            "task_id": plan.task_id,
+            "script_id": plan.script_id,
+            "script_title": plan.script_title,
+            "status": plan.status,
+            "cues": [asdict(cue) for cue in plan.cues],
+            "clips": [
+                {
+                    **asdict(clip),
+                    "source_reference": clip.source_path,
+                }
+                for clip in plan.clips
+            ],
+            "duration_seconds": plan.duration_seconds,
+            "low_confidence_clip_count": plan.low_confidence_clip_count,
+            "narration_reference": plan.narration_audio_path,
+            "output_url": (
+                f"/api/creation-tasks/{plan.task_id}/output"
+                if plan.status == "rendered" and plan.output_path
+                else None
+            ),
+            "subtitle_url": (
+                f"/api/creation-tasks/{plan.task_id}/output/subtitles"
+                if plan.status == "rendered" and plan.subtitle_path
+                else None
+            ),
+            "message": plan.message,
+            "created_at": plan.created_at,
+            "updated_at": plan.updated_at,
+        }
+    )
+
+
+def _creation_task_workspace_response(
+    workspace_id: str,
+    task: CreationTask,
+) -> CreationTaskWorkspaceResponse:
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    selected_topic = next(
+        (
+            candidate
+            for candidate in production_repo.list_topic_candidates(workspace_id, task.id)
+            if candidate.id == task.selected_topic_id
+        ),
+        None,
+    )
+    topic_evidence = [
+        reference
+        for reference in production_repo.list_topic_evidence_references(workspace_id, task.id)
+        if selected_topic is not None and reference.candidate_id == selected_topic.id
+    ]
+    artifact = (
+        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
+        if task.narration_cache_key
+        else None
+    )
+    try:
+        montage = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+        )
+    except KeyError:
+        montage = None
+    return CreationTaskWorkspaceResponse.model_validate(
+        {
+            "task": task.__dict__,
+            "plan": _creation_plan_preview_response(plan).model_dump(),
+            "selected_topic": (
+                {
+                    "id": selected_topic.id,
+                    "run_id": selected_topic.run_id,
+                    "title": selected_topic.title,
+                    "angle": selected_topic.angle,
+                    "audience": selected_topic.audience,
+                    "outline": selected_topic.outline,
+                    "score": selected_topic.score,
+                    "selection_status": selected_topic.selection_status,
+                    "created_at": selected_topic.created_at,
+                }
+                if selected_topic is not None
+                else None
+            ),
+            "topic_evidence": [
+                {
+                    "id": reference.id,
+                    "candidate_id": reference.candidate_id,
+                    "kind": reference.kind,
+                    "reference_id": reference.reference_id,
+                    "version_or_identity": reference.version_or_identity,
+                    "title": reference.title,
+                    "authorization_or_license": reference.authorization_or_license,
+                    "source_url": reference.source_url,
+                    "created_at": reference.created_at,
+                }
+                for reference in topic_evidence
+            ],
+            "scripts": [
+                asdict(script)
+                for script in production_repo.list_creation_task_scripts(workspace_id, task.id)
+            ],
+            "narration": (
+                _creation_task_narration_response(task, artifact).model_dump()
+                if artifact is not None
+                else None
+            ),
+            "montage": (
+                _creation_task_montage_response(montage).model_dump()
+                if montage is not None
+                else None
+            ),
         }
     )
 @app.post(
@@ -2815,6 +3030,693 @@ def confirm_creation_task_topic(
             retryable=False,
         ) from exc
     return _creation_task_topic_response(workspace_id, task)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}",
+    response_model=CreationTaskWorkspaceResponse,
+)
+def get_creation_task_workspace(
+    task_id: str,
+    request: Request,
+) -> CreationTaskWorkspaceResponse:
+    workspace_id = current_workspace_id(request)
+    return _creation_task_workspace_response(
+        workspace_id,
+        _creation_task_or_404(workspace_id, task_id),
+    )
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/scripts",
+    response_model=CreationTaskScriptsResponse,
+)
+def get_creation_task_scripts(
+    task_id: str,
+    request: Request,
+) -> CreationTaskScriptsResponse:
+    workspace_id = current_workspace_id(request)
+    return _creation_task_scripts_response(
+        workspace_id,
+        _creation_task_or_404(workspace_id, task_id),
+    )
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/scripts/generate",
+    response_model=CreationTaskScriptsResponse,
+)
+def generate_creation_task_script(
+    task_id: str,
+    request: Request,
+    _payload: CreationTaskScriptGenerateRequest,
+) -> CreationTaskScriptsResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    selected_topic = next(
+        (
+            candidate
+            for candidate in production_repo.list_topic_candidates(workspace_id, task.id)
+            if candidate.id == task.selected_topic_id
+        ),
+        None,
+    )
+    if selected_topic is None:
+        raise _topic_failure_response(
+            status_code=409,
+            error="confirmed_topic_missing",
+            reason="当前创作任务还没有已确认选题。",
+            impact="未调用文字模型，未生成文案。",
+            repair_action="先生成并确认一个选题。",
+            retryable=False,
+        )
+    route_snapshot = _topic_route_snapshot()
+    provider_sources: tuple[CreationTaskTopicSource, ...] = ()
+    input_references: list[dict[str, object]] = []
+    preflight_error: _CreationTaskTopicPreflightError | None = None
+    try:
+        provider_sources, input_references, _ = _creation_task_topic_inputs(
+            workspace_id,
+            task,
+            plan,
+            cloud_egress=route_snapshot["execution_location"] == "cloud",
+        )
+        if route_snapshot["availability"] == "unconfigured":
+            raise _CreationTaskTopicPreflightError(
+                reason="capability_unavailable",
+                impact="当前没有可调用的文字模型连接，未生成文案。",
+                repair_action="在本机运行时设置中配置 OpenAI-compatible 文字模型后重试。",
+                retryable=True,
+            )
+    except _CreationTaskTopicPreflightError as exc:
+        preflight_error = exc
+    run = ScriptGenerationRun(
+        id=f"script_run_{uuid4().hex[:12]}",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        plan_id=plan.id,
+        topic_id=selected_topic.id,
+        status="running",
+        route_snapshot=route_snapshot,
+        prompt_schema_version="creation-task-script/v1",
+        input_references=input_references,
+    )
+    try:
+        task, run = production_repo.start_script_generation(run)
+    except (KeyError, ValueError) as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_script_stage_conflict",
+            reason="当前创作任务不能开始生成文案。",
+            impact="没有创建重复文案或重复模型调用。",
+            repair_action=str(exc),
+            retryable=task.stage_status == "failed",
+        ) from exc
+    if preflight_error is not None:
+        production_repo.fail_script_generation(
+            run.id,
+            reason=preflight_error.reason,
+            impact=preflight_error.impact,
+            repair_action=preflight_error.repair_action,
+            retryable=preflight_error.retryable,
+        )
+        raise _topic_failure_response(
+            status_code=503,
+            error="capability_unavailable",
+            reason=preflight_error.reason,
+            impact=preflight_error.impact,
+            repair_action=preflight_error.repair_action,
+            retryable=preflight_error.retryable,
+        )
+    try:
+        generated: CreationTaskGeneratedScript = (
+            _creation_task_script_generator_from_settings().generate(
+                CreationTaskScriptInput(
+                    goal=plan.goal,
+                    language=plan.language,
+                    duration_target_seconds=plan.duration_target_seconds,
+                    topic_title=selected_topic.title,
+                    topic_angle=selected_topic.angle,
+                    topic_audience=selected_topic.audience,
+                    topic_outline=tuple(selected_topic.outline),
+                    sources=provider_sources,
+                )
+            )
+        )
+    except CreationTaskScriptGenerationError as exc:
+        production_repo.fail_script_generation(
+            run.id,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=exc.retryable,
+            provider_attempted=True,
+        )
+        raise _topic_failure_response(
+            status_code=502,
+            error=exc.code,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=exc.retryable,
+        ) from exc
+    script = CreationTaskScript(
+        id=f"script_{uuid4().hex[:12]}",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        run_id=run.id,
+        topic_id=selected_topic.id,
+        title=generated.title,
+        language=generated.language,
+        sections=[
+            CreationTaskScriptSection(
+                id=f"section_{index:02d}_{uuid4().hex[:6]}",
+                title=section.title,
+                content=section.content,
+                visual_prompt=section.visual_prompt,
+                evidence_reference_ids=list(section.evidence_reference_ids),
+            )
+            for index, section in enumerate(generated.sections, start=1)
+        ],
+    )
+    try:
+        task, _, _ = production_repo.complete_script_generation(run.id, script)
+    except ValueError as exc:
+        production_repo.fail_script_generation(
+            run.id,
+            reason="provider_output_invalid",
+            impact="文字模型输出未通过文案与证据持久化校验，未保存文案。",
+            repair_action="检查模型 JSON 输出与来源引用后重试。",
+            retryable=True,
+            provider_attempted=True,
+        )
+        raise _topic_failure_response(
+            status_code=502,
+            error="provider_output_invalid",
+            reason="文案输出未通过持久化校验。",
+            impact="未保存无效文案。",
+            repair_action="检查模型 JSON 输出与来源引用后重试。",
+            retryable=True,
+        ) from exc
+    return _creation_task_scripts_response(workspace_id, task)
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/scripts/{script_id}/confirm",
+    response_model=CreationTaskScriptsResponse,
+)
+def confirm_creation_task_script(
+    task_id: str,
+    script_id: str,
+    request: Request,
+    payload: CreationTaskScriptConfirmRequest,
+) -> CreationTaskScriptsResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        task, _ = production_repo.confirm_creation_task_script(
+            workspace_id,
+            task_id,
+            script_id,
+            title=payload.title,
+            sections=[
+                CreationTaskScriptSection(**section.model_dump())
+                for section in payload.sections
+            ],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task script not found") from exc
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_script_confirmation_conflict",
+            reason="当前文案不能被确认。",
+            impact="没有改变任务阶段或文案版本。",
+            repair_action=str(exc),
+            retryable=False,
+        ) from exc
+    return _creation_task_scripts_response(workspace_id, task)
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/narration/generate",
+    response_model=CreationTaskNarrationResponse,
+)
+def generate_creation_task_narration(
+    task_id: str,
+    request: Request,
+) -> CreationTaskNarrationResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    if task.confirmed_script_id is None:
+        raise HTTPException(status_code=409, detail="confirmed creation task script missing")
+    try:
+        script = production_repo.get_creation_task_script(
+            workspace_id, task.confirmed_script_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail="confirmed creation task script missing") from exc
+    try:
+        task = production_repo.start_creation_task_narration(workspace_id, task.id)
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_narration_conflict",
+            reason="当前任务还不能生成配音。",
+            impact="没有调用声音模型，也没有生成音频文件。",
+            repair_action=str(exc),
+            retryable=False,
+        ) from exc
+    try:
+        if plan.selected_voice is None:
+            raise MediaAuthorityError(
+                reason="voice_identity_missing",
+                impact="当前创作任务未生成配音，未调用声音模型。",
+                repair_action="重新预检并选择已授权的中文声音版本。",
+            )
+        inputs = production_repo.resolve_creation_task_narration_inputs(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            voice_profile_id=plan.selected_voice.profile_id,
+            voice_version=plan.selected_voice.version,
+        )
+        reference_path = production_repo.resolve_workspace_media_reference(
+            workspace_id,
+            inputs.voice.reference_audio_path,
+            require_registered=True,
+        )
+        artifact = narration_generator.generate_for_creation_task(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            script_id=script.id,
+            narration_text="\n".join(section.content for section in script.sections),
+            max_duration_seconds=plan.duration_target_seconds,
+            voice_identity=inputs.voice,
+            pronunciation_entries=inputs.pronunciation_entries,
+            resolved_reference_audio_path=reference_path,
+        )
+        task, record = production_repo.complete_creation_task_narration(
+            NarrationArtifactRecord(
+                id=f"narration_{artifact.cache_key[:16]}",
+                workspace_id=workspace_id,
+                task_id=task.id,
+                script_id=script.id,
+                voice_profile_id=artifact.voice_profile_id,
+                cache_key=artifact.cache_key,
+                audio_path=artifact.audio_path,
+                duration_seconds=artifact.duration_seconds,
+                sample_rate=artifact.sample_rate,
+                model_id=artifact.model_id,
+                language=artifact.language,
+                pronunciation_version=artifact.pronunciation_version,
+            )
+        )
+    except (MediaAuthorityError, VoiceCloneError, OSError, ValueError) as exc:
+        if isinstance(exc, MediaAuthorityError):
+            reason, impact, repair_action, retryable = (
+                exc.reason,
+                exc.impact,
+                exc.repair_action,
+                True,
+            )
+        elif isinstance(exc, VoiceCloneError):
+            reason, impact, repair_action, retryable = (
+                exc.failure.reason,
+                exc.failure.impact,
+                exc.failure.repair_action,
+                exc.failure.retryable,
+            )
+        else:
+            reason, impact, repair_action, retryable = (
+                "narration_generation_failed",
+                "未生成可用的中文声音克隆 WAV。",
+                str(exc),
+                True,
+            )
+        production_repo.fail_creation_task_stage(
+            workspace_id,
+            task.id,
+            stage="narration",
+            reason=reason,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        )
+        raise _topic_failure_response(
+            status_code=503,
+            error=reason,
+            reason=reason,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        ) from exc
+    return _creation_task_narration_response(task, record)
+
+
+@app.get("/api/creation-tasks/{task_id}/narration/audio")
+def get_creation_task_narration_audio(task_id: str, request: Request) -> FileResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    artifact = (
+        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
+        if task.narration_cache_key
+        else None
+    )
+    if artifact is None or artifact.task_id != task.id:
+        raise HTTPException(status_code=404, detail="creation task narration not found")
+    return FileResponse(artifact.audio_path, media_type="audio/wav", filename="narration.wav")
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/montage/plan",
+    response_model=CreationTaskMontagePlanResponse,
+)
+def create_creation_task_montage_plan(
+    task_id: str,
+    request: Request,
+) -> CreationTaskMontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    if task.confirmed_script_id is None or task.narration_cache_key is None:
+        raise HTTPException(status_code=409, detail="confirmed script or narration missing")
+    try:
+        task = production_repo.start_creation_task_montage(workspace_id, task.id)
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_montage_conflict",
+            reason="当前任务还不能生成故事板。",
+            impact="没有读取或改写剪辑计划。",
+            repair_action=str(exc),
+            retryable=False,
+        ) from exc
+    try:
+        script = production_repo.get_creation_task_script(
+            workspace_id, task.confirmed_script_id
+        )
+        narration = production_repo.get_narration_artifact(
+            workspace_id, task.narration_cache_key
+        )
+        if narration is None or narration.task_id != task.id:
+            raise ValueError("当前创作任务的配音产物不可用")
+        montage = montage_planner.build_for_creation_task(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            script=script,
+            profile=production_repo.get_profile(workspace_id),
+            assets=production_repo.list_assets(workspace_id),
+            media_reference_for_asset=lambda asset_id: production_repo.workspace_media_reference_for_asset(
+                workspace_id, asset_id
+            ),
+            narration_audio_path=production_repo.narration_artifact_reference(
+                narration.cache_key
+            ),
+            narration_duration_seconds=narration.duration_seconds,
+        )
+        task, _ = production_repo.save_creation_task_montage_plan(
+            workspace_id,
+            task.id,
+            montage.id,
+            creation_task_montage_plan_to_payload(montage),
+        )
+    except (KeyError, MediaAuthorityError, ValueError) as exc:
+        task = production_repo.fail_creation_task_stage(
+            workspace_id,
+            task.id,
+            stage="montage",
+            reason="montage_plan_failed",
+            impact="未生成可供审核的故事板和剪辑计划。",
+            repair_action=str(exc),
+            retryable=True,
+        )
+        raise _topic_failure_response(
+            status_code=409,
+            error="montage_plan_failed",
+            reason="素材或配音不满足剪辑计划要求。",
+            impact=task.stage_impact or "未生成剪辑计划。",
+            repair_action=task.stage_repair_action or "审核素材后重试。",
+            retryable=True,
+        ) from exc
+    return _creation_task_montage_response(montage)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/montage/clips/{clip_id}/candidates",
+    response_model=list[MontageClipCandidateResponse],
+)
+def get_creation_task_montage_clip_candidates(
+    task_id: str,
+    clip_id: str,
+    request: Request,
+) -> list[MontageClipCandidateResponse]:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        )
+        clip = next(item for item in plan.clips if item.id == clip_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
+    cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
+    cue_tokens = set((cue.text if cue else "").lower())
+    candidates: list[MontageClipCandidateResponse] = []
+    for asset in production_repo.list_assets(workspace_id):
+        if asset.review_status != "approved" or not asset.rights_confirmed or not asset.brand_safe:
+            continue
+        for segment in asset.segments:
+            if (
+                segment.review_status != "approved"
+                or effective_segment_usage_role(asset, segment)
+                not in {"a_roll", "b_roll"}
+            ):
+                continue
+            available = segment.end_seconds - segment.start_seconds
+            slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+            if available + 1e-6 < slot_duration:
+                continue
+            description = (segment.description or segment.transcript or asset.file_name).strip()
+            overlap = len(cue_tokens & set(description.lower())) / max(1, len(cue_tokens))
+            score = max(
+                0.0,
+                min(
+                    1.0,
+                    overlap * 0.7
+                    + min(1.0, available / max(slot_duration, 0.1)) * 0.3,
+                ),
+            )
+            candidates.append(
+                MontageClipCandidateResponse(
+                    asset_id=asset.id,
+                    segment_id=segment.id,
+                    file_name=asset.file_name,
+                    start_seconds=segment.start_seconds,
+                    end_seconds=segment.end_seconds,
+                    description=description,
+                    score=round(score, 3),
+                    reasons=["已通过版权和品牌审核", "时长满足当前旁白时间槽"],
+                )
+            )
+    candidates.sort(
+        key=lambda item: (
+            item.asset_id == clip.asset_id and item.segment_id == clip.segment_id,
+            item.score,
+        ),
+        reverse=True,
+    )
+    return candidates[:24]
+
+
+@app.patch(
+    "/api/creation-tasks/{task_id}/montage/clips/{clip_id}",
+    response_model=CreationTaskMontagePlanResponse,
+)
+def update_creation_task_montage_clip(
+    task_id: str,
+    clip_id: str,
+    request: Request,
+    payload: CreationTaskMontageClipUpdateRequest,
+) -> CreationTaskMontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        )
+        clip = next(item for item in plan.clips if item.id == clip_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
+    if plan.status in {"rendering", "rendered"}:
+        raise HTTPException(status_code=409, detail="rendered montage cannot be edited")
+    asset_id = payload.asset_id or clip.asset_id
+    segment_id = payload.segment_id or clip.segment_id
+    try:
+        asset = production_repo.get_asset(workspace_id, asset_id)
+        segment = next(item for item in asset.segments if item.id == segment_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="material segment not found") from exc
+    if (
+        asset.review_status != "approved"
+        or not asset.rights_confirmed
+        or not asset.brand_safe
+        or segment.review_status != "approved"
+        or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
+    ):
+        raise HTTPException(status_code=409, detail="material segment has not passed review")
+    slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    source_start = (
+        payload.source_start_seconds
+        if payload.source_start_seconds is not None
+        else max(segment.start_seconds, clip.source_start_seconds)
+    )
+    source_end = source_start + slot_duration
+    if source_start < segment.start_seconds - 1e-6 or source_end > segment.end_seconds + 1e-6:
+        raise HTTPException(status_code=400, detail="trim range exceeds reviewed segment")
+    if payload.asset_id is not None or payload.segment_id is not None:
+        clip.asset_id = asset.id
+        clip.segment_id = segment.id
+        clip.source_path = production_repo.workspace_media_reference_for_asset(
+            workspace_id, asset.id
+        )
+        clip.role = (
+            "a_roll"
+            if effective_segment_usage_role(asset, segment) == "a_roll"
+            else "b_roll"
+        )
+        clip.match_reasons = ["由用户替换", "已通过版权和品牌审核"]
+        clip.match_score = 1.0
+        clip.manually_selected = True
+    clip.source_start_seconds = round(source_start, 3)
+    clip.source_end_seconds = round(source_end, 3)
+    if payload.locked is not None:
+        clip.locked = payload.locked
+    if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
+        clip.needs_confirmation = False
+    if payload.position is not None:
+        current_index = plan.clips.index(clip)
+        target_index = min(payload.position, len(plan.clips) - 1)
+        if current_index != target_index:
+            plan.clips.pop(current_index)
+            plan.clips.insert(target_index, clip)
+            timeline_cursor = 0.0
+            for item in plan.clips:
+                duration = item.timeline_end_seconds - item.timeline_start_seconds
+                item.timeline_start_seconds = round(timeline_cursor, 3)
+                item.timeline_end_seconds = round(timeline_cursor + duration, 3)
+                timeline_cursor += duration
+    _refresh_montage_review_state(plan)
+    production_repo.save_creation_task_montage_plan(
+        workspace_id,
+        task_id,
+        plan.id,
+        creation_task_montage_plan_to_payload(plan),
+    )
+    return _creation_task_montage_response(plan)
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/montage/render",
+    response_model=CreationTaskMontagePlanResponse,
+)
+def render_creation_task_montage(
+    task_id: str,
+    request: Request,
+    _payload: CreationTaskMontageRenderRequest,
+) -> CreationTaskMontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
+    if plan.status != "ready":
+        raise HTTPException(status_code=409, detail="montage clips still require confirmation")
+    if not plan.narration_audio_path:
+        raise HTTPException(status_code=409, detail="creation task narration missing")
+    try:
+        narration_path = production_repo.resolve_authorized_narration_audio_reference(
+            workspace_id, plan.narration_audio_path
+        )
+        rendering_payload = creation_task_montage_plan_to_payload(plan)
+        rendering_payload["status"] = "rendering"
+        production_repo.save_creation_task_montage_plan(
+            workspace_id, task.id, plan.id, rendering_payload
+        )
+        rendered = _render_montage_with_resolved_clip_sources(
+            workspace_id, plan, narration_path
+        )
+        task, _ = production_repo.save_creation_task_montage_plan(
+            workspace_id,
+            task.id,
+            rendered.id,
+            creation_task_montage_plan_to_payload(rendered),
+        )
+        _record_montage_usage(workspace_id, rendered)
+    except (MediaAuthorityError, OSError, ValueError) as exc:
+        plan.status = "failed"
+        plan.message = f"成片渲染失败：{exc}"
+        production_repo.save_creation_task_montage_plan(
+            workspace_id,
+            task.id,
+            plan.id,
+            creation_task_montage_plan_to_payload(plan),
+        )
+        raise _topic_failure_response(
+            status_code=500,
+            error="montage_render_failed",
+            reason="FFmpeg 没有生成通过校验的成片。",
+            impact="当前任务仍没有可播放 MP4。",
+            repair_action=str(exc),
+            retryable=True,
+        ) from exc
+    return _creation_task_montage_response(rendered)
+
+
+def _creation_task_output_path(
+    workspace_id: str,
+    task_id: str,
+    *,
+    subtitle: bool,
+) -> Path:
+    task = _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task output not found") from exc
+    raw_path = plan.subtitle_path if subtitle else plan.output_path
+    if plan.status != "rendered" or not raw_path:
+        raise HTTPException(status_code=404, detail="creation task output not found")
+    output_root = Path(settings.video_output_path).expanduser().resolve()
+    path = Path(raw_path).expanduser().resolve()
+    try:
+        path.relative_to(output_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="creation task output authority mismatch") from exc
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="creation task output not found")
+    return path
+
+
+@app.get("/api/creation-tasks/{task_id}/output")
+def get_creation_task_output(task_id: str, request: Request) -> FileResponse:
+    path = _creation_task_output_path(
+        current_workspace_id(request), task_id, subtitle=False
+    )
+    return FileResponse(path, media_type="video/mp4", filename=f"{task_id}.mp4")
+
+
+@app.get("/api/creation-tasks/{task_id}/output/subtitles")
+def get_creation_task_subtitles(task_id: str, request: Request) -> FileResponse:
+    path = _creation_task_output_path(
+        current_workspace_id(request), task_id, subtitle=True
+    )
+    return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
 
 
 @app.get(

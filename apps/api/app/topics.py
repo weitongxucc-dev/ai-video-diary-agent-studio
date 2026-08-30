@@ -495,6 +495,307 @@ class OpenAICompatibleCreationTaskTopicGenerator:
         )
 
 
+@dataclass(frozen=True)
+class CreationTaskScriptInput:
+    goal: str
+    language: str
+    duration_target_seconds: int
+    topic_title: str
+    topic_angle: str
+    topic_audience: str
+    topic_outline: tuple[str, ...]
+    sources: tuple[CreationTaskTopicSource, ...]
+
+
+@dataclass(frozen=True)
+class CreationTaskGeneratedScriptSection:
+    title: str
+    content: str
+    visual_prompt: str
+    evidence_reference_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CreationTaskGeneratedScript:
+    title: str
+    language: Literal["zh-CN"]
+    sections: tuple[CreationTaskGeneratedScriptSection, ...]
+
+
+class CreationTaskScriptGenerationError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        code: str,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> None:
+        self.code = code
+        self.reason = reason
+        self.impact = impact
+        self.repair_action = repair_action
+        self.retryable = retryable
+        super().__init__(f"{code}: {reason}")
+
+
+class OpenAICompatibleCreationTaskScriptGenerator:
+    """Generate one editable script from a confirmed topic and explicit evidence."""
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+        timeout: float = 90.0,
+    ) -> None:
+        self._base_url = base_url.strip().rstrip("/")
+        self._model = model.strip()
+        self._api_key = api_key
+        self._transport = transport
+        self._timeout = timeout
+        parsed_url = urlsplit(self._base_url)
+        if (
+            not self._base_url
+            or not self._model
+            or parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+        ):
+            raise self._failure(
+                code="route_configuration_invalid",
+                reason="文字模型连接缺少服务地址或模型标识。",
+                impact="未调用文字模型，未生成文案。",
+                repair_action="在本机运行时设置中填写有效的 OpenAI-compatible 地址和模型标识。",
+                retryable=False,
+            )
+
+    def generate(self, input: CreationTaskScriptInput) -> CreationTaskGeneratedScript:
+        if input.language != "zh-CN":
+            raise self._failure(
+                code="language_unavailable",
+                reason="本地真成片 v0.1 只支持中文文案与中文声音克隆。",
+                impact="未调用文字模型，未生成文案。",
+                repair_action="将创作方案语言改为简体中文后重试。",
+                retryable=False,
+            )
+        if not 15 <= input.duration_target_seconds <= 600:
+            raise self._failure(
+                code="input_invalid",
+                reason="文案目标时长无效。",
+                impact="未调用文字模型，未生成文案。",
+                repair_action="将目标时长设置在 15 到 600 秒之间。",
+                retryable=False,
+            )
+        required_texts = (
+            input.goal,
+            input.topic_title,
+            input.topic_angle,
+            input.topic_audience,
+        )
+        if any(not value.strip() for value in required_texts) or not input.topic_outline:
+            raise self._failure(
+                code="input_invalid",
+                reason="已确认选题缺少生成文案所需的信息。",
+                impact="未调用文字模型，未生成文案。",
+                repair_action="重新确认包含标题、角度、受众和大纲的选题。",
+                retryable=False,
+            )
+        if not input.sources or len(input.sources) > 64:
+            raise self._failure(
+                code="input_invalid",
+                reason="文案输入必须包含有界的授权资料。",
+                impact="未调用文字模型，未生成文案。",
+                repair_action="重新从已确认方案解析资料引用后重试。",
+                retryable=False,
+            )
+        source_ids: set[str] = set()
+        serialized_sources: list[dict[str, str]] = []
+        total_length = 0
+        for source in input.sources:
+            reference_id = source.reference_id.strip()
+            text = source.text.strip()
+            if (
+                not reference_id
+                or reference_id in source_ids
+                or not source.title.strip()
+                or not text
+                or len(text) > 8_000
+            ):
+                raise self._failure(
+                    code="input_invalid",
+                    reason="文案资料引用为空、重复或超过上限。",
+                    impact="未调用文字模型，未生成文案。",
+                    repair_action="重新读取当前工作区已授权的文字资料。",
+                    retryable=False,
+                )
+            source_ids.add(reference_id)
+            total_length += len(text)
+            if total_length > 48_000:
+                raise self._failure(
+                    code="input_invalid",
+                    reason="文案资料文字超过本次请求上限。",
+                    impact="未调用文字模型，未生成文案。",
+                    repair_action="缩短已授权文字摘录后重试。",
+                    retryable=False,
+                )
+            serialized_sources.append(
+                {
+                    "reference_id": reference_id,
+                    "kind": source.kind,
+                    "title": source.title.strip(),
+                    "text": text,
+                }
+            )
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是短视频中文口播文案生成器。只返回单一 JSON object，不要 Markdown。"
+                        "顶层必须为 {\"script\": {title, language, sections}}。"
+                        "language 必须是 zh-CN。sections 每项必须包含 title、content、"
+                        "visual_prompt、evidence_reference_ids；证据只能引用输入 reference_id。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "goal": input.goal.strip(),
+                            "duration_target_seconds": input.duration_target_seconds,
+                            "confirmed_topic": {
+                                "title": input.topic_title.strip(),
+                                "angle": input.topic_angle.strip(),
+                                "audience": input.topic_audience.strip(),
+                                "outline": [item.strip() for item in input.topic_outline],
+                            },
+                            "sources": serialized_sources,
+                            "requirements": {
+                                "spoken_chinese": True,
+                                "section_count": "1-20",
+                                "every_section_requires_evidence": True,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.4,
+            "max_tokens": 4800,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        try:
+            with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
+                response = client.post(
+                    f"{self._base_url}/chat/completions", json=payload, headers=headers
+                )
+        except httpx.RequestError as exc:
+            raise self._failure(
+                code="transport_failed",
+                reason="文字模型连接失败。",
+                impact="未生成文案。",
+                repair_action="检查本机模型连接、网络或本地服务后重试。",
+                retryable=True,
+            ) from exc
+        if response.is_error:
+            raise self._failure(
+                code="http_failed",
+                reason="文字模型服务拒绝了文案请求。",
+                impact="未生成文案。",
+                repair_action="检查模型服务状态、账号权限或请求配额后重试。",
+                retryable=response.status_code >= 500,
+            )
+        try:
+            envelope = response.json()
+            content = envelope["choices"][0]["message"]["content"]
+            document = json.loads(content)
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise self._failure(
+                code="response_envelope_invalid",
+                reason="文字模型返回的文案协议无效。",
+                impact="未生成文案。",
+                repair_action="检查 OpenAI-compatible JSON 响应格式后重试。",
+                retryable=True,
+            ) from exc
+        return self._validated_script(document, source_ids)
+
+    def _validated_script(
+        self, document: object, allowed_reference_ids: set[str]
+    ) -> CreationTaskGeneratedScript:
+        raw = document.get("script") if isinstance(document, dict) else None
+        if not isinstance(raw, dict):
+            raise self._schema_failure("文字模型内容缺少 script 对象。")
+        title = self._text(raw.get("title"), "title", 160)
+        if raw.get("language") != "zh-CN":
+            raise self._schema_failure("文字模型返回了当前版本不支持的文案语言。")
+        raw_sections = raw.get("sections")
+        if not isinstance(raw_sections, list) or not 1 <= len(raw_sections) <= 20:
+            raise self._schema_failure("文字模型返回的文案段落数量无效。")
+        sections: list[CreationTaskGeneratedScriptSection] = []
+        for section in raw_sections:
+            if not isinstance(section, dict):
+                raise self._schema_failure("文字模型返回的文案段落无效。")
+            reference_ids = section.get("evidence_reference_ids")
+            if (
+                not isinstance(reference_ids, list)
+                or not reference_ids
+                or len(reference_ids) > 12
+                or any(not isinstance(item, str) or item not in allowed_reference_ids for item in reference_ids)
+                or len(set(reference_ids)) != len(reference_ids)
+            ):
+                raise self._schema_failure("文字模型返回了无效或未授权的文案证据引用。")
+            sections.append(
+                CreationTaskGeneratedScriptSection(
+                    title=self._text(section.get("title"), "section title", 160),
+                    content=self._text(section.get("content"), "section content", 4_000),
+                    visual_prompt=self._text(
+                        section.get("visual_prompt"), "visual prompt", 1_000
+                    ),
+                    evidence_reference_ids=tuple(reference_ids),
+                )
+            )
+        return CreationTaskGeneratedScript(
+            title=title,
+            language="zh-CN",
+            sections=tuple(sections),
+        )
+
+    def _text(self, value: object, field: str, maximum: int) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+            raise self._schema_failure(f"文字模型返回的 {field} 为空或超过上限。")
+        return value.strip()
+
+    def _schema_failure(self, reason: str) -> CreationTaskScriptGenerationError:
+        return self._failure(
+            code="response_schema_invalid",
+            reason=reason,
+            impact="未保存无效文案。",
+            repair_action="检查模型 JSON 输出结构和证据引用后重试。",
+            retryable=True,
+        )
+
+    @staticmethod
+    def _failure(
+        *,
+        code: str,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> CreationTaskScriptGenerationError:
+        return CreationTaskScriptGenerationError(
+            code=code,
+            reason=reason,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        )
+
+
 class TopicGenerator(Protocol):
     def generate(
         self,

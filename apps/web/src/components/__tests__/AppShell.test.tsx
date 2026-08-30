@@ -51,6 +51,10 @@ function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
     created_at: "2026-08-29T00:00:00Z",
     updated_at: "2026-08-29T00:00:00Z",
     ...overrides,
+    confirmed_script_id: overrides.confirmed_script_id ?? null,
+    narration_cache_key: overrides.narration_cache_key ?? null,
+    montage_plan_id: overrides.montage_plan_id ?? null,
+    output_ready: overrides.output_ready ?? false,
   };
 }
 
@@ -86,7 +90,7 @@ describe("AppShell", () => {
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
     expect(screen.getAllByText("等待开始")).not.toHaveLength(0);
-    expect(screen.getByRole("link", { name: /产品演示视频/ })).toHaveAttribute("href", "/production?plan=plan-1");
+    expect(screen.getByRole("link", { name: /产品演示视频/ })).toHaveAttribute("href", "/tasks/task-1");
   });
 
   it("projects each persisted task stage with its user-facing status", () => {
@@ -103,9 +107,9 @@ describe("AppShell", () => {
     );
 
     expect(screen.getByRole("link", { name: /等待任务等待开始/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /生成任务选题生成中/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /生成任务选题处理中/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /确认任务等待确认/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /完成任务选题已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /完成任务已完成/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /处理任务需要处理/ })).toBeInTheDocument();
   });
 
@@ -116,7 +120,7 @@ describe("AppShell", () => {
     });
     render(<AppShell><p>页面内容</p></AppShell>);
 
-    expect(await screen.findByRole("link", { name: /持久化创作任务/ })).toHaveAttribute("href", "/production?plan=plan-2");
+    expect(await screen.findByRole("link", { name: /持久化创作任务/ })).toHaveAttribute("href", "/tasks/task-2");
     expect(screen.queryByText("共存旧创作任务")).not.toBeInTheDocument();
   });
 
@@ -125,7 +129,7 @@ describe("AppShell", () => {
     render(<AppShell creationTasks={[creationTask({ id: "task-3", name: "当前详情任务", plan_id: "plan-3" })]}><p>页面内容</p></AppShell>);
 
     await waitFor(() => expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole("link", { name: /当前详情任务/ })).toHaveAttribute("href", "/production?plan=plan-3");
+    expect(screen.getByRole("link", { name: /当前详情任务/ })).toHaveAttribute("href", "/tasks/task-3");
   });
 
   it("replaces an older task snapshot with the latest list response for the same id", async () => {
@@ -135,7 +139,7 @@ describe("AppShell", () => {
     });
     render(<AppShell creationTasks={[creationTask({ id: "task-1", name: "当前详情任务", stage_status: "not_started" })]}><p>页面内容</p></AppShell>);
 
-    expect(await screen.findByRole("link", { name: /当前详情任务选题已完成/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /当前详情任务已完成/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /当前详情任务等待开始/ })).not.toBeInTheDocument();
   });
 

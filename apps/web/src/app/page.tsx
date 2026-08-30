@@ -26,10 +26,10 @@ async function loadFoundation(): Promise<ProductionFoundation | null> {
 }
 
 function CreationTaskRow({ task }: { task: CreationTask }) {
-  const state = creationTaskStatusPresentation(task.stage_status);
+  const state = creationTaskStatusPresentation(task.stage_status, task.stage);
   const StateIcon = state.tone === "success" ? CheckCircle2 : state.tone === "warning" || state.tone === "danger" ? AlertCircle : Clock3;
   return (
-    <Link className="home-batch-row" href={`/production?plan=${encodeURIComponent(task.plan_id)}`}>
+    <Link className="home-batch-row" href={`/tasks/${encodeURIComponent(task.id)}`}>
       <span className={`home-batch-row__icon status-${state.tone}`}><StateIcon className={state.tone === "running" ? "is-spinning" : ""} size={16} /></span>
       <span className="home-batch-row__copy">
         <strong>{displayTaskName(task.name)}</strong>
@@ -48,7 +48,7 @@ function PlanReadiness({ foundation, creationTasks }: { foundation: ProductionFo
     ?? creationTasks.find((task) => task.stage_status === "running")
     ?? creationTasks.find((task) => task.stage_status === "not_started")
     ?? creationTasks.find((task) => task.stage_status === "completed");
-  const taskSummary = mostUrgentTask ? creationTaskStatusPresentation(mostUrgentTask.stage_status) : null;
+  const taskSummary = mostUrgentTask ? creationTaskStatusPresentation(mostUrgentTask.stage_status, mostUrgentTask.stage) : null;
   const rows = [
     {
       label: "资料与素材",
@@ -103,7 +103,7 @@ export default async function HomePage() {
             <div><dt>等待开始</dt><dd>{taskStatusCounts.not_started}<small>项任务</small></dd></div>
             <div><dt>进行中或待确认</dt><dd>{taskStatusCounts.running + taskStatusCounts.waiting_for_user}<small>项任务</small></dd></div>
             <div><dt>需要处理</dt><dd>{taskStatusCounts.failed}<small>项任务</small></dd></div>
-            <div><dt>选题已完成</dt><dd>{taskStatusCounts.completed}<small>项任务</small></dd></div>
+            <div><dt>已完成</dt><dd>{taskStatusCounts.completed}<small>项任务</small></dd></div>
           </dl>
           <section className="home-run-board__notifications" aria-label="需要处理的通知">
             <header><h3>通知</h3><Link href="/production">查看任务</Link></header>

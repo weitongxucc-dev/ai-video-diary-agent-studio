@@ -96,11 +96,11 @@ export type AppShellProps = {
 };
 
 function creationTaskState(task: CreationTask) {
-  return creationTaskStatusPresentation(task.stage_status);
+  return creationTaskStatusPresentation(task.stage_status, task.stage);
 }
 
 function creationTaskHref(task: CreationTask) {
-  return `/production?plan=${encodeURIComponent(task.plan_id)}`;
+  return `/tasks/${encodeURIComponent(task.id)}`;
 }
 
 function mergeCreationTasks(...groups: CreationTask[][]): CreationTask[] {

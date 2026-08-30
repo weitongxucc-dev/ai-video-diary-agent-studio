@@ -94,7 +94,7 @@ export function CreateProductionTaskForm({
   const [goal, setGoal] = useState(initialGoal);
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
-  const [language, setLanguage] = useState<CreationPlanInput["language"]>("zh-CN");
+  const language: CreationPlanInput["language"] = "zh-CN";
   const [duration, setDuration] = useState("60");
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [pending, setPending] = useState<"preview" | "confirm" | null>(null);
@@ -144,7 +144,7 @@ export function CreateProductionTaskForm({
     setError(null);
     try {
       const plan = await confirmCreationPlan({ ...input(), preflight_fingerprint: preview.preflight_fingerprint });
-      assignLocation(`/production?${new URLSearchParams({ plan: plan.id, toast: "success", toast_message: "创作任务已创建，选题尚未开始。" }).toString()}`);
+      assignLocation(`/tasks/${encodeURIComponent(plan.creation_task.id)}?${new URLSearchParams({ toast: "success", toast_message: "创作任务已创建，选题尚未开始。" }).toString()}`);
     } catch (cause) {
       if (cause instanceof CreationPlanApiError && cause.code === "creation_plan_preflight_stale") {
         setPreview(null);
@@ -163,7 +163,7 @@ export function CreateProductionTaskForm({
         <div className="creation-plan-form__settings">
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max="50" min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
-          <label><span>语言</span><select disabled={isPending} name="language" onChange={(event) => { setLanguage(event.target.value as CreationPlanInput["language"]); invalidatePreview(); }} value={language}><option value="zh-CN">中文</option><option value="en-US">英文</option><option value="zh-CN/en-US">中英文</option></select></label>
+          <label><span>语言</span><select disabled name="language" value={language}><option value="zh-CN">中文（当前版本）</option></select></label>
           <label><span>目标时长（秒）</span><input disabled={isPending} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} /></label>
         </div>
         <p className="creation-plan-form__ratio">画幅：9:16（当前本地服务支持的画幅）</p>

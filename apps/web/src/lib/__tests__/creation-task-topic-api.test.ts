@@ -3,6 +3,7 @@ import {
   confirmCreationTaskTopic,
   CreationPlanApiError,
   generateCreationTaskTopics,
+  generateCreationTaskNarration,
   getCreationTaskTopics,
 } from "../api";
 
@@ -56,6 +57,27 @@ describe("creation-task topic API", () => {
       reason: "capability_unavailable",
       impact: "没有调用文字模型，也没有生成候选。",
       repairAction: "配置文字模型后重新开始选题。",
+    } satisfies Partial<CreationPlanApiError>);
+  });
+
+  it("explains a missing authorized voice in user language", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        error: "voice_identity_missing",
+        reason: "voice_identity_missing",
+        impact: "当前创作任务未生成配音，未调用声音模型。",
+        repair_action: "重新预检并选择已授权的中文声音版本。",
+        retryable: true,
+      },
+    }), { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(generateCreationTaskNarration("task-1")).rejects.toMatchObject({
+      status: 503,
+      code: "voice_identity_missing",
+      message: "缺少已授权的声音版本",
+      impact: "当前创作任务未生成配音，未调用声音模型。",
+      repairAction: "重新预检并选择已授权的中文声音版本。",
     } satisfies Partial<CreationPlanApiError>);
   });
 });

@@ -989,12 +989,16 @@ export type CreationTask = {
   plan_id: string;
   name: string;
   scenario: string;
-  stage: "topic";
+  stage: "topic" | "script" | "narration" | "montage" | "review";
   stage_status: "not_started" | "running" | "waiting_for_user" | "completed" | "failed";
   status: "created" | "running" | "waiting_for_user" | "completed" | "failed";
   progress: number;
   recovery_point: string;
   selected_topic_id: string | null;
+  confirmed_script_id: string | null;
+  narration_cache_key: string | null;
+  montage_plan_id: string | null;
+  output_ready: boolean;
   stage_reason: string | null;
   stage_impact: string | null;
   stage_repair_action: string | null;
@@ -1076,6 +1080,103 @@ export type CreationTaskTopicsResponse = {
   latest_run: CreationTaskTopicGeneration | null;
   route_preflight: CreationTaskTopicRoutePreflight;
   egress_preflight: CreationTaskTopicEgressPreflight;
+};
+
+export type CreationTaskScriptSection = {
+  id: string;
+  title: string;
+  content: string;
+  visual_prompt: string;
+  evidence_reference_ids: string[];
+};
+
+export type CreationTaskScript = {
+  id: string;
+  task_id: string;
+  run_id: string;
+  topic_id: string;
+  title: string;
+  language: "zh-CN";
+  sections: CreationTaskScriptSection[];
+  selection_status: "draft" | "confirmed";
+  created_at: string;
+  updated_at: string;
+  confirmed_at: string | null;
+};
+
+export type CreationTaskScriptsResponse = {
+  task: CreationTask;
+  scripts: CreationTaskScript[];
+  latest_run: {
+    id: string;
+    status: "running" | "succeeded" | "failed";
+    route_snapshot: CreationTaskTopicRoutePreflight;
+    reason: string | null;
+    impact: string | null;
+    repair_action: string | null;
+    retryable: boolean | null;
+    started_at: string;
+    finished_at: string | null;
+  } | null;
+  route_preflight: CreationTaskTopicRoutePreflight;
+};
+
+export type CreationTaskNarration = {
+  task: CreationTask;
+  script_id: string;
+  audio_reference: string;
+  duration_seconds: number;
+  sample_rate: number;
+  model_id: string;
+  voice_profile_id: string;
+  language: "zh";
+  pronunciation_version: string;
+};
+
+export type CreationTaskMontageClip = {
+  id: string;
+  cue_id: string;
+  asset_id: string;
+  segment_id: string;
+  source_reference: string;
+  source_start_seconds: number;
+  source_end_seconds: number;
+  timeline_start_seconds: number;
+  timeline_end_seconds: number;
+  match_score: number;
+  match_reasons: string[];
+  needs_confirmation: boolean;
+  role: "a_roll" | "b_roll";
+  locked: boolean;
+  manually_selected: boolean;
+};
+
+export type CreationTaskMontage = {
+  id: string;
+  task_id: string;
+  script_id: string;
+  script_title: string;
+  status: "waiting_for_user" | "ready" | "rendering" | "rendered" | "failed";
+  cues: NarrationCue[];
+  clips: CreationTaskMontageClip[];
+  duration_seconds: number;
+  low_confidence_clip_count: number;
+  narration_reference: string;
+  output_url: string | null;
+  subtitle_url: string | null;
+  message: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTaskWorkspace = {
+  task: CreationTask;
+  plan: CreationPlanPreview;
+  selected_topic: CreationTaskTopicCandidate | null;
+  topic_evidence: CreationTaskTopicEvidenceReference[];
+  scripts: CreationTaskScript[];
+  narration: CreationTaskNarration | null;
+  montage: CreationTaskMontage | null;
 };
 
 export type CreationPlanPreview = CreationPlanInput & {

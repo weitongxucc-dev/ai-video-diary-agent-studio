@@ -5,6 +5,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 const { autoUpdater } = require('electron-updater');
 
 // ── State ──────────────────────────────────────────────
@@ -501,6 +502,35 @@ async function stopAllServices() {
   ]);
 }
 
+async function downloadCreationTaskOutput(taskId, temporaryPath) {
+  if (!Number.isInteger(apiPort) || apiPort <= 0 || serviceStates.api.state !== 'ready') {
+    throw new Error('本地视频服务尚未就绪，请等待服务恢复后重试。');
+  }
+  const requestPath = `/api/creation-tasks/${encodeURIComponent(taskId)}/output`;
+  await new Promise((resolve, reject) => {
+    const request = http.get({
+      hostname: '127.0.0.1',
+      port: apiPort,
+      path: requestPath,
+      headers: { Accept: 'video/mp4' },
+    }, (response) => {
+      const contentType = String(response.headers['content-type'] || '');
+      if (response.statusCode !== 200 || !contentType.startsWith('video/mp4')) {
+        response.resume();
+        reject(new Error(`本地服务没有返回可保存的 MP4（HTTP ${response.statusCode || 0}）。`));
+        return;
+      }
+      const output = fs.createWriteStream(temporaryPath, { flags: 'wx' });
+      pipeline(response, output).then(resolve, reject);
+    });
+    request.on('error', reject);
+  });
+  const stats = await fs.promises.stat(temporaryPath);
+  if (!stats.isFile() || stats.size <= 0) {
+    throw new Error('本地服务返回了空的成片文件。');
+  }
+}
+
 // ── IPC Handlers ───────────────────────────────────────
 function registerIpcHandlers() {
   ipcMain.handle('get-api-port', () => {
@@ -524,6 +554,32 @@ function registerIpcHandlers() {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  ipcMain.handle('save-rendered-video', async (_event, taskId) => {
+    if (typeof taskId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,80}$/.test(taskId)) {
+      return { saved: false, error: '创作任务标识无效。' };
+    }
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '保存初版成片',
+      defaultPath: path.join(app.getPath('videos'), `${taskId}.mp4`),
+      filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
+    });
+    if (result.canceled || !result.filePath) return { saved: false, canceled: true };
+    const temporaryPath = `${result.filePath}.partial-${crypto.randomUUID()}`;
+    try {
+      await downloadCreationTaskOutput(taskId, temporaryPath);
+      await fs.promises.rename(temporaryPath, result.filePath);
+      recordLifecycle('rendered-video-saved', { taskId, fileName: path.basename(result.filePath) });
+      return { saved: true, fileName: path.basename(result.filePath) };
+    } catch (error) {
+      await fs.promises.unlink(temporaryPath).catch(() => undefined);
+      recordLifecycle('rendered-video-save-failed', {
+        taskId,
+        errorCode: error.code || error.name || 'unknown',
+      });
+      return { saved: false, error: error.message || '成片保存失败。' };
+    }
   });
 
   ipcMain.handle('open-path', async (_event, filePath) => {

@@ -22,6 +22,11 @@ const serverFixture = `
 const http = require('node:http');
 const port = Number(process.env.FIXTURE_PORT || process.env.PORT || process.env.API_PORT);
 const server = http.createServer((request, response) => {
+  if (/^\\/api\\/creation-tasks\\/task_[a-zA-Z0-9_-]+\\/output$/.test(request.url)) {
+    response.writeHead(200, { 'content-type': 'video/mp4' });
+    response.end('fixture-mp4');
+    return;
+  }
   response.writeHead(200, { 'content-type': 'text/plain' });
   response.end(request.url === '/api/runtime/health' ? 'ok' : 'web');
 });
@@ -85,6 +90,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
   const handlers = new Map();
   const dialogs = [];
   const windows = [];
+  let saveDialogResult = { canceled: true };
   const app = {
     isPackaged: packaged,
     whenReady: () => Promise.resolve(),
@@ -176,6 +182,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
         showErrorBox(title, message) { dialogs.push({ title, message }); },
         async showMessageBox() { return { response: 1 }; },
         async showOpenDialog() { return { canceled: true, filePaths: [] }; },
+        async showSaveDialog() { return saveDialogResult; },
       },
       ipcMain: { handle(name, callback) { handlers.set(name, callback); } },
       shell: { openExternal() {}, openPath() { return ''; } },
@@ -185,6 +192,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
     windows,
     handlers,
     app,
+    setSaveDialogResult(value) { saveDialogResult = value; },
   };
 }
 
@@ -193,7 +201,17 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   const originalLoad = Module._load;
   const originalResourcesPath = process.resourcesPath;
   const originalNodeEnv = process.env.NODE_ENV;
+  const stdoutErrorListeners = new Set(process.stdout.listeners('error'));
+  const stderrErrorListeners = new Set(process.stderr.listeners('error'));
   const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode);
+  const restoreProcessErrorListeners = () => {
+    for (const listener of process.stdout.listeners('error')) {
+      if (!stdoutErrorListeners.has(listener)) process.stdout.removeListener('error', listener);
+    }
+    for (const listener of process.stderr.listeners('error')) {
+      if (!stderrErrorListeners.has(listener)) process.stderr.removeListener('error', listener);
+    }
+  };
   process.resourcesPath = resourcesPath;
   if (development) process.env.NODE_ENV = 'development';
   else delete process.env.NODE_ENV;
@@ -209,6 +227,7 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   } catch (error) {
     Module._load = originalLoad;
     process.resourcesPath = originalResourcesPath;
+    restoreProcessErrorListeners();
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;
     delete require.cache[mainPath];
@@ -219,6 +238,7 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
     restore() {
       Module._load = originalLoad;
       process.resourcesPath = originalResourcesPath;
+      restoreProcessErrorListeners();
       if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = originalNodeEnv;
       delete require.cache[mainPath];
@@ -511,6 +531,23 @@ async function assertDevelopmentExternalServices() {
   }
 }
 
+async function assertNativeRenderedVideoSaveBoundary() {
+  const test = await startPackaged();
+  try {
+    const handler = test.runtime.handlers.get('save-rendered-video');
+    assert.equal(typeof handler, 'function', 'native rendered-video save handler must be registered');
+    const invalid = await handler({}, '/tmp/untrusted.mp4');
+    assert.equal(invalid.saved, false, 'renderer paths must not be accepted as task ids');
+    const destination = path.join(test.resources, 'chosen-output.mp4');
+    test.runtime.setSaveDialogResult({ canceled: false, filePath: destination });
+    const saved = await handler({}, 'task_fixture');
+    assert.deepEqual(saved, { saved: true, fileName: 'chosen-output.mp4' });
+    assert.equal(fs.readFileSync(destination, 'utf8'), 'fixture-mp4');
+  } finally {
+    await cleanupRuntime(test);
+  }
+}
+
 async function main() {
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable');
   await assertBuildIdentityMetadataFailure('invalid', 'build identity metadata is invalid');
@@ -521,6 +558,7 @@ async function main() {
   await assertVisibleWindowLifecycleBoundary();
   for (const resource of ['api', 'web']) await assertMissingResource(resource);
   for (const service of ['api', 'web']) await assertRuntimeExit(service);
+  await assertNativeRenderedVideoSaveBoundary();
   const normal = await startPackaged();
   await cleanupRuntime(normal);
   await assertDevelopmentExternalServices();

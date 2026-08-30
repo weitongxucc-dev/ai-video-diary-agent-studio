@@ -29,6 +29,8 @@ from app.repository import LEGACY_WORKSPACE_ID, EpisodeRepository
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 from app.topics import (
+    CreationTaskGeneratedScript,
+    CreationTaskGeneratedScriptSection,
     CreationTaskGeneratedTopic,
     CreationTaskTopicGenerationError,
 )
@@ -617,6 +619,33 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
     )
 
 
+def test_creation_plan_preflight_reports_missing_authorized_voice_wav(
+    tmp_path,
+    monkeypatch,
+):
+    production = _repository(tmp_path)
+    sources = SourceRepository(production.database_path)
+    _seed_creation_plan_facts(production, sources, workspace_id="local")
+    (production.video_library_path / "approved" / "local.wav").unlink()
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "source_repository", sources)
+    monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "local")
+
+    response = TestClient(main_module.app).post(
+        "/api/creation-plans/preview",
+        json={"goal": "制作一条中文口播视频"},
+    )
+
+    assert response.status_code == 200
+    assert any(
+        blocker["reason"] == "voice_reference_wav_unavailable"
+        and blocker["stage"] == "narration"
+        and blocker["blocks_confirmation"] is False
+        for blocker in response.json()["blockers"]
+    )
+
+
 def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     tmp_path,
     monkeypatch,
@@ -822,7 +851,8 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
         f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={}
     )
     assert confirmed.status_code == 200
-    assert confirmed.json()["task"]["stage_status"] == "completed"
+    assert confirmed.json()["task"]["stage"] == "script"
+    assert confirmed.json()["task"]["stage_status"] == "not_started"
     assert confirmed.json()["selected_topic_id"] == first_topic_id
     assert client.post(
         f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={}
@@ -853,7 +883,8 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     )
     saved_task = reloaded.get_creation_task("workspace_a", task_id)
     assert saved_task.selected_topic_id == first_topic_id
-    assert saved_task.stage_status == "completed"
+    assert saved_task.stage == "script"
+    assert saved_task.stage_status == "not_started"
     assert len(reloaded.list_topic_candidates("workspace_a", task_id)) == 2
     reloaded_evidence = reloaded.list_topic_evidence_references("workspace_a", task_id)
     assert len(reloaded_evidence) == 2
@@ -879,6 +910,128 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     changed_route = client.get(f"/api/creation-tasks/{task_id}/topics")
     assert changed_route.status_code == 200
     assert changed_route.json()["route_preflight"]["availability"] == "unverified"
+
+
+def test_creation_task_script_generation_confirmation_and_restart_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    production = _repository(tmp_path)
+    sources = SourceRepository(production.database_path)
+    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "source_repository", sources)
+    monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        Settings(
+            llm_provider="custom",
+            llm_base_url="https://model.example/v1",
+            llm_model="deepseek-test",
+            llm_api_key="test-key",
+        ),
+    )
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace_a")
+
+    class FakeTopicGenerator:
+        def generate(self, input):
+            return [
+                CreationTaskGeneratedTopic(
+                    title="一个真实选题",
+                    angle="从授权资料提炼",
+                    audience="内容运营者",
+                    outline=("事实", "判断", "行动"),
+                    score=91,
+                    evidence_reference_ids=tuple(
+                        source.reference_id for source in input.sources
+                    ),
+                )
+            ]
+
+    script_calls = []
+
+    class FakeScriptGenerator:
+        def generate(self, input):
+            script_calls.append(input)
+            return CreationTaskGeneratedScript(
+                title="已生成的真实文案",
+                language="zh-CN",
+                sections=(
+                    CreationTaskGeneratedScriptSection(
+                        title="开场",
+                        content="先看事实，再给判断，最后说明下一步行动。",
+                        visual_prompt="产品操作界面和人物工作场景",
+                        evidence_reference_ids=tuple(
+                            source.reference_id for source in input.sources
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(
+        main_module,
+        "_creation_task_topic_generator_from_settings",
+        lambda: FakeTopicGenerator(),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_creation_task_script_generator_from_settings",
+        lambda: FakeScriptGenerator(),
+    )
+    client = TestClient(main_module.app)
+    payload = {"goal": "基于授权内容生成中文视频", "name": "本地真成片"}
+    preview = client.post("/api/creation-plans/preview", json=payload).json()
+    created = client.post(
+        "/api/creation-plans/confirm",
+        json={**payload, "preflight_fingerprint": preview["preflight_fingerprint"]},
+    ).json()
+    task_id = created["creation_task"]["id"]
+    topics = client.post(f"/api/creation-tasks/{task_id}/topics/generate", json={})
+    assert topics.status_code == 200
+    topic_id = topics.json()["candidates"][0]["id"]
+    assert client.post(
+        f"/api/creation-tasks/{task_id}/topics/{topic_id}/confirm", json={}
+    ).status_code == 200
+
+    generated = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/generate", json={}
+    )
+    assert generated.status_code == 200
+    body = generated.json()
+    assert len(script_calls) == 1
+    assert body["task"]["stage"] == "script"
+    assert body["task"]["stage_status"] == "waiting_for_user"
+    assert body["scripts"][0]["selection_status"] == "draft"
+    script = body["scripts"][0]
+    edited_sections = [
+        {**section, "content": f"{section['content']} 这句话由用户确认。"}
+        for section in script["sections"]
+    ]
+    confirmed = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/{script['id']}/confirm",
+        json={"title": "用户确认后的文案", "sections": edited_sections},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["task"]["stage"] == "narration"
+    assert confirmed.json()["task"]["stage_status"] == "not_started"
+    assert confirmed.json()["scripts"][0]["selection_status"] == "confirmed"
+    workspace = client.get(f"/api/creation-tasks/{task_id}")
+    assert workspace.status_code == 200
+    assert workspace.json()["scripts"][0]["title"] == "用户确认后的文案"
+
+    reloaded = ProductionRepository(
+        database_path=production.database_path,
+        video_library_path=production.video_library_path,
+    )
+    saved_task = reloaded.get_creation_task("workspace_a", task_id)
+    saved_script = reloaded.get_creation_task_script(
+        "workspace_a", saved_task.confirmed_script_id
+    )
+    assert saved_task.stage == "narration"
+    assert saved_script.sections[0].content.endswith("这句话由用户确认。")
+    with reloaded._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM production_batches").fetchone()[0] == 0
 
 
 def test_creation_task_topic_failure_records_capability_license_and_provider_errors(
