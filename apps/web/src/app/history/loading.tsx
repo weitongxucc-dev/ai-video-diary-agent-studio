@@ -8,9 +8,9 @@ import {
 export default function HistoryLoading() {
   return (
     <AppShell>
-      <LoadingShell label="正在拉取 Episode 历史...">
+      <LoadingShell label="正在拉取发布与数据...">
         <div className="history-page">
-          <section className="history-main pixel-card">
+          <section className="history-main ui-panel">
             <div className="history-header">
               <div>
                 <Skeleton height={12} width={92} />

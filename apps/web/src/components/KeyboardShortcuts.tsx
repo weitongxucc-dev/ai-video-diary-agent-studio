@@ -14,8 +14,7 @@ type RouteShortcut = {
 const ROUTE_SHORTCUTS: RouteShortcut[] = [
   { keys: ["Ctrl", "1"], href: "/", label: "今日工作台" },
   { keys: ["Ctrl", "2"], href: "/script", label: "口播稿" },
-  { keys: ["Ctrl", "3"], href: "/video", label: "视频处理" },
-  { keys: ["Ctrl", "4"], href: "/edit-plan", label: "剪辑计划" },
+  { keys: ["Ctrl", "3"], href: "/production", label: "创作任务" },
   { keys: ["Ctrl", "5"], href: "/draft", label: "剪映草稿" },
   { keys: ["Ctrl", "6"], href: "/learning", label: "反馈学习" },
   { keys: ["Ctrl", "7"], href: "/settings", label: "设置" },

@@ -4,28 +4,174 @@ const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
 let apiProcess = null;
 let nextProcess = null;
-let workerProcess = null;
 let apiPort = 0;
 let nextPort = 0;
 let apiStopping = false;
 let nextStopping = false;
-let workerStopping = false;
+let quitInProgress = false;
+let lifecycleLogFile = null;
 const isDev = process.env.NODE_ENV === 'development';
+const buildIdentityMetadataFile = path.join(__dirname, 'build-identity.generated.json');
 // Supabase invite/recovery links must target a stable origin. The callback runs
 // in the user's browser, sets the password, and can then be followed by a fresh
 // sign-in inside Electron; a random port makes that link unreachable.
 const authWebPort = 3000;
 const authWebOrigin = `http://localhost:${authWebPort}`;
+const serviceStates = {
+  api: { label: '本地 API 服务', state: 'not-started', error: null },
+  web: { label: '本地 Web 服务', state: 'not-started', error: null },
+};
+
+function metadataManifestDigest(inputs) {
+  return crypto.createHash('sha256').update(JSON.stringify(inputs)).digest('hex');
+}
+
+// Keep this locale-independent order identical to generate-build-identity.js.
+function compareIdentityPaths(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function loadBuildIdentity() {
+  let metadata;
+  try {
+    metadata = JSON.parse(fs.readFileSync(buildIdentityMetadataFile, 'utf8'));
+  } catch (error) {
+    if (isDev && !app.isPackaged && error && error.code === 'ENOENT') return null;
+    throw new Error('Desktop package build identity metadata is missing or unreadable; rebuild the app before launching.');
+  }
+  const inputs = metadata && metadata.inputs;
+  const validInputs = Array.isArray(inputs)
+    && inputs.length > 0
+    && inputs.every((input, index) => (
+      input
+      && typeof input.path === 'string'
+      && typeof input.sha256 === 'string' && /^[a-f0-9]{64}$/.test(input.sha256)
+      && Number.isSafeInteger(input.bytes) && input.bytes >= 0
+      && (index === 0 || compareIdentityPaths(inputs[index - 1].path, input.path) < 0)
+    ));
+  if (
+    !metadata
+    || metadata.format !== 'ai-video-diary-candidate-inputs/v1'
+    || typeof metadata.candidateInputDigest !== 'string' || !/^[a-f0-9]{64}$/.test(metadata.candidateInputDigest)
+    || typeof metadata.manifestDigest !== 'string' || !/^[a-f0-9]{64}$/.test(metadata.manifestDigest)
+    || !validInputs
+    || metadata.manifestDigest !== metadataManifestDigest(inputs)
+  ) {
+    throw new Error('Desktop package build identity metadata is invalid; rebuild the app before launching.');
+  }
+  return metadata.candidateInputDigest;
+}
+
+const buildIdentity = loadBuildIdentity();
+
+function runtimeLogPath() {
+  if (lifecycleLogFile) return lifecycleLogFile;
+  const directory = app.getPath('logs');
+  fs.mkdirSync(directory, { recursive: true });
+  lifecycleLogFile = path.join(directory, 'desktop-runtime.jsonl');
+  return lifecycleLogFile;
+}
+
+function recordLifecycle(event, fields = {}) {
+  fs.appendFileSync(runtimeLogPath(), `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event,
+    buildIdentity,
+    ...fields,
+  })}\n`, 'utf8');
+}
+
+function isBrokenPipe(error) {
+  return error && error.code === 'EPIPE';
+}
+
+function stopAfterMainLogFailure(stream, error) {
+  recordLifecycle('main-log-stream-failed', {
+    stream,
+    code: error.code || error.name || 'unknown',
+  });
+  if (quitInProgress) return;
+  quitInProgress = true;
+  dialog.showErrorBox(
+    '日志输出失败',
+    `桌面日志输出发生错误（${error.code || error.name || 'unknown'}）。应用将退出，避免继续显示无法追溯的核心服务状态。`,
+  );
+  void stopAllServices().finally(() => app.exit(1));
+}
+
+function handleMainLogStreamError(stream, error) {
+  if (isBrokenPipe(error)) {
+    recordLifecycle('main-log-sink-closed', { stream, code: error.code });
+    return;
+  }
+  stopAfterMainLogFailure(stream, error);
+}
+
+function installMainLogStreamGuards() {
+  process.stdout.on('error', (error) => handleMainLogStreamError('stdout', error));
+  process.stderr.on('error', (error) => handleMainLogStreamError('stderr', error));
+}
+
+function attachChildOutput(service, stream, prefix, write) {
+  stream.on('data', (data) => {
+    write(`[${prefix}] ${data.toString().trim()}`);
+  });
+  stream.on('error', (error) => {
+    if (isBrokenPipe(error)) {
+      recordLifecycle('child-log-sink-closed', { service, stream: prefix, code: error.code });
+      return;
+    }
+    reportServiceFailure(service, new Error(`${prefix} 日志管道失败（${error.code || error.name || 'unknown'}）`));
+  });
+}
+
+function setServiceState(name, state, error = null) {
+  serviceStates[name].state = state;
+  serviceStates[name].error = error ? error.message : null;
+  recordLifecycle('service-state', {
+    service: name,
+    state,
+    errorCode: error && (error.code || error.name) ? (error.code || error.name) : null,
+  });
+  console.log(`[main] ${serviceStates[name].label}: ${state}${error ? ` (${error.message})` : ''}`);
+}
+
+function requiredPackagedFile(label, candidates, mode) {
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, mode);
+      return candidate;
+    } catch (_) { /* try the next package location */ }
+  }
+  throw new Error(`${label} 缺失或不可用。请重新安装应用；不要从未完整解压的安装包中直接运行。`);
+}
+
+function reportServiceFailure(name, error) {
+  setServiceState(name, 'failed', error);
+  recordLifecycle('service-failure', {
+    service: name,
+    errorCode: error.code || error.name || 'unknown',
+  });
+  if (quitInProgress || !mainWindow) return;
+
+  dialog.showErrorBox(
+    '核心服务已停止',
+    `${serviceStates[name].label}意外停止：${error.message}\n\n应用将退出，避免继续显示不可用的核心能力。请重新打开应用；若仍失败，请重新安装。`,
+  );
+  app.quit();
+}
 
 // ── Shared config path ─────────────────────────────────
-// Packaged API and Worker share one writable .env under
-// userData (NOT inside the signed Resources bundle).
+// The packaged API reads one writable .env under userData (not inside the
+// signed Resources bundle).
 // Dev builds keep the default repo-root .env resolution.
 function userDotenvPath() {
   return path.join(app.getPath('userData'), '.env');
@@ -36,7 +182,7 @@ function ensureUserDotenv() {
   if (!fs.existsSync(p)) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, '', 'utf-8');
-    console.log('[main] Created user config file:', p);
+    console.log('[main] Created user config file');
   }
 }
 
@@ -68,21 +214,10 @@ function distributionAuthEnv() {
 
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
-  if (isDev) return null; // dev mode: user runs API separately
-
-  // Production: look in extraResources
-  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
-  const candidates = [
-    path.join(resourcePath, 'api-server'),
-    path.join(__dirname, 'dist', 'api-server'),
-  ];
-  for (const c of candidates) {
-    try {
-      fs.accessSync(c, fs.constants.X_OK);
-      return c;
-    } catch (_) { /* continue */ }
-  }
-  return null;
+  if (isDev) return null;
+  return requiredPackagedFile('打包的 API 服务', [
+    path.join(process.resourcesPath, 'api-server'),
+  ], fs.constants.X_OK);
 }
 
 function getFreePort() {
@@ -109,15 +244,18 @@ function ensurePortAvailable(port) {
 }
 
 async function startApiServer() {
-  // Duplicate guard: if already running (or starting), return the port
   if (apiProcess) return apiPort;
 
-  const binary = findApiBinary();
-  if (!binary) {
-    console.log('[main] API server binary not found — assuming external API');
-    return null;
+  setServiceState('api', 'starting');
+
+  if (isDev) {
+    apiPort = 8000;
+    await waitForApi(apiPort);
+    setServiceState('api', 'ready');
+    return apiPort;
   }
 
+  const binary = findApiBinary();
   apiPort = await getFreePort();
   console.log(`[main] Starting API server on port ${apiPort}...`);
 
@@ -133,104 +271,136 @@ async function startApiServer() {
   apiProcess = spawn(binary, [], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
 
   apiProcess.on('error', (err) => {
     console.error(`[main] Failed to spawn API server: ${err.message}`);
     apiProcess = null;
+    reportServiceFailure('api', new Error(`无法启动：${err.message}`));
   });
 
-  apiProcess.stdout.on('data', (data) => {
-    console.log(`[api] ${data.toString().trim()}`);
-  });
-
-  apiProcess.stderr.on('data', (data) => {
-    console.error(`[api:err] ${data.toString().trim()}`);
-  });
+  attachChildOutput('api', apiProcess.stdout, 'api', (message) => console.log(message));
+  attachChildOutput('api', apiProcess.stderr, 'api:err', (message) => console.error(message));
 
   apiProcess.on('exit', (code, signal) => {
     console.log(`[main] API server exited (code=${code}, signal=${signal})`);
+    const pid = apiProcess ? apiProcess.pid : null;
+    recordLifecycle('service-exit', { service: 'api', code, signal, expected: apiStopping });
     apiProcess = null;
+    if (!apiStopping) {
+      if (pid) terminateExitedServiceGroup(pid);
+      reportServiceFailure('api', new Error(`进程已退出（code=${code}, signal=${signal}）`));
+    }
   });
 
-  // Wait for API to be ready
   await waitForApi(apiPort);
+  setServiceState('api', 'ready');
   return apiPort;
 }
 
 function waitForApi(port, maxRetries = 60) {
+  return waitForHttpService({
+    service: 'api',
+    port,
+    path: '/api/runtime/health',
+    maxRetries,
+    ready: (statusCode) => statusCode === 200,
+    label: 'API server',
+  });
+}
+
+function waitForNext(port, maxRetries = 30) {
+  return waitForHttpService({
+    service: 'web',
+    port,
+    path: '/',
+    maxRetries,
+    ready: (statusCode) => statusCode < 500,
+    label: 'Next.js server',
+  });
+}
+
+function waitForHttpService({ service, port, path: requestPath, maxRetries, ready, label }) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
+    let settled = false;
+    let retryTimer = null;
+    let activeRequest = null;
+
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (activeRequest) activeRequest.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const scheduleRetry = () => {
+      if (settled || retryTimer) return;
+      if (attempts >= maxRetries) {
+        finish(new Error(`${label} did not become ready`));
+        return;
+      }
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        check();
+      }, 1000);
+    };
+
     const check = () => {
+      if (settled) return;
+      if (serviceStates[service].state === 'failed') {
+        finish(new Error(serviceStates[service].error || `${label} 进程提前退出`));
+        return;
+      }
       attempts++;
-      const req = http.get(`http://127.0.0.1:${port}/api/runtime/health`, (res) => {
-        if (res.statusCode === 200) {
-          console.log(`[main] API server ready on port ${port}`);
-          resolve();
-        } else if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('API server did not become ready'));
+      const req = http.get(`http://127.0.0.1:${port}${requestPath}`, (res) => {
+        activeRequest = null;
+        res.resume();
+        if (settled) return;
+        if (ready(res.statusCode)) {
+          console.log(`[main] ${label} ready on port ${port}`);
+          finish();
+          return;
         }
+        scheduleRetry();
       });
-      req.on('error', () => {
-        if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('API server did not become ready'));
-        }
+      activeRequest = req;
+      req.once('error', () => {
+        activeRequest = null;
+        scheduleRetry();
       });
       req.setTimeout(2000, () => {
         req.destroy();
-        if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('API server did not become ready'));
-        }
       });
     };
     check();
   });
 }
 
-function stopApiServer() {
-  if (!apiProcess || apiStopping) return;
-  apiStopping = true;
-  console.log('[main] Stopping API server...');
-  apiProcess.kill('SIGTERM');
-  const pid = apiProcess.pid;
-  setTimeout(() => {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (_) { /* already dead */ }
-    apiStopping = false;
-  }, 5000);
-}
-
 // ── Next.js Server Management ───────────────────────────
 function findNextServer() {
   if (isDev) return null;
-
-  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
-  const candidate = path.join(resourcePath, 'web', 'server.js');
-  try {
-    fs.accessSync(candidate, fs.constants.R_OK);
-    return candidate;
-  } catch (_) {
-    return null;
-  }
+  return requiredPackagedFile('打包的 Web 服务', [
+    path.join(process.resourcesPath, 'web', 'server.js'),
+  ], fs.constants.R_OK);
 }
 
 async function startNextServer() {
-  // Duplicate guard
   if (nextProcess) return nextPort;
 
-  const serverJs = findNextServer();
-  if (!serverJs) {
-    console.log('[main] Next.js standalone server not found — assuming external Next.js');
-    return null;
+  setServiceState('web', 'starting');
+
+  if (isDev) {
+    nextPort = authWebPort;
+    await waitForNext(nextPort);
+    setServiceState('web', 'ready');
+    return nextPort;
   }
 
+  const serverJs = findNextServer();
   await ensurePortAvailable(authWebPort);
   nextPort = authWebPort;
   console.log(`[main] Starting Next.js server on port ${nextPort}...`);
@@ -249,158 +419,86 @@ async function startNextServer() {
   nextProcess = spawn(process.execPath, [serverJs], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
 
   nextProcess.on('error', (err) => {
     console.error(`[main] Failed to spawn Next.js server: ${err.message}`);
     nextProcess = null;
+    reportServiceFailure('web', new Error(`无法启动：${err.message}`));
   });
 
-  nextProcess.stdout.on('data', (data) => {
-    console.log(`[next] ${data.toString().trim()}`);
-  });
-
-  nextProcess.stderr.on('data', (data) => {
-    console.error(`[next:err] ${data.toString().trim()}`);
-  });
+  attachChildOutput('web', nextProcess.stdout, 'next', (message) => console.log(message));
+  attachChildOutput('web', nextProcess.stderr, 'next:err', (message) => console.error(message));
 
   nextProcess.on('exit', (code, signal) => {
     console.log(`[main] Next.js server exited (code=${code}, signal=${signal})`);
+    const pid = nextProcess ? nextProcess.pid : null;
+    recordLifecycle('service-exit', { service: 'web', code, signal, expected: nextStopping });
     nextProcess = null;
+    if (!nextStopping) {
+      if (pid) terminateExitedServiceGroup(pid);
+      reportServiceFailure('web', new Error(`进程已退出（code=${code}, signal=${signal}）`));
+    }
   });
 
-  // Wait for Next.js to be ready
   await waitForNext(nextPort);
+  setServiceState('web', 'ready');
   return nextPort;
 }
 
-function waitForNext(port, maxRetries = 30) {
-  return new Promise((resolve, reject) => {
-    let attempts = 0;
-    const check = () => {
-      attempts++;
-      const req = http.get(`http://127.0.0.1:${port}`, (res) => {
-        if (res.statusCode < 500) {
-          console.log(`[main] Next.js server ready on port ${port}`);
-          resolve();
-        } else if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('Next.js server did not become ready'));
-        }
-      });
-      req.on('error', () => {
-        if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('Next.js server did not become ready'));
-        }
-      });
-      req.setTimeout(2000, () => {
-        req.destroy();
-        if (attempts < maxRetries) {
-          setTimeout(check, 1000);
-        } else {
-          reject(new Error('Next.js server did not become ready'));
-        }
-      });
-    };
-    check();
-  });
-}
-
-function stopNextServer() {
-  if (!nextProcess || nextStopping) return;
-  nextStopping = true;
-  console.log('[main] Stopping Next.js server...');
-  nextProcess.kill('SIGTERM');
-  const pid = nextProcess.pid;
-  setTimeout(() => {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (_) { /* already dead */ }
-    nextStopping = false;
-  }, 5000);
-}
-
-// ── Worker Process Management ──────────────────────────
-function findWorkerBinary() {
-  if (isDev) return null; // dev mode: user runs worker separately
-
-  const resourcePath = process.resourcesPath || path.join(__dirname, '..');
-  const candidates = [
-    path.join(resourcePath, 'worker-server'),
-    path.join(__dirname, 'dist', 'worker-server'),
-  ];
-  for (const c of candidates) {
-    try {
-      fs.accessSync(c, fs.constants.X_OK);
-      return c;
-    } catch (_) { /* continue */ }
-  }
-  return null;
-}
-
-function startWorker() {
-  const binary = findWorkerBinary();
-  if (!binary) {
-    console.log('[main] Worker binary not found — automation disabled');
+async function stopService(name, child, setStopping) {
+  if (!child) return;
+  if (child.exitCode !== null) {
+    setServiceState(name, 'stopped');
     return;
   }
+  setStopping(true);
+  console.log(`[main] Stopping ${serviceStates[name].label} (pid=${child.pid})...`);
 
-  // Duplicate guard: prevent two workers
-  if (workerProcess) {
-    console.log('[main] Worker already running (pid=%d) — skipping', workerProcess.pid);
-    return;
-  }
-
-  console.log('[main] Starting automation worker...');
-
-  const env = {
-    ...process.env,
-    ...localModelEnv(),
-    API_PORT: String(apiPort),
-    HOST: '127.0.0.1',
-    AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
-  };
-
-  workerProcess = spawn(binary, [], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  workerProcess.on('error', (err) => {
-    console.error('[main] Failed to spawn worker: %s', err.message);
-    workerProcess = null;
-  });
-
-  workerProcess.stdout.on('data', (data) => {
-    console.log('[worker] %s', data.toString().trim());
-  });
-
-  workerProcess.stderr.on('data', (data) => {
-    console.error('[worker:err] %s', data.toString().trim());
-  });
-
-  // No hidden auto-restart — surface failure in logs, let user decide
-  workerProcess.on('exit', (code, signal) => {
-    console.log('[main] Worker exited (code=%d, signal=%s) — will not auto-restart', code, signal);
-    workerProcess = null;
-  });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  signalService(child, 'SIGTERM');
+  let timeoutId;
+  await Promise.race([
+    exited,
+    new Promise((resolve) => { timeoutId = setTimeout(resolve, 5000); }),
+  ]);
+  clearTimeout(timeoutId);
+  if (child.exitCode === null) signalService(child, 'SIGKILL');
+  let killTimeoutId;
+  await Promise.race([
+    exited,
+    new Promise((resolve) => { killTimeoutId = setTimeout(resolve, 1000); }),
+  ]);
+  clearTimeout(killTimeoutId);
+  setServiceState(name, 'stopped');
+  setStopping(false);
 }
 
-function stopWorker() {
-  if (!workerProcess || workerStopping) return;
-  workerStopping = true;
-  console.log('[main] Stopping worker (pid=%d)...', workerProcess.pid);
-  workerProcess.kill('SIGTERM');
-  const pid = workerProcess.pid;
-  setTimeout(() => {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (_) { /* already dead */ }
-    workerStopping = false;
-  }, 5000);
+function signalService(child, signal) {
+  if (process.platform === 'win32') return child.kill(signal);
+  return signalServiceGroup(child.pid, signal);
+}
+
+function terminateExitedServiceGroup(pid) {
+  if (process.platform === 'win32') return;
+  signalServiceGroup(pid, 'SIGTERM');
+}
+
+function signalServiceGroup(pid, signal) {
+  try {
+    return process.kill(-pid, signal);
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function stopAllServices() {
+  await Promise.all([
+    stopService('web', nextProcess, (value) => { nextStopping = value; }),
+    stopService('api', apiProcess, (value) => { apiStopping = value; }),
+  ]);
 }
 
 // ── IPC Handlers ───────────────────────────────────────
@@ -450,25 +548,26 @@ function registerIpcHandlers() {
     checkForUpdates(false);
   });
 
-  ipcMain.handle('get-worker-status', () => {
-    return {
-      running: workerProcess !== null && !workerStopping,
-      pid: workerProcess ? workerProcess.pid : null,
-    };
-  });
+  ipcMain.handle('get-service-status', () => ({
+    api: { ...serviceStates.api, pid: apiProcess ? apiProcess.pid : null, port: apiPort },
+    web: { ...serviceStates.web, pid: nextProcess ? nextProcess.pid : null, port: nextPort },
+    buildIdentity,
+  }));
+
+  ipcMain.handle('get-runtime-info', () => ({ buildIdentity, logFileName: 'desktop-runtime.jsonl' }));
 }
 
 // ── Window Management ──────────────────────────────────
 function createWindow() {
   const isMac = process.platform === 'darwin';
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1360,
     height: 840,
     minWidth: 1024,
     minHeight: 700,
     title: 'AI 视频日记',
     backgroundColor: '#f7f7f5',
-    show: false,
+    show: true,
     ...(isMac ? {
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 15 },
@@ -481,30 +580,21 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  mainWindow = window;
 
-  // Load content
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
+
   if (isDev) {
-    mainWindow.loadURL(authWebOrigin);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    window.loadURL(authWebOrigin);
+    window.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Production: load from Next.js standalone server
-    if (nextPort) {
-      mainWindow.loadURL(authWebOrigin);
-    } else {
-      mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
-    }
+    window.loadURL(authWebOrigin);
   }
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-
   // Open external links in browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
@@ -602,7 +692,7 @@ function buildMenu() {
               type: 'info',
               title: '关于 AI视频日记 Agent Studio',
               message: `AI视频日记 Agent Studio v${app.getVersion()}`,
-              detail: '本地优先的 macOS 内容生产 Agent。\n\n将素材、想法和语音指令推进成可验证、可回滚、可导入剪映的完整视频草稿。\n\n© 2026 AI视频日记 Contributors\nMIT License',
+              detail: `构建身份：${buildIdentity}\n\n本地优先的 macOS 内容生产 Agent。\n\n将素材、想法和语音指令推进成可验证、可回滚、可导入剪映的完整视频草稿。\n\n© 2026 AI视频日记 Contributors\nMIT License`,
             });
           },
         },
@@ -615,61 +705,57 @@ function buildMenu() {
 
 // ── App Lifecycle ──────────────────────────────────────
 app.whenReady().then(async () => {
+  installMainLogStreamGuards();
+  recordLifecycle('app-start', { mode: isDev ? 'development' : 'packaged' });
   buildMenu();
   registerIpcHandlers();
   configureAutoUpdater();
 
-  // Check for updates in background 10s after startup
-  setTimeout(() => checkForUpdates(true), 10_000);
+  // Check for updates in background only in a packaged app.
+  if (app.isPackaged) {
+    setTimeout(() => checkForUpdates(true), 10_000);
+  }
 
-  // Ensure a writable .env exists under userData (not inside the
-  // signed Resources bundle) before spawning API / Worker.
+  // Ensure a writable .env exists under userData before spawning the API.
   if (!isDev) {
     ensureUserDotenv();
   }
 
-  let apiReady = true;
+  let startupService = 'api';
   try {
     await startApiServer();
+    startupService = 'web';
+    await startNextServer();
+    createWindow();
   } catch (err) {
-    apiReady = false;
-    console.error('[main] Failed to start API server:', err.message);
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (serviceStates[startupService].state !== 'failed') {
+      setServiceState(startupService, 'failed', error);
+    }
+    console.error(`[main] Failed to start ${serviceStates[startupService].label}:`, error.message);
     dialog.showErrorBox(
       '启动失败',
-      `无法启动本地 API 服务：${err.message}\n\n请确认：\n1. api-server 可执行文件存在\n2. .env 配置文件已正确设置`
+      `${serviceStates[startupService].label}无法就绪：${error.message}\n\n请重新打开应用；若仍失败，请重新安装。开发模式请按 README 分别启动 API 和 Web 服务。`,
     );
-  }
-
-  if (apiReady) {
-    // Start Next.js server after API is ready (middleware proxies /api to API)
-    try {
-      await startNextServer();
-    } catch (err) {
-      console.error('[main] Failed to start Next.js server:', err.message);
-      dialog.showErrorBox(
-        '启动失败',
-        `无法启动本地 Web 服务：${err.message}`
-      );
-      app.quit();
-      return;
-    }
-
-    // Start automation worker after API is ready (non-blocking —
-    // worker failures are logged but do not prevent the main window)
-    startWorker();
-
-    createWindow();
+    quitInProgress = true;
+    await stopAllServices();
+    app.quit();
+    return;
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0 && apiReady) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show();
+      return;
+    }
+    if (BrowserWindow.getAllWindows().length === 0 && serviceStates.web.state === 'ready') {
       createWindow();
     }
   });
 });
 
 app.on('window-all-closed', () => {
-  // On macOS the app stays alive with its services (API, Next, Worker)
+  // On macOS the app stays alive with its services (API and Next)
   // so re-activate can create a fresh window instantly.  Services are
   // only torn down on before-quit / quit (actual app termination).
   if (process.platform !== 'darwin') {
@@ -677,16 +763,11 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  stopWorker();
-  stopNextServer();
-  stopApiServer();
-});
-
-app.on('quit', () => {
-  stopWorker();
-  stopNextServer();
-  stopApiServer();
+app.on('before-quit', (event) => {
+  if (quitInProgress) return;
+  event.preventDefault();
+  quitInProgress = true;
+  void stopAllServices().finally(() => app.exit());
 });
 
 // ── Auto Updater ──────────────────────────────────────

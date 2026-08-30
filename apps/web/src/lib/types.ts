@@ -321,6 +321,7 @@ export type SetupPreflightCheckItem = {
   impact: string;
   repair_action: string;
   settings_target: string | null;
+  required: boolean;
 };
 
 export type SetupPreflightResponse = {
@@ -724,23 +725,6 @@ export type WorkflowStatus = {
   human_review_nodes: string[];
 };
 
-export type VoiceCommandOperation = {
-  kind: string;
-  label: string;
-  params: Record<string, unknown>;
-};
-
-export type VoiceCommandResponse = {
-  status: "ready" | "blocked" | "unknown" | "executed";
-  intent: string;
-  summary: string;
-  can_execute: boolean;
-  next_url: string | null;
-  operations: VoiceCommandOperation[];
-  result_episode: Episode | null;
-  result_edit_plan: EditPlan | null;
-};
-
 export type VoiceRecorderState = "idle" | "recording" | "transcribing" | "done";
 
 export type VoiceTranscribeSegment = {
@@ -872,8 +856,13 @@ export type VoiceProfiles = {
 
 export type EpisodeVoiceSelection = {
   episode_id: string;
-  voice: VoiceProfile | null;
-  source: "episode" | "default" | "legacy";
+  voice_profile_id: string | null;
+  voice_version: string | null;
+  language: "zh" | "en" | "zh-en" | null;
+  authorization_id: string | null;
+  authorization_version: string | null;
+  pronunciation_entry_ids: string[];
+  source: "episode" | "none";
 };
 
 export type ProductionReadiness = {
@@ -904,8 +893,11 @@ export type ProductionBatch = {
     episode_id: string;
     status: "queued" | "running" | "waiting_for_user" | "rendered" | "failed" | "interrupted";
     plan_id: string | null;
-    narration_audio_path: string | null;
-    output_path: string | null;
+    aspect_ratio: "9:16";
+    narration_status: "ready" | "unavailable";
+    subtitle_status: "ready" | "not_generated" | "unavailable";
+    output_url: string | null;
+    subtitle_url: string | null;
     message: string;
     attempts: number;
     updated_at: string;
@@ -927,6 +919,189 @@ export type ProductionFoundation = {
   recent_batches: ProductionBatch[];
   recent_montage_plans: MontagePlan[];
   eligible_episodes: { id: string; title: string; status: EpisodeStatus }[];
+};
+
+export type CreationPlanInput = {
+  goal: string;
+  name?: string;
+  target_count: number;
+  language: "zh-CN" | "en-US" | "zh-CN/en-US";
+  aspect_ratio: "9:16";
+  duration_target_seconds: number;
+};
+
+export type CreationPlanKnowledgeReference = {
+  id: string;
+  version: string;
+  title: string;
+  authorization: string;
+  ownership: string;
+};
+
+export type CreationPlanSourceReference = {
+  id: string;
+  connector_id: string;
+  source_label: string;
+  title: string;
+  license: string;
+};
+
+export type CreationPlanVoiceReference = {
+  profile_id: string;
+  version: string;
+  person_profile_id: string;
+  person_version: string;
+  person_authorization_id: string;
+  person_authorization_version: string;
+  authorization_id: string;
+  authorization_version: string;
+  language: string;
+  model_id: string;
+};
+
+export type CreationPlanPronunciationReference = {
+  id: string;
+  version: string;
+  scope: "workspace" | "person" | "task";
+  scope_reference: string | null;
+  language: "zh" | "en" | "zh-en";
+};
+
+export type CreationPlanModelStatus = {
+  id: string;
+  capability: string;
+  state: string;
+  ready: boolean;
+  message: string;
+};
+
+export type CreationPlanBlocker = {
+  reason: string;
+  impact: string;
+  repair_action: string;
+  stage: string;
+  blocks_confirmation: boolean;
+};
+
+export type CreationTask = {
+  id: string;
+  workspace_id: string;
+  plan_id: string;
+  name: string;
+  scenario: string;
+  stage: "topic";
+  stage_status: "not_started" | "running" | "waiting_for_user" | "completed" | "failed";
+  status: "created" | "running" | "waiting_for_user" | "completed" | "failed";
+  progress: number;
+  recovery_point: string;
+  selected_topic_id: string | null;
+  stage_reason: string | null;
+  stage_impact: string | null;
+  stage_repair_action: string | null;
+  stage_retryable: boolean | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTasksResponse = {
+  items: CreationTask[];
+  total_count: number;
+};
+
+export type CreationTaskTopicRoutePreflight = {
+  provider_kind: string;
+  execution_location: "cloud" | "local";
+  model_id: string;
+  endpoint_identity: string;
+  connection_version: string;
+  availability: "unconfigured" | "unverified" | "failed" | "succeeded";
+  checked_at: string;
+};
+
+export type CreationTaskTopicEgressPreflight = {
+  cloud_egress: boolean;
+  source_count: number;
+  text_excerpt_count: number;
+  reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+};
+
+export type CreationTaskTopicGeneration = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  plan_id: string;
+  status: "running" | "succeeded" | "failed";
+  route_snapshot: CreationTaskTopicRoutePreflight;
+  prompt_schema_version: string;
+  input_references: Record<string, unknown>[];
+  reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  retryable: boolean | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type CreationTaskTopicCandidate = {
+  id: string;
+  run_id: string;
+  title: string;
+  angle: string;
+  audience: string;
+  outline: string[];
+  score: number;
+  selection_status: "unselected" | "confirmed";
+  created_at: string;
+};
+
+export type CreationTaskTopicEvidenceReference = {
+  id: string;
+  candidate_id: string;
+  kind: "knowledge" | "source";
+  reference_id: string;
+  version_or_identity: string;
+  title: string;
+  authorization_or_license: string;
+  source_url: string | null;
+  created_at: string;
+};
+
+export type CreationTaskTopicsResponse = {
+  task: CreationTask;
+  candidates: CreationTaskTopicCandidate[];
+  evidence_references: CreationTaskTopicEvidenceReference[];
+  selected_topic_id: string | null;
+  latest_run: CreationTaskTopicGeneration | null;
+  route_preflight: CreationTaskTopicRoutePreflight;
+  egress_preflight: CreationTaskTopicEgressPreflight;
+};
+
+export type CreationPlanPreview = CreationPlanInput & {
+  name: string;
+  knowledge_references: CreationPlanKnowledgeReference[];
+  source_references: CreationPlanSourceReference[];
+  selected_voice: CreationPlanVoiceReference | null;
+  pronunciation_references: CreationPlanPronunciationReference[];
+  approved_asset_count: number;
+  approved_clip_count: number;
+  material_rule_summary: string;
+  model_snapshot: CreationPlanModelStatus[];
+  confirmation_points: string[];
+  blockers: CreationPlanBlocker[];
+  confirmable: boolean;
+  preflight_fingerprint: string;
+};
+
+export type CreationPlan = CreationPlanPreview & {
+  id: string;
+  workspace_id: string;
+  status: "confirmed";
+  creation_task: CreationTask;
+  created_at: string;
+  confirmed_at: string;
+  updated_at: string;
 };
 
 export type NarrationCue = {
@@ -976,9 +1151,11 @@ export type MontagePlan = {
   clips: MontageClip[];
   duration_seconds: number;
   low_confidence_clip_count: number;
-  narration_audio_path: string | null;
-  output_path: string | null;
-  subtitle_path: string | null;
+  aspect_ratio: "9:16";
+  narration_status: "ready" | "unavailable";
+  subtitle_status: "ready" | "not_generated" | "unavailable";
+  output_url: string | null;
+  subtitle_url: string | null;
   message: string;
   created_at: string;
   updated_at: string;

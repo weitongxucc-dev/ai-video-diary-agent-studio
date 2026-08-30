@@ -84,7 +84,7 @@ export function ModelInstallPanel({ models, modelRootPath }: Props) {
           const active = job && ["queued", "running"].includes(job.status);
           const progress = Math.round((job?.progress ?? 0) * 100);
           return (
-            <div className="pixel-card side-note" key={model.model.id}>
+            <div className="ui-panel side-note" key={model.model.id}>
               <h2>{model.model.display_name}</h2>
               <p>{model.message}</p>
               <p>
@@ -129,7 +129,7 @@ export function ModelInstallPanel({ models, modelRootPath }: Props) {
                     </a>
                   </label>
                   <button
-                    className="pixel-button secondary"
+                    className="ui-button secondary"
                     disabled={!accepted[model.model.id] || Boolean(active)}
                     onClick={() => void start(model)}
                     type="button"

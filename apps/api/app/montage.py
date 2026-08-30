@@ -32,6 +32,18 @@ MontagePlanStatus = Literal[
 ]
 
 
+class MontageRenderError(OSError):
+    """A failed ffmpeg/ffprobe boundary with actionable process evidence."""
+
+    def __init__(self, *, tool: str, exit_code: int, stderr: str) -> None:
+        self.tool = tool
+        self.exit_code = exit_code
+        self.stderr = stderr.strip() or "(no stderr produced)"
+        super().__init__(
+            f"{tool} exited with code {exit_code}: {self.stderr}"
+        )
+
+
 @dataclass
 class NarrationCue:
     id: str
@@ -416,8 +428,12 @@ class MontageRenderer:
         plan.narration_audio_path = str(narration_path)
         try:
             self.runner(self.build_command(plan, narration_path, output_path))
-            if not output_path.is_file() or output_path.stat().st_size == 0:
-                raise OSError("FFmpeg 未生成有效输出文件")
+            _validate_rendered_media(output_path)
+        except subprocess.CalledProcessError as exc:
+            render_error = _render_error_from_process(exc)
+            plan.status = "failed"
+            plan.message = f"FFmpeg 渲染失败：{render_error}"
+            raise render_error from exc
         except (OSError, subprocess.SubprocessError) as exc:
             plan.status = "failed"
             plan.message = f"FFmpeg 渲染失败：{exc}"
@@ -493,7 +509,13 @@ class MontageRenderer:
 
     @staticmethod
     def _run(command: list[str]) -> None:
-        subprocess.run(command, check=True)
+        completed = subprocess.run(command, capture_output=True, text=True)
+        if completed.returncode:
+            raise MontageRenderError(
+                tool="ffmpeg",
+                exit_code=completed.returncode,
+                stderr=completed.stderr,
+            )
 
 
 _SCRIPT_APPROVED_STATUSES = {
@@ -696,6 +718,63 @@ def _probe_duration(path: Path) -> float:
         text=True,
     )
     return float(completed.stdout.strip())
+
+
+def _validate_rendered_media(output_path: Path) -> None:
+    if not output_path.is_file() or output_path.stat().st_size <= 0:
+        raise OSError("FFmpeg 未生成有效输出文件")
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,width,height",
+            "-of",
+            "json",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise MontageRenderError(
+            tool="ffprobe",
+            exit_code=completed.returncode,
+            stderr=completed.stderr,
+        )
+    try:
+        streams = json.loads(completed.stdout).get("streams", [])
+    except json.JSONDecodeError as exc:
+        raise OSError("ffprobe 返回了无效的媒体元数据") from exc
+    video_stream = next(
+        (stream for stream in streams if stream.get("codec_type") == "video"),
+        None,
+    )
+    audio_stream = next(
+        (stream for stream in streams if stream.get("codec_type") == "audio"),
+        None,
+    )
+    if video_stream is None or video_stream.get("codec_name") != "h264":
+        raise OSError("渲染输出缺少 H.264 视频轨")
+    if audio_stream is None or audio_stream.get("codec_name") != "aac":
+        raise OSError("渲染输出缺少 AAC 音频轨")
+    if video_stream.get("width") != 1080 or video_stream.get("height") != 1920:
+        raise OSError("渲染输出不是 1080×1920 竖版画幅")
+
+
+def _render_error_from_process(exc: subprocess.CalledProcessError) -> MontageRenderError:
+    command = exc.cmd
+    if isinstance(command, list | tuple) and command:
+        tool = Path(str(command[0])).name
+    else:
+        tool = "ffmpeg"
+    stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+    return MontageRenderError(
+        tool=tool,
+        exit_code=exc.returncode,
+        stderr=stderr,
+    )
 
 
 def _json_default(value: object) -> str:

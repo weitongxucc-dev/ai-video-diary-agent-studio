@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import subprocess
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.avatar_lipsync import (
+    Authorization,
+    AvatarPreviewService,
+    PersonProfile,
+    PronunciationEntry,
+    UnavailableAvatarAndLipSyncProvider,
+    VoiceProfile as VersionedVoiceProfile,
+)
 from app.auth import (
     ForbiddenError,
     OnboardingStateError,
@@ -56,18 +67,31 @@ from app.models import (
     utc_now,
 )
 from app.montage import MontagePlanner, MontageRenderer, MontageRepository
-from app.narration import NarrationArtifact, NarrationGenerator
+from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
+from app.product_hunt import ProductHuntClient
 from app.production import (
+    CreationPlan,
+    CreationPlanBlocker,
+    CreationPlanKnowledgeReference,
+    CreationPlanPronunciationReference,
+    CreationPlanSourceReference,
+    CreationPlanVoiceReference,
+    CreationTask,
+    MediaAuthorityError,
     MaterialCollection,
     NarrationArtifactRecord,
     ProductionBatch,
     ProductionBatchItem,
     ProductionProfile,
     ProductionRepository,
+    TopicCandidate as CreationTaskTopicCandidate,
+    TopicEvidenceReference,
+    TopicGenerationRun,
     VoiceProfile,
 )
+from app.voice_clone import VoiceCloneError
 from app.repository import (
     LEGACY_WORKSPACE_ID,
     EpisodeRepository,
@@ -80,12 +104,26 @@ from app.repository import (
 )
 from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
+from app.source_repository import SourceRepository
 from app.schemas import (
     ApproveTopicRequest,
+    AuthorizationResponse,
+    AuthorizationsResponse,
+    AuthorizationUpsertRequest,
     ArchiveSourcesRequest,
     ArchiveSourcesResponse,
+    AvatarLipSyncPreviewRequest,
     ContentTemplateSelectRequest,
     ContentTemplatesResponse,
+    CreationPlanConfirmRequest,
+    CreationPlanPreviewRequest,
+    CreationPlanPreviewResponse,
+    CreationPlanResponse,
+    CreationTaskTopicCandidateResponse,
+    CreationTaskTopicConfirmRequest,
+    CreationTaskTopicGenerateRequest,
+    CreationTaskTopicsResponse,
+    CreationTasksResponse,
     CreatorProfileLearnResult,
     CreatorProfileResponse,
     CreatorProfileUpdate,
@@ -110,6 +148,9 @@ from app.schemas import (
     FeedbackRevertRequest,
     FeedbackSummaryResponse,
     KnowledgeNoteResponse,
+    KnowledgeItemResponse,
+    KnowledgeItemsResponse,
+    ManualSourceItemRequest,
     ManualLinkRequest,
     MarkPublishedRequest,
     MaterialAssetResponse,
@@ -120,17 +161,22 @@ from app.schemas import (
     MaterialLibraryResponse,
     MaterialReviewRequest,
     MaterialSegmentUpdateRequest,
+    MediaCapabilityResponse,
+    MediaPreviewRunResponse,
+    MediaPreviewRunsResponse,
     ModelCatalogResponse,
     ModelInstallJobResponse,
     ModelInstallRequest,
     MontageClipCandidateResponse,
     MontageClipOrderRequest,
+    MontageClipResponse,
     MontageClipUpdateRequest,
     MontagePlanConfirmRequest,
     MontagePlanCreateRequest,
     MontagePlanResponse,
     MontagePlansResponse,
     MontageRenderRequest,
+    NarrationCueResponse,
     NarrationArtifactResponse,
     OnboardingCompletionResponse,
     PendingVideoResponse,
@@ -144,7 +190,6 @@ from app.schemas import (
     ProcessedVideoResponse,
     ProcessVideoBatchRequest,
     ProcessVideoRequest,
-    ProductionBatchCreateRequest,
     ProductionBatchesResponse,
     ProductionBatchResponse,
     ProductionChainResponse,
@@ -152,6 +197,12 @@ from app.schemas import (
     ProductionModeRequest,
     ProductionProfileResponse,
     ProductionProfileUpdateRequest,
+    PersonProfileResponse,
+    PersonProfilesResponse,
+    PersonProfileUpsertRequest,
+    PronunciationEntriesResponse,
+    PronunciationEntryResponse,
+    PronunciationEntryUpsertRequest,
     PublishMetricsUpdateRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
@@ -164,26 +215,55 @@ from app.schemas import (
     ScriptVersionRevertRequest,
     SetupPreflightResponse,
     SourceFileStatesResponse,
+    SourceConnectorCreateRequest,
+    SourceConnectorResponse,
+    SourceConnectorsResponse,
+    SourceItemDetailResponse,
+    SourceItemDetailsResponse,
     SourceItemResponse,
+    SourceRunEvidenceResponse,
+    SourceRunEvidencesResponse,
+    SourceSyncResponse,
     SourceItemsResponse,
+    SaveSourceItemToKnowledgeRequest,
     SourceSyncRetryResponse,
     SourceSyncStatusesResponse,
     SourceSyncStatusResponse,
     SystemStatusResponse,
     TopicEvidenceItemResponse,
     TopicEvidenceResponse,
+    TopicEgressPreflightResponse,
+    TopicEvidenceReferenceResponse,
+    TopicGenerationRunResponse,
+    TopicRouteSnapshotResponse,
     UploadVideoRequest,
-    VoiceCommandRequest,
-    VoiceCommandResponse,
+    VoicePreviewRequest,
     VoiceProfileResponse,
     VoiceProfilesResponse,
     VoiceProfileUpsertRequest,
+    VersionedVoiceProfileResponse,
+    VersionedVoiceProfilesResponse,
+    VersionedVoiceProfileUpsertRequest,
     VoiceTranscriptionResponse,
     WorkflowStatusResponse,
+    validate_logical_media_reference,
 )
 from app.services import EpisodeService
-from app.sources import ObsidianVault, TopicSourceItem
+from app.sources import (
+    KnowledgeItem,
+    ObsidianVault,
+    SourceBoundaryError,
+    SourceConnector,
+    SourceItem,
+    SourceSyncFailedError,
+    sync_source_connector,
+)
 from app.topics import (
+    CreationTaskGeneratedTopic,
+    CreationTaskTopicGenerationError,
+    CreationTaskTopicInput,
+    CreationTaskTopicSource,
+    OpenAICompatibleCreationTaskTopicGenerator,
     TopicGenerationConfigurationError,
     TopicGenerationResponseError,
     topic_generator_from_settings,
@@ -194,7 +274,6 @@ from app.video_pipeline import video_processing_pipeline_from_settings
 from app.visual_semantics import visual_semantic_provider_from_catalog
 from app.voice import transcribe_audio_bytes
 from app.voice_clone import voice_clone_provider_from_catalog
-from app.voice_commands import VoiceCommandPlan, parse_voice_command
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
@@ -211,6 +290,11 @@ app.add_middleware(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -250,6 +334,7 @@ settings = Settings.from_env()
 configure_process_temporary_directory(settings)
 set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
+source_repository = SourceRepository(settings.database_path)
 model_catalog = ModelCatalog(
     settings.model_root_path,
     settings.model_runtime_python_path,
@@ -274,6 +359,11 @@ montage_planner = MontagePlanner(
 )
 montage_renderer = MontageRenderer(settings.video_output_path)
 narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
+voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
+avatar_preview_service = AvatarPreviewService(
+    settings.video_output_path,
+    UnavailableAvatarAndLipSyncProvider(),
+)
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
 video_processor = FfmpegVideoProcessor(settings)
@@ -289,8 +379,9 @@ video_job_runner = VideoJobRunner()
 batch_job_runner = VideoJobRunner()
 edit_plan_apply_runner = None
 source_tracker = SourceTracker(video_inbox)
-manual_source_items: list[TopicSourceItem] = []
 auth_context = SupabaseAuthContext(settings)
+
+_EXTERNAL_URLS_CONFIGURATION_REQUIRED = "configuration_required"
 
 # Endpoints that are true pre-login / local-readiness probes and therefore
 # stay public even when Supabase auth is enabled. Everything else requires a
@@ -547,14 +638,14 @@ def get_production_foundation(request: Request) -> ProductionFoundationResponse:
         ),
         readiness=production_repo.readiness(workspace_id, profile=profile),
         recent_batches=[
-            ProductionBatchResponse.model_validate(batch, from_attributes=True)
+            _production_batch_response(batch)
             for batch in (
                 _recover_production_batch_if_needed(item)
                 for item in production_repo.list_batches(workspace_id)[:8]
             )
         ],
         recent_montage_plans=[
-            MontagePlanResponse.model_validate(plan, from_attributes=True)
+            _montage_plan_response(plan)
             for plan in montage_repo.recent(workspace_id, limit=8)
         ],
         eligible_episodes=[
@@ -592,6 +683,34 @@ def update_production_profile(
     workspace_id = current_workspace_id(request)
     current = production_repo.get_profile(workspace_id)
     updates = payload.model_dump()
+    legacy_voice_fields = {
+        "voice_name": str(updates["voice_name"]).strip(),
+        "voice_reference_path": updates["voice_reference_path"],
+        "voice_reference_text": str(updates["voice_reference_text"]).strip(),
+        "voice_consent_confirmed": bool(updates["voice_consent_confirmed"]),
+    }
+    current_legacy_voice_fields = {
+        "voice_name": current.voice_name,
+        "voice_reference_path": current.voice_reference_path,
+        "voice_reference_text": current.voice_reference_text,
+        "voice_consent_confirmed": current.voice_consent_confirmed,
+    }
+    submitted_legacy_voice_fields = payload.model_fields_set.intersection(
+        legacy_voice_fields
+    )
+    if any(
+        legacy_voice_fields[field] != current_legacy_voice_fields[field]
+        for field in submitted_legacy_voice_fields
+    ):
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "legacy_profile_voice_write_retired",
+                "impact": "生产档案中的旧声音字段不会再用于创作任务或新声音登记。",
+                "repair_action": "使用 /api/media/voice-profiles 保存带人物、授权和版本的声音档案。",
+                "retryable": False,
+            },
+        )
     duration_min = (
         int(updates["target_duration_min_seconds"])
         if updates["target_duration_min_seconds"] is not None
@@ -619,10 +738,10 @@ def update_production_profile(
         intro_text=str(updates["intro_text"]).strip(),
         outro_text=str(updates["outro_text"]).strip(),
         background_music_path=updates["background_music_path"],
-        voice_name=str(updates["voice_name"]).strip(),
-        voice_reference_path=updates["voice_reference_path"],
-        voice_reference_text=str(updates["voice_reference_text"]).strip(),
-        voice_consent_confirmed=bool(updates["voice_consent_confirmed"]),
+        voice_name=current.voice_name,
+        voice_reference_path=current.voice_reference_path,
+        voice_reference_text=current.voice_reference_text,
+        voice_consent_confirmed=current.voice_consent_confirmed,
         # Model readiness is maintained by the local model lifecycle, never by
         # an untrusted profile update from the browser.
         voice_model_status=(
@@ -641,75 +760,14 @@ def update_production_profile(
         factuality_gate_enabled=bool(updates["factuality_gate_enabled"]),
         cloud_enhancement_enabled=bool(updates["cloud_enhancement_enabled"]),
     )
-    if profile.voice_consent_confirmed and not profile.voice_reference_path:
-        raise HTTPException(status_code=400, detail="确认声音授权时必须选择参考音频")
-    if profile.voice_consent_confirmed and not profile.voice_reference_text:
-        raise HTTPException(status_code=400, detail="确认声音授权时必须填写参考音频对应文字")
-    if profile.voice_reference_path:
-        reference_path = Path(profile.voice_reference_path).expanduser()
-        if not reference_path.is_file():
-            raise HTTPException(status_code=400, detail="声音参考文件不存在")
     saved = production_repo.save_profile(profile)
     return ProductionProfileResponse.model_validate(saved, from_attributes=True)
 
 
-def _voice_profile_from_request(
-    workspace_id: str,
-    payload: VoiceProfileUpsertRequest,
-    current: VoiceProfile | None = None,
-) -> VoiceProfile:
-    reference_path = Path(payload.reference_audio_path).expanduser()
-    if not reference_path.is_file():
-        raise HTTPException(status_code=400, detail="声音参考文件不存在")
-    if reference_path.suffix.lower() != ".wav":
-        raise HTTPException(status_code=400, detail="声音参考文件必须是 WAV")
-    if payload.consent_confirmed and not payload.reference_text.strip():
-        raise HTTPException(status_code=400, detail="确认声音授权时必须填写参考文字")
-    runtime = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    existing = _voice_profiles_with_legacy_migration(workspace_id)
-    return VoiceProfile(
-        id=current.id if current is not None else f"voice_{uuid4().hex[:10]}",
-        workspace_id=workspace_id,
-        name=payload.name.strip(),
-        reference_audio_path=str(reference_path),
-        reference_text=payload.reference_text.strip(),
-        consent_confirmed=payload.consent_confirmed,
-        is_default=payload.is_default or (current is None and not existing),
-        model_id=QWEN3_TTS_06B_BASE_8BIT.id,
-        status=("ready" if runtime.ready else "failed" if runtime.state == "invalid" else "blocked"),
-        message=runtime.message,
-        created_at=current.created_at if current is not None else utc_now(),
-    )
-
-
-def _voice_profiles_with_legacy_migration(workspace_id: str) -> list[VoiceProfile]:
-    voices = production_repo.list_voice_profiles(workspace_id)
-    if voices:
-        return voices
-    profile = production_repo.get_profile(workspace_id)
-    if not profile.voice_reference_path or not profile.voice_reference_text.strip():
-        return []
-    runtime = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    migrated = VoiceProfile(
-        id=f"voice_{uuid4().hex[:10]}",
-        workspace_id=workspace_id,
-        name=profile.voice_name.strip() or "默认声音",
-        reference_audio_path=profile.voice_reference_path,
-        reference_text=profile.voice_reference_text,
-        consent_confirmed=profile.voice_consent_confirmed,
-        is_default=True,
-        model_id=QWEN3_TTS_06B_BASE_8BIT.id,
-        status=("ready" if runtime.ready else "failed" if runtime.state == "invalid" else "blocked"),
-        message=runtime.message,
-        created_at=profile.updated_at,
-    )
-    production_repo.save_voice_profile(migrated)
-    return [migrated]
-
-
 @app.get("/api/production/voices", response_model=VoiceProfilesResponse)
 def list_production_voices(request: Request) -> VoiceProfilesResponse:
-    voices = _voice_profiles_with_legacy_migration(current_workspace_id(request))
+    """Read historical voice rows only; new writes use versioned media profiles."""
+    voices = production_repo.list_voice_profiles(current_workspace_id(request))
     return VoiceProfilesResponse(
         voices=[
             VoiceProfileResponse.model_validate(voice, from_attributes=True)
@@ -724,9 +782,16 @@ def create_production_voice(
     request: Request,
     payload: VoiceProfileUpsertRequest,
 ) -> VoiceProfileResponse:
-    voice = _voice_profile_from_request(current_workspace_id(request), payload)
-    saved = production_repo.save_voice_profile(voice)
-    return VoiceProfileResponse.model_validate(saved, from_attributes=True)
+    del request, payload
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "legacy_voice_profile_write_retired",
+            "impact": "旧声音档案不会再作为创作任务的配音事实源。",
+            "repair_action": "使用 /api/media/voice-profiles 保存带人物、授权和版本的声音档案。",
+            "retryable": False,
+        },
+    )
 
 
 @app.put(
@@ -738,15 +803,16 @@ def update_production_voice(
     request: Request,
     payload: VoiceProfileUpsertRequest,
 ) -> VoiceProfileResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        current = production_repo.get_voice_profile(workspace_id, voice_profile_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    saved = production_repo.save_voice_profile(
-        _voice_profile_from_request(workspace_id, payload, current)
+    del voice_profile_id, request, payload
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "legacy_voice_profile_write_retired",
+            "impact": "旧声音档案不会再作为创作任务的配音事实源。",
+            "repair_action": "使用 /api/media/voice-profiles 创建新的声音版本。",
+            "retryable": False,
+        },
     )
-    return VoiceProfileResponse.model_validate(saved, from_attributes=True)
 
 
 @app.get("/api/production/voices/{voice_profile_id}/media")
@@ -759,26 +825,44 @@ def get_production_voice_media(
         voice = production_repo.get_voice_profile(workspace_id, voice_profile_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    reference_path = Path(voice.reference_audio_path).expanduser()
-    if reference_path.suffix.lower() != ".wav" or not reference_path.is_file():
-        raise HTTPException(status_code=404, detail="voice reference not found")
-    return FileResponse(reference_path, media_type="audio/wav", filename=reference_path.name)
+    raise _capability_unavailable(
+        "voice_reference_mapping",
+        message="声音参考仅保存为工作区逻辑引用，当前 API 未配置已授权媒体根映射。",
+        impact="不能直接读取或返回声音参考媒体。",
+        repair_action="配置工作区已授权媒体根映射后重试。",
+    )
 
 
 def _episode_voice_selection_response(
     workspace_id: str,
     episode_id: str,
 ) -> EpisodeVoiceSelectionResponse:
-    selected_id = production_repo.selected_episode_voice_id(workspace_id, episode_id)
-    voice = production_repo.resolve_voice_profile(workspace_id, episode_id)
+    identity = production_repo.selected_episode_versioned_voice_identity(
+        workspace_id,
+        episode_id,
+    )
+    if identity is None:
+        return EpisodeVoiceSelectionResponse(
+            episode_id=episode_id,
+            voice_profile_id=None,
+            voice_version=None,
+            language=None,
+            authorization_id=None,
+            authorization_version=None,
+            pronunciation_entry_ids=[],
+            source="none",
+        )
+    inputs = production_repo.resolve_episode_narration_inputs(workspace_id, episode_id)
+    voice = inputs.voice
     return EpisodeVoiceSelectionResponse(
         episode_id=episode_id,
-        voice=(
-            VoiceProfileResponse.model_validate(voice, from_attributes=True)
-            if voice is not None
-            else None
-        ),
-        source="episode" if selected_id else "default" if voice is not None else "legacy",
+        voice_profile_id=voice.id,
+        voice_version=voice.version,
+        language=voice.language,
+        authorization_id=voice.authorization.id,
+        authorization_version=voice.authorization.version,
+        pronunciation_entry_ids=[entry.id for entry in inputs.pronunciation_entries],
+        source="episode",
     )
 
 
@@ -795,7 +879,10 @@ def get_episode_voice_selection(
         repo.get(episode_id, workspace_id=workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="episode not found") from exc
-    return _episode_voice_selection_response(workspace_id, episode_id)
+    try:
+        return _episode_voice_selection_response(workspace_id, episode_id)
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
 
 
 @app.put(
@@ -810,14 +897,710 @@ def update_episode_voice_selection(
     workspace_id = current_workspace_id(request)
     try:
         repo.get(episode_id, workspace_id=workspace_id)
-        production_repo.select_episode_voice(
+        production_repo.select_episode_versioned_voice(
             workspace_id,
             episode_id,
             payload.voice_profile_id,
+            payload.voice_version,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="episode or voice profile not found") from exc
-    return _episode_voice_selection_response(workspace_id, episode_id)
+        raise HTTPException(status_code=404, detail="episode or versioned voice profile not found") from exc
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
+    try:
+        return _episode_voice_selection_response(workspace_id, episode_id)
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
+
+
+def _required_media_text(value: str, field: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} must not be blank")
+    return normalized
+
+
+def _media_text_values(values: list[str], field: str) -> tuple[str, ...]:
+    normalized = tuple(_required_media_text(value, field) for value in values)
+    if not normalized:
+        raise ValueError(f"{field} must not be empty")
+    return normalized
+
+
+def _optional_media_text_values(values: list[str], field: str) -> tuple[str, ...]:
+    return tuple(_required_media_text(value, field) for value in values)
+
+
+def _authorization_from_request(
+    workspace_id: str,
+    payload: AuthorizationUpsertRequest,
+) -> Authorization:
+    return Authorization(
+        id=_required_media_text(payload.id, "authorization id"),
+        workspace_id=workspace_id,
+        version=_required_media_text(payload.version, "authorization version"),
+        rights_holder=_required_media_text(payload.rights_holder, "rights holder"),
+        content_types=_media_text_values(payload.content_types, "content types"),
+        usage_scopes=_media_text_values(payload.usage_scopes, "usage scopes"),
+        effective_from=payload.effective_from,
+        expires_at=payload.expires_at,
+        evidence_reference=_required_media_text(
+            payload.evidence_reference, "evidence reference"
+        ),
+        status=payload.status,
+    )
+
+
+def _media_write_error(exc: ValueError) -> HTTPException:
+    status_code = 409 if "语义变更必须使用新版本" in str(exc) else 422
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
+def _media_authority_http_error(exc: MediaAuthorityError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": exc.reason,
+            "impact": exc.impact,
+            "repair_action": exc.repair_action,
+            "retryable": False,
+        },
+    )
+
+
+def _voice_clone_http_error(exc: VoiceCloneError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": exc.failure.reason,
+            "impact": exc.failure.impact,
+            "repair_action": exc.failure.repair_action,
+            "retryable": exc.failure.retryable,
+        },
+    )
+
+
+def _authorization_response(authorization: Authorization) -> AuthorizationResponse:
+    return AuthorizationResponse.model_validate(authorization, from_attributes=True)
+
+
+def _current_authorization(workspace_id: str, authorization: Authorization) -> Authorization:
+    return production_repo.get_authorization(workspace_id, authorization.id)
+
+
+def _person_profile_response(person: PersonProfile) -> PersonProfileResponse:
+    current_authorization = _current_authorization(person.workspace_id, person.authorization)
+    reason = current_authorization.failure_for(
+        content_type="person_likeness",
+        usage_scope="avatar_lipsync",
+    )
+    return PersonProfileResponse(
+        id=person.id,
+        workspace_id=person.workspace_id,
+        display_name=person.display_name,
+        version=person.version,
+        avatar_reference=person.avatar_reference,
+        background_capabilities=list(person.background_capabilities),
+        shot_capabilities=list(person.shot_capabilities),
+        authorization=_authorization_response(person.authorization),
+        current_authorization=_authorization_response(current_authorization),
+        runnable=reason is None,
+        runnable_reason=reason,
+    )
+
+
+def _versioned_voice_profile_response(
+    voice: VersionedVoiceProfile,
+) -> VersionedVoiceProfileResponse:
+    current_authorization = _current_authorization(voice.workspace_id, voice.authorization)
+    reason = current_authorization.failure_for(
+        content_type="voice",
+        usage_scope="narration",
+    )
+    return VersionedVoiceProfileResponse(
+        id=voice.id,
+        workspace_id=voice.workspace_id,
+        person_profile_id=voice.person_profile_id,
+        person_version=voice.person_version,
+        version=voice.version,
+        language=voice.language,
+        reference_audio_path=voice.reference_audio_path,
+        reference_text=voice.reference_text,
+        model_id=voice.model_id,
+        authorization=_authorization_response(voice.authorization),
+        current_authorization=_authorization_response(current_authorization),
+        runnable=reason is None,
+        runnable_reason=reason,
+    )
+
+
+def _pronunciation_entry_response(entry: PronunciationEntry) -> PronunciationEntryResponse:
+    return PronunciationEntryResponse.model_validate(entry, from_attributes=True)
+
+
+@app.get("/api/media/authorizations", response_model=AuthorizationsResponse)
+def list_media_authorizations(request: Request) -> AuthorizationsResponse:
+    authorizations = production_repo.list_authorizations(current_workspace_id(request))
+    return AuthorizationsResponse(
+        items=[_authorization_response(item) for item in authorizations],
+        total_count=len(authorizations),
+    )
+
+
+@app.post("/api/media/authorizations", response_model=AuthorizationResponse)
+def save_media_authorization(
+    request: Request,
+    payload: AuthorizationUpsertRequest,
+) -> AuthorizationResponse:
+    try:
+        saved = production_repo.save_authorization(
+            _authorization_from_request(current_workspace_id(request), payload)
+        )
+    except ValueError as exc:
+        raise _media_write_error(exc) from exc
+    return _authorization_response(saved)
+
+
+@app.get("/api/media/authorizations/{authorization_id}", response_model=AuthorizationResponse)
+def get_media_authorization(
+    authorization_id: str,
+    request: Request,
+    version: str | None = None,
+) -> AuthorizationResponse:
+    try:
+        authorization = production_repo.get_authorization(
+            current_workspace_id(request), authorization_id, version
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="authorization not found") from exc
+    return _authorization_response(authorization)
+
+
+@app.get(
+    "/api/media/authorizations/{authorization_id}/versions",
+    response_model=AuthorizationsResponse,
+)
+def list_media_authorization_versions(
+    authorization_id: str,
+    request: Request,
+) -> AuthorizationsResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_authorization(workspace_id, authorization_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="authorization not found") from exc
+    items = production_repo.list_authorization_versions(workspace_id, authorization_id)
+    return AuthorizationsResponse(
+        items=[_authorization_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+@app.get("/api/media/person-profiles", response_model=PersonProfilesResponse)
+def list_media_person_profiles(request: Request) -> PersonProfilesResponse:
+    people = production_repo.list_person_profiles(current_workspace_id(request))
+    return PersonProfilesResponse(
+        items=[_person_profile_response(item) for item in people],
+        total_count=len(people),
+    )
+
+
+@app.post("/api/media/person-profiles", response_model=PersonProfileResponse)
+def save_media_person_profile(
+    request: Request,
+    payload: PersonProfileUpsertRequest,
+) -> PersonProfileResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        saved = production_repo.save_person_profile(
+            PersonProfile(
+                id=_required_media_text(payload.id, "person id"),
+                workspace_id=workspace_id,
+                display_name=_required_media_text(payload.display_name, "display name"),
+                version=_required_media_text(payload.version, "person version"),
+                avatar_reference=validate_logical_media_reference(
+                    payload.avatar_reference,
+                    field="avatar reference",
+                    allowed_schemes={"asset", "workspace"},
+                ),
+                background_capabilities=_optional_media_text_values(
+                    payload.background_capabilities, "background capabilities"
+                ),
+                shot_capabilities=_optional_media_text_values(
+                    payload.shot_capabilities, "shot capabilities"
+                ),
+                authorization=_authorization_from_request(workspace_id, payload.authorization),
+            )
+        )
+    except ValueError as exc:
+        raise _media_write_error(exc) from exc
+    return _person_profile_response(saved)
+
+
+@app.get(
+    "/api/media/person-profiles/{person_id}",
+    response_model=PersonProfileResponse,
+)
+def get_media_person_profile(
+    person_id: str,
+    request: Request,
+    version: str | None = None,
+) -> PersonProfileResponse:
+    try:
+        person = production_repo.get_person_profile(
+            current_workspace_id(request), person_id, version
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="person profile not found") from exc
+    return _person_profile_response(person)
+
+
+@app.get(
+    "/api/media/person-profiles/{person_id}/versions",
+    response_model=PersonProfilesResponse,
+)
+def list_media_person_profile_versions(
+    person_id: str,
+    request: Request,
+) -> PersonProfilesResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_person_profile(workspace_id, person_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="person profile not found") from exc
+    items = production_repo.list_person_profile_versions(workspace_id, person_id)
+    return PersonProfilesResponse(
+        items=[_person_profile_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+@app.get("/api/media/voice-profiles", response_model=VersionedVoiceProfilesResponse)
+def list_media_voice_profiles(request: Request) -> VersionedVoiceProfilesResponse:
+    voices = production_repo.list_versioned_voice_profiles(current_workspace_id(request))
+    return VersionedVoiceProfilesResponse(
+        items=[_versioned_voice_profile_response(item) for item in voices],
+        total_count=len(voices),
+    )
+
+
+@app.post("/api/media/voice-profiles", response_model=VersionedVoiceProfileResponse)
+def save_media_voice_profile(
+    request: Request,
+    payload: VersionedVoiceProfileUpsertRequest,
+) -> VersionedVoiceProfileResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        saved = production_repo.save_versioned_voice_profile(
+            VersionedVoiceProfile(
+                id=_required_media_text(payload.id, "voice profile id"),
+                workspace_id=workspace_id,
+                person_profile_id=_required_media_text(
+                    payload.person_profile_id, "person profile id"
+                ),
+                person_version=_required_media_text(
+                    payload.person_version, "person version"
+                ),
+                version=_required_media_text(payload.version, "voice version"),
+                language=payload.language,
+                reference_audio_path=validate_logical_media_reference(
+                    payload.reference_audio_path,
+                    field="reference audio path",
+                    allowed_schemes={"workspace"},
+                ),
+                reference_text=_required_media_text(
+                    payload.reference_text, "reference text"
+                ),
+                model_id=_required_media_text(payload.model_id, "model id"),
+                authorization=_authorization_from_request(workspace_id, payload.authorization),
+            )
+        )
+    except (KeyError, ValueError) as exc:
+        if isinstance(exc, KeyError):
+            raise HTTPException(status_code=404, detail="person profile not found") from exc
+        raise _media_write_error(exc) from exc
+    return _versioned_voice_profile_response(saved)
+
+
+@app.get(
+    "/api/media/voice-profiles/{voice_profile_id}",
+    response_model=VersionedVoiceProfileResponse,
+)
+def get_media_voice_profile(
+    voice_profile_id: str,
+    request: Request,
+    version: str | None = None,
+) -> VersionedVoiceProfileResponse:
+    try:
+        voice = production_repo.get_versioned_voice_profile(
+            current_workspace_id(request), voice_profile_id, version
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice profile not found") from exc
+    return _versioned_voice_profile_response(voice)
+
+
+@app.get(
+    "/api/media/voice-profiles/{voice_profile_id}/versions",
+    response_model=VersionedVoiceProfilesResponse,
+)
+def list_media_voice_profile_versions(
+    voice_profile_id: str,
+    request: Request,
+) -> VersionedVoiceProfilesResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_versioned_voice_profile(workspace_id, voice_profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice profile not found") from exc
+    items = production_repo.list_versioned_voice_profile_versions(
+        workspace_id, voice_profile_id
+    )
+    return VersionedVoiceProfilesResponse(
+        items=[_versioned_voice_profile_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+@app.get(
+    "/api/media/pronunciation-entries",
+    response_model=PronunciationEntriesResponse,
+)
+def list_media_pronunciation_entries(request: Request) -> PronunciationEntriesResponse:
+    entries = production_repo.list_pronunciation_entries(current_workspace_id(request))
+    return PronunciationEntriesResponse(
+        items=[_pronunciation_entry_response(item) for item in entries],
+        total_count=len(entries),
+    )
+
+
+@app.post(
+    "/api/media/pronunciation-entries",
+    response_model=PronunciationEntryResponse,
+)
+def save_media_pronunciation_entry(
+    request: Request,
+    payload: PronunciationEntryUpsertRequest,
+) -> PronunciationEntryResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        scope_reference = (
+            _required_media_text(payload.scope_reference, "scope reference")
+            if payload.scope_reference is not None
+            else None
+        )
+        saved = production_repo.save_pronunciation_entry(
+            PronunciationEntry(
+                id=_required_media_text(payload.id, "pronunciation entry id"),
+                workspace_id=workspace_id,
+                term=_required_media_text(payload.term, "term"),
+                language=payload.language,
+                target_pronunciation=_required_media_text(
+                    payload.target_pronunciation, "target pronunciation"
+                ),
+                scope=payload.scope,
+                scope_reference=scope_reference,
+                version=_required_media_text(payload.version, "pronunciation version"),
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="person profile not found") from exc
+    except ValueError as exc:
+        raise _media_write_error(exc) from exc
+    return _pronunciation_entry_response(saved)
+
+
+@app.get(
+    "/api/media/pronunciation-entries/{entry_id}",
+    response_model=PronunciationEntryResponse,
+)
+def get_media_pronunciation_entry(
+    entry_id: str,
+    request: Request,
+    version: str | None = None,
+) -> PronunciationEntryResponse:
+    try:
+        entry = production_repo.get_pronunciation_entry(
+            current_workspace_id(request), entry_id, version
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="pronunciation entry not found") from exc
+    return _pronunciation_entry_response(entry)
+
+
+@app.get(
+    "/api/media/pronunciation-entries/{entry_id}/versions",
+    response_model=PronunciationEntriesResponse,
+)
+def list_media_pronunciation_entry_versions(
+    entry_id: str,
+    request: Request,
+) -> PronunciationEntriesResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_pronunciation_entry(workspace_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="pronunciation entry not found") from exc
+    items = production_repo.list_pronunciation_entry_versions(workspace_id, entry_id)
+    return PronunciationEntriesResponse(
+        items=[_pronunciation_entry_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+def _capability_unavailable(
+    capability_id: str,
+    *,
+    message: str,
+    impact: str,
+    repair_action: str,
+) -> HTTPException:
+    return HTTPException(
+        status_code=501,
+        detail={
+            "error": "capability_unavailable",
+            "capability_id": capability_id,
+            "detail": message,
+            "impact": impact,
+            "repair_action": repair_action,
+            "retryable": False,
+        },
+    )
+
+
+@app.get(
+    "/api/media/capabilities/voice-clone",
+    response_model=MediaCapabilityResponse,
+)
+def get_voice_clone_capability() -> MediaCapabilityResponse:
+    if not voice_clone_provider.ready:
+        raise _capability_unavailable(
+            "voice_clone",
+            message=voice_clone_provider.message,
+            impact="声音复制未执行，不能产出或返回配音媒体。",
+            repair_action="安装并配置本地声音复制运行环境后重新查询。",
+        )
+    return MediaCapabilityResponse(
+        capability_id="voice_clone",
+        available=True,
+        model_id=voice_clone_provider.model_id,
+        message=voice_clone_provider.message,
+        impact=None,
+        repair_action=None,
+    )
+
+
+@app.get(
+    "/api/media/capabilities/avatar-lipsync",
+    response_model=MediaCapabilityResponse,
+)
+def get_avatar_lipsync_capability() -> MediaCapabilityResponse:
+    raise _capability_unavailable(
+        "avatar_lipsync",
+        message="人物口型能力尚未配置。",
+        impact="人物与口型步骤未完成，不能生成或返回人物视频。",
+        repair_action="配置明确的本地人物口型运行环境后重新查询。",
+    )
+
+
+def _preview_output_path(run) -> Path | None:
+    if run.status != "succeeded" or not run.output_path:
+        return None
+    root = Path(settings.video_output_path).expanduser().resolve()
+    path = Path(run.output_path).expanduser().resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    return path
+
+
+def _media_preview_response(run) -> MediaPreviewRunResponse:
+    output_url = (
+        f"/api/media/previews/{run.preview_type}/{run.identity}/media"
+        if _preview_output_path(run) is not None
+        else None
+    )
+    return MediaPreviewRunResponse(
+        id=run.id,
+        workspace_id=run.workspace_id,
+        preview_type=run.preview_type,
+        identity=run.identity,
+        attempt=run.attempt,
+        status=run.status,
+        capability_id=run.capability_id,
+        model_id=run.model_id,
+        language=run.language,
+        person_profile_id=run.person_profile_id,
+        person_version=run.person_version,
+        voice_profile_id=run.voice_profile_id,
+        voice_version=run.voice_version,
+        authorization_id=run.authorization_id,
+        authorization_version=run.authorization_version,
+        output_url=output_url,
+        reason=run.reason,
+        impact=run.impact,
+        repair_action=run.repair_action,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+def _preview_precondition_error(
+    *,
+    error: str,
+    detail: str,
+    impact: str,
+    repair_action: str,
+    status_code: int = 409,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "error": error,
+            "detail": detail,
+            "impact": impact,
+            "repair_action": repair_action,
+            "retryable": False,
+        },
+    )
+
+
+@app.post("/api/media/previews/voice", response_model=MediaPreviewRunResponse)
+def request_voice_preview(
+    request: Request,
+    payload: VoicePreviewRequest,
+) -> MediaPreviewRunResponse:
+    try:
+        run = voice_preview_service.request(
+            repository=production_repo,
+            workspace_id=current_workspace_id(request),
+            voice_profile_id=payload.voice_profile_id,
+            voice_version=payload.voice_version,
+            preview_text=payload.preview_text,
+            retry=payload.retry,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice profile not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _media_preview_response(run)
+
+
+@app.post(
+    "/api/media/previews/avatar-lipsync",
+    response_model=MediaPreviewRunResponse,
+)
+def request_avatar_lipsync_preview(
+    request: Request,
+    payload: AvatarLipSyncPreviewRequest,
+) -> MediaPreviewRunResponse:
+    workspace_id = current_workspace_id(request)
+    voice_run = production_repo.get_media_preview_run(
+        workspace_id,
+        "voice",
+        payload.voice_preview_identity,
+    )
+    if voice_run is None:
+        raise HTTPException(status_code=404, detail="voice preview not found")
+    audio_path = _preview_output_path(voice_run)
+    if voice_run.status != "succeeded" or audio_path is None:
+        raise _preview_precondition_error(
+            error="voice_preview_not_succeeded",
+            detail="avatar preview requires a succeeded voice preview with a safe output.",
+            impact="人物口型预览未开始，不能生成或返回人物视频。",
+            repair_action="完成当前工作区的声音预览后重试。",
+        )
+    try:
+        run = avatar_preview_service.request(
+            repository=production_repo,
+            workspace_id=workspace_id,
+            person_id=payload.person_profile_id,
+            person_version=payload.person_version,
+            voice_profile_id=payload.voice_profile_id,
+            voice_version=payload.voice_version,
+            audio_path=str(audio_path),
+            audio_cache_key=voice_run.identity,
+            language=voice_run.language,
+            motion=payload.motion,
+            expression=payload.expression,
+            authorization_id=payload.authorization_id,
+            authorization_version=payload.authorization_version,
+            model_id=payload.model_id,
+            retry=payload.retry,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="media preview dependency not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _media_preview_response(run)
+
+
+@app.get("/api/media/previews", response_model=MediaPreviewRunsResponse)
+def list_media_previews(
+    request: Request,
+    preview_type: str | None = None,
+) -> MediaPreviewRunsResponse:
+    if preview_type not in {None, "voice", "avatar_lipsync"}:
+        raise HTTPException(status_code=422, detail="invalid preview type")
+    workspace_id = current_workspace_id(request)
+    latest_by_identity = {}
+    for run in production_repo.list_media_preview_runs(workspace_id, preview_type):
+        current = latest_by_identity.get(run.identity)
+        if current is None or run.attempt > current.attempt:
+            latest_by_identity[run.identity] = run
+    runs = sorted(
+        latest_by_identity.values(),
+        key=lambda run: (run.finished_at or run.started_at, run.attempt),
+        reverse=True,
+    )
+    return MediaPreviewRunsResponse(
+        items=[_media_preview_response(run) for run in runs],
+        total_count=len(runs),
+    )
+
+
+@app.get(
+    "/api/media/previews/{preview_type}/{identity}/attempts",
+    response_model=MediaPreviewRunsResponse,
+)
+def list_media_preview_attempts(
+    preview_type: str,
+    identity: str,
+    request: Request,
+) -> MediaPreviewRunsResponse:
+    if preview_type not in {"voice", "avatar_lipsync"}:
+        raise HTTPException(status_code=422, detail="invalid preview type")
+    workspace_id = current_workspace_id(request)
+    if production_repo.get_media_preview_run(workspace_id, preview_type, identity) is None:
+        raise HTTPException(status_code=404, detail="media preview not found")
+    runs = production_repo.list_media_preview_attempts(workspace_id, preview_type, identity)
+    return MediaPreviewRunsResponse(
+        items=[_media_preview_response(run) for run in runs],
+        total_count=len(runs),
+    )
+
+
+@app.get("/api/media/previews/{preview_type}/{identity}/media")
+def stream_media_preview_output(
+    preview_type: str,
+    identity: str,
+    request: Request,
+) -> FileResponse:
+    if preview_type not in {"voice", "avatar_lipsync"}:
+        raise HTTPException(status_code=422, detail="invalid preview type")
+    run = production_repo.get_media_preview_run(
+        current_workspace_id(request), preview_type, identity
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="media preview not found")
+    output_path = _preview_output_path(run)
+    if output_path is None:
+        raise HTTPException(status_code=404, detail="media preview output not found")
+    media_type = "audio/wav" if output_path.suffix.lower() == ".wav" else "video/mp4"
+    return FileResponse(output_path, media_type=media_type, filename=output_path.name)
 
 
 @app.get(
@@ -855,6 +1638,1183 @@ def create_material_collection(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="parent collection not found") from exc
     return MaterialCollectionResponse.model_validate(saved, from_attributes=True)
+
+
+def _material_workspace_reference(asset) -> str | None:
+    root = Path(settings.video_inbox_path).expanduser().resolve()
+    try:
+        relative_path = Path(asset.path).expanduser().resolve().relative_to(root)
+    except ValueError:
+        return None
+    if not relative_path.parts:
+        return None
+    return f"workspace://{relative_path.as_posix()}"
+
+
+def _material_asset_response(asset) -> MaterialAssetResponse:
+    response = MaterialAssetResponse.model_validate(asset, from_attributes=True)
+    return response.model_copy(
+        update={"workspace_reference": _material_workspace_reference(asset)}
+    )
+
+
+def _safe_montage_media_path(plan, field: str) -> Path | None:
+    if plan.status != "rendered":
+        return None
+    stored_path = getattr(plan, field)
+    if not stored_path:
+        return None
+    root = Path(settings.video_output_path).expanduser().resolve()
+    path = Path(stored_path).expanduser().resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    return path
+
+
+def _montage_narration_status(workspace_id: str, narration_reference: str | None) -> str:
+    if not narration_reference:
+        return "unavailable"
+    try:
+        path = production_repo.resolve_authorized_narration_audio_reference(
+            workspace_id,
+            narration_reference,
+        )
+    except MediaAuthorityError:
+        return "unavailable"
+    return "ready" if path.is_file() and path.stat().st_size > 0 else "unavailable"
+
+
+def _montage_clip_response(workspace_id: str, clip) -> MontageClipResponse:
+    response = MontageClipResponse.model_validate(clip, from_attributes=True)
+    try:
+        source_reference = production_repo.workspace_media_reference_for_asset(
+            workspace_id,
+            clip.asset_id,
+        )
+    except (KeyError, MediaAuthorityError):
+        source_reference = None
+    return response.model_copy(update={"source_path": source_reference})
+
+
+def _montage_plan_response(plan) -> MontagePlanResponse:
+    output_path = _safe_montage_media_path(plan, "output_path")
+    subtitle_path = _safe_montage_media_path(plan, "subtitle_path")
+    subtitle_status = (
+        "ready"
+        if subtitle_path is not None
+        else "not_generated"
+        if not plan.subtitle_path
+        else "unavailable"
+    )
+    return MontagePlanResponse.model_validate(
+        {
+            "id": plan.id,
+            "workspace_id": plan.workspace_id,
+            "batch_id": plan.batch_id,
+            "episode_id": plan.episode_id,
+            "script_title": plan.script_title,
+            "status": plan.status,
+            "cues": [
+                NarrationCueResponse.model_validate(cue, from_attributes=True)
+                for cue in plan.cues
+            ],
+            "clips": [
+                _montage_clip_response(plan.workspace_id, clip)
+                for clip in plan.clips
+            ],
+            "duration_seconds": plan.duration_seconds,
+            "low_confidence_clip_count": plan.low_confidence_clip_count,
+            "aspect_ratio": "9:16",
+            "narration_status": _montage_narration_status(
+                plan.workspace_id, plan.narration_audio_path
+            ),
+            "subtitle_status": subtitle_status,
+            "output_url": (
+                f"/api/production/montage-plans/{plan.id}/output"
+                if output_path is not None
+                else None
+            ),
+            "subtitle_url": (
+                f"/api/production/montage-plans/{plan.id}/subtitle"
+                if subtitle_path is not None
+                else None
+            ),
+            "message": plan.message,
+            "created_at": plan.created_at,
+            "updated_at": plan.updated_at,
+        }
+    )
+
+
+def _production_batch_response(batch: ProductionBatch) -> ProductionBatchResponse:
+    items = []
+    for item in batch.items:
+        plan = None
+        if item.plan_id:
+            try:
+                plan = montage_repo.get(batch.workspace_id, item.plan_id)
+            except KeyError:
+                pass
+        output_path = _safe_montage_media_path(plan, "output_path") if plan else None
+        subtitle_path = _safe_montage_media_path(plan, "subtitle_path") if plan else None
+        items.append(
+            {
+                "episode_id": item.episode_id,
+                "status": item.status,
+                "plan_id": item.plan_id,
+                "aspect_ratio": "9:16",
+                "narration_status": _montage_narration_status(
+                    batch.workspace_id,
+                    plan.narration_audio_path if plan else None,
+                ),
+                "subtitle_status": (
+                    "ready"
+                    if subtitle_path is not None
+                    else "not_generated"
+                    if plan is None or not plan.subtitle_path
+                    else "unavailable"
+                ),
+                "output_url": (
+                    f"/api/production/montage-plans/{plan.id}/output"
+                    if output_path is not None
+                    else None
+                ),
+                "subtitle_url": (
+                    f"/api/production/montage-plans/{plan.id}/subtitle"
+                    if subtitle_path is not None
+                    else None
+                ),
+                "message": item.message,
+                "attempts": item.attempts,
+                "updated_at": item.updated_at,
+            }
+        )
+    return ProductionBatchResponse.model_validate(
+        {
+            "id": batch.id,
+            "workspace_id": batch.workspace_id,
+            "name": batch.name,
+            "target_count": batch.target_count,
+            "status": batch.status,
+            "episode_ids": batch.episode_ids,
+            "items": items,
+            "blocker_codes": batch.blocker_codes,
+            "message": batch.message,
+            "rendered_count": batch.rendered_count,
+            "waiting_review_count": batch.waiting_review_count,
+            "failed_count": batch.failed_count,
+            "started_at": batch.started_at,
+            "finished_at": batch.finished_at,
+            "created_at": batch.created_at,
+            "updated_at": batch.updated_at,
+        }
+    )
+
+
+def _source_item_identity(item: SourceItem) -> str:
+    """Return a non-secret identity for the exact SourceItem snapshot in a Plan."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "id": item.id,
+                "connector_id": item.connector_id,
+                "source_label": item.source_label,
+                "source_url": item.source_url,
+                "content_type": item.content_type,
+                "author": item.author,
+                "published_at": item.published_at.isoformat()
+                if item.published_at is not None
+                else None,
+                "body": item.body,
+                "subtitles": item.subtitles,
+                "media_references": list(item.media_references),
+                "license": item.license,
+                "title": item.title,
+                "file_reference": item.file_reference,
+                "created_at": item.created_at.isoformat(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _creation_plan_preflight(
+    workspace_id: str,
+    payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
+) -> CreationPlan:
+    knowledge_references = [
+        CreationPlanKnowledgeReference(
+            id=item.id,
+            version=item.version,
+            title=item.title,
+            authorization=item.authorization,
+            ownership=item.ownership,
+        )
+        for item in source_repository.list_knowledge_items(workspace_id)
+    ]
+    source_references = [
+        CreationPlanSourceReference(
+            id=item.id,
+            connector_id=item.connector_id,
+            source_label=item.source_label,
+            title=item.title,
+            license=item.license,
+            identity=_source_item_identity(item),
+        )
+        for item in source_repository.list_source_items(workspace_id)
+    ]
+    approved_assets = [
+        asset
+        for asset in production_repo.list_assets(workspace_id)
+        if asset.review_status == "approved"
+        and asset.rights_confirmed
+        and asset.brand_safe
+        and asset.usage_role in {"a_roll", "b_roll"}
+    ]
+    approved_clips = [
+        segment
+        for asset in approved_assets
+        for segment in asset.segments
+        if segment.review_status == "approved"
+        and segment.usage_role == "b_roll"
+    ]
+    language_to_voice_language = {
+        "zh-CN": "zh",
+        "en-US": "en",
+        "zh-CN/en-US": "zh-en",
+    }
+    requested_voice_language = language_to_voice_language[payload.language]
+    active_voices = []
+    for voice in production_repo.list_versioned_voice_profiles(workspace_id):
+        authorization = production_repo.get_authorization(
+            workspace_id,
+            voice.authorization.id,
+        )
+        if authorization.failure_for(content_type="voice", usage_scope="narration") is None:
+            active_voices.append((voice, authorization))
+    selected_voice_pair = next(
+        (
+            (voice, authorization)
+            for voice, authorization in active_voices
+            if voice.language in {requested_voice_language, "zh-en"}
+        ),
+        None,
+    )
+    selected_voice = None
+    pronunciation_references: list[CreationPlanPronunciationReference] = []
+    person_authorization_failure: str | None = None
+    if selected_voice_pair is not None:
+        voice, authorization = selected_voice_pair
+        person = production_repo.get_person_profile(
+            workspace_id,
+            voice.person_profile_id,
+            voice.person_version,
+        )
+        person_authorization = production_repo.get_authorization(
+            workspace_id,
+            person.authorization.id,
+        )
+        person_authorization_failure = person_authorization.failure_for(
+            content_type="person_likeness",
+            usage_scope="avatar_lipsync",
+        )
+        selected_voice = CreationPlanVoiceReference(
+            profile_id=voice.id,
+            version=voice.version,
+            person_profile_id=voice.person_profile_id,
+            person_version=voice.person_version,
+            person_authorization_id=person_authorization.id,
+            person_authorization_version=person_authorization.version,
+            authorization_id=authorization.id,
+            authorization_version=authorization.version,
+            language=voice.language,
+            model_id=voice.model_id,
+        )
+        pronunciation_references = [
+            CreationPlanPronunciationReference(
+                id=entry.id,
+                version=entry.version,
+                scope=entry.scope,
+                scope_reference=entry.scope_reference,
+                language=entry.language,
+            )
+            for entry in production_repo.list_applicable_pronunciation_entries(
+                workspace_id=workspace_id,
+                person_profile_id=voice.person_profile_id,
+                episode_id="",
+            )
+        ]
+    model_snapshot = [
+        {
+            "id": status.model.id,
+            "capability": status.model.capability,
+            "state": status.state,
+            "ready": status.ready,
+            "message": status.message,
+        }
+        for status in model_catalog.list_statuses()
+    ]
+    model_by_id = {str(item["id"]): item for item in model_snapshot}
+    blockers: list[CreationPlanBlocker] = []
+    if not knowledge_references and not source_references:
+        blockers.append(
+            CreationPlanBlocker(
+                reason="content_sources_missing",
+                impact="没有已保存的知识库内容或信息源条目，不能可靠进入选题阶段。",
+                repair_action="先保存用户知识或完成一个可用信息源同步，再重新预检。",
+                stage="topic",
+                blocks_confirmation=True,
+            )
+        )
+    if selected_voice is None:
+        reason = (
+            "voice_language_unavailable"
+            if active_voices
+            else "voice_authorization_missing"
+        )
+        blockers.append(
+            CreationPlanBlocker(
+                reason=reason,
+                impact="当前方案不能进入需要该语言授权声音的配音阶段。",
+                repair_action="登记当前工作区可用语言的授权声音版本，或调整方案语言。",
+                stage="narration",
+                blocks_confirmation=False,
+            )
+        )
+    else:
+        model = model_by_id.get(selected_voice.model_id)
+        if model is None or not bool(model["ready"]):
+            blockers.append(
+                CreationPlanBlocker(
+                    reason="voice_model_unavailable",
+                    impact="当前方案不能进入配音阶段，但可先创建任务并进行选题。",
+                    repair_action="安装或修复所选声音版本要求的模型后，再从配音阶段继续。",
+                    stage="narration",
+                    blocks_confirmation=False,
+                )
+            )
+        if person_authorization_failure is not None:
+            blockers.append(
+                CreationPlanBlocker(
+                    reason=person_authorization_failure,
+                    impact="当前方案不能进入人物口型阶段，但可先创建任务并进行选题。",
+                    repair_action="更新人物形象的有效授权后，再从人物与口型阶段继续。",
+                    stage="avatar_lipsync",
+                    blocks_confirmation=False,
+                )
+            )
+    if not approved_clips:
+        blockers.append(
+            CreationPlanBlocker(
+                reason="approved_material_clips_missing",
+                impact="当前方案不能进入自动选片和视频剪辑阶段。",
+                repair_action="审核并标记至少一个当前工作区可用的 B-roll 镜头后继续。",
+                stage="video_editing",
+                blocks_confirmation=False,
+            )
+        )
+    name = payload.name or f"创作任务：{payload.goal[:48]}"
+    fingerprint_payload = {
+        "goal": payload.goal,
+        "name": name,
+        "target_count": payload.target_count,
+        "language": payload.language,
+        "aspect_ratio": payload.aspect_ratio,
+        "duration_target_seconds": payload.duration_target_seconds,
+        "knowledge_references": [item.__dict__ for item in knowledge_references],
+        "source_references": [item.__dict__ for item in source_references],
+        "selected_voice": selected_voice.__dict__ if selected_voice else None,
+        "pronunciation_references": [
+            item.__dict__ for item in pronunciation_references
+        ],
+        "approved_asset_count": len(approved_assets),
+        "approved_clip_count": len(approved_clips),
+        "material_rule_summary": "仅计入已审核、已确认授权且品牌安全的 B-roll 镜头。",
+        "model_snapshot": model_snapshot,
+        "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],
+        "blockers": [item.__dict__ for item in blockers],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return CreationPlan(
+        id="",
+        workspace_id=workspace_id,
+        goal=payload.goal,
+        name=name,
+        target_count=payload.target_count,
+        language=payload.language,
+        aspect_ratio=payload.aspect_ratio,
+        duration_target_seconds=payload.duration_target_seconds,
+        knowledge_references=knowledge_references,
+        source_references=source_references,
+        selected_voice=selected_voice,
+        pronunciation_references=pronunciation_references,
+        approved_asset_count=len(approved_assets),
+        approved_clip_count=len(approved_clips),
+        material_rule_summary=str(fingerprint_payload["material_rule_summary"]),
+        model_snapshot=model_snapshot,
+        confirmation_points=list(fingerprint_payload["confirmation_points"]),
+        blockers=blockers,
+        preflight_fingerprint=fingerprint,
+    )
+
+
+def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewResponse:
+    return CreationPlanPreviewResponse.model_validate(
+        {
+            "goal": plan.goal,
+            "name": plan.name,
+            "target_count": plan.target_count,
+            "language": plan.language,
+            "aspect_ratio": plan.aspect_ratio,
+            "duration_target_seconds": plan.duration_target_seconds,
+            "knowledge_references": [item.__dict__ for item in plan.knowledge_references],
+            "source_references": [item.__dict__ for item in plan.source_references],
+            "selected_voice": (
+                plan.selected_voice.__dict__ if plan.selected_voice is not None else None
+            ),
+            "pronunciation_references": [
+                item.__dict__ for item in plan.pronunciation_references
+            ],
+            "approved_asset_count": plan.approved_asset_count,
+            "approved_clip_count": plan.approved_clip_count,
+            "material_rule_summary": plan.material_rule_summary,
+            "model_snapshot": plan.model_snapshot,
+            "confirmation_points": plan.confirmation_points,
+            "blockers": [item.__dict__ for item in plan.blockers],
+            "confirmable": not any(
+                blocker.blocks_confirmation for blocker in plan.blockers
+            ),
+            "preflight_fingerprint": plan.preflight_fingerprint,
+        }
+    )
+
+
+def _creation_plan_response(
+    plan: CreationPlan,
+    task: CreationTask,
+) -> CreationPlanResponse:
+    payload = _creation_plan_preview_response(plan).model_dump()
+    payload.update(
+        {
+            "id": plan.id,
+            "workspace_id": plan.workspace_id,
+            "status": plan.status,
+            "creation_task": task.__dict__,
+            "created_at": plan.created_at,
+            "confirmed_at": plan.confirmed_at,
+            "updated_at": plan.updated_at,
+        }
+    )
+    return CreationPlanResponse.model_validate(payload)
+
+
+class _CreationTaskTopicPreflightError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> None:
+        self.reason = reason
+        self.impact = impact
+        self.repair_action = repair_action
+        self.retryable = retryable
+        super().__init__(reason)
+
+
+def _topic_route_snapshot() -> dict[str, object]:
+    provider_kind = settings.effective_llm_provider
+    base_url = settings.effective_llm_base_url
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "unconfigured"
+    try:
+        port = f":{parsed.port}" if parsed.port else ""
+    except ValueError:
+        port = ""
+    endpoint_identity = (
+        f"{parsed.scheme or 'unknown'}://{host}{port}"
+        if host != "unconfigured"
+        else "unconfigured"
+    )
+    execution_location = (
+        "local"
+        if provider_kind == "ollama" or host in {"localhost", "127.0.0.1", "::1"}
+        else "cloud"
+    )
+    availability = "unverified" if settings.llm_configured else "unconfigured"
+    connection_version = hashlib.sha256(
+        f"{provider_kind}|{endpoint_identity}|{settings.effective_llm_model}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "provider_kind": provider_kind,
+        "execution_location": execution_location,
+        "model_id": settings.effective_llm_model,
+        "endpoint_identity": endpoint_identity,
+        "connection_version": connection_version,
+        "availability": availability,
+        "checked_at": utc_now(),
+    }
+
+
+def _safe_topic_source_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return value
+
+
+def _topic_text_excerpt(value: str | None) -> str:
+    return " ".join((value or "").split())[:8_000]
+
+
+def _creation_task_topic_inputs(
+    workspace_id: str,
+    task: CreationTask,
+    plan: CreationPlan,
+    *,
+    cloud_egress: bool,
+) -> tuple[
+    tuple[CreationTaskTopicSource, ...],
+    list[dict[str, object]],
+    dict[str, dict[str, object]],
+]:
+    if plan.workspace_id != workspace_id or task.plan_id != plan.id:
+        raise _CreationTaskTopicPreflightError(
+            reason="creation_plan_relation_invalid",
+            impact="无法确认本次选题使用的已确认方案，未调用文字模型。",
+            repair_action="重新从当前创作任务进入内容预检并确认方案。",
+            retryable=False,
+        )
+    provider_sources: list[CreationTaskTopicSource] = []
+    input_references: list[dict[str, object]] = []
+    evidence_by_reference_id: dict[str, dict[str, object]] = {}
+    for reference in plan.knowledge_references:
+        try:
+            item = source_repository.get_knowledge_item(workspace_id, reference.id)
+        except KeyError as exc:
+            raise _CreationTaskTopicPreflightError(
+                reason="knowledge_reference_missing",
+                impact="方案中的知识库资料已不可用，未调用文字模型。",
+                repair_action="重新执行内容预检，确认仍可用的知识资料后重试。",
+                retryable=True,
+            ) from exc
+        if (
+            item.version != reference.version
+            or item.ownership != reference.ownership
+            or item.authorization != reference.authorization
+        ):
+            raise _CreationTaskTopicPreflightError(
+                reason="knowledge_reference_stale",
+                impact="方案中的知识版本已变化，未调用文字模型。",
+                repair_action="重新执行内容预检并确认最新知识版本。",
+                retryable=True,
+            )
+        if not item.ownership.strip() or not item.authorization.strip():
+            raise _CreationTaskTopicPreflightError(
+                reason="knowledge_authorization_invalid",
+                impact="知识资料缺少可验证的拥有权或授权，不能发送给文字模型。",
+                repair_action="补齐该知识条目的拥有权、授权和版本后重新预检。",
+                retryable=True,
+            )
+        text = _topic_text_excerpt(item.body)
+        if not text:
+            raise _CreationTaskTopicPreflightError(
+                reason="knowledge_text_unavailable",
+                impact="知识资料没有可发送的文字摘录，未调用文字模型。",
+                repair_action="保存已授权的文字内容后重新预检；本机文件路径不会发送给模型。",
+                retryable=True,
+            )
+        reference_id = f"knowledge:{item.id}:{item.version}"
+        provider_sources.append(
+            CreationTaskTopicSource(
+                reference_id=reference_id,
+                kind="knowledge",
+                title=item.title,
+                text=text,
+            )
+        )
+        input_references.append(
+            {
+                "reference_id": reference_id,
+                "kind": "knowledge",
+                "object_id": item.id,
+                "version_or_identity": item.version,
+                "title": item.title,
+            }
+        )
+        evidence_by_reference_id[reference_id] = {
+            "kind": "knowledge",
+            "reference_id": item.id,
+            "version_or_identity": item.version,
+            "title": item.title,
+            "authorization_or_license": item.authorization,
+            "source_url": None,
+        }
+    for reference in plan.source_references:
+        try:
+            item = source_repository.get_source_item(workspace_id, reference.id)
+        except KeyError as exc:
+            raise _CreationTaskTopicPreflightError(
+                reason="source_reference_missing",
+                impact="方案中的信息源条目已不可用，未调用文字模型。",
+                repair_action="重新同步或重新选择信息源后执行内容预检。",
+                retryable=True,
+            ) from exc
+        if (
+            item.connector_id != reference.connector_id
+            or item.title != reference.title
+            or item.license != reference.license
+            or not reference.identity
+            or _source_item_identity(item) != reference.identity
+        ):
+            raise _CreationTaskTopicPreflightError(
+                reason="source_reference_stale",
+                impact="方案中的信息源身份或许可已变化，未调用文字模型。",
+                repair_action="重新执行内容预检并确认最新信息源条目。",
+                retryable=True,
+            )
+        license_value = item.license.strip()
+        if cloud_egress and (
+            not license_value
+            or license_value.casefold() in {"unknown", "unverified"}
+        ):
+            raise _CreationTaskTopicPreflightError(
+                reason="source_license_unverified",
+                impact="信息源许可未知或未验证，不能发送到云端文字模型。",
+                repair_action="补齐该信息源条目的许可后重新预检。",
+                retryable=True,
+            )
+        text = _topic_text_excerpt(item.body or item.subtitles)
+        if not text:
+            raise _CreationTaskTopicPreflightError(
+                reason="source_text_unavailable",
+                impact="信息源没有可发送的文字摘录，未调用文字模型。",
+                repair_action="保存该来源的已授权正文或字幕后重新预检。",
+                retryable=True,
+            )
+        reference_id = f"source:{item.id}"
+        provider_sources.append(
+            CreationTaskTopicSource(
+                reference_id=reference_id,
+                kind="source",
+                title=item.title,
+                text=text,
+            )
+        )
+        input_references.append(
+            {
+                "reference_id": reference_id,
+                "kind": "source",
+                "object_id": item.id,
+                "version_or_identity": _source_item_identity(item),
+                "title": item.title,
+            }
+        )
+        evidence_by_reference_id[reference_id] = {
+            "kind": "source",
+            "reference_id": item.id,
+            "version_or_identity": _source_item_identity(item),
+            "title": item.title,
+            "authorization_or_license": license_value,
+            "source_url": _safe_topic_source_url(item.source_url),
+        }
+    if not provider_sources:
+        raise _CreationTaskTopicPreflightError(
+            reason="content_sources_missing",
+            impact="当前方案没有可发送的已授权文字资料，未调用文字模型。",
+            repair_action="保存知识或同步已授权的信息源后重新预检。",
+            retryable=True,
+        )
+    return tuple(provider_sources), input_references, evidence_by_reference_id
+
+
+def _creation_task_topic_generator_from_settings() -> OpenAICompatibleCreationTaskTopicGenerator:
+    return OpenAICompatibleCreationTaskTopicGenerator(
+        base_url=settings.effective_llm_base_url,
+        model=settings.effective_llm_model,
+        api_key=settings.effective_llm_api_key,
+    )
+
+
+def _projected_topic_route_snapshot(
+    current_snapshot: dict[str, object],
+    latest_run: TopicGenerationRun | None,
+) -> dict[str, object]:
+    if latest_run is None:
+        return current_snapshot
+    previous = latest_run.route_snapshot
+    if previous.get("connection_version") != current_snapshot["connection_version"]:
+        return current_snapshot
+    availability = previous.get("availability")
+    if availability not in {"succeeded", "failed"}:
+        return current_snapshot
+    return {
+        **current_snapshot,
+        "availability": availability,
+        "checked_at": previous.get("checked_at", current_snapshot["checked_at"]),
+    }
+
+
+def _creation_task_topic_response(
+    workspace_id: str,
+    task: CreationTask,
+    *,
+    route_snapshot: dict[str, object] | None = None,
+    preflight_error: _CreationTaskTopicPreflightError | None = None,
+    preflight_input_count: int = 0,
+) -> CreationTaskTopicsResponse:
+    route_snapshot = route_snapshot or _topic_route_snapshot()
+    latest_run = production_repo.latest_topic_generation_run(workspace_id, task.id)
+    route_snapshot = _projected_topic_route_snapshot(route_snapshot, latest_run)
+    candidates = production_repo.list_topic_candidates(workspace_id, task.id)
+    evidence_references = production_repo.list_topic_evidence_references(workspace_id, task.id)
+    cloud_egress = route_snapshot["execution_location"] == "cloud"
+    return CreationTaskTopicsResponse.model_validate(
+        {
+            "task": task.__dict__,
+            "candidates": [
+                {
+                    "id": candidate.id,
+                    "run_id": candidate.run_id,
+                    "title": candidate.title,
+                    "angle": candidate.angle,
+                    "audience": candidate.audience,
+                    "outline": candidate.outline,
+                    "score": candidate.score,
+                    "selection_status": candidate.selection_status,
+                    "created_at": candidate.created_at,
+                }
+                for candidate in candidates
+            ],
+            "evidence_references": [
+                {
+                    "id": reference.id,
+                    "candidate_id": reference.candidate_id,
+                    "kind": reference.kind,
+                    "reference_id": reference.reference_id,
+                    "version_or_identity": reference.version_or_identity,
+                    "title": reference.title,
+                    "authorization_or_license": reference.authorization_or_license,
+                    "source_url": reference.source_url,
+                    "created_at": reference.created_at,
+                }
+                for reference in evidence_references
+            ],
+            "selected_topic_id": task.selected_topic_id,
+            "latest_run": latest_run.__dict__ if latest_run is not None else None,
+            "route_preflight": route_snapshot,
+            "egress_preflight": {
+                "cloud_egress": cloud_egress,
+                "source_count": len(latest_run.input_references)
+                if latest_run is not None
+                else preflight_input_count,
+                "text_excerpt_count": len(latest_run.input_references)
+                if latest_run is not None
+                else preflight_input_count,
+                "reason": preflight_error.reason if preflight_error else None,
+                "impact": preflight_error.impact if preflight_error else None,
+                "repair_action": preflight_error.repair_action if preflight_error else None,
+            },
+        }
+    )
+@app.post(
+    "/api/creation-plans/preview",
+    response_model=CreationPlanPreviewResponse,
+)
+def preview_creation_plan(
+    request: Request,
+    payload: CreationPlanPreviewRequest,
+) -> CreationPlanPreviewResponse:
+    return _creation_plan_preview_response(
+        _creation_plan_preflight(current_workspace_id(request), payload)
+    )
+
+
+@app.post(
+    "/api/creation-plans/confirm",
+    response_model=CreationPlanResponse,
+    status_code=201,
+)
+def confirm_creation_plan(
+    request: Request,
+    payload: CreationPlanConfirmRequest,
+) -> CreationPlanResponse:
+    workspace_id = current_workspace_id(request)
+    plan = _creation_plan_preflight(workspace_id, payload)
+    if payload.preflight_fingerprint != plan.preflight_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "creation_plan_preflight_stale",
+                "impact": "预检期间的资料、授权、素材或模型状态已变化，未创建任务。",
+                "repair_action": "重新执行内容预检并确认最新方案。",
+                "retryable": True,
+            },
+        )
+    blocking = next((item for item in plan.blockers if item.blocks_confirmation), None)
+    if blocking is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": blocking.reason,
+                "impact": blocking.impact,
+                "repair_action": blocking.repair_action,
+                "retryable": True,
+            },
+        )
+    now = utc_now()
+    plan.id = f"plan_{uuid4().hex[:12]}"
+    plan.created_at = now
+    plan.confirmed_at = now
+    task = CreationTask(
+        id=f"task_{uuid4().hex[:12]}",
+        workspace_id=workspace_id,
+        plan_id=plan.id,
+        name=plan.name,
+        scenario=plan.goal,
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        saved_plan, saved_task = production_repo.confirm_creation_plan(plan, task)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "creation_plan_confirmation_rejected",
+                "impact": "没有创建部分方案或部分创作任务。",
+                "repair_action": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    return _creation_plan_response(saved_plan, saved_task)
+
+
+@app.get(
+    "/api/creation-plans/{plan_id}",
+    response_model=CreationPlanResponse,
+)
+def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        plan = production_repo.get_creation_plan(workspace_id, plan_id)
+        if plan.creation_task_id is None:
+            raise KeyError(plan_id)
+        task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation plan not found") from exc
+    return _creation_plan_response(plan, task)
+
+
+@app.get("/api/creation-tasks", response_model=CreationTasksResponse)
+def list_creation_tasks(request: Request) -> CreationTasksResponse:
+    tasks = production_repo.list_creation_tasks(current_workspace_id(request))
+    return CreationTasksResponse(
+        items=[item.__dict__ for item in tasks],
+        total_count=len(tasks),
+    )
+
+
+def _creation_task_or_404(workspace_id: str, task_id: str) -> CreationTask:
+    try:
+        return production_repo.get_creation_task(workspace_id, task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+
+
+def _creation_plan_for_task_or_404(
+    workspace_id: str,
+    task: CreationTask,
+) -> CreationPlan:
+    try:
+        plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    if plan.creation_task_id != task.id:
+        raise HTTPException(status_code=404, detail="creation task not found")
+    return plan
+
+
+def _topic_failure_response(
+    *,
+    status_code: int,
+    error: str,
+    reason: str,
+    impact: str,
+    repair_action: str,
+    retryable: bool,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "error": error,
+            "reason": reason,
+            "impact": impact,
+            "repair_action": repair_action,
+            "retryable": retryable,
+        },
+    )
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/topics",
+    response_model=CreationTaskTopicsResponse,
+)
+def get_creation_task_topics(
+    task_id: str,
+    request: Request,
+) -> CreationTaskTopicsResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    route_snapshot = _topic_route_snapshot()
+    preflight_error: _CreationTaskTopicPreflightError | None = None
+    input_count = 0
+    try:
+        sources, _, _ = _creation_task_topic_inputs(
+            workspace_id,
+            task,
+            plan,
+            cloud_egress=route_snapshot["execution_location"] == "cloud",
+        )
+        input_count = len(sources)
+        if route_snapshot["availability"] == "unconfigured":
+            preflight_error = _CreationTaskTopicPreflightError(
+                reason="capability_unavailable",
+                impact="当前没有可调用的文字模型连接，不能开始选题。",
+                repair_action="在本机运行时设置中配置 OpenAI-compatible 文字模型后重试。",
+                retryable=True,
+            )
+    except _CreationTaskTopicPreflightError as exc:
+        preflight_error = exc
+    return _creation_task_topic_response(
+        workspace_id,
+        task,
+        route_snapshot=route_snapshot,
+        preflight_error=preflight_error,
+        preflight_input_count=input_count,
+    )
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/topics/generate",
+    response_model=CreationTaskTopicsResponse,
+)
+def generate_creation_task_topics(
+    task_id: str,
+    request: Request,
+    _payload: CreationTaskTopicGenerateRequest,
+) -> CreationTaskTopicsResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    route_snapshot = _topic_route_snapshot()
+    provider_sources: tuple[CreationTaskTopicSource, ...] = ()
+    input_references: list[dict[str, object]] = []
+    evidence_by_reference_id: dict[str, dict[str, object]] = {}
+    preflight_error: _CreationTaskTopicPreflightError | None = None
+    try:
+        (
+            provider_sources,
+            input_references,
+            evidence_by_reference_id,
+        ) = _creation_task_topic_inputs(
+            workspace_id,
+            task,
+            plan,
+            cloud_egress=route_snapshot["execution_location"] == "cloud",
+        )
+        if route_snapshot["availability"] == "unconfigured":
+            raise _CreationTaskTopicPreflightError(
+                reason="capability_unavailable",
+                impact="当前没有可调用的文字模型连接，未生成选题候选。",
+                repair_action="在本机运行时设置中配置 OpenAI-compatible 文字模型后重试。",
+                retryable=True,
+            )
+    except _CreationTaskTopicPreflightError as exc:
+        preflight_error = exc
+
+    run = TopicGenerationRun(
+        id=f"topic_run_{uuid4().hex[:12]}",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        plan_id=plan.id,
+        status="running",
+        route_snapshot=route_snapshot,
+        prompt_schema_version="creation-task-topic/v1",
+        input_references=input_references,
+    )
+    try:
+        task, run = production_repo.start_topic_generation(run)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_topic_stage_conflict",
+            reason="当前创作任务不能重复开始选题。",
+            impact="没有创建新的选题候选或重复运行记录。",
+            repair_action=str(exc),
+            retryable=task.stage_status == "failed",
+        ) from exc
+
+    if preflight_error is not None:
+        task, _ = production_repo.fail_topic_generation(
+            run.id,
+            reason=preflight_error.reason,
+            impact=preflight_error.impact,
+            repair_action=preflight_error.repair_action,
+            retryable=preflight_error.retryable,
+        )
+        raise _topic_failure_response(
+            status_code=503,
+            error="capability_unavailable",
+            reason=preflight_error.reason,
+            impact=preflight_error.impact,
+            repair_action=preflight_error.repair_action,
+            retryable=preflight_error.retryable,
+        )
+
+    try:
+        generated_topics = _creation_task_topic_generator_from_settings().generate(
+            CreationTaskTopicInput(
+                goal=plan.goal,
+                language=plan.language,
+                sources=provider_sources,
+            )
+        )
+    except CreationTaskTopicGenerationError as exc:
+        production_repo.fail_topic_generation(
+            run.id,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=exc.retryable,
+            provider_attempted=True,
+        )
+        raise _topic_failure_response(
+            status_code=502,
+            error=exc.code,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=exc.retryable,
+        ) from exc
+
+    candidates: list[CreationTaskTopicCandidate] = []
+    evidence_references: list[TopicEvidenceReference] = []
+    try:
+        for generated in generated_topics:
+            candidate = CreationTaskTopicCandidate(
+                id=f"topic_{uuid4().hex[:12]}",
+                workspace_id=workspace_id,
+                task_id=task.id,
+                run_id=run.id,
+                title=generated.title,
+                angle=generated.angle,
+                audience=generated.audience,
+                outline=list(generated.outline),
+                score=round(generated.score),
+            )
+            candidates.append(candidate)
+            for reference_id in generated.evidence_reference_ids:
+                source = evidence_by_reference_id.get(reference_id)
+                if source is None:
+                    raise ValueError("文字模型引用了未授权的证据")
+                evidence_references.append(
+                    TopicEvidenceReference(
+                        id=f"topic_evidence_{uuid4().hex[:12]}",
+                        workspace_id=workspace_id,
+                        task_id=task.id,
+                        candidate_id=candidate.id,
+                        kind=str(source["kind"]),  # type: ignore[arg-type]
+                        reference_id=str(source["reference_id"]),
+                        version_or_identity=str(source["version_or_identity"]),
+                        title=str(source["title"]),
+                        authorization_or_license=str(source["authorization_or_license"]),
+                        source_url=(
+                            str(source["source_url"])
+                            if source["source_url"] is not None
+                            else None
+                        ),
+                    )
+                )
+        task, run, _, _ = production_repo.complete_topic_generation(
+            run.id,
+            candidates,
+            evidence_references,
+        )
+    except ValueError as exc:
+        production_repo.fail_topic_generation(
+            run.id,
+            reason="provider_output_invalid",
+            impact="文字模型输出未通过选题和证据持久化校验，未生成候选。",
+            repair_action="检查模型 JSON 输出与来源引用后重试。",
+            retryable=True,
+            provider_attempted=True,
+        )
+        raise _topic_failure_response(
+            status_code=502,
+            error="provider_output_invalid",
+            reason="provider_output_invalid",
+            impact="文字模型输出未通过选题和证据持久化校验，未生成候选。",
+            repair_action="检查模型 JSON 输出与来源引用后重试。",
+            retryable=True,
+        ) from exc
+    return _creation_task_topic_response(
+        workspace_id,
+        task,
+        route_snapshot=route_snapshot,
+        preflight_input_count=len(provider_sources),
+    )
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/topics/{topic_id}/confirm",
+    response_model=CreationTaskTopicsResponse,
+)
+def confirm_creation_task_topic(
+    task_id: str,
+    topic_id: str,
+    request: Request,
+    _payload: CreationTaskTopicConfirmRequest,
+) -> CreationTaskTopicsResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        task, _ = production_repo.confirm_topic_candidate(
+            workspace_id,
+            task_id,
+            topic_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task topic not found") from exc
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_topic_confirmation_conflict",
+            reason="当前选题不能被确认。",
+            impact="没有改变已确认的选题或任务阶段。",
+            repair_action=str(exc),
+            retryable=False,
+        ) from exc
+    return _creation_task_topic_response(workspace_id, task)
 
 
 @app.get(
@@ -897,7 +2857,7 @@ def list_production_materials(
     )
     return MaterialLibraryResponse(
         assets=[
-            MaterialAssetResponse.model_validate(asset, from_attributes=True)
+            _material_asset_response(asset)
             for asset in assets
         ],
         total_count=total,
@@ -919,7 +2879,7 @@ def get_production_material(
         asset = production_repo.get_asset(current_workspace_id(request), asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+    return _material_asset_response(asset)
 
 
 @app.get("/api/production/materials/{asset_id}/media")
@@ -955,7 +2915,7 @@ def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
     return MaterialLibraryResponse(
         assets=[
-            MaterialAssetResponse.model_validate(asset, from_attributes=True)
+            _material_asset_response(asset)
             for asset in assets
         ],
         total_count=total,
@@ -977,7 +2937,7 @@ def analyze_production_material(
         asset = production_repo.analyze_asset(current_workspace_id(request), asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+    return _material_asset_response(asset)
 
 
 @app.put(
@@ -1000,7 +2960,7 @@ def review_production_material(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+    return _material_asset_response(asset)
 
 
 @app.put(
@@ -1027,7 +2987,7 @@ def update_production_material_segment(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material segment not found") from exc
-    return MaterialAssetResponse.model_validate(asset, from_attributes=True)
+    return _material_asset_response(asset)
 
 
 @app.get(
@@ -1041,7 +3001,7 @@ def list_production_batches(request: Request) -> ProductionBatchesResponse:
     ]
     return ProductionBatchesResponse(
         batches=[
-            ProductionBatchResponse.model_validate(batch, from_attributes=True)
+            _production_batch_response(batch)
             for batch in batches
         ],
         total_count=len(batches),
@@ -1050,20 +3010,18 @@ def list_production_batches(request: Request) -> ProductionBatchesResponse:
 
 @app.post(
     "/api/production/batches",
-    response_model=ProductionBatchResponse,
 )
-def create_production_batch(
-    request: Request,
-    payload: ProductionBatchCreateRequest,
-) -> ProductionBatchResponse:
-    workspace_id = current_workspace_id(request)
-    batch = production_repo.create_batch(
-        workspace_id,
-        name=payload.name,
-        target_count=payload.target_count,
-        profile=production_profile_with_model_status(workspace_id),
+def create_production_batch() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "legacy_batch_creation_retired",
+            "message": "旧的生产批次创建入口已退役，不会创建创作任务。",
+            "impact": "本次请求没有写入批次、创作方案或创作任务。",
+            "repair_action": "从创作任务进入“检查可用内容”，再完成“确认并创建任务”流程。",
+            "retryable": False,
+        },
     )
-    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
 
 
 @app.get(
@@ -1080,7 +3038,7 @@ def get_production_batch(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="production batch not found") from exc
-    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+    return _production_batch_response(batch)
 
 
 @app.post(
@@ -1100,9 +3058,9 @@ def run_production_batch(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="production batch not found") from exc
     if batch_job_runner.is_active(batch.id):
-        return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+        return _production_batch_response(batch)
     if batch.status in {"ready", "reviewed"}:
-        return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+        return _production_batch_response(batch)
 
     profile = production_profile_with_model_status(workspace_id)
     readiness = production_repo.readiness(workspace_id, profile=profile)
@@ -1127,7 +3085,7 @@ def run_production_batch(
     )
     if not submitted:
         batch = production_repo.get_batch(workspace_id, batch.id)
-    return ProductionBatchResponse.model_validate(batch, from_attributes=True)
+    return _production_batch_response(batch)
 
 
 def _recover_production_batch_if_needed(batch: ProductionBatch) -> ProductionBatch:
@@ -1250,15 +3208,19 @@ def _process_production_batch_item(
     if plan is None or not plan.narration_audio_path:
         profile = production_profile_with_model_status(workspace_id)
         narration = _narration_for_episode(workspace_id, episode, profile)
+        narration_reference = production_repo.narration_artifact_reference(
+            narration.cache_key
+        )
         rebuilt = montage_planner.build(
             workspace_id=workspace_id,
             batch=batch,
             episode=episode,
             profile=profile,
             assets=production_repo.list_assets(workspace_id),
-            narration_audio_path=narration.audio_path,
+            narration_audio_path=narration_reference,
             narration_duration_seconds=narration.duration_seconds,
         )
+        _normalize_montage_clip_references(workspace_id, rebuilt)
         if plan is not None:
             rebuilt.id = plan.id
             rebuilt.created_at = plan.created_at
@@ -1275,7 +3237,28 @@ def _process_production_batch_item(
         return
     if not plan.narration_audio_path:
         raise ValueError("混剪计划没有可用的旁白音频。")
-    rendered = montage_renderer.render(plan, plan.narration_audio_path)
+    narration_reference = plan.narration_audio_path
+    resolved_narration_audio_path = (
+        production_repo.resolve_authorized_narration_audio_reference(
+            workspace_id,
+            narration_reference,
+        )
+    )
+    if (
+        not resolved_narration_audio_path.is_file()
+        or resolved_narration_audio_path.stat().st_size == 0
+    ):
+        raise MediaAuthorityError(
+            reason="narration_audio_unavailable",
+            impact="混剪渲染未使用不存在或为空的旁白音频。",
+            repair_action="重新生成当前工作区的旁白后再渲染。",
+        )
+    rendered = _render_montage_with_resolved_clip_sources(
+        workspace_id,
+        plan,
+        resolved_narration_audio_path,
+    )
+    rendered.narration_audio_path = narration_reference
     montage_repo.save(rendered)
     _record_montage_usage(workspace_id, rendered)
     item.status = "rendered"
@@ -1326,11 +3309,15 @@ def _narration_for_episode(
     profile: ProductionProfile | None = None,
 ) -> NarrationArtifact:
     profile = profile or production_profile_with_model_status(workspace_id)
-    voice_profile = production_repo.resolve_voice_profile(workspace_id, episode.id)
+    inputs = production_repo.resolve_episode_narration_inputs(
+        workspace_id,
+        episode.id,
+    )
     cache_key = narration_generator.cache_key(
         episode=episode,
         profile=profile,
-        voice_profile=voice_profile,
+        voice_identity=inputs.voice,
+        pronunciation_entries=inputs.pronunciation_entries,
     )
     cached = production_repo.get_narration_artifact(workspace_id, cache_key)
     if cached is not None:
@@ -1343,11 +3330,27 @@ def _narration_for_episode(
             voice_profile_id=cached.voice_profile_id,
             cache_key=cached.cache_key,
         )
+    resolved_reference_audio_path = production_repo.resolve_workspace_media_reference(
+        workspace_id,
+        inputs.voice.reference_audio_path,
+        require_registered=True,
+    )
+    if (
+        not resolved_reference_audio_path.is_file()
+        or resolved_reference_audio_path.stat().st_size == 0
+    ):
+        raise MediaAuthorityError(
+            reason="voice_reference_unavailable",
+            impact="声音参考不可用，未调用声音模型或复用旧配音。",
+            repair_action="确认当前工作区已授权媒体根内的参考音频存在且非空。",
+        )
     artifact = narration_generator.generate(
         workspace_id=workspace_id,
         episode=episode,
         profile=profile,
-        voice_profile=voice_profile,
+        voice_identity=inputs.voice,
+        pronunciation_entries=inputs.pronunciation_entries,
+        resolved_reference_audio_path=resolved_reference_audio_path,
     )
     production_repo.save_narration_artifact(
         NarrationArtifactRecord(
@@ -1377,6 +3380,41 @@ def _record_montage_usage(workspace_id: str, plan) -> None:
         )
 
 
+def _normalize_montage_clip_references(workspace_id: str, plan):
+    for clip in plan.clips:
+        clip.source_path = production_repo.workspace_media_reference_for_asset(
+            workspace_id,
+            clip.asset_id,
+        )
+    return plan
+
+
+def _render_montage_with_resolved_clip_sources(
+    workspace_id: str,
+    plan,
+    narration_audio_path: Path,
+):
+    original_references = [clip.source_path for clip in plan.clips]
+    try:
+        for clip in plan.clips:
+            resolved_source_path = production_repo.resolve_clip_media_reference(
+                workspace_id,
+                clip.asset_id,
+                clip.source_path,
+            )
+            if not resolved_source_path.is_file() or resolved_source_path.stat().st_size == 0:
+                raise MediaAuthorityError(
+                    reason="clip_media_unavailable",
+                    impact="缺失或为空的素材未被传给渲染器。",
+                    repair_action="重新扫描当前工作区素材并更新剪辑计划。",
+                )
+            clip.source_path = str(resolved_source_path)
+        return montage_renderer.render(plan, narration_audio_path)
+    finally:
+        for clip, reference in zip(plan.clips, original_references, strict=True):
+            clip.source_path = reference
+
+
 @app.post(
     "/api/production/episodes/{episode_id}/narration",
     response_model=NarrationArtifactResponse,
@@ -1392,9 +3430,21 @@ def generate_production_narration(
         raise HTTPException(status_code=404, detail="episode not found") from exc
     try:
         artifact = _narration_for_episode(workspace_id, episode)
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
+    except VoiceCloneError as exc:
+        raise _voice_clone_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return NarrationArtifactResponse.model_validate(artifact, from_attributes=True)
+    return NarrationArtifactResponse(
+        episode_id=artifact.episode_id,
+        audio_reference=production_repo.narration_artifact_reference(artifact.cache_key),
+        duration_seconds=artifact.duration_seconds,
+        sample_rate=artifact.sample_rate,
+        model_id=artifact.model_id,
+        voice_profile_id=artifact.voice_profile_id,
+        cache_key=artifact.cache_key,
+    )
 
 
 @app.get(
@@ -1413,7 +3463,7 @@ def list_production_montage_plans(
     plans = montage_repo.list_for_batch(workspace_id, batch_id)
     return MontagePlansResponse(
         plans=[
-            MontagePlanResponse.model_validate(plan, from_attributes=True)
+            _montage_plan_response(plan)
             for plan in plans
         ],
         total_count=len(plans),
@@ -1444,14 +3494,11 @@ def create_production_montage_plan(
         if existing_plan is not None:
             raise ValueError("该 Episode 已存在可恢复的混剪计划")
         profile = production_profile_with_model_status(workspace_id)
-        narration_audio_path = payload.narration_audio_path
-        audio_duration = None
-        if narration_audio_path:
-            audio_duration = montage_renderer.audio_duration(narration_audio_path)
-        elif voice_clone_provider.ready and profile.voice_consent_confirmed:
-            narration = _narration_for_episode(workspace_id, episode, profile)
-            narration_audio_path = narration.audio_path
-            audio_duration = narration.duration_seconds
+        narration = _narration_for_episode(workspace_id, episode, profile)
+        narration_audio_path = production_repo.narration_artifact_reference(
+            narration.cache_key
+        )
+        audio_duration = narration.duration_seconds
         plan = montage_planner.build(
             workspace_id=workspace_id,
             batch=batch,
@@ -1461,8 +3508,13 @@ def create_production_montage_plan(
             narration_audio_path=narration_audio_path,
             narration_duration_seconds=audio_duration,
         )
+        _normalize_montage_clip_references(workspace_id, plan)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="batch or episode not found") from exc
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
+    except VoiceCloneError as exc:
+        raise _voice_clone_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1488,7 +3540,7 @@ def create_production_montage_plan(
         else "混剪时间线已就绪，等待渲染。"
     )
     production_repo.save_batch(batch)
-    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+    return _montage_plan_response(plan)
 
 
 @app.post(
@@ -1539,7 +3591,7 @@ def confirm_production_montage_clips(
         else "混剪时间线仍有镜头等待确认。"
     )
     production_repo.save_batch(batch)
-    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+    return _montage_plan_response(plan)
 
 
 @app.get(
@@ -1554,7 +3606,49 @@ def get_production_montage_plan(
         plan = montage_repo.get(current_workspace_id(request), plan_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+    return _montage_plan_response(plan)
+
+
+def _stream_montage_plan_media(
+    plan_id: str,
+    request: Request,
+    *,
+    field: str,
+    media_type: str,
+) -> FileResponse:
+    try:
+        plan = montage_repo.get(current_workspace_id(request), plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    path = _safe_montage_media_path(plan, field)
+    if path is None:
+        raise HTTPException(status_code=404, detail="montage media not found")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+@app.get("/api/production/montage-plans/{plan_id}/output")
+def stream_production_montage_output(plan_id: str, request: Request) -> FileResponse:
+    return _stream_montage_plan_media(
+        plan_id,
+        request,
+        field="output_path",
+        media_type="video/mp4",
+    )
+
+
+@app.get("/api/production/montage-plans/{plan_id}/subtitle")
+def stream_production_montage_subtitle(plan_id: str, request: Request) -> FileResponse:
+    return _stream_montage_plan_media(
+        plan_id,
+        request,
+        field="subtitle_path",
+        media_type="application/x-subrip",
+    )
 
 
 def _refresh_montage_review_state(plan) -> None:
@@ -1644,7 +3738,10 @@ def update_production_montage_clip(
             raise HTTPException(status_code=409, detail="material segment has not passed review")
         clip.asset_id = asset.id
         clip.segment_id = segment.id
-        clip.source_path = asset.path
+        clip.source_path = production_repo.workspace_media_reference_for_asset(
+            workspace_id,
+            asset.id,
+        )
         clip.role = "a_roll" if segment.usage_role == "a_roll" else "b_roll"
         clip.match_reasons = ["由用户替换", "已通过版权和品牌审核"]
         clip.match_score = 1.0
@@ -1667,7 +3764,7 @@ def update_production_montage_clip(
         clip.needs_confirmation = False
     _refresh_montage_review_state(plan)
     montage_repo.save(plan)
-    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+    return _montage_plan_response(plan)
 
 
 @app.put(
@@ -1719,7 +3816,7 @@ def reorder_production_montage_clips(
         target.manually_selected = True
     _refresh_montage_review_state(plan)
     montage_repo.save(plan)
-    return MontagePlanResponse.model_validate(plan, from_attributes=True)
+    return _montage_plan_response(plan)
 
 
 @app.post(
@@ -1734,7 +3831,27 @@ def render_production_montage_plan(
     workspace_id = current_workspace_id(request)
     try:
         plan = montage_repo.get(workspace_id, plan_id)
-        audio_duration = montage_renderer.audio_duration(payload.narration_audio_path)
+        narration_reference = plan.narration_audio_path
+        if not narration_reference:
+            raise MediaAuthorityError(
+                reason="narration_audio_unavailable",
+                impact="混剪计划没有已持久化的旁白引用，未调用渲染器。",
+                repair_action="重新创建混剪计划以由服务端绑定旁白。",
+            )
+        resolved_narration_audio_path = production_repo.resolve_authorized_narration_audio_reference(
+            workspace_id,
+            narration_reference,
+        )
+        if (
+            not resolved_narration_audio_path.is_file()
+            or resolved_narration_audio_path.stat().st_size == 0
+        ):
+            raise MediaAuthorityError(
+                reason="narration_audio_unavailable",
+                impact="混剪渲染未使用不存在或为空的旁白音频。",
+                repair_action="选择当前工作区已授权媒体根内的非空旁白音频。",
+            )
+        audio_duration = montage_renderer.audio_duration(resolved_narration_audio_path)
         if abs(audio_duration - plan.duration_seconds) > 0.5:
             batch = production_repo.get_batch(workspace_id, plan.batch_id)
             episode = repo.get(plan.episode_id, workspace_id=workspace_id)
@@ -1744,9 +3861,10 @@ def render_production_montage_plan(
                 episode=episode,
                 profile=production_repo.get_profile(workspace_id),
                 assets=production_repo.list_assets(workspace_id),
-                narration_audio_path=payload.narration_audio_path,
+                narration_audio_path=narration_reference,
                 narration_duration_seconds=audio_duration,
             )
+            _normalize_montage_clip_references(workspace_id, rebuilt)
             rebuilt.id = plan.id
             rebuilt.created_at = plan.created_at
             plan = montage_repo.save(rebuilt)
@@ -1770,9 +3888,18 @@ def render_production_montage_plan(
                     status_code=409,
                     detail="旁白时长与原计划不同，已重新生成时间线；请确认低置信镜头后再渲染",
                 )
-        rendered = montage_renderer.render(plan, payload.narration_audio_path)
+        rendered = _render_montage_with_resolved_clip_sources(
+            workspace_id,
+            plan,
+            resolved_narration_audio_path,
+        )
+        # The renderer needs the resolved local path, but persisted/API state must
+        # retain the server-bound logical narration reference.
+        rendered.narration_audio_path = narration_reference
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="montage plan not found") from exc
+    except MediaAuthorityError as exc:
+        raise _media_authority_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1803,7 +3930,7 @@ def render_production_montage_plan(
         else f"已生成 {rendered_count}/{batch.target_count} 条初版成片，可继续批量生产。"
     )
     production_repo.save_batch(batch)
-    return MontagePlanResponse.model_validate(rendered, from_attributes=True)
+    return _montage_plan_response(rendered)
 
 
 @app.get("/api/version")
@@ -1972,7 +4099,7 @@ async def is_setup():
         str(check["id"])
         for check in preflight["checks"]
         if check["status"] in {"missing", "invalid"}
-        and check["id"] in {"video_inbox", "video_output", "ffmpeg", "asr"}
+        and check["required"]
     ]
     configured = preflight["overall"] == "ready"
     return {
@@ -1983,13 +4110,14 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, production_repo, montage_repo, montage_planner, montage_renderer, narration_generator, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
+    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, production_repo, montage_repo, montage_planner, montage_renderer, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context
 
     settings = Settings.from_env()
     configure_process_temporary_directory(settings)
     set_auth_enabled(settings.auth_enabled)
     auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)
+    source_repository = SourceRepository(settings.database_path)
     model_catalog = ModelCatalog(
         settings.model_root_path,
         settings.model_runtime_python_path,
@@ -2014,6 +4142,11 @@ def _reload_runtime_dependencies() -> None:
     )
     montage_renderer = MontageRenderer(settings.video_output_path)
     narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
+    voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
+    avatar_preview_service = AvatarPreviewService(
+        settings.video_output_path,
+        UnavailableAvatarAndLipSyncProvider(),
+    )
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)
     video_processor = FfmpegVideoProcessor(settings)
@@ -2048,49 +4181,473 @@ def get_knowledge_notes(q: str | None = None, limit: int = 40) -> list[Knowledge
     ]
 
 
-@app.get("/api/sources/items", response_model=SourceItemsResponse)
-def get_source_items() -> SourceItemsResponse:
-    items = [
-        *HermesRadarSourceClient(settings.hermes_radar_path).fetch_items(),
-        *manual_source_items,
+def _source_connector_response(connector: SourceConnector) -> SourceConnectorResponse:
+    return SourceConnectorResponse.model_validate(connector, from_attributes=True)
+
+
+def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
+    return SourceItemDetailResponse.model_validate(item, from_attributes=True)
+
+
+def _knowledge_item_response(item: KnowledgeItem) -> KnowledgeItemResponse:
+    return KnowledgeItemResponse.model_validate(item, from_attributes=True)
+
+
+def _source_run_response(run) -> SourceRunEvidenceResponse:
+    return SourceRunEvidenceResponse.model_validate(run, from_attributes=True)
+
+
+def _manual_connector(workspace_id: str) -> SourceConnector:
+    connector_id = f"manual:{workspace_id}"
+    try:
+        return source_repository.get_connector(workspace_id, connector_id)
+    except KeyError:
+        return source_repository.upsert_connector(
+            SourceConnector(
+                id=connector_id,
+                workspace_id=workspace_id,
+                platform="manual",
+                protocol="local",
+                account_or_rule="user-provided content",
+                frequency="on_demand",
+                permissions=("write:source_items",),
+            )
+        )
+
+
+def _compat_connector(
+    workspace_id: str,
+    key: str,
+    *,
+    platform: str,
+    protocol: str,
+    account_or_rule: str,
+) -> SourceConnector:
+    connector_id = f"compat:{key}:{workspace_id}"
+    try:
+        existing = source_repository.get_connector(workspace_id, connector_id)
+        if existing.account_or_rule != account_or_rule:
+            return source_repository.upsert_connector(
+                replace(existing, account_or_rule=account_or_rule)
+            )
+        return existing
+    except KeyError:
+        return source_repository.upsert_connector(
+            SourceConnector(
+                id=connector_id,
+                workspace_id=workspace_id,
+                platform=platform,
+                protocol=protocol,
+                account_or_rule=account_or_rule,
+                frequency="on_demand",
+                permissions=("read:source_items",),
+            )
+        )
+
+
+def _connector_urls(connector: SourceConnector) -> list[str]:
+    return [
+        value.strip()
+        for value in connector.account_or_rule.replace(",", "\n").splitlines()
+        if value.strip() and value.strip() != _EXTERNAL_URLS_CONFIGURATION_REQUIRED
     ]
-    return _source_items_response(items)
 
 
-def _source_items_response(items: list[TopicSourceItem]) -> SourceItemsResponse:
-    counts = Counter(item.source_type for item in items)
+def _source_fetcher(
+    connector: SourceConnector,
+    workspace_id: str,
+):
+    platform = connector.platform.casefold().replace(" ", "_")
+
+    def fetch(cursor: str | None) -> tuple[list[SourceItem], str | None]:
+        if platform in {"hermes_radar", "hermes"}:
+            topic_items = HermesRadarSourceClient(settings.hermes_radar_path).fetch_items()
+            return (
+                [item.to_source_item(workspace_id, connector.id) for item in topic_items],
+                cursor,
+            )
+        if platform in {"external_urls", "external_url", "web"}:
+            urls = _connector_urls(connector)
+            if not urls:
+                raise SourceBoundaryError(
+                    "configuration_required",
+                    "external URL connector has no URLs configured",
+                    repair_action="Add one or more allowed HTTP(S) URLs to the connector rule.",
+                )
+            topic_items = HtmlPageSourceClient(urls).fetch_items()
+            return (
+                [item.to_source_item(workspace_id, connector.id) for item in topic_items],
+                cursor,
+            )
+        if platform in {"product_hunt", "producthunt"}:
+            topic_items = ProductHuntClient(settings).fetch_source_items()
+            return (
+                [item.to_source_item(workspace_id, connector.id) for item in topic_items],
+                cursor,
+            )
+        if platform == "manual":
+            return source_repository.list_source_items(workspace_id, connector.id), cursor
+        raise SourceBoundaryError(
+            "capability_unavailable",
+            f"{connector.platform} connector is configured but not implemented",
+            impact="No external items were imported.",
+            repair_action="Use a supported connector or wait for this platform capability.",
+        )
+
+    return fetch
+
+
+def _source_failure_http_exception(failure: SourceSyncFailedError) -> HTTPException:
+    run = failure.run
+    connector = source_repository.get_connector(run.workspace_id, run.connector_id)
+    status_code = {
+        "authentication_required": 401,
+        "access_denied": 403,
+        "rate_limited": 429,
+        "capability_unavailable": 501,
+        "configuration_required": 409,
+    }.get(
+        connector.connection_status,
+        502,
+    )
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "error": connector.connection_status,
+            "detail": run.reason,
+            "impact": run.impact,
+            "repair_action": run.repair_action,
+            "retryable": run.retryable,
+            "run": _source_run_response(run).model_dump(mode="json"),
+        },
+    )
+
+
+def _sync_connector(
+    workspace_id: str,
+    connector: SourceConnector,
+):
+    try:
+        return sync_source_connector(
+            source_repository,
+            workspace_id,
+            connector.id,
+            _source_fetcher(connector, workspace_id),
+        )
+    except SourceSyncFailedError as exc:
+        raise _source_failure_http_exception(exc) from exc
+
+
+def _legacy_source_items_response(
+    workspace_id: str,
+    items: list[SourceItem],
+) -> SourceItemsResponse:
+    source_items = [
+        SourceItemResponse(
+            source_type=item.source_label,
+            title=item.title,
+            ref=item.source_url or item.file_reference or item.id,
+            excerpt=item.body or item.subtitles or "",
+        )
+        for item in items
+    ]
     return SourceItemsResponse(
-        items=[SourceItemResponse.model_validate(item, from_attributes=True) for item in items],
+        items=source_items,
+        total_count=len(source_items),
+        source_counts=dict(Counter(item.source_type for item in source_items)),
+    )
+
+
+@app.get("/api/source-connectors", response_model=SourceConnectorsResponse)
+def list_source_connectors(request: Request) -> SourceConnectorsResponse:
+    connectors = source_repository.list_connectors(current_workspace_id(request))
+    return SourceConnectorsResponse(
+        items=[_source_connector_response(item) for item in connectors],
+        total_count=len(connectors),
+    )
+
+
+@app.post("/api/source-connectors", response_model=SourceConnectorResponse)
+def create_source_connector(
+    request: Request,
+    payload: SourceConnectorCreateRequest,
+) -> SourceConnectorResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        connector = source_repository.upsert_connector(
+            SourceConnector(
+                id=f"connector_{uuid4().hex}",
+                workspace_id=workspace_id,
+                platform=payload.platform,
+                protocol=payload.protocol,
+                account_or_rule=payload.account_or_rule,
+                frequency=payload.frequency,
+                permissions=tuple(item.strip() for item in payload.permissions if item.strip()),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _source_connector_response(connector)
+
+
+@app.get("/api/source-connectors/{connector_id}", response_model=SourceConnectorResponse)
+def get_source_connector(
+    connector_id: str,
+    request: Request,
+) -> SourceConnectorResponse:
+    try:
+        connector = source_repository.get_connector(
+            current_workspace_id(request), connector_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source connector not found") from exc
+    return _source_connector_response(connector)
+
+
+@app.get(
+    "/api/source-connectors/{connector_id}/runs",
+    response_model=SourceRunEvidencesResponse,
+)
+def list_source_connector_runs(
+    connector_id: str,
+    request: Request,
+) -> SourceRunEvidencesResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        source_repository.get_connector(workspace_id, connector_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source connector not found") from exc
+    runs = source_repository.list_runs(workspace_id, connector_id)
+    return SourceRunEvidencesResponse(
+        items=[_source_run_response(run) for run in runs],
+        total_count=len(runs),
+    )
+
+
+@app.get(
+    "/api/source-connectors/{connector_id}/runs/latest",
+    response_model=SourceRunEvidenceResponse,
+)
+def get_latest_source_connector_run(
+    connector_id: str,
+    request: Request,
+) -> SourceRunEvidenceResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        source_repository.get_connector(workspace_id, connector_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source connector not found") from exc
+    runs = source_repository.list_runs(workspace_id, connector_id)
+    if not runs:
+        raise HTTPException(status_code=404, detail="source run not found")
+    return _source_run_response(runs[0])
+
+
+@app.get(
+    "/api/source-connectors/{connector_id}/runs/{run_id}",
+    response_model=SourceRunEvidenceResponse,
+)
+def get_source_connector_run(
+    connector_id: str,
+    run_id: str,
+    request: Request,
+) -> SourceRunEvidenceResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        source_repository.get_connector(workspace_id, connector_id)
+        run = source_repository.get_run(workspace_id, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source run not found") from exc
+    if run.connector_id != connector_id:
+        raise HTTPException(status_code=404, detail="source run not found")
+    return _source_run_response(run)
+
+
+@app.post(
+    "/api/source-connectors/{connector_id}/sync",
+    response_model=SourceSyncResponse,
+)
+def sync_source_connector_endpoint(
+    connector_id: str,
+    request: Request,
+) -> SourceSyncResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        connector = source_repository.get_connector(workspace_id, connector_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source connector not found") from exc
+    run = _sync_connector(workspace_id, connector)
+    return SourceSyncResponse(
+        connector=_source_connector_response(
+            source_repository.get_connector(workspace_id, connector_id)
+        ),
+        run=_source_run_response(run),
+    )
+
+
+@app.get("/api/source-items", response_model=SourceItemDetailsResponse)
+def list_persisted_source_items(
+    request: Request,
+    connector_id: str | None = None,
+) -> SourceItemDetailsResponse:
+    items = source_repository.list_source_items(
+        current_workspace_id(request), connector_id
+    )
+    return SourceItemDetailsResponse(
+        items=[_source_item_response(item) for item in items],
         total_count=len(items),
-        source_counts=dict(counts),
+    )
+
+
+@app.post("/api/source-items/manual", response_model=SourceItemDetailResponse)
+def create_manual_source_item(
+    request: Request,
+    payload: ManualSourceItemRequest,
+) -> SourceItemDetailResponse:
+    workspace_id = current_workspace_id(request)
+    connector = _manual_connector(workspace_id)
+    source_url = payload.source_url.strip() if payload.source_url else None
+    if source_url:
+        parsed = urlparse(source_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(
+                status_code=422,
+                detail="manual source_url must use http or https",
+            )
+    try:
+        item = source_repository.save_source_items(
+            workspace_id,
+            [
+                SourceItem(
+                    id=f"source_{uuid4().hex}",
+                    workspace_id=workspace_id,
+                    connector_id=connector.id,
+                    source_label="manual",
+                    source_url=source_url,
+                    content_type=payload.content_type.strip(),
+                    author=payload.author.strip() if payload.author else None,
+                    published_at=payload.published_at,
+                    body=payload.body,
+                    subtitles=payload.subtitles,
+                    media_references=tuple(payload.media_references),
+                    license=payload.license.strip(),
+                    title=payload.title.strip(),
+                    file_reference=(
+                        payload.file_reference.strip()
+                        if payload.file_reference
+                        else None
+                    ),
+                )
+            ],
+        )[0]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _source_item_response(item)
+
+
+@app.post(
+    "/api/source-items/{source_item_id}/save-to-knowledge",
+    response_model=KnowledgeItemResponse,
+)
+def save_source_item_to_knowledge(
+    source_item_id: str,
+    request: Request,
+    payload: SaveSourceItemToKnowledgeRequest,
+) -> KnowledgeItemResponse:
+    try:
+        item = source_repository.save_source_item_to_knowledge(
+            current_workspace_id(request),
+            source_item_id,
+            ownership=payload.ownership.strip(),
+            authorization=payload.authorization.strip(),
+            version=payload.version.strip(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="source item not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _knowledge_item_response(item)
+
+
+@app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
+def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
+    items = source_repository.list_knowledge_items(current_workspace_id(request))
+    return KnowledgeItemsResponse(
+        items=[_knowledge_item_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+@app.get("/api/sources/items", response_model=SourceItemsResponse)
+def get_source_items(request: Request) -> SourceItemsResponse:
+    workspace_id = current_workspace_id(request)
+    return _legacy_source_items_response(
+        workspace_id, source_repository.list_source_items(workspace_id)
     )
 
 
 @app.post("/api/sources/sync", response_model=SourceItemsResponse)
-def sync_source_items() -> SourceItemsResponse:
-    items = [
-        *HermesRadarSourceClient(settings.hermes_radar_path).fetch_items(),
-        *manual_source_items,
+def sync_source_items(request: Request) -> SourceItemsResponse:
+    workspace_id = current_workspace_id(request)
+    connectors = [
+        _compat_connector(
+            workspace_id,
+            "hermes_radar",
+            platform="hermes_radar",
+            protocol="local_file",
+            account_or_rule=str(settings.hermes_radar_path or ""),
+        )
     ]
     if settings.topic_source_urls:
-        try:
-            items.extend(HtmlPageSourceClient(settings.topic_source_urls).fetch_items())
-        except ExternalSourceResponseError:
-            pass
-    return _source_items_response(items)
+        connectors.append(
+            _compat_connector(
+                workspace_id,
+                "external_urls",
+                platform="external_urls",
+                protocol="https",
+                account_or_rule="\n".join(settings.topic_source_urls),
+            )
+        )
+    for connector in connectors:
+        _sync_connector(workspace_id, connector)
+    return _legacy_source_items_response(
+        workspace_id, source_repository.list_source_items(workspace_id)
+    )
 
 
 @app.post("/api/sources/links", response_model=SourceItemsResponse)
-def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
-    url = request.url.strip()
+def ingest_manual_link(
+    request: Request,
+    payload: ManualLinkRequest,
+) -> SourceItemsResponse:
+    url = payload.url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    workspace_id = current_workspace_id(request)
+    connector = _manual_connector(workspace_id)
     try:
-        items = HtmlPageSourceClient([url]).fetch_items()
+        topic_items = HtmlPageSourceClient([url]).fetch_items()
     except ExternalSourceResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    manual_source_items.extend(items)
-    return _source_items_response(manual_source_items)
+        failure = SourceSyncFailedError(
+            source_repository.record_sync_failure(
+                workspace_id,
+                connector.id,
+                reason=str(exc),
+                impact=exc.impact,
+                repair_action=exc.repair_action,
+                retryable=exc.retryable,
+                connection_status=exc.kind,
+            )
+        )
+        raise _source_failure_http_exception(failure) from exc
+    source_repository.save_source_items(
+        workspace_id,
+        [item.to_source_item(workspace_id, connector.id) for item in topic_items],
+    )
+    return _legacy_source_items_response(
+        workspace_id,
+        source_repository.list_source_items(workspace_id, connector.id),
+    )
 
 
 @app.get(
@@ -2098,27 +4655,23 @@ def ingest_manual_link(request: ManualLinkRequest) -> SourceItemsResponse:
     response_model=SourceSyncStatusesResponse,
 )
 def get_source_sync_status(request: Request) -> SourceSyncStatusesResponse:
-    from app.repository import load_source_sync_statuses
-
-    ws = current_workspace_id(request)
-    raw_statuses = load_source_sync_statuses(workspace_id=ws)
-    statuses = [
-        {
-            "source_type": source_type,
-            "configured": data.get("configured", False),
-            "last_sync_at": datetime.fromisoformat(data["last_sync_at"])
-            if data.get("last_sync_at")
-            else None,
-            "last_success_at": datetime.fromisoformat(data["last_success_at"])
-            if data.get("last_success_at")
-            else None,
-            "last_failure_at": datetime.fromisoformat(data["last_failure_at"])
-            if data.get("last_failure_at")
-            else None,
-            "error_message": data.get("error_message"),
-        }
-        for source_type, data in raw_statuses.items()
-    ]
+    workspace_id = current_workspace_id(request)
+    statuses = []
+    for connector in source_repository.list_connectors(workspace_id):
+        runs = source_repository.list_runs(workspace_id, connector.id)
+        latest = runs[0] if runs else None
+        latest_success = next((run for run in runs if run.status == "succeeded"), None)
+        latest_failure = next((run for run in runs if run.status == "failed"), None)
+        statuses.append(
+            {
+                "source_type": connector.platform,
+                "configured": connector.connection_status != "capability_unavailable",
+                "last_sync_at": latest.finished_at if latest else None,
+                "last_success_at": latest_success.finished_at if latest_success else None,
+                "last_failure_at": latest_failure.finished_at if latest_failure else None,
+                "error_message": latest_failure.reason if latest_failure else None,
+            }
+        )
     return SourceSyncStatusesResponse(
         statuses=[
             SourceSyncStatusResponse(**status)
@@ -2629,56 +5182,26 @@ def revert_episode_script_version(
     return episode_response(repo.save(episode))
 
 
-@app.post(
-    "/api/episodes/{episode_id}/voice-command/preview",
-    response_model=VoiceCommandResponse,
-)
-def preview_voice_command(
-    episode_id: str,
-    request: VoiceCommandRequest,
-) -> VoiceCommandResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    plan = parse_voice_command(episode, request.transcript)
-    return _voice_command_response(plan)
-
-
-@app.post(
-    "/api/episodes/{episode_id}/voice-command/execute",
-    response_model=VoiceCommandResponse,
-)
-def execute_voice_command(
-    episode_id: str,
-    request: VoiceCommandRequest,
-) -> VoiceCommandResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    plan = parse_voice_command(episode, request.transcript)
-    if not plan.can_execute:
-        return _voice_command_response(plan)
-
-    try:
-        updated_episode, edit_plan_workspace = _execute_voice_command_plan(
-            episode,
-            plan,
-        )
-    except (
-        LLMConfigurationError,
-        TopicGenerationConfigurationError,
-    ) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (
-        LLMResponseError,
-        TopicGenerationResponseError,
-    ) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return _voice_command_response(
-        plan,
-        status="executed",
-        result_episode=updated_episode,
-        result_edit_plan=edit_plan_workspace,
+def _legacy_voice_command_retired() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "legacy_voice_command_retired",
+            "reason": "旧的 Episode 对话指令已退役，不能再生成选题、脚本或旧剪辑草稿。",
+            "impact": "本次请求不会修改创作内容、剪辑文件或任务状态。",
+            "repair_action": "请在创作任务页手动创建任务；目标自动搭建制作方案将在新能力接入后开放。",
+        },
     )
+
+
+@app.post("/api/episodes/{episode_id}/voice-command/preview")
+def preview_voice_command(episode_id: str) -> None:
+    _legacy_voice_command_retired()
+
+
+@app.post("/api/episodes/{episode_id}/voice-command/execute")
+def execute_voice_command(episode_id: str) -> None:
+    _legacy_voice_command_retired()
 
 
 @app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
@@ -2902,129 +5425,6 @@ def _extract_frequent_phrases(
             break
 
     return result
-
-
-def _voice_command_response(
-    plan: VoiceCommandPlan,
-    *,
-    status: str | None = None,
-    result_episode: Episode | None = None,
-    result_edit_plan: dict[str, object] | None = None,
-) -> VoiceCommandResponse:
-    return VoiceCommandResponse.model_validate(
-        {
-            "status": status or plan.status,
-            "intent": plan.intent,
-            "summary": plan.summary,
-            "can_execute": plan.can_execute,
-            "next_url": plan.next_url,
-            "operations": [
-                {
-                    "kind": operation.kind,
-                    "label": operation.label,
-                    "params": operation.params,
-                }
-                for operation in plan.operations
-            ],
-            "result_episode": episode_response(result_episode)
-            if result_episode is not None
-            else None,
-            "result_edit_plan": result_edit_plan,
-        }
-    )
-
-
-def _execute_voice_command_plan(
-    episode: Episode,
-    plan: VoiceCommandPlan,
-) -> tuple[Episode, dict[str, object] | None]:
-    updated_episode = episode
-    edit_plan_workspace: dict[str, object] | None = None
-    for operation in plan.operations:
-        if operation.kind == "generate_topics":
-            updated_episode = workflow.run(
-                "generate_topics",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-            )
-        elif operation.kind == "regenerate_topics":
-            updated_episode = workflow.run(
-                "regenerate_topics",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-            )
-        elif operation.kind == "generate_script":
-            updated_episode = workflow.run(
-                "generate_script",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-            )
-        elif operation.kind == "regenerate_script":
-            updated_episode = workflow.run(
-                "regenerate_script",
-                updated_episode,
-                feedback_history=feedback_history_for(updated_episode.id),
-                reason=_string_param(operation.params, "reason"),
-            )
-        elif operation.kind == "regenerate_script_section":
-            updated_episode = workflow.run(
-                "regenerate_script_section",
-                updated_episode,
-                section_id=_required_string_param(operation.params, "section_id"),
-                feedback_history=feedback_history_for(updated_episode.id),
-                reason=_string_param(operation.params, "reason"),
-            )
-        elif operation.kind == "approve_script":
-            updated_episode = workflow.run("approve_script", updated_episode)
-        elif operation.kind == "create_draft":
-            updated_episode = _create_draft_from_voice_command(updated_episode)
-        elif operation.kind == "edit_plan_segment_decision":
-            edit_plan_workspace = update_edit_plan_segment_decision(
-                updated_episode,
-                settings.video_output_path,
-                segment_id=_required_string_param(operation.params, "segment_id"),
-                action=_required_string_param(operation.params, "action"),
-                reason=_string_param(operation.params, "reason"),
-            )
-        else:
-            raise ValueError(f"unsupported voice command operation: {operation.kind}")
-    return repo.save(updated_episode), edit_plan_workspace
-
-
-def _create_draft_from_voice_command(episode: Episode) -> Episode:
-    if not episode.video_processed_file_name:
-        raise ValueError("process a video first")
-    confirmed_video = apply_confirmed_edit_plan(
-        episode,
-        draft_workspace.video_output_path,
-        runner=edit_plan_apply_runner,
-    )
-    if confirmed_video is not None:
-        episode.video_processed_file_name = confirmed_video["file_name"]
-        episode.video_processed_path = confirmed_video["path"]
-        episode = repo.save(episode)
-    package = draft_workspace.create_package_and_import_to_jianying(
-        video_file_name=episode.video_processed_file_name,
-        episode=episode,
-    )
-    return workflow.run(
-        "bind_draft_package",
-        episode,
-        package_name=package.package_name,
-        package_path=package.path,
-    )
-
-
-def _required_string_param(params: dict[str, object], key: str) -> str:
-    value = params.get(key)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"voice command operation missing param: {key}")
-    return value
-
-
-def _string_param(params: dict[str, object], key: str) -> str | None:
-    value = params.get(key)
-    return value if isinstance(value, str) and value else None
 
 
 @app.post("/api/episodes/{episode_id}/approve-script", response_model=EpisodeResponse)
@@ -3500,52 +5900,41 @@ def list_episode_history(
 
 
 @app.post("/api/sources/{key}/retry", response_model=SourceSyncRetryResponse)
-def retry_source_sync(key: str) -> SourceSyncRetryResponse:
-    """Re-sync a specific source type and return item count + status."""
-    known_sources = {"hermes_radar", "manual", "external_urls"}
-    if key not in known_sources:
+def retry_source_sync(key: str, request: Request) -> SourceSyncRetryResponse:
+    """Compatibility retry route backed by the same persistent connectors."""
+    workspace_id = current_workspace_id(request)
+    if key == "manual":
+        connector = _manual_connector(workspace_id)
+    elif key == "hermes_radar":
+        connector = _compat_connector(
+            workspace_id,
+            key,
+            platform="hermes_radar",
+            protocol="local_file",
+            account_or_rule=str(settings.hermes_radar_path or ""),
+        )
+    elif key == "external_urls":
+        connector = _compat_connector(
+            workspace_id,
+            key,
+            platform="external_urls",
+            protocol="https",
+            account_or_rule=(
+                "\n".join(settings.topic_source_urls)
+                if settings.topic_source_urls
+                else _EXTERNAL_URLS_CONFIGURATION_REQUIRED
+            ),
+        )
+    else:
         raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
 
-    try:
-        if key == "hermes_radar":
-            items = HermesRadarSourceClient(settings.hermes_radar_path).fetch_items()
-            return SourceSyncRetryResponse(
-                source_type=key,
-                status="success",
-                message=f"Hermes radar re-synced: {len(items)} items",
-                item_count=len(items),
-            )
-        elif key == "external_urls":
-            if not settings.topic_source_urls:
-                return SourceSyncRetryResponse(
-                    source_type=key,
-                    status="skipped",
-                    message="No external source URLs configured",
-                )
-            items = HtmlPageSourceClient(settings.topic_source_urls).fetch_items()
-            return SourceSyncRetryResponse(
-                source_type=key,
-                status="success",
-                message=f"External URLs re-synced: {len(items)} items",
-                item_count=len(items),
-            )
-        elif key == "manual":
-            return SourceSyncRetryResponse(
-                source_type=key,
-                status="success",
-                message=f"Manual sources: {len(manual_source_items)} items in memory",
-                item_count=len(manual_source_items),
-            )
-    except ExternalSourceResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Source retry failed for {key}: {exc}",
-        ) from exc
-
-    # Unreachable: unknown source caught above with 404
-    raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
+    run = _sync_connector(workspace_id, connector)
+    return SourceSyncRetryResponse(
+        source_type=key,
+        status="success",
+        message=f"{connector.platform} sync completed: {run.item_count} items",
+        item_count=run.item_count,
+    )
 
 
 @app.get("/api/preferences/cards", response_model=PreferencesCardsResponse)

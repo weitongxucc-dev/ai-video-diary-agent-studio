@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -28,6 +30,469 @@ class TopicGenerationConfigurationError(RuntimeError):
 
 class TopicGenerationResponseError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class CreationTaskTopicSource:
+    reference_id: str
+    kind: Literal["knowledge", "source"]
+    title: str
+    text: str
+
+
+@dataclass(frozen=True)
+class CreationTaskTopicInput:
+    goal: str
+    language: str
+    sources: tuple[CreationTaskTopicSource, ...]
+
+
+@dataclass(frozen=True)
+class CreationTaskGeneratedTopic:
+    title: str
+    angle: str
+    audience: str
+    outline: tuple[str, ...]
+    score: float
+    evidence_reference_ids: tuple[str, ...]
+
+
+class CreationTaskTopicGenerationError(RuntimeError):
+    """A safe, structured failure for the explicit CreationTask topic boundary."""
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> None:
+        self.code = code
+        self.reason = reason
+        self.impact = impact
+        self.repair_action = repair_action
+        self.retryable = retryable
+        super().__init__(f"{code}: {reason}")
+
+
+class OpenAICompatibleCreationTaskTopicGenerator:
+    """Generate CreationTask topics only from explicit, server-resolved input.
+
+    This is deliberately separate from the legacy Episode generators below: it
+    never reads a vault, external URL, template, feedback, or repository.
+    """
+
+    _MAX_SOURCES = 64
+    _MAX_SOURCE_TEXT = 8_000
+    _MAX_TOTAL_SOURCE_TEXT = 48_000
+    _MAX_TOPICS = 8
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+        timeout: float = 60.0,
+    ) -> None:
+        self._base_url = base_url.strip().rstrip("/")
+        self._model = model.strip()
+        self._api_key = api_key
+        self._transport = transport
+        self._timeout = timeout
+        parsed_url = urlsplit(self._base_url)
+        if (
+            not self._base_url
+            or not self._model
+            or parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+        ):
+            raise CreationTaskTopicGenerationError(
+                code="route_configuration_invalid",
+                reason="文字模型连接缺少服务地址或模型标识。",
+                impact="未调用文字模型，未生成选题候选。",
+                repair_action="在本机运行时设置中填写有效的 OpenAI-compatible 地址和模型标识。",
+                retryable=False,
+            )
+
+    def generate(self, input: CreationTaskTopicInput) -> list[CreationTaskGeneratedTopic]:
+        sources = self._validated_sources(input)
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是创作任务的选题生成器。只返回单一 JSON object，不要 Markdown。"
+                        "顶层必须为 {\"topics\": [...]}。每个 topic 必须包含 "
+                        "title、angle、audience、outline、score、evidence_reference_ids。"
+                        "evidence_reference_ids 只能引用输入 sources 的 reference_id。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "goal": input.goal.strip(),
+                            "language": input.language.strip(),
+                            "sources": [
+                                {
+                                    "reference_id": source.reference_id,
+                                    "kind": source.kind,
+                                    "title": source.title,
+                                    "text": source.text,
+                                }
+                                for source in sources
+                            ],
+                            "requirements": {
+                                "topic_count": "1-8",
+                                "outline_items": "1-8",
+                                "score_range": "0-100",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.7,
+            "max_tokens": 3200,
+        }
+        headers = (
+            {"Authorization": f"Bearer {self._api_key}"}
+            if self._api_key
+            else {}
+        )
+        transport_failed = False
+        try:
+            with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
+                response = client.post(
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+        except httpx.RequestError:
+            transport_failed = True
+        if transport_failed:
+            raise self._failure(
+                code="transport_failed",
+                reason="文字模型连接失败。",
+                impact="未生成选题候选。",
+                repair_action="检查本机模型连接、网络或本地服务后重试。",
+                retryable=True,
+            )
+        if response.is_error:
+            raise self._failure(
+                code="http_failed",
+                reason="文字模型服务拒绝了选题请求。",
+                impact="未生成选题候选。",
+                repair_action="检查模型服务状态、账号权限或请求配额后重试。",
+                retryable=response.status_code >= 500,
+            )
+        content = self._response_content(response)
+        try:
+            document = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise self._failure(
+                code="content_json_invalid",
+                reason="文字模型返回的内容不是有效 JSON。",
+                impact="未生成选题候选。",
+                repair_action="检查模型的 JSON 输出能力或更换兼容模型后重试。",
+                retryable=True,
+            ) from exc
+        return self._validated_topics(document, {source.reference_id for source in sources})
+
+    def _validated_sources(
+        self,
+        input: CreationTaskTopicInput,
+    ) -> tuple[CreationTaskTopicSource, ...]:
+        goal = self._input_text(input.goal, "goal", 2_000)
+        language = self._input_text(input.language, "language", 64)
+        if not isinstance(input.sources, tuple) or not input.sources or len(input.sources) > self._MAX_SOURCES:
+            raise self._failure(
+                code="input_invalid",
+                reason="选题输入必须包含有界的授权资料。",
+                impact="未调用文字模型，未生成选题候选。",
+                repair_action="重新从已确认方案解析资料引用后重试。",
+                retryable=False,
+            )
+        del goal, language
+        total_text = 0
+        seen_ids: set[str] = set()
+        normalized: list[CreationTaskTopicSource] = []
+        for source in input.sources:
+            if not isinstance(source, CreationTaskTopicSource) or source.kind not in {"knowledge", "source"}:
+                raise self._failure(
+                    code="input_invalid",
+                    reason="选题资料类型无效。",
+                    impact="未调用文字模型，未生成选题候选。",
+                    repair_action="重新读取当前工作区已授权的知识或信息源。",
+                    retryable=False,
+                )
+            reference_id = self._input_text(source.reference_id, "reference id", 200)
+            title = self._input_text(source.title, "source title", 300)
+            text = self._input_text(source.text, "source text", self._MAX_SOURCE_TEXT)
+            if reference_id in seen_ids:
+                raise self._failure(
+                    code="input_invalid",
+                    reason="选题资料引用重复。",
+                    impact="未调用文字模型，未生成选题候选。",
+                    repair_action="去除重复资料引用后重新预检。",
+                    retryable=False,
+                )
+            seen_ids.add(reference_id)
+            total_text += len(text)
+            if total_text > self._MAX_TOTAL_SOURCE_TEXT:
+                raise self._failure(
+                    code="input_invalid",
+                    reason="选题资料文字超过本次请求上限。",
+                    impact="未调用文字模型，未生成选题候选。",
+                    repair_action="缩短已授权文字摘录后重试。",
+                    retryable=False,
+                )
+            normalized.append(
+                CreationTaskTopicSource(
+                    reference_id=reference_id,
+                    kind=source.kind,
+                    title=title,
+                    text=text,
+                )
+            )
+        return tuple(normalized)
+
+    def _response_content(self, response: httpx.Response) -> str:
+        try:
+            envelope = response.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise self._failure(
+                code="response_envelope_invalid",
+                reason="文字模型响应协议无效。",
+                impact="未生成选题候选。",
+                repair_action="检查 OpenAI-compatible 服务响应格式后重试。",
+                retryable=True,
+            ) from exc
+        if not isinstance(envelope, dict):
+            raise self._failure(
+                code="response_envelope_invalid",
+                reason="文字模型响应协议无效。",
+                impact="未生成选题候选。",
+                repair_action="检查 OpenAI-compatible 服务响应格式后重试。",
+                retryable=True,
+            )
+        choices = envelope.get("choices")
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], dict)
+            or not isinstance(choices[0].get("message"), dict)
+            or not isinstance(choices[0]["message"].get("content"), str)
+        ):
+            raise self._failure(
+                code="response_envelope_invalid",
+                reason="文字模型响应缺少候选内容。",
+                impact="未生成选题候选。",
+                repair_action="检查 OpenAI-compatible 服务响应格式后重试。",
+                retryable=True,
+            )
+        return str(choices[0]["message"]["content"])
+
+    def _validated_topics(
+        self,
+        document: object,
+        allowed_reference_ids: set[str],
+    ) -> list[CreationTaskGeneratedTopic]:
+        if not isinstance(document, dict) or not isinstance(document.get("topics"), list):
+            raise self._failure(
+                code="response_schema_invalid",
+                reason="文字模型内容缺少 topics 列表。",
+                impact="未生成选题候选。",
+                repair_action="检查模型提示词或更换支持 JSON 输出的模型后重试。",
+                retryable=True,
+            )
+        raw_topics = document["topics"]
+        if not raw_topics or len(raw_topics) > self._MAX_TOPICS:
+            raise self._failure(
+                code="response_schema_invalid",
+                reason="文字模型返回的选题数量无效。",
+                impact="未生成选题候选。",
+                repair_action="要求模型返回 1 到 8 个选题后重试。",
+                retryable=True,
+            )
+        titles: set[str] = set()
+        topics: list[CreationTaskGeneratedTopic] = []
+        for raw_topic in raw_topics:
+            if not isinstance(raw_topic, dict):
+                raise self._failure(
+                    code="response_schema_invalid",
+                    reason="文字模型返回的选题项无效。",
+                    impact="未生成选题候选。",
+                    repair_action="检查模型 JSON 输出结构后重试。",
+                    retryable=True,
+                )
+            title = self._topic_text(raw_topic, "title", 160)
+            normalized_title = title.casefold()
+            if normalized_title in titles:
+                raise self._failure(
+                    code="duplicate_title",
+                    reason="文字模型返回了重复标题。",
+                    impact="未生成选题候选。",
+                    repair_action="要求模型生成不同切入角度的选题后重试。",
+                    retryable=True,
+                )
+            titles.add(normalized_title)
+            angle = self._topic_text(raw_topic, "angle", 500)
+            audience = self._topic_text(raw_topic, "audience", 300)
+            outline = self._topic_outline(raw_topic)
+            score = raw_topic.get("score")
+            if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= float(score) <= 100:
+                raise self._failure(
+                    code="response_schema_invalid",
+                    reason="文字模型返回的选题评分无效。",
+                    impact="未生成选题候选。",
+                    repair_action="要求模型返回 0 到 100 的数值评分后重试。",
+                    retryable=True,
+                )
+            evidence_ids = self._topic_evidence_ids(raw_topic, allowed_reference_ids)
+            topics.append(
+                CreationTaskGeneratedTopic(
+                    title=title,
+                    angle=angle,
+                    audience=audience,
+                    outline=outline,
+                    score=float(score),
+                    evidence_reference_ids=evidence_ids,
+                )
+            )
+        return topics
+
+    def _topic_text(self, topic: dict[str, object], field: str, maximum: int) -> str:
+        value = topic.get(field)
+        if not isinstance(value, str):
+            raise self._failure(
+                code="response_schema_invalid",
+                reason=f"文字模型返回的 {field} 无效。",
+                impact="未生成选题候选。",
+                repair_action="检查模型 JSON 输出结构后重试。",
+                retryable=True,
+            )
+        return self._response_text(value, field, maximum)
+
+    def _topic_outline(self, topic: dict[str, object]) -> tuple[str, ...]:
+        outline = topic.get("outline")
+        if not isinstance(outline, list) or not outline or len(outline) > 8:
+            raise self._failure(
+                code="response_schema_invalid",
+                reason="文字模型返回的选题大纲无效。",
+                impact="未生成选题候选。",
+                repair_action="要求模型返回 1 到 8 条非空大纲后重试。",
+                retryable=True,
+            )
+        return tuple(self._topic_text({"outline": item}, "outline", 400) for item in outline)
+
+    def _topic_evidence_ids(
+        self,
+        topic: dict[str, object],
+        allowed_reference_ids: set[str],
+    ) -> tuple[str, ...]:
+        raw_ids = topic.get("evidence_reference_ids")
+        if not isinstance(raw_ids, list) or not raw_ids or len(raw_ids) > 8:
+            raise self._failure(
+                code="evidence_reference_invalid",
+                reason="文字模型返回的证据引用无效。",
+                impact="未生成选题候选。",
+                repair_action="要求模型仅引用本次输入资料后重试。",
+                retryable=True,
+            )
+        reference_ids = tuple(
+            self._evidence_reference_id(value)
+            if isinstance(value, str)
+            else ""
+            for value in raw_ids
+        )
+        if (
+            not all(reference_ids)
+            or len(set(reference_ids)) != len(reference_ids)
+            or any(reference_id not in allowed_reference_ids for reference_id in reference_ids)
+        ):
+            raise self._failure(
+                code="evidence_reference_invalid",
+                reason="文字模型引用了无效或未提供的证据。",
+                impact="未生成选题候选。",
+                repair_action="要求模型仅引用本次输入资料后重试。",
+                retryable=True,
+            )
+        return reference_ids
+
+    def _input_text(self, value: object, field: str, maximum: int) -> str:
+        if not isinstance(value, str):
+            raise self._failure(
+                code="input_invalid",
+                reason=f"选题 {field} 无效。",
+                impact="未调用文字模型，未生成选题候选。",
+                repair_action="重新读取已确认方案的文字资料后重试。",
+                retryable=False,
+            )
+        cleaned = value.strip()
+        if not cleaned or len(cleaned) > maximum:
+            raise self._failure(
+                code="input_invalid",
+                reason=f"选题 {field} 为空或超过上限。",
+                impact="未调用文字模型，未生成选题候选。",
+                repair_action="缩短并确认本次选题输入后重试。",
+                retryable=False,
+            )
+        return cleaned
+
+    def _response_text(self, value: object, field: str, maximum: int) -> str:
+        if not isinstance(value, str):
+            raise self._failure(
+                code="response_schema_invalid",
+                reason=f"文字模型返回的 {field} 无效。",
+                impact="未生成选题候选。",
+                repair_action="检查模型 JSON 输出结构后重试。",
+                retryable=True,
+            )
+        cleaned = value.strip()
+        if not cleaned or len(cleaned) > maximum:
+            raise self._failure(
+                code="response_schema_invalid",
+                reason=f"文字模型返回的 {field} 为空或超过上限。",
+                impact="未生成选题候选。",
+                repair_action="检查模型 JSON 输出结构后重试。",
+                retryable=True,
+            )
+        return cleaned
+
+    def _evidence_reference_id(self, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or len(cleaned) > 200:
+            raise self._failure(
+                code="evidence_reference_invalid",
+                reason="文字模型返回的证据引用为空或超过上限。",
+                impact="未生成选题候选。",
+                repair_action="要求模型仅引用本次输入资料后重试。",
+                retryable=True,
+            )
+        return cleaned
+
+    @staticmethod
+    def _failure(
+        *,
+        code: str,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+    ) -> CreationTaskTopicGenerationError:
+        return CreationTaskTopicGenerationError(
+            code=code,
+            reason=reason,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        )
 
 
 class TopicGenerator(Protocol):

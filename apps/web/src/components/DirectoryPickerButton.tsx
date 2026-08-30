@@ -66,7 +66,7 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
   return (
     <span className="settings-pick-wrap">
       <button
-        className="pixel-button secondary settings-pick-button"
+        className="ui-button secondary settings-pick-button"
         onClick={handleClick}
         type="button"
       >

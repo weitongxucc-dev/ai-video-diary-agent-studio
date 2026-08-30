@@ -285,10 +285,10 @@ export default function WelcomePage() {
     <div className="onboarding-desktop">
       <div className="onboarding-window">
         <main className="welcome-page">
-          <header className="welcome-header pixel-card">
+          <header className="welcome-header ui-panel">
             <div className="welcome-header-main">
               <span className="section-kicker">首次运行</span>
-              <h1>AI 视频日记 · Agent Studio</h1>
+              <h1>AI 视频日记</h1>
               <p>
                 本向导帮你完成首次配置：AI 模型密钥、Obsidian Vault 与视频目录。
                 配置保存后可随时在「设置」页修改。
@@ -322,7 +322,7 @@ export default function WelcomePage() {
             })}
           </ol>
 
-          <section className="welcome-stage pixel-card">
+          <section className="welcome-stage ui-panel">
             {step === "welcome" ? (
               <StepWelcome onStart={() => gotoStep("model")} />
             ) : null}
@@ -361,7 +361,7 @@ export default function WelcomePage() {
 
           <nav aria-label="引导导航" className="welcome-nav">
             <button
-              className="pixel-button secondary"
+              className="ui-button secondary"
               disabled={currentStepIndex <= 0}
               onClick={() =>
                 gotoStep(stepDefs[Math.max(0, currentStepIndex - 1)].id)
@@ -370,11 +370,11 @@ export default function WelcomePage() {
             >
               ← 上一步
             </button>
-            <Link className="pixel-button secondary" href="/">
+            <Link className="ui-button secondary" href="/">
               跳过引导
             </Link>
             <button
-              className="pixel-button"
+              className="ui-button"
               disabled={currentStepIndex >= stepDefs.length - 1}
               onClick={() =>
                 gotoStep(
@@ -400,7 +400,7 @@ function StepWelcome({ onStart }: { onStart: () => void }) {
         <span className="section-kicker">Step 1</span>
         <h2>欢迎来到 AI 视频日记</h2>
         <p>
-          Agent Studio 帮助创作者把 Obsidian / Hermes /
+          AI 视频日记帮助创作者把资料与信息源、
           外链素材整理成口播稿、剪辑计划与剪映草稿。
           首次运行需要完成三件事：配置大模型、绑定 Obsidian Vault
           与视频目录、确认运行环境。
@@ -430,7 +430,7 @@ function StepWelcome({ onStart }: { onStart: () => void }) {
         </li>
       </ul>
       <div className="welcome-step-actions">
-        <button className="pixel-button" onClick={onStart} type="button">
+        <button className="ui-button" onClick={onStart} type="button">
           开始配置 →
         </button>
       </div>
@@ -465,7 +465,7 @@ function StepModel({
           或自定义接口，请进入完整模型设置。
         </p>
         <Link className="welcome-inline-link" href="/settings?section=model">
-          选择其他模型供应商 →
+          选择其他模型服务 →
         </Link>
       </div>
 
@@ -484,14 +484,14 @@ function StepModel({
             value={apiKey}
           />
           <button
-            className="pixel-button secondary"
+            className="ui-button secondary"
             onClick={onToggleVisibility}
             type="button"
           >
             {apiKeyVisible ? "隐藏" : "显示"}
           </button>
           <button
-            className="pixel-button"
+            className="ui-button"
             disabled={verifying}
             onClick={onVerify}
             type="button"
@@ -590,7 +590,7 @@ function StepPaths({
       ) : null}
 
       <div className="welcome-step-actions">
-        <button className="pixel-button" disabled={saving} type="submit">
+        <button className="ui-button" disabled={saving} type="submit">
           {saving ? "保存中…" : "保存目录并继续"}
         </button>
       </div>
@@ -668,7 +668,7 @@ function StepVerify({
           <strong>无法验证</strong>
           <span>{state.message}</span>
           <button
-            className="pixel-button secondary"
+            className="ui-button secondary"
             onClick={onRetry}
             type="button"
           >
@@ -699,21 +699,21 @@ function StepVerify({
 
       <div className="welcome-step-actions">
         <button
-          className="pixel-button secondary"
+          className="ui-button secondary"
           onClick={onRetry}
           type="button"
         >
           重新检查
         </button>
         <button
-          className="pixel-button secondary"
+          className="ui-button secondary"
           onClick={onSkip}
           type="button"
         >
           先跳过
         </button>
         <button
-          className="pixel-button"
+          className="ui-button"
           disabled={!consent}
           onClick={onFinish}
           title={consent ? "进入主页" : "请先勾选同意隐私政策与使用条款"}

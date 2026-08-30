@@ -157,18 +157,18 @@ export default async function HistoryPage({
   return (
     <AppShell>
       <div className="history-page">
-        <section className="history-main pixel-card">
+        <section className="history-main ui-panel">
           <div className="history-header">
             <div>
-              <span className="section-kicker">Episode 历史</span>
+              <span className="section-kicker">发布与数据</span>
               <h1>发布与回溯</h1>
               <p>
                 {offline
                   ? "暂时无法连接本地 API。"
-                  : `共 ${totalCount} 条 Episode，当前筛选 ${filteredCount} 条。`}
+                  : `共 ${totalCount} 条创作内容，当前筛选 ${filteredCount} 条。`}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/">
+            <Link className="ui-button secondary" href="/">
               返回工作台
             </Link>
           </div>
@@ -227,7 +227,7 @@ export default async function HistoryPage({
                       <div className="history-item-actions">
                         {item.draft_package_path ? (
                           <Link
-                            className="pixel-button secondary"
+                            className="ui-button secondary"
                             href={`/draft?episode=${encodeURIComponent(item.id)}`}
                             title={`第 ${item.day_number} 天 · ${item.topic_title ?? "未填写选题"}`}
                           >
@@ -238,18 +238,18 @@ export default async function HistoryPage({
                         )}
                         {item.video_dedup_report_path ? (
                           <Link
-                            className="pixel-button secondary"
-                            href={`/video?episode=${encodeURIComponent(item.id)}`}
+                            className="ui-button secondary"
+                            href="/production"
                             title={`第 ${item.day_number} 天 · ${item.topic_title ?? "未填写选题"}`}
                           >
-                            查看重录报告
+                            查看创作任务
                           </Link>
                         ) : (
                           <span className="step-state">无重录报告</span>
                         )}
                         {item.publish_url ? (
                           <a
-                            className="pixel-button"
+                            className="ui-button"
                             href={item.publish_url}
                             rel="noreferrer"
                             target="_blank"
@@ -266,7 +266,7 @@ export default async function HistoryPage({
                         ? `素材包 · ${getBaseName(item.draft_package_path)}`
                         : getBaseName(item.video_dedup_report_path) !== "--"
                           ? `重录报告 · ${getBaseName(item.video_dedup_report_path)}`
-                          : `Episode ID · ${item.id}`}
+                          : `内容编号 · ${item.id}`}
                     </code>
                   </li>
                 );
@@ -279,12 +279,12 @@ export default async function HistoryPage({
                     {offline
                       ? "API 未连接"
                       : activeFilter === "all"
-                        ? "还没有 Episode"
-                        : `当前筛选下没有 Episode`}
+                        ? "还没有创作内容"
+                        : "当前筛选下没有创作内容"}
                   </strong>
                   <p>
                     {offline
-                      ? "连接恢复后这里会按倒序列出所有 Episode。"
+                      ? "连接恢复后这里会按倒序列出所有创作内容。"
                       : "完成一次内容发布流程后会自动出现在这里。"}
                   </p>
                 </div>
@@ -322,10 +322,10 @@ export default async function HistoryPage({
             label="失败"
             tone="orange"
           />
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>统计说明</h2>
             <p>展示当前筛选下的状态分布。</p>
-            <span>数据来源：本地 Episode 数据库。</span>
+            <span>数据来源：本地创作记录。</span>
           </div>
         </aside>
       </div>

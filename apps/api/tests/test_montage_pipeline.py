@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from datetime import date
@@ -20,13 +21,16 @@ from app.montage import (
     MontageClip,
     MontagePlan,
     MontagePlanner,
+    MontageRenderError,
     MontageRenderer,
     MontageRepository,
     NarrationCue,
 )
+from app.narration import NarrationArtifact
 from app.production import (
     MaterialAsset,
     MaterialSegment,
+    NarrationArtifactRecord,
     ProductionBatch,
     ProductionBatchItem,
     ProductionProfile,
@@ -361,7 +365,7 @@ def test_montage_repository_is_workspace_scoped_and_persistent(tmp_path):
         repository.get("workspace_b", plan.id)
 
 
-def test_renderer_writes_vertical_command_and_subtitles(tmp_path):
+def test_renderer_rejects_placeholder_output_after_running_command(tmp_path):
     asset = _asset(tmp_path)
     audio_path = tmp_path / "voice.wav"
     audio_path.write_bytes(b"audio")
@@ -378,17 +382,53 @@ def test_renderer_writes_vertical_command_and_subtitles(tmp_path):
         commands.append(command)
         Path(command[-1]).write_bytes(b"rendered")
 
-    rendered = MontageRenderer(tmp_path / "output", runner=runner).render(plan, audio_path)
+    with pytest.raises(OSError, match="ffprobe|输出"):
+        MontageRenderer(tmp_path / "output", runner=runner).render(plan, audio_path)
 
-    assert rendered.status == "rendered"
-    assert Path(rendered.output_path or "").read_bytes() == b"rendered"
-    subtitle = Path(rendered.subtitle_path or "").read_text(encoding="utf-8")
+    assert plan.status == "failed"
+    subtitle = (tmp_path / "output" / "batch_1_episode_ready.srt").read_text(encoding="utf-8")
     assert "人工智能工具正在改变团队效率" in subtitle
     command = commands[0]
     assert "scale=1080:1920:force_original_aspect_ratio=increase" in " ".join(command)
     assert "-shortest" in command
     assert command[command.index("-ar") + 1] == "48000"
     assert command[-1].endswith("batch_1_episode_ready_preview.mp4")
+
+
+def test_renderer_keeps_ffmpeg_exit_code_and_stderr(tmp_path):
+    asset = _asset(tmp_path)
+    audio_path = tmp_path / "voice.wav"
+    audio_path.write_bytes(b"audio")
+    plan = MontagePlanner().build(
+        workspace_id="workspace_a",
+        batch=_batch(),
+        episode=_episode(),
+        profile=_profile(),
+        assets=[asset],
+    )
+
+    def runner(_command: list[str]) -> None:
+        raise subprocess.CalledProcessError(23, ["ffmpeg"], stderr="invalid filter")
+
+    with pytest.raises(MontageRenderError) as error:
+        MontageRenderer(tmp_path / "output", runner=runner).render(plan, audio_path)
+
+    assert plan.status == "failed"
+    assert error.value.exit_code == 23
+    assert error.value.stderr == "invalid filter"
+    assert "23" in plan.message
+    assert "invalid filter" in plan.message
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
+def test_renderer_default_runner_keeps_real_ffmpeg_exit_code_and_stderr(tmp_path):
+    with pytest.raises(MontageRenderError) as error:
+        MontageRenderer(tmp_path / "output")._run(
+            ["ffmpeg", "-f", "unknown-input-format", "-i", "ignored", "-f", "null", "-"]
+        )
+
+    assert error.value.exit_code != 0
+    assert error.value.stderr != "(no stderr produced)"
 
 
 def test_renderer_rejects_unconfirmed_plan(tmp_path):
@@ -451,26 +491,72 @@ def test_montage_api_creates_and_lists_plan(tmp_path, monkeypatch):
     episode.status = EpisodeStatus.SCRIPT_APPROVED
     episode.script = _episode(workspace_id).script
     episode_repository.save(episode)
+    narration = tmp_path / "approved" / "narration.wav"
+    narration.parent.mkdir()
+    narration.write_bytes(b"audio")
+    narration_cache_key = "fixture_narration"
+    production.save_narration_artifact(
+        NarrationArtifactRecord(
+            id="narration_fixture",
+            workspace_id=workspace_id,
+            episode_id=episode.id,
+            script_id="script_fixture",
+            voice_profile_id=None,
+            cache_key=narration_cache_key,
+            audio_path=str(narration),
+            duration_seconds=24.0,
+            sample_rate=24_000,
+            model_id="fixture-narration",
+        )
+    )
 
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "montage_repo", MontageRepository(tmp_path / "studio.sqlite3"))
     monkeypatch.setattr(main_module, "repo", episode_repository)
+    monkeypatch.setattr(main_module.montage_renderer, "audio_duration", lambda _path: 24.0)
+    monkeypatch.setattr(
+        main_module,
+        "_narration_for_episode",
+        lambda _workspace_id, _episode, _profile: NarrationArtifact(
+            episode_id=episode.id,
+            audio_path=str(narration),
+            duration_seconds=24.0,
+            sample_rate=24_000,
+            model_id="fixture-narration",
+            cache_key=narration_cache_key,
+        ),
+    )
     client = TestClient(main_module.app)
 
     response = client.post(
         "/api/production/batches/batch_1/montage-plans",
-        json={"episode_id": episode.id, "narration_audio_path": None},
+        json={"episode_id": episode.id},
     )
     assert response.status_code == 200
-    assert response.json()["clips"]
+    payload = response.json()
+    assert payload["clips"]
+    assert all(clip["source_path"].startswith("workspace://") for clip in payload["clips"])
+    assert "narration_audio_path" not in payload
+    assert "output_path" not in payload
+    assert "subtitle_path" not in payload
 
     listed = client.get("/api/production/batches/batch_1/montage-plans")
     assert listed.status_code == 200
     assert listed.json()["total_count"] == 1
+    assert listed.json()["plans"][0]["clips"][0]["source_path"].startswith("workspace://")
+
+    legacy_payload = client.post(
+        "/api/production/batches/batch_1/montage-plans",
+        json={
+            "episode_id": episode.id,
+            "narration_audio_path": "workspace://approved/narration.wav",
+        },
+    )
+    assert legacy_payload.status_code == 422
 
     duplicate = client.post(
         "/api/production/batches/batch_1/montage-plans",
-        json={"episode_id": episode.id, "narration_audio_path": None},
+        json={"episode_id": episode.id},
     )
     assert duplicate.status_code == 409
 
@@ -626,24 +712,28 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
     rendered = MontageRenderer(tmp_path / "output").render(plan, audio_path)
     output_path = Path(rendered.output_path or "")
     assert output_path.stat().st_size > 0
-    dimensions = subprocess.run(
+    stream_summary = subprocess.run(
         [
             "ffprobe",
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=width,height",
+            "stream=codec_type,codec_name,width,height",
             "-of",
-            "csv=s=x:p=0",
+            "json",
             str(output_path),
         ],
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
-    assert dimensions == "1080x1920"
+    ).stdout
+    streams = json.loads(stream_summary)["streams"]
+    assert {stream["codec_type"]: stream["codec_name"] for stream in streams} == {
+        "video": "h264",
+        "audio": "aac",
+    }
+    video = next(stream for stream in streams if stream["codec_type"] == "video")
+    assert (video["width"], video["height"]) == (1080, 1920)
 
 
 def test_montage_review_api_supports_candidates_trim_lock_and_confirm(tmp_path, monkeypatch):

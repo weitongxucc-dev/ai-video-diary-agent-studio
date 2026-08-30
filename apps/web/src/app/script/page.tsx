@@ -86,7 +86,7 @@ function EmptyScriptState({
       : error === "topics_failed"
         ? {
             title: "还没有可用选题",
-            description: "今日 Episode 已创建，但选题生成没有完成。请先去选题池生成候选选题。"
+            description: "今日创作内容已创建，但选题生成没有完成。请先生成候选选题。"
           }
         : error === "no_topics"
           ? {
@@ -96,7 +96,7 @@ function EmptyScriptState({
           : error === "needs_topic_review"
             ? {
                 title: "请先人工复核选题",
-                description: "Agent 已经准备好候选选题，但口播稿必须在你确认选题后才会生成。"
+                description: "系统已准备好候选选题，但口播稿必须在你确认选题后才会生成。"
               }
             : error === "script_failed"
               ? {
@@ -105,22 +105,22 @@ function EmptyScriptState({
                 }
               : {
                   title: "还没有口播稿",
-                  description: "当前 Episode 没有可展示的脚本内容，请先完成选题确认和脚本生成。"
+                  description: "当前创作内容没有可展示的脚本，请先完成选题确认和脚本生成。"
                 };
 
   return (
-    <section className="script-empty pixel-card">
+    <section className="script-empty ui-panel">
       <span className="section-kicker">口播稿</span>
       <h1>{copy.title}</h1>
       <p>{copy.description}</p>
       {episode ? (
-        <p className="script-empty-meta">Episode #{episode.day_number}</p>
+        <p className="script-empty-meta">第 {episode.day_number} 条创作内容</p>
       ) : null}
       <div className="script-empty-actions">
-        <Link className="pixel-button" href="/topics">
+        <Link className="ui-button" href="/topics">
           去选题池
         </Link>
-        <Link className="pixel-button secondary" href="/">
+        <Link className="ui-button secondary" href="/">
           返回今日工作台
         </Link>
       </div>
@@ -192,7 +192,7 @@ export default async function ScriptPage() {
               <input name="reason" type="hidden" value="用户手动编辑口播稿" />
             </FormErrorBanner>
             <section className="script-main" aria-label="口播稿正文">
-              <section className="script-dashboard pixel-card" aria-label="脚本仪表盘">
+              <section className="script-dashboard ui-panel" aria-label="脚本仪表盘">
                 <div className="script-dashboard-stat">
                   <span>总时长</span>
                   <strong>{totalSeconds}s</strong>
@@ -223,7 +223,7 @@ export default async function ScriptPage() {
                 </nav>
               </section>
 
-              <section className="script-hook pixel-card" id="script-hook">
+              <section className="script-hook ui-panel" id="script-hook">
                 <div className="script-section-header compact">
                   <div>
                     <span className="section-kicker">开头 3 秒</span>
@@ -293,7 +293,7 @@ export default async function ScriptPage() {
                         title="重写理由 0-200 字"
                         type="text"
                       />
-                      <button className="pixel-button secondary" type="submit">
+                      <button className="ui-button secondary" type="submit">
                         重写本段
                       </button>
                     </form>
@@ -302,7 +302,7 @@ export default async function ScriptPage() {
               ))}
             </section>
 
-            <aside className="script-side pixel-card">
+            <aside className="script-side ui-panel">
               <section className="script-side-panel">
                 <h2>发布素材</h2>
                 <h3>标题候选</h3>
@@ -360,7 +360,7 @@ export default async function ScriptPage() {
 
               <section className="script-side-panel script-side-actions">
                 <h2>操作</h2>
-                <button className="pixel-button" form={scriptFormId} type="submit">
+                <button className="ui-button" form={scriptFormId} type="submit">
                   保存口播稿修改
                 </button>
                 <form action={regenerateScriptAction} className="script-control-form">
@@ -373,13 +373,13 @@ export default async function ScriptPage() {
                     title="整篇重写理由 0-200 字"
                     type="text"
                   />
-                  <button className="pixel-button secondary" type="submit">
+                  <button className="ui-button secondary" type="submit">
                     重新生成整篇
                   </button>
                 </form>
                 <form action={approveScriptAction}>
                   <input name="episode_id" type="hidden" value={episode.id} />
-                  <button className="pixel-button" type="submit">
+                  <button className="ui-button" type="submit">
                     确认脚本，等待录制视频
                   </button>
                 </form>
@@ -406,7 +406,7 @@ export default async function ScriptPage() {
                         <input name="version_id" type="hidden" value={version.id} />
                         <input name="reason" type="hidden" value="从版本历史恢复" />
                         <button
-                          className="pixel-button secondary"
+                          className="ui-button secondary"
                           disabled={version.active}
                           type="submit"
                         >

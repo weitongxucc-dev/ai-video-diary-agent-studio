@@ -1,0 +1,198 @@
+"use client";
+
+import { AlertCircle, AudioLines, FileText, LoaderCircle, RefreshCw, ShieldCheck, UserRound, Volume2 } from "lucide-react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { AppShell } from "@/components/AppShell";
+import {
+  type AuthorizationInput, type MediaAuthorization, type MediaCapability, type MediaPreview, type PersonProfile,
+  type PronunciationEntry, type VoiceProfile, getMediaCapability, listApprovedMaterials,
+  listAuthorizations, listPersonProfiles, listPronunciationEntries, listVoiceProfiles,
+  createAvatarLipsyncPreview, createVoicePreview, listMediaPreviewAttempts, listMediaPreviews, mediaProfilesErrorMessage, savePersonProfile, savePronunciationEntry, saveVoiceProfile,
+} from "@/lib/media-profiles-api";
+
+type View = "people" | "voices" | "dictionary" | "authorizations";
+const viewLabel: Record<View, string> = { people: "人物形象", voices: "声音", dictionary: "发音词典", authorizations: "授权记录" };
+const now = () => new Date().toISOString();
+const id = (prefix: string) => `${prefix}-${globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Date.now()}`;
+
+function authTone(auth: MediaAuthorization) {
+  if (auth.status === "active") return { label: "授权有效", tone: "success" };
+  if (auth.status === "pending") return { label: "等待确认", tone: "warning" };
+  return { label: auth.status === "revoked" ? "授权已撤销" : "授权已失效", tone: "danger" };
+}
+
+const authorizationLabels: Record<string, string> = {
+  narration: "配音生成", avatar_lipsync: "人物口型", person_likeness: "人物形象", avatar_video: "人物视频", voice: "声音",
+};
+const authorizationLabel = (value: string) => authorizationLabels[value] ?? "已授权内容";
+const authorizationListLabel = (values: string[]) => values.map(authorizationLabel).join("、");
+const authorizationEvidenceLabel = (reference: string) => reference.startsWith("workspace://") ? "已保存授权凭证" : "外部授权凭证";
+const modelLabel = (kind: "voice" | "avatar") => kind === "voice" ? "本地声音模型" : "人物口型模型";
+function modelCapabilityCopy(capability: MediaCapability | null, kind: "voice" | "avatar") {
+  const label = modelLabel(kind);
+  return capability?.available ? `${label}已配置` : `${label}尚未配置`;
+}
+
+function runnableCopy(runnable: boolean, reason: string | null) {
+  if (runnable) return "可用于任务";
+  if (reason === "authorization_revoked") return "授权已撤销";
+  if (reason === "authorization_expired") return "授权已失效";
+  if (reason === "authorization_pending") return "授权等待确认";
+  return "暂不可用于任务";
+}
+
+function AuthorizationFields({ prefix, kind }: { prefix: string; kind: "person" | "voice" }) {
+  return <div className="profiles-auth-fields">
+    <label><span>权利人</span><input name={`${prefix}rights_holder`} required placeholder="授权主体名称" /></label>
+    <label><span>授权证据</span><input name={`${prefix}evidence_reference`} required placeholder="workspace:// 或已保存的证据链接" /></label>
+    <p>{kind === "person" ? "用于人物口型与发布人物视频。" : "用于配音与人物口型。"}</p>
+  </div>;
+}
+
+function formAuthorization(data: FormData, prefix: string, kind: "person" | "voice"): AuthorizationInput {
+  return { id: id("authorization"), version: "v1", rights_holder: String(data.get(`${prefix}rights_holder`) ?? "").trim(), content_types: kind === "person" ? ["person_likeness", "avatar_video"] : ["voice"], usage_scopes: kind === "person" ? ["avatar_lipsync"] : ["narration", "avatar_lipsync"], effective_from: now(), expires_at: null, evidence_reference: String(data.get(`${prefix}evidence_reference`) ?? "").trim(), status: "active" };
+}
+
+const canRetryPreview = (preview: MediaPreview | undefined) => preview?.status === "failed" || preview?.status === "unavailable" || preview?.status === "blocked";
+const isCurrentVoicePreview = (preview: MediaPreview, voice: VoiceProfile | null) => preview.preview_type === "voice" && preview.voice_profile_id === voice?.id && preview.voice_version === voice?.version;
+const isCurrentAvatarPreview = (preview: MediaPreview, person: PersonProfile | null, voice: VoiceProfile | null) => preview.preview_type === "avatar_lipsync" && preview.person_profile_id === person?.id && preview.person_version === person?.version && preview.voice_profile_id === voice?.id && preview.voice_version === voice?.version;
+const hasAvatarAuthorization = (authorization: MediaAuthorization | undefined) => authorization?.status === "active" && authorization.content_types.includes("avatar_video") && authorization.usage_scopes.includes("avatar_lipsync");
+const currentTimestamp = (preview: MediaPreview) => preview.finished_at ?? preview.started_at;
+
+export function PeopleAndVoiceWorkspace() {
+  const [view, setView] = useState<View>("people");
+  const [people, setPeople] = useState<PersonProfile[]>([]);
+  const [voices, setVoices] = useState<VoiceProfile[]>([]);
+  const [entries, setEntries] = useState<PronunciationEntry[]>([]);
+  const [authorizations, setAuthorizations] = useState<MediaAuthorization[]>([]);
+  const [materials, setMaterials] = useState<Array<{ id: string; file_name: string; workspace_reference: string | null }>>([]);
+  const [previews, setPreviews] = useState<MediaPreview[]>([]);
+  const [attempts, setAttempts] = useState<MediaPreview[]>([]);
+  const [voiceCapability, setVoiceCapability] = useState<MediaCapability | null>(null);
+  const [avatarCapability, setAvatarCapability] = useState<MediaCapability | null>(null);
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const selectedPerson = people.find((item) => item.id === selectedPersonId) ?? people[0] ?? null;
+  const selectedVoice = voices.find((item) => item.id === selectedVoiceId) ?? voices.find((item) => item.person_profile_id === selectedPerson?.id) ?? voices[0] ?? null;
+  const currentVoicePreview = previews.find((preview) => isCurrentVoicePreview(preview, selectedVoice));
+  const currentAvatarPreview = previews.find((preview) => isCurrentAvatarPreview(preview, selectedPerson, selectedVoice));
+  const activePreview = view === "voices" ? currentVoicePreview : currentAvatarPreview;
+
+  async function refresh() {
+    setLoading(true); setError(null);
+    try {
+      const [personResponse, voiceResponse, entryResponse, authorizationResponse, materialResponse, voiceResult, avatarResult, previewResponse] = await Promise.all([
+        listPersonProfiles(), listVoiceProfiles(), listPronunciationEntries(), listAuthorizations(), listApprovedMaterials(),
+        getMediaCapability("voice-clone").catch(() => null), getMediaCapability("avatar-lipsync").catch(() => null),
+        listMediaPreviews(),
+      ]);
+      setPeople(personResponse.items); setVoices(voiceResponse.items); setEntries(entryResponse.items); setAuthorizations(authorizationResponse.items);
+      setMaterials(materialResponse.assets.map((asset) => ({ id: asset.id, file_name: asset.file_name, workspace_reference: asset.workspace_reference })));
+      setVoiceCapability(voiceResult); setAvatarCapability(avatarResult); setPreviews(previewResponse.items);
+      setSelectedPersonId((current) => current ?? personResponse.items[0]?.id ?? null);
+      setSelectedVoiceId((current) => current ?? voiceResponse.items[0]?.id ?? null);
+    } catch (cause) { setError(mediaProfilesErrorMessage(cause)); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  useEffect(() => {
+    if (!activePreview) { setAttempts([]); return; }
+    void listMediaPreviewAttempts(activePreview.preview_type, activePreview.identity)
+      .then((response) => setAttempts(response.items))
+      .catch(() => setAttempts([]));
+  }, [activePreview?.identity, activePreview?.preview_type]);
+
+  function recordPreview(preview: MediaPreview) {
+    setPreviews((items) => [preview, ...items.filter((item) => item.preview_type !== preview.preview_type || item.identity !== preview.identity)]);
+    setAttempts((items) => [preview, ...items.filter((item) => item.id !== preview.id)]);
+  }
+
+  async function createPerson(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const data = new FormData(event.currentTarget); setBusy("person"); setNotice(null);
+    try {
+      const saved = await savePersonProfile({ id: selectedPerson?.id ?? id("person"), display_name: String(data.get("display_name") ?? "").trim(), version: String(data.get("version") ?? "").trim(), avatar_reference: String(data.get("avatar_reference") ?? ""), background_capabilities: [String(data.get("background") ?? "").trim()].filter(Boolean), shot_capabilities: [String(data.get("shot") ?? "").trim()].filter(Boolean), authorization: formAuthorization(data, "person_", "person") });
+      setNotice(`已保存人物档案 ${saved.display_name}（${saved.version}）。`); await refresh(); setSelectedPersonId(saved.id); event.currentTarget.reset();
+    } catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  async function createVoice(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const data = new FormData(event.currentTarget); setBusy("voice"); setNotice(null);
+    try {
+      const person = people.find((item) => item.id === String(data.get("person_profile_id")))!;
+      const saved = await saveVoiceProfile({ id: selectedVoice?.id ?? id("voice"), person_profile_id: person.id, person_version: person.version, version: String(data.get("version") ?? "").trim(), language: String(data.get("language")) as VoiceProfile["language"], reference_audio_path: String(data.get("reference_audio_path")), reference_text: String(data.get("reference_text") ?? "").trim(), model_id: "voice-clone", authorization: formAuthorization(data, "voice_", "voice") });
+      setNotice(`已登记声音档案 ${saved.version}；这不是已复制声音。`); await refresh(); setSelectedVoiceId(saved.id); event.currentTarget.reset();
+    } catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  async function createEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const data = new FormData(event.currentTarget); setBusy("entry"); setNotice(null);
+    try { const saved = await savePronunciationEntry({ id: id("pronunciation"), term: String(data.get("term") ?? "").trim(), language: String(data.get("language")) as PronunciationEntry["language"], target_pronunciation: String(data.get("target") ?? "").trim(), scope: "workspace", scope_reference: null, version: "v1" }); setNotice(`已保存“${saved.term}”的发音规则。`); await refresh(); event.currentTarget.reset(); }
+    catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  async function runVoicePreview(retry = false) {
+    if (!selectedVoice) return;
+    setBusy("voice-preview"); setError(null);
+    try { const preview = await createVoicePreview({ voice_profile_id: selectedVoice.id, voice_version: selectedVoice.version, preview_text: selectedVoice.reference_text, retry }); recordPreview(preview); }
+    catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  async function runAvatarPreview(retry = false) {
+    const personAuthorization = selectedPerson?.current_authorization;
+    const voicePreview = previews.find((preview) => isCurrentVoicePreview(preview, selectedVoice) && preview.status === "succeeded");
+    const validPersonAuthorization = hasAvatarAuthorization(personAuthorization);
+    if (!selectedPerson || !selectedVoice || !voicePreview || !validPersonAuthorization || !avatarCapability?.model_id) return;
+    setBusy("avatar-preview"); setError(null);
+    try { const preview = await createAvatarLipsyncPreview({ person_profile_id: selectedPerson.id, person_version: selectedPerson.version, voice_profile_id: selectedVoice.id, voice_version: selectedVoice.version, voice_preview_identity: voicePreview.identity, motion: "natural", expression: "neutral", authorization_id: personAuthorization.id, authorization_version: personAuthorization.version, model_id: avatarCapability.model_id, retry }); recordPreview(preview); }
+    catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  const inspector = useMemo(() => {
+    const auth = view === "voices" ? selectedVoice?.current_authorization : selectedPerson?.current_authorization;
+    const currentName = view === "voices" ? selectedVoice?.reference_text || "声音档案" : selectedPerson?.display_name || "人物形象";
+    const cap = view === "voices" ? voiceCapability : avatarCapability;
+    return <div className="profiles-inspector">
+      <span className={`profiles-status status-${auth ? authTone(auth).tone : "idle"}`}>{auth ? authTone(auth).label : "尚未选择档案"}</span>
+      <h3>{currentName}</h3>
+      {auth ? <dl><div><dt>当前版本</dt><dd>{view === "voices" ? selectedVoice?.version : selectedPerson?.version}</dd></div><div><dt>语言</dt><dd>{selectedVoice?.language === "zh-en" ? "中英混合" : selectedVoice?.language === "en" ? "英文" : "中文"}</dd></div><div><dt>授权内容</dt><dd>{authorizationListLabel(auth.content_types)}</dd></div><div><dt>使用范围</dt><dd>{authorizationListLabel(auth.usage_scopes)}</dd></div><div><dt>授权证据</dt><dd title={auth.evidence_reference}>{authorizationEvidenceLabel(auth.evidence_reference)}</dd></div></dl> : <p>选择一个人物或声音档案，查看版本、授权与可执行操作。</p>}
+      <section><h4>模型能力</h4><p>{modelCapabilityCopy(cap, view === "voices" ? "voice" : "avatar")}</p>{cap?.model_id ? <small title={cap.model_id}>技术标识已保存</small> : null}{cap?.impact ? <p>影响：{cap.impact}</p> : null}{cap?.repair_action ? <p>处理：{cap.repair_action}</p> : null}</section>
+      <section><h4>数据发送说明</h4><p>仅在你触发生成时向已配置的模型服务发送当前档案所需的已授权参考内容。</p></section>
+    </div>;
+  }, [avatarCapability, selectedPerson, selectedVoice, view, voiceCapability]);
+
+  return <AppShell inspector={inspector} inspectorTitle="人物与声音详情">
+    <div className="profiles-workspace">
+      <header className="profiles-workspace__header"><div><span>人物、声音与授权</span><h1>人物与声音</h1><p>分别管理人物形象、声音档案、发音词典和授权记录；所有档案均以版本保存。</p></div><button className="modern-primary-button" disabled={loading} onClick={() => void refresh()} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新状态</button></header>
+      {error ? <section className="profiles-error" role="alert"><AlertCircle size={18}/><div><strong>{error}</strong><p>不会显示任何演示人物、声音或生成结果。检查本地服务后可重试。</p></div><button onClick={() => void refresh()} type="button">重试</button></section> : null}
+      {notice ? <p className="profiles-notice" role="status">{notice}</p> : null}
+      <nav className="profiles-tabs" aria-label="人物与声音视图">{(Object.keys(viewLabel) as View[]).map((item) => <button className={view === item ? "is-active" : ""} key={item} onClick={() => setView(item)} type="button">{viewLabel[item]}</button>)}</nav>
+      {loading ? <div className="profiles-loading"><LoaderCircle className="is-spinning" size={20}/>正在读取当前工作区的人物与声音档案…</div> : null}
+      {!loading && error ? <section className="profiles-service-empty"><AlertCircle size={22}/><div><strong>人物与声音档案暂不可读取</strong><p>服务恢复后可读取人物版本、声音档案、发音规则和授权记录；当前没有在页面中替代为示例数据。</p></div><button onClick={() => void refresh()} type="button">重新读取</button></section> : null}
+      {!loading && !error && <div className="profiles-layout">
+        <section className="profiles-stage">
+          {view === "people" && <><header><div><span>人物形象</span><h2>当前人物预览</h2></div><span>{people.length} 个档案</span></header><div className="profiles-browser">{people.map((person) => <button className={selectedPerson?.id === person.id ? "is-selected" : ""} key={person.id} onClick={() => setSelectedPersonId(person.id)} type="button"><UserRound size={16}/><div><strong>{person.display_name}</strong><small>{person.version} · {runnableCopy(person.runnable, person.runnable_reason)}</small></div></button>)}{!people.length && <Empty title="还没有人物形象" text="从已批准素材中选择人物参考，并登记授权后保存。"/>}</div><ProfilePreview person={selectedPerson} voice={selectedVoice} capability={avatarCapability} preview={currentAvatarPreview} voiceReady={currentVoicePreview?.status === "succeeded"} authorizationReady={hasAvatarAuthorization(selectedPerson?.current_authorization)} attempts={activePreview?.identity === currentAvatarPreview?.identity ? attempts : []} busy={busy === "avatar-preview"} onPreview={runAvatarPreview}/></>}
+          {view === "voices" && <><header><div><span>声音档案</span><h2>当前声音与参考文字</h2></div><span>{voices.length} 个档案</span></header><div className="profiles-browser">{voices.map((voice) => <button className={selectedVoice?.id === voice.id ? "is-selected" : ""} key={voice.id} onClick={() => setSelectedVoiceId(voice.id)} type="button"><Volume2 size={16}/><div><strong>{people.find((person) => person.id === voice.person_profile_id)?.display_name || "未找到对应人物"}</strong><small>{voice.version} · {voice.language} · {runnableCopy(voice.runnable, voice.runnable_reason)}</small></div></button>)}{!voices.length && <Empty title="还没有声音档案" text="先登记人物与授权，再从已批准素材选择声音参考。"/>}</div><VoicePreview voice={selectedVoice} capability={voiceCapability} preview={currentVoicePreview} attempts={activePreview?.identity === currentVoicePreview?.identity ? attempts : []} busy={busy === "voice-preview"} onPreview={runVoicePreview}/></>}
+          {view === "dictionary" && <Dictionary entries={entries} onSubmit={createEntry} busy={busy === "entry"}/>}
+          {view === "authorizations" && <AuthorizationList authorizations={authorizations}/>}
+        </section>
+        {(view === "people" || view === "voices") && <aside className="profiles-create"><header><span>新增档案</span><h2>{view === "people" ? selectedPerson ? "为当前人物创建新版本" : "创建人物形象" : selectedVoice ? "为当前声音创建新版本" : "登记声音档案"}</h2><p>{view === "people" ? "参考内容只可来自带工作区引用的已批准素材。" : "登记档案不会复制或生成声音。"}</p></header>{view === "people" ? <form onSubmit={createPerson}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>人物名称</span><input name="display_name" required placeholder="例如：品牌主讲人"/></label><label><span>人物参考素材</span><ApprovedMaterialSelect materials={materials} name="avatar_reference"/></label><label><span>背景能力</span><input name="background" placeholder="例如：室内、纯色背景"/></label><label><span>景别能力</span><input name="shot" placeholder="例如：半身、近景"/></label><AuthorizationFields kind="person" prefix="person_"/><button disabled={busy === "person" || !materials.some((item) => item.workspace_reference)} type="submit"><UserRound size={16}/>保存人物新版本</button></form> : <form onSubmit={createVoice}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>关联人物</span><select name="person_profile_id" required>{people.map((person) => <option key={person.id} value={person.id}>{person.display_name} · {person.version}</option>)}</select></label><label><span>声音参考素材</span><ApprovedMaterialSelect materials={materials} name="reference_audio_path"/></label><label><span>参考文字</span><textarea name="reference_text" required rows={3} placeholder="逐字填写已授权参考音频中的内容"/></label><label><span>语言</span><select name="language"><option value="zh">中文</option><option value="en">英文</option><option value="zh-en">中英混合</option></select></label><AuthorizationFields kind="voice" prefix="voice_"/><button disabled={busy === "voice" || !people.length || !materials.some((item) => item.workspace_reference)} type="submit"><AudioLines size={16}/>登记声音新版本</button></form>}</aside>}
+      </div>}
+    </div>
+  </AppShell>;
+}
+
+function ApprovedMaterialSelect({ materials, name }: { materials: Array<{id:string; file_name:string; workspace_reference:string|null}>; name:string }) { const selectable = materials.filter((material) => material.workspace_reference); return <select name={name} required disabled={!selectable.length}>{selectable.length ? selectable.map((material) => <option key={material.id} value={material.workspace_reference!}>{material.file_name}</option>) : <option>没有可引用的已批准素材</option>}</select>; }
+function Empty({ title, text }: { title:string; text:string }) { return <div className="profiles-empty"><FileText size={20}/><div><strong>{title}</strong><p>{text}</p></div></div>; }
+function PreviewStatus({ preview }: { preview: MediaPreview | undefined }) { return preview ? <p>最近尝试：{preview.status === "succeeded" ? "已生成" : preview.status === "running" ? "正在生成" : preview.reason || "未返回原因"}{preview.repair_action ? ` · ${preview.repair_action}` : ""}{canRetryPreview(preview) ? " · 可以重新尝试" : ""}</p> : null; }
+function PreviewAttempts({ attempts }: { attempts: MediaPreview[] }) { return attempts.length ? <section className="profiles-preview-history" aria-label="预览尝试历史"><h4>尝试历史</h4>{attempts.map((attempt) => <p key={attempt.id}>第 {attempt.attempt} 次 · {attempt.status === "succeeded" ? "已生成" : attempt.status === "running" ? "正在生成" : attempt.reason || "未返回原因"} · {new Date(currentTimestamp(attempt)).toLocaleString("zh-CN")}</p>)}</section> : null; }
+function ProfilePreview({ person, voice, capability, preview, voiceReady, authorizationReady, attempts, busy, onPreview }: { person:PersonProfile|null; voice:VoiceProfile|null; capability:MediaCapability|null; preview:MediaPreview|undefined; voiceReady:boolean; authorizationReady:boolean; attempts:MediaPreview[]; busy:boolean; onPreview:(retry?:boolean)=>void }) { const retry = canRetryPreview(preview); const samePerson = Boolean(person && voice && voice.person_profile_id === person.id && voice.person_version === person.version); const blockedReason = !samePerson ? "请选择与当前人物版本匹配的声音档案。" : !voiceReady ? "请先成功生成当前声音档案的声音预览。" : !authorizationReady ? "当前人物缺少用于人物口型的有效授权，请补充授权后再生成。" : modelCapabilityCopy(capability, "avatar"); return <div className="profiles-preview"><UserRound size={28}/><strong>{person?.display_name || "选择人物形象"}</strong><p>{person ? "参考：已保存的人物参考素材" : "保存人物档案后，可在这里查看当前版本与授权状态。"}</p><button disabled={!capability?.available || !person || !samePerson || !voiceReady || !authorizationReady || busy} onClick={() => onPreview(retry)} type="button">{retry ? "重新生成口型预览" : "生成口型预览"}</button><small>{blockedReason}</small><PreviewStatus preview={preview}/>{preview?.status === "succeeded" && preview.output_url ? <video aria-label="人物口型预览" controls src={preview.output_url}/> : null}<PreviewAttempts attempts={attempts}/></div>; }
+function VoicePreview({ voice, capability, preview, attempts, busy, onPreview }: { voice:VoiceProfile|null; capability:MediaCapability|null; preview:MediaPreview|undefined; attempts:MediaPreview[]; busy:boolean; onPreview:(retry?:boolean)=>void }) { const retry = canRetryPreview(preview); return <div className="profiles-preview"><AudioLines size={28}/><strong>{voice ? `声音 ${voice.version}` : "选择声音档案"}</strong><p>{voice?.reference_text || "登记声音档案后，可在这里核对参考文字与语言。"}</p><button disabled={!capability?.available || !voice || busy} onClick={() => onPreview(retry)} type="button">{retry ? "重新生成声音预览" : "生成声音预览"}</button><small>{modelCapabilityCopy(capability, "voice")}</small><PreviewStatus preview={preview}/>{preview?.status === "succeeded" && preview.output_url ? <audio aria-label="声音预览" controls src={preview.output_url}/> : null}<PreviewAttempts attempts={attempts}/></div>; }
+function Dictionary({ entries, onSubmit, busy }: { entries:PronunciationEntry[]; onSubmit:(event:FormEvent<HTMLFormElement>)=>void; busy:boolean }) { return <><header><div><span>发音词典</span><h2>工作区发音规则</h2></div><span>{entries.length} 条</span></header><div className="profiles-records">{entries.map((entry) => <article key={entry.id}><AudioLines size={16}/><div><strong>{entry.term}</strong><p>{entry.target_pronunciation} · {entry.language} · {entry.version}</p></div></article>)}{!entries.length && <Empty title="还没有发音规则" text="添加品牌名、人名或缩写的统一读法。"/>}</div><form className="profiles-inline-form" onSubmit={onSubmit}><label><span>词语</span><input name="term" required/></label><label><span>目标发音</span><input name="target" required/></label><label><span>语言</span><select name="language"><option value="zh">中文</option><option value="en">英文</option><option value="zh-en">中英混合</option></select></label><button disabled={busy} type="submit">保存发音规则</button></form></>; }
+function AuthorizationList({ authorizations }: { authorizations:MediaAuthorization[] }) { return <><header><div><span>授权记录</span><h2>当前有效性与使用范围</h2></div><span>{authorizations.length} 条</span></header><div className="profiles-records">{authorizations.map((auth) => { const state = authTone(auth); return <article key={auth.id}><ShieldCheck size={16}/><div><strong>{auth.rights_holder}</strong><p>{authorizationListLabel(auth.content_types)} · {authorizationListLabel(auth.usage_scopes)} · {auth.version}</p><small title={auth.evidence_reference}>{authorizationEvidenceLabel(auth.evidence_reference)}</small></div><span className={`profiles-status status-${state.tone}`}>{state.label}</span></article>; })}{!authorizations.length && <Empty title="还没有授权记录" text="保存人物或声音档案时会同时建立一条授权记录。"/>}</div></>; }

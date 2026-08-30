@@ -2,16 +2,14 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Activity,
   ArrowLeft,
   BookOpen,
   ChevronDown,
-  ChevronRight,
   CircleHelp,
   FileStack,
-  FolderKanban,
   Home,
   Library,
   Menu,
@@ -29,43 +27,59 @@ import {
   useEffect,
   useRef,
   useState,
+  Suspense,
   type ComponentType,
   type ReactNode,
 } from "react";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
-import { VoiceCommandConsole } from "@/components/VoiceCommandConsole";
+import { listCreationTasks } from "@/lib/api";
+import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { toggleHelpPanel } from "@/lib/helpPanel";
+import type { CreationTask } from "@/lib/types";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
-type NavItem = { href: string; label: string; icon: Icon };
+type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
 type ThemeMode = "system" | "light" | "dark";
+
+function displayTaskName(name?: string) {
+  return (name || "未命名创作任务")
+    .replace(/\bb-?roll\b/gi, "补充画面")
+    .replace(/\bbatch\b/gi, "创作任务")
+    .replace(/批次/g, "创作任务")
+    .replace(/\bepisode\b/gi, "内容")
+    .replace(/\brecipe\b/gi, "制作方案")
+    .replace(/\bprovider\b/gi, "服务")
+    .replace(/\bagent\b/gi, "智能助手")
+    .replace(/混剪/g, "视频剪辑")
+    .replace(/\bSRT\s+字幕/gi, "字幕");
+}
+
+export type AppShellCreationTask = CreationTask;
 
 const primaryNav: NavItem[] = [
   { href: "/", label: "首页", icon: Home },
-  { href: "/production", label: "生产队列", icon: FolderKanban },
   { href: "/library", label: "素材库", icon: Library },
+  { href: "/knowledge", label: "内容资料", icon: BookOpen },
+  { href: "/profiles", label: "人物与声音", icon: UserRound },
+  { href: "/templates", label: "视频模板", icon: FileStack },
+  { href: "/production?view=automations", label: "自动任务", icon: Sparkles, activePath: "/automations" },
+  { href: "/history", label: "发布与数据", icon: Activity },
 ];
 
-const resourceNav: NavItem[] = [
-  { href: "/templates", label: "内容模板", icon: FileStack },
-  { href: "/knowledge", label: "知识库", icon: BookOpen },
-  { href: "/sources", label: "信息源", icon: Sparkles },
-];
-
-const routeLabels = [
+const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
-  ...resourceNav,
+  { href: "/production", label: "创作任务" },
+  { href: "/sources", label: "内容资料" },
   { href: "/topics", label: "选题" },
   { href: "/script", label: "脚本" },
-  { href: "/video", label: "素材处理" },
-  { href: "/edit-plan", label: "混剪审核" },
   { href: "/draft", label: "导出" },
   { href: "/history", label: "发布反馈" },
   { href: "/health", label: "运行健康" },
   { href: "/settings", label: "设置" },
   { href: "/onboarding", label: "启动检查" },
   { href: "/profile", label: "创作者画像" },
+  { href: "/profiles", label: "人物与声音" },
 ];
 
 export type AppShellWorkspaceStatus = {
@@ -75,13 +89,77 @@ export type AppShellWorkspaceStatus = {
 
 export type AppShellProps = {
   children: ReactNode;
+  creationTasks?: AppShellCreationTask[];
   inspector?: ReactNode;
   inspectorTitle?: string;
   workspaceStatus?: AppShellWorkspaceStatus;
 };
 
-function isActive(pathname: string, href: string): boolean {
-  return href === "/" ? pathname === "/" : pathname.startsWith(href);
+function creationTaskState(task: CreationTask) {
+  return creationTaskStatusPresentation(task.stage_status);
+}
+
+function creationTaskHref(task: CreationTask) {
+  return `/production?plan=${encodeURIComponent(task.plan_id)}`;
+}
+
+function mergeCreationTasks(...groups: CreationTask[][]): CreationTask[] {
+  const seen = new Set<string>();
+  return groups.flat().filter((task) => {
+    if (seen.has(task.id)) return false;
+    seen.add(task.id);
+    return true;
+  }).slice(0, 6);
+}
+
+function isActive(pathname: string, href: string, activePath?: string, search?: Pick<URLSearchParams, "get">): boolean {
+  if (href.includes("view=automations")) return pathname === "/production" && search?.get("view") === "automations";
+  const route = activePath ?? href.split(/[?#]/)[0];
+  return route === "/" ? pathname === "/" : pathname.startsWith(route);
+}
+
+function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, "get">) {
+  return routeLabels
+    .filter((item) => isActive(pathname, item.href, item.activePath, searchParams))
+    .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
+}
+
+function NavigationRows({ pathname }: { pathname: string }) {
+  const searchParams = useSearchParams();
+  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} />;
+}
+
+function NavigationRowsContent({ pathname, searchParams }: { pathname: string; searchParams?: Pick<URLSearchParams, "get"> }) {
+  return <>
+    {primaryNav.map((item) => {
+      const ItemIcon = item.icon;
+      const active = isActive(pathname, item.href, item.activePath, searchParams);
+      return (
+        <Link
+          aria-current={active ? "page" : undefined}
+          className={`desktop-nav-row${active ? " is-active" : ""}`}
+          href={item.href}
+          key={item.href}
+        >
+          <ItemIcon size={16} strokeWidth={1.8} />
+          <span>{item.label}</span>
+        </Link>
+      );
+    })}
+  </>;
+}
+
+function ToolbarLocation({ pathname }: { pathname: string }) {
+  const searchParams = useSearchParams();
+  return <ToolbarLocationContent pathname={pathname} searchParams={searchParams} />;
+}
+
+function ToolbarLocationContent({ pathname, searchParams }: { pathname: string; searchParams?: Pick<URLSearchParams, "get"> }) {
+  const currentRoute = currentRouteFor(pathname, searchParams);
+  return <div className="desktop-location">
+    <span>{currentRoute.label}</span>
+    {pathname.startsWith("/production") ? <ChevronDown size={13} /> : null}
+  </div>;
 }
 
 function applyTheme(mode: ThemeMode) {
@@ -97,6 +175,7 @@ function applyTheme(mode: ThemeMode) {
 
 export function AppShell({
   children,
+  creationTasks,
   inspector,
   inspectorTitle = "当前任务详情",
   workspaceStatus,
@@ -106,15 +185,9 @@ export function AppShell({
   const router = useRouter();
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [resourcesOpen, setResourcesOpen] = useState(true);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
-  const [recentBatches, setRecentBatches] = useState<Array<{ id: string; name: string }>>([]);
+  const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
-
-  const currentRoute =
-    routeLabels
-      .filter((item) => isActive(pathname, item.href))
-      .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
 
   useEffect(() => {
     const stored = window.localStorage.getItem("ai-video-diary-theme") as ThemeMode | null;
@@ -129,17 +202,21 @@ export function AppShell({
 
   useEffect(() => {
     let active = true;
-    fetch("/api/production/foundation", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
+    listCreationTasks()
       .then((payload) => {
-        if (!active || !payload?.recent_batches) return;
-        setRecentBatches(payload.recent_batches.slice(0, 6));
+        if (!active) return;
+        setRecentTasks((current) => mergeCreationTasks(payload.items, current));
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!creationTasks?.length) return;
+    setRecentTasks((current) => mergeCreationTasks(creationTasks, current));
+  }, [creationTasks]);
 
   useEffect(() => {
     if (!inspector) {
@@ -206,67 +283,39 @@ export function AppShell({
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
           <Link className="new-production-button" href="/production?new=1">
             <Plus size={16} />
-            <span>新建生产</span>
+            <span>开始制作新视频</span>
             <kbd>⌘N</kbd>
           </Link>
 
           <div className="desktop-nav-group">
-            {primaryNav.map((item) => {
-              const ItemIcon = item.icon;
-              return (
-                <Link
-                  aria-current={isActive(pathname, item.href) ? "page" : undefined}
-                  className={`desktop-nav-row${isActive(pathname, item.href) ? " is-active" : ""}`}
-                  href={item.href}
-                  key={item.href}
-                >
-                  <ItemIcon size={16} strokeWidth={1.8} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
+            <Suspense fallback={<NavigationRowsContent pathname={pathname} />}>
+              <NavigationRows pathname={pathname} />
+            </Suspense>
           </div>
 
-          {recentBatches.length ? (
-            <div className="desktop-nav-section">
-              <div className="desktop-nav-heading">最近批次</div>
-              {recentBatches.map((batch) => (
-                <Link className="desktop-nav-row desktop-nav-row--recent" href={`/production?batch=${batch.id}`} key={batch.id}>
-                  <FolderKanban size={15} strokeWidth={1.7} />
-                  <span>{batch.name || "未命名批次"}</span>
+          <div className="desktop-nav-section desktop-nav-section--creation-tasks">
+            <div className="desktop-nav-heading">创作任务</div>
+            {recentTasks.length ? recentTasks.map((task) => {
+              const taskState = creationTaskState(task);
+              return (
+                <Link className="desktop-creation-task" href={creationTaskHref(task)} key={task.id}>
+                  <span className={`creation-task-dot status-${taskState.tone}`} aria-hidden="true" />
+                  <span className="desktop-creation-task__copy">
+                    <strong>{displayTaskName(task.name)}</strong>
+                    <small>{taskState.label}</small>
+                  </span>
                 </Link>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="desktop-nav-section">
-            <button className="desktop-nav-heading desktop-nav-heading--button" onClick={() => setResourcesOpen((value) => !value)} type="button">
-              <span>资源</span>
-              {resourcesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
-            {resourcesOpen
-              ? resourceNav.map((item) => {
-                  const ItemIcon = item.icon;
-                  return (
-                    <Link
-                      aria-current={isActive(pathname, item.href) ? "page" : undefined}
-                      className={`desktop-nav-row${isActive(pathname, item.href) ? " is-active" : ""}`}
-                      href={item.href}
-                      key={item.href}
-                    >
-                      <ItemIcon size={16} strokeWidth={1.8} />
-                      <span>{item.label}</span>
-                    </Link>
-                  );
-                })
-              : null}
+              );
+            }) : (
+              <p className="desktop-creation-tasks-empty">还没有创作任务</p>
+            )}
           </div>
         </nav>
 
         <div className="desktop-sidebar__footer">
           <Link className={`desktop-nav-row${pathname.startsWith("/health") ? " is-active" : ""}`} href="/health">
             <Activity size={16} />
-            <span>运行健康</span>
+            <span>运行情况</span>
             {workspaceStatus ? <i className={`health-dot health-dot--${workspaceStatus.kind}`} title={workspaceStatus.label} /> : null}
           </Link>
           <Link className={`desktop-nav-row${pathname.startsWith("/settings") ? " is-active" : ""}`} href="/settings">
@@ -292,10 +341,9 @@ export function AppShell({
             <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
             </button>
-            <div className="desktop-location">
-              <span>{currentRoute.label}</span>
-              {pathname.startsWith("/production") ? <ChevronDown size={13} /> : null}
-            </div>
+            <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
+              <ToolbarLocation pathname={pathname} />
+            </Suspense>
           </div>
           <div className="desktop-toolbar__actions">
             <button aria-label="搜索" className="shell-icon-button desktop-search-button" type="button">
@@ -343,7 +391,6 @@ export function AppShell({
           ) : null}
         </div>
 
-        {pathname !== "/" ? <VoiceCommandConsole contextLabel={currentRoute.label} /> : null}
       </section>
       <KeyboardShortcuts />
       <HelpPanel />

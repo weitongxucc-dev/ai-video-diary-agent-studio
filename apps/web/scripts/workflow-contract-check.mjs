@@ -13,11 +13,8 @@ const files = {
   home: new URL("../src/app/page.tsx", import.meta.url),
   templates: new URL("../src/app/templates/page.tsx", import.meta.url),
   health: new URL("../src/app/health/page.tsx", import.meta.url),
-  video: new URL("../src/app/video/page.tsx", import.meta.url),
   actions: new URL("../src/app/actions.ts", import.meta.url),
   settings: new URL("../src/app/settings/page.tsx", import.meta.url),
-  editPlan: new URL("../src/app/edit-plan/page.tsx", import.meta.url),
-  voiceCommandConsole: new URL("../src/components/VoiceCommandConsole.tsx", import.meta.url),
 };
 
 async function readOptional(file) {
@@ -41,11 +38,8 @@ const [
   homePage,
   templatesPage,
   healthPage,
-  videoPage,
   actionsFile,
   settingsPage,
-  editPlanPage,
-  voiceCommandConsole,
 ] = await Promise.all(Object.values(files).map((file) => readOptional(file)));
 
 const failures = [];
@@ -105,8 +99,21 @@ if (!typesFile.includes("hermes_radar")) {
   failures.push("SystemStatus must expose Hermes radar source status.");
 }
 
-if (!homePage.includes("HomeCommandComposer") || !homeComposer.includes("previewVoiceCommand")) {
-  failures.push("The home workbench must provide a real preview-first command composer.");
+if (
+  !homePage.includes("HomeCommandComposer")
+  || !homeComposer.includes("检查可用内容")
+  || !homeComposer.includes('new: "1"')
+  || !apiFile.includes("previewCreationPlan")
+  || !apiFile.includes("confirmCreationPlan")
+  || !typesFile.includes("CreationPlanPreview")
+) {
+  failures.push("The home workbench must carry a goal into the reviewed creation-plan preflight.");
+}
+
+for (const retiredConsumer of ["previewVoiceCommand", "executeVoiceCommand", "VoiceCommandResponse", "result_episode", "result_edit_plan"]) {
+  if (homeComposer.includes(retiredConsumer) || apiFile.includes(retiredConsumer) || typesFile.includes(retiredConsumer)) {
+    failures.push(`Retired Episode command consumer must be absent: ${retiredConsumer}`);
+  }
 }
 
 for (const route of ["/", "/production", "/library", "/templates", "/knowledge", "/sources", "/health", "/settings"]) {
@@ -123,38 +130,14 @@ for (const route of ["/", "/production", "/library", "/templates", "/knowledge",
   }
 }
 
-if (!appShell.includes("VoiceCommandConsole") || !appShell.includes("<VoiceCommandConsole")) {
-  failures.push("AppShell must render the reusable VoiceCommandConsole.");
-}
-
-for (const required of ["语音指令", "command-submit-button", "previewVoiceCommand", "executeVoiceCommand", "等待确认"]) {
-  if (!voiceCommandConsole.includes(required)) {
-    failures.push(`VoiceCommandConsole must include ${required}.`);
-  }
-}
-
-for (const required of ["剪辑计划", "视频浏览窗口", "原片标记", "剪辑计划时间轴", "语音定位结果", "剪映轨道预览"]) {
-  if (!editPlanPage.includes(required)) {
-    failures.push(`/edit-plan must include ${required}.`);
-  }
-}
-
-if (!editPlanPage.includes("timeline-action-chip")) {
-  failures.push("/edit-plan timeline segments must use compact Win95 action chips instead of full-color blocks.");
-}
-
-for (const required of [".voice-command-console", ".edit-plan-page", ".video-preview-window", ".source-marker-strip", ".edit-plan-timeline", ".timeline-action-chip"]) {
-  if (!css.includes(required)) {
-    failures.push(`globals.css must define ${required}.`);
-  }
-}
-
-if (!homePage.includes("waiting_for_user") || !homePage.includes("recent_batches")) {
-  failures.push("The workbench must prioritize waiting reviews and recent production batches.");
-}
-
-if (!actionsFile.includes("processVideoAndPackageAction")) {
-  failures.push("Server actions must expose one command that processes a video and creates a draft package.");
+if (
+  !homePage.includes("listCreationTasks")
+  || !homePage.includes("CreationTask")
+  || !homePage.includes("production?plan=")
+  || homePage.includes("recent_batches")
+  || homePage.includes("ProductionBatch")
+) {
+  failures.push("The workbench must prioritize workspace-scoped CreationTasks instead of legacy Batch projections.");
 }
 
 if (!apiFile.includes("getContentTemplates")) {
@@ -183,54 +166,6 @@ for (const required of ["getRuntimeHealth", "运行健康", "修复动作", "Dee
   if (!healthPage.includes(required)) {
     failures.push(`/health must include ${required}.`);
   }
-}
-
-if (!actionsFile.includes("confirmEditPlanAction")) {
-  failures.push("Server actions must expose a real edit-plan confirmation action.");
-}
-
-if (!apiFile.includes("updateEditPlanSegmentDecision")) {
-  failures.push("API client must expose edit-plan segment decision updates.");
-}
-
-if (!apiFile.includes("revertEditPlanSegmentDecision")) {
-  failures.push("API client must expose edit-plan segment decision revert.");
-}
-
-if (!actionsFile.includes("updateEditPlanSegmentDecisionAction")) {
-  failures.push("Server actions must submit edit-plan segment decisions.");
-}
-
-if (!actionsFile.includes("revertEditPlanSegmentDecisionAction")) {
-  failures.push("Server actions must submit edit-plan segment decision reverts.");
-}
-
-if (!videoPage.includes("processVideoAndPackageAction")) {
-  failures.push("/video must let the user process a video into a complete draft artifact package.");
-}
-
-if (!editPlanPage.includes("getEpisodeEditPlan")) {
-  failures.push("/edit-plan must load the real episode edit plan from the API.");
-}
-
-if (!editPlanPage.includes("<video")) {
-  failures.push("/edit-plan video browser must render a real video element, not only a mock preview.");
-}
-
-if (!editPlanPage.includes("confirmEditPlanAction")) {
-  failures.push("/edit-plan must submit confirmation to the draft creation flow.");
-}
-
-if (!editPlanPage.includes("updateEditPlanSegmentDecisionAction")) {
-  failures.push("/edit-plan must render actionable segment decision controls.");
-}
-
-if (!editPlanPage.includes("revertEditPlanSegmentDecisionAction")) {
-  failures.push("/edit-plan must render segment decision rollback controls.");
-}
-
-if (!editPlanPage.includes("user_decision")) {
-  failures.push("/edit-plan must show persisted user segment decisions.");
 }
 
 if (!typesFile.includes("subtitle_path") || !typesFile.includes("cover_path")) {

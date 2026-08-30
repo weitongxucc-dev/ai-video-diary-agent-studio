@@ -88,7 +88,7 @@ export function TemplateTracksPanel({
         </div>
         <a
           aria-label="查看模板与轨道实现"
-          className="pixel-button secondary"
+          className="ui-button secondary"
           href="/templates"
         >
           查看模板
@@ -166,7 +166,7 @@ export function TemplateTracksPanel({
             </div>
             {track.fixHref ? (
               <a
-                className="pixel-button secondary"
+                className="ui-button secondary"
                 href={track.fixHref}
               >
                 去设置

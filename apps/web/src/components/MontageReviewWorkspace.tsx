@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Download,
   Film,
   Lock,
   Play,
@@ -31,6 +32,36 @@ function time(value: number) {
   const minutes = Math.floor(value / 60);
   const seconds = (value % 60).toFixed(1).padStart(4, "0");
   return `${minutes}:${seconds}`;
+}
+
+function narrationLabel(status: MontagePlan["narration_status"]) {
+  return status === "ready" ? "旁白已就绪" : "旁白不可用";
+}
+
+function subtitleLabel(status: MontagePlan["subtitle_status"]) {
+  if (status === "ready") return "字幕已生成";
+  if (status === "unavailable") return "字幕不可用";
+  return "字幕将在生成成片后提供";
+}
+
+function planStatusLabel(status: MontagePlan["status"], pendingCount: number) {
+  if (status === "waiting_for_user") return `${pendingCount} 个镜头待确认`;
+  if (status === "ready") return "可以生成成片";
+  if (status === "rendering") return "正在生成成片";
+  if (status === "rendered") return "成片已生成";
+  return "生成失败";
+}
+
+function displayPlanText(value?: string | null) {
+  return (value || "")
+    .replace(/\bb-?roll\b/gi, "补充画面")
+    .replace(/\bbatch\b/gi, "创作任务")
+    .replace(/批次/g, "创作任务")
+    .replace(/\bepisode\b/gi, "内容")
+    .replace(/\bagent\b/gi, "智能助手")
+    .replace(/\bprovider\b/gi, "服务")
+    .replace(/混剪/g, "视频剪辑")
+    .replace(/\bSRT\s+字幕/gi, "字幕");
 }
 
 export function MontageReviewWorkspace({ initialPlan }: { initialPlan: MontagePlan }) {
@@ -94,6 +125,12 @@ export function MontageReviewWorkspace({ initialPlan }: { initialPlan: MontagePl
       <div className="montage-inspector__cue"><span>旁白时间槽 · {time(selected.timeline_start_seconds)}–{time(selected.timeline_end_seconds)}</span><p>{cue?.text ?? "未找到旁白段落"}</p></div>
       <div className="montage-confidence"><Sparkles size={14} /><div><strong>{selected.manually_selected ? "人工选择" : `匹配度 ${Math.round(selected.match_score * 100)}%`}</strong><p>{selected.match_reasons.join("；")}</p></div></div>
 
+      <dl className="montage-inspector__facts">
+        <div><dt>画幅</dt><dd>{plan.aspect_ratio} 竖屏</dd></div>
+        <div><dt>旁白</dt><dd>{narrationLabel(plan.narration_status)}</dd></div>
+        <div><dt>字幕</dt><dd>{subtitleLabel(plan.subtitle_status)}</dd></div>
+      </dl>
+
       <div className="montage-trim">
         <label><span>来源起点</span><input min="0" onChange={(event) => setTrimStart(Number(event.target.value))} step="0.1" type="number" value={trimStart} /></label>
         <span>保持 {time(selected.timeline_end_seconds - selected.timeline_start_seconds)} 的旁白时间槽</span>
@@ -116,8 +153,8 @@ export function MontageReviewWorkspace({ initialPlan }: { initialPlan: MontagePl
     <AppShell inspector={inspector} inspectorTitle="镜头审核">
       <div className="modern-montage">
         <header className="modern-montage__header">
-          <div className="modern-montage__breadcrumb"><Link href={`/production?batch=${plan.batch_id}`}><ArrowLeft size={14} />返回批次</Link><span>混剪审核</span></div>
-          <div className="modern-montage__title"><div><h1>{plan.script_title}</h1><p>{time(plan.duration_seconds)} · {plan.clips.length} 个镜头 · {plan.message}</p></div><span className={`montage-status montage-status--${plan.status}`}>{plan.status === "waiting_for_user" ? `${plan.low_confidence_clip_count} 个镜头待确认` : plan.status === "ready" ? "可以渲染" : plan.status === "rendered" ? "已生成成片" : plan.status}</span></div>
+          <div className="modern-montage__breadcrumb"><Link href={`/production?batch=${plan.batch_id}`}><ArrowLeft size={14} />返回创作任务</Link><span>视频剪辑</span></div>
+          <div className="modern-montage__title"><div><h1>{displayPlanText(plan.script_title)}</h1><p>{time(plan.duration_seconds)} · {plan.clips.length} 个镜头 · {displayPlanText(plan.message)}</p></div><span className={`montage-status montage-status--${plan.status}`}>{planStatusLabel(plan.status, plan.low_confidence_clip_count)}</span></div>
         </header>
 
         {error ? <div className="montage-error" role="alert"><AlertCircle size={15} />{error}</div> : null}
@@ -127,19 +164,32 @@ export function MontageReviewWorkspace({ initialPlan }: { initialPlan: MontagePl
           <div className="montage-player-stage__caption"><span>{cue?.text}</span><small>{selected ? `${time(selected.timeline_start_seconds)} / ${time(plan.duration_seconds)}` : ""}</small></div>
         </section>
 
+        {plan.output_url ? (
+          <section className="montage-output" aria-label="生成的成片">
+            <div><span>成片</span><h2>已生成 {plan.aspect_ratio} 视频</h2><p>{subtitleLabel(plan.subtitle_status)}</p></div>
+            <video controls preload="metadata" src={plan.output_url} />
+            <div className="montage-output__actions">
+              <a href={plan.output_url}><Download size={14} />打开成片</a>
+              {plan.subtitle_url ? <a href={plan.subtitle_url}><Download size={14} />打开字幕</a> : null}
+            </div>
+          </section>
+        ) : null}
+
         <section className="montage-review-bar">
           <div><strong>审核型时间线</strong><span>点击镜头查看依据、替换或滑移裁剪</span></div>
           <div className="montage-review-bar__actions">
             <button aria-label="向前移动镜头" disabled={selectedIndex <= 0 || selected?.locked || Boolean(busy)} onClick={() => move(-1)} type="button"><ChevronUp size={15} /></button>
             <button aria-label="向后移动镜头" disabled={selectedIndex < 0 || selectedIndex >= plan.clips.length - 1 || selected?.locked || Boolean(busy)} onClick={() => move(1)} type="button"><ChevronDown size={15} /></button>
-            {pendingIds.length ? <button className="is-primary" disabled={Boolean(busy)} onClick={() => void mutate("confirm-all", () => confirmMontageClips(plan.id, pendingIds))} type="button"><Check size={14} />确认全部低置信镜头</button> : plan.status === "ready" && plan.narration_audio_path ? <button className="is-primary" disabled={Boolean(busy)} onClick={() => void mutate("render", () => renderMontagePlan(plan.id, plan.narration_audio_path!))} type="button"><Play size={14} />渲染初版成片</button> : null}
+            {pendingIds.length ? <button className="is-primary" disabled={Boolean(busy)} onClick={() => void mutate("confirm-all", () => confirmMontageClips(plan.id, pendingIds))} type="button"><Check size={14} />确认全部低置信镜头</button> : plan.status === "ready" && plan.narration_status === "ready" ? <button className="is-primary" disabled={Boolean(busy)} onClick={() => void mutate("render", () => renderMontagePlan(plan.id))} type="button"><Play size={14} />生成成片</button> : null}
           </div>
         </section>
+
+        {plan.status === "ready" && plan.narration_status === "unavailable" ? <div className="montage-runtime-notice" role="status"><AlertCircle size={15} /><span>旁白不可用，暂不能生成成片。请回到创作任务检查已选声音与授权状态。</span><Link href={`/production?batch=${plan.batch_id}`}>返回创作任务</Link></div> : null}
 
         <ol className="montage-timeline">
           {plan.clips.map((clip, index) => {
             const clipCue = plan.cues.find((item) => item.id === clip.cue_id);
-            return <li key={clip.id}><button className={`${selected?.id === clip.id ? "is-selected" : ""}${clip.needs_confirmation ? " needs-review" : ""}`} onClick={() => selectClip(clip.id)} type="button"><span className="montage-clip__number">{String(index + 1).padStart(2, "0")}</span><span className="montage-clip__poster"><Film size={18} />{clip.locked ? <Lock size={12} /> : null}</span><span className="montage-clip__copy"><strong>{clipCue?.text ?? "未命名镜头"}</strong><small>{time(clip.timeline_start_seconds)}–{time(clip.timeline_end_seconds)} · {clip.role === "b_roll" ? "B-roll" : "人物主镜头"}</small></span><i className={clip.needs_confirmation ? "is-warning" : "is-approved"}>{clip.needs_confirmation ? "待确认" : "已确认"}</i></button></li>;
+            return <li key={clip.id}><button className={`${selected?.id === clip.id ? "is-selected" : ""}${clip.needs_confirmation ? " needs-review" : ""}`} onClick={() => selectClip(clip.id)} type="button"><span className="montage-clip__number">{String(index + 1).padStart(2, "0")}</span><span className="montage-clip__poster"><Film size={18} />{clip.locked ? <Lock size={12} /> : null}</span><span className="montage-clip__copy"><strong>{clipCue?.text ?? "未命名镜头"}</strong><small>{time(clip.timeline_start_seconds)}–{time(clip.timeline_end_seconds)} · {clip.role === "b_roll" ? "补充画面" : "人物主镜头"}</small></span><i className={clip.needs_confirmation ? "is-warning" : "is-approved"}>{clip.needs_confirmation ? "待确认" : "已确认"}</i></button></li>;
           })}
         </ol>
       </div>

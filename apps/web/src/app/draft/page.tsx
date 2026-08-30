@@ -122,7 +122,7 @@ export default async function DraftPage() {
   return (
     <AppShell>
       <div className="workspace-page">
-        <section className="workspace-main pixel-card draft-main">
+        <section className="workspace-main ui-panel draft-main">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">剪映草稿</span>
@@ -137,8 +137,8 @@ export default async function DraftPage() {
                     : "当前未检测到剪映草稿工具，只生成真实可追溯的本地素材包。"}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/video">
-              去处理视频
+            <Link className="ui-button secondary" href="/production">
+              查看创作任务
             </Link>
           </div>
 
@@ -172,8 +172,8 @@ export default async function DraftPage() {
                 </strong>
                 <span>
                   {isPublished
-                    ? `Episode 状态：${getStatusLabel(episode.status)}，请补全发布信息。`
-                    : `Episode 状态：${getStatusLabel(episode.status)}，填写发布信息后归档当日内容。`}
+                    ? `当前内容状态：${getStatusLabel(episode.status)}，请补全发布信息。`
+                    : `当前内容状态：${getStatusLabel(episode.status)}，填写发布信息后归档当日内容。`}
                 </span>
               </div>
 
@@ -255,7 +255,7 @@ export default async function DraftPage() {
                       ? "更新后会写入反馈学习并刷新发布历史。"
                       : "提交后会跳转到历史页，可补录后续数据。"}
                   </span>
-                  <button className="pixel-button" type="submit">
+                  <button className="ui-button" type="submit">
                     {isPublished ? "更新发布数据" : "标记已发布"}
                   </button>
                 </div>
@@ -295,7 +295,7 @@ export default async function DraftPage() {
                 </div>
                 <form action={createDraftPackageAction}>
                   <input name="video_file_name" type="hidden" value={video.file_name} />
-                  <button className="pixel-button" type="submit">
+                  <button className="ui-button" type="submit">
                     生成并导入
                   </button>
                 </form>
@@ -331,7 +331,7 @@ export default async function DraftPage() {
                   ) : (
                     <form action={importDraftPackageAction}>
                       <input name="package_name" type="hidden" value={item.file_name} />
-                      <button className="pixel-button secondary" type="submit">
+                      <button className="ui-button secondary" type="submit">
                         重试导入剪映
                       </button>
                     </form>
@@ -367,7 +367,7 @@ export default async function DraftPage() {
                       ) : (
                         <form action={importDraftPackageAction}>
                           <input name="package_name" type="hidden" value={item.file_name} />
-                          <button className="pixel-button secondary" type="submit">
+                          <button className="ui-button secondary" type="submit">
                             重试导入剪映
                           </button>
                         </form>
@@ -383,27 +383,27 @@ export default async function DraftPage() {
         <aside className="workspace-side">
           <MetricCard icon="clip" value={String(env?.package_count ?? 0)} label="素材包" tone="purple" />
           <MetricCard icon="video" value={String(env?.processed_video_count ?? 0)} label="可用视频" tone="green" />
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>草稿工具</h2>
             <p>{toolAvailable ? env?.draft_tool.tool_name : "未安装"}</p>
             <code>{env?.draft_tool.checked_modules.join(" / ") ?? "--"}</code>
             <span>{env?.editable_draft_supported ? "自动兼容桥接，需人工验证" : "当前只能生成素材包 fallback"}</span>
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>剪映目录</h2>
             <p>{env?.jianying_root_exists ? "已发现" : "未发现"}</p>
             <code>{env?.jianying_root_path ?? "--"}</code>
             {env?.jianying_blocker ? <span>{env.jianying_blocker}</span> : null}
           </div>
-          <div className="pixel-card side-note">
-            <h2>当前 Episode</h2>
+          <div className="ui-panel side-note">
+            <h2>当前创作内容</h2>
             <p>{getStatusLabel(episode?.status)}</p>
             <code>{episode?.id ?? "--"}</code>
             {episode?.published_at ? (
               <span>发布于 {formatDate(episode.published_at)}</span>
             ) : null}
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>输出目录</h2>
             <code>{env?.output_path ?? "--"}</code>
           </div>

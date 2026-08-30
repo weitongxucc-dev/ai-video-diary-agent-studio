@@ -21,7 +21,7 @@
 
 ```text
 apps/web       Next.js 工作台
-apps/api       FastAPI、工作流、视频处理和 Worker
+apps/api       FastAPI、领域仓储、模型适配和视频处理
 apps/desktop   Electron 壳、打包与发布配置
 supabase       分发模式所需的数据库迁移
 docs           当前有效的产品与安全文档
@@ -42,10 +42,11 @@ cp .env.example .env
 ```bash
 corepack pnpm dev:api
 corepack pnpm dev:web
-corepack pnpm dev:worker
 ```
 
 访问 `http://localhost:3000`。桌面开发和打包见 [`apps/desktop/README.md`](apps/desktop/README.md)。
+旧 Episode 自动化 Worker 不属于当前默认运行链，不要为本地开发单独启动。
+新的自动任务将在 `CreationTask`、`Automation` 和持久化运行记录接入后提供独立入口。
 
 ## 配置
 

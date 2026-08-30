@@ -1,54 +1,36 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowUp, Check, LoaderCircle, Mic, Paperclip, Sparkles } from "lucide-react";
-import { useState } from "react";
-import { executeVoiceCommand, previewVoiceCommand } from "@/lib/api";
-import type { VoiceCommandResponse } from "@/lib/types";
+import { ArrowRight, Mic, Paperclip, Sparkles } from "lucide-react";
+import { type FormEvent, useState } from "react";
 
-type EpisodeOption = { id: string; title: string; status: string };
+type HomeCommandComposerProps = {
+  assignLocation?: (url: string) => void;
+};
 
-export function HomeCommandComposer({ episodes }: { episodes: EpisodeOption[] }) {
-  const [episodeId, setEpisodeId] = useState(episodes[0]?.id ?? "");
-  const [transcript, setTranscript] = useState("");
-  const [preview, setPreview] = useState<VoiceCommandResponse | null>(null);
-  const [busy, setBusy] = useState<"preview" | "execute" | null>(null);
-  const [error, setError] = useState("");
+function assignDocumentLocation(url: string) {
+  window.location.assign(url);
+}
 
-  async function run(mode: "preview" | "execute") {
-    const text = transcript.trim();
-    if (!text || !episodeId) return;
-    setBusy(mode);
-    setError("");
-    try {
-      const result =
-        mode === "preview"
-          ? await previewVoiceCommand(episodeId, text)
-          : await executeVoiceCommand(episodeId, text);
-      setPreview(result);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "指令处理失败，请稍后重试。");
-    } finally {
-      setBusy(null);
-    }
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation }: HomeCommandComposerProps) {
+  const [goal, setGoal] = useState("");
+
+  function continueToPreflight(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedGoal = goal.trim();
+    if (!normalizedGoal) return;
+    assignLocation(`/production?${new URLSearchParams({ new: "1", goal: normalizedGoal }).toString()}`);
   }
 
   return (
-    <div className="home-composer">
+    <form className="home-composer" onSubmit={continueToPreflight}>
       <div className="home-composer__input-row">
         <Sparkles aria-hidden="true" size={18} />
         <textarea
           aria-label="制作指令"
-          onChange={(event) => {
-            setTranscript(event.target.value);
-            setPreview(null);
-          }}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void run("preview");
-          }}
+          onChange={(event) => setGoal(event.target.value)}
           placeholder="想制作什么内容？例如：根据已审核素材生成一条关于 AI 工作流的 60 秒视频"
           rows={3}
-          value={transcript}
+          value={goal}
         />
       </div>
 
@@ -56,44 +38,20 @@ export function HomeCommandComposer({ episodes }: { episodes: EpisodeOption[] })
         <div className="home-composer__context">
           <button aria-label="添加素材" className="composer-icon-button" disabled type="button"><Paperclip size={16} /></button>
           <button aria-label="语音输入" className="composer-icon-button" disabled type="button"><Mic size={16} /></button>
-          {episodes.length ? (
-            <select aria-label="选择 Episode 上下文" onChange={(event) => setEpisodeId(event.target.value)} value={episodeId}>
-              {episodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.title || "未命名 Episode"}</option>)}
-            </select>
-          ) : (
-            <Link className="composer-context-link" href="/production?new=1">先创建生产批次</Link>
-          )}
+          <span className="home-composer__availability">先检查当前可用的资料、素材、声音与模型，再由你确认创建任务</span>
         </div>
         <button
-          aria-label="预览指令"
+          aria-label="检查可用内容"
           className="composer-submit"
-          disabled={!transcript.trim() || !episodeId || busy !== null}
-          onClick={() => void run("preview")}
-          type="button"
+          disabled={!goal.trim()}
+          type="submit"
         >
-          {busy === "preview" ? <LoaderCircle className="is-spinning" size={17} /> : <ArrowUp size={17} />}
+          <ArrowRight size={17} />
+          <span>检查可用内容</span>
         </button>
       </div>
 
-      {error ? <p className="home-composer__error" role="alert">{error}</p> : null}
-      {preview ? (
-        <div className="home-command-preview" aria-live="polite">
-          <div>
-            <span className={`command-preview-status command-preview-status--${preview.status}`}>
-              {preview.can_execute ? <Check size={13} /> : null}
-              {preview.status === "unknown" ? "需要更具体的指令" : preview.summary}
-            </span>
-            {preview.operations.length ? (
-              <ol>{preview.operations.map((operation, index) => <li key={`${operation.kind}-${index}`}>{operation.label}</li>)}</ol>
-            ) : null}
-          </div>
-          {preview.can_execute && preview.status !== "executed" ? (
-            <button disabled={busy !== null} onClick={() => void run("execute")} type="button">
-              {busy === "execute" ? "正在执行…" : "确认执行"}
-            </button>
-          ) : preview.next_url ? <Link href={preview.next_url}>打开相关页面</Link> : null}
-        </div>
-      ) : null}
-    </div>
+      <p className="home-composer__hint" role="status">{goal.trim() ? "将先进行只读检查，不会生成选题、文案或成片。" : "先写下制作目标，再检查当前工作区可用的内容。"}</p>
+    </form>
   );
 }

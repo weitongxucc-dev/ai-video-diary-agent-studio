@@ -13,5 +13,5 @@ export default async function EpisodeMontagePage({ params }: { params: Promise<{
     const plan = response.plans.find((item) => item.episode_id === episodeId);
     if (plan) return <MontageReviewWorkspace initialPlan={plan} />;
   } catch { /* Render recoverable state below. */ }
-  return <AppShell><div className="montage-route-empty"><Film size={24} /><div><h1>还没有混剪计划</h1><p>先回到生产批次，为这条 Episode 生成配音和混剪时间线。</p></div><Link href={`/production?batch=${batchId}`}>返回生产批次</Link></div></AppShell>;
+  return <AppShell><div className="montage-route-empty"><Film size={24} /><div><h1>还没有视频剪辑</h1><p>先回到创作任务，为这条内容生成旁白和视频剪辑。</p></div><Link href={`/production?batch=${batchId}`}>返回创作任务</Link></div></AppShell>;
 }

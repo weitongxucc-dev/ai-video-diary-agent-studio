@@ -33,7 +33,7 @@ function joinList(items: string[]): string {
 
 function EmptyTemplatesState({ offline }: { offline: boolean }) {
   return (
-    <div className="template-empty pixel-card">
+    <div className="template-empty ui-panel">
       <div className="template-empty-icon" aria-hidden="true">
         <span className="template-empty-icon-frame">
           <PixelIcon name="product" />
@@ -49,7 +49,7 @@ function EmptyTemplatesState({ offline }: { offline: boolean }) {
         </span>
       ) : (
         <form action={refreshTemplatesAction} className="template-empty-actions">
-          <button className="pixel-button" type="submit">
+          <button className="ui-button" type="submit">
             刷新模板
           </button>
         </form>
@@ -66,7 +66,7 @@ export default async function TemplatesPage() {
   return (
     <AppShell>
       <div className="workspace-page templates-page">
-        <section className="workspace-main pixel-card">
+        <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">内容模板</span>
@@ -74,10 +74,10 @@ export default async function TemplatesPage() {
               <p>
                 {offline
                   ? "暂时无法连接本地 API。"
-                  : "选择今天 Episode 的生产结构，后续选题、脚本、素材和剪映样式都会围绕这个模板推进。"}
+                  : "选择当前创作内容的制作结构，后续选题、脚本、素材和剪辑样式都会围绕这个模板推进。"}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/">
+            <Link className="ui-button secondary" href="/">
               返回工作台
             </Link>
           </div>
@@ -139,7 +139,7 @@ export default async function TemplatesPage() {
                           />
                           <button
                             className={
-                              active ? "pixel-button secondary" : "pixel-button"
+                              active ? "ui-button secondary" : "ui-button"
                             }
                             disabled={active}
                             type="submit"
@@ -148,14 +148,14 @@ export default async function TemplatesPage() {
                           </button>
                         </form>
                       ) : (
-                        <PixelTooltip label="请先创建一个 Episode">
+                        <PixelTooltip label="请先创建一条创作内容">
                           <button
-                            aria-label="等待 Episode"
-                            className="pixel-button"
+                            aria-label="等待创作内容"
+                            className="ui-button"
                             disabled
                             type="button"
                           >
-                            等待 Episode
+                            等待创作内容
                           </button>
                         </PixelTooltip>
                       )}
@@ -167,12 +167,12 @@ export default async function TemplatesPage() {
         </section>
 
         <aside className="workspace-side">
-          <div className="pixel-card side-note">
-            <h2>当前 Episode</h2>
+          <div className="ui-panel side-note">
+            <h2>当前创作内容</h2>
             <p>模板：{selectedTemplateId}</p>
             <p>状态：{episode?.status ?? "--"}</p>
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>2.0 范围</h2>
             <p>video_diary / tool_review / tutorial_demo 是 2.0 的第一组内容生产模板。</p>
           </div>

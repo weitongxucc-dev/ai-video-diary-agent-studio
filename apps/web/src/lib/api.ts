@@ -1,5 +1,10 @@
 import type {
   ContentTemplates,
+  CreationPlan,
+  CreationPlanInput,
+  CreationPlanPreview,
+  CreationTasksResponse,
+  CreationTaskTopicsResponse,
   Episode,
   EditPlan,
   EditPlanSegmentDecisionAction,
@@ -47,7 +52,6 @@ import type {
   SystemStatus,
   TopicEvidenceList,
   VideoProductionMode,
-  VoiceCommandResponse,
   VoiceProfile,
   VoiceProfiles,
   VoiceTranscribeResult,
@@ -100,6 +104,85 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export class CreationPlanApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string | null,
+    message: string,
+    public readonly impact: string | null = null,
+    public readonly repairAction: string | null = null,
+    public readonly reason: string | null = null,
+  ) {
+    super(message);
+    this.name = "CreationPlanApiError";
+  }
+}
+
+const creationPlanErrorTitles: Record<string, string> = {
+  creation_plan_preflight_stale: "预检结果已变化",
+  creation_plan_confirmation_rejected: "无法确认创建创作任务",
+  content_sources_missing: "缺少可用于选题的资料",
+  capability_unavailable: "当前文字模型不可用",
+  creation_task_topic_stage_conflict: "当前创作任务不能重复开始选题",
+  creation_task_topic_confirmation_conflict: "当前选题不能被确认",
+  provider_output_invalid: "文字模型返回的选题无法使用",
+};
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    const serverAuthorization = await getServerAuthorization();
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+        ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+      },
+      cache: "no-store",
+    });
+  } catch {
+    throw new CreationPlanApiError(0, null, "本地服务未接通。");
+  }
+
+  const text = await response.text();
+  const payload = text ? parseJson(text) : null;
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail: unknown }).detail
+      : payload;
+    const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
+    const code = typeof details.error === "string" ? details.error : null;
+    const reason = typeof details.reason === "string" ? details.reason : null;
+    throw new CreationPlanApiError(
+      response.status,
+      code,
+      code && creationPlanErrorTitles[code]
+        ? creationPlanErrorTitles[code]
+        : typeof detail === "string"
+          ? detail
+          : typeof details.detail === "string"
+            ? details.detail
+            : typeof payload === "string"
+              ? payload
+              : `请求失败：${response.status}`,
+      typeof details.impact === "string" ? details.impact : null,
+      typeof details.repair_action === "string" ? details.repair_action : null,
+      reason,
+    );
+  }
+
+  return payload as T;
 }
 
 async function getServerAuthorization(): Promise<string | null> {
@@ -263,25 +346,62 @@ export function updateVoiceProfile(
 
 export function selectEpisodeVoice(
   episodeId: string,
-  voiceProfileId: string | null,
+  input: { voice_profile_id: string | null; voice_version: string | null },
 ): Promise<EpisodeVoiceSelection> {
   return request<EpisodeVoiceSelection>(
     `/api/production/episodes/${episodeId}/voice`,
     {
       method: "PUT",
-      body: JSON.stringify({ voice_profile_id: voiceProfileId }),
+      body: JSON.stringify(input),
     },
   );
 }
 
-export function createProductionBatch(input: {
-  name: string;
-  target_count: number;
-}): Promise<ProductionBatch> {
-  return request<ProductionBatch>("/api/production/batches", {
+export function previewCreationPlan(input: CreationPlanInput): Promise<CreationPlanPreview> {
+  return creationPlanRequest<CreationPlanPreview>("/api/creation-plans/preview", {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function confirmCreationPlan(
+  input: CreationPlanInput & { preflight_fingerprint: string },
+): Promise<CreationPlan> {
+  return creationPlanRequest<CreationPlan>("/api/creation-plans/confirm", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getCreationPlan(planId: string): Promise<CreationPlan> {
+  return creationPlanRequest<CreationPlan>(`/api/creation-plans/${encodeURIComponent(planId)}`);
+}
+
+export function listCreationTasks(): Promise<CreationTasksResponse> {
+  return creationPlanRequest<CreationTasksResponse>("/api/creation-tasks");
+}
+
+export function getCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
+  return creationPlanRequest<CreationTaskTopicsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/topics`,
+  );
+}
+
+export function generateCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
+  return creationPlanRequest<CreationTaskTopicsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/topics/generate`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function confirmCreationTaskTopic(
+  taskId: string,
+  topicId: string,
+): Promise<CreationTaskTopicsResponse> {
+  return creationPlanRequest<CreationTaskTopicsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/topics/${encodeURIComponent(topicId)}/confirm`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
 }
 
 export function runProductionBatch(batchId: string): Promise<ProductionBatch> {
@@ -347,7 +467,7 @@ export function reorderMontageClips(
 
 export function createMontagePlan(
   batchId: string,
-  input: { episode_id: string; narration_audio_path: string | null },
+  input: { episode_id: string },
 ): Promise<MontagePlan> {
   return request<MontagePlan>(
     `/api/production/batches/${batchId}/montage-plans`,
@@ -373,39 +493,12 @@ export function confirmMontageClips(
 
 export function renderMontagePlan(
   planId: string,
-  narrationAudioPath: string,
 ): Promise<MontagePlan> {
   return request<MontagePlan>(
     `/api/production/montage-plans/${planId}/render`,
     {
       method: "POST",
-      body: JSON.stringify({ narration_audio_path: narrationAudioPath }),
-    },
-  );
-}
-
-export function previewVoiceCommand(
-  episodeId: string,
-  transcript: string,
-): Promise<VoiceCommandResponse> {
-  return request<VoiceCommandResponse>(
-    `/api/episodes/${episodeId}/voice-command/preview`,
-    {
-      method: "POST",
-      body: JSON.stringify({ transcript }),
-    },
-  );
-}
-
-export function executeVoiceCommand(
-  episodeId: string,
-  transcript: string,
-): Promise<VoiceCommandResponse> {
-  return request<VoiceCommandResponse>(
-    `/api/episodes/${episodeId}/voice-command/execute`,
-    {
-      method: "POST",
-      body: JSON.stringify({ transcript }),
+      body: JSON.stringify({}),
     },
   );
 }

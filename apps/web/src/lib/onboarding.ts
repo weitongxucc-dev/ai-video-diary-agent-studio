@@ -23,6 +23,7 @@ export type OnboardingChecklistEntry = {
   fixHref: string;
   fixLabel: string;
   secretSummary: string;
+  required?: boolean;
 };
 
 export type OnboardingChecklistSection = {
@@ -486,31 +487,42 @@ export function buildOnboardingSnapshot(input: {
   ];
 
   if (input.preflight) {
+    const preflightEntries = input.preflight.checks.map((check) => {
+      const state: OnboardingChecklistState =
+        check.status === "ready" || check.status === "not_applicable"
+          ? "ready"
+          : check.required
+            ? "missing"
+            : "attention";
+      return {
+        ...buildEntry({
+          id: check.id,
+          title: check.label,
+          detail: check.summary,
+          impact: `${check.impact} ${check.required ? "修复" : "可稍后配置"}：${check.repair_action}`,
+          state,
+          fixHref: "/settings",
+          fixLabel: check.settings_target ? "打开对应设置" : "查看设置",
+          isSecret: check.id === "deepseek" || check.id === "asr",
+          secretSummary: `${check.label}：${describeState(state)}`,
+        }),
+        required: check.required,
+      };
+    });
     sections = [
       {
-        id: "preflight",
-        title: "首次启动预检",
+        id: "required",
+        title: "开始创作所需",
         description:
-          "这些结果来自本机 API 的实时检查；所有阻断项修复前不能完成首次启动。",
-        entries: input.preflight.checks.map((check) => {
-          const state: OnboardingChecklistState =
-            check.status === "ready" || check.status === "not_applicable"
-              ? "ready"
-              : check.status === "missing" || check.status === "invalid"
-                ? "missing"
-                : "attention";
-          return buildEntry({
-            id: check.id,
-            title: check.label,
-            detail: check.summary,
-            impact: `${check.impact} 修复：${check.repair_action}`,
-            state,
-            fixHref: "/settings",
-            fixLabel: check.settings_target ? "打开对应设置" : "查看设置",
-            isSecret: check.id === "deepseek" || check.id === "asr",
-            secretSummary: `${check.label}：${describeState(state)}`,
-          });
-        }),
+          "只有这些本地视频流水线条件会阻止进入工作台。",
+        entries: preflightEntries.filter((entry) => entry.required),
+      },
+      {
+        id: "optional",
+        title: "可稍后配置",
+        description:
+          "语音识别、知识库、剪映和模型增强不会锁死工作台，只影响对应功能。",
+        entries: preflightEntries.filter((entry) => !entry.required),
       },
     ];
   }
@@ -567,9 +579,16 @@ export function summarizeOnboardingHealth(snapshot: OnboardingSnapshot): {
   detail: string;
 } {
   if (snapshot.ready) {
+    if (snapshot.attentionCount > 0) {
+      return {
+        tone: "yellow",
+        headline: "已可进入工作台",
+        detail: `核心环境已就绪，还有 ${snapshot.attentionCount} 项增强能力可稍后配置。`,
+      };
+    }
     return {
       tone: "green",
-      headline: "首次启动检查全部通过",
+      headline: "创作环境已就绪",
       detail: `${snapshot.completion.ready}/${snapshot.completion.total} 项就绪，可以开始今日工作。`,
     };
   }

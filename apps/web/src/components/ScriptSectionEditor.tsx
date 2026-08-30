@@ -23,7 +23,7 @@ export function ScriptSectionEditor({
   const charsPerSecond = Math.round((charCount / Math.max(section.estimated_seconds, 1)) * 10) / 10;
 
   return (
-    <section className="script-section pixel-card" id={`script-section-${section.id}`}>
+    <section className="script-section ui-panel" id={`script-section-${section.id}`}>
       <input form={formId} name="section_id" type="hidden" value={section.id} />
       <input
         form={formId}

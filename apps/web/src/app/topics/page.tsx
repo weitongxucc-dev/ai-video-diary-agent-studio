@@ -66,11 +66,11 @@ function EmptyTopicState({
         }
       : {
           title: "还没有候选选题",
-          description: "点击生成后，Agent 会读取 Obsidian、外链素材源和已配置的产品源来生成候选。",
+          description: "点击生成后，系统会读取已连接的资料与信息源来生成候选。",
         };
 
   return (
-    <section className="topic-empty pixel-card">
+    <section className="topic-empty ui-panel">
       <span className="section-kicker">选题池</span>
       <h1>{copy.title}</h1>
       <p>{copy.description}</p>
@@ -78,12 +78,12 @@ function EmptyTopicState({
         {episode ? (
           <form action={generateTopicsAction}>
             <input name="episode_id" type="hidden" value={episode.id} />
-            <button className="pixel-button" type="submit">
+            <button className="ui-button" type="submit">
               生成今日选题
             </button>
           </form>
         ) : null}
-        <Link className="pixel-button secondary" href="/">
+        <Link className="ui-button secondary" href="/">
           返回今日工作台
         </Link>
       </div>
@@ -138,7 +138,7 @@ type TopicDetailProps = {
 function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
   const extended = readExtendedTopic(topic);
   return (
-    <section className="topic-detail pixel-card">
+    <section className="topic-detail ui-panel">
       <header className="topic-detail-header">
         <div>
           <span className="section-kicker">推荐选题</span>
@@ -166,7 +166,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
                 ))}
               </ol>
             ) : (
-              <p className="topic-empty-cell">等待 Agent 补充 3 分钟结构</p>
+              <p className="topic-empty-cell">等待系统补充 3 分钟结构</p>
             )}
           </section>
 
@@ -174,7 +174,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
             <h3>核心观点</h3>
             <p>
               {topic.core_viewpoint?.trim() ||
-                "等待 Agent 补充核心观点"}
+                "等待系统补充核心观点"}
             </p>
             <dl className="topic-mini-meta">
               <div>
@@ -257,7 +257,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
                 ))}
               </ul>
             ) : (
-              <p className="topic-empty-cell">等待 Agent 补充复核清单</p>
+              <p className="topic-empty-cell">等待系统补充复核清单</p>
             )}
           </section>
 
@@ -289,7 +289,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
 
           {hasAnyAgentJudgment(extended) ? (
             <section className="topic-agent-terminal">
-              <h3>Agent 判断</h3>
+              <h3>系统判断</h3>
               {extended.agentRecommendation ? (
                 <p>推荐原因：{extended.agentRecommendation}</p>
               ) : null}
@@ -312,7 +312,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
         <form action={approveTopicAndGenerateScript}>
           <input name="episode_id" type="hidden" value={episodeId ?? ""} />
           <input name="topic_id" type="hidden" value={topic.id} />
-          <button className="pixel-button" type="submit">
+          <button className="ui-button" type="submit">
             通过并生成口播稿
           </button>
         </form>
@@ -320,7 +320,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
           <input name="episode_id" type="hidden" value={episodeId ?? ""} />
           <input name="topic_id" type="hidden" value={topic.id} />
           <input name="reason" type="hidden" value="这个方向值得继续强化" />
-          <button className="pixel-button secondary" name="value" type="submit" value="up">
+          <button className="ui-button secondary" name="value" type="submit" value="up">
             赞这个选题
           </button>
         </form>
@@ -328,7 +328,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
           <input name="episode_id" type="hidden" value={episodeId ?? ""} />
           <input name="topic_id" type="hidden" value={topic.id} />
           <input name="reason" type="hidden" value="这个方向暂时不够具体" />
-          <button className="pixel-button secondary" name="value" type="submit" value="down">
+          <button className="ui-button secondary" name="value" type="submit" value="down">
             踩这个选题
           </button>
         </form>
@@ -336,7 +336,7 @@ function TopicDetail({ topic, evidenceByKey, episodeId }: TopicDetailProps) {
           <input name="episode_id" type="hidden" value={episodeId ?? ""} />
           <input name="topic_id" type="hidden" value={topic.id} />
           <input name="reason" type="hidden" value="想换成更贴近日记感的角度" />
-          <button className="pixel-button secondary" name="value" type="submit" value="down">
+          <button className="ui-button secondary" name="value" type="submit" value="down">
             换一个角度
           </button>
         </form>
@@ -376,11 +376,11 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
         {requestedTopicId !== null && !requestedExists ? (
           <div
             aria-live="polite"
-            className="pixel-form-error"
+            className="ui-form-error"
             role="status"
           >
-            <span aria-hidden="true" className="pixel-form-error-light" />
-            <div className="pixel-form-error-body">
+            <span aria-hidden="true" className="ui-form-error-light" />
+            <div className="ui-form-error-body">
               <strong>请求的 topic_id 不存在</strong>
               <span>
                 找不到 “{requestedTopicId}”，已回退到当前默认选题。
@@ -392,14 +392,14 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
           {episode && topics.length > 0 ? (
             <form action={regenerateTopicsAction} className="topic-regenerate-form">
               <input name="episode_id" type="hidden" value={episode.id} />
-              <button className="pixel-button secondary" type="submit">
+              <button className="ui-button secondary" type="submit">
                 重新生成候选
               </button>
             </form>
           ) : episode ? (
             <form action={generateTopicsAction} className="topic-regenerate-form">
               <input name="episode_id" type="hidden" value={episode.id} />
-              <button className="pixel-button" type="submit">
+              <button className="ui-button" type="submit">
                 生成今日选题
               </button>
             </form>
@@ -413,7 +413,7 @@ export default async function TopicsPage({ searchParams }: TopicsPageProps) {
               />
             ))
           ) : (
-            <div className="topic-card pixel-card">
+            <div className="topic-card ui-panel">
               <div className="topic-card-header">
                 <span className="score-badge">--</span>
                 <span>待生成</span>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,29 @@ from typing import Protocol
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT, ModelCatalog
 
 
-class VoiceCloneError(RuntimeError):
-    pass
+@dataclass(frozen=True)
+class MediaRuntimeFailure:
+    """A user-actionable capability or execution failure at a media boundary."""
+
+    reason: str
+    impact: str
+    repair_action: str
+    retryable: bool
+
+
+class VoiceCloneError(ValueError):
+    def __init__(self, failure: MediaRuntimeFailure | str) -> None:
+        self.failure = (
+            failure
+            if isinstance(failure, MediaRuntimeFailure)
+            else MediaRuntimeFailure(
+                reason="provider_failed",
+                impact="声音生成失败，未产生可用音频。",
+                repair_action=str(failure),
+                retryable=True,
+            )
+        )
+        super().__init__(self.failure.repair_action)
 
 
 @dataclass(frozen=True)
@@ -25,6 +47,8 @@ class VoiceCloneResult:
 
 class VoiceCloneProvider(Protocol):
     model_id: str
+    supported_languages: tuple[str, ...]
+    supports_pronunciation_dictionary: bool
 
     @property
     def ready(self) -> bool: ...
@@ -38,12 +62,16 @@ class VoiceCloneProvider(Protocol):
         text: str,
         reference_audio_path: str | Path,
         reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
         output_path: str | Path,
     ) -> VoiceCloneResult: ...
 
 
 class UnavailableVoiceCloneProvider:
     model_id = QWEN3_TTS_06B_BASE_8BIT.id
+    supported_languages: tuple[str, ...] = ()
+    supports_pronunciation_dictionary = False
 
     def __init__(self, message: str = "本地声音克隆模型尚未安装。") -> None:
         self._message = message
@@ -62,13 +90,24 @@ class UnavailableVoiceCloneProvider:
         text: str,
         reference_audio_path: str | Path,
         reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
         output_path: str | Path,
     ) -> VoiceCloneResult:
-        raise VoiceCloneError(self.message)
+        raise VoiceCloneError(
+            text_to_speech_preflight(
+                self,
+                language=language,
+                pronunciation_dictionary=pronunciation_dictionary,
+            )
+            or self.message
+        )
 
 
 class Qwen3TTSSubprocessProvider:
     model_id = QWEN3_TTS_06B_BASE_8BIT.id
+    supported_languages = ("zh",)
+    supports_pronunciation_dictionary = False
 
     def __init__(
         self,
@@ -105,18 +144,34 @@ class Qwen3TTSSubprocessProvider:
         text: str,
         reference_audio_path: str | Path,
         reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
         output_path: str | Path,
     ) -> VoiceCloneResult:
         narration = text.strip()
         transcript = reference_text.strip()
         reference = Path(reference_audio_path).expanduser().resolve()
         output = Path(output_path).expanduser().resolve()
-        if not self.ready:
-            raise VoiceCloneError(self.message)
+        preflight_failure = text_to_speech_preflight(
+            self,
+            language=language,
+            pronunciation_dictionary=pronunciation_dictionary,
+        )
+        if preflight_failure is not None:
+            raise VoiceCloneError(preflight_failure)
         if not narration:
             raise VoiceCloneError("待配音文案不能为空")
         if not transcript:
             raise VoiceCloneError("声音参考文字不能为空")
+        if any(
+            not isinstance(entry, dict)
+            or any(
+                not isinstance(entry.get(field), str) or not entry[field].strip()
+                for field in ("id", "version", "term", "language", "target_pronunciation", "scope")
+            )
+            for entry in pronunciation_dictionary
+        ):
+            raise VoiceCloneError("发音词典条目无效")
         if not reference.is_file() or reference.suffix.lower() != ".wav":
             raise VoiceCloneError("声音参考文件必须是存在的 WAV 文件")
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +187,8 @@ class Qwen3TTSSubprocessProvider:
                         "text": narration,
                         "reference_audio_path": str(reference),
                         "reference_text": transcript,
+                        "language": language,
+                        "pronunciation_dictionary": pronunciation_dictionary,
                         "output_path": str(output),
                     },
                     ensure_ascii=False,
@@ -199,6 +256,39 @@ def voice_clone_provider_from_catalog(catalog: ModelCatalog) -> VoiceCloneProvid
     )
 
 
+def text_to_speech_preflight(
+    provider: VoiceCloneProvider,
+    *,
+    language: str,
+    pronunciation_dictionary: tuple[dict[str, str], ...],
+) -> MediaRuntimeFailure | None:
+    """Reject unsupported TTS inputs before a provider or worker receives them."""
+    if not provider.ready:
+        return MediaRuntimeFailure(
+            reason="capability_unavailable",
+            impact="声音生成能力未配置，未生成音频。",
+            repair_action=provider.message,
+            retryable=True,
+        )
+    supported_languages = getattr(provider, "supported_languages", ("zh", "en", "zh-en"))
+    if language not in supported_languages:
+        supported = ", ".join(supported_languages) or "无"
+        return MediaRuntimeFailure(
+            reason="language_unavailable",
+            impact="当前声音运行时不支持请求语言，未生成音频。",
+            repair_action=f"选择已声明支持 {language} 的模型；当前模型支持：{supported}。",
+            retryable=False,
+        )
+    if pronunciation_dictionary and not getattr(provider, "supports_pronunciation_dictionary", False):
+        return MediaRuntimeFailure(
+            reason="pronunciation_dictionary_unavailable",
+            impact="当前声音运行时不会应用发音词典，未生成可能被误导的音频。",
+            repair_action="选择明确支持发音词典的声音运行时，或移除词典条目后重试。",
+            retryable=False,
+        )
+    return None
+
+
 def _parse_result(payload: object, expected_output: Path) -> VoiceCloneResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise ValueError("响应协议版本错误")
@@ -213,8 +303,20 @@ def _parse_result(payload: object, expected_output: Path) -> VoiceCloneResult:
         raise ValueError("响应音频时长无效")
     if not isinstance(sample_rate, int) or sample_rate <= 0:
         raise ValueError("响应采样率无效")
+    _validate_wav_output(expected_output, sample_rate)
     return VoiceCloneResult(
         audio_path=str(expected_output),
         duration_seconds=round(float(duration), 3),
         sample_rate=sample_rate,
     )
+
+
+def _validate_wav_output(output: Path, expected_sample_rate: int) -> None:
+    try:
+        with wave.open(str(output), "rb") as audio:
+            if audio.getnchannels() < 1 or audio.getframerate() != expected_sample_rate:
+                raise ValueError("输出音频格式与响应不匹配")
+            if audio.getnframes() <= 0:
+                raise ValueError("输出音频为空")
+    except (OSError, EOFError, wave.Error) as exc:
+        raise ValueError(f"输出音频不是有效 WAV：{exc}") from exc

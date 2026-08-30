@@ -11,7 +11,7 @@ export default function DraftLoading() {
     <AppShell>
       <LoadingShell label="正在加载剪映草稿...">
         <div className="workspace-page">
-          <section className="workspace-main pixel-card draft-main">
+          <section className="workspace-main ui-panel draft-main">
             <div className="workspace-header">
               <div>
                 <Skeleton height={12} width={92} />

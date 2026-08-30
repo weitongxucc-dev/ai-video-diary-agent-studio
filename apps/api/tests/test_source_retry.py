@@ -3,14 +3,31 @@
 import dataclasses
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.external_sources import ExternalSourceResponseError
-from app.main import app
+import app.main as main_module
+from app.source_repository import SourceRepository
+from app.sources import TopicSourceItem
 
-client = TestClient(app)
+client = TestClient(main_module.app)
 
-_FAKE_ITEMS = [None, None, None]
+_FAKE_ITEMS = [
+    TopicSourceItem(
+        source_type="外链",
+        title=f"item-{index}",
+        ref=f"https://example.com/{index}",
+        excerpt="source excerpt",
+        source_url=f"https://example.com/{index}",
+    )
+    for index in range(3)
+]
+
+
+@pytest.fixture(autouse=True)
+def source_repository_isolation(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "source_repository", SourceRepository(tmp_path / "db.sqlite"))
 
 
 class _FakeHermesRadarClient:
@@ -74,10 +91,10 @@ def test_retry_external_urls_skipped_when_no_urls_configured():
         patch("app.main.settings", patched_settings),
     ):
         resp = client.post("/api/sources/external_urls/retry")
-    assert resp.status_code == 200
+    assert resp.status_code == 409
     data = resp.json()
-    assert data["status"] == "skipped"
-    assert data["item_count"] == 0
+    assert data["detail"]["error"] == "configuration_required"
+    assert data["detail"]["run"]["status"] == "failed"
 
 
 def test_retry_manual_success():

@@ -6,13 +6,21 @@ import re
 import sqlite3
 import subprocess
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Literal
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
+from app.avatar_lipsync import (
+    Authorization,
+    AvatarAndLipSyncRequest,
+    PersonProfile,
+    PronunciationEntry,
+    VoiceProfile as VersionedVoiceProfile,
+)
 from app.models import utc_now
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
@@ -44,6 +52,8 @@ BatchItemStatus = Literal[
     "failed",
     "interrupted",
 ]
+MediaPreviewType = Literal["voice", "avatar_lipsync"]
+MediaPreviewStatus = Literal["running", "succeeded", "unavailable", "blocked", "failed"]
 
 _A_ROLL_PROMPTS = (
     "一个人面对摄像头说话的自拍视频",
@@ -175,6 +185,53 @@ class NarrationArtifactRecord:
     created_at: datetime = field(default_factory=utc_now)
 
 
+@dataclass(frozen=True)
+class VersionedNarrationInputs:
+    voice: VersionedVoiceProfile
+    pronunciation_entries: tuple[PronunciationEntry, ...]
+
+
+class MediaAuthorityError(ValueError):
+    """A fail-closed media identity or authorization error for API callers."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        impact: str,
+        repair_action: str,
+    ) -> None:
+        self.reason = reason
+        self.impact = impact
+        self.repair_action = repair_action
+        super().__init__(repair_action)
+
+
+@dataclass
+class MediaPreviewRunRecord:
+    id: str
+    workspace_id: str
+    preview_type: MediaPreviewType
+    identity: str
+    status: MediaPreviewStatus
+    capability_id: str
+    model_id: str
+    language: str
+    person_profile_id: str | None
+    person_version: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
+    authorization_id: str | None
+    authorization_version: str | None
+    attempt: int = 1
+    output_path: str | None = None
+    reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    started_at: datetime = field(default_factory=utc_now)
+    finished_at: datetime | None = None
+
+
 @dataclass
 class MaterialCollection:
     id: str
@@ -226,6 +283,161 @@ class ProductionBatch:
         return sum(item.status in {"failed", "interrupted"} for item in self.items)
 
 
+@dataclass(frozen=True)
+class CreationPlanKnowledgeReference:
+    id: str
+    version: str
+    title: str
+    authorization: str
+    ownership: str
+
+
+@dataclass(frozen=True)
+class CreationPlanSourceReference:
+    id: str
+    connector_id: str
+    source_label: str
+    title: str
+    license: str
+    identity: str = ""
+
+
+@dataclass(frozen=True)
+class CreationPlanVoiceReference:
+    profile_id: str
+    version: str
+    person_profile_id: str
+    person_version: str
+    person_authorization_id: str
+    person_authorization_version: str
+    authorization_id: str
+    authorization_version: str
+    language: str
+    model_id: str
+
+
+@dataclass(frozen=True)
+class CreationPlanPronunciationReference:
+    id: str
+    version: str
+    scope: str
+    scope_reference: str | None
+    language: str
+
+
+@dataclass(frozen=True)
+class CreationPlanBlocker:
+    reason: str
+    impact: str
+    repair_action: str
+    stage: str
+    blocks_confirmation: bool
+
+
+@dataclass
+class CreationPlan:
+    id: str
+    workspace_id: str
+    goal: str
+    name: str
+    target_count: int
+    language: str
+    aspect_ratio: str
+    duration_target_seconds: int
+    knowledge_references: list[CreationPlanKnowledgeReference]
+    source_references: list[CreationPlanSourceReference]
+    selected_voice: CreationPlanVoiceReference | None
+    pronunciation_references: list[CreationPlanPronunciationReference]
+    approved_asset_count: int
+    approved_clip_count: int
+    material_rule_summary: str
+    model_snapshot: list[dict[str, object]]
+    confirmation_points: list[str]
+    blockers: list[CreationPlanBlocker]
+    preflight_fingerprint: str
+    status: Literal["confirmed"] = "confirmed"
+    creation_task_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    confirmed_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class CreationTask:
+    id: str
+    workspace_id: str
+    plan_id: str
+    name: str
+    scenario: str
+    stage: Literal["topic"] = "topic"
+    stage_status: Literal[
+        "not_started", "running", "waiting_for_user", "completed", "failed"
+    ] = "not_started"
+    status: Literal["created", "running", "waiting_for_user", "completed", "failed"] = "created"
+    progress: int = 0
+    recovery_point: str = "topic"
+    selected_topic_id: str | None = None
+    stage_reason: str | None = None
+    stage_impact: str | None = None
+    stage_repair_action: str | None = None
+    stage_retryable: bool | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+TopicGenerationRunStatus = Literal["running", "succeeded", "failed"]
+TopicSelectionStatus = Literal["unselected", "confirmed"]
+TopicEvidenceKind = Literal["knowledge", "source"]
+
+
+@dataclass
+class TopicGenerationRun:
+    id: str
+    workspace_id: str
+    task_id: str
+    plan_id: str
+    status: TopicGenerationRunStatus
+    route_snapshot: dict[str, object]
+    prompt_schema_version: str
+    input_references: list[dict[str, object]]
+    reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    retryable: bool | None = None
+    started_at: datetime = field(default_factory=utc_now)
+    finished_at: datetime | None = None
+
+
+@dataclass
+class TopicCandidate:
+    id: str
+    workspace_id: str
+    task_id: str
+    run_id: str
+    title: str
+    angle: str
+    audience: str
+    outline: list[str]
+    score: int
+    selection_status: TopicSelectionStatus = "unselected"
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class TopicEvidenceReference:
+    id: str
+    workspace_id: str
+    task_id: str
+    candidate_id: str
+    kind: TopicEvidenceKind
+    reference_id: str
+    version_or_identity: str
+    title: str
+    authorization_or_license: str
+    source_url: str | None
+    created_at: datetime = field(default_factory=utc_now)
+
+
 class ProductionRepository:
     """Workspace-scoped persistence for the batch-production foundation.
 
@@ -250,6 +462,137 @@ class ProductionRepository:
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
+
+    def resolve_workspace_media_reference(
+        self,
+        workspace_id: str,
+        reference: str,
+        *,
+        require_registered: bool = False,
+    ) -> Path:
+        """Resolve an approved workspace media reference without widening its root."""
+        if not workspace_id.strip():
+            raise MediaAuthorityError(
+                reason="workspace_required",
+                impact="不能解析或使用没有工作区归属的媒体。",
+                repair_action="从当前已认证工作区重新提交媒体引用。",
+            )
+        value = reference.strip()
+        root = self.video_library_path.resolve()
+        if value.startswith("workspace://"):
+            encoded_path = value.removeprefix("workspace://")
+            decoded_path = unquote(encoded_path)
+            parts = decoded_path.split("/")
+            if (
+                not decoded_path
+                or "\\" in decoded_path
+                or "\x00" in decoded_path
+                or decoded_path.startswith("/")
+                or any(part in {"", ".", ".."} for part in parts)
+            ):
+                raise MediaAuthorityError(
+                    reason="invalid_media_reference",
+                    impact="媒体引用未被解析，未向模型或渲染器传递文件路径。",
+                    repair_action="使用规范的 workspace://<relative-posix-path> 引用。",
+                )
+            candidate = root.joinpath(*parts)
+        else:
+            raise MediaAuthorityError(
+                reason="logical_media_reference_required",
+                impact="任意本机路径不能作为已授权媒体使用。",
+                repair_action="从当前工作区已批准素材选择 workspace:// 逻辑引用。",
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise MediaAuthorityError(
+                reason="media_reference_outside_authorized_root",
+                impact="越界媒体不会被读取或传给模型、ffmpeg。",
+                repair_action="选择当前工作区已授权媒体根目录内的素材。",
+            ) from exc
+        if require_registered:
+            self._require_workspace_media_reference(workspace_id, value)
+        return resolved
+
+    @staticmethod
+    def narration_artifact_reference(cache_key: str) -> str:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", cache_key):
+            raise ValueError("旁白产物标识无效")
+        return f"narration://artifact/{cache_key}"
+
+    def resolve_authorized_narration_audio_reference(
+        self,
+        workspace_id: str,
+        reference: str,
+    ) -> Path:
+        value = reference.strip()
+        if value.startswith("workspace://"):
+            return self.resolve_workspace_media_reference(
+                workspace_id,
+                value,
+                require_registered=True,
+            )
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "narration"
+            or parsed.netloc != "artifact"
+            or parsed.query
+            or parsed.fragment
+            or not re.fullmatch(r"/[a-zA-Z0-9_-]{1,128}", parsed.path)
+        ):
+            raise MediaAuthorityError(
+                reason="logical_media_reference_required",
+                impact="任意本机路径不能作为旁白或渲染输入。",
+                repair_action="从当前工作区选择 workspace:// 媒体，或使用已有 narration://artifact 资源。",
+            )
+        artifact = self.get_narration_artifact(
+            workspace_id,
+            parsed.path.removeprefix("/"),
+        )
+        if artifact is None:
+            raise MediaAuthorityError(
+                reason="narration_audio_unavailable",
+                impact="当前工作区不存在可用的旁白产物，未调用渲染器。",
+                repair_action="重新生成旁白，或选择当前工作区已授权的媒体引用。",
+            )
+        return Path(artifact.audio_path)
+
+    def workspace_media_reference_for_asset(
+        self,
+        workspace_id: str,
+        asset_id: str,
+    ) -> str:
+        asset = self.get_asset(workspace_id, asset_id)
+        root = self.video_library_path.resolve()
+        resolved = Path(asset.path).resolve()
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError as exc:
+            raise MediaAuthorityError(
+                reason="asset_outside_authorized_root",
+                impact="素材不会被写入剪辑计划或传给渲染器。",
+                repair_action="重新扫描当前工作区已授权素材根内的文件。",
+            ) from exc
+        return f"workspace://{relative.as_posix()}"
+
+    def resolve_clip_media_reference(
+        self,
+        workspace_id: str,
+        asset_id: str,
+        reference: str,
+    ) -> Path:
+        expected_reference = self.workspace_media_reference_for_asset(
+            workspace_id,
+            asset_id,
+        )
+        if reference != expected_reference:
+            raise MediaAuthorityError(
+                reason="clip_media_reference_mismatch",
+                impact="剪辑计划中的素材引用与当前工作区资产不匹配，未调用渲染器。",
+                repair_action="重新从当前工作区素材库生成剪辑计划。",
+            )
+        return self.resolve_workspace_media_reference(workspace_id, reference)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path)
@@ -296,6 +639,55 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_production_batches_workspace
                     ON production_batches(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS creation_plans (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_creation_plans_workspace
+                    ON creation_plans(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS creation_tasks (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(workspace_id, plan_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_creation_tasks_workspace
+                    ON creation_tasks(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS topic_generation_runs (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_topic_generation_runs_task
+                    ON topic_generation_runs(workspace_id, task_id, started_at DESC);
+                CREATE TABLE IF NOT EXISTS topic_candidates (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_topic_candidates_task
+                    ON topic_candidates(workspace_id, task_id, created_at ASC);
+                CREATE TABLE IF NOT EXISTS topic_evidence_references (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_topic_evidence_candidate
+                    ON topic_evidence_references(workspace_id, candidate_id, created_at ASC);
                 CREATE TABLE IF NOT EXISTS voice_profiles (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -309,6 +701,7 @@ class ProductionRepository:
                     workspace_id TEXT NOT NULL,
                     episode_id TEXT NOT NULL,
                     voice_profile_id TEXT NOT NULL,
+                    voice_version TEXT,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(workspace_id, episode_id)
                 );
@@ -322,6 +715,76 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_narration_artifacts_episode
                     ON narration_artifacts(workspace_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS media_preview_runs (
+                    id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    preview_type TEXT NOT NULL,
+                    identity TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, preview_type, identity)
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_preview_runs_workspace
+                    ON media_preview_runs(workspace_id, preview_type, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS media_preview_attempts (
+                    id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    preview_type TEXT NOT NULL,
+                    identity TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, preview_type, identity, attempt)
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_preview_attempts_workspace
+                    ON media_preview_attempts(workspace_id, preview_type, identity, attempt DESC);
+                CREATE TABLE IF NOT EXISTS media_authorizations (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_authorizations_current
+                    ON media_authorizations(workspace_id, id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS person_profiles (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_person_profiles_current
+                    ON person_profiles(workspace_id, id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS versioned_voice_profiles (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_versioned_voice_profiles_current
+                    ON versioned_voice_profiles(workspace_id, id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS workspace_media_references (
+                    reference TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_workspace_media_references_workspace
+                    ON workspace_media_references(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS pronunciation_entries (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_pronunciation_entries_workspace
+                    ON pronunciation_entries(workspace_id, id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS material_collections (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -343,6 +806,624 @@ class ProductionRepository:
                     ON material_segment_usage(workspace_id, segment_id, used_at DESC);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(episode_voice_selections)")
+            }
+            if "voice_version" not in columns:
+                conn.execute(
+                    "ALTER TABLE episode_voice_selections ADD COLUMN voice_version TEXT"
+                )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO media_preview_attempts
+                    (id, workspace_id, preview_type, identity, attempt, payload, updated_at)
+                SELECT id, workspace_id, preview_type, identity, 1, payload, updated_at
+                FROM media_preview_runs
+                """
+            )
+
+    def save_authorization(self, authorization: Authorization) -> Authorization:
+        _validate_authorization(authorization)
+        with self._connect() as conn:
+            self._save_versioned_payload(
+                conn,
+                table="media_authorizations",
+                workspace_id=authorization.workspace_id,
+                record_id=authorization.id,
+                version=authorization.version,
+                payload=_authorization_payload(authorization),
+            )
+        return authorization
+
+    def get_authorization(
+        self,
+        workspace_id: str,
+        authorization_id: str,
+        version: str | None = None,
+    ) -> Authorization:
+        with self._connect() as conn:
+            return self._get_authorization(conn, workspace_id, authorization_id, version)
+
+    def list_authorizations(self, workspace_id: str) -> list[Authorization]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="media_authorizations",
+                workspace_id=workspace_id,
+                current_only=True,
+            )
+        return [self._authorization_from_payload(payload) for payload in payloads]
+
+    def list_authorization_versions(
+        self,
+        workspace_id: str,
+        authorization_id: str,
+    ) -> list[Authorization]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="media_authorizations",
+                workspace_id=workspace_id,
+                record_id=authorization_id,
+            )
+        return [self._authorization_from_payload(payload) for payload in payloads]
+
+    def save_person_profile(self, person: PersonProfile) -> PersonProfile:
+        _validate_person_profile(person)
+        with self._connect() as conn:
+            self._save_authorization(conn, person.workspace_id, person.authorization)
+            self._save_versioned_payload(
+                conn,
+                table="person_profiles",
+                workspace_id=person.workspace_id,
+                record_id=person.id,
+                version=person.version,
+                payload=_person_profile_payload(person),
+            )
+        return person
+
+    def get_person_profile(
+        self,
+        workspace_id: str,
+        person_id: str,
+        version: str | None = None,
+    ) -> PersonProfile:
+        with self._connect() as conn:
+            return self._get_person_profile(conn, workspace_id, person_id, version)
+
+    def list_person_profiles(self, workspace_id: str) -> list[PersonProfile]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="person_profiles",
+                workspace_id=workspace_id,
+                current_only=True,
+            )
+            return [
+                self._person_profile_from_payload(conn, workspace_id, payload)
+                for payload in payloads
+            ]
+
+    def list_person_profile_versions(
+        self,
+        workspace_id: str,
+        person_id: str,
+    ) -> list[PersonProfile]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="person_profiles",
+                workspace_id=workspace_id,
+                record_id=person_id,
+            )
+            return [
+                self._person_profile_from_payload(conn, workspace_id, payload)
+                for payload in payloads
+            ]
+
+    def save_versioned_voice_profile(
+        self,
+        voice: VersionedVoiceProfile,
+    ) -> VersionedVoiceProfile:
+        _validate_versioned_voice_profile(voice)
+        with self._connect() as conn:
+            self.resolve_workspace_media_reference(
+                voice.workspace_id,
+                voice.reference_audio_path,
+            )
+            self._get_person_profile(
+                conn,
+                voice.workspace_id,
+                voice.person_profile_id,
+                voice.person_version,
+            )
+            self._save_authorization(conn, voice.workspace_id, voice.authorization)
+            self._claim_workspace_media_reference(
+                conn,
+                workspace_id=voice.workspace_id,
+                reference=voice.reference_audio_path,
+            )
+            self._save_versioned_payload(
+                conn,
+                table="versioned_voice_profiles",
+                workspace_id=voice.workspace_id,
+                record_id=voice.id,
+                version=voice.version,
+                payload=_versioned_voice_profile_payload(voice),
+            )
+        return voice
+
+    def get_versioned_voice_profile(
+        self,
+        workspace_id: str,
+        voice_profile_id: str,
+        version: str | None = None,
+    ) -> VersionedVoiceProfile:
+        with self._connect() as conn:
+            return self._get_versioned_voice_profile(
+                conn,
+                workspace_id,
+                voice_profile_id,
+                version,
+            )
+
+    def list_versioned_voice_profiles(
+        self,
+        workspace_id: str,
+    ) -> list[VersionedVoiceProfile]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="versioned_voice_profiles",
+                workspace_id=workspace_id,
+                current_only=True,
+            )
+            return [
+                self._versioned_voice_profile_from_payload(conn, workspace_id, payload)
+                for payload in payloads
+            ]
+
+    def list_versioned_voice_profile_versions(
+        self,
+        workspace_id: str,
+        voice_profile_id: str,
+    ) -> list[VersionedVoiceProfile]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="versioned_voice_profiles",
+                workspace_id=workspace_id,
+                record_id=voice_profile_id,
+            )
+            return [
+                self._versioned_voice_profile_from_payload(conn, workspace_id, payload)
+                for payload in payloads
+            ]
+
+    def save_pronunciation_entry(
+        self,
+        entry: PronunciationEntry,
+    ) -> PronunciationEntry:
+        _validate_pronunciation_entry(entry)
+        with self._connect() as conn:
+            if entry.scope == "person":
+                self._get_person_profile(conn, entry.workspace_id, entry.scope_reference or "")
+            self._save_versioned_payload(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=entry.workspace_id,
+                record_id=entry.id,
+                version=entry.version,
+                payload=_pronunciation_entry_payload(entry),
+            )
+        return entry
+
+    def get_pronunciation_entry(
+        self,
+        workspace_id: str,
+        entry_id: str,
+        version: str | None = None,
+    ) -> PronunciationEntry:
+        with self._connect() as conn:
+            row = self._versioned_row(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                record_id=entry_id,
+                version=version,
+            )
+        return self._pronunciation_entry_from_payload(json.loads(str(row["payload"])))
+
+    def list_pronunciation_entries(self, workspace_id: str) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                current_only=True,
+            )
+        return [self._pronunciation_entry_from_payload(payload) for payload in payloads]
+
+    def list_pronunciation_entry_versions(
+        self,
+        workspace_id: str,
+        entry_id: str,
+    ) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            payloads = self._list_versioned_payloads(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                record_id=entry_id,
+            )
+        return [self._pronunciation_entry_from_payload(payload) for payload in payloads]
+
+    def resolve_narration_inputs(
+        self,
+        *,
+        workspace_id: str,
+        episode_id: str,
+        voice_profile_id: str,
+        voice_version: str | None = None,
+    ) -> VersionedNarrationInputs:
+        with self._connect() as conn:
+            historical_voice = self._get_versioned_voice_profile(
+                conn,
+                workspace_id,
+                voice_profile_id,
+                voice_version,
+            )
+            voice = replace(
+                historical_voice,
+                authorization=self._current_authorization(
+                    conn,
+                    workspace_id,
+                    historical_voice.authorization,
+                ),
+            )
+        return VersionedNarrationInputs(
+            voice=voice,
+            pronunciation_entries=tuple(
+                self.list_applicable_pronunciation_entries(
+                    workspace_id=workspace_id,
+                    person_profile_id=voice.person_profile_id,
+                    episode_id=episode_id,
+                )
+            ),
+        )
+
+    def resolve_avatar_lipsync_request(
+        self,
+        *,
+        workspace_id: str,
+        person_id: str,
+        person_version: str,
+        voice_profile_id: str,
+        voice_version: str,
+        audio_path: str,
+        audio_cache_key: str,
+        language: str,
+        motion: str,
+        expression: str,
+        authorization_id: str,
+        authorization_version: str,
+        model_id: str,
+    ) -> AvatarAndLipSyncRequest:
+        if language not in {"zh", "en", "zh-en"}:
+            raise ValueError("人物口型语言必须是 zh、en 或 zh-en")
+        with self._connect() as conn:
+            historical_person = self._get_person_profile(
+                conn,
+                workspace_id,
+                person_id,
+                person_version,
+            )
+            historical_voice = self._get_versioned_voice_profile(
+                conn,
+                workspace_id,
+                voice_profile_id,
+                voice_version,
+            )
+            person = replace(
+                historical_person,
+                authorization=self._current_authorization(
+                    conn,
+                    workspace_id,
+                    historical_person.authorization,
+                ),
+            )
+            voice = replace(
+                historical_voice,
+                authorization=self._current_authorization(
+                    conn,
+                    workspace_id,
+                    historical_voice.authorization,
+                ),
+            )
+            requested_authorization = self._get_authorization(
+                conn,
+                workspace_id,
+                authorization_id,
+                authorization_version,
+            )
+            authorization = self._current_authorization(
+                conn,
+                workspace_id,
+                requested_authorization,
+            )
+        return AvatarAndLipSyncRequest(
+            workspace_id=workspace_id,
+            person=person,
+            voice=voice,
+            audio_path=audio_path,
+            audio_cache_key=audio_cache_key,
+            language=language,
+            motion=motion,
+            expression=expression,
+            authorization=authorization,
+            model_id=model_id,
+        )
+
+    def migrate_legacy_voice_profile(
+        self,
+        *,
+        workspace_id: str,
+        legacy_voice_profile_id: str,
+        person_profile_id: str,
+        person_version: str,
+        version: str,
+        language: str,
+        authorization: Authorization,
+    ) -> VersionedVoiceProfile:
+        """Explicitly map a legacy voice row; no automatic migration is performed."""
+        if language not in {"zh", "en", "zh-en"}:
+            raise ValueError("配音语言必须是 zh、en 或 zh-en")
+        legacy = self.get_voice_profile(workspace_id, legacy_voice_profile_id)
+        versioned = VersionedVoiceProfile(
+            id=legacy.id,
+            workspace_id=workspace_id,
+            person_profile_id=person_profile_id,
+            person_version=person_version,
+            version=version,
+            language=language,
+            reference_audio_path=legacy.reference_audio_path,
+            reference_text=legacy.reference_text,
+            model_id=legacy.model_id,
+            authorization=authorization,
+        )
+        return self.save_versioned_voice_profile(versioned)
+
+    def list_applicable_pronunciation_entries(
+        self,
+        *,
+        workspace_id: str,
+        person_profile_id: str | None,
+        episode_id: str,
+    ) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM pronunciation_entries
+                WHERE workspace_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        entries = [self._pronunciation_entry_from_payload(json.loads(str(row["payload"]))) for row in rows]
+        latest_by_id: dict[str, PronunciationEntry] = {}
+        for entry in entries:
+            latest_by_id.setdefault(entry.id, entry)
+        return [
+            entry
+            for entry in latest_by_id.values()
+            if entry.applies_to(
+                workspace_id=workspace_id,
+                person_profile_id=person_profile_id,
+                task_id=episode_id,
+            )
+        ]
+
+    def _save_authorization(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        authorization: Authorization,
+    ) -> None:
+        _validate_authorization(authorization)
+        if authorization.workspace_id != workspace_id:
+            raise ValueError("授权不属于当前工作区")
+        self._save_versioned_payload(
+            conn,
+            table="media_authorizations",
+            workspace_id=workspace_id,
+            record_id=authorization.id,
+            version=authorization.version,
+            payload=_authorization_payload(authorization),
+        )
+
+    def _claim_workspace_media_reference(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        reference: str,
+    ) -> None:
+        row = conn.execute(
+            "SELECT workspace_id FROM workspace_media_references WHERE reference = ?",
+            (reference,),
+        ).fetchone()
+        if row is not None and str(row["workspace_id"]) != workspace_id:
+            raise MediaAuthorityError(
+                reason="media_reference_owned_by_another_workspace",
+                impact="其他工作区登记的媒体不会被当前声音档案或创作任务使用。",
+                repair_action="从当前工作区选择已授权的媒体引用，或由原工作区重新授权。",
+            )
+        conn.execute(
+            """
+            INSERT INTO workspace_media_references (reference, workspace_id, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(reference) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                updated_at = excluded.updated_at
+            """,
+            (reference, workspace_id, utc_now().isoformat()),
+        )
+
+    def _require_workspace_media_reference(
+        self,
+        workspace_id: str,
+        reference: str,
+    ) -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT workspace_id FROM workspace_media_references WHERE reference = ?",
+                (reference,),
+            ).fetchone()
+        if row is None or str(row["workspace_id"]) != workspace_id:
+            raise MediaAuthorityError(
+                reason="media_reference_not_authorized_for_workspace",
+                impact="未登记给当前工作区的媒体不会被读取或传给模型、ffmpeg。",
+                repair_action="先将该媒体作为当前工作区已授权声音引用登记，或选择该工作区已有的逻辑引用。",
+            )
+
+    def _save_versioned_payload(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        workspace_id: str,
+        record_id: str,
+        version: str,
+        payload: dict[str, object],
+    ) -> None:
+        if not workspace_id.strip() or not record_id.strip() or not version.strip():
+            raise ValueError("版本化媒体对象必须包含工作区、ID 和版本")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        row = conn.execute(
+            f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? AND version = ?",
+            (workspace_id, record_id, version),
+        ).fetchone()
+        if row is not None:
+            if str(row["payload"]) != encoded:
+                raise ValueError("语义变更必须使用新版本")
+            return
+        conn.execute(
+            f"INSERT INTO {table} (workspace_id, id, version, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+            (workspace_id, record_id, version, encoded, utc_now().isoformat()),
+        )
+
+    @staticmethod
+    def _list_versioned_payloads(
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        workspace_id: str,
+        record_id: str | None = None,
+        current_only: bool = False,
+    ) -> list[dict[str, object]]:
+        if record_id is None:
+            rows = conn.execute(
+                f"SELECT id, payload FROM {table} WHERE workspace_id = ? ORDER BY id, created_at DESC, rowid DESC",
+                (workspace_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT id, payload FROM {table} WHERE workspace_id = ? AND id = ? ORDER BY created_at DESC, rowid DESC",
+                (workspace_id, record_id),
+            ).fetchall()
+        seen: set[str] = set()
+        payloads: list[dict[str, object]] = []
+        for row in rows:
+            item_id = str(row["id"])
+            if current_only and item_id in seen:
+                continue
+            seen.add(item_id)
+            payloads.append(json.loads(str(row["payload"])))
+        return payloads
+
+    @staticmethod
+    def _versioned_row(
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        workspace_id: str,
+        record_id: str,
+        version: str | None,
+    ) -> sqlite3.Row:
+        if version is None:
+            row = conn.execute(
+                f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? ORDER BY created_at DESC LIMIT 1",
+                (workspace_id, record_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? AND version = ?",
+                (workspace_id, record_id, version),
+            ).fetchone()
+        if row is None:
+            raise KeyError(record_id)
+        return row
+
+    def _get_authorization(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        authorization_id: str,
+        version: str | None,
+    ) -> Authorization:
+        row = self._versioned_row(
+            conn,
+            table="media_authorizations",
+            workspace_id=workspace_id,
+            record_id=authorization_id,
+            version=version,
+        )
+        return self._authorization_from_payload(json.loads(str(row["payload"])))
+
+    def _current_authorization(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        authorization: Authorization,
+    ) -> Authorization:
+        return self._get_authorization(conn, workspace_id, authorization.id, None)
+
+    def _get_person_profile(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        person_id: str,
+        version: str | None = None,
+    ) -> PersonProfile:
+        row = self._versioned_row(
+            conn,
+            table="person_profiles",
+            workspace_id=workspace_id,
+            record_id=person_id,
+            version=version,
+        )
+        return self._person_profile_from_payload(conn, workspace_id, json.loads(str(row["payload"])))
+
+    def _get_versioned_voice_profile(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        voice_profile_id: str,
+        version: str | None = None,
+    ) -> VersionedVoiceProfile:
+        row = self._versioned_row(
+            conn,
+            table="versioned_voice_profiles",
+            workspace_id=workspace_id,
+            record_id=voice_profile_id,
+            version=version,
+        )
+        return self._versioned_voice_profile_from_payload(
+            conn,
+            workspace_id,
+            json.loads(str(row["payload"])),
+        )
 
     def get_profile(self, workspace_id: str) -> ProductionProfile:
         with self._connect() as conn:
@@ -428,65 +1509,105 @@ class ProductionRepository:
             )
         return voice
 
-    def select_episode_voice(
+    def select_episode_versioned_voice(
         self,
         workspace_id: str,
         episode_id: str,
         voice_profile_id: str | None,
-    ) -> VoiceProfile | None:
+        voice_version: str | None,
+    ) -> VersionedVoiceProfile | None:
         with self._connect() as conn:
-            if voice_profile_id is None:
+            if voice_profile_id is None and voice_version is None:
                 conn.execute(
                     "DELETE FROM episode_voice_selections WHERE workspace_id = ? AND episode_id = ?",
                     (workspace_id, episode_id),
                 )
                 return None
-            voice = self.get_voice_profile(workspace_id, voice_profile_id)
+            if voice_profile_id is None or voice_version is None:
+                raise ValueError("声音选择必须包含声音 ID 和版本")
+            voice = self._get_versioned_voice_profile(
+                conn,
+                workspace_id,
+                voice_profile_id,
+                voice_version,
+            )
             conn.execute(
                 """
                 INSERT INTO episode_voice_selections
-                    (workspace_id, episode_id, voice_profile_id, updated_at)
-                VALUES (?, ?, ?, ?)
+                    (workspace_id, episode_id, voice_profile_id, voice_version, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(workspace_id, episode_id) DO UPDATE SET
                     voice_profile_id = excluded.voice_profile_id,
+                    voice_version = excluded.voice_version,
                     updated_at = excluded.updated_at
                 """,
-                (workspace_id, episode_id, voice.id, utc_now().isoformat()),
+                (
+                    workspace_id,
+                    episode_id,
+                    voice.id,
+                    voice.version,
+                    utc_now().isoformat(),
+                ),
             )
         return voice
 
-    def selected_episode_voice_id(
+    def selected_episode_versioned_voice_identity(
         self,
         workspace_id: str,
         episode_id: str,
-    ) -> str | None:
+    ) -> tuple[str, str] | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT voice_profile_id FROM episode_voice_selections
+                SELECT voice_profile_id, voice_version FROM episode_voice_selections
                 WHERE workspace_id = ? AND episode_id = ?
                 """,
                 (workspace_id, episode_id),
             ).fetchone()
-        return str(row["voice_profile_id"]) if row is not None else None
+        if row is None:
+            return None
+        version = row["voice_version"]
+        if not isinstance(version, str) or not version.strip():
+            raise MediaAuthorityError(
+                reason="legacy_voice_selection_requires_migration",
+                impact="历史未版本化声音选择不会用于新的配音或渲染。",
+                repair_action="在人物与声音中选择已授权的声音版本后重新开始该步骤。",
+            )
+        return str(row["voice_profile_id"]), version
 
-    def resolve_voice_profile(
+    def resolve_episode_narration_inputs(
         self,
         workspace_id: str,
         episode_id: str,
-    ) -> VoiceProfile | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT voice_profile_id FROM episode_voice_selections
-                WHERE workspace_id = ? AND episode_id = ?
-                """,
-                (workspace_id, episode_id),
-            ).fetchone()
-        if row is not None:
-            return self.get_voice_profile(workspace_id, str(row["voice_profile_id"]))
-        profiles = self.list_voice_profiles(workspace_id)
-        return next((voice for voice in profiles if voice.is_default), None)
+    ) -> VersionedNarrationInputs:
+        identity = self.selected_episode_versioned_voice_identity(
+            workspace_id,
+            episode_id,
+        )
+        if identity is None:
+            raise MediaAuthorityError(
+                reason="voice_selection_required",
+                impact="当前创作任务未生成配音，未调用声音模型。",
+                repair_action="为该创作任务选择已授权的声音版本后重试。",
+            )
+        voice_profile_id, voice_version = identity
+        inputs = self.resolve_narration_inputs(
+            workspace_id=workspace_id,
+            episode_id=episode_id,
+            voice_profile_id=voice_profile_id,
+            voice_version=voice_version,
+        )
+        authorization_failure = inputs.voice.authorization.failure_for(
+            content_type="voice",
+            usage_scope="narration",
+        )
+        if authorization_failure is not None:
+            raise MediaAuthorityError(
+                reason=f"voice_authorization_{authorization_failure}",
+                impact="声音授权当前不可用，未调用声音模型或复用旧配音。",
+                repair_action="恢复或更新该声音的 narration 授权后重试。",
+            )
+        return inputs
 
     def get_narration_artifact(
         self,
@@ -531,6 +1652,179 @@ class ProductionRepository:
                 ),
             )
         return artifact
+
+    def get_media_preview_run(
+        self,
+        workspace_id: str,
+        preview_type: MediaPreviewType,
+        identity: str,
+    ) -> MediaPreviewRunRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM media_preview_attempts
+                WHERE workspace_id = ? AND preview_type = ? AND identity = ?
+                ORDER BY attempt DESC
+                LIMIT 1
+                """,
+                (workspace_id, preview_type, identity),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._media_preview_run_from_payload(json.loads(str(row["payload"])))
+
+    def save_media_preview_run(
+        self,
+        record: MediaPreviewRunRecord,
+    ) -> MediaPreviewRunRecord:
+        _validate_media_preview_run(record)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM media_preview_attempts
+                WHERE workspace_id = ? AND preview_type = ? AND identity = ? AND attempt = ?
+                """,
+                (record.workspace_id, record.preview_type, record.identity, record.attempt),
+            ).fetchone()
+            if row is not None:
+                previous = self._media_preview_run_from_payload(
+                    json.loads(str(row["payload"]))
+                )
+                if previous.id != record.id:
+                    raise ValueError("预览尝试 ID 与现有记录不一致")
+                if previous.status != "running" and previous != record:
+                    raise ValueError("已结束的预览尝试不可覆盖")
+            conn.execute(
+                """
+                INSERT INTO media_preview_attempts
+                    (id, workspace_id, preview_type, identity, attempt, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, preview_type, identity, attempt) DO UPDATE SET
+                    id = excluded.id,
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    record.id,
+                    record.workspace_id,
+                    record.preview_type,
+                    record.identity,
+                    record.attempt,
+                    _json_payload(record),
+                    utc_now().isoformat(),
+                ),
+            )
+        return record
+
+    def claim_media_preview_run(
+        self,
+        record: MediaPreviewRunRecord,
+        *,
+        retry: bool,
+        succeeded_reusable: bool = True,
+    ) -> tuple[MediaPreviewRunRecord, bool]:
+        """Atomically return the latest preview run or create one running attempt."""
+        _validate_media_preview_run(record)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT payload FROM media_preview_attempts
+                WHERE workspace_id = ? AND preview_type = ? AND identity = ?
+                ORDER BY attempt DESC
+                LIMIT 1
+                """,
+                (record.workspace_id, record.preview_type, record.identity),
+            ).fetchone()
+            latest = (
+                self._media_preview_run_from_payload(json.loads(str(row["payload"])))
+                if row is not None
+                else None
+            )
+            if latest is not None:
+                if latest.status == "running":
+                    return latest, False
+                if latest.status == "succeeded" and succeeded_reusable:
+                    return latest, False
+                if latest.status != "succeeded" and not retry:
+                    return latest, False
+                attempt = latest.attempt + 1
+            else:
+                attempt = 1
+            claimed = replace(
+                record,
+                id=f"{record.preview_type}_preview_{record.identity}_{attempt}",
+                attempt=attempt,
+            )
+            _validate_media_preview_run(claimed)
+            conn.execute(
+                """
+                INSERT INTO media_preview_attempts
+                    (id, workspace_id, preview_type, identity, attempt, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    claimed.id,
+                    claimed.workspace_id,
+                    claimed.preview_type,
+                    claimed.identity,
+                    claimed.attempt,
+                    _json_payload(claimed),
+                    utc_now().isoformat(),
+                ),
+            )
+        return claimed, True
+
+    def list_media_preview_attempts(
+        self,
+        workspace_id: str,
+        preview_type: MediaPreviewType,
+        identity: str,
+    ) -> list[MediaPreviewRunRecord]:
+        if preview_type not in {"voice", "avatar_lipsync"}:
+            raise ValueError("预览类型无效")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM media_preview_attempts
+                WHERE workspace_id = ? AND preview_type = ? AND identity = ?
+                ORDER BY attempt DESC
+                """,
+                (workspace_id, preview_type, identity),
+            ).fetchall()
+        return [
+            self._media_preview_run_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def list_media_preview_runs(
+        self,
+        workspace_id: str,
+        preview_type: MediaPreviewType | None = None,
+    ) -> list[MediaPreviewRunRecord]:
+        if preview_type is not None and preview_type not in {"voice", "avatar_lipsync"}:
+            raise ValueError("预览类型无效")
+        with self._connect() as conn:
+            if preview_type is None:
+                rows = conn.execute(
+                    """
+                    SELECT payload FROM media_preview_attempts
+                    WHERE workspace_id = ? ORDER BY updated_at DESC
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT payload FROM media_preview_attempts
+                    WHERE workspace_id = ? AND preview_type = ? ORDER BY updated_at DESC
+                    """,
+                    (workspace_id, preview_type),
+                ).fetchall()
+        return [
+            self._media_preview_run_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
 
     def list_collections(self, workspace_id: str) -> list[MaterialCollection]:
         with self._connect() as conn:
@@ -940,6 +2234,505 @@ class ProductionRepository:
             raise KeyError(batch_id)
         return self._batch_from_payload(json.loads(str(row["payload"])))
 
+    def confirm_creation_plan(
+        self,
+        plan: CreationPlan,
+        task: CreationTask,
+    ) -> tuple[CreationPlan, CreationTask]:
+        if not plan.workspace_id.strip() or not task.workspace_id.strip():
+            raise ValueError("创作方案和任务必须属于工作区")
+        if plan.workspace_id != task.workspace_id or plan.id != task.plan_id:
+            raise ValueError("创作任务必须关联同一工作区的创作方案")
+        if not plan.goal.strip() or not plan.name.strip():
+            raise ValueError("创作方案必须包含目标和名称")
+        if not 1 <= plan.target_count <= 50:
+            raise ValueError("创作方案成片数必须在 1 到 50 之间")
+        if any(blocker.blocks_confirmation for blocker in plan.blockers):
+            raise ValueError("当前预检存在阻断选题阶段的事实缺口")
+
+        now = utc_now()
+        plan.creation_task_id = task.id
+        plan.updated_at = now
+        task.updated_at = now
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO creation_plans (id, workspace_id, payload, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    plan.id,
+                    plan.workspace_id,
+                    _json_payload(plan),
+                    plan.updated_at.isoformat(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    task.id,
+                    task.workspace_id,
+                    task.plan_id,
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                ),
+            )
+        return (
+            self.get_creation_plan(plan.workspace_id, plan.id),
+            self.get_creation_task(task.workspace_id, task.id),
+        )
+
+    def get_creation_plan(self, workspace_id: str, plan_id: str) -> CreationPlan:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM creation_plans
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (workspace_id, plan_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(plan_id)
+        return self._creation_plan_from_payload(json.loads(str(row["payload"])))
+
+    def get_creation_task(self, workspace_id: str, task_id: str) -> CreationTask:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (workspace_id, task_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return self._creation_task_from_payload(json.loads(str(row["payload"])))
+
+    def list_creation_tasks(self, workspace_id: str) -> list[CreationTask]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? ORDER BY updated_at DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [
+            self._creation_task_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def start_topic_generation(
+        self,
+        run: TopicGenerationRun,
+    ) -> tuple[CreationTask, TopicGenerationRun]:
+        """Persist the running attempt before the provider boundary is crossed."""
+        if run.status != "running":
+            raise ValueError("选题运行必须以 running 状态开始")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+            if task.plan_id != run.plan_id:
+                raise ValueError("选题运行关联的方案与创作任务不一致")
+            if task.stage != "topic" or task.stage_status not in {"not_started", "failed"}:
+                raise ValueError("当前创作任务不允许再次开始选题")
+            now = utc_now()
+            task.stage_status = "running"
+            task.status = "running"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = now
+            conn.execute(
+                """
+                INSERT INTO topic_generation_runs
+                    (id, workspace_id, task_id, plan_id, payload, started_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.id,
+                    run.workspace_id,
+                    run.task_id,
+                    run.plan_id,
+                    _json_payload(run),
+                    run.started_at.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                    task.workspace_id,
+                    task.id,
+                ),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_topic_generation_run(run.workspace_id, run.id),
+        )
+
+    def complete_topic_generation(
+        self,
+        run_id: str,
+        candidates: list[TopicCandidate],
+        evidence_references: list[TopicEvidenceReference],
+    ) -> tuple[CreationTask, TopicGenerationRun, list[TopicCandidate], list[TopicEvidenceReference]]:
+        """Commit validated candidates, their evidence, and the stage transition together."""
+        if not candidates:
+            raise ValueError("选题生成没有返回候选")
+        candidate_ids = {candidate.id for candidate in candidates}
+        if len(candidate_ids) != len(candidates):
+            raise ValueError("选题候选标识重复")
+        if any(reference.candidate_id not in candidate_ids for reference in evidence_references):
+            raise ValueError("选题证据关联了不存在的候选")
+        if any(
+            not any(reference.candidate_id == candidate.id for reference in evidence_references)
+            for candidate in candidates
+        ):
+            raise ValueError("每个选题候选都必须保留来源证据")
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM topic_generation_runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            run = self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
+            if run.status != "running":
+                raise ValueError("选题运行不是可完成状态")
+            task_row = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            if task.stage_status != "running":
+                raise ValueError("创作任务的选题阶段不是运行中")
+            for candidate in candidates:
+                if (
+                    candidate.workspace_id != run.workspace_id
+                    or candidate.task_id != run.task_id
+                    or candidate.run_id != run.id
+                    or not candidate.title.strip()
+                    or not candidate.angle.strip()
+                    or not candidate.audience.strip()
+                    or not candidate.outline
+                    or not 0 <= candidate.score <= 100
+                ):
+                    raise ValueError("选题候选不符合当前任务的持久化契约")
+            for reference in evidence_references:
+                if (
+                    reference.workspace_id != run.workspace_id
+                    or reference.task_id != run.task_id
+                    or not reference.reference_id.strip()
+                    or not reference.version_or_identity.strip()
+                    or not reference.authorization_or_license.strip()
+                ):
+                    raise ValueError("选题证据不符合当前任务的持久化契约")
+
+            now = utc_now()
+            run.status = "succeeded"
+            run.route_snapshot = {
+                **run.route_snapshot,
+                "availability": "succeeded",
+                "checked_at": now,
+            }
+            run.finished_at = now
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = max(task.progress, 15)
+            task.updated_at = now
+            conn.execute(
+                """
+                UPDATE topic_generation_runs SET payload = ?, updated_at = ? WHERE id = ?
+                """,
+                (_json_payload(run), now.isoformat(), run.id),
+            )
+            conn.executemany(
+                """
+                INSERT INTO topic_candidates
+                    (id, workspace_id, task_id, run_id, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        candidate.id,
+                        candidate.workspace_id,
+                        candidate.task_id,
+                        candidate.run_id,
+                        _json_payload(candidate),
+                        candidate.created_at.isoformat(),
+                    )
+                    for candidate in candidates
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO topic_evidence_references
+                    (id, workspace_id, task_id, candidate_id, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        reference.id,
+                        reference.workspace_id,
+                        reference.task_id,
+                        reference.candidate_id,
+                        _json_payload(reference),
+                        reference.created_at.isoformat(),
+                    )
+                    for reference in evidence_references
+                ],
+            )
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                    task.workspace_id,
+                    task.id,
+                ),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_topic_generation_run(run.workspace_id, run.id),
+            self.list_topic_candidates(run.workspace_id, run.task_id),
+            self.list_topic_evidence_references(run.workspace_id, run.task_id),
+        )
+
+    def fail_topic_generation(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+        provider_attempted: bool = False,
+    ) -> tuple[CreationTask, TopicGenerationRun]:
+        if not all(value.strip() for value in (reason, impact, repair_action)):
+            raise ValueError("选题失败必须包含原因、影响和修复动作")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM topic_generation_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            run = self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
+            if run.status != "running":
+                raise ValueError("选题运行不是可失败状态")
+            task_row = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (run.workspace_id, run.task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(run.task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            now = utc_now()
+            run.status = "failed"
+            run.reason = reason
+            run.impact = impact
+            run.repair_action = repair_action
+            run.retryable = retryable
+            if provider_attempted:
+                run.route_snapshot = {
+                    **run.route_snapshot,
+                    "availability": "failed",
+                    "checked_at": now,
+                }
+            run.finished_at = now
+            task.stage_status = "failed"
+            task.status = "failed"
+            task.recovery_point = "topic"
+            task.stage_reason = reason
+            task.stage_impact = impact
+            task.stage_repair_action = repair_action
+            task.stage_retryable = retryable
+            task.updated_at = now
+            conn.execute(
+                "UPDATE topic_generation_runs SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json_payload(run), now.isoformat(), run.id),
+            )
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                    task.workspace_id,
+                    task.id,
+                ),
+            )
+        return (
+            self.get_creation_task(run.workspace_id, run.task_id),
+            self.get_topic_generation_run(run.workspace_id, run.id),
+        )
+
+    def get_topic_generation_run(
+        self, workspace_id: str, run_id: str
+    ) -> TopicGenerationRun:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM topic_generation_runs
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (workspace_id, run_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
+
+    def latest_topic_generation_run(
+        self, workspace_id: str, task_id: str
+    ) -> TopicGenerationRun | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM topic_generation_runs
+                WHERE workspace_id = ? AND task_id = ?
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (workspace_id, task_id),
+            ).fetchone()
+        return (
+            self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
+            if row is not None
+            else None
+        )
+
+    def list_topic_candidates(
+        self, workspace_id: str, task_id: str
+    ) -> list[TopicCandidate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM topic_candidates
+                WHERE workspace_id = ? AND task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [
+            self._topic_candidate_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def list_topic_evidence_references(
+        self, workspace_id: str, task_id: str
+    ) -> list[TopicEvidenceReference]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM topic_evidence_references
+                WHERE workspace_id = ? AND task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [
+            self._topic_evidence_reference_from_payload(json.loads(str(row["payload"])))
+            for row in rows
+        ]
+
+    def confirm_topic_candidate(
+        self, workspace_id: str, task_id: str, candidate_id: str
+    ) -> tuple[CreationTask, TopicCandidate]:
+        with self._connect() as conn:
+            task_row = conn.execute(
+                """
+                SELECT payload FROM creation_tasks
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (workspace_id, task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            candidate_row = conn.execute(
+                """
+                SELECT payload FROM topic_candidates
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, candidate_id),
+            ).fetchone()
+            if candidate_row is None:
+                raise KeyError(candidate_id)
+            candidate = self._topic_candidate_from_payload(
+                json.loads(str(candidate_row["payload"]))
+            )
+            if task.selected_topic_id == candidate_id and task.stage_status == "completed":
+                return task, candidate
+            if task.selected_topic_id is not None:
+                raise ValueError("当前创作任务已经确认了另一个选题")
+            if task.stage != "topic" or task.stage_status != "waiting_for_user":
+                raise ValueError("当前创作任务不在等待确认选题状态")
+            now = utc_now()
+            candidate.selection_status = "confirmed"
+            task.selected_topic_id = candidate.id
+            task.stage_status = "completed"
+            task.status = "completed"
+            task.progress = max(task.progress, 20)
+            task.recovery_point = "script"
+            task.updated_at = now
+            conn.execute(
+                "UPDATE topic_candidates SET payload = ? WHERE id = ?",
+                (_json_payload(candidate), candidate.id),
+            )
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                    task.workspace_id,
+                    task.id,
+                ),
+            )
+        return (
+            self.get_creation_task(workspace_id, task_id),
+            next(
+                candidate
+                for candidate in self.list_topic_candidates(workspace_id, task_id)
+                if candidate.id == candidate_id
+            ),
+        )
+
     def readiness(
         self,
         workspace_id: str,
@@ -962,11 +2755,16 @@ class ProductionRepository:
             and effective_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
-        default_voice = next(
+        versioned_voices = self.list_versioned_voice_profiles(workspace_id)
+        usable_voice = next(
             (
                 voice
-                for voice in self.list_voice_profiles(workspace_id)
-                if voice.is_default
+                for voice in versioned_voices
+                if voice.authorization.failure_for(
+                    content_type="voice",
+                    usage_scope="narration",
+                )
+                is None
             ),
             None,
         )
@@ -977,33 +2775,18 @@ class ProductionRepository:
                     "message": "尚未配置品牌名称和固定视觉模板。",
                 }
             )
-        voice_consent_confirmed = (
-            default_voice.consent_confirmed
-            if default_voice is not None
-            else profile.voice_consent_confirmed
-        )
-        voice_reference_path = (
-            default_voice.reference_audio_path
-            if default_voice is not None
-            else profile.voice_reference_path
-        )
-        voice_reference_text = (
-            default_voice.reference_text
-            if default_voice is not None
-            else profile.voice_reference_text
-        )
-        if not voice_consent_confirmed:
+        if usable_voice is None:
             blockers.append(
                 {
-                    "code": "voice_consent_missing",
-                    "message": "授权声音尚未确认授权。",
+                    "code": "versioned_voice_authorization_missing",
+                    "message": "尚未登记可用于配音的版本化授权声音。",
                 }
             )
-        elif not voice_reference_path or not voice_reference_text.strip():
+        elif not usable_voice.reference_audio_path or not usable_voice.reference_text.strip():
             blockers.append(
                 {
-                    "code": "voice_reference_missing",
-                    "message": "授权声音缺少 WAV 参考文件或对应文字。",
+                "code": "voice_reference_missing",
+                    "message": "授权声音缺少工作区参考音频或对应文字。",
                 }
             )
         if profile.voice_model_status != "ready":
@@ -1377,11 +3160,97 @@ class ProductionRepository:
         return VoiceProfile(**data)
 
     @staticmethod
+    def _authorization_from_payload(data: dict[str, object]) -> Authorization:
+        return Authorization(
+            id=_required_text(data, "id"),
+            version=_required_text(data, "version"),
+            rights_holder=_required_text(data, "rights_holder"),
+            content_types=_string_tuple(data, "content_types"),
+            usage_scopes=_string_tuple(data, "usage_scopes"),
+            effective_from=_required_datetime(data, "effective_from"),
+            expires_at=_optional_datetime(data, "expires_at"),
+            evidence_reference=_required_text(data, "evidence_reference"),
+            status=_required_text(data, "status"),  # type: ignore[arg-type]
+            workspace_id=_required_text(data, "workspace_id"),
+        )
+
+    def _person_profile_from_payload(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        data: dict[str, object],
+    ) -> PersonProfile:
+        authorization = self._get_authorization(
+            conn,
+            workspace_id,
+            _required_text(data, "authorization_id"),
+            _required_text(data, "authorization_version"),
+        )
+        return PersonProfile(
+            id=_required_text(data, "id"),
+            workspace_id=_required_text(data, "workspace_id"),
+            display_name=_required_text(data, "display_name"),
+            version=_required_text(data, "version"),
+            avatar_reference=_required_text(data, "avatar_reference"),
+            background_capabilities=_string_tuple(data, "background_capabilities"),
+            shot_capabilities=_string_tuple(data, "shot_capabilities"),
+            authorization=authorization,
+        )
+
+    def _versioned_voice_profile_from_payload(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        data: dict[str, object],
+    ) -> VersionedVoiceProfile:
+        authorization = self._get_authorization(
+            conn,
+            workspace_id,
+            _required_text(data, "authorization_id"),
+            _required_text(data, "authorization_version"),
+        )
+        return VersionedVoiceProfile(
+            id=_required_text(data, "id"),
+            workspace_id=_required_text(data, "workspace_id"),
+            person_profile_id=_required_text(data, "person_profile_id"),
+            person_version=_required_text(data, "person_version"),
+            version=_required_text(data, "version"),
+            language=_required_text(data, "language"),  # type: ignore[arg-type]
+            reference_audio_path=_required_text(data, "reference_audio_path"),
+            reference_text=_required_text(data, "reference_text"),
+            model_id=_required_text(data, "model_id"),
+            authorization=authorization,
+        )
+
+    @staticmethod
+    def _pronunciation_entry_from_payload(data: dict[str, object]) -> PronunciationEntry:
+        scope_reference = data.get("scope_reference")
+        if scope_reference is not None and not isinstance(scope_reference, str):
+            raise ValueError("发音词典作用域引用无效")
+        return PronunciationEntry(
+            id=_required_text(data, "id"),
+            workspace_id=_required_text(data, "workspace_id"),
+            term=_required_text(data, "term"),
+            language=_required_text(data, "language"),  # type: ignore[arg-type]
+            target_pronunciation=_required_text(data, "target_pronunciation"),
+            scope=_required_text(data, "scope"),  # type: ignore[arg-type]
+            scope_reference=scope_reference,
+            version=_required_text(data, "version"),
+        )
+
+    @staticmethod
     def _narration_artifact_from_payload(
         data: dict[str, object],
     ) -> NarrationArtifactRecord:
         data = _with_datetime(data, "created_at")
         return NarrationArtifactRecord(**data)
+
+    @staticmethod
+    def _media_preview_run_from_payload(
+        data: dict[str, object],
+    ) -> MediaPreviewRunRecord:
+        data = _with_datetime(data, "started_at", "finished_at")
+        return MediaPreviewRunRecord(**data)
 
     @staticmethod
     def _collection_from_payload(data: dict[str, object]) -> MaterialCollection:
@@ -1422,9 +3291,246 @@ class ProductionRepository:
         ]
         return ProductionBatch(**data, items=items)
 
+    @staticmethod
+    def _creation_plan_from_payload(data: dict[str, object]) -> CreationPlan:
+        knowledge_payloads = data.pop("knowledge_references", [])
+        source_payloads = data.pop("source_references", [])
+        voice_payload = data.pop("selected_voice", None)
+        pronunciation_payloads = data.pop("pronunciation_references", [])
+        blocker_payloads = data.pop("blockers", [])
+        data = _with_datetime(data, "created_at", "confirmed_at", "updated_at")
+        return CreationPlan(
+            **data,
+            knowledge_references=[
+                CreationPlanKnowledgeReference(**item)
+                for item in knowledge_payloads
+                if isinstance(item, dict)
+            ],
+            source_references=[
+                CreationPlanSourceReference(**item)
+                for item in source_payloads
+                if isinstance(item, dict)
+            ],
+            selected_voice=(
+                CreationPlanVoiceReference(**voice_payload)
+                if isinstance(voice_payload, dict)
+                else None
+            ),
+            pronunciation_references=[
+                CreationPlanPronunciationReference(**item)
+                for item in pronunciation_payloads
+                if isinstance(item, dict)
+            ],
+            blockers=[
+                CreationPlanBlocker(**item)
+                for item in blocker_payloads
+                if isinstance(item, dict)
+            ],
+        )
+
+    @staticmethod
+    def _creation_task_from_payload(data: dict[str, object]) -> CreationTask:
+        return CreationTask(**_with_datetime(data, "created_at", "updated_at"))
+
+    @staticmethod
+    def _topic_generation_run_from_payload(data: dict[str, object]) -> TopicGenerationRun:
+        return TopicGenerationRun(
+            **_with_datetime(data, "started_at", "finished_at")
+        )
+
+    @staticmethod
+    def _topic_candidate_from_payload(data: dict[str, object]) -> TopicCandidate:
+        return TopicCandidate(**_with_datetime(data, "created_at"))
+
+    @staticmethod
+    def _topic_evidence_reference_from_payload(
+        data: dict[str, object],
+    ) -> TopicEvidenceReference:
+        return TopicEvidenceReference(**_with_datetime(data, "created_at"))
+
 
 def _json_payload(value: object) -> str:
     return json.dumps(asdict(value), ensure_ascii=False, default=_json_default)
+
+
+def _authorization_payload(authorization: Authorization) -> dict[str, object]:
+    return {
+        "id": authorization.id,
+        "version": authorization.version,
+        "rights_holder": authorization.rights_holder,
+        "content_types": list(authorization.content_types),
+        "usage_scopes": list(authorization.usage_scopes),
+        "effective_from": authorization.effective_from.isoformat(),
+        "expires_at": authorization.expires_at.isoformat() if authorization.expires_at else None,
+        "evidence_reference": authorization.evidence_reference,
+        "status": authorization.status,
+        "workspace_id": authorization.workspace_id,
+    }
+
+
+def _person_profile_payload(person: PersonProfile) -> dict[str, object]:
+    return {
+        "id": person.id,
+        "workspace_id": person.workspace_id,
+        "display_name": person.display_name,
+        "version": person.version,
+        "avatar_reference": person.avatar_reference,
+        "background_capabilities": list(person.background_capabilities),
+        "shot_capabilities": list(person.shot_capabilities),
+        "authorization_id": person.authorization.id,
+        "authorization_version": person.authorization.version,
+    }
+
+
+def _versioned_voice_profile_payload(voice: VersionedVoiceProfile) -> dict[str, object]:
+    return {
+        "id": voice.id,
+        "workspace_id": voice.workspace_id,
+        "person_profile_id": voice.person_profile_id,
+        "person_version": voice.person_version,
+        "version": voice.version,
+        "language": voice.language,
+        "reference_audio_path": voice.reference_audio_path,
+        "reference_text": voice.reference_text,
+        "model_id": voice.model_id,
+        "authorization_id": voice.authorization.id,
+        "authorization_version": voice.authorization.version,
+    }
+
+
+def _pronunciation_entry_payload(entry: PronunciationEntry) -> dict[str, object]:
+    return {
+        "id": entry.id,
+        "workspace_id": entry.workspace_id,
+        "term": entry.term,
+        "language": entry.language,
+        "target_pronunciation": entry.target_pronunciation,
+        "scope": entry.scope,
+        "scope_reference": entry.scope_reference,
+        "version": entry.version,
+    }
+
+
+def _validate_authorization(authorization: Authorization) -> None:
+    if not authorization.workspace_id.strip():
+        raise ValueError("授权必须属于一个工作区")
+    if not all(
+        value.strip()
+        for value in (
+            authorization.id,
+            authorization.version,
+            authorization.rights_holder,
+            authorization.evidence_reference,
+        )
+    ):
+        raise ValueError("授权缺少必要标识或证据")
+    if not authorization.content_types or not authorization.usage_scopes:
+        raise ValueError("授权必须声明内容类型和用途范围")
+    if authorization.status not in {"active", "pending", "expired", "revoked"}:
+        raise ValueError("授权状态无效")
+
+
+def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
+    if not record.workspace_id.strip() or not record.id.strip() or not record.identity.strip():
+        raise ValueError("预览运行记录缺少工作区、ID 或幂等身份")
+    if record.preview_type not in {"voice", "avatar_lipsync"}:
+        raise ValueError("预览类型无效")
+    if record.status not in {"running", "succeeded", "unavailable", "blocked", "failed"}:
+        raise ValueError("预览运行状态无效")
+    if not record.capability_id.strip() or not record.model_id.strip() or not record.language.strip():
+        raise ValueError("预览运行记录缺少能力、模型或语言")
+    if record.attempt < 1:
+        raise ValueError("预览尝试序号必须从 1 开始")
+    if record.status == "running":
+        if record.finished_at is not None:
+            raise ValueError("运行中的预览不能包含结束时间")
+    elif record.status == "succeeded":
+        if not record.output_path or record.finished_at is None:
+            raise ValueError("成功预览必须包含输出引用和结束时间")
+    elif (
+        record.finished_at is None
+        or not record.reason
+        or not record.impact
+        or not record.repair_action
+    ):
+        raise ValueError("终态失败或不可用预览必须包含结束时间、原因、影响和修复动作")
+
+
+def _validate_person_profile(person: PersonProfile) -> None:
+    if not all(
+        value.strip()
+        for value in (person.id, person.workspace_id, person.display_name, person.version, person.avatar_reference)
+    ):
+        raise ValueError("人物档案缺少必要标识或形象引用")
+    if person.authorization.workspace_id != person.workspace_id:
+        raise ValueError("人物授权不属于当前工作区")
+
+
+def _validate_versioned_voice_profile(voice: VersionedVoiceProfile) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            voice.id,
+            voice.workspace_id,
+            voice.person_profile_id,
+            voice.person_version,
+            voice.version,
+            voice.reference_audio_path,
+            voice.reference_text,
+            voice.model_id,
+        )
+    ):
+        raise ValueError("声音档案缺少必要标识或参考资料")
+    if voice.language not in {"zh", "en", "zh-en"}:
+        raise ValueError("声音语言必须是 zh、en 或 zh-en")
+    if voice.authorization.workspace_id != voice.workspace_id:
+        raise ValueError("声音授权不属于当前工作区")
+
+
+def _validate_pronunciation_entry(entry: PronunciationEntry) -> None:
+    if not all(
+        value.strip()
+        for value in (entry.id, entry.workspace_id, entry.term, entry.target_pronunciation, entry.version)
+    ):
+        raise ValueError("发音词典缺少必要标识或发音")
+    if entry.language not in {"zh", "en", "zh-en"}:
+        raise ValueError("发音词典语言必须是 zh、en 或 zh-en")
+    if entry.scope not in {"workspace", "person", "task"}:
+        raise ValueError("发音词典作用域无效")
+    if entry.scope == "workspace" and entry.scope_reference is not None:
+        raise ValueError("工作区发音词典不能绑定对象")
+    if entry.scope != "workspace" and not (entry.scope_reference or "").strip():
+        raise ValueError("对象或任务发音词典必须绑定作用域引用")
+
+
+def _required_text(data: dict[str, object], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"持久化媒体对象缺少 {key}")
+    return value
+
+
+def _string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+        raise ValueError(f"持久化媒体对象的 {key} 无效")
+    return tuple(value)
+
+
+def _required_datetime(data: dict[str, object], key: str) -> datetime:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"持久化媒体对象缺少 {key}")
+    return datetime.fromisoformat(value)
+
+
+def _optional_datetime(data: dict[str, object], key: str) -> datetime | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"持久化媒体对象的 {key} 无效")
+    return datetime.fromisoformat(value)
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

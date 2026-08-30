@@ -41,11 +41,14 @@
 
     目标：
     用户可见或契约级验收：
+    要求的证据等级：
     Owned files：
     Authority Snapshot（S2/S3：最多 1–2 份文档的具体章节和基线）：
     不得修改：
     最小验证命令：
     回报：改动、测试、风险、阻断
+
+迁移或替换任务还必须包含：迁移负责人、旧目标及当前消费者、新权威与替代路径、正向验收、负向验收、删除条件、允许共存的截止条件、真实目标证据和不存在证明。只描述“新增什么”的契约无效。
 
 禁止派发“研究整个仓库”“把相关问题都修了”“再读一遍所有文档”之类无边界任务。
 
@@ -74,6 +77,42 @@
 - 多个线程同时修改 main.py、共享 schema、同一 migration 或同一设计权威；
 - 一个线程写功能，另一个线程在功能未冻结前写大量测试假设；
 - 让每个线程各跑一遍全量 Web、API 和打包。
+
+### 4.1 产品级迁移与退役
+
+AI 默认倾向增加覆盖层、adapter、兼容路由和 fallback，而不主动证明旧路径可以删除。涉及 redesign、modernize、consolidate、migrate、replace、deprecate 或统一事实源时，使用 `$project-authority-harness` 的 Migrate 模式，并按 S3 管理。
+
+文件可以按技术边界互斥分配，但验收责任必须围绕一个用户闭环集中给迁移负责人：
+
+    用户目标 -> 真实页面 -> 唯一事实源 -> 授权边界
+    -> 真实动作 -> 持久化结果 -> 真实产物
+    -> 旧路径删除 -> 不存在证明
+
+迁移状态为：
+
+    LEGACY_INVENTORIED
+      -> NEW_AUTHORITY_FROZEN
+      -> VERTICAL_SLICE_IMPLEMENTED
+      -> REAL_TARGET_VERIFIED
+      -> OLD_PATH_DISABLED
+      -> OLD_PATH_REMOVED
+      -> ABSENCE_VERIFIED
+      -> MIGRATION_ACCEPTED
+
+单个退役目标只使用 `ACTIVE -> COEXISTING -> MIGRATED -> RETIRED`。只有 `RETIRED` 算完成。临时维护三张控制矩阵：旧系统退役矩阵、能力真实性矩阵、真实交互证据矩阵；它们放在线程、Issue/PR 或临时证据目录，波次结束后删除，不进入活动权威文档。
+
+负向验收至少按目标选择以下证据：活动消费者归零或剩余命中被分类；旧路由不可达；旧事实源不可写；原始路径和旧授权标识被拒绝；旧依赖/样式不进入构建；同一真实候选中旧控件和名称不可见；保护错误产品行为的测试已删除或改写；删除旧文件后仍能干净构建和运行。
+
+不得混淆证据等级：
+
+    STATIC_WIRING_CONFIRMED
+    RUNTIME_CALL_CONFIRMED
+    REAL_INTERACTION_CONFIRMED
+    PERSISTED_EFFECT_CONFIRMED
+    REAL_OUTPUT_CONFIRMED
+    END_TO_END_ACCEPTED
+
+前一等级不蕴含后一等级。真实客户端测试开始前先验证权限、窗口聚焦、一个无害点击、一个键盘探针和隔离数据；第零探针失败立即 HOLD，不继续累积未执行案例。
 
 ## 5. Token 与上下文预算
 
@@ -134,6 +173,8 @@
 | 发布 | connector 测试、草稿/确认门和失败语义 | 真实交付时执行 RELEASE 和 workflow 全部门禁 |
 
 UI 必须在 1024×768、1180×800、1440×900 的适用页面验证可见行为。截图只证明当时可见结果，不能替代数据或安全测试。
+
+迁移验收必须使用同一候选同时证明新路径成立和旧路径不存在。静态连线、mock、单测、构建或进程启动不能提升为功能或端到端 PASS；环境阻断只能记录为 BLOCKED，未执行项保持未知。
 
 ## 8. 审核顺序
 

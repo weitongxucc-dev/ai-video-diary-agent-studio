@@ -61,7 +61,7 @@ function roleLabel(asset: MaterialAsset) {
       ? asset.suggested_usage_role
       : asset.usage_role;
   if (role === "a_roll") return "人物主镜头";
-  if (role === "b_roll") return "B-roll";
+  if (role === "b_roll") return "补充画面";
   if (asset.usage_role === "exclude") return "不使用";
   return "待判断";
 }
@@ -73,6 +73,18 @@ function reviewLabel(asset: MaterialAsset) {
   if (asset.analysis_status === "failed" || asset.analysis_status === "blocked")
     return "分析受阻";
   return "等待分析";
+}
+
+function tagLabel(value: string) {
+  return value
+    .replaceAll("a_roll", "人物主镜头")
+    .replaceAll("b_roll", "补充画面");
+}
+
+function fileLabel(value: string) {
+  return value
+    .replace(/batch_(\d+)/gi, "第 $1 组")
+    .replace(/episode/gi, "创作任务");
 }
 
 export function MaterialLibraryWorkspace({
@@ -333,7 +345,7 @@ export function MaterialLibraryWorkspace({
         </span>
       </div>
       <div className="library-inspector__title">
-        <strong title={selected.file_name}>{selected.file_name}</strong>
+        <strong title={fileLabel(selected.file_name)}>{fileLabel(selected.file_name)}</strong>
         <span>
           {roleLabel(selected)} · {reviewLabel(selected)}
         </span>
@@ -383,7 +395,7 @@ export function MaterialLibraryWorkspace({
           type="button"
         >
           <Check size={14} />
-          批准为 B-roll
+          批准为补充画面
         </button>
         <button
           className="is-danger"
@@ -434,7 +446,7 @@ export function MaterialLibraryWorkspace({
           </div>
           <div className="library-tag-list" aria-label="系统标签">
             {selectedSegment.system_tags.map((tag) => (
-              <span key={tag}>{tag}</span>
+              <span key={tag}>{tagLabel(tag)}</span>
             ))}
             {!selectedSegment.system_tags.length ? (
               <small>等待画面理解生成系统标签</small>
@@ -527,7 +539,7 @@ export function MaterialLibraryWorkspace({
           <div className="library-coverage__tags">
             {insights.tags.slice(0, 6).map((entry) => (
               <span key={entry.tag}>
-                <strong>{entry.tag}</strong>
+                <strong>{tagLabel(entry.tag)}</strong>
                 <small>
                   {entry.segment_count} 段 · 已用 {entry.usage_count} 次
                 </small>
@@ -599,9 +611,16 @@ export function MaterialLibraryWorkspace({
                 key={asset.id}
                 onClick={() => selectAsset(asset)}
                 type="button"
-              >
+                >
                 <span className="library-card__poster">
-                  <Film size={22} />
+                  <video
+                    aria-hidden="true"
+                    muted
+                    playsInline
+                    preload="metadata"
+                    src={`/api/production/materials/${asset.id}/media`}
+                  />
+                  <Film className="library-card__fallback-icon" size={22} />
                   <small>{duration(asset.duration_seconds)}</small>
                   <i
                     className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}
@@ -616,7 +635,7 @@ export function MaterialLibraryWorkspace({
                   </i>
                 </span>
                 <span className="library-card__copy">
-                  <strong title={asset.file_name}>{asset.file_name}</strong>
+                  <strong title={fileLabel(asset.file_name)}>{fileLabel(asset.file_name)}</strong>
                   <small>
                     {roleLabel(asset)} · {reviewLabel(asset)}
                   </small>

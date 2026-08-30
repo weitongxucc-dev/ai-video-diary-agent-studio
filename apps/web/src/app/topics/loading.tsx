@@ -12,7 +12,7 @@ export default function TopicsLoading() {
         <div className="topic-page">
           <section className="topic-list">
             {Array.from({ length: 4 }).map((_, index) => (
-              <div className="topic-card pixel-card" key={`topic-card-${index}`}>
+              <div className="topic-card ui-panel" key={`topic-card-${index}`}>
                 <div className="topic-card-header">
                   <Skeleton height={24} width={48} />
                   <Skeleton height={14} width="35%" />
@@ -28,7 +28,7 @@ export default function TopicsLoading() {
             ))}
           </section>
 
-          <section className="topic-detail pixel-card">
+          <section className="topic-detail ui-panel">
             <header className="topic-detail-header">
               <div>
                 <Skeleton height={12} width={92} />

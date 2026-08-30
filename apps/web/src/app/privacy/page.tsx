@@ -16,9 +16,9 @@ const SECTIONS: Section[] = [
     title: "本地优先，不收集个人视频",
     icon: "archive",
     paragraphs: [
-      "AI 视频日记 Agent Studio 是本地优先的桌面工具。所有视频、口播稿、选题、反馈事件都保存在你本机的 Obsidian Vault、视频目录和 SQLite 数据库中。",
+      "AI 视频日记是本地优先的桌面工具。所有视频、口播稿、选题和反馈都保存在你的本机资料目录、视频目录和数据库中。",
       "我们（即项目作者与后端进程）不会把你的视频、音频或文字稿上传到任何第三方服务器，也没有任何形式的远程索引或转售。",
-      "只有在你显式点击「标记已发布」并填写第三方平台 URL 后，发布链接才会写入本地 Episode 历史；这一步也不会上传视频本体。",
+      "只有在你显式点击「标记已发布」并填写第三方平台 URL 后，发布链接才会写入本地发布记录；这一步也不会上传视频本体。",
     ],
   },
   {
@@ -37,7 +37,7 @@ const SECTIONS: Section[] = [
     title: "DeepSeek 与腾讯云 ASR 数据使用",
     icon: "agent",
     paragraphs: [
-      "调用 DeepSeek 时，本机会把选题素材摘要、当前 Episode 的脚本骨架和反馈偏好作为 prompt 上下文发送至 api.deepseek.com。DeepSeek 的隐私政策请参考其官方文档；我们仅在生成内容时使用最小必要的上下文，不持久化任何用户数据。",
+      "调用文字模型时，本机会把选题素材摘要、当前创作内容的脚本骨架和反馈偏好作为上下文发送至已配置的模型服务。我们仅在生成内容时使用最小必要的上下文，不持久化任何用户数据。",
       "调用腾讯云 ASR（语音转写）时，音频文件直传至腾讯云 ASR 服务，结果回写到本地 SQLite。该音频文件不会保存在腾讯云侧，处理完成后即被丢弃。",
       "可选的本地 Whisper 模式完全离线运行，音频不离开你的电脑。",
     ],
@@ -46,7 +46,7 @@ const SECTIONS: Section[] = [
     title: "Hermes 雷达与外链 URL",
     icon: "video",
     paragraphs: [
-      "信息源页会拉取本地 Hermes 雷达日报（一个 Markdown 目录）以及你粘贴的外链 URL。这些都是公开内容，仅用于辅助 Agent 提炼选题，不会自动发布到任何外部平台。",
+      "信息源页会读取你已配置的信息源以及粘贴的外链 URL。这些内容仅用于辅助系统提炼选题，不会自动发布到任何外部平台。",
       <>
         你随时可以在 <Link href="/sources">信息源</Link> 页查看、删除或归档任一条目；本地 Obsidian Vault 的笔记也是同样的逻辑。
       </>,
@@ -68,12 +68,12 @@ export default function PrivacyPage() {
   return (
     <AppShell>
       <div className="legal-page">
-        <section className="legal-main pixel-card">
+        <section className="legal-main ui-panel">
           <header className="legal-header">
             <span className="section-kicker">隐私政策</span>
             <h1>AI 视频日记 · 隐私与数据使用</h1>
             <p>
-              这份文档说明 AI 视频日记 Agent Studio
+              这份文档说明 AI 视频日记
               如何处理你的数据。它是产品的一部分，不依赖任何外部 cookie
               横幅或第三方追踪脚本。
             </p>
@@ -98,10 +98,10 @@ export default function PrivacyPage() {
           ))}
 
           <footer className="legal-footer">
-            <Link className="pixel-button" href="/">
+            <Link className="ui-button" href="/">
               返回工作台
             </Link>
-            <Link className="pixel-button secondary" href="/terms">
+            <Link className="ui-button secondary" href="/terms">
               阅读使用条款
             </Link>
           </footer>

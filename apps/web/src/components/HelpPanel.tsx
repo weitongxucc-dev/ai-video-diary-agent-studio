@@ -37,15 +37,15 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
       intro: "今天的总览 + 选题复核入口",
       items: [
         {
-          title: "今日 Episode",
-          description: "查看当前 Episode 的所有状态机和今天的进度",
+          title: "今日创作内容",
+          description: "查看当前创作内容的进度和需要确认的事项",
         },
         {
           title: "今日队列",
           description: "4 步流程：复核选题 → 生成口播稿 → 视频处理 → 写入反馈",
         },
         {
-          title: "Agent 面板",
+          title: "运行面板",
           description: "模型服务 / Hermes / Obsidian 实时状态",
         },
       ],
@@ -65,7 +65,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
       items: [
         {
           title: "生成 / 重新生成",
-          description: "点击按钮让 Agent 读取 Obsidian + 外链素材生成 3-5 个候选",
+          description: "点击按钮让系统读取知识库和外链素材，生成 3–5 个候选",
         },
         {
           title: "证据",
@@ -106,61 +106,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
       shortcuts: [
         { keys: ["Ctrl", "1"], label: "回工作台" },
         { keys: ["Ctrl", "2"], label: "本页" },
-        { keys: ["Ctrl", "3"], label: "视频处理" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/video"),
-    content: {
-      title: "视频处理",
-      icon: "video",
-      intro: "扫描本地视频 → 预处理 → 拼接合并 → 准备剪辑",
-      items: [
-        {
-          title: "4 种生产模式",
-          description: "单条精剪 / 多段拼剪 / 临时单条 / 临时多段",
-        },
-        {
-          title: "源文件状态",
-          description: "pending / processing / processed / archived / skipped",
-        },
-        {
-          title: "重录报告",
-          description: "自动检测并剪掉重复口播，置信度高时自动剪",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "3"], label: "本页" },
-        { keys: ["Ctrl", "4"], label: "剪辑计划" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/edit-plan"),
-    content: {
-      title: "剪辑计划",
-      icon: "clip",
-      intro: "可视化剪辑时间轴 + 段落决策 + 剪映导入确认",
-      items: [
-        {
-          title: "决策三类",
-          description: "keep（保留）/ cut_silence（剪静音）/ remove_retake（去重录）",
-        },
-        {
-          title: "人工复核",
-          description: "对 AI 自动判定不确定的片段手动 keep/cut/review",
-        },
-        {
-          title: "确认后",
-          description: "生成完整素材包，自动导入剪映草稿箱",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "4"], label: "本页" },
-        { keys: ["Ctrl", "5"], label: "剪映草稿" },
+        { keys: ["Ctrl", "3"], label: "创作任务" },
       ],
     },
   },
@@ -177,7 +123,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
         },
         {
           title: "发布面板",
-          description: "Episode 草稿就绪后填 URL + 数据 → 标记已发布",
+          description: "内容草稿就绪后填写发布链接和数据，再标记为已发布",
           hint: "支持更新初始数据，二次提交仅更新数据不修改 URL/时间",
         },
       ],
@@ -200,7 +146,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
         },
         {
           title: "证据",
-          description: "点击卡片可看每条赞/踩对应的 Episode + 原因",
+          description: "点击卡片可查看每条赞/踩对应的创作内容和原因",
         },
         {
           title: "撤销",
@@ -218,7 +164,7 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
     content: {
       title: "内容模板",
       icon: "product",
-      intro: "为 Episode 选择生产结构（脚本骨架 + 剪映样式）",
+      intro: "为创作内容选择结构（脚本骨架和剪辑样式）",
       items: [
         {
           title: "2.0 第一组",
@@ -273,9 +219,9 @@ const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[]
   {
     match: (path) => path.startsWith("/history"),
     content: {
-      title: "Episode 历史",
+      title: "发布与数据",
       icon: "calendar",
-      intro: "按状态筛选 + 查看历史 Episode",
+      intro: "按状态筛选并查看历史创作内容",
       items: [
         {
           title: "筛选",
@@ -482,7 +428,7 @@ export function HelpPanel() {
         onClick={() => closeHelpPanel()}
         type="button"
       />
-      <div className="help-panel-card pixel-card">
+      <div className="help-panel-card ui-panel">
         <header className="help-panel-head">
           <div className="help-panel-icon-frame" aria-hidden="true">
             <PixelIcon name={help.icon} />
@@ -494,7 +440,7 @@ export function HelpPanel() {
           </div>
           <button
             aria-label="关闭"
-            className="pixel-button secondary"
+            className="ui-button secondary"
             onClick={() => closeHelpPanel()}
             type="button"
           >

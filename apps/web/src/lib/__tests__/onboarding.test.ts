@@ -7,7 +7,7 @@ import type {
   RuntimeHealth,
   RuntimeSettings,
   SetupStatus,
-  SetupPreflight,
+  SetupPreflightResponse,
   SystemStatus,
 } from "../types";
 
@@ -95,7 +95,7 @@ function makeHealth(overrides: Partial<RuntimeHealth> = {}): RuntimeHealth {
 
 describe("buildOnboardingSnapshot", () => {
   it("uses setup preflight as the authoritative readiness gate", () => {
-    const preflight: SetupPreflight = {
+    const preflight: SetupPreflightResponse = {
       overall: "blocked",
       generated_at: "2026-08-13T00:00:00Z",
       checks: [
@@ -107,13 +107,14 @@ describe("buildOnboardingSnapshot", () => {
           impact: "无法生成内容。",
           repair_action: "打开设置填写 API Key。",
           settings_target: "deepseek_api_key",
+          required: true,
         },
       ],
     };
     const snapshot = buildOnboardingSnapshot({
       preflight,
       preflightError: null,
-      setup: makeSetup({ complete: true }),
+      setup: makeSetup(),
       setupError: null,
       health: makeHealth({ summary: { total: 1, ready: 1, missing: 0, degraded: 0, invalid: 0 } }),
       healthError: null,
@@ -124,7 +125,7 @@ describe("buildOnboardingSnapshot", () => {
     });
 
     expect(snapshot.ready).toBe(false);
-    expect(snapshot.sections).toHaveLength(1);
+    expect(snapshot.sections).toHaveLength(2);
     expect(snapshot.sections[0]?.entries[0]).toMatchObject({
       id: "deepseek",
       state: "missing",
@@ -256,7 +257,7 @@ describe("buildOnboardingSnapshot", () => {
     const snapshot = buildOnboardingSnapshot({
       preflight: null,
       preflightError: "API server unreachable",
-      setup: makeSetup({ complete: true, items: [] }),
+      setup: makeSetup(),
       setupError: null,
       health: makeHealth({ summary: { total: 1, ready: 1, missing: 0, degraded: 0, invalid: 0 } }),
       healthError: null,

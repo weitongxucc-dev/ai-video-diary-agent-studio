@@ -6,11 +6,8 @@ import {
   approveScript,
   approveTopic,
   archiveSources,
-  confirmMontageClips,
   createVoiceProfile,
-  createMontagePlan,
   createEpisodeDraft,
-  createProductionBatch,
   createDraftPackage,
   disablePreferenceCard,
   generateTopics,
@@ -33,7 +30,6 @@ import {
   sendFeedback,
   selectEpisodeContentTemplate,
   scanProductionMaterials,
-  selectEpisodeVoice,
   syncSourceItems,
   updateEditPlanSegmentDecision,
   updateEpisodeScript,
@@ -41,8 +37,6 @@ import {
   updateVoiceProfile,
   updateProductionMaterialSegment,
   reviewProductionMaterial,
-  renderMontagePlan,
-  runProductionBatch,
   uploadEpisodeVideo,
   updatePublishMetrics,
   updateRuntimeSettings,
@@ -392,9 +386,9 @@ export async function approveScriptAction(formData: FormData) {
 
   try {
     await approveScript(episodeId);
-    revalidatePath("/video");
+    revalidatePath("/library");
     revalidatePath("/script");
-    redirectWithToast("/video", "success", "口播稿已确认通过");
+    redirectWithToast("/library", "success", "口播稿已确认通过");
   } catch (err) {
     redirectWithToast(
       "/script",
@@ -415,12 +409,12 @@ export async function processPendingVideoAction(formData: FormData) {
     } else {
       await processVideo(fileName);
     }
-    revalidatePath("/video");
+    revalidatePath("/library");
     revalidatePath("/");
-    redirectWithToast("/video", "success", "视频已预处理");
+    redirectWithToast("/library", "success", "视频已预处理");
   } catch (err) {
     redirectWithToast(
-      "/video",
+      "/library",
       "error",
       `视频预处理失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -440,7 +434,7 @@ export async function processVideoAndPackageAction(formData: FormData) {
     processedOk = true;
     await createEpisodeDraft(episodeId);
     revalidatePath("/draft");
-    revalidatePath("/video");
+    revalidatePath("/library");
     redirectWithToast("/draft", "success", "素材包已生成并导入");
   } catch (err) {
     const stage = !uploadOk
@@ -449,7 +443,7 @@ export async function processVideoAndPackageAction(formData: FormData) {
         ? "预处理视频"
         : "生成草稿素材包";
     redirectWithToast(
-      "/video",
+      "/library",
       "error",
       `${stage}失败：${safeErrorMessage(err, "未知错误")}（之前步骤已生效，请重试）`,
     );
@@ -462,11 +456,11 @@ export async function processAdHocVideoAction(formData: FormData) {
 
   try {
     await processAdHocEpisodeVideo(episodeId, fileName);
-    revalidatePath("/video");
-    redirectWithToast("/video", "success", "临时视频已处理");
+    revalidatePath("/library");
+    redirectWithToast("/library", "success", "临时视频已处理");
   } catch (err) {
     redirectWithToast(
-      "/video",
+      "/library",
       "error",
       `临时视频处理失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -486,16 +480,16 @@ export async function processAdHocVideoBatchAction(formData: FormData) {
     });
 
   if (fileNames.length < 2) {
-    redirectWithToast("/video", "error", "至少选择两条短视频");
+    redirectWithToast("/library", "error", "至少选择两条短视频");
   }
 
   try {
     await processAdHocEpisodeVideoBatch(episodeId, fileNames);
-    revalidatePath("/video");
-    redirectWithToast("/video", "success", `已合并 ${fileNames.length} 段视频`);
+    revalidatePath("/library");
+    redirectWithToast("/library", "success", `已合并 ${fileNames.length} 段视频`);
   } catch (err) {
     redirectWithToast(
-      "/video",
+      "/library",
       "error",
       `合并临时视频失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -510,20 +504,20 @@ export async function archiveSourcesAction(formData: FormData) {
     .filter((value, index, values) => values.indexOf(value) === index);
 
   if (fileNames.length === 0) {
-    redirectWithToast("/video", "error", "请选择要归档的源文件");
+    redirectWithToast("/library", "error", "请选择要归档的源文件");
   }
 
   try {
     await archiveSources(episodeId, fileNames);
-    revalidatePath("/video");
+    revalidatePath("/library");
     redirectWithToast(
-      "/video",
+      "/library",
       "success",
       `已归档 ${fileNames.length} 个源文件`,
     );
   } catch (err) {
     redirectWithToast(
-      "/video",
+      "/library",
       "error",
       `归档源文件失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -678,11 +672,11 @@ export async function confirmEditPlanAction(formData: FormData) {
   try {
     await createEpisodeDraft(episodeId);
     revalidatePath("/draft");
-    revalidatePath("/edit-plan");
+    revalidatePath("/production");
     redirectWithToast("/draft", "success", "剪辑计划已确认，素材包已生成");
   } catch (err) {
     redirectWithToast(
-      "/edit-plan",
+      "/production",
       "error",
       `确认剪辑计划失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -700,11 +694,11 @@ export async function updateEditPlanSegmentDecisionAction(formData: FormData) {
       editPlanSegmentDecisionAction(formData),
       optionalString(formData, "reason"),
     );
-    revalidatePath("/edit-plan");
-    redirectWithToast("/edit-plan", "success", "片段决策已保存");
+    revalidatePath("/production");
+    redirectWithToast("/production", "success", "片段决策已保存");
   } catch (err) {
     redirectWithToast(
-      "/edit-plan",
+      "/production",
       "error",
       `保存片段决策失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -717,11 +711,11 @@ export async function revertEditPlanSegmentDecisionAction(formData: FormData) {
 
   try {
     await revertEditPlanSegmentDecision(episodeId, segmentId);
-    revalidatePath("/edit-plan");
-    redirectWithToast("/edit-plan", "success", "片段决策已撤销");
+    revalidatePath("/production");
+    redirectWithToast("/production", "success", "片段决策已撤销");
   } catch (err) {
     redirectWithToast(
-      "/edit-plan",
+      "/production",
       "error",
       `撤销片段决策失败：${safeErrorMessage(err, "未知错误")}`,
     );
@@ -1051,109 +1045,4 @@ export async function setDefaultVoiceProfileAction(formData: FormData) {
   }
   revalidatePath("/settings");
   redirectWithToast("/settings", "success", "默认声音已切换");
-}
-
-export async function createProductionBatchAction(formData: FormData) {
-  const requestedCount = Number(requiredString(formData, "target_count"));
-  let successKind: ToastKind = "success";
-  let successMessage = "生产批次已创建";
-  try {
-    const batch = await createProductionBatch({
-      name: String(formData.get("name") ?? "").trim(),
-      target_count: Number.isFinite(requestedCount) ? requestedCount : 10,
-    });
-    successKind = batch.status === "blocked" ? "info" : "success";
-    successMessage = batch.message;
-  } catch (err) {
-    redirectWithToast(
-      "/production",
-      "error",
-      `创建批次失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-  revalidatePath("/production");
-  redirectWithToast("/production", successKind, successMessage);
-}
-
-export async function runProductionBatchAction(formData: FormData) {
-  const batchId = requiredString(formData, "batch_id");
-  try {
-    const batch = await runProductionBatch(batchId);
-    revalidatePath("/production");
-    redirectWithToast("/production", "success", batch.message);
-  } catch (err) {
-    redirectWithToast(
-      "/production",
-      "error",
-      `启动批量生产失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-}
-
-export async function createMontagePlanAction(formData: FormData) {
-  const batchId = requiredString(formData, "batch_id");
-  const episodeId = requiredString(formData, "episode_id");
-  let successKind: ToastKind = "success";
-  let successMessage = "混剪时间线已生成";
-  try {
-    await selectEpisodeVoice(
-      episodeId,
-      optionalString(formData, "voice_profile_id") ?? null,
-    );
-    const plan = await createMontagePlan(batchId, {
-      episode_id: episodeId,
-      narration_audio_path:
-        optionalString(formData, "narration_audio_path") ?? null,
-    });
-    successKind = plan.status === "waiting_for_user" ? "info" : "success";
-    successMessage = plan.message;
-  } catch (err) {
-    redirectWithToast(
-      "/production",
-      "error",
-      `生成混剪计划失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-  revalidatePath("/production");
-  redirectWithToast("/production", successKind, successMessage);
-}
-
-export async function confirmMontageClipsAction(formData: FormData) {
-  const planId = requiredString(formData, "plan_id");
-  const clipIds = requiredString(formData, "clip_ids")
-    .split(",")
-    .filter(Boolean);
-  let successMessage = "镜头已确认";
-  try {
-    const plan = await confirmMontageClips(planId, clipIds);
-    successMessage = plan.message;
-  } catch (err) {
-    redirectWithToast(
-      "/production",
-      "error",
-      `确认镜头失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-  revalidatePath("/production");
-  redirectWithToast("/production", "success", successMessage);
-}
-
-export async function renderMontagePlanAction(formData: FormData) {
-  const planId = requiredString(formData, "plan_id");
-  let successMessage = "初版成片已生成";
-  try {
-    const plan = await renderMontagePlan(
-      planId,
-      requiredString(formData, "narration_audio_path"),
-    );
-    successMessage = plan.message;
-  } catch (err) {
-    redirectWithToast(
-      "/production",
-      "error",
-      `渲染初版成片失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-  revalidatePath("/production");
-  redirectWithToast("/production", "success", successMessage);
 }

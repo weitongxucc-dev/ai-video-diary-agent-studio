@@ -115,7 +115,7 @@ export default async function LearningPage({
   return (
     <AppShell>
       <div className="workspace-page">
-        <section className="workspace-main pixel-card">
+        <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">反馈学习</span>
@@ -128,7 +128,7 @@ export default async function LearningPage({
                     : "还没有反馈记录，先在选题或口播稿里点赞/踩。"}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/topics">
+            <Link className="ui-button secondary" href="/topics">
               去选题池反馈
             </Link>
           </div>
@@ -210,7 +210,7 @@ export default async function LearningPage({
                                 value={card.id}
                               />
                               <button
-                                className="pixel-button secondary"
+                                className="ui-button secondary"
                                 type="submit"
                               >
                                 禁用这张卡
@@ -227,7 +227,7 @@ export default async function LearningPage({
                                 value={card.id}
                               />
                               <button
-                                className="pixel-button"
+                                className="ui-button"
                                 type="submit"
                               >
                                 恢复这张卡
@@ -250,7 +250,7 @@ export default async function LearningPage({
                                 : "正在拉取证据..."}
                             </span>
                             <Link
-                              className="pixel-button secondary"
+                              className="ui-button secondary"
                               href="/learning"
                             >
                               收起
@@ -338,7 +338,7 @@ export default async function LearningPage({
                       <input name="episode_id" type="hidden" value={event.episode_id} />
                       <input name="feedback_event_id" type="hidden" value={event.id} />
                       <input name="reason" type="hidden" value="用户在反馈学习页撤销" />
-                      <button className="pixel-button secondary" type="submit">
+                      <button className="ui-button secondary" type="submit">
                         撤销这条反馈
                       </button>
                     </form>
@@ -350,20 +350,20 @@ export default async function LearningPage({
               <div className="workspace-empty">
                 <PixelIcon name="spark" />
                 <strong>还没有偏好样本</strong>
-                <p>你点过的赞和踩会在这里汇总，后续会影响 Agent 的选题判断。</p>
+                <p>你点过的赞和踩会在这里汇总，后续会影响系统的选题判断。</p>
               </div>
             )}
           </div>
         </section>
 
         <aside className="workspace-side">
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>当前学习方式</h2>
             <p>第一版不训练模型，只把未撤销的赞踩、原因和修改偏好写回 prompt 上下文。</p>
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>偏好卡说明</h2>
-            <p>每张卡汇总一类偏好信号；禁用后 Agent 在生成时不再参考，但保留历史证据。</p>
+            <p>每张卡汇总一类偏好信号；禁用后系统在生成时不再参考，但保留历史证据。</p>
           </div>
         </aside>
       </div>

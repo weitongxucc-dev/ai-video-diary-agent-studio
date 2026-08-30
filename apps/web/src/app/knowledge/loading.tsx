@@ -11,7 +11,7 @@ export default function KnowledgeLoading() {
     <AppShell>
       <LoadingShell label="正在读取知识库...">
         <div className="workspace-page">
-          <section className="workspace-main pixel-card">
+          <section className="workspace-main ui-panel">
             <div className="workspace-header">
               <div>
                 <Skeleton height={12} width={92} />

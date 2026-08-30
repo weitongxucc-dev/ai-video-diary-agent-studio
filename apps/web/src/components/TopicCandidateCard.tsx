@@ -22,7 +22,7 @@ export function TopicCandidateCard({
 }) {
   return (
     <Link
-      className={`topic-card pixel-card${active ? " selected" : ""}`}
+      className={`topic-card ui-panel${active ? " selected" : ""}`}
       href={`/topics?topic_id=${encodeURIComponent(topic.id)}`}
     >
       <div className="topic-card-header">

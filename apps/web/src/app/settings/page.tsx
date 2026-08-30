@@ -160,7 +160,7 @@ function buildFields(
       {
         name: "database_path",
         label: "SQLite 数据库",
-        helper: "存放 Episode、选题、反馈事件等结构化数据。",
+        helper: "存放创作内容、选题和反馈等结构化数据。",
         kind: "directory",
         defaultValue: valueOf("DATABASE_PATH"),
         placeholder: "/Users/you/.ai-video-diary/studio.db",
@@ -387,7 +387,7 @@ const SETTINGS_CATEGORIES: Array<{
   label: string;
   description: string;
 }> = [
-  { id: "model", label: "模型与 API", description: "供应商、模型和连接" },
+  { id: "model", label: "模型与 API", description: "模型服务、能力与连接" },
   { id: "production", label: "生产默认值", description: "文案时长与品牌" },
   { id: "voices", label: "声音库", description: "默认声音与授权" },
   { id: "paths", label: "存储与本地模型", description: "移动硬盘与输出" },
@@ -478,7 +478,7 @@ export default async function SettingsPage({
             <Link href="/terms">使用条款</Link>
           </nav>
         </aside>
-        <section className="workspace-main pixel-card">
+        <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
               <span className="section-kicker">设置</span>
@@ -496,7 +496,7 @@ export default async function SettingsPage({
                     )?.description}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/">
+            <Link className="ui-button secondary" href="/">
               返回工作台
             </Link>
           </div>
@@ -512,7 +512,7 @@ export default async function SettingsPage({
                 <div>
                   <h2>文案与选题模型</h2>
                   <p>
-                    选择供应商后再选择模型；也可以接入自有代理或本地
+                    选择模型服务后再选择具体模型；也可以接入自有服务或本地
                     OpenAI-compatible 服务。
                   </p>
                 </div>
@@ -539,7 +539,7 @@ export default async function SettingsPage({
               />
               <div className="settings-actions">
                 <button
-                  className="pixel-button"
+                  className="ui-button"
                   disabled={offline}
                   type="submit"
                 >
@@ -692,7 +692,7 @@ export default async function SettingsPage({
                   />
                 ) : null}
                 <div className="settings-actions">
-                  <button className="pixel-button" type="submit">
+                  <button className="ui-button" type="submit">
                     保存生产默认值
                   </button>
                   <span>后续可在单个内容中临时覆盖时长。</span>
@@ -709,7 +709,7 @@ export default async function SettingsPage({
                     <span className="section-kicker">授权资产</span>
                     <h2 id="voice-library-title">声音库</h2>
                     <p>
-                      可保存多个声音。默认声音用于新内容，单个 Episode
+                      可保存多个声音。默认声音用于新内容，单条创作内容
                       仍可临时切换。
                     </p>
                   </div>
@@ -757,7 +757,7 @@ export default async function SettingsPage({
                             value={String(voice.consent_confirmed)}
                           />
                           <button
-                            className="pixel-button secondary"
+                            className="ui-button secondary"
                             type="submit"
                           >
                             设为默认
@@ -828,7 +828,7 @@ export default async function SettingsPage({
                     </label>
                   </div>
                   <div className="settings-actions">
-                    <button className="pixel-button" type="submit">
+                    <button className="ui-button" type="submit">
                       添加声音
                     </button>
                     <span>模型就绪前会保留参考档案和可解释状态。</span>
@@ -889,7 +889,7 @@ export default async function SettingsPage({
 
               <div className="settings-actions">
                 <button
-                  className="pixel-button"
+                  className="ui-button"
                   disabled={offline}
                   type="submit"
                 >

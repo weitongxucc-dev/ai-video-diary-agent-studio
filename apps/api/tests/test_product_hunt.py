@@ -3,7 +3,9 @@ import json
 import httpx
 
 from app.config import Settings
-from app.product_hunt import ProductHuntClient
+import pytest
+
+from app.product_hunt import ProductHuntClient, ProductHuntResponseError
 
 
 def test_product_hunt_client_fetches_posts_with_graphql_token():
@@ -57,6 +59,23 @@ def test_settings_status_reports_product_hunt_token_without_exposing_it():
     assert status["product_hunt"]["configured"] is True
     assert status["product_hunt"]["api_url"] == "https://api.producthunt.com/v2/api/graphql"
     assert "token" not in json.dumps(status, ensure_ascii=False)
+
+
+def test_product_hunt_rate_limit_has_explicit_retry_semantics():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"errors": [{"message": "slow down"}]})
+
+    client = ProductHuntClient(
+        Settings(product_hunt_token="token"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProductHuntResponseError) as failure:
+        client.fetch_posts()
+
+    assert failure.value.kind == "rate_limited"
+    assert failure.value.retryable is True
+    assert "Wait for the platform limit window" in failure.value.repair_action
 
 
 def test_system_status_response_includes_external_source_urls():

@@ -2,17 +2,20 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, composer, library, montage, production, desktop, layout, signin, routeIcon, mascot] = await Promise.all([
+const [design, globals, overrides, shell, home, composer, api, library, montage, production, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
   read("src/components/AppShell.tsx"),
   read("src/app/page.tsx"),
   read("src/components/HomeCommandComposer.tsx"),
+  read("src/lib/api.ts"),
   read("src/components/MaterialLibraryWorkspace.tsx"),
   read("src/components/MontageReviewWorkspace.tsx"),
   read("src/app/production/page.tsx"),
   read("../desktop/main.js"),
+  read("../api/pyinstaller.spec"),
+  read("../desktop/package.json"),
   read("src/app/layout.tsx"),
   read("src/app/signin/page.tsx"),
   read("src/components/PixelIcon.tsx"),
@@ -39,7 +42,7 @@ for (const token of [
 for (const required of [
   ':root[data-theme="dark"]',
   "prefers-reduced-motion",
-  "--sidebar-width: 232px",
+  "--sidebar-width: 220px",
   "--inspector-width: 320px",
   "min-width: 1024px",
 ]) {
@@ -68,12 +71,34 @@ for (const [name, source] of [["home", home], ["composer", composer], ["library"
   if (/Pixel(?:Icon|Panel|Button|Status|Mascot|Agent)/.test(source)) failures.push(`${name} north-star UI imports Pixel components`);
 }
 
-for (const required of ["HomeCommandComposer", "想制作什么", "recent_batches", "waiting_for_user"]) {
+for (const required of ["HomeCommandComposer", "想制作什么", "listCreationTasks", "plan_id"]) {
   if (!home.includes(required)) failures.push(`modern home is missing: ${required}`);
 }
+for (const retired of ["recent_batches", "ProductionBatch", "production?batch="]) {
+  if (home.includes(retired)) failures.push(`home still projects legacy Batch tasks: ${retired}`);
+}
 
-for (const required of ["previewVoiceCommand", "executeVoiceCommand", "确认执行"]) {
-  if (!composer.includes(required)) failures.push(`home command composer is missing: ${required}`);
+for (const retired of ["?batch=", "rendered_count", "target_count"]) {
+  if (shell.includes(retired)) failures.push(`AppShell still projects legacy Batch task fields: ${retired}`);
+}
+
+if (production.includes("legacyTaskProjection") || production.includes("foundation?.recent_batches")) {
+  failures.push("production default list still projects legacy Batch tasks");
+}
+const defaultTaskBranch = production.indexOf("if (!params.batch)");
+const legacyBatchBranch = production.indexOf("const { recent_batches: batches");
+if (defaultTaskBranch === -1 || legacyBatchBranch === -1 || legacyBatchBranch < defaultTaskBranch) {
+  failures.push("production must isolate Batch data behind the explicit history-task branch");
+}
+for (const required of ["defaultInspector", "已创建任务", "等待开始", "历史任务（旧流程）"]) {
+  if (!production.includes(required)) failures.push(`production is missing the CreationTask or history-task boundary: ${required}`);
+}
+
+for (const required of ["/production?", 'new: "1"', "goal: normalizedGoal", "检查可用内容", "不会生成选题、文案或成片"]) {
+  if (!composer.includes(required)) failures.push(`home command composer is missing the CreationPlan entry: ${required}`);
+}
+for (const retired of ["previewVoiceCommand", "executeVoiceCommand", "VoiceCommandResponse", "createProductionBatch"]) {
+  if (`${composer}\n${api}`.includes(retired)) failures.push(`home CreationPlan path still consumes a retired helper: ${retired}`);
 }
 
 for (const required of ["scanProductionMaterials", "reviewProductionMaterial", "素材库", "/media"]) {
@@ -86,6 +111,13 @@ for (const required of ["getMontageClipCandidates", "updateMontageClip", "reorde
 
 for (const required of ["titleBarStyle: 'hiddenInset'", "minWidth: 1024", "minHeight: 700", "backgroundColor: '#f7f7f5'"]) {
   if (!desktop.includes(required)) failures.push(`Electron chrome is missing: ${required}`);
+}
+
+if (!apiSpec.includes("console=False") || apiSpec.includes("console=True")) {
+  failures.push("api-server must use the background PyInstaller bootloader");
+}
+for (const retired of ["build:worker", "worker-server"]) {
+  if (desktopPackage.includes(retired)) failures.push(`desktop package still includes retired automation worker: ${retired}`);
 }
 
 if (!layout.includes("modern-overrides.css") || !layout.includes("ai-video-diary-theme")) {

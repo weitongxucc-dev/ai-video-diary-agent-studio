@@ -15,14 +15,18 @@ from app.models import (
     ScriptSection,
 )
 from app.repository import EpisodeRepository
+from app.source_repository import SourceRepository
+from app.sources import TopicSourceItem
 from app.video import FfmpegVideoProcessor, VideoInbox
 
 client = TestClient(main_module.app)
 
 
 @pytest.fixture(autouse=True)
-def reset_manual_sources():
-    main_module.manual_source_items = []
+def reset_source_repository(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        main_module, "source_repository", SourceRepository(tmp_path / "sources.sqlite3")
+    )
 
 
 def test_knowledge_endpoint_lists_real_obsidian_notes(tmp_path):
@@ -69,6 +73,9 @@ def test_sources_endpoint_lists_hermes_radar_items(tmp_path):
         topic_source_urls=(),
     )
 
+    sync_response = client.post("/api/sources/sync")
+    assert sync_response.status_code == 200
+
     response = client.get("/api/sources/items")
 
     assert response.status_code == 200
@@ -110,7 +117,7 @@ def test_sources_links_endpoint_converts_url_to_material(monkeypatch):
 
         def fetch_items(self):
             return [
-                main_module.TopicSourceItem(
+                TopicSourceItem(
                     source_type="外链",
                     title="AI 产品观察",
                     ref=self.urls[0],

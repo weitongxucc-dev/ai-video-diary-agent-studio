@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // API server info
   getApiPort: () => ipcRenderer.invoke('get-api-port'),
+  getServiceStatus: () => ipcRenderer.invoke('get-service-status'),
 
   // File system
   openDirectory: () => ipcRenderer.invoke('open-directory'),

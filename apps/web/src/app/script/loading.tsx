@@ -11,7 +11,7 @@ export default function ScriptLoading() {
       <LoadingShell label="正在加载口播稿...">
         <div className="script-page">
           <section className="script-main">
-            <section className="script-dashboard pixel-card">
+            <section className="script-dashboard ui-panel">
               {Array.from({ length: 4 }).map((_, index) => (
                 <div className="script-dashboard-stat" key={`stat-${index}`}>
                   <Skeleton height={10} width="50%" />
@@ -21,7 +21,7 @@ export default function ScriptLoading() {
               ))}
             </section>
 
-            <section className="script-section pixel-card">
+            <section className="script-section ui-panel">
               <Skeleton height={14} width={120} />
               <Skeleton height={120} width="100%" />
             </section>
