@@ -1244,9 +1244,7 @@ h4 {
 .manual-link-form,
 .workspace-row,
 .workspace-empty,
-.source-health-card,
-.template-card,
-.template-spec-table div {
+.source-health-card {
   border: 1px solid var(--border-1) !important;
   border-radius: 10px !important;
   background: var(--surface-1) !important;
@@ -1258,25 +1256,6 @@ h4 {
 .workspace-row:hover { background: var(--surface-2) !important; }
 .workspace-empty { border-style: dashed !important; }
 
-.template-grid { gap: 10px !important; }
-.template-card { align-content: start; padding: 14px !important; }
-.template-card.active {
-  border-color: color-mix(in srgb, var(--focus) 54%, var(--border-1)) !important;
-  background: color-mix(in srgb, var(--focus) 7%, var(--surface-1)) !important;
-}
-.template-card-head {
-  grid-template-columns: 22px minmax(0, 1fr) auto !important;
-  border-bottom: 1px solid var(--border-1) !important;
-  padding-bottom: 10px !important;
-}
-.template-card-head span,
-.template-spec-table dt {
-  color: var(--text-3) !important;
-  font-family: inherit !important;
-  font-size: 12px !important;
-}
-.template-card-head h2 { color: var(--text-1) !important; font-size: 16px !important; }
-.template-card-head em,
 .health-status-chip {
   border: 0 !important;
   border-radius: 999px !important;
@@ -1287,10 +1266,6 @@ h4 {
   font-size: 12px !important;
   font-weight: 500;
 }
-.template-card p,
-.template-spec-table dd { color: var(--text-2) !important; }
-.template-spec-table div { padding: 8px !important; }
-
 .settings-section {
   gap: 12px !important;
   padding: 15px !important;
@@ -1662,29 +1637,6 @@ h4 {
   font-size: 12px;
   line-height: 1.45;
 }
-
-/* M5人物与声音：人物/声音预览居中，Inspector 保持对象证据与唯一下一步。 */
-.profiles-workspace { width: min(100%, 1160px); padding: 30px 28px 64px; }
-.profiles-workspace__header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
-.profiles-workspace__header > div > span { color: var(--text-3); font-size: 12px; }
-.profiles-workspace__header h1 { margin: 3px 0 5px; font-size: 28px; font-weight: 500; }
-.profiles-workspace__header p { max-width: 700px; margin: 0; color: var(--text-2); font-size: 14px; }
-.profiles-error { display: flex; align-items: flex-start; gap: 10px; margin: 18px 0; padding: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-1)); border-radius: 10px; color: var(--danger); }
-.profiles-error > div { min-width: 0; flex: 1; }.profiles-error strong { font-size: 14px; }.profiles-error p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }.profiles-error button { min-height: 36px; padding: 0 12px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
-.profiles-notice { margin: 14px 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border-1)); border-radius: 8px; color: var(--success); font-size: 13px; }
-.profiles-service-empty { display: flex; align-items: center; gap: 12px; min-height: 164px; padding: 20px 0; border-bottom: 1px solid var(--border-1); color: var(--text-2); }.profiles-service-empty > div { max-width: 520px; }.profiles-service-empty strong { display: block; color: var(--text-1); font-size: 16px; font-weight: 500; }.profiles-service-empty p { margin: 5px 0 0; font-size: 13px; line-height: 1.5; }.profiles-service-empty button { min-height: 40px; margin-left: auto; padding: 0 14px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 14px; }
-.profiles-tabs { display: flex; gap: 26px; margin-top: 16px; border-bottom: 1px solid var(--border-1); }.profiles-tabs button { min-height: 42px; padding: 0; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--text-2); font-size: 14px; }.profiles-tabs button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 500; }
-.profiles-loading { display: flex; align-items: center; gap: 9px; min-height: 180px; color: var(--text-2); font-size: 14px; }
-.profiles-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .8fr); gap: 24px; margin-top: 20px; }
-.profiles-stage { min-width: 0; }.profiles-stage > header, .profiles-create > header { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-1); }.profiles-stage > header span, .profiles-create > header > span { color: var(--text-3); font-size: 12px; }.profiles-stage h2, .profiles-create h2 { margin: 2px 0 0; font-size: 18px; font-weight: 500; }.profiles-stage > header > span { color: var(--text-3); font-size: 12px; }.profiles-create > header p { margin: 5px 0 0; color: var(--text-2); font-size: 12px; }
-.profiles-browser { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }.profiles-browser > button { display: flex; min-width: 0; align-items: center; gap: 10px; min-height: 62px; padding: 10px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); text-align: left; }.profiles-browser > button.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface-1)); }.profiles-browser > button div { min-width: 0; }.profiles-browser strong { display: block; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }.profiles-browser small { display: block; overflow: hidden; margin-top: 3px; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.profiles-preview { display: grid; min-height: 250px; place-content: center; justify-items: center; gap: 10px; margin-top: 16px; padding: 28px; border: 1px solid var(--border-1); border-radius: 10px; background: linear-gradient(145deg, color-mix(in srgb, var(--surface-2) 82%, var(--surface-1)), var(--surface-1)); text-align: center; }.profiles-preview > svg { color: var(--accent); }.profiles-preview strong { font-size: 16px; font-weight: 500; }.profiles-preview p { max-width: 420px; margin: 0; color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }.profiles-preview button { min-height: 40px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 14px; }.profiles-preview button:disabled { cursor: not-allowed; opacity: .52; }.profiles-preview small { color: var(--text-2); font-size: 12px; }
-.profiles-create { padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }.profiles-create form, .profiles-auth-fields { display: grid; gap: 12px; margin-top: 16px; }.profiles-create label, .profiles-inline-form label { display: grid; gap: 5px; }.profiles-create label > span, .profiles-inline-form label > span { color: var(--text-2); font-size: 12px; }.profiles-create input, .profiles-create select, .profiles-create textarea, .profiles-inline-form input, .profiles-inline-form select { min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }.profiles-create textarea { resize: vertical; }.profiles-create form > button, .profiles-inline-form > button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 14px; }.profiles-create form > button:disabled { cursor: not-allowed; opacity: .5; }
-.profiles-empty { display: flex; align-items: center; gap: 10px; min-height: 112px; color: var(--text-3); }.profiles-empty div { min-width: 0; }.profiles-empty strong { color: var(--text-1); font-size: 14px; }.profiles-empty p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
-.profiles-records { display: grid; margin-top: 12px; border-top: 1px solid var(--border-1); }.profiles-records article { display: flex; align-items: start; gap: 10px; min-width: 0; padding: 14px 4px; border-bottom: 1px solid var(--border-1); }.profiles-records article > div { min-width: 0; flex: 1; }.profiles-records strong { font-size: 14px; }.profiles-records p, .profiles-records small { display: block; margin: 3px 0 0; overflow-wrap: anywhere; color: var(--text-2); font-size: 12px; }.profiles-inline-form { display: grid; grid-template-columns: 1fr 1fr 130px auto; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-1); }
-.profiles-status { display: inline-flex; width: fit-content; align-items: center; min-height: 25px; padding: 0 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }.profiles-inspector h3 { margin: 9px 0 14px; font-size: 17px; font-weight: 500; }.profiles-inspector dl { margin: 0; }.profiles-inspector dl > div { padding: 10px 0; border-top: 1px solid var(--border-1); }.profiles-inspector dt { color: var(--text-2); font-size: 12px; }.profiles-inspector dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 13px; }.profiles-inspector > p, .profiles-inspector section p { color: var(--text-2); font-size: 12px; line-height: 1.5; }.profiles-inspector section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-1); }.profiles-inspector h4 { margin: 0; font-size: 13px; font-weight: 500; }
-@media (max-width: 1279px) { .profiles-workspace { padding-right: 24px; padding-left: 24px; } }
-@media (max-width: 1120px) { .profiles-layout { grid-template-columns: 1fr; }.profiles-create { max-width: 640px; }.profiles-inline-form { grid-template-columns: 1fr 1fr; }.profiles-inline-form > button { grid-column: 2; } }
 
 /* Shared controls use semantic ui-* classes. They deliberately do not inherit
    legacy pixel borders, hard shadows, or Windows-style fills. */

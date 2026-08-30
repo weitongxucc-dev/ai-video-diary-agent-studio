@@ -28,7 +28,6 @@ import {
   revertEpisodeScriptVersion,
   revertFeedbackEvent,
   sendFeedback,
-  selectEpisodeContentTemplate,
   scanProductionMaterials,
   syncSourceItems,
   updateEditPlanSegmentDecision,
@@ -174,23 +173,6 @@ export async function approveTopicAndGenerateScript(formData: FormData) {
       "/topics",
       "error",
       `选题已通过但生成口播稿失败：${safeErrorMessage(err, "未知错误")}（选题已确认，可重试生成）`,
-    );
-  }
-}
-
-export async function selectContentTemplateAction(formData: FormData) {
-  const episodeId = requiredString(formData, "episode_id");
-  const templateId = requiredString(formData, "template_id");
-
-  try {
-    await selectEpisodeContentTemplate(episodeId, templateId);
-    revalidatePath("/templates");
-    redirectWithToast("/templates", "success", "内容模板已切换");
-  } catch (err) {
-    redirectWithToast(
-      "/templates",
-      "error",
-      `切换内容模板失败：${safeErrorMessage(err, "未知错误")}`,
     );
   }
 }
@@ -750,19 +732,6 @@ export async function syncSourcesAction() {
       "/sources",
       "error",
       `信息源同步失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-}
-
-export async function refreshTemplatesAction() {
-  try {
-    revalidatePath("/templates");
-    redirectWithToast("/templates", "success", "模板列表已刷新");
-  } catch (err) {
-    redirectWithToast(
-      "/templates",
-      "error",
-      `刷新模板失败：${safeErrorMessage(err, "未知错误")}`,
     );
   }
 }

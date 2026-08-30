@@ -26,7 +26,8 @@ afterEach(() => { vi.clearAllMocks(); });
 describe("PeopleAndVoiceWorkspace", () => {
   it("submits fixed person authorization and only a server workspace reference", async () => {
     arrange(); api.savePersonProfile.mockResolvedValue(person); render(<PeopleAndVoiceWorkspace />);
-    await screen.findByText("当前人物预览");
+    await screen.findByText("人物预览");
+    fireEvent.click(screen.getByRole("button", { name: "新建人物" }));
     expect(screen.getByRole("option", { name: "已批准声音.wav" })).toHaveValue("workspace://approved/asset-1");
     expect(screen.queryByRole("option", { name: "不可引用.mp4" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("档案编号")).not.toBeInTheDocument();
@@ -38,7 +39,7 @@ describe("PeopleAndVoiceWorkspace", () => {
 
   it("shows authorization and model details in ordinary Chinese without raw references", async () => {
     arrange(); render(<PeopleAndVoiceWorkspace />);
-    await screen.findByText("当前人物预览");
+    await screen.findByText("人物预览");
     expect(screen.getAllByText("人物形象").length).toBeGreaterThan(0);
     expect(screen.getByText("人物口型")).toBeInTheDocument();
     expect(screen.getByText("已保存授权凭证")).toBeInTheDocument();
@@ -51,9 +52,9 @@ describe("PeopleAndVoiceWorkspace", () => {
   });
 
   it("starts a voice preview for the selected version with the schema field names", async () => {
-    arrange(); render(<PeopleAndVoiceWorkspace />); await screen.findByText("当前人物预览");
+    arrange(); render(<PeopleAndVoiceWorkspace />); await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
-    await screen.findByText("当前声音与参考文字");
+    await screen.findByText("声音预览");
     fireEvent.click(screen.getByRole("button", { name: "生成声音预览" }));
     await waitFor(() => expect(api.createVoicePreview).toHaveBeenCalledWith({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "你好", retry: false }));
   });
@@ -63,8 +64,9 @@ describe("PeopleAndVoiceWorkspace", () => {
     api.importVoiceReference.mockResolvedValue({ reference: "workspace://approved/voices/voice-safe.wav", file_name: "已导入声音参考.wav", size_bytes: 32044, duration_seconds: 1 });
     api.saveVoiceProfile.mockResolvedValue(voice);
     render(<PeopleAndVoiceWorkspace />);
-    await screen.findByText("当前人物预览");
+    await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
+    fireEvent.click(screen.getByRole("button", { name: "登记声音" }));
     const form = screen.getByRole("button", { name: "登记声音新版本" }).closest("form")!;
     fireEvent.change(screen.getByLabelText("选择已授权 WAV"), { target: { files: [new File(["wav"], "owner.wav", { type: "audio/wav" })] } });
     await screen.findByText("WAV 已安全导入 · 1.0 秒");
@@ -89,7 +91,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     api.listMediaPreviews.mockResolvedValue({ items: [otherVoiceRun, voicePreview], total_count: 2 });
     api.listMediaPreviewAttempts.mockResolvedValue({ items: [voicePreview, { ...voicePreview, id: "voice-preview-old", attempt: 1, status: "failed", output_url: null, reason: "首次失败" }], total_count: 2 });
     render(<PeopleAndVoiceWorkspace />);
-    await screen.findByText("当前人物预览");
+    await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
     await screen.findByLabelText("声音预览");
     expect(screen.getByLabelText("声音预览")).toHaveAttribute("src", "/api/media/previews/voice/voice-identity-1/media");
@@ -109,7 +111,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     api.listMediaPreviews.mockResolvedValue({ items: [voicePreview], total_count: 1 });
     api.createAvatarLipsyncPreview.mockResolvedValue(avatarRun);
     render(<PeopleAndVoiceWorkspace />);
-    await screen.findByText("当前人物预览");
+    await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "生成口型预览" }));
     await waitFor(() => expect(api.createAvatarLipsyncPreview).toHaveBeenCalledWith({ person_profile_id: "person-1", person_version: "v1", voice_profile_id: "voice-1", voice_version: "v1", voice_preview_identity: "voice-identity-1", motion: "natural", expression: "neutral", authorization_id: "person-auth-1", authorization_version: "v1", model_id: "local", retry: false }));
     expect(await screen.findByLabelText("人物口型预览")).toHaveAttribute("src", "/api/media/previews/avatar-lipsync/avatar-identity/media");

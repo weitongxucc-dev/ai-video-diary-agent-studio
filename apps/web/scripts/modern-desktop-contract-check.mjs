@@ -71,7 +71,7 @@ for (const [name, source] of [["home", home], ["composer", composer], ["library"
   if (/Pixel(?:Icon|Panel|Button|Status|Mascot|Agent)/.test(source)) failures.push(`${name} north-star UI imports Pixel components`);
 }
 
-for (const required of ["HomeCommandComposer", "想制作什么", "listCreationTasks", "plan_id"]) {
+for (const required of ["HomeCommandComposer", "想制作什么", "listCreationTasks", "/tasks/"]) {
   if (!home.includes(required)) failures.push(`modern home is missing: ${required}`);
 }
 for (const retired of ["recent_batches", "ProductionBatch", "production?batch="]) {

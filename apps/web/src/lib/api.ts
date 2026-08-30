@@ -16,8 +16,6 @@ import type {
   DraftImport,
   DraftPackage,
   DraftStatus,
-  EpisodeHistory,
-  EpisodeStatus,
   EpisodeVoiceSelection,
   FeedbackTargetType,
   FeedbackValue,
@@ -655,16 +653,6 @@ export function getContentTemplates(): Promise<ContentTemplates> {
   return request<ContentTemplates>("/api/content-templates");
 }
 
-export function selectEpisodeContentTemplate(
-  episodeId: string,
-  templateId: string,
-): Promise<Episode> {
-  return request<Episode>(`/api/episodes/${episodeId}/content-template`, {
-    method: "POST",
-    body: JSON.stringify({ template_id: templateId }),
-  });
-}
-
 export function getSourceItems(): Promise<SourceItems> {
   return request<SourceItems>("/api/sources/items");
 }
@@ -945,18 +933,6 @@ export function updatePublishMetrics(
     method: "PUT",
     body: JSON.stringify(payload),
   });
-}
-
-export function getEpisodeHistory(
-  status?: EpisodeStatus,
-): Promise<EpisodeHistory> {
-  const params = new URLSearchParams();
-  if (status) {
-    params.set("status", status);
-  }
-  const query = params.toString();
-  const suffix = query ? `?${query}` : "";
-  return request<EpisodeHistory>(`/api/episodes/history${suffix}`);
 }
 
 // TODO(backend): dedicated publish-feedback endpoint is not implemented.
