@@ -1,12 +1,13 @@
 .page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
-.header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 12px; }
-.sectionHeader span, .editor header span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.header h1 { margin: 0; font-size: 23px; font-weight: 500; letter-spacing: -.02em; line-height: 1.25; }
+.sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
 .secondaryButton:disabled, .primaryButton:disabled { cursor: not-allowed; opacity: .5; }
 
+.viewBar { display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--border-1); }
+.viewBar .tabs { min-width: 0; flex: 1; border-bottom: 0; }
+.viewBar > .secondaryButton { min-height: 36px; }
 .tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
 .tabs button { min-height: 39px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
@@ -62,7 +63,7 @@
 
 .editor { min-height: 0; padding: 18px; }
 .editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-1); }
-.editor h2 { margin: 3px 0 4px; font-size: 19px; font-weight: 500; }
+.editor h2 { margin: 0 0 4px; font-size: 19px; font-weight: 500; }
 .editor header p { margin: 0; color: var(--text-2); font-size: 12px; }
 .editorForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .editorForm label, .inlineForm label, .voiceReference { display: grid; gap: 5px; min-width: 0; }

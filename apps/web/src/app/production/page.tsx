@@ -129,7 +129,7 @@ export default async function ProductionPage({ searchParams }: { searchParams?: 
 
   if (params.new === "1") {
     const initialGoal = params.goal ?? "";
-    return <AppShell creationTasks={creationTasks} inspector={<CreationPlanStartInspector goal={initialGoal} />} inspectorTitle="创建前检查"><div className="modern-queue"><header className="modern-queue__header"><div><span>创作任务</span><h1>检查并创建创作任务</h1><p>先检查当前可用内容，再由你确认创建。检查不会生成选题、文案或成片。</p></div><Link href="/production">返回任务列表</Link></header><section className="queue-create-panel--preflight"><div><span><Sparkles size={17} /></span><div><h2>从制作目标开始</h2><p>检查会读取当前工作区的真实资料、信息源、素材、声音、授权和模型状态。</p></div></div><CreateProductionTaskForm autoFocus={!initialGoal} initialGoal={initialGoal} /></section></div></AppShell>;
+    return <AppShell creationTasks={creationTasks} inspector={<CreationPlanStartInspector goal={initialGoal} />} inspectorTitle="创建前检查"><div className="modern-queue"><header className="modern-queue__header"><div><h1>检查并创建创作任务</h1><p>先检查当前可用内容，再由你确认创建。检查不会生成选题、文案或成片。</p></div><Link href="/production">返回任务列表</Link></header><section className="queue-create-panel--preflight"><div><span><Sparkles size={17} /></span><div><h2>从制作目标开始</h2><p>检查会读取当前工作区的真实资料、信息源、素材、声音、授权和模型状态。</p></div></div><CreateProductionTaskForm autoFocus={!initialGoal} initialGoal={initialGoal} /></section></div></AppShell>;
   }
 
   if (!foundation) {
@@ -169,11 +169,6 @@ export default async function ProductionPage({ searchParams }: { searchParams?: 
     return (
       <AppShell creationTasks={creationTasks} inspector={defaultInspector} inspectorTitle="任务运行情况" workspaceStatus={readiness.ready ? { kind: "connected", label: "工作区已就绪" } : { kind: "attention", label: "工作区存在阻断" }}>
         <div className="modern-queue">
-          <header className="modern-queue__header">
-            <div><span>创作任务</span><h1>创作任务</h1><p>每项任务保留制作过程、人工决定、失败原因与恢复点；需要你确认时会暂停。</p></div>
-            <Link className="modern-primary-button" href="/production?new=1"><Plus size={16} />开始制作新视频</Link>
-          </header>
-
           {!readiness.ready ? (
             <section className="queue-gate queue-gate--blocked"><AlertCircle size={20} /><div><strong>开始制作前还有 {readiness.blockers.length} 项需要处理</strong><p>{readiness.blockers[0]?.message}</p></div><Link href={readiness.approved_segment_count ? "/settings" : "/library"}>{readiness.approved_segment_count ? "打开制作设置" : "审核素材"}<ArrowRight size={14} /></Link></section>
           ) : (
@@ -181,7 +176,7 @@ export default async function ProductionPage({ searchParams }: { searchParams?: 
           )}
 
           <section className="queue-section">
-            <header><div><span>任务</span><h2>最近任务</h2></div></header>
+            <header><h2>最近任务</h2><Link className="modern-primary-button" href="/production?new=1"><Plus size={16} />开始制作新视频</Link></header>
             {creationTasks.length ? <div className="queue-list">{creationTasks.map((task) => <CreationTaskRow key={task.id} task={task} />)}</div> : (
               <div className="queue-empty"><FolderKanban size={22} /><div><strong>还没有创作任务</strong><p>检查当前可用内容后，创建第一个创作任务。</p></div><Link href="/production?new=1">开始制作</Link></div>
             )}

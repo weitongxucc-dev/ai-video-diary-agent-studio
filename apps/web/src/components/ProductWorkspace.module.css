@@ -1,7 +1,5 @@
 .page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
-.pageHeader { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 12px; }
-.eyebrow, .objectEyebrow, .sectionHeading span { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.pageHeader h1 { margin: 0; font-size: 23px; font-weight: 500; letter-spacing: -.02em; line-height: 1.25; }
+.objectEyebrow { color: var(--text-3); font-size: 12px; font-weight: 500; }
 
 .primaryButton, .secondaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); }
@@ -9,6 +7,9 @@
 button.secondaryButton { cursor: pointer; }
 .secondaryButton:disabled { cursor: not-allowed; opacity: .5; }
 
+.viewBar { display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--border-1); }
+.viewBar .tabs { min-width: 0; flex: 1; border-bottom: 0; }
+.viewBar > .primaryButton { min-height: 36px; }
 .tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
 .tabs button { display: inline-flex; min-height: 39px; align-items: center; gap: 7px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
@@ -66,9 +67,10 @@ button.secondaryButton { cursor: pointer; }
 .capabilityBanner strong { font-size: 13px; font-weight: 500; }
 .capabilityBanner p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 .capabilityBanner a { display: inline-flex; align-items: center; gap: 5px; color: var(--text-1); font-size: 12px; font-weight: 500; text-decoration: none; }
-.summaryRow { display: flex; gap: 24px; padding: 12px 2px 8px; color: var(--text-2); font-size: 12px; }
+.summaryRow { display: flex; align-items: center; gap: 24px; padding: 12px 2px 8px; color: var(--text-2); font-size: 12px; }
 .summaryRow span { display: inline-flex; align-items: baseline; gap: 6px; }
 .summaryRow strong { color: var(--text-1); font-size: 20px; font-weight: 500; }
+.summaryRow > button { margin-left: auto; }
 
 .records { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border-1); }
 .records li { border-bottom: 1px solid var(--border-1); }

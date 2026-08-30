@@ -474,7 +474,7 @@ textarea:focus-visible {
   top: 0;
   z-index: 2;
   display: flex;
-  min-height: 58px;
+  min-height: 48px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -484,13 +484,8 @@ textarea:focus-visible {
   backdrop-filter: blur(12px);
 }
 
-.desktop-inspector__header span {
-  color: var(--text-3);
-  font-size: 10px;
-}
-
 .desktop-inspector__header h2 {
-  margin: 1px 0 0;
+  margin: 0;
   font-size: 13px;
   line-height: 1.3;
 }

@@ -481,7 +481,6 @@ export default async function SettingsPage({
         <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
-              <span className="section-kicker">设置</span>
               <h1>
                 {
                   SETTINGS_CATEGORIES.find((item) => item.id === activeCategory)
@@ -496,9 +495,6 @@ export default async function SettingsPage({
                     )?.description}
               </p>
             </div>
-            <Link className="ui-button secondary" href="/">
-              返回工作台
-            </Link>
           </div>
 
           {activeCategory === "model" ? (

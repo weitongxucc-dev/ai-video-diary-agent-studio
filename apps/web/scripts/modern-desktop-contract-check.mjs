@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, composer, api, library, montage, production, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
+const [design, globals, overrides, shell, home, composer, api, library, montage, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
@@ -13,6 +13,11 @@ const [design, globals, overrides, shell, home, composer, api, library, montage,
   read("src/components/MaterialLibraryWorkspace.tsx"),
   read("src/components/MontageReviewWorkspace.tsx"),
   read("src/app/production/page.tsx"),
+  read("src/components/PeopleAndVoiceWorkspace.tsx"),
+  read("src/components/TemplateLibraryWorkspace.tsx"),
+  read("src/components/PublishingWorkspace.tsx"),
+  read("src/app/knowledge/page.tsx"),
+  read("src/app/sources/page.tsx"),
   read("../desktop/main.js"),
   read("../api/pyinstaller.spec"),
   read("../desktop/package.json"),
@@ -103,6 +108,22 @@ for (const retired of ["previewVoiceCommand", "executeVoiceCommand", "VoiceComma
 
 for (const retired of [".modern-home__eyebrow", ".home-plan-readiness", ".home-composer__availability", ".composer-icon-button", ".home-run-board__notifications"]) {
   if (overrides.includes(retired)) failures.push(`modern desktop CSS still contains a retired empty-space selector: ${retired}`);
+}
+
+for (const retired of [".modern-library__header", ".source-workspace__header", ".source-workspace__actions"]) {
+  if (overrides.includes(retired)) failures.push(`modern desktop CSS still contains a retired duplicate-heading selector: ${retired}`);
+}
+for (const [name, source, retired] of [
+  ["shell inspector", shell, "<span>详情</span>"],
+  ["library", library, "<h1>素材库</h1>"],
+  ["people", people, "<h1>人物与声音</h1>"],
+  ["templates", templates, "<h1>视频模板</h1>"],
+  ["publishing", publishing, "<h1>发布与数据</h1>"],
+  ["knowledge", knowledge, "内容资料 · 我的知识库"],
+  ["sources", sources, "内容资料 · 外部信息源"],
+  ["production", production, "<div><span>创作任务</span><h1>创作任务</h1>"],
+]) {
+  if (source.includes(retired)) failures.push(`${name} still renders a retired duplicate heading: ${retired}`);
 }
 
 for (const required of ["scanProductionMaterials", "reviewProductionMaterial", "素材库", "/media"]) {

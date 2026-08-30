@@ -506,23 +506,6 @@ export function MaterialLibraryWorkspace({
   return (
     <AppShell inspector={inspector} inspectorTitle="素材详情">
       <div className="modern-library">
-        <header className="modern-library__header">
-          <h1>素材库</h1>
-          <button
-            className="modern-primary-button"
-            disabled={busy !== null}
-            onClick={() => void scan()}
-            type="button"
-          >
-            {busy === "scan" ? (
-              <LoaderCircle className="is-spinning" size={16} />
-            ) : (
-              <FolderSearch size={16} />
-            )}
-            {busy === "scan" ? "正在扫描…" : "扫描素材目录"}
-          </button>
-        </header>
-
         <section
           className="library-coverage"
           aria-label="素材覆盖"
@@ -589,6 +572,19 @@ export function MaterialLibraryWorkspace({
           <span className="library-count">
             已载入 {assets.length} / {totalCount}
           </span>
+          <button
+            className="modern-primary-button"
+            disabled={busy !== null}
+            onClick={() => void scan()}
+            type="button"
+          >
+            {busy === "scan" ? (
+              <LoaderCircle className="is-spinning" size={16} />
+            ) : (
+              <FolderSearch size={16} />
+            )}
+            {busy === "scan" ? "正在扫描…" : "扫描目录"}
+          </button>
         </div>
 
         {error ? (

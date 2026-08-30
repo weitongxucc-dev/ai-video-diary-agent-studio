@@ -65,7 +65,6 @@ export default async function HealthPage() {
         <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
-              <span className="section-kicker">运行健康</span>
               <h1>本地依赖诊断台</h1>
               <p>
                 {offline

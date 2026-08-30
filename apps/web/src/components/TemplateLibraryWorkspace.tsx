@@ -80,14 +80,9 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
   return (
     <AppShell inspector={inspector} inspectorTitle="模板详情">
       <div className={styles.page}>
-        <header className={styles.pageHeader}>
-          <h1>视频模板</h1>
-          <Link className={styles.primaryButton} href="/production?new=1"><Sparkles size={16} /> 开始创作</Link>
-        </header>
-
-        <nav aria-label="模板视图" className={styles.tabs}>
+        <div className={styles.viewBar}><nav aria-label="模板视图" className={styles.tabs}>
           {viewLabels.map((item) => { const ItemIcon = item.icon; return <button aria-pressed={view === item.id} className={view === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setView(item.id)} type="button"><ItemIcon size={15} /> {item.label}</button>; })}
-        </nav>
+        </nav><Link className={styles.primaryButton} href="/production?new=1"><Sparkles size={16} />开始创作</Link></div>
 
         {view === "built-in" ? (
           offline || templates.length === 0 ? (
@@ -98,7 +93,7 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
             </section>
           ) : (
             <div className={styles.templateCatalog}>
-              <div className={styles.sectionHeading}><div><span>内置结构</span><h2>适合不同内容目标</h2></div><p>{templates.length} 种结构 · 选择后可查看详情</p></div>
+              <div className={styles.sectionHeading}><h2>选择制作结构</h2><p>{templates.length} 种 · 选择后查看详情</p></div>
               <div className={styles.templateGrid}>
                 {templates.map((template) => {
                   const TemplateIcon = templateIcon(template.template_id);

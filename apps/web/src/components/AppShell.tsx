@@ -382,7 +382,7 @@ export function AppShell({
               {inspectorOpen ? <button aria-label="关闭详情" className="inspector-backdrop" onClick={() => setInspectorOpen(false)} type="button" /> : null}
               <aside aria-label={inspectorTitle} className="desktop-inspector" hidden={!inspectorOpen} id="agent-inspector">
                 <header className="desktop-inspector__header">
-                  <div><span>详情</span><h2>{inspectorTitle}</h2></div>
+                  <h2>{inspectorTitle}</h2>
                   <button aria-label="关闭详情" className="shell-icon-button" onClick={() => setInspectorOpen(false)} type="button"><X size={16} /></button>
                 </header>
                 <div className="desktop-inspector__body">{inspector}</div>
