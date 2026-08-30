@@ -12,15 +12,16 @@ type RouteShortcut = {
 };
 
 const ROUTE_SHORTCUTS: RouteShortcut[] = [
-  { keys: ["Ctrl", "1"], href: "/", label: "今日工作台" },
-  { keys: ["Ctrl", "2"], href: "/script", label: "口播稿" },
-  { keys: ["Ctrl", "3"], href: "/production", label: "创作任务" },
-  { keys: ["Ctrl", "5"], href: "/draft", label: "剪映草稿" },
-  { keys: ["Ctrl", "6"], href: "/learning", label: "反馈学习" },
-  { keys: ["Ctrl", "7"], href: "/settings", label: "设置" },
+  { keys: ["Meta", "1"], href: "/", label: "首页" },
+  { keys: ["Meta", "2"], href: "/library", label: "素材库" },
+  { keys: ["Meta", "3"], href: "/knowledge", label: "内容资料" },
+  { keys: ["Meta", "4"], href: "/profiles", label: "人物与声音" },
+  { keys: ["Meta", "5"], href: "/templates", label: "视频模板" },
+  { keys: ["Meta", "6"], href: "/production?view=automations", label: "自动任务" },
+  { keys: ["Meta", "7"], href: "/history", label: "发布与数据" },
 ];
 
-const HELP_TOGGLE_KEYS = ["Ctrl", "Shift", "H"];
+const HELP_TOGGLE_KEYS = ["Meta", "Shift", "H"];
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -62,21 +63,33 @@ function matchesBinding(event: KeyboardEvent, keys: string[]): boolean {
   });
 }
 
-export function KeyboardShortcuts() {
+export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: () => void }) {
   const router = useRouter();
   const { pushToast } = useToast();
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        onOpenSearch();
+        return;
+      }
+
+      if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        router.push("/production?new=1");
+        return;
+      }
+
       if (isEditableTarget(event.target)) {
         return;
       }
 
       if (
-        event.ctrlKey &&
+        event.metaKey &&
         event.shiftKey &&
         !event.altKey &&
-        !event.metaKey &&
+        !event.ctrlKey &&
         matchesBinding(event, HELP_TOGGLE_KEYS)
       ) {
         event.preventDefault();
@@ -84,7 +97,7 @@ export function KeyboardShortcuts() {
         return;
       }
 
-      if (event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.metaKey && !event.ctrlKey && !event.altKey) {
         const navBinding = ROUTE_SHORTCUTS.find((entry) =>
           matchesBinding(event, entry.keys),
         );
@@ -102,7 +115,7 @@ export function KeyboardShortcuts() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [router, pushToast]);
+  }, [onOpenSearch, router, pushToast]);
 
   return null;
 }

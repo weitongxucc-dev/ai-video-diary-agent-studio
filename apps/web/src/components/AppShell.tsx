@@ -9,6 +9,7 @@ import {
   BookOpen,
   ChevronDown,
   CircleHelp,
+  Clapperboard,
   FileStack,
   Home,
   Library,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   Suspense,
@@ -33,6 +35,7 @@ import {
 } from "react";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
+import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
 import { listCreationTasks } from "@/lib/api";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { toggleHelpPanel } from "@/lib/helpPanel";
@@ -70,6 +73,7 @@ const primaryNav: NavItem[] = [
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
   { href: "/production", label: "创作任务" },
+  { href: "/tasks", label: "创作任务" },
   { href: "/sources", label: "内容资料" },
   { href: "/topics", label: "选题" },
   { href: "/script", label: "脚本" },
@@ -186,6 +190,7 @@ export function AppShell({
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -254,6 +259,25 @@ export function AppShell({
   }
 
   const ThemeIcon = themeMode === "dark" ? Moon : Sun;
+  const commandItems = useMemo<CommandPaletteItem[]>(() => [
+    { id: "new-production", label: "开始制作新视频", description: "输入目标并检查当前可用内容", href: "/production?new=1", icon: Plus },
+    ...primaryNav.map((item) => ({
+      id: `nav-${item.href}`,
+      label: item.label,
+      description: item.label === "首页" ? "查看任务、阻断和通知" : `打开${item.label}`,
+      href: item.href,
+      icon: item.icon,
+    })),
+    ...recentTasks.map((task) => ({
+      id: `task-${task.id}`,
+      label: displayTaskName(task.name),
+      description: `创作任务 · ${creationTaskState(task).label}`,
+      href: creationTaskHref(task),
+      icon: Clapperboard,
+    })),
+    { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
+    { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
+  ], [recentTasks]);
 
   return (
     <div className="desktop-shell">
@@ -275,7 +299,7 @@ export function AppShell({
             </span>
             <span>AI 视频日记</span>
           </Link>
-          <button aria-label="搜索" className="shell-icon-button" type="button">
+          <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button" onClick={() => setSearchOpen(true)} type="button">
             <Search size={16} />
           </button>
         </div>
@@ -346,7 +370,7 @@ export function AppShell({
             </Suspense>
           </div>
           <div className="desktop-toolbar__actions">
-            <button aria-label="搜索" className="shell-icon-button desktop-search-button" type="button">
+            <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
               <kbd>⌘K</kbd>
             </button>
@@ -392,8 +416,14 @@ export function AppShell({
         </div>
 
       </section>
-      <KeyboardShortcuts />
+      <KeyboardShortcuts onOpenSearch={() => setSearchOpen(true)} />
       <HelpPanel />
+      <CommandPalette
+        items={commandItems}
+        onClose={() => setSearchOpen(false)}
+        onNavigate={(href) => router.push(href)}
+        open={searchOpen}
+      />
     </div>
   );
 }

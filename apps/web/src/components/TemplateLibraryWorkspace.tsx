@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {
   ArrowRight, BookOpenCheck, Clock3, GraduationCap, History, Layers3,
-  Library, ListChecks, Sparkles, Video, Wrench,
+  Library, ListChecks, Video, Wrench,
 } from "lucide-react";
 import { type ComponentType, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -71,7 +71,6 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
         <div><dt>字幕方式</dt><dd>{selected.subtitle_style}</dd></div>
       </dl>
       <section className={styles.inspectorNotice}><strong>当前能力边界</strong><p>此操作会把模板方向带入新任务目标；固定模板保存、版本记录和自动任务尚未接入。</p></section>
-      <Link className={styles.primaryButton} href={`/production?new=1&goal=${encodeURIComponent(templateGoal(selected))}`}>以此方向开始 <ArrowRight size={15} /></Link>
     </div>
   ) : (
     <div className={styles.inspectorEmpty}><BookOpenCheck size={20} /><strong>没有可检查的模板</strong><p>连接本地服务后，模板的结构与素材要求会显示在这里。</p></div>
@@ -82,7 +81,7 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
       <div className={styles.page}>
         <div className={styles.viewBar}><nav aria-label="模板视图" className={styles.tabs}>
           {viewLabels.map((item) => { const ItemIcon = item.icon; return <button aria-pressed={view === item.id} className={view === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setView(item.id)} type="button"><ItemIcon size={15} /> {item.label}</button>; })}
-        </nav><Link className={styles.primaryButton} href="/production?new=1"><Sparkles size={16} />开始创作</Link></div>
+        </nav>{view === "built-in" && selected ? <Link className={styles.primaryButton} href={`/production?new=1&goal=${encodeURIComponent(templateGoal(selected))}`}>用“{selected.name}”开始 <ArrowRight size={15} /></Link> : null}</div>
 
         {view === "built-in" ? (
           offline || templates.length === 0 ? (

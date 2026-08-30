@@ -30,7 +30,8 @@ describe("TemplateLibraryWorkspace", () => {
     expect(screen.getByText("清晰白底字幕")).toBeInTheDocument();
     expect(screen.queryByText("video_diary", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText("diary_minimal", { exact: true })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /以此方向开始/ })).toHaveAttribute("href", expect.stringContaining("/production?new=1&goal="));
+    expect(screen.getByRole("link", { name: /用“视频日记”开始/ })).toHaveAttribute("href", expect.stringContaining("/production?new=1&goal="));
+    expect(screen.getAllByRole("link", { name: /开始/ })).toHaveLength(1);
   });
 
   it("does not pretend built-in templates are user-saved versions", () => {

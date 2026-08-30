@@ -55,42 +55,110 @@
 .progress span { color: var(--text-3); font-size: 12px; }
 
 .stageRail {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(92px, 1fr));
-  gap: 1px;
   margin: 24px 0;
-  overflow: hidden;
   border: 1px solid var(--border-1);
   border-radius: 10px;
-  background: var(--border-1);
-}
-
-.stageRail > span {
-  display: flex;
-  min-height: 48px;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  overflow-x: auto;
   background: var(--surface-1);
-  color: var(--text-2);
-  font-size: 13px;
-  white-space: nowrap;
+  scrollbar-width: thin;
 }
 
-.stageRail > span > span {
+.stageRail ol {
   display: grid;
-  width: 20px;
-  height: 20px;
+  width: 100%;
+  min-width: 760px;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stageRail li {
+  min-height: 64px;
+  border-right: 1px solid var(--border-1);
+  color: var(--text-2);
+}
+
+.stageRail li:last-child { border-right: 0; }
+.stageRail li > button {
+  display: grid;
+  width: 100%;
+  min-height: 64px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.stageRail li > button:hover:not(:disabled),
+.stageRail li > button[aria-pressed="true"] { background: var(--surface-2); }
+.stageRail li > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stageRail li > button:disabled { cursor: default; }
+.stageMarker {
+  display: grid;
+  width: 18px;
+  height: 18px;
   place-items: center;
   border: 1px solid var(--border-2);
   border-radius: 50%;
   font-size: 11px;
 }
 
-.stageRail .prepared,
+.stageCopy { display: grid; min-width: 0; gap: 2px; }
+.stageCopy strong { overflow: hidden; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.stageCopy small { overflow: hidden; color: var(--text-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .stageRail .done { color: var(--success); }
+.stageRail .done .stageMarker { border-color: color-mix(in srgb, var(--success) 45%, var(--border-1)); }
 .stageRail .current { box-shadow: inset 0 -2px var(--accent); color: var(--text-1); }
-.stageRail .current > span { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
+.stageRail .current .stageMarker { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
+.stageRail .partial { color: var(--warning); }
+.stageRail .partial .stageMarker { border-color: color-mix(in srgb, var(--warning) 55%, var(--border-1)); }
+.stageRail .unavailable { color: var(--text-3); }
+.stageRail .unavailable .stageMarker { border-style: dashed; }
+
+.artifactStatus {
+  display: inline-flex;
+  min-width: max-content;
+  align-items: center;
+  gap: 6px;
+  color: var(--success);
+  font-size: 12px;
+}
+
+.artifactGrid {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+.artifactGrid > section {
+  padding: 14px;
+  border: 1px solid var(--border-1);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.artifactGrid strong, .evidenceList > strong { font-size: 12px; font-weight: 500; }
+.artifactGrid p, .artifactGrid ol { margin: 7px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.6; }
+.artifactGrid ol { padding-left: 18px; }
+.evidenceList { display: grid; gap: 8px; margin-top: 16px; }
+.evidenceList article {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-1);
+}
+.evidenceList article > span { color: var(--text-3); font-size: 11px; }
+.evidenceList article > div { display: grid; gap: 3px; }
+.evidenceList article strong { font-size: 13px; font-weight: 500; }
+.evidenceList article small { color: var(--text-3); font-size: 11px; }
+.evidenceList > p { margin: 0; color: var(--text-3); font-size: 12px; }
+.scriptCopy { color: var(--text-1) !important; font-size: 14px !important; white-space: pre-wrap; }
+.audioPreview { width: min(100%, 640px); margin-top: 8px; }
 
 .notice {
   display: flex;
@@ -229,7 +297,6 @@
 
 @media (max-width: 1279px) {
   .workspace { padding: 20px 24px 32px; }
-  .stageRail { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .storyboard article { grid-template-columns: 32px minmax(0, 1fr); }
   .clipActions { grid-column: 2; flex-wrap: wrap; }
 }
@@ -239,8 +306,8 @@
   .taskHeader,
   .sectionHeading { align-items: stretch; flex-direction: column; }
   .progress { justify-items: start; }
-  .stageRail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sectionHeading > button { align-self: flex-start; }
+  .artifactGrid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -106,6 +106,35 @@ afterEach(() => {
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("lets the user review persisted topic and script results without rerunning them", () => {
+    const initial = workspace(baseTask);
+    initial.selected_topic = {
+      id: "topic-1", run_id: "run-1", title: "真实选题", angle: "从一次真实失败说起",
+      audience: "内容运营人员", outline: ["问题", "判断", "行动"], score: 92,
+      selection_status: "confirmed", created_at: baseTask.created_at,
+    };
+    initial.topic_evidence = [{
+      id: "evidence-1", candidate_id: "topic-1", kind: "knowledge", reference_id: "knowledge-1",
+      version_or_identity: "v1", title: "已授权复盘笔记", authorization_or_license: "工作区已授权",
+      source_url: null, created_at: baseTask.created_at,
+    }];
+    initial.scripts = [{
+      id: "script-1", task_id: baseTask.id, run_id: "run-2", topic_id: "topic-1", title: "真实文案",
+      language: "zh-CN", selection_status: "confirmed", created_at: baseTask.created_at,
+      updated_at: baseTask.updated_at, confirmed_at: baseTask.updated_at,
+      sections: [{ id: "section-1", title: "开头", content: "这是已经确认的口播正文。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+    }];
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "选题：已完成" }));
+    expect(screen.getByRole("heading", { name: "真实选题" })).toBeInTheDocument();
+    expect(screen.getByText("已授权复盘笔记")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "文案：已完成" }));
+    expect(screen.getByRole("heading", { name: "真实文案" })).toBeInTheDocument();
+    expect(screen.getByText("这是已经确认的口播正文。")).toBeInTheDocument();
+  });
+
   it("shows the real narration blocker after the user clicks generate", async () => {
     const initial = workspace(baseTask);
     mocks.getWorkspace.mockResolvedValue(initial);
@@ -139,6 +168,9 @@ describe("CreationTaskWorkspace", () => {
     Object.defineProperty(window, "electronAPI", { configurable: true, value: { saveRenderedVideo } });
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByTitle("人物与口型：未接入")).toBeInTheDocument();
+    expect(screen.getByTitle("字幕与封面：字幕已生成")).toBeInTheDocument();
+    expect(screen.getByTitle("检查与发布：检查成片")).toHaveAttribute("aria-current", "step");
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));

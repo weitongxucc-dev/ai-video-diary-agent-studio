@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
@@ -9,6 +9,7 @@ let search = "";
 const apiMocks = vi.hoisted(() => ({
   listCreationTasks: vi.fn(),
 }));
+const routerPush = vi.fn();
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
@@ -20,7 +21,7 @@ vi.mock("next/image", () => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => pathname,
-  useRouter: () => ({ back: vi.fn() }),
+  useRouter: () => ({ back: vi.fn(), push: routerPush }),
   useSearchParams: () => new URLSearchParams(search),
 }));
 
@@ -62,6 +63,7 @@ beforeEach(() => {
   pathname = "/";
   search = "";
   apiMocks.listCreationTasks.mockReset();
+  routerPush.mockReset();
   apiMocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -149,5 +151,18 @@ describe("AppShell", () => {
     render(<AppShell><p>页面内容</p></AppShell>);
     expect(screen.getByRole("link", { name: "自动任务" })).toHaveClass("is-active");
     expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
+  });
+
+  it("turns both search affordances into one real page and task command palette", () => {
+    render(<AppShell creationTasks={[creationTask({ id: "task-search", name: "品牌口播任务" })]}><p>页面内容</p></AppShell>);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "搜索" })[0]);
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索页面和创作任务" }), { target: { value: "品牌口播" } });
+    fireEvent.click(screen.getByRole("option", { name: /品牌口播任务/ }));
+
+    expect(routerPush).toHaveBeenCalledWith("/tasks/task-search");
+    expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
   });
 });
