@@ -1544,6 +1544,13 @@ class VersionedVoiceProfilesResponse(BaseModel):
     total_count: int
 
 
+class VoiceReferenceImportResponse(BaseModel):
+    reference: str
+    file_name: str
+    size_bytes: int = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+
+
 class PronunciationEntryResponse(BaseModel):
     id: str
     workspace_id: str

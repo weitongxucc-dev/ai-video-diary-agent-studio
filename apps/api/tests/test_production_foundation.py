@@ -1,5 +1,7 @@
 import hashlib
+import io
 import sqlite3
+import wave
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1316,6 +1318,46 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     with production._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM creation_plans").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 0
+
+
+def test_voice_reference_import_uses_bytes_and_returns_registered_logical_reference(
+    tmp_path,
+    monkeypatch,
+):
+    production = _repository(tmp_path)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "workspace_a")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16_000)
+        audio.writeframes(b"\x00\x00" * 16_000)
+
+    response = TestClient(main_module.app).post(
+        "/api/media/voice-references/import",
+        files={"audio": ("owner-recording.wav", buffer.getvalue(), "audio/wav")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["reference"].startswith("workspace://approved/voices/voice_")
+    assert "owner-recording" not in body["reference"]
+    assert body["duration_seconds"] == pytest.approx(1.0)
+    resolved = production.resolve_workspace_media_reference(
+        "workspace_a",
+        body["reference"],
+        require_registered=True,
+    )
+    assert resolved.is_file()
+    assert resolved.read_bytes() == buffer.getvalue()
+
+    rejected = TestClient(main_module.app).post(
+        "/api/media/voice-references/import",
+        files={"audio": ("not-a-wave.wav", b"not-wave", "audio/wav")},
+    )
+    assert rejected.status_code == 422
+    assert len(list((production.video_library_path / "approved" / "voices").glob("*.wav"))) == 1
 
 
 def test_profile_api_retires_legacy_voice_writes(tmp_path, monkeypatch):

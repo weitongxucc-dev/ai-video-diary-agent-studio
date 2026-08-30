@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  listPersonProfiles: vi.fn(), listVoiceProfiles: vi.fn(), listPronunciationEntries: vi.fn(), listAuthorizations: vi.fn(), listApprovedMaterials: vi.fn(), getMediaCapability: vi.fn(), listMediaPreviews: vi.fn(), listMediaPreviewAttempts: vi.fn(), savePersonProfile: vi.fn(), saveVoiceProfile: vi.fn(), savePronunciationEntry: vi.fn(), createVoicePreview: vi.fn(), createAvatarLipsyncPreview: vi.fn(), mediaProfilesErrorMessage: vi.fn(() => "请求失败"),
+  listPersonProfiles: vi.fn(), listVoiceProfiles: vi.fn(), listPronunciationEntries: vi.fn(), listAuthorizations: vi.fn(), listApprovedMaterials: vi.fn(), getMediaCapability: vi.fn(), listMediaPreviews: vi.fn(), listMediaPreviewAttempts: vi.fn(), savePersonProfile: vi.fn(), saveVoiceProfile: vi.fn(), savePronunciationEntry: vi.fn(), importVoiceReference: vi.fn(), createVoicePreview: vi.fn(), createAvatarLipsyncPreview: vi.fn(), mediaProfilesErrorMessage: vi.fn(() => "请求失败"),
 }));
 
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
@@ -56,6 +56,31 @@ describe("PeopleAndVoiceWorkspace", () => {
     await screen.findByText("当前声音与参考文字");
     fireEvent.click(screen.getByRole("button", { name: "生成声音预览" }));
     await waitFor(() => expect(api.createVoicePreview).toHaveBeenCalledWith({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "你好", retry: false }));
+  });
+
+  it("imports WAV bytes before saving a logical voice reference", async () => {
+    arrange();
+    api.importVoiceReference.mockResolvedValue({ reference: "workspace://approved/voices/voice-safe.wav", file_name: "已导入声音参考.wav", size_bytes: 32044, duration_seconds: 1 });
+    api.saveVoiceProfile.mockResolvedValue(voice);
+    render(<PeopleAndVoiceWorkspace />);
+    await screen.findByText("当前人物预览");
+    fireEvent.click(screen.getByRole("button", { name: "声音" }));
+    const form = screen.getByRole("button", { name: "登记声音新版本" }).closest("form")!;
+    fireEvent.change(screen.getByLabelText("选择已授权 WAV"), { target: { files: [new File(["wav"], "owner.wav", { type: "audio/wav" })] } });
+    await screen.findByText("WAV 已安全导入 · 1.0 秒");
+    fireEvent.change(form.querySelector('input[name="version"]')!, { target: { value: "v2" } });
+    fireEvent.change(form.querySelector('textarea[name="reference_text"]')!, { target: { value: "这是授权参考文字" } });
+    fireEvent.change(form.querySelector('input[name="voice_rights_holder"]')!, { target: { value: "本人" } });
+    fireEvent.change(form.querySelector('input[name="voice_evidence_reference"]')!, { target: { value: "workspace://proof/voice" } });
+    fireEvent.submit(form);
+
+    await waitFor(() => expect(api.saveVoiceProfile).toHaveBeenCalled());
+    expect(api.importVoiceReference).toHaveBeenCalledTimes(1);
+    expect(api.saveVoiceProfile.mock.calls[0]?.[0]).toMatchObject({
+      reference_audio_path: "workspace://approved/voices/voice-safe.wav",
+      language: "zh",
+      reference_text: "这是授权参考文字",
+    });
   });
 
   it("uses only the selected voice run, renders its returned media URL, history, and explicit retry", async () => {

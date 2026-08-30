@@ -258,6 +258,7 @@ from app.schemas import (
     UploadVideoRequest,
     VoicePreviewRequest,
     VoiceProfileResponse,
+    VoiceReferenceImportResponse,
     VoiceProfilesResponse,
     VoiceProfileUpsertRequest,
     VersionedVoiceProfileResponse,
@@ -1195,6 +1196,35 @@ def list_media_person_profile_versions(
     return PersonProfilesResponse(
         items=[_person_profile_response(item) for item in items],
         total_count=len(items),
+    )
+
+
+@app.post(
+    "/api/media/voice-references/import",
+    response_model=VoiceReferenceImportResponse,
+    status_code=201,
+)
+async def import_media_voice_reference(
+    request: Request,
+    audio: UploadFile = File(...),  # noqa: B008
+) -> VoiceReferenceImportResponse:
+    if not audio.filename or Path(audio.filename).suffix.lower() != ".wav":
+        raise HTTPException(status_code=422, detail="请选择 WAV 声音参考文件")
+    try:
+        content = await audio.read(50 * 1024 * 1024 + 1)
+        reference, size_bytes, duration_seconds = (
+            production_repo.import_voice_reference_wav(
+                current_workspace_id(request),
+                content,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return VoiceReferenceImportResponse(
+        reference=reference,
+        file_name="已导入声音参考.wav",
+        size_bytes=size_bytes,
+        duration_seconds=duration_seconds,
     )
 
 

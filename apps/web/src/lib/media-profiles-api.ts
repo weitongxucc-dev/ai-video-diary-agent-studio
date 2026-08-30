@@ -45,6 +45,9 @@ export type AuthorizationInput = Omit<MediaAuthorization, "workspace_id">;
 export type PersonInput = Pick<PersonProfile, "id" | "display_name" | "version" | "avatar_reference" | "background_capabilities" | "shot_capabilities"> & { authorization: AuthorizationInput };
 export type VoiceInput = Pick<VoiceProfile, "id" | "person_profile_id" | "person_version" | "version" | "language" | "reference_audio_path" | "reference_text" | "model_id"> & { authorization: AuthorizationInput };
 export type PronunciationInput = Omit<PronunciationEntry, "workspace_id">;
+export type VoiceReferenceImport = {
+  reference: string; file_name: string; size_bytes: number; duration_seconds: number;
+};
 
 export class MediaProfilesApiError extends Error {
   constructor(public readonly status: number, message: string, public readonly code: string | null = null, public readonly impact: string | null = null, public readonly repairAction: string | null = null) {
@@ -56,13 +59,14 @@ function json(value: string): unknown { try { return JSON.parse(value); } catch 
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
-  try { response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers }, cache: "no-store" }); }
+  const formUpload = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  try { response = await fetch(path, { ...init, headers: { ...(init?.body && !formUpload ? { "Content-Type": "application/json" } : {}), ...init?.headers }, cache: "no-store" }); }
   catch { throw new MediaProfilesApiError(0, "本地服务未接通。"); }
   const text = await response.text(); const payload = text ? json(text) : null;
   if (!response.ok) {
     const detail = payload && typeof payload === "object" && "detail" in payload ? (payload as { detail: unknown }).detail : payload;
     const object = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
-    throw new MediaProfilesApiError(response.status, typeof object.detail === "string" ? object.detail : `请求失败：${response.status}`, typeof object.error === "string" ? object.error : null, typeof object.impact === "string" ? object.impact : null, typeof object.repair_action === "string" ? object.repair_action : null);
+    throw new MediaProfilesApiError(response.status, typeof detail === "string" ? detail : typeof object.detail === "string" ? object.detail : `请求失败：${response.status}`, typeof object.error === "string" ? object.error : null, typeof object.impact === "string" ? object.impact : null, typeof object.repair_action === "string" ? object.repair_action : null);
   }
   return payload as T;
 }
@@ -71,6 +75,11 @@ export const listPersonProfiles = () => request<{ items: PersonProfile[]; total_
 export const savePersonProfile = (input: PersonInput) => request<PersonProfile>("/api/media/person-profiles", { method: "POST", body: JSON.stringify(input) });
 export const listVoiceProfiles = () => request<{ items: VoiceProfile[]; total_count: number }>("/api/media/voice-profiles");
 export const saveVoiceProfile = (input: VoiceInput) => request<VoiceProfile>("/api/media/voice-profiles", { method: "POST", body: JSON.stringify(input) });
+export const importVoiceReference = (file: File) => {
+  const body = new FormData();
+  body.append("audio", file);
+  return request<VoiceReferenceImport>("/api/media/voice-references/import", { method: "POST", body });
+};
 export const listPronunciationEntries = () => request<{ items: PronunciationEntry[]; total_count: number }>("/api/media/pronunciation-entries");
 export const savePronunciationEntry = (input: PronunciationInput) => request<PronunciationEntry>("/api/media/pronunciation-entries", { method: "POST", body: JSON.stringify(input) });
 export const listAuthorizations = () => request<{ items: MediaAuthorization[]; total_count: number }>("/api/media/authorizations");

@@ -1,13 +1,13 @@
 "use client";
 
 import { AlertCircle, AudioLines, FileText, LoaderCircle, RefreshCw, ShieldCheck, UserRound, Volume2 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   type AuthorizationInput, type MediaAuthorization, type MediaCapability, type MediaPreview, type PersonProfile,
   type PronunciationEntry, type VoiceProfile, getMediaCapability, listApprovedMaterials,
   listAuthorizations, listPersonProfiles, listPronunciationEntries, listVoiceProfiles,
-  createAvatarLipsyncPreview, createVoicePreview, listMediaPreviewAttempts, listMediaPreviews, mediaProfilesErrorMessage, savePersonProfile, savePronunciationEntry, saveVoiceProfile,
+  createAvatarLipsyncPreview, createVoicePreview, importVoiceReference, listMediaPreviewAttempts, listMediaPreviews, mediaProfilesErrorMessage, savePersonProfile, savePronunciationEntry, saveVoiceProfile,
 } from "@/lib/media-profiles-api";
 
 type View = "people" | "voices" | "dictionary" | "authorizations";
@@ -76,6 +76,7 @@ export function PeopleAndVoiceWorkspace() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [voiceReference, setVoiceReference] = useState<{ reference: string; label: string } | null>(null);
 
   const selectedPerson = people.find((item) => item.id === selectedPersonId) ?? people[0] ?? null;
   const selectedVoice = voices.find((item) => item.id === selectedVoiceId) ?? voices.find((item) => item.person_profile_id === selectedPerson?.id) ?? voices[0] ?? null;
@@ -127,8 +128,21 @@ export function PeopleAndVoiceWorkspace() {
     try {
       const person = people.find((item) => item.id === String(data.get("person_profile_id")))!;
       const saved = await saveVoiceProfile({ id: selectedVoice?.id ?? id("voice"), person_profile_id: person.id, person_version: person.version, version: String(data.get("version") ?? "").trim(), language: String(data.get("language")) as VoiceProfile["language"], reference_audio_path: String(data.get("reference_audio_path")), reference_text: String(data.get("reference_text") ?? "").trim(), model_id: "voice-clone", authorization: formAuthorization(data, "voice_", "voice") });
-      setNotice(`已登记声音档案 ${saved.version}；这不是已复制声音。`); await refresh(); setSelectedVoiceId(saved.id); event.currentTarget.reset();
+      setNotice(`已登记声音档案 ${saved.version}；这不是已复制声音。`); await refresh(); setSelectedVoiceId(saved.id); setVoiceReference(null); event.currentTarget.reset();
     } catch (cause) { setError(mediaProfilesErrorMessage(cause)); } finally { setBusy(null); }
+  }
+
+  async function importVoice(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    setBusy("voice-import"); setError(null); setNotice(null);
+    try {
+      const imported = await importVoiceReference(file);
+      setVoiceReference({ reference: imported.reference, label: `WAV 已安全导入 · ${imported.duration_seconds.toFixed(1)} 秒` });
+      setNotice("声音参考 WAV 已保存到当前工作区；请继续填写参考文字和授权信息。");
+    } catch (cause) { setError(mediaProfilesErrorMessage(cause)); }
+    finally { setBusy(null); input.value = ""; }
   }
 
   async function createEntry(event: FormEvent<HTMLFormElement>) {
@@ -178,17 +192,18 @@ export function PeopleAndVoiceWorkspace() {
       {!loading && !error && <div className="profiles-layout">
         <section className="profiles-stage">
           {view === "people" && <><header><div><span>人物形象</span><h2>当前人物预览</h2></div><span>{people.length} 个档案</span></header><div className="profiles-browser">{people.map((person) => <button className={selectedPerson?.id === person.id ? "is-selected" : ""} key={person.id} onClick={() => setSelectedPersonId(person.id)} type="button"><UserRound size={16}/><div><strong>{person.display_name}</strong><small>{person.version} · {runnableCopy(person.runnable, person.runnable_reason)}</small></div></button>)}{!people.length && <Empty title="还没有人物形象" text="从已批准素材中选择人物参考，并登记授权后保存。"/>}</div><ProfilePreview person={selectedPerson} voice={selectedVoice} capability={avatarCapability} preview={currentAvatarPreview} voiceReady={currentVoicePreview?.status === "succeeded"} authorizationReady={hasAvatarAuthorization(selectedPerson?.current_authorization)} attempts={activePreview?.identity === currentAvatarPreview?.identity ? attempts : []} busy={busy === "avatar-preview"} onPreview={runAvatarPreview}/></>}
-          {view === "voices" && <><header><div><span>声音档案</span><h2>当前声音与参考文字</h2></div><span>{voices.length} 个档案</span></header><div className="profiles-browser">{voices.map((voice) => <button className={selectedVoice?.id === voice.id ? "is-selected" : ""} key={voice.id} onClick={() => setSelectedVoiceId(voice.id)} type="button"><Volume2 size={16}/><div><strong>{people.find((person) => person.id === voice.person_profile_id)?.display_name || "未找到对应人物"}</strong><small>{voice.version} · {voice.language} · {runnableCopy(voice.runnable, voice.runnable_reason)}</small></div></button>)}{!voices.length && <Empty title="还没有声音档案" text="先登记人物与授权，再从已批准素材选择声音参考。"/>}</div><VoicePreview voice={selectedVoice} capability={voiceCapability} preview={currentVoicePreview} attempts={activePreview?.identity === currentVoicePreview?.identity ? attempts : []} busy={busy === "voice-preview"} onPreview={runVoicePreview}/></>}
+          {view === "voices" && <><header><div><span>声音档案</span><h2>当前声音与参考文字</h2></div><span>{voices.length} 个档案</span></header><div className="profiles-browser">{voices.map((voice) => <button className={selectedVoice?.id === voice.id ? "is-selected" : ""} key={voice.id} onClick={() => setSelectedVoiceId(voice.id)} type="button"><Volume2 size={16}/><div><strong>{people.find((person) => person.id === voice.person_profile_id)?.display_name || "未找到对应人物"}</strong><small>{voice.version} · {voice.language} · {runnableCopy(voice.runnable, voice.runnable_reason)}</small></div></button>)}{!voices.length && <Empty title="还没有声音档案" text="先登记人物，再导入已授权 WAV、填写参考文字和授权证据。"/>}</div><VoicePreview voice={selectedVoice} capability={voiceCapability} preview={currentVoicePreview} attempts={activePreview?.identity === currentVoicePreview?.identity ? attempts : []} busy={busy === "voice-preview"} onPreview={runVoicePreview}/></>}
           {view === "dictionary" && <Dictionary entries={entries} onSubmit={createEntry} busy={busy === "entry"}/>}
           {view === "authorizations" && <AuthorizationList authorizations={authorizations}/>}
         </section>
-        {(view === "people" || view === "voices") && <aside className="profiles-create"><header><span>新增档案</span><h2>{view === "people" ? selectedPerson ? "为当前人物创建新版本" : "创建人物形象" : selectedVoice ? "为当前声音创建新版本" : "登记声音档案"}</h2><p>{view === "people" ? "参考内容只可来自带工作区引用的已批准素材。" : "登记档案不会复制或生成声音。"}</p></header>{view === "people" ? <form onSubmit={createPerson}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>人物名称</span><input name="display_name" required placeholder="例如：品牌主讲人"/></label><label><span>人物参考素材</span><ApprovedMaterialSelect materials={materials} name="avatar_reference"/></label><label><span>背景能力</span><input name="background" placeholder="例如：室内、纯色背景"/></label><label><span>景别能力</span><input name="shot" placeholder="例如：半身、近景"/></label><AuthorizationFields kind="person" prefix="person_"/><button disabled={busy === "person" || !materials.some((item) => item.workspace_reference)} type="submit"><UserRound size={16}/>保存人物新版本</button></form> : <form onSubmit={createVoice}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>关联人物</span><select name="person_profile_id" required>{people.map((person) => <option key={person.id} value={person.id}>{person.display_name} · {person.version}</option>)}</select></label><label><span>声音参考素材</span><ApprovedMaterialSelect materials={materials} name="reference_audio_path"/></label><label><span>参考文字</span><textarea name="reference_text" required rows={3} placeholder="逐字填写已授权参考音频中的内容"/></label><label><span>语言</span><select name="language"><option value="zh">中文</option><option value="en">英文</option><option value="zh-en">中英混合</option></select></label><AuthorizationFields kind="voice" prefix="voice_"/><button disabled={busy === "voice" || !people.length || !materials.some((item) => item.workspace_reference)} type="submit"><AudioLines size={16}/>登记声音新版本</button></form>}</aside>}
+        {(view === "people" || view === "voices") && <aside className="profiles-create"><header><span>新增档案</span><h2>{view === "people" ? selectedPerson ? "为当前人物创建新版本" : "创建人物形象" : selectedVoice ? "为当前声音创建新版本" : "登记声音档案"}</h2><p>{view === "people" ? "参考内容只可来自带工作区引用的已批准素材。" : "登记档案不会复制或生成声音。"}</p></header>{view === "people" ? <form onSubmit={createPerson}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>人物名称</span><input name="display_name" required placeholder="例如：品牌主讲人"/></label><label><span>人物参考素材</span><ApprovedMaterialSelect materials={materials} name="avatar_reference"/></label><label><span>背景能力</span><input name="background" placeholder="例如：室内、纯色背景"/></label><label><span>景别能力</span><input name="shot" placeholder="例如：半身、近景"/></label><AuthorizationFields kind="person" prefix="person_"/><button disabled={busy === "person" || !materials.some((item) => item.workspace_reference)} type="submit"><UserRound size={16}/>保存人物新版本</button></form> : <form onSubmit={createVoice}><label><span>新版本</span><input name="version" required placeholder="例如：v2"/></label><label><span>关联人物</span><select name="person_profile_id" required>{people.map((person) => <option key={person.id} value={person.id}>{person.display_name} · {person.version}</option>)}</select></label><VoiceReferenceField busy={busy === "voice-import"} onImport={importVoice} value={voiceReference}/><label><span>参考文字</span><textarea name="reference_text" required rows={3} placeholder="逐字填写已授权参考音频中的内容"/></label><label><span>语言</span><select name="language"><option value="zh">中文</option></select></label><AuthorizationFields kind="voice" prefix="voice_"/><button disabled={busy === "voice" || busy === "voice-import" || !people.length || !voiceReference} type="submit"><AudioLines size={16}/>登记声音新版本</button></form>}</aside>}
       </div>}
     </div>
   </AppShell>;
 }
 
 function ApprovedMaterialSelect({ materials, name }: { materials: Array<{id:string; file_name:string; workspace_reference:string|null}>; name:string }) { const selectable = materials.filter((material) => material.workspace_reference); return <select name={name} required disabled={!selectable.length}>{selectable.length ? selectable.map((material) => <option key={material.id} value={material.workspace_reference!}>{material.file_name}</option>) : <option>没有可引用的已批准素材</option>}</select>; }
+function VoiceReferenceField({ busy, onImport, value }: { busy:boolean; onImport:(event:ChangeEvent<HTMLInputElement>)=>void; value:{reference:string; label:string}|null }) { return <div className="profiles-auth-fields"><label><span>声音参考 WAV</span><input accept=".wav,audio/wav" aria-label="选择已授权 WAV" disabled={busy} onChange={onImport} type="file"/></label><input name="reference_audio_path" readOnly required type="hidden" value={value?.reference ?? ""}/><small>{busy ? "正在验证并导入 WAV…" : value?.label ?? "请选择 1–120 秒、单声道或双声道的已授权 WAV。页面不会提交本机绝对路径。"}</small></div>; }
 function Empty({ title, text }: { title:string; text:string }) { return <div className="profiles-empty"><FileText size={20}/><div><strong>{title}</strong><p>{text}</p></div></div>; }
 function PreviewStatus({ preview }: { preview: MediaPreview | undefined }) { return preview ? <p>最近尝试：{preview.status === "succeeded" ? "已生成" : preview.status === "running" ? "正在生成" : preview.reason || "未返回原因"}{preview.repair_action ? ` · ${preview.repair_action}` : ""}{canRetryPreview(preview) ? " · 可以重新尝试" : ""}</p> : null; }
 function PreviewAttempts({ attempts }: { attempts: MediaPreview[] }) { return attempts.length ? <section className="profiles-preview-history" aria-label="预览尝试历史"><h4>尝试历史</h4>{attempts.map((attempt) => <p key={attempt.id}>第 {attempt.attempt} 次 · {attempt.status === "succeeded" ? "已生成" : attempt.status === "running" ? "正在生成" : attempt.reason || "未返回原因"} · {new Date(currentTimestamp(attempt)).toLocaleString("zh-CN")}</p>)}</section> : null; }

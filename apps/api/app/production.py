@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import sqlite3
 import subprocess
+import wave
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -569,6 +571,58 @@ class ProductionRepository:
         if require_registered:
             self._require_workspace_media_reference(workspace_id, value)
         return resolved
+
+    def import_voice_reference_wav(
+        self,
+        workspace_id: str,
+        content: bytes,
+    ) -> tuple[str, int, float]:
+        """Persist a validated WAV under the workspace media root.
+
+        The caller supplies bytes, never a client-controlled source path. The
+        returned value is the only reference accepted by voice profile writes.
+        """
+        if not workspace_id.strip():
+            raise ValueError("工作区不能为空")
+        if not content:
+            raise ValueError("声音参考 WAV 不能为空")
+        if len(content) > 50 * 1024 * 1024:
+            raise ValueError("声音参考 WAV 不能超过 50 MB")
+        try:
+            with wave.open(io.BytesIO(content), "rb") as audio:
+                frame_rate = audio.getframerate()
+                frame_count = audio.getnframes()
+                channels = audio.getnchannels()
+                sample_width = audio.getsampwidth()
+        except (EOFError, wave.Error) as exc:
+            raise ValueError("文件不是可读取的 PCM WAV") from exc
+        if frame_rate <= 0 or frame_count <= 0 or channels not in {1, 2}:
+            raise ValueError("WAV 必须包含单声道或双声道有效音频")
+        if sample_width not in {1, 2, 3, 4}:
+            raise ValueError("WAV 采样位宽不受支持")
+        duration_seconds = frame_count / frame_rate
+        if duration_seconds < 1 or duration_seconds > 120:
+            raise ValueError("声音参考 WAV 时长必须在 1–120 秒之间")
+
+        relative = Path("approved") / "voices" / f"voice_{uuid4().hex}.wav"
+        target = self.video_library_path.resolve() / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(".partial")
+        try:
+            temporary.write_bytes(content)
+            temporary.replace(target)
+            reference = f"workspace://{relative.as_posix()}"
+            with self._connect() as conn:
+                self._claim_workspace_media_reference(
+                    conn,
+                    workspace_id=workspace_id,
+                    reference=reference,
+                )
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+            raise
+        return reference, len(content), duration_seconds
 
     @staticmethod
     def narration_artifact_reference(cache_key: str) -> str:

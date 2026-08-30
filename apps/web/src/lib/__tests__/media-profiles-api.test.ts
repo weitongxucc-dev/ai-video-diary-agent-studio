@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MediaProfilesApiError, createAvatarLipsyncPreview, createVoicePreview, getMediaCapability, listApprovedMaterials, mediaProfilesErrorMessage, saveVoiceProfile } from "../media-profiles-api";
+import { MediaProfilesApiError, createAvatarLipsyncPreview, createVoicePreview, getMediaCapability, importVoiceReference, listApprovedMaterials, mediaProfilesErrorMessage, saveVoiceProfile } from "../media-profiles-api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -17,6 +17,20 @@ describe("media profiles API client", () => {
     await saveVoiceProfile({ id: "voice-1", person_profile_id: "person-1", person_version: "v1", version: "v1", language: "zh", reference_audio_path: "workspace://materials/asset-1", reference_text: "测试", model_id: "voice-clone", authorization: { id: "authorization-1", version: "v1", rights_holder: "本人", content_types: ["voice"], usage_scopes: ["narration", "avatar_lipsync"], effective_from: "2026-08-28T00:00:00Z", expires_at: null, evidence_reference: "workspace://proof/1", status: "active" } });
     expect(fetchMock).toHaveBeenCalledWith("/api/media/voice-profiles", expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toMatchObject({ reference_audio_path: "workspace://materials/asset-1" });
+  });
+
+  it("uploads WAV bytes without sending an absolute path or forcing a JSON content type", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ reference: "workspace://approved/voices/voice-safe.wav" }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["wav-bytes"], "owner.wav", { type: "audio/wav" });
+
+    await importVoiceReference(file);
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init.method).toBe("POST");
+    expect(init.headers).not.toHaveProperty("Content-Type");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get("audio")).toBe(file);
   });
 
   it("turns an unavailable provider into an explicit product state", async () => {
