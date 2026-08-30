@@ -42,6 +42,7 @@
 - 并行执行中发现产品、领域、架构、安全或共享接口的既有权威有误时，子线程只提交证据和变更建议，由主线程判断影响、必要时与用户确认，并更新唯一权威。
 - 收到 `HOLD_FOR_AUTHORITY_UPDATE` 的线程必须在当前不可中断操作结束后停止新增修改并回报已有 diff；收到 `AUTHORITY_CHANGED` 后，旧任务契约即失效，必须重读指定章节并完成 `REBASE_ACK` 后再继续。
 - 当前权威只来自 `docs/README.md` 登记的活动文档。`docs/archive/` 是隔离区，除非任务明确要求历史追溯，否则禁止读取或引用其中内容。
+- 当用户要求“继续”或“恢复”当前复杂/迁移任务时，如果 `.project-control/active-contract.md` 存在，先读取该合同再执行；普通 S0/S1 任务不得为此加载。它是短期执行约束，不是产品权威，详细生命周期见 `docs/development-workflow.md`。
 
 详细协议只在复杂或高风险任务中读取 `docs/development-workflow.md`。
 
