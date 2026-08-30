@@ -1133,6 +1133,16 @@ export type CreationTaskNarration = {
   pronunciation_version: string;
 };
 
+export type CreationTaskVoiceOption = {
+  profile_id: string;
+  version: string;
+  person_display_name: string;
+  language: "zh" | "en" | "zh-en";
+  model_id: string;
+  runnable: boolean;
+  runnable_reason: string | null;
+};
+
 export type CreationTaskMontageClip = {
   id: string;
   cue_id: string;
@@ -1175,6 +1185,7 @@ export type CreationTaskWorkspace = {
   selected_topic: CreationTaskTopicCandidate | null;
   topic_evidence: CreationTaskTopicEvidenceReference[];
   scripts: CreationTaskScript[];
+  available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
   montage: CreationTaskMontage | null;
 };

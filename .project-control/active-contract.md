@@ -27,7 +27,8 @@
 ## 3. 唯一事实源与主接口
 
 - 创作任务、文案、配音引用和剪辑产物只扩展现有 `ProductionRepository`；不得建立第二套仓储或写回 Episode、Batch、`repo.today()`。
-- Web 只通过 CreationTask 接口推进任务：任务详情、文案生成/确认、配音生成、剪辑计划/片段修改/渲染和成片输出。
+- Web 只通过 CreationTask 接口推进任务：任务详情、文案生成/确认、配音声音选择/生成、剪辑计划/片段修改/渲染和成片输出。
+- 已确认文案的任务如果因声音缺失停在配音阶段，必须允许用户显式绑定后来登记的已授权声音版本后原地继续；不得要求重做选题、文案或自动选择未确认的声音。该恢复动作使用 `POST /api/creation-tasks/{task_id}/narration/voice`，只更新同一 Plan/CreationTask 的声音引用与配音阻断，不调用模型。
 - Electron 只通过 `saveRenderedVideo(taskId)` 和原生保存对话框导出；客户端不得提交任意源文件绝对路径。
 - 外部模型、FFmpeg、文件系统和授权失败必须持久化原因、影响与修复动作；禁止系统声音、静音、伪造 WAV、伪造视频或 Template fallback。
 
@@ -65,7 +66,8 @@
 | --- | --- | --- |
 | 创建任务、选题、确认文案 | `PERSISTED_EFFECT_CONFIRMED`（既有验证任务） | 可继续使用，但最终验收必须在同一候选重跑 |
 | 回看选题和文案、全局搜索、阶段导航 | `REAL_INTERACTION_CONFIRMED@66fad77` | 1024/1180/1440 已验证，不代表成片完成 |
-| Qwen3-TTS 中文声音克隆 | `BLOCKED` | 当前未选择已授权声音版本；缺失时明确停止 |
+| Qwen3-TTS 中文声音克隆 | `MODEL_RUNTIME_CONFIRMED / INPUT_BLOCKED` | 运行环境、模型和工作进程已就绪；当前工作区没有已登记授权声音，因此未调用模型 |
+| 配音阶段补选声音并原地恢复 | `TESTED / REAL_UI_CONFIRMED` | 仓储、API 和组件测试通过；无声音时 1024/1180/主机尺寸只显示可执行修复动作，不再提供必失败的生成按钮 |
 | 故事板、FFmpeg MP4/SRT | `STATIC_WIRING_CONFIRMED` | 真实输入、运行结果与持久化仍待验证 |
 | Electron 原生保存 | `STATIC_WIRING_CONFIRMED` | 组件测试存在，真实客户端保存仍待验证 |
 

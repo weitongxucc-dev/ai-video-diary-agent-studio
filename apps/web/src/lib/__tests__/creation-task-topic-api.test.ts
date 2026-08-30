@@ -5,6 +5,7 @@ import {
   generateCreationTaskTopics,
   generateCreationTaskNarration,
   getCreationTaskTopics,
+  selectCreationTaskNarrationVoice,
 } from "../api";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -79,5 +80,24 @@ describe("creation-task topic API", () => {
       impact: "当前创作任务未生成配音，未调用声音模型。",
       repairAction: "重新预检并选择已授权的中文声音版本。",
     } satisfies Partial<CreationPlanApiError>);
+  });
+
+  it("binds an explicit versioned voice without sending a local path", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ task: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await selectCreationTaskNarrationVoice("task-1", {
+      voice_profile_id: "voice-1",
+      voice_version: "v2",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/creation-tasks/task-1/narration/voice",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ voice_profile_id: "voice-1", voice_version: "v2" }),
+      }),
+    );
+    expect(fetch.mock.calls[0]?.[1]?.body).not.toContain("/Users/");
   });
 });

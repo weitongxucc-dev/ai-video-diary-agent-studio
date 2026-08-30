@@ -82,6 +82,7 @@ describe("PeopleAndVoiceWorkspace", () => {
       reference_audio_path: "workspace://approved/voices/voice-safe.wav",
       language: "zh",
       reference_text: "这是授权参考文字",
+      model_id: "local",
     });
   });
 

@@ -229,6 +229,36 @@
 .emptyAction p { max-width: 560px; }
 .emptyAction button { margin-top: 12px; }
 
+.voiceSelection {
+  display: grid;
+  width: min(100%, 440px);
+  gap: 10px;
+  margin-top: 12px;
+  text-align: left;
+}
+
+.voiceSelection .field { margin: 0; }
+.voiceSelection button { justify-self: center; margin-top: 0; }
+
+.voiceMissing {
+  display: grid;
+  width: min(100%, 600px);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.voiceMissing > svg { color: var(--warning); }
+.voiceMissing strong { font-size: 14px; font-weight: 550; }
+.voiceMissing p { margin-top: 3px; font-size: 13px; }
+.voiceMissing a { white-space: nowrap; }
+
 .field {
   display: grid;
   gap: 6px;
@@ -237,6 +267,7 @@
 
 .field > span { color: var(--text-2); font-size: 13px; }
 .field input,
+.field select,
 .scriptSections textarea {
   width: 100%;
   border: 1px solid var(--border-2);
@@ -245,8 +276,14 @@
   color: var(--text-1);
   font: inherit;
 }
-.field input { min-height: 40px; padding: 8px 10px; }
+.field input,
+.field select { min-height: 40px; padding: 8px 10px; }
 .scriptSections textarea { resize: vertical; padding: 10px 12px; line-height: 1.6; }
+
+@media (max-width: 760px) {
+  .voiceMissing { grid-template-columns: auto minmax(0, 1fr); }
+  .voiceMissing a { grid-column: 1 / -1; justify-self: stretch; text-align: center; }
+}
 
 .scriptSections article,
 .storyboard article {

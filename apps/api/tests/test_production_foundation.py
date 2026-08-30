@@ -5,6 +5,7 @@ import wave
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,9 @@ from app.models import EpisodeStatus, ScriptPackage, ScriptSection
 from app.narration import NarrationArtifact
 from app.production import (
     Authorization,
+    CreationPlan,
+    CreationPlanBlocker,
+    CreationTask,
     MaterialCollection,
     MediaAuthorityError,
     NarrationArtifactRecord,
@@ -1034,6 +1038,107 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert saved_script.sections[0].content.endswith("这句话由用户确认。")
     with reloaded._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM production_batches").fetchone()[0] == 0
+
+
+def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
+    tmp_path,
+    monkeypatch,
+):
+    production = _repository(tmp_path)
+    workspace_id = "workspace_a"
+    plan = CreationPlan(
+        id="plan-recovery",
+        workspace_id=workspace_id,
+        goal="继续已经确认文案的中文口播任务",
+        name="配音恢复任务",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=60,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=None,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=1,
+        material_rule_summary="只使用已审核镜头",
+        model_snapshot=[],
+        confirmation_points=["确认文案", "确认声音"],
+        blockers=[
+            CreationPlanBlocker(
+                reason="voice_authorization_missing",
+                impact="当前不能配音。",
+                repair_action="登记授权声音。",
+                stage="narration",
+                blocks_confirmation=False,
+            )
+        ],
+        preflight_fingerprint="f" * 64,
+    )
+    task = CreationTask(
+        id="task-recovery",
+        workspace_id=workspace_id,
+        plan_id=plan.id,
+        name=plan.name,
+        scenario=plan.goal,
+        stage="narration",
+        stage_status="failed",
+        status="failed",
+        progress=40,
+        recovery_point="narration",
+        confirmed_script_id="script-confirmed",
+        stage_reason="voice_identity_missing",
+        stage_impact="未生成配音。",
+        stage_repair_action="登记授权声音。",
+        stage_retryable=True,
+    )
+    production.confirm_creation_plan(plan, task)
+    reference = production.video_library_path / "approved" / "voice-recovery.wav"
+    reference.parent.mkdir(exist_ok=True)
+    reference.write_bytes(b"valid-wav-reference")
+    voice = _save_versioned_voice(
+        production,
+        workspace_id=workspace_id,
+        voice_id="voice-recovery",
+        version="v1",
+        reference_audio_path="workspace://approved/voice-recovery.wav",
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    monkeypatch.setattr(
+        main_module,
+        "model_catalog",
+        SimpleNamespace(
+            list_statuses=lambda: [
+                SimpleNamespace(
+                    model=SimpleNamespace(id=voice.model_id),
+                    ready=True,
+                )
+            ]
+        ),
+    )
+
+    response = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/narration/voice",
+        json={"voice_profile_id": voice.id, "voice_version": voice.version},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plan"]["selected_voice"]["profile_id"] == voice.id
+    assert body["task"]["stage"] == "narration"
+    assert body["task"]["stage_status"] == "not_started"
+    assert body["task"]["confirmed_script_id"] == "script-confirmed"
+    assert body["task"]["stage_reason"] is None
+    assert not any(
+        blocker["stage"] == "narration" for blocker in body["plan"]["blockers"]
+    )
+    reloaded = ProductionRepository(
+        database_path=production.database_path,
+        video_library_path=production.video_library_path,
+    )
+    assert reloaded.get_creation_task(workspace_id, task.id).confirmed_script_id == "script-confirmed"
+    assert reloaded.get_creation_plan(workspace_id, plan.id).selected_voice.profile_id == voice.id
 
 
 def test_creation_task_topic_failure_records_capability_license_and_provider_errors(

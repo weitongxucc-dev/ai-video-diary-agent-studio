@@ -138,6 +138,7 @@ from app.schemas import (
     CreationTaskScriptGenerateRequest,
     CreationTaskScriptsResponse,
     CreationTaskNarrationResponse,
+    CreationTaskNarrationVoiceSelectionRequest,
     CreationTaskMontagePlanResponse,
     CreationTaskMontageClipUpdateRequest,
     CreationTaskMontageRenderRequest,
@@ -2601,6 +2602,169 @@ def _creation_task_montage_response(
     )
 
 
+def _resolve_creation_task_voice_selection(
+    *,
+    workspace_id: str,
+    task: CreationTask,
+    plan: CreationPlan,
+    voice_profile_id: str,
+    voice_version: str,
+) -> tuple[CreationPlanVoiceReference, list[CreationPlanPronunciationReference]]:
+    try:
+        inputs = production_repo.resolve_creation_task_narration_inputs(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            voice_profile_id=voice_profile_id,
+            voice_version=voice_version,
+        )
+    except KeyError as exc:
+        raise MediaAuthorityError(
+            reason="voice_identity_missing",
+            impact="当前任务没有绑定声音，未调用声音模型。",
+            repair_action="选择当前工作区中存在的声音版本。",
+        ) from exc
+    voice = inputs.voice
+    expected_language = {
+        "zh-CN": "zh",
+        "en-US": "en",
+        "zh-CN/en-US": "zh-en",
+    }[plan.language]
+    if voice.language not in {expected_language, "zh-en"}:
+        raise MediaAuthorityError(
+            reason="voice_language_unavailable",
+            impact="所选声音不支持当前任务语言，未调用声音模型。",
+            repair_action="选择中文声音版本，或新建与任务语言一致的授权声音。",
+        )
+    authorization_failure = voice.authorization.failure_for(
+        content_type="voice",
+        usage_scope="narration",
+    )
+    if authorization_failure is not None:
+        raise MediaAuthorityError(
+            reason=authorization_failure,
+            impact="所选声音授权当前不可用于配音，未调用声音模型。",
+            repair_action="更新声音授权状态和配音使用范围后再选择。",
+        )
+    try:
+        reference_audio = production_repo.resolve_workspace_media_reference(
+            workspace_id,
+            voice.reference_audio_path,
+            require_registered=True,
+        )
+    except (MediaAuthorityError, OSError) as exc:
+        raise MediaAuthorityError(
+            reason="voice_reference_wav_unavailable",
+            impact="所选声音没有可读取的工作区 WAV，未调用声音模型。",
+            repair_action="重新导入 1–120 秒的已授权 WAV，再登记声音新版本。",
+        ) from exc
+    if (
+        reference_audio.suffix.lower() != ".wav"
+        or not reference_audio.is_file()
+        or reference_audio.stat().st_size == 0
+    ):
+        raise MediaAuthorityError(
+            reason="voice_reference_wav_unavailable",
+            impact="所选声音没有有效 WAV，未调用声音模型。",
+            repair_action="重新导入 1–120 秒的已授权 WAV，再登记声音新版本。",
+        )
+    model_status = next(
+        (status for status in model_catalog.list_statuses() if status.model.id == voice.model_id),
+        None,
+    )
+    if model_status is None or not model_status.ready:
+        raise MediaAuthorityError(
+            reason="voice_model_unavailable",
+            impact="所选声音要求的本地模型尚未就绪，未调用声音模型。",
+            repair_action=(
+                model_status.message
+                if model_status is not None
+                else "为声音档案选择当前已安装的本地声音模型。"
+            ),
+        )
+    try:
+        person = production_repo.get_person_profile(
+            workspace_id,
+            voice.person_profile_id,
+            voice.person_version,
+        )
+        person_authorization = production_repo.get_authorization(
+            workspace_id,
+            person.authorization.id,
+        )
+    except KeyError as exc:
+        raise MediaAuthorityError(
+            reason="voice_person_identity_missing",
+            impact="声音版本关联的人物身份不完整，未调用声音模型。",
+            repair_action="重新登记与现有人物版本关联的授权声音。",
+        ) from exc
+    return (
+        CreationPlanVoiceReference(
+            profile_id=voice.id,
+            version=voice.version,
+            person_profile_id=voice.person_profile_id,
+            person_version=voice.person_version,
+            person_authorization_id=person_authorization.id,
+            person_authorization_version=person_authorization.version,
+            authorization_id=voice.authorization.id,
+            authorization_version=voice.authorization.version,
+            language=voice.language,
+            model_id=voice.model_id,
+        ),
+        [
+            CreationPlanPronunciationReference(
+                id=entry.id,
+                version=entry.version,
+                scope=entry.scope,
+                scope_reference=entry.scope_reference,
+                language=entry.language,
+            )
+            for entry in inputs.pronunciation_entries
+        ],
+    )
+
+
+def _creation_task_voice_options(
+    workspace_id: str,
+    task: CreationTask,
+    plan: CreationPlan,
+) -> list[dict[str, object]]:
+    options: list[dict[str, object]] = []
+    for voice in production_repo.list_versioned_voice_profiles(workspace_id):
+        try:
+            person = production_repo.get_person_profile(
+                workspace_id,
+                voice.person_profile_id,
+                voice.person_version,
+            )
+        except KeyError:
+            person = None
+        reason = None
+        try:
+            _resolve_creation_task_voice_selection(
+                workspace_id=workspace_id,
+                task=task,
+                plan=plan,
+                voice_profile_id=voice.id,
+                voice_version=voice.version,
+            )
+        except MediaAuthorityError as exc:
+            reason = exc.reason
+        options.append(
+            {
+                "profile_id": voice.id,
+                "version": voice.version,
+                "person_display_name": (
+                    person.display_name if person is not None else "人物档案缺失"
+                ),
+                "language": voice.language,
+                "model_id": voice.model_id,
+                "runnable": reason is None,
+                "runnable_reason": reason,
+            }
+        )
+    return options
+
+
 def _creation_task_workspace_response(
     workspace_id: str,
     task: CreationTask,
@@ -2667,6 +2831,7 @@ def _creation_task_workspace_response(
                 asdict(script)
                 for script in production_repo.list_creation_task_scripts(workspace_id, task.id)
             ],
+            "available_voices": _creation_task_voice_options(workspace_id, task, plan),
             "narration": (
                 _creation_task_narration_response(task, artifact).model_dump()
                 if artifact is not None
@@ -3286,6 +3451,53 @@ def confirm_creation_task_script(
             retryable=False,
         ) from exc
     return _creation_task_scripts_response(workspace_id, task)
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/narration/voice",
+    response_model=CreationTaskWorkspaceResponse,
+)
+def select_creation_task_narration_voice(
+    task_id: str,
+    request: Request,
+    payload: CreationTaskNarrationVoiceSelectionRequest,
+) -> CreationTaskWorkspaceResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    try:
+        selected_voice, pronunciation_references = _resolve_creation_task_voice_selection(
+            workspace_id=workspace_id,
+            task=task,
+            plan=plan,
+            voice_profile_id=payload.voice_profile_id,
+            voice_version=payload.voice_version,
+        )
+        _, task = production_repo.select_creation_task_narration_voice(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            selected_voice=selected_voice,
+            pronunciation_references=pronunciation_references,
+        )
+    except MediaAuthorityError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error=exc.reason,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=True,
+        ) from exc
+    except ValueError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error="creation_task_voice_selection_conflict",
+            reason="当前任务不能选择这个声音版本。",
+            impact="没有改变任务阶段，也没有调用声音模型。",
+            repair_action=str(exc),
+            retryable=False,
+        ) from exc
+    return _creation_task_workspace_response(workspace_id, task)
 
 
 @app.post(

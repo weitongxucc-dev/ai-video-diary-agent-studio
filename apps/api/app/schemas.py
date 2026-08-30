@@ -907,6 +907,23 @@ class CreationTaskNarrationResponse(BaseModel):
     pronunciation_version: str
 
 
+class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    voice_profile_id: str = Field(min_length=1, max_length=120)
+    voice_version: str = Field(min_length=1, max_length=120)
+
+
+class CreationTaskVoiceOptionResponse(BaseModel):
+    profile_id: str
+    version: str
+    person_display_name: str
+    language: Literal["zh", "en", "zh-en"]
+    model_id: str
+    runnable: bool
+    runnable_reason: str | None
+
+
 class CreationTaskMontageClipResponse(BaseModel):
     id: str
     cue_id: str
@@ -1002,6 +1019,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     selected_topic: CreationTaskTopicCandidateResponse | None
     topic_evidence: list[TopicEvidenceReferenceResponse]
     scripts: list[CreationTaskScriptResponse]
+    available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
     montage: CreationTaskMontagePlanResponse | None
 

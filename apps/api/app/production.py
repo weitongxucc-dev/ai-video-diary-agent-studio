@@ -3244,6 +3244,78 @@ class ProductionRepository:
             voice_version=voice_version,
         )
 
+    def select_creation_task_narration_voice(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        selected_voice: CreationPlanVoiceReference,
+        pronunciation_references: list[CreationPlanPronunciationReference],
+    ) -> tuple[CreationPlan, CreationTask]:
+        """Bind an explicitly confirmed voice to a blocked narration stage."""
+        with self._connect() as conn:
+            task_row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            if task_row is None:
+                raise KeyError(task_id)
+            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            plan_row = conn.execute(
+                "SELECT payload FROM creation_plans WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task.plan_id),
+            ).fetchone()
+            if plan_row is None:
+                raise KeyError(task.plan_id)
+            plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
+            if plan.creation_task_id != task.id:
+                raise ValueError("创作方案与任务不一致")
+            if task.stage != "narration" or task.stage_status not in {
+                "not_started",
+                "failed",
+            }:
+                raise ValueError("当前任务不能选择配音声音")
+
+            now = utc_now()
+            plan.selected_voice = selected_voice
+            plan.pronunciation_references = pronunciation_references
+            plan.blockers = [
+                blocker
+                for blocker in plan.blockers
+                if not (
+                    blocker.stage == "narration"
+                    and blocker.reason
+                    in {
+                        "voice_authorization_missing",
+                        "voice_identity_missing",
+                        "voice_language_unavailable",
+                        "voice_model_unavailable",
+                        "voice_reference_wav_unavailable",
+                    }
+                )
+            ]
+            plan.updated_at = now
+            task.stage_status = "not_started"
+            task.status = "running"
+            task.recovery_point = "narration"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = now
+            conn.execute(
+                "UPDATE creation_plans SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(plan), now.isoformat(), workspace_id, plan.id),
+            )
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), now.isoformat(), workspace_id, task.id),
+            )
+        return (
+            self.get_creation_plan(workspace_id, task.plan_id),
+            self.get_creation_task(workspace_id, task.id),
+        )
+
     def complete_creation_task_narration(
         self, artifact: NarrationArtifactRecord
     ) -> tuple[CreationTask, NarrationArtifactRecord]:

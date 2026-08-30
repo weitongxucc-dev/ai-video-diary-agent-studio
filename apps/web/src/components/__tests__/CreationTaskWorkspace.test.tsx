@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     MockCreationPlanApiError,
     generateNarration: vi.fn(),
     getWorkspace: vi.fn(),
+    selectVoice: vi.fn(),
     updateClip: vi.fn(),
   };
 });
@@ -42,6 +43,7 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
   renderCreationTaskMontage: vi.fn(),
+  selectCreationTaskNarrationVoice: mocks.selectVoice,
   updateCreationTaskMontageClip: mocks.updateClip,
 }));
 
@@ -95,6 +97,7 @@ function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null
     selected_topic: null,
     topic_evidence: [],
     scripts: [],
+    available_voices: [],
     narration: null,
     montage,
   };
@@ -135,23 +138,38 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText("这是已经确认的口播正文。")).toBeInTheDocument();
   });
 
-  it("shows the real narration blocker after the user clicks generate", async () => {
+  it("does not offer a doomed generation action when no authorized voice exists", () => {
     const initial = workspace(baseTask);
-    mocks.getWorkspace.mockResolvedValue(initial);
-    mocks.generateNarration.mockRejectedValue(new mocks.MockCreationPlanApiError(
-      503,
-      "voice_identity_missing",
-      "缺少已授权的声音版本",
-      "当前创作任务未生成配音，未调用声音模型。",
-      "重新预检并选择已授权的中文声音版本。",
-    ));
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", { name: "生成真实配音" }));
+    expect(screen.queryByRole("button", { name: "生成真实配音" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "去登记授权声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByText(/不需要重做选题或文案/)).toBeInTheDocument();
+  });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("缺少已授权的声音版本");
-    expect(screen.getByRole("alert")).toHaveTextContent("未调用声音模型");
-    expect(screen.getByRole("alert")).toHaveTextContent("重新预检并选择已授权的中文声音版本");
+  it("explicitly binds a later authorized voice before enabling generation", async () => {
+    const initial = workspace(baseTask);
+    initial.available_voices = [{
+      profile_id: "voice-1", version: "v1", person_display_name: "主讲人",
+      language: "zh", model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+      runnable: true, runnable_reason: null,
+    }];
+    const selected = workspace({ ...baseTask, stage_status: "not_started", status: "running", stage_reason: null, stage_impact: null, stage_repair_action: null });
+    selected.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "v1",
+      person_authorization_id: "person-auth", person_authorization_version: "v1",
+      authorization_id: "voice-auth", authorization_version: "v1", language: "zh",
+      model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+    };
+    selected.available_voices = initial.available_voices;
+    mocks.selectVoice.mockResolvedValue(selected);
+    mocks.getWorkspace.mockResolvedValue(selected);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "使用这个声音继续" }));
+
+    await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", { voice_profile_id: "voice-1", voice_version: "v1" }));
+    expect(await screen.findByRole("button", { name: "生成真实配音" })).toBeInTheDocument();
   });
 
   it("sends only the task id to the native save boundary", async () => {

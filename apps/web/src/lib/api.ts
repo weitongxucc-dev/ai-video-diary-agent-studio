@@ -453,6 +453,16 @@ export function generateCreationTaskNarration(taskId: string): Promise<CreationT
   );
 }
 
+export function selectCreationTaskNarrationVoice(
+  taskId: string,
+  input: { voice_profile_id: string; voice_version: string },
+): Promise<CreationTaskWorkspace> {
+  return creationPlanRequest<CreationTaskWorkspace>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export function createCreationTaskMontagePlan(taskId: string): Promise<CreationTaskMontage> {
   return creationPlanRequest<CreationTaskMontage>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`,
