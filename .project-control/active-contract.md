@@ -2,7 +2,7 @@
 
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
-迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（等待独立质量复核）
+迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（独立质量复核未收口，保持 HOLD）
 实现基线：`codex/recovery-local-video-v01@7aae62f`；控制文档基线 `9e72860`；打包 build identity `342b65e0bd9789485bf8c9ee3efe5af856a577d7f5e7a6f380d0477ea44a1d97`
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
@@ -73,7 +73,8 @@
 | 旧 Web 入口与可见名称 | `ABSENCE_VERIFIED` | `/topics`、`/script`、`/draft` 在真实浏览器均为 404；`/production` 仅保留 CreationTask 创建和列表，任务页无 Episode/Batch 可见名称 |
 | 旧 API 写事实源 | `RUNTIME_CALL_CONFIRMED / ABSENCE_VERIFIED` | 当前 API 对旧写命名空间统一返回 410，CreationTask 仍返回 200；旧仓储 writer、隐式 GET 写回和 Episode 自动循环已移除 |
 | 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 355 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
-| 打包客户端 | `REAL_TARGET_VERIFIED` | 最终候选 `342b65…` 的 Foundation 与 CreationTask 返回 200，旧 Episode 写请求返回 410；任务页播放器真实加载 1080×1920、20.233 秒 H.264/AAC MP4，画面可见烧录字幕，独立 SRT 返回 200。发现桌面用户配置仍指向旧输出目录后，已通过既有运行设置接口将模型、素材和输出目录重新绑定到当前移动硬盘；重启后配置、任务和成片保持一致。原生保存和退出清理均通过。DMG SHA-256 为 `8928341e44c1b0109943df295f8327cbe7e55a8dc372ae1c775ec0b8de8ee8b0`，仅 ad-hoc 签名，未签名、公证或分发 |
+| 打包客户端 | `REAL_TARGET_VERIFIED` | 最终候选 `342b65…` 的 Foundation 与 CreationTask 返回 200，旧 Episode 写请求返回 410；任务页播放器真实加载 1080×1920、20.233 秒 H.264/AAC MP4，画面可见烧录字幕，独立 SRT 返回 200。发现桌面用户配置仍指向旧输出目录后，已通过既有运行设置接口将模型、素材和输出目录重新绑定到当前移动硬盘；重启后配置、任务和成片保持一致。原生保存和退出清理均通过。DMG SHA-256 为 `8928341e44c1b0109943df295f8327cbe7e55a8dc372ae1c775ec0b8de8ee8b0`。主 Mach-O 只有 linker ad-hoc 标记，完整 App bundle 的 `codesign --verify --deep --strict` 不通过；因此仅允许本机功能测试，Release 明确 `NOT ACCEPTED`，未签名、公证或分发 |
+| 独立质量复核 | `HOLD` | 独立线程确认 Git/branch、DMG 与导出 MP4 哈希、arm64 和 build identity 精确匹配，并发现完整 App bundle 签名不可验证；该线程随后未能在限定时间内给出一次性最终结论，已按停止规则中断。其结果不能当作质量 ACCEPT，也不触发新的产品修改 |
 
 ## 7. 阻断、停止和授权
 
