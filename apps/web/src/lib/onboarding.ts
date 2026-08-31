@@ -367,7 +367,7 @@ export function buildOnboardingSnapshot(input: {
     detail: databaseConfigured
       ? `已就绪：${status?.storage.database_path ?? ""}`
       : "数据库文件尚未生成，请确认 database_path 指向的目录可写。",
-    impact: "没有数据库，Episode 状态、偏好、反馈学习都会丢失。",
+    impact: "没有数据库，创作任务状态、偏好、反馈学习都会丢失。",
     state: databaseConfigured ? "ready" : "missing",
     fixHref: "/settings",
     fixLabel: "去设置路径",

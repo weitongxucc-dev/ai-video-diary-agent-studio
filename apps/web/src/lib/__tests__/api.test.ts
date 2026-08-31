@@ -11,8 +11,8 @@ beforeEach(() => {
 describe("apiUrl", () => {
   it("returns a relative path from API_BASE", async () => {
     const { apiUrl, API_BASE } = await import("../api");
-    expect(apiUrl("/api/episodes/today")).toBe(
-      `${API_BASE}/api/episodes/today`,
+    expect(apiUrl("/api/creation-tasks/task-1")).toBe(
+      `${API_BASE}/api/creation-tasks/task-1`,
     );
   });
 
@@ -27,8 +27,8 @@ describe("apiUrl", () => {
   it("returns path unchanged when API_BASE is empty string", async () => {
     vi.stubEnv("NEXT_PUBLIC_API_BASE", "");
     const { apiUrl } = await import("../api");
-    expect(apiUrl("/api/episodes/123/topic-evidence")).toBe(
-      "/api/episodes/123/topic-evidence",
+    expect(apiUrl("/api/creation-tasks/task-1/topics")).toBe(
+      "/api/creation-tasks/task-1/topics",
     );
   });
 });

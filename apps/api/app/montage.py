@@ -140,29 +140,6 @@ class MontageRepository:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def save(self, plan: MontagePlan) -> MontagePlan:
-        plan.updated_at = utc_now()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO production_montage_plans
-                    (id, workspace_id, batch_id, episode_id, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    plan.id,
-                    plan.workspace_id,
-                    plan.batch_id,
-                    plan.episode_id,
-                    json.dumps(asdict(plan), ensure_ascii=False, default=_json_default),
-                    plan.updated_at.isoformat(),
-                ),
-            )
-        return plan
-
     def get(self, workspace_id: str, plan_id: str) -> MontagePlan:
         with self._connect() as conn:
             row = conn.execute(

@@ -1650,48 +1650,6 @@ class ProductionRepository:
             )
         return voice
 
-    def select_episode_versioned_voice(
-        self,
-        workspace_id: str,
-        episode_id: str,
-        voice_profile_id: str | None,
-        voice_version: str | None,
-    ) -> VersionedVoiceProfile | None:
-        with self._connect() as conn:
-            if voice_profile_id is None and voice_version is None:
-                conn.execute(
-                    "DELETE FROM episode_voice_selections WHERE workspace_id = ? AND episode_id = ?",
-                    (workspace_id, episode_id),
-                )
-                return None
-            if voice_profile_id is None or voice_version is None:
-                raise ValueError("声音选择必须包含声音 ID 和版本")
-            voice = self._get_versioned_voice_profile(
-                conn,
-                workspace_id,
-                voice_profile_id,
-                voice_version,
-            )
-            conn.execute(
-                """
-                INSERT INTO episode_voice_selections
-                    (workspace_id, episode_id, voice_profile_id, voice_version, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, episode_id) DO UPDATE SET
-                    voice_profile_id = excluded.voice_profile_id,
-                    voice_version = excluded.voice_version,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    workspace_id,
-                    episode_id,
-                    voice.id,
-                    voice.version,
-                    utc_now().isoformat(),
-                ),
-            )
-        return voice
-
     def selected_episode_versioned_voice_identity(
         self,
         workspace_id: str,
@@ -2303,53 +2261,6 @@ class ProductionRepository:
                 and str(item["tag"]) in DEFAULT_MATERIAL_TAXONOMY
             ],
         }
-
-    def create_batch(
-        self,
-        workspace_id: str,
-        *,
-        name: str,
-        target_count: int,
-        profile: ProductionProfile | None = None,
-    ) -> ProductionBatch:
-        if not 1 <= target_count <= 50:
-            raise ValueError("单个批次的成片数必须在 1 到 50 之间")
-        readiness = self.readiness(workspace_id, profile=profile)
-        blockers = [item["code"] for item in readiness["blockers"]]
-        batch = ProductionBatch(
-            id=f"batch_{uuid4().hex[:8]}",
-            workspace_id=workspace_id,
-            name=name.strip() or f"生产批次 {utc_now().date().isoformat()}",
-            target_count=target_count,
-            status="blocked" if blockers else "created",
-            blocker_codes=blockers,
-            message=(
-                "生产基础尚未就绪，修复阻断后再启动。"
-                if blockers
-                else "批次已创建，等待自动选题。"
-            ),
-        )
-        return self.save_batch(batch)
-
-    def save_batch(self, batch: ProductionBatch) -> ProductionBatch:
-        batch.updated_at = utc_now()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO production_batches (id, workspace_id, payload, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    batch.id,
-                    batch.workspace_id,
-                    _json_payload(batch),
-                    batch.updated_at.isoformat(),
-                ),
-            )
-        return batch
 
     def list_batches(self, workspace_id: str) -> list[ProductionBatch]:
         with self._connect() as conn:

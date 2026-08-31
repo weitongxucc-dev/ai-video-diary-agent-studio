@@ -33,13 +33,13 @@ describe("auth routing", () => {
     expect(isPublicAuthPath("/auth/update-password")).toBe(true);
     expect(isPublicAuthPath("/auth/signout")).toBe(true);
     expect(isPublicAuthPath("/privacy")).toBe(true);
-    expect(isPublicAuthPath("/topics")).toBe(false);
+    expect(isPublicAuthPath("/tasks/task-1")).toBe(false);
   });
 
   it("keeps only readiness endpoints public", () => {
     expect(isPublicApiPath("/api/setup/preflight")).toBe(true);
     expect(isPublicApiPath("/api/runtime/health")).toBe(true);
-    expect(isPublicApiPath("/api/episodes/today")).toBe(false);
+    expect(isPublicApiPath("/api/creation-tasks/task-1")).toBe(false);
   });
 
   it("never trusts a browser supplied bearer token", () => {
@@ -51,20 +51,20 @@ describe("auth routing", () => {
   });
 
   it("accepts only local non-auth return paths", () => {
-    expect(sanitizeNextPath("/topics?q=video")).toBe("/topics?q=video");
+    expect(sanitizeNextPath("/tasks/task-1?view=video")).toBe("/tasks/task-1?view=video");
     expect(sanitizeNextPath("https://evil.example")).toBeNull();
     expect(sanitizeNextPath("//evil.example")).toBeNull();
     expect(sanitizeNextPath("/\\evil.example")).toBeNull();
-    expect(sanitizeNextPath("/topics\\evil.example")).toBeNull();
+    expect(sanitizeNextPath("/tasks\\evil.example")).toBeNull();
     expect(sanitizeNextPath("C:\\evil.example")).toBeNull();
-    expect(sanitizeNextPath("/signin?next=/topics")).toBeNull();
+    expect(sanitizeNextPath("/signin?next=/tasks/task-1")).toBeNull();
     expect(sanitizeNextPath("/auth/callback")).toBeNull();
   });
 
   it("only exempts onboarding repair routes from the product gate", () => {
     expect(isOnboardingSupportPath("/onboarding")).toBe(true);
     expect(isOnboardingSupportPath("/settings")).toBe(true);
-    expect(isOnboardingSupportPath("/topics")).toBe(false);
+    expect(isOnboardingSupportPath("/tasks/task-1")).toBe(false);
     expect(isOnboardingSupportApiPath("/api/onboarding/complete")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/settings/runtime")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/models")).toBe(true);
@@ -72,14 +72,14 @@ describe("auth routing", () => {
       isOnboardingSupportApiPath("/api/models/chinese-clip/install"),
     ).toBe(true);
     expect(isOnboardingSupportApiPath("/api/model-install-jobs/abc")).toBe(true);
-    expect(isOnboardingSupportApiPath("/api/episodes/today")).toBe(false);
+    expect(isOnboardingSupportApiPath("/api/creation-tasks/task-1")).toBe(false);
   });
 
   it("preserves the protected route when redirecting to sign-in", () => {
     const target = signInRedirectUrl(
-      new URL("https://app.example/topics?q=video"),
+      new URL("https://app.example/tasks/task-1?view=video"),
     );
     expect(target.pathname).toBe("/signin");
-    expect(target.searchParams.get("next")).toBe("/topics?q=video");
+    expect(target.searchParams.get("next")).toBe("/tasks/task-1?view=video");
   });
 });

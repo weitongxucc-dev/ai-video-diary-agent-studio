@@ -117,14 +117,10 @@ from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.source_repository import SourceRepository
 from app.schemas import (
-    ApproveTopicRequest,
     AuthorizationResponse,
     AuthorizationsResponse,
     AuthorizationUpsertRequest,
-    ArchiveSourcesRequest,
-    ArchiveSourcesResponse,
     AvatarLipSyncPreviewRequest,
-    ContentTemplateSelectRequest,
     ContentTemplatesResponse,
     CreationPlanConfirmRequest,
     CreationPlanPreviewRequest,
@@ -150,30 +146,21 @@ from app.schemas import (
     CreatorProfileUpdate,
     DraftAssetResponse,
     DraftEnvironmentResponse,
-    DraftImportRequest,
-    DraftImportResponse,
-    DraftPackageRequest,
-    DraftPackageResponse,
     DraftStatusResponse,
     EditPlanResponse,
-    EditPlanSegmentDecisionRequest,
     EpisodeHistoryItemResponse,
     EpisodeHistoryResponse,
     EpisodeListResponse,
     EpisodeResponse,
     EpisodeSummaryResponse,
-    EpisodeVoiceSelectionRequest,
     EpisodeVoiceSelectionResponse,
     FeedbackEventResponse,
-    FeedbackRequest,
-    FeedbackRevertRequest,
     FeedbackSummaryResponse,
     KnowledgeNoteResponse,
     KnowledgeItemResponse,
     KnowledgeItemsResponse,
     ManualSourceItemRequest,
     ManualLinkRequest,
-    MarkPublishedRequest,
     MaterialAssetResponse,
     MaterialCollectionCreateRequest,
     MaterialCollectionResponse,
@@ -189,16 +176,10 @@ from app.schemas import (
     ModelInstallJobResponse,
     ModelInstallRequest,
     MontageClipCandidateResponse,
-    MontageClipOrderRequest,
     MontageClipResponse,
-    MontageClipUpdateRequest,
-    MontagePlanConfirmRequest,
-    MontagePlanCreateRequest,
     MontagePlanResponse,
     MontagePlansResponse,
-    MontageRenderRequest,
     NarrationCueResponse,
-    NarrationArtifactResponse,
     OnboardingCompletionResponse,
     PendingVideoResponse,
     PreferenceCardResponse,
@@ -209,13 +190,11 @@ from app.schemas import (
     PreferencesResponse,
     PreferenceToggleRequest,
     ProcessedVideoResponse,
-    ProcessVideoBatchRequest,
     ProcessVideoRequest,
     ProductionBatchesResponse,
     ProductionBatchResponse,
     ProductionChainResponse,
     ProductionFoundationResponse,
-    ProductionModeRequest,
     ProductionProfileResponse,
     ProductionProfileUpdateRequest,
     PersonProfileResponse,
@@ -224,16 +203,10 @@ from app.schemas import (
     PronunciationEntriesResponse,
     PronunciationEntryResponse,
     PronunciationEntryUpsertRequest,
-    PublishMetricsUpdateRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdateRequest,
-    ScriptGenerateRequest,
-    ScriptRegenerateRequest,
-    ScriptSectionRegenerateRequest,
-    ScriptUpdateRequest,
-    ScriptVersionRevertRequest,
     SetupPreflightResponse,
     SourceFileStatesResponse,
     SourceConnectorCreateRequest,
@@ -257,7 +230,6 @@ from app.schemas import (
     TopicEvidenceReferenceResponse,
     TopicGenerationRunResponse,
     TopicRouteSnapshotResponse,
-    UploadVideoRequest,
     VoicePreviewRequest,
     VoiceProfileResponse,
     VoiceReferenceImportResponse,
@@ -566,28 +538,11 @@ def get_episode_or_404(episode_id: str) -> Episode:
 
 def episode_response(episode: Episode) -> EpisodeResponse:
     return EpisodeResponse.model_validate(
-        recover_interrupted_video_job_if_needed(episode),
+        episode,
         from_attributes=True,
     )
 
 
-def recover_interrupted_video_job_if_needed(episode: Episode) -> Episode:
-    active_statuses = {VideoJobStatus.PROCESSING, VideoJobStatus.DRAFTING}
-    job_status = _video_job_status(episode.video_job_status)
-    if (
-        episode.status == EpisodeStatus.VIDEO_PROCESSING
-        and job_status in active_statuses
-        and not video_job_runner.is_active(episode.id)
-    ):
-        episode.status = EpisodeStatus.FAILED
-        episode.video_job_status = VideoJobStatus.INTERRUPTED
-        episode.video_job_message = "后台任务已中断"
-        episode.video_job_error = (
-            "API restarted or the worker stopped before the video job finished."
-        )
-        episode.video_job_finished_at = utc_now()
-        return repo.save(episode)
-    return episode
 
 
 def _video_job_status(value: object) -> VideoJobStatus:
@@ -911,32 +866,6 @@ def get_episode_voice_selection(
         raise _media_authority_http_error(exc) from exc
 
 
-@app.put(
-    "/api/production/episodes/{episode_id}/voice",
-    response_model=EpisodeVoiceSelectionResponse,
-)
-def update_episode_voice_selection(
-    episode_id: str,
-    request: Request,
-    payload: EpisodeVoiceSelectionRequest,
-) -> EpisodeVoiceSelectionResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        repo.get(episode_id, workspace_id=workspace_id)
-        production_repo.select_episode_versioned_voice(
-            workspace_id,
-            episode_id,
-            payload.voice_profile_id,
-            payload.voice_version,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="episode or versioned voice profile not found") from exc
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
-    try:
-        return _episode_voice_selection_response(workspace_id, episode_id)
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
 
 
 def _required_media_text(value: str, field: str) -> str:
@@ -4176,10 +4105,7 @@ def update_production_material_segment(
     response_model=ProductionBatchesResponse,
 )
 def list_production_batches(request: Request) -> ProductionBatchesResponse:
-    batches = [
-        _recover_production_batch_if_needed(batch)
-        for batch in production_repo.list_batches(current_workspace_id(request))
-    ]
+    batches = production_repo.list_batches(current_workspace_id(request))
     return ProductionBatchesResponse(
         batches=[
             _production_batch_response(batch)
@@ -4189,20 +4115,6 @@ def list_production_batches(request: Request) -> ProductionBatchesResponse:
     )
 
 
-@app.post(
-    "/api/production/batches",
-)
-def create_production_batch() -> None:
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "legacy_batch_creation_retired",
-            "message": "旧的生产批次创建入口已退役，不会创建创作任务。",
-            "impact": "本次请求没有写入批次、创作方案或创作任务。",
-            "repair_action": "从创作任务进入“检查可用内容”，再完成“确认并创建任务”流程。",
-            "retryable": False,
-        },
-    )
 
 
 @app.get(
@@ -4214,340 +4126,24 @@ def get_production_batch(
     request: Request,
 ) -> ProductionBatchResponse:
     try:
-        batch = _recover_production_batch_if_needed(
-            production_repo.get_batch(current_workspace_id(request), batch_id)
-        )
+        batch = production_repo.get_batch(current_workspace_id(request), batch_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="production batch not found") from exc
     return _production_batch_response(batch)
 
 
-@app.post(
-    "/api/production/batches/{batch_id}/run",
-    response_model=ProductionBatchResponse,
-    status_code=202,
-)
-def run_production_batch(
-    batch_id: str,
-    request: Request,
-) -> ProductionBatchResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        batch = _recover_production_batch_if_needed(
-            production_repo.get_batch(workspace_id, batch_id)
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="production batch not found") from exc
-    if batch_job_runner.is_active(batch.id):
-        return _production_batch_response(batch)
-    if batch.status in {"ready", "reviewed"}:
-        return _production_batch_response(batch)
-
-    profile = production_profile_with_model_status(workspace_id)
-    readiness = production_repo.readiness(workspace_id, profile=profile)
-    blockers = [str(item["code"]) for item in readiness["blockers"]]
-    if blockers:
-        batch.status = "blocked"
-        batch.blocker_codes = blockers
-        batch.message = "生产基础尚未就绪，修复阻断后再继续。"
-        production_repo.save_batch(batch)
-        raise HTTPException(status_code=409, detail=batch.message)
-
-    batch.status = "running"
-    batch.blocker_codes = []
-    batch.started_at = batch.started_at or utc_now()
-    batch.finished_at = None
-    batch.message = "批次已进入串行队列，正在准备第一条内容。"
-    production_repo.save_batch(batch)
-    submitted = batch_job_runner.submit(
-        batch.id,
-        lambda: _complete_production_batch(workspace_id, batch.id),
-        workspace_id=workspace_id,
-    )
-    if not submitted:
-        batch = production_repo.get_batch(workspace_id, batch.id)
-    return _production_batch_response(batch)
 
 
-def _recover_production_batch_if_needed(batch: ProductionBatch) -> ProductionBatch:
-    if (
-        batch.status != "running"
-        or batch.started_at is None
-        or batch_job_runner.is_active(batch.id)
-    ):
-        return batch
-    for item in batch.items:
-        if item.status == "running":
-            item.status = "interrupted"
-            item.message = "应用重启导致任务中断，可从当前条目继续。"
-            item.updated_at = utc_now()
-    batch.status = "interrupted"
-    batch.finished_at = utc_now()
-    batch.message = "上次批量任务已中断，点击继续后会保留已生成成片。"
-    return production_repo.save_batch(batch)
 
 
-def _eligible_batch_episodes(workspace_id: str) -> list[Episode]:
-    allowed = {
-        EpisodeStatus.SCRIPT_APPROVED,
-        EpisodeStatus.WAITING_VIDEO,
-        EpisodeStatus.VIDEO_PROCESSING,
-        EpisodeStatus.DRAFT_READY,
-        EpisodeStatus.PUBLISHED,
-    }
-    return [
-        episode
-        for episode in repo.all(workspace_id=workspace_id)
-        if episode.script is not None and episode.status in allowed
-    ]
 
 
-def _complete_production_batch(workspace_id: str, batch_id: str) -> None:
-    try:
-        batch = production_repo.get_batch(workspace_id, batch_id)
-        eligible = _eligible_batch_episodes(workspace_id)
-        known_ids = {item.episode_id for item in batch.items}
-        for episode in eligible:
-            if len(batch.items) >= batch.target_count:
-                break
-            if episode.id not in known_ids:
-                batch.items.append(ProductionBatchItem(episode_id=episode.id))
-                known_ids.add(episode.id)
-        production_repo.save_batch(batch)
-
-        for item in batch.items[: batch.target_count]:
-            if item.status == "rendered":
-                continue
-            item.status = "running"
-            item.attempts += 1
-            item.updated_at = utc_now()
-            item.message = "正在生成旁白与混剪时间线。"
-            batch.status = "running"
-            batch.message = (
-                f"正在处理 {item.episode_id}；"
-                f"已完成 {batch.rendered_count}/{batch.target_count} 条。"
-            )
-            production_repo.save_batch(batch)
-            try:
-                _process_production_batch_item(workspace_id, batch, item)
-            except Exception as exc:
-                item.status = "failed"
-                item.message = str(exc)
-                item.updated_at = utc_now()
-                logger.exception(
-                    "production batch item failed: batch=%s episode=%s",
-                    batch.id,
-                    item.episode_id,
-                )
-            production_repo.save_batch(batch)
-        _finalize_production_batch(workspace_id, batch_id, len(eligible))
-    except Exception:
-        logger.exception("production batch failed: %s", batch_id)
-        try:
-            batch = production_repo.get_batch(workspace_id, batch_id)
-            batch.status = "failed"
-            batch.finished_at = utc_now()
-            batch.message = "批量执行器异常停止，已完成条目会保留，可重试。"
-            production_repo.save_batch(batch)
-        except Exception:
-            logger.exception("unable to persist failed production batch: %s", batch_id)
 
 
-def _process_production_batch_item(
-    workspace_id: str,
-    batch: ProductionBatch,
-    item: ProductionBatchItem,
-) -> None:
-    episode = repo.get(item.episode_id, workspace_id=workspace_id)
-    if episode.id not in batch.episode_ids:
-        batch.episode_ids.append(episode.id)
-    existing = next(
-        (
-            plan
-            for plan in montage_repo.list_for_batch(workspace_id, batch.id)
-            if plan.episode_id == episode.id and plan.status != "failed"
-        ),
-        None,
-    )
-    if existing is not None and existing.status == "rendered":
-        item.status = "rendered"
-        item.plan_id = existing.id
-        item.narration_audio_path = existing.narration_audio_path
-        item.output_path = existing.output_path
-        item.message = "已复用完成的初版成片。"
-        item.updated_at = utc_now()
-        return
-    if existing is not None and existing.status == "waiting_for_user":
-        item.status = "waiting_for_user"
-        item.plan_id = existing.id
-        item.narration_audio_path = existing.narration_audio_path
-        item.message = existing.message
-        item.updated_at = utc_now()
-        return
-
-    plan = existing
-    if plan is None or not plan.narration_audio_path:
-        profile = production_profile_with_model_status(workspace_id)
-        narration = _narration_for_episode(workspace_id, episode, profile)
-        narration_reference = production_repo.narration_artifact_reference(
-            narration.cache_key
-        )
-        rebuilt = montage_planner.build(
-            workspace_id=workspace_id,
-            batch=batch,
-            episode=episode,
-            profile=profile,
-            assets=production_repo.list_assets(workspace_id),
-            narration_audio_path=narration_reference,
-            narration_duration_seconds=narration.duration_seconds,
-        )
-        _normalize_montage_clip_references(workspace_id, rebuilt)
-        if plan is not None:
-            rebuilt.id = plan.id
-            rebuilt.created_at = plan.created_at
-        plan = montage_repo.save(rebuilt)
-        if episode.id not in batch.episode_ids:
-            batch.episode_ids.append(episode.id)
-
-    item.plan_id = plan.id
-    item.narration_audio_path = plan.narration_audio_path
-    if plan.status == "waiting_for_user":
-        item.status = "waiting_for_user"
-        item.message = plan.message
-        item.updated_at = utc_now()
-        return
-    if not plan.narration_audio_path:
-        raise ValueError("混剪计划没有可用的旁白音频。")
-    narration_reference = plan.narration_audio_path
-    resolved_narration_audio_path = (
-        production_repo.resolve_authorized_narration_audio_reference(
-            workspace_id,
-            narration_reference,
-        )
-    )
-    if (
-        not resolved_narration_audio_path.is_file()
-        or resolved_narration_audio_path.stat().st_size == 0
-    ):
-        raise MediaAuthorityError(
-            reason="narration_audio_unavailable",
-            impact="混剪渲染未使用不存在或为空的旁白音频。",
-            repair_action="重新生成当前工作区的旁白后再渲染。",
-        )
-    rendered = _render_montage_with_resolved_clip_sources(
-        workspace_id,
-        plan,
-        resolved_narration_audio_path,
-    )
-    rendered.narration_audio_path = narration_reference
-    montage_repo.save(rendered)
-    _record_montage_usage(workspace_id, rendered)
-    item.status = "rendered"
-    item.output_path = rendered.output_path
-    item.message = rendered.message
-    item.updated_at = utc_now()
 
 
-def _finalize_production_batch(
-    workspace_id: str,
-    batch_id: str,
-    eligible_count: int,
-) -> ProductionBatch:
-    batch = production_repo.get_batch(workspace_id, batch_id)
-    batch.finished_at = utc_now()
-    if batch.rendered_count >= batch.target_count:
-        batch.status = "ready"
-        batch.message = "批次初版成片已全部生成，等待最终审核。"
-    elif batch.waiting_review_count:
-        batch.status = "waiting_for_user"
-        batch.message = (
-            f"已生成 {batch.rendered_count}/{batch.target_count} 条；"
-            f"有 {batch.waiting_review_count} 条时间线等待镜头确认。"
-        )
-    elif batch.failed_count and batch.rendered_count == 0:
-        batch.status = "failed"
-        batch.message = (
-            f"本轮 {batch.failed_count} 条失败，修复原因后可继续，"
-            "已完成结果不会重做。"
-        )
-    else:
-        batch.status = "created"
-        failure_message = (
-            f"本轮 {batch.failed_count} 条失败，可修复后继续；"
-            if batch.failed_count
-            else ""
-        )
-        batch.message = (
-            f"已生成 {batch.rendered_count}/{batch.target_count} 条；"
-            f"{failure_message}当前有 {eligible_count} 条已确认文案。"
-        )
-    return production_repo.save_batch(batch)
 
 
-def _narration_for_episode(
-    workspace_id: str,
-    episode: Episode,
-    profile: ProductionProfile | None = None,
-) -> NarrationArtifact:
-    profile = profile or production_profile_with_model_status(workspace_id)
-    inputs = production_repo.resolve_episode_narration_inputs(
-        workspace_id,
-        episode.id,
-    )
-    cache_key = narration_generator.cache_key(
-        episode=episode,
-        profile=profile,
-        voice_identity=inputs.voice,
-        pronunciation_entries=inputs.pronunciation_entries,
-    )
-    cached = production_repo.get_narration_artifact(workspace_id, cache_key)
-    if cached is not None:
-        return NarrationArtifact(
-            episode_id=cached.episode_id,
-            audio_path=cached.audio_path,
-            duration_seconds=cached.duration_seconds,
-            sample_rate=cached.sample_rate,
-            model_id=cached.model_id,
-            voice_profile_id=cached.voice_profile_id,
-            cache_key=cached.cache_key,
-        )
-    resolved_reference_audio_path = production_repo.resolve_workspace_media_reference(
-        workspace_id,
-        inputs.voice.reference_audio_path,
-        require_registered=True,
-    )
-    if (
-        not resolved_reference_audio_path.is_file()
-        or resolved_reference_audio_path.stat().st_size == 0
-    ):
-        raise MediaAuthorityError(
-            reason="voice_reference_unavailable",
-            impact="声音参考不可用，未调用声音模型或复用旧配音。",
-            repair_action="确认当前工作区已授权媒体根内的参考音频存在且非空。",
-        )
-    artifact = narration_generator.generate(
-        workspace_id=workspace_id,
-        episode=episode,
-        profile=profile,
-        voice_identity=inputs.voice,
-        pronunciation_entries=inputs.pronunciation_entries,
-        resolved_reference_audio_path=resolved_reference_audio_path,
-    )
-    production_repo.save_narration_artifact(
-        NarrationArtifactRecord(
-            id=f"narration_{artifact.cache_key[:16]}",
-            workspace_id=workspace_id,
-            episode_id=episode.id,
-            script_id=episode.script.id if episode.script is not None else "",
-            voice_profile_id=artifact.voice_profile_id,
-            cache_key=artifact.cache_key,
-            audio_path=artifact.audio_path,
-            duration_seconds=artifact.duration_seconds,
-            sample_rate=artifact.sample_rate,
-            model_id=artifact.model_id,
-        )
-    )
-    return artifact
 
 
 def _record_montage_usage(workspace_id: str, plan) -> None:
@@ -4561,13 +4157,6 @@ def _record_montage_usage(workspace_id: str, plan) -> None:
         )
 
 
-def _normalize_montage_clip_references(workspace_id: str, plan):
-    for clip in plan.clips:
-        clip.source_path = production_repo.workspace_media_reference_for_asset(
-            workspace_id,
-            clip.asset_id,
-        )
-    return plan
 
 
 def _render_montage_with_resolved_clip_sources(
@@ -4598,36 +4187,6 @@ def _render_montage_with_resolved_clip_sources(
         plan.narration_audio_path = original_narration_reference
 
 
-@app.post(
-    "/api/production/episodes/{episode_id}/narration",
-    response_model=NarrationArtifactResponse,
-)
-def generate_production_narration(
-    episode_id: str,
-    request: Request,
-) -> NarrationArtifactResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        episode = repo.get(episode_id, workspace_id=workspace_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="episode not found") from exc
-    try:
-        artifact = _narration_for_episode(workspace_id, episode)
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
-    except VoiceCloneError as exc:
-        raise _voice_clone_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return NarrationArtifactResponse(
-        episode_id=artifact.episode_id,
-        audio_reference=production_repo.narration_artifact_reference(artifact.cache_key),
-        duration_seconds=artifact.duration_seconds,
-        sample_rate=artifact.sample_rate,
-        model_id=artifact.model_id,
-        voice_profile_id=artifact.voice_profile_id,
-        cache_key=artifact.cache_key,
-    )
 
 
 @app.get(
@@ -4653,128 +4212,8 @@ def list_production_montage_plans(
     )
 
 
-@app.post(
-    "/api/production/batches/{batch_id}/montage-plans",
-    response_model=MontagePlanResponse,
-)
-def create_production_montage_plan(
-    batch_id: str,
-    request: Request,
-    payload: MontagePlanCreateRequest,
-) -> MontagePlanResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        batch = production_repo.get_batch(workspace_id, batch_id)
-        episode = repo.get(payload.episode_id, workspace_id=workspace_id)
-        existing_plan = next(
-            (
-                item
-                for item in montage_repo.list_for_batch(workspace_id, batch_id)
-                if item.episode_id == episode.id and item.status != "failed"
-            ),
-            None,
-        )
-        if existing_plan is not None:
-            raise ValueError("该 Episode 已存在可恢复的混剪计划")
-        profile = production_profile_with_model_status(workspace_id)
-        narration = _narration_for_episode(workspace_id, episode, profile)
-        narration_audio_path = production_repo.narration_artifact_reference(
-            narration.cache_key
-        )
-        audio_duration = narration.duration_seconds
-        plan = montage_planner.build(
-            workspace_id=workspace_id,
-            batch=batch,
-            episode=episode,
-            profile=profile,
-            assets=production_repo.list_assets(workspace_id),
-            narration_audio_path=narration_audio_path,
-            narration_duration_seconds=audio_duration,
-        )
-        _normalize_montage_clip_references(workspace_id, plan)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="batch or episode not found") from exc
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
-    except VoiceCloneError as exc:
-        raise _voice_clone_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    montage_repo.save(plan)
-    if episode.id not in batch.episode_ids:
-        batch.episode_ids.append(episode.id)
-    batch_item = next(
-        (item for item in batch.items if item.episode_id == episode.id),
-        None,
-    )
-    if batch_item is None:
-        batch_item = ProductionBatchItem(episode_id=episode.id)
-        batch.items.append(batch_item)
-    batch_item.plan_id = plan.id
-    batch_item.narration_audio_path = plan.narration_audio_path
-    batch_item.status = "waiting_for_user" if plan.status == "waiting_for_user" else "queued"
-    batch_item.message = plan.message
-    batch_item.updated_at = utc_now()
-    batch.status = "waiting_for_user" if plan.status == "waiting_for_user" else "created"
-    batch.message = (
-        "混剪时间线等待镜头确认。"
-        if plan.status == "waiting_for_user"
-        else "混剪时间线已就绪，等待渲染。"
-    )
-    production_repo.save_batch(batch)
-    return _montage_plan_response(plan)
 
 
-@app.post(
-    "/api/production/montage-plans/{plan_id}/confirm",
-    response_model=MontagePlanResponse,
-)
-def confirm_production_montage_clips(
-    plan_id: str,
-    request: Request,
-    payload: MontagePlanConfirmRequest,
-) -> MontagePlanResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        plan = montage_repo.get(workspace_id, plan_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    requested = set(payload.clip_ids)
-    known = {clip.id for clip in plan.clips}
-    if not requested <= known:
-        raise HTTPException(status_code=400, detail="montage clip not found")
-    for clip in plan.clips:
-        if clip.id in requested and clip.needs_confirmation:
-            clip.needs_confirmation = False
-            clip.match_reasons.append("已由用户确认")
-    plan.low_confidence_clip_count = sum(clip.needs_confirmation for clip in plan.clips)
-    if plan.low_confidence_clip_count == 0:
-        plan.status = "ready"
-        plan.message = "所有低置信镜头已确认，可以进入渲染。"
-    else:
-        plan.message = f"仍有 {plan.low_confidence_clip_count} 个镜头等待确认。"
-    montage_repo.save(plan)
-    batch = production_repo.get_batch(workspace_id, plan.batch_id)
-    batch_item = next(
-        (item for item in batch.items if item.episode_id == plan.episode_id),
-        None,
-    )
-    if batch_item is None:
-        batch_item = ProductionBatchItem(episode_id=plan.episode_id)
-        batch.items.append(batch_item)
-    batch_item.plan_id = plan.id
-    batch_item.status = "queued" if plan.status == "ready" else "waiting_for_user"
-    batch_item.message = plan.message
-    batch_item.updated_at = utc_now()
-    batch.status = "created" if plan.status == "ready" else "waiting_for_user"
-    batch.message = (
-        "混剪时间线已就绪，等待渲染。"
-        if plan.status == "ready"
-        else "混剪时间线仍有镜头等待确认。"
-    )
-    production_repo.save_batch(batch)
-    return _montage_plan_response(plan)
 
 
 @app.get(
@@ -4891,229 +4330,10 @@ def list_production_montage_clip_candidates(
     return candidates[:24]
 
 
-@app.patch(
-    "/api/production/montage-plans/{plan_id}/clips/{clip_id}",
-    response_model=MontagePlanResponse,
-)
-def update_production_montage_clip(
-    plan_id: str,
-    clip_id: str,
-    request: Request,
-    payload: MontageClipUpdateRequest,
-) -> MontagePlanResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        plan = montage_repo.get(workspace_id, plan_id)
-        clip = next(item for item in plan.clips if item.id == clip_id)
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=404, detail="montage clip not found") from exc
-    if plan.status == "rendering":
-        raise HTTPException(status_code=409, detail="montage plan is rendering")
-    asset_id = payload.asset_id or clip.asset_id
-    segment_id = payload.segment_id or clip.segment_id
-    if payload.asset_id is not None or payload.segment_id is not None:
-        try:
-            asset = production_repo.get_asset(workspace_id, asset_id)
-            segment = next(item for item in asset.segments if item.id == segment_id)
-        except (KeyError, StopIteration) as exc:
-            raise HTTPException(status_code=404, detail="material segment not found") from exc
-        if asset.review_status != "approved" or not asset.rights_confirmed or not asset.brand_safe or segment.review_status != "approved":
-            raise HTTPException(status_code=409, detail="material segment has not passed review")
-        clip.asset_id = asset.id
-        clip.segment_id = segment.id
-        clip.source_path = production_repo.workspace_media_reference_for_asset(
-            workspace_id,
-            asset.id,
-        )
-        clip.role = "a_roll" if segment.usage_role == "a_roll" else "b_roll"
-        clip.match_reasons = ["由用户替换", "已通过版权和品牌审核"]
-        clip.match_score = 1.0
-        clip.manually_selected = True
-    else:
-        asset = production_repo.get_asset(workspace_id, clip.asset_id)
-        segment = next((item for item in asset.segments if item.id == clip.segment_id), None)
-        if segment is None:
-            raise HTTPException(status_code=404, detail="material segment not found")
-    slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-    source_start = payload.source_start_seconds if payload.source_start_seconds is not None else max(segment.start_seconds, clip.source_start_seconds)
-    source_end = source_start + slot_duration
-    if source_start < segment.start_seconds - 1e-6 or source_end > segment.end_seconds + 1e-6:
-        raise HTTPException(status_code=400, detail="trim range exceeds the reviewed segment")
-    clip.source_start_seconds = round(source_start, 3)
-    clip.source_end_seconds = round(source_end, 3)
-    if payload.locked is not None:
-        clip.locked = payload.locked
-    if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
-        clip.needs_confirmation = False
-    _refresh_montage_review_state(plan)
-    montage_repo.save(plan)
-    return _montage_plan_response(plan)
 
 
-@app.put(
-    "/api/production/montage-plans/{plan_id}/clips/order",
-    response_model=MontagePlanResponse,
-)
-def reorder_production_montage_clips(
-    plan_id: str,
-    request: Request,
-    payload: MontageClipOrderRequest,
-) -> MontagePlanResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        plan = montage_repo.get(workspace_id, plan_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    if set(payload.clip_ids) != {clip.id for clip in plan.clips} or len(payload.clip_ids) != len(plan.clips):
-        raise HTTPException(status_code=400, detail="clip order must contain every clip exactly once")
-    by_id = {clip.id: clip for clip in plan.clips}
-    for index, current in enumerate(plan.clips):
-        if current.locked and payload.clip_ids[index] != current.id:
-            raise HTTPException(status_code=409, detail="locked clips cannot be moved")
-    sources = [
-        {
-            "asset_id": by_id[clip_id].asset_id,
-            "segment_id": by_id[clip_id].segment_id,
-            "source_path": by_id[clip_id].source_path,
-            "source_start_seconds": by_id[clip_id].source_start_seconds,
-            "source_end_seconds": by_id[clip_id].source_end_seconds,
-            "match_score": by_id[clip_id].match_score,
-            "match_reasons": list(by_id[clip_id].match_reasons),
-            "needs_confirmation": by_id[clip_id].needs_confirmation,
-            "role": by_id[clip_id].role,
-        }
-        for clip_id in payload.clip_ids
-    ]
-    for target, source in zip(plan.clips, sources, strict=True):
-        if target.locked:
-            continue
-        target.asset_id = str(source["asset_id"])
-        target.segment_id = str(source["segment_id"])
-        target.source_path = str(source["source_path"])
-        target.source_start_seconds = float(source["source_start_seconds"])
-        target.source_end_seconds = float(source["source_end_seconds"])
-        target.match_score = float(source["match_score"])
-        target.match_reasons = [*source["match_reasons"], "由用户调整视觉顺序"]
-        target.needs_confirmation = bool(source["needs_confirmation"])
-        target.role = source["role"]
-        target.manually_selected = True
-    _refresh_montage_review_state(plan)
-    montage_repo.save(plan)
-    return _montage_plan_response(plan)
 
 
-@app.post(
-    "/api/production/montage-plans/{plan_id}/render",
-    response_model=MontagePlanResponse,
-)
-def render_production_montage_plan(
-    plan_id: str,
-    request: Request,
-    payload: MontageRenderRequest,
-) -> MontagePlanResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        plan = montage_repo.get(workspace_id, plan_id)
-        narration_reference = plan.narration_audio_path
-        if not narration_reference:
-            raise MediaAuthorityError(
-                reason="narration_audio_unavailable",
-                impact="混剪计划没有已持久化的旁白引用，未调用渲染器。",
-                repair_action="重新创建混剪计划以由服务端绑定旁白。",
-            )
-        resolved_narration_audio_path = production_repo.resolve_authorized_narration_audio_reference(
-            workspace_id,
-            narration_reference,
-        )
-        if (
-            not resolved_narration_audio_path.is_file()
-            or resolved_narration_audio_path.stat().st_size == 0
-        ):
-            raise MediaAuthorityError(
-                reason="narration_audio_unavailable",
-                impact="混剪渲染未使用不存在或为空的旁白音频。",
-                repair_action="选择当前工作区已授权媒体根内的非空旁白音频。",
-            )
-        audio_duration = montage_renderer.audio_duration(resolved_narration_audio_path)
-        if abs(audio_duration - plan.duration_seconds) > 0.5:
-            batch = production_repo.get_batch(workspace_id, plan.batch_id)
-            episode = repo.get(plan.episode_id, workspace_id=workspace_id)
-            rebuilt = montage_planner.build(
-                workspace_id=workspace_id,
-                batch=batch,
-                episode=episode,
-                profile=production_repo.get_profile(workspace_id),
-                assets=production_repo.list_assets(workspace_id),
-                narration_audio_path=narration_reference,
-                narration_duration_seconds=audio_duration,
-            )
-            _normalize_montage_clip_references(workspace_id, rebuilt)
-            rebuilt.id = plan.id
-            rebuilt.created_at = plan.created_at
-            plan = montage_repo.save(rebuilt)
-            if plan.status != "ready":
-                batch_item = next(
-                    (item for item in batch.items if item.episode_id == plan.episode_id),
-                    None,
-                )
-                if batch_item is None:
-                    batch_item = ProductionBatchItem(episode_id=plan.episode_id)
-                    batch.items.append(batch_item)
-                batch_item.plan_id = plan.id
-                batch_item.status = "waiting_for_user"
-                batch_item.narration_audio_path = plan.narration_audio_path
-                batch_item.message = plan.message
-                batch_item.updated_at = utc_now()
-                batch.status = "waiting_for_user"
-                batch.message = "已按真实旁白时长重排时间线，等待镜头确认。"
-                production_repo.save_batch(batch)
-                raise HTTPException(
-                    status_code=409,
-                    detail="旁白时长与原计划不同，已重新生成时间线；请确认低置信镜头后再渲染",
-                )
-        rendered = _render_montage_with_resolved_clip_sources(
-            workspace_id,
-            plan,
-            resolved_narration_audio_path,
-        )
-        # The renderer needs the resolved local path, but persisted/API state must
-        # retain the server-bound logical narration reference.
-        rendered.narration_audio_path = narration_reference
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (OSError, subprocess.SubprocessError) as exc:
-        montage_repo.save(plan)
-        raise HTTPException(status_code=500, detail=plan.message) from exc
-
-    montage_repo.save(rendered)
-    _record_montage_usage(workspace_id, rendered)
-    batch = production_repo.get_batch(workspace_id, rendered.batch_id)
-    batch_item = next(
-        (item for item in batch.items if item.episode_id == rendered.episode_id),
-        None,
-    )
-    if batch_item is None:
-        batch_item = ProductionBatchItem(episode_id=rendered.episode_id)
-        batch.items.append(batch_item)
-    batch_item.plan_id = rendered.id
-    batch_item.status = "rendered"
-    batch_item.narration_audio_path = rendered.narration_audio_path
-    batch_item.output_path = rendered.output_path
-    batch_item.message = rendered.message
-    batch_item.updated_at = utc_now()
-    rendered_count = batch.rendered_count
-    batch.status = "ready" if rendered_count >= batch.target_count else "created"
-    batch.message = (
-        "批次初版成片已全部生成，等待最终审核。"
-        if batch.status == "ready"
-        else f"已生成 {rendered_count}/{batch.target_count} 条初版成片，可继续批量生产。"
-    )
-    production_repo.save_batch(batch)
-    return _montage_plan_response(rendered)
 
 
 @app.get("/api/version")
@@ -5215,7 +4435,6 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
         )
 
     if not auth_context.enabled:
-        repo.today(workspace_id=LEGACY_WORKSPACE_ID)
         return OnboardingCompletionResponse(
             workspace_id=LEGACY_WORKSPACE_ID,
             completed=True,
@@ -5224,11 +4443,6 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.user_id or not principal.workspace_id:
         raise HTTPException(status_code=403, detail="workspace context is required")
-
-    # The first workbench visit expects today's Episode to exist. Create it
-    # before recording the corresponding onboarding step; repo.today() is
-    # idempotent for the workspace/date pair, so retries stay safe.
-    repo.today(workspace_id=principal.workspace_id)
 
     try:
         auth_context.complete_onboarding(
@@ -6042,59 +5256,16 @@ def get_draft_status() -> DraftStatusResponse:
     )
 
 
-@app.post("/api/drafts/package", response_model=DraftPackageResponse)
-def create_draft_package(
-    request: Request,
-    body: DraftPackageRequest,
-) -> DraftPackageResponse:
-    ws = current_workspace_id(request)
-    try:
-        package = draft_workspace.create_package_and_import_to_jianying(
-            video_file_name=body.video_file_name,
-            episode=repo.today(workspace_id=ws),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return DraftPackageResponse.model_validate(package, from_attributes=True)
 
 
-@app.post("/api/drafts/import", response_model=DraftImportResponse)
-def import_draft_package(request: DraftImportRequest) -> DraftImportResponse:
-    try:
-        result = draft_workspace.import_package_to_jianying(request.package_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return DraftImportResponse.model_validate(result, from_attributes=True)
 
 
-def _pending_video_by_name(file_name: str):
-    for video in video_inbox.pending_videos():
-        if video.file_name == file_name:
-            return video
-    raise ValueError("pending video not found")
 
 
-def _pending_videos_by_name(file_names: list[str]):
-    pending_by_name = {
-        video.file_name: video
-        for video in video_inbox.pending_videos()
-    }
-    try:
-        return [pending_by_name[file_name] for file_name in file_names]
-    except KeyError as exc:
-        raise ValueError("pending video not found") from exc
 
 
-@app.get("/api/episodes/today", response_model=EpisodeResponse)
-def get_today_episode(request: Request) -> EpisodeResponse:
-    return episode_response(repo.today(workspace_id=current_workspace_id(request)))
 
 
-@app.post("/api/episodes", response_model=EpisodeResponse)
-def create_episode(request: Request) -> EpisodeResponse:
-    return episode_response(
-        repo.create(workspace_id=current_workspace_id(request))
-    )
 
 
 @app.get("/api/episodes/{episode_id}", response_model=EpisodeResponse)
@@ -6102,18 +5273,6 @@ def get_episode(episode_id: str, request: Request) -> EpisodeResponse:
     return episode_response(get_episode_or_404(episode_id))
 
 
-@app.post("/api/episodes/{episode_id}/content-template", response_model=EpisodeResponse)
-def select_episode_content_template(
-    episode_id: str,
-    request: ContentTemplateSelectRequest,
-) -> EpisodeResponse:
-    try:
-        get_content_template(request.template_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="content template not found") from exc
-    episode = get_episode_or_404(episode_id)
-    episode.content_template_id = request.template_id
-    return episode_response(repo.save(episode))
 
 
 @app.get("/api/episodes/{episode_id}/retake-report", response_model=RetakeReportResponse)
@@ -6123,57 +5282,14 @@ def get_episode_retake_report(episode_id: str) -> RetakeReportResponse:
 
 @app.get("/api/episodes/{episode_id}/edit-plan", response_model=EditPlanResponse)
 def get_episode_edit_plan(episode_id: str) -> EditPlanResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
+    episode = get_episode_or_404(episode_id)
     return EditPlanResponse.model_validate(
         build_edit_plan_workspace(episode, settings.video_output_path)
     )
 
 
-@app.post(
-    "/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/decision",
-    response_model=EditPlanResponse,
-)
-def update_episode_edit_plan_segment_decision(
-    episode_id: str,
-    segment_id: str,
-    request: EditPlanSegmentDecisionRequest,
-) -> EditPlanResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    try:
-        workspace = update_edit_plan_segment_decision(
-            episode,
-            settings.video_output_path,
-            segment_id=segment_id,
-            action=request.action,
-            reason=request.reason,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return EditPlanResponse.model_validate(workspace)
 
 
-@app.post(
-    "/api/episodes/{episode_id}/edit-plan/segments/{segment_id}/revert",
-    response_model=EditPlanResponse,
-)
-def revert_episode_edit_plan_segment_decision(
-    episode_id: str,
-    segment_id: str,
-) -> EditPlanResponse:
-    episode = recover_interrupted_video_job_if_needed(get_episode_or_404(episode_id))
-    try:
-        workspace = revert_edit_plan_segment_decision(
-            episode,
-            settings.video_output_path,
-            segment_id=segment_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return EditPlanResponse.model_validate(workspace)
 
 
 @app.get("/api/retake-reports/latest", response_model=RetakeReportResponse)
@@ -6208,183 +5324,26 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
         raise HTTPException(status_code=404, detail="retake report not found") from exc
 
 
-@app.post("/api/episodes/{episode_id}/generate-topics", response_model=EpisodeResponse)
-def generate_topics(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = get_episode_or_404(episode_id)
-        _require_feature("generate-topics")
-        episode = workflow.run(
-            "generate_topics",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-        )
-    except TopicGenerationConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except TopicGenerationResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/regenerate-topics", response_model=EpisodeResponse)
-def regenerate_topics(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = get_episode_or_404(episode_id)
-        _require_feature("generate-topics")
-        episode = workflow.run(
-            "regenerate_topics",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-        )
-    except TopicGenerationConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except TopicGenerationResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/approve-topic", response_model=EpisodeResponse)
-def approve_topic(episode_id: str, request: ApproveTopicRequest) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "approve_topic",
-            get_episode_or_404(episode_id),
-            topic_id=request.topic_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/generate-script", response_model=EpisodeResponse)
-def generate_script(
-    episode_id: str,
-    request: ScriptGenerateRequest | None = None,
-) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    if episode.selected_topic_id is None:
-        raise HTTPException(status_code=400, detail="approve a topic first")
-    try:
-        episode = workflow.run(
-            "generate_script",
-            episode,
-            feedback_history=feedback_history_for(episode_id),
-            target_duration_seconds=(
-                request.target_duration_seconds if request is not None else None
-            ),
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/script", response_model=EpisodeResponse)
-def update_episode_script(
-    episode_id: str,
-    request: ScriptUpdateRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "update_script",
-            get_episode_or_404(episode_id),
-            script=_script_package_from_response(request.script),
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/script/regenerate", response_model=EpisodeResponse)
-def regenerate_episode_script(
-    episode_id: str,
-    request: ScriptRegenerateRequest,
-) -> EpisodeResponse:
-    try:
-        get_episode_or_404(episode_id)
-        _require_feature("regenerate-script")
-        episode = workflow.run(
-            "regenerate_script",
-            get_episode_or_404(episode_id),
-            feedback_history=feedback_history_for(episode_id),
-            reason=request.reason,
-            target_duration_seconds=request.target_duration_seconds,
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post(
-    "/api/episodes/{episode_id}/script/sections/{section_id}/regenerate",
-    response_model=EpisodeResponse,
-)
-def regenerate_episode_script_section(
-    episode_id: str,
-    section_id: str,
-    request: ScriptSectionRegenerateRequest,
-) -> EpisodeResponse:
-    try:
-        get_episode_or_404(episode_id)
-        _require_feature("regenerate-section")
-        episode = workflow.run(
-            "regenerate_script_section",
-            get_episode_or_404(episode_id),
-            section_id=section_id,
-            feedback_history=feedback_history_for(episode_id),
-            reason=request.reason,
-        )
-    except LLMConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/script/revert", response_model=EpisodeResponse)
-def revert_episode_script_version(
-    episode_id: str,
-    request: ScriptVersionRevertRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "revert_script_version",
-            get_episode_or_404(episode_id),
-            version_id=request.version_id,
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-def _legacy_voice_command_retired() -> None:
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "legacy_voice_command_retired",
-            "reason": "旧的 Episode 对话指令已退役，不能再生成选题、脚本或旧剪辑草稿。",
-            "impact": "本次请求不会修改创作内容、剪辑文件或任务状态。",
-            "repair_action": "请在创作任务页手动创建任务；目标自动搭建制作方案将在新能力接入后开放。",
-        },
-    )
 
 
-@app.post("/api/episodes/{episode_id}/voice-command/preview")
-def preview_voice_command(episode_id: str) -> None:
-    _legacy_voice_command_retired()
 
 
-@app.post("/api/episodes/{episode_id}/voice-command/execute")
-def execute_voice_command(episode_id: str) -> None:
-    _legacy_voice_command_retired()
 
 
 @app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
@@ -6610,292 +5569,36 @@ def _extract_frequent_phrases(
     return result
 
 
-@app.post("/api/episodes/{episode_id}/approve-script", response_model=EpisodeResponse)
-def approve_script(episode_id: str) -> EpisodeResponse:
-    try:
-        episode = workflow.run("approve_script", get_episode_or_404(episode_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/upload-video", response_model=EpisodeResponse)
-def upload_video(episode_id: str, request: UploadVideoRequest) -> EpisodeResponse:
-    try:
-        video = _pending_video_by_name(request.file_name)
-        episode = workflow.run(
-            "bind_video",
-            get_episode_or_404(episode_id),
-            video=video,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/process-video", response_model=EpisodeResponse)
-def process_episode_video(
-    episode_id: str,
-    request: ProcessVideoRequest,
-) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    _require_feature("process-video")
-    file_name = request.file_name or episode.video_source_file_name
-    if not file_name:
-        raise HTTPException(status_code=400, detail="bind or provide a video first")
-    try:
-        processed = video_pipeline.process(file_name)
-        episode = workflow.run("bind_processed_video", episode, video=processed)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/process-ad-hoc-video", response_model=EpisodeResponse)
-def process_ad_hoc_episode_video(
-    episode_id: str,
-    request: Request,
-    body: ProcessVideoRequest,
-) -> EpisodeResponse:
-    if not body.file_name:
-        raise HTTPException(status_code=400, detail="file_name is required")
-    if video_job_runner.is_active(episode_id):
-        return episode_response(get_episode_or_404(episode_id))
-    ws = current_workspace_id(request)
-    try:
-        episode = workflow.run(
-            "bind_ad_hoc_video",
-            get_episode_or_404(episode_id),
-            video=_pending_video_by_name(body.file_name),
-        )
-        _start_video_job(episode)
-        episode = repo.save(episode)
-        video_job_runner.submit(
-            episode_id,
-            lambda: _complete_ad_hoc_episode_video(episode_id, body.file_name),
-            workspace_id=ws,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.get(episode_id))
 
 
-@app.post(
-    "/api/episodes/{episode_id}/process-ad-hoc-video-batch",
-    response_model=EpisodeResponse,
-)
-def process_ad_hoc_episode_video_batch(
-    episode_id: str,
-    request: Request,
-    body: ProcessVideoBatchRequest,
-) -> EpisodeResponse:
-    if video_job_runner.is_active(episode_id):
-        return episode_response(get_episode_or_404(episode_id))
-    ws = current_workspace_id(request)
-    try:
-        videos = _pending_videos_by_name(body.file_names)
-        episode = workflow.run(
-            "bind_ad_hoc_video_batch",
-            get_episode_or_404(episode_id),
-            videos=videos,
-        )
-        _start_video_job(episode)
-        episode = repo.save(episode)
-        video_job_runner.submit(
-            episode_id,
-            lambda: _complete_ad_hoc_episode_video_batch(
-                episode_id,
-                body.file_names,
-            ),
-            workspace_id=ws,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.get(episode_id))
 
 
-def _complete_ad_hoc_episode_video(episode_id: str, file_name: str) -> None:
-    try:
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.PROCESSING,
-            "正在生成精剪视频",
-        )
-        processed = video_pipeline.process(file_name)
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.DRAFTING,
-            "正在生成草稿素材包",
-        )
-        _bind_processed_video_and_draft(episode_id, processed)
-        _mark_video_job_completed(episode_id)
-    except Exception as exc:
-        _mark_video_job_failed(episode_id, exc)
-        logger.exception("ad hoc video processing failed for %s", episode_id)
 
 
-def _complete_ad_hoc_episode_video_batch(
-    episode_id: str,
-    file_names: list[str],
-) -> None:
-    try:
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.PROCESSING,
-            "正在合并并精剪视频",
-        )
-        processed = video_pipeline.process_batch(file_names)
-        _mark_video_job_stage(
-            episode_id,
-            VideoJobStatus.DRAFTING,
-            "正在生成草稿素材包",
-        )
-        _bind_processed_video_and_draft(episode_id, processed)
-        _mark_video_job_completed(episode_id)
-    except Exception as exc:
-        _mark_video_job_failed(episode_id, exc)
-        logger.exception("ad hoc video batch processing failed for %s", episode_id)
 
 
-def _bind_processed_video_and_draft(episode_id: str, processed) -> None:
-    episode = workflow.run(
-        "bind_processed_video",
-        get_episode_or_404(episode_id),
-        video=processed,
-    )
-    package = draft_workspace.create_package_and_import_to_jianying(
-        video_file_name=processed.file_name,
-        episode=episode,
-    )
-    episode = workflow.run(
-        "bind_draft_package",
-        episode,
-        package_name=package.package_name,
-        package_path=package.path,
-    )
-    repo.save(episode)
 
 
-def _start_video_job(episode: Episode) -> None:
-    episode.status = EpisodeStatus.VIDEO_PROCESSING
-    episode.video_job_status = VideoJobStatus.PROCESSING
-    episode.video_job_message = "后台正在处理视频"
-    episode.video_job_error = None
-    episode.video_job_started_at = utc_now()
-    episode.video_job_finished_at = None
 
 
-def _mark_video_job_stage(
-    episode_id: str,
-    status: VideoJobStatus,
-    message: str,
-) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.video_job_status = status
-    episode.video_job_message = message
-    episode.video_job_error = None
-    if episode.video_job_started_at is None:
-        episode.video_job_started_at = utc_now()
-    repo.save(episode)
 
 
-def _mark_video_job_completed(episode_id: str) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.video_job_status = VideoJobStatus.COMPLETED
-    episode.video_job_message = "视频已处理，并已自动尝试导入剪映草稿箱"
-    episode.video_job_error = None
-    episode.video_job_finished_at = utc_now()
-    repo.save(episode)
 
 
-def _mark_video_job_failed(episode_id: str, error: Exception) -> None:
-    episode = get_episode_or_404(episode_id)
-    episode.status = EpisodeStatus.FAILED
-    episode.video_job_status = VideoJobStatus.FAILED
-    episode.video_job_message = "视频处理失败"
-    episode.video_job_error = f"{type(error).__name__}: {error}"
-    episode.video_job_finished_at = utc_now()
-    repo.save(episode)
 
 
-@app.post("/api/episodes/{episode_id}/create-draft", response_model=EpisodeResponse)
-def create_episode_draft(episode_id: str) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    if not episode.video_processed_file_name:
-        raise HTTPException(status_code=400, detail="process a video first")
-    try:
-        confirmed_video = apply_confirmed_edit_plan(
-            episode,
-            draft_workspace.video_output_path,
-            runner=edit_plan_apply_runner,
-        )
-        if confirmed_video is not None:
-            episode.video_processed_file_name = confirmed_video["file_name"]
-            episode.video_processed_path = confirmed_video["path"]
-            episode = repo.save(episode)
-        package = draft_workspace.create_package_and_import_to_jianying(
-            video_file_name=episode.video_processed_file_name,
-            episode=episode,
-        )
-        episode = workflow.run(
-            "bind_draft_package",
-            episode,
-            package_name=package.package_name,
-            package_path=package.path,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/mark-published", response_model=EpisodeResponse)
-def mark_episode_published(
-    episode_id: str,
-    request: MarkPublishedRequest,
-) -> EpisodeResponse:
-    episode = workflow.run(
-        "mark_published",
-        get_episode_or_404(episode_id),
-        publish_url=request.publish_url,
-        platform=request.platform,
-        play_count=request.play_count,
-        like_count=request.like_count,
-        comment_count=request.comment_count,
-        notes=request.notes,
-    )
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/feedback", response_model=EpisodeResponse)
-def apply_feedback(episode_id: str, request: FeedbackRequest) -> EpisodeResponse:
-    try:
-        episode = service.apply_feedback(
-            get_episode_or_404(episode_id),
-            request.target_type,
-            request.target_id,
-            request.value,
-            request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
-@app.post("/api/episodes/{episode_id}/feedback/revert", response_model=EpisodeResponse)
-def revert_episode_feedback(
-    episode_id: str,
-    request: FeedbackRevertRequest,
-) -> EpisodeResponse:
-    try:
-        episode = workflow.run(
-            "revert_feedback",
-            get_episode_or_404(episode_id),
-            feedback_event_id=request.feedback_event_id,
-            reason=request.reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return episode_response(repo.save(episode))
 
 
 # ── Server entry point (for pyinstaller onefile binary) ─────────────
@@ -6946,32 +5649,6 @@ def get_episode_source_file_states(episode_id: str) -> SourceFileStatesResponse:
     )
 
 
-@app.post(
-    "/api/episodes/{episode_id}/archive-sources",
-    response_model=ArchiveSourcesResponse,
-)
-def archive_episode_sources(
-    episode_id: str,
-    request: ArchiveSourcesRequest,
-) -> ArchiveSourcesResponse:
-    episode = get_episode_or_404(episode_id)
-    try:
-        episode = service.archive_source_files(episode, source_tracker)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    repo.save(episode)
-    files = [
-        {"file_name": name, "state": state}
-        for name, state in episode.source_file_states.items()
-    ]
-    archived_count = sum(
-        1 for f in files if f["state"] == "archived"
-    )
-    return ArchiveSourcesResponse(
-        episode_id=episode.id,
-        archived_count=archived_count,
-        files=files,
-    )
 
 
 @app.get("/api/episodes", response_model=EpisodeListResponse)
@@ -7209,46 +5886,40 @@ def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
     )
 
 
-@app.post(
-    "/api/episodes/{episode_id}/production-mode",
-    response_model=EpisodeResponse,
-)
-def set_episode_production_mode(
-    episode_id: str,
-    request: ProductionModeRequest,
-) -> EpisodeResponse:
-    """Stub: accept production mode (bilibili/youtube/shorts) and return episode."""
-    known_modes = {"bilibili", "youtube", "shorts", "douyin", "xiaohongshu"}
-    if request.mode not in known_modes:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown production mode: {request.mode}. Known: {', '.join(sorted(known_modes))}",
-        )
-    episode = get_episode_or_404(episode_id)
-    episode.platform = request.mode
-    repo.save(episode)
-    return episode_response(episode)
+_LEGACY_WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
 
 
-@app.put(
-    "/api/episodes/{episode_id}/publish-metrics",
-    response_model=EpisodeResponse,
+@app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)
+@app.api_route("/api/episodes/{legacy_path:path}", methods=_LEGACY_WRITE_METHODS)
+@app.api_route("/api/drafts/{legacy_path:path}", methods=_LEGACY_WRITE_METHODS)
+@app.api_route("/api/production/batches", methods=_LEGACY_WRITE_METHODS)
+@app.api_route(
+    "/api/production/batches/{legacy_path:path}",
+    methods=_LEGACY_WRITE_METHODS,
 )
-def update_episode_publish_metrics(
-    episode_id: str,
-    request: PublishMetricsUpdateRequest,
-) -> EpisodeResponse:
-    episode = get_episode_or_404(episode_id)
-    episode = service.update_publish_metrics(
-        episode,
-        publish_url=request.publish_url,
-        platform=request.platform,
-        play_count=request.play_count,
-        like_count=request.like_count,
-        comment_count=request.comment_count,
-        notes=request.notes,
+@app.api_route(
+    "/api/production/montage-plans/{legacy_path:path}",
+    methods=_LEGACY_WRITE_METHODS,
+)
+@app.api_route(
+    "/api/production/episodes/{legacy_path:path}",
+    methods=_LEGACY_WRITE_METHODS,
+)
+def reject_legacy_creation_write(legacy_path: str = "") -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "legacy_creation_write_retired",
+            "message": "旧 Episode、Batch 与草稿写入口已退役。",
+            "impact": "本次请求没有写入历史 Episode、Batch 或剪辑草稿。",
+            "repair_action": "请通过 CreationTask 接口继续当前创作任务。",
+            "retryable": False,
+        },
     )
-    return episode_response(repo.save(episode))
+
+
+
+
 
 
 # ── Server entry point (for standalone API server) ──────────────────

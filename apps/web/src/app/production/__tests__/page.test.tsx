@@ -14,13 +14,7 @@ vi.mock("@/components/AppShell", () => ({
   AppShell: ({ children, creationTasks, inspector }: { children: React.ReactNode; creationTasks?: CreationTask[]; inspector?: React.ReactNode }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><aside data-testid="inspector">{inspector}</aside><main>{children}</main></>,
 }));
 vi.mock("@/components/CreateProductionTaskForm", () => ({ CreateProductionTaskForm: () => null }));
-vi.mock("@/components/CreationTaskTopicWorkspace", () => ({ CreationTaskTopicWorkspace: () => null }));
-vi.mock("@/components/ProcessingRefresh", () => ({ ProcessingRefresh: () => null }));
-vi.mock("@/components/ProductionTaskControls", () => ({ ProductionTaskControls: () => null }));
 vi.mock("@/lib/api.server", () => ({
-  CreationPlanApiError: class CreationPlanApiError extends Error {},
-  getCreationPlan: vi.fn(),
-  getCreationTaskTopics: vi.fn(),
   getProductionFoundation: mocks.getProductionFoundation,
   listCreationTasks: mocks.listCreationTasks,
 }));
@@ -61,9 +55,6 @@ const foundation = {
     approved_segment_count: 4,
     blockers: [],
   },
-  recent_batches: [],
-  recent_montage_plans: [],
-  eligible_episodes: [],
 } as unknown as ProductionFoundation;
 
 describe("ProductionPage default CreationTask projection", () => {
@@ -81,6 +72,7 @@ describe("ProductionPage default CreationTask projection", () => {
     expect(screen.getAllByText("等待确认")).not.toHaveLength(0);
     expect(screen.getAllByText("选题已完成")).not.toHaveLength(0);
     expect(screen.getAllByText("需要处理")).not.toHaveLength(0);
+    expect(screen.getByRole("link", { name: "打开 任务 completed" })).toHaveAttribute("href", "/tasks/task-completed");
 
     const inspector = within(screen.getByTestId("inspector"));
     for (const label of ["等待开始", "选题生成中", "等待确认", "选题已完成", "需要处理"]) {

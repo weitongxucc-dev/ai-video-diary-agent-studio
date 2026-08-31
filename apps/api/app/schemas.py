@@ -144,47 +144,22 @@ class EpisodeResponse(BaseModel):
     updated_at: datetime
 
 
-class ApproveTopicRequest(BaseModel):
-    topic_id: str
 
 
-class ContentTemplateSelectRequest(BaseModel):
-    template_id: str
 
 
-class FeedbackRequest(BaseModel):
-    target_type: Literal["topic", "script_section"]
-    target_id: str
-    value: FeedbackValue
-    reason: str | None = None
 
 
-class ScriptUpdateRequest(BaseModel):
-    script: ScriptPackageResponse
-    reason: str | None = None
 
 
-class ScriptGenerateRequest(BaseModel):
-    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
 
 
-class ScriptRegenerateRequest(BaseModel):
-    reason: str | None = None
-    target_duration_seconds: int | None = Field(default=None, ge=5, le=1800)
 
 
-class ScriptSectionRegenerateRequest(BaseModel):
-    reason: str | None = None
 
 
-class ScriptVersionRevertRequest(BaseModel):
-    version_id: str
-    reason: str | None = None
 
 
-class FeedbackRevertRequest(BaseModel):
-    feedback_event_id: str
-    reason: str | None = None
 
 
 class LLMStatusResponse(BaseModel):
@@ -381,15 +356,6 @@ class VoiceProfileUpsertRequest(BaseModel):
         )
 
 
-class EpisodeVoiceSelectionRequest(BaseModel):
-    voice_profile_id: str | None = Field(default=None, max_length=120)
-    voice_version: str | None = Field(default=None, max_length=120)
-
-    @model_validator(mode="after")
-    def require_complete_versioned_voice_identity(self) -> "EpisodeVoiceSelectionRequest":
-        if (self.voice_profile_id is None) != (self.voice_version is None):
-            raise ValueError("声音选择必须同时提供 voice_profile_id 和 voice_version")
-        return self
 
 
 class EpisodeVoiceSelectionResponse(BaseModel):
@@ -563,14 +529,6 @@ class ModelInstallJobResponse(BaseModel):
     required_bytes: int = Field(ge=0)
 
 
-class NarrationArtifactResponse(BaseModel):
-    episode_id: str
-    audio_reference: str
-    duration_seconds: float = Field(gt=0)
-    sample_rate: int = Field(gt=0)
-    model_id: str
-    voice_profile_id: str | None = None
-    cache_key: str = ""
 
 
 class ProductionBlockerResponse(BaseModel):
@@ -1081,26 +1039,12 @@ class MontagePlansResponse(BaseModel):
     total_count: int
 
 
-class MontagePlanCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    episode_id: str = Field(min_length=1, max_length=80)
 
 
-class MontagePlanConfirmRequest(BaseModel):
-    clip_ids: list[str] = Field(min_length=1, max_length=100)
 
 
-class MontageClipUpdateRequest(BaseModel):
-    asset_id: str | None = Field(default=None, min_length=1, max_length=120)
-    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
-    source_start_seconds: float | None = Field(default=None, ge=0)
-    locked: bool | None = None
-    confirmed: bool | None = None
 
 
-class MontageClipOrderRequest(BaseModel):
-    clip_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 class MontageClipCandidateResponse(BaseModel):
@@ -1114,8 +1058,6 @@ class MontageClipCandidateResponse(BaseModel):
     reasons: list[str]
 
 
-class MontageRenderRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
 class ProductionEpisodeOptionResponse(BaseModel):
@@ -1200,8 +1142,6 @@ class ProcessVideoRequest(BaseModel):
     file_name: str | None = None
 
 
-class ProcessVideoBatchRequest(BaseModel):
-    file_names: list[str] = Field(min_length=2)
 
 
 class ProcessedVideoResponse(BaseModel):
@@ -1240,9 +1180,6 @@ class EditPlanVideoResponse(BaseModel):
     url: str
 
 
-class EditPlanSegmentDecisionRequest(BaseModel):
-    action: Literal["keep", "remove", "review"]
-    reason: str | None = None
 
 
 class EditPlanUserDecisionResponse(BaseModel):
@@ -1782,52 +1719,18 @@ class DraftStatusResponse(BaseModel):
     packages: list[DraftAssetResponse]
 
 
-class DraftPackageRequest(BaseModel):
-    video_file_name: str | None = None
 
 
-class DraftPackageResponse(BaseModel):
-    package_name: str
-    path: str
-    manifest_path: str
-    video_path: str
-    subtitle_path: str | None
-    cover_path: str | None
-    status: str
 
 
-class DraftImportRequest(BaseModel):
-    package_name: str | None = None
 
 
-class DraftImportResponse(BaseModel):
-    package_name: str
-    status: str
-    message: str
-    draft_path: str | None
-    manifest_path: str
 
 
-class UploadVideoRequest(BaseModel):
-    file_name: str
 
 
-class MarkPublishedRequest(BaseModel):
-    publish_url: str | None = None
-    platform: str | None = None
-    play_count: int | None = Field(default=None, ge=0)
-    like_count: int | None = Field(default=None, ge=0)
-    comment_count: int | None = Field(default=None, ge=0)
-    notes: str | None = None
 
 
-class PublishMetricsUpdateRequest(BaseModel):
-    publish_url: str | None = None
-    platform: str | None = None
-    play_count: int | None = Field(default=None, ge=0)
-    like_count: int | None = Field(default=None, ge=0)
-    comment_count: int | None = Field(default=None, ge=0)
-    notes: str | None = None
 
 
 class EpisodeSummaryResponse(BaseModel):
@@ -1878,14 +1781,8 @@ class SourceFileStatesResponse(BaseModel):
     files: list[SourceFileStateResponse]
 
 
-class ArchiveSourcesRequest(BaseModel):
-    file_names: list[str] | None = None
 
 
-class ArchiveSourcesResponse(BaseModel):
-    episode_id: str
-    archived_count: int
-    files: list[SourceFileStateResponse]
 
 
 class EpisodeHistoryItemResponse(BaseModel):
@@ -1970,8 +1867,6 @@ class TopicEvidenceResponse(BaseModel):
     items: list[TopicEvidenceItemResponse]
 
 
-class ProductionModeRequest(BaseModel):
-    mode: str  # one of: bilibili, youtube, shorts, douyin, xiaohongshu
 
 
 class SourceSyncRetryResponse(BaseModel):

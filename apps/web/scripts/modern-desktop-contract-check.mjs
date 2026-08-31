@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, composer, api, library, montage, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
+const [design, globals, overrides, shell, home, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
@@ -11,7 +11,6 @@ const [design, globals, overrides, shell, home, composer, api, library, montage,
   read("src/components/HomeCommandComposer.tsx"),
   read("src/lib/api.ts"),
   read("src/components/MaterialLibraryWorkspace.tsx"),
-  read("src/components/MontageReviewWorkspace.tsx"),
   read("src/app/production/page.tsx"),
   read("src/components/PeopleAndVoiceWorkspace.tsx"),
   read("src/components/TemplateLibraryWorkspace.tsx"),
@@ -72,7 +71,7 @@ for (const forbidden of ["RetroChrome", "PixelIcon", "PixelPrimitives", "retro-d
   if (shell.includes(forbidden)) failures.push(`AppShell still depends on legacy chrome: ${forbidden}`);
 }
 
-for (const [name, source] of [["home", home], ["composer", composer], ["library", library], ["montage", montage], ["production", production]]) {
+for (const [name, source] of [["home", home], ["composer", composer], ["library", library], ["production", production]]) {
   if (/Pixel(?:Icon|Panel|Button|Status|Mascot|Agent)/.test(source)) failures.push(`${name} north-star UI imports Pixel components`);
 }
 
@@ -87,16 +86,11 @@ for (const retired of ["?batch=", "rendered_count", "target_count"]) {
   if (shell.includes(retired)) failures.push(`AppShell still projects legacy Batch task fields: ${retired}`);
 }
 
-if (production.includes("legacyTaskProjection") || production.includes("foundation?.recent_batches")) {
-  failures.push("production default list still projects legacy Batch tasks");
+for (const retired of ["legacyTaskProjection", "foundation?.recent_batches", "params.batch", "ProductionBatch", "recent_batches", "ProductionTaskControls"]) {
+  if (production.includes(retired)) failures.push(`production still projects a legacy Batch path: ${retired}`);
 }
-const defaultTaskBranch = production.indexOf("if (!params.batch)");
-const legacyBatchBranch = production.indexOf("const { recent_batches: batches");
-if (defaultTaskBranch === -1 || legacyBatchBranch === -1 || legacyBatchBranch < defaultTaskBranch) {
-  failures.push("production must isolate Batch data behind the explicit history-task branch");
-}
-for (const required of ["defaultInspector", "已创建任务", "等待开始", "历史任务（旧流程）"]) {
-  if (!production.includes(required)) failures.push(`production is missing the CreationTask or history-task boundary: ${required}`);
+for (const required of ["defaultInspector", "已创建任务", "等待开始", "/tasks/", "CreateProductionTaskForm"]) {
+  if (!production.includes(required)) failures.push(`production is missing the CreationTask boundary: ${required}`);
 }
 
 for (const required of ["/production?", 'new: "1"', "goal: normalizedGoal", "检查可用内容", "下一步只检查可用内容，不会直接开始生成"]) {
@@ -128,10 +122,6 @@ for (const [name, source, retired] of [
 
 for (const required of ["scanProductionMaterials", "reviewProductionMaterial", "素材库", "/media"]) {
   if (!library.includes(required)) failures.push(`material library is missing: ${required}`);
-}
-
-for (const required of ["getMontageClipCandidates", "updateMontageClip", "reorderMontageClips", "滑移裁剪", "锁定镜头"]) {
-  if (!montage.includes(required)) failures.push(`montage review is missing: ${required}`);
 }
 
 for (const required of ["titleBarStyle: 'hiddenInset'", "minWidth: 1024", "minHeight: 700", "backgroundColor: '#f7f7f5'"]) {

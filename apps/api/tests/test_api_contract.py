@@ -88,79 +88,11 @@ def test_feedback_event_lifecycle_fields_match_spec():
     assert isinstance(event.created_at, datetime)
 
 
-def test_episode_aggregates_script_versions():
-    episode = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4)
-    ).today()
-    version = ScriptVersion(
-        id="sv_1",
-        source=ScriptVersionSource.MANUAL_EDIT,
-        script=ScriptPackage(
-            id="script_1",
-            hook="edited hook",
-            sections=[ScriptSection("s1", "段", 12, "edited")],
-            title_options=["t"],
-            cover_copy="c",
-            publish_copy="p",
-            comment_prompt="q",
-        ),
-        changed_section_ids=["s1"],
-        reason="手动修改",
-    )
-    episode.script_versions.append(version)
-    episode.feedback_events.append(
-        FeedbackEvent(
-            "topic",
-            "t1",
-            FeedbackValue.UP,
-            "方向可以",
-            id="fb_1",
-            active=False,
-            revert_reason="撤回样本",
-        )
-    )
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-    )
-    saved = repo.save(episode)
-
-    assert len(saved.script_versions) == 1
-    assert saved.script_versions[0].source == ScriptVersionSource.MANUAL_EDIT
-    assert saved.script_versions[0].script.hook == "edited hook"
-    assert len(saved.feedback_events) == 1
-    assert saved.feedback_events[0].active is False
-    assert saved.feedback_events[0].revert_reason == "撤回样本"
 
 
 # ── Schema response contracts ─────────────────────────────────────
 
 
-def test_episode_response_includes_script_versions():
-    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 4))
-    episode = repo.today()
-    episode.script_versions.append(
-        ScriptVersion(
-            id="sv_1",
-            source=ScriptVersionSource.AI_GENERATED,
-            script=ScriptPackage(
-                id="script_1",
-                hook="h",
-                sections=[ScriptSection("s1", "title", 12, "content")],
-                title_options=["t"],
-                cover_copy="c",
-                publish_copy="p",
-                comment_prompt="q",
-            ),
-            changed_section_ids=[],
-            reason="initial",
-        )
-    )
-    response = EpisodeResponse.model_validate(episode, from_attributes=True)
-
-    assert len(response.script_versions) == 1
-    assert isinstance(response.script_versions[0], ScriptVersionResponse)
-    assert response.script_versions[0].source == ScriptVersionSource.AI_GENERATED
-    assert response.script_versions[0].script is not None
 
 
 def test_feedback_event_response_includes_lifecycle():
@@ -190,105 +122,13 @@ def test_feedback_event_response_includes_lifecycle():
 # ── Repository persistence contracts ──────────────────────────────
 
 
-def test_repository_roundtrips_script_versions(tmp_path):
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    episode.script_versions.append(
-        ScriptVersion(
-            id="sv_1",
-            source=ScriptVersionSource.MANUAL_EDIT,
-            script=ScriptPackage(
-                id="script_1",
-                hook="edited hook",
-                sections=[ScriptSection("s1", "段", 12, "编辑后内容")],
-                title_options=["标题"],
-                cover_copy="封面",
-                publish_copy="发布",
-                comment_prompt="评论",
-            ),
-            changed_section_ids=["s1"],
-            reason="改成自己口吻",
-        )
-    )
-    repo.save(episode)
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-
-    assert len(restored.script_versions) == 1
-    assert restored.script_versions[0].id == "sv_1"
-    assert restored.script_versions[0].source == ScriptVersionSource.MANUAL_EDIT
-    assert restored.script_versions[0].script.sections[0].content == "编辑后内容"
-    assert restored.script_versions[0].changed_section_ids == ["s1"]
-    assert restored.script_versions[0].reason == "改成自己口吻"
 
 
-def test_repository_backward_compat_restores_old_feedback_events(tmp_path):
-    """Feedback events persisted before the lifecycle fields existed
-    should load with active=True and no revert fields."""
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    episode.feedback_events.append(
-        FeedbackEvent("topic", "t1", FeedbackValue.DOWN, "太像概念课")
-    )
-    repo.save(episode)
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-
-    assert len(restored.feedback_events) == 1
-    assert restored.feedback_events[0].id.startswith("fb_")
-    assert restored.feedback_events[0].active is True
-    assert restored.feedback_events[0].reverted_at is None
-    assert restored.feedback_events[0].revert_reason is None
 
 
 # ── Active-only feedback contract ─────────────────────────────────
 
 
-def test_reverted_feedback_should_be_excluded_from_active_evidence():
-    episode = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-    ).today()
-    active_event = FeedbackEvent(
-        "topic",
-        "t1",
-        FeedbackValue.UP,
-        "方向对",
-        id="fb_active",
-        active=True,
-    )
-    reverted_event = FeedbackEvent(
-        "topic",
-        "t2",
-        FeedbackValue.DOWN,
-        "太泛",
-        id="fb_reverted",
-        active=False,
-        revert_reason="误点",
-    )
-    episode.feedback_events.extend([active_event, reverted_event])
-
-    # Active-only filter as used by feedback_history_for and preferences
-    active_events = [e for e in episode.feedback_events if e.active]
-
-    assert len(active_events) == 1
-    assert active_events[0].id == "fb_active"
-    assert active_events[0].value == FeedbackValue.UP
 
 
 # ── Endpoint status code contracts ────────────────────────────────
@@ -540,69 +380,8 @@ def test_episode_intake_mode_default_is_planned_single():
     assert EpisodeIntakeMode.PLANNED_SINGLE.value == "planned_single"
 
 
-def test_repository_migrates_old_intake_mode_planned_to_planned_single(tmp_path):
-    from app.repository import EpisodeRepository
-
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    repo.save(episode)
-
-    # Simulate old data by directly writing the old value to the db
-    import json
-    import sqlite3
-
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT id, payload FROM episodes").fetchall()
-        for ep_id, payload in rows:
-            data = json.loads(payload)
-            data["intake_mode"] = "planned"
-            conn.execute(
-                "UPDATE episodes SET payload = ? WHERE id = ?",
-                (json.dumps(data, ensure_ascii=False), ep_id),
-            )
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-    assert restored.intake_mode.value == "planned_single"
 
 
-def test_repository_migrates_old_ad_hoc_video_to_ad_hoc_single(tmp_path):
-    from app.repository import EpisodeRepository
-
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    repo.save(episode)
-
-    import json
-    import sqlite3
-
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT id, payload FROM episodes").fetchall()
-        for ep_id, payload in rows:
-            data = json.loads(payload)
-            data["intake_mode"] = "ad_hoc_video"
-            conn.execute(
-                "UPDATE episodes SET payload = ? WHERE id = ?",
-                (json.dumps(data, ensure_ascii=False), ep_id),
-            )
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-    assert restored.intake_mode.value == "ad_hoc_single"
 
 
 def test_source_tracker_archive_moves_file_to_archive_dir(tmp_path):
@@ -620,68 +399,8 @@ def test_source_tracker_archive_moves_file_to_archive_dir(tmp_path):
     assert "_已处理" in str(dest)
 
 
-def test_episode_source_file_states_tracks_pending_to_archived(tmp_path):
-    from app.models import EpisodeIntakeMode, SourceFileState
-    from app.repository import EpisodeRepository
-    from app.services import EpisodeService
-    from app.video import PendingVideo, SourceTracker, VideoInbox
-
-    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 4))
-    episode = repo.today()
-    episode.intake_mode = EpisodeIntakeMode.AD_HOC_SINGLE
-    episode.script = ScriptPackage(
-        id="s", hook="h",
-        sections=[ScriptSection("s1", "t", 12, "c")],
-        title_options=["t"], cover_copy="c", publish_copy="p", comment_prompt="q",
-    )
-    service = EpisodeService()
-
-    inbox = VideoInbox(tmp_path)
-    inbox.path.mkdir(parents=True, exist_ok=True)
-    (inbox.path / "clip.mp4").write_bytes(b"fake")
-
-    video = PendingVideo(
-        file_name="clip.mp4",
-        path=str(inbox.path / "clip.mp4"),
-        size_bytes=4,
-        modified_at=datetime.now(tz=UTC),
-    )
-    service.bind_video(episode, video)
-    assert episode.source_file_states["clip.mp4"] == SourceFileState.PENDING
-
-    episode.source_file_states["clip.mp4"] = SourceFileState.PROCESSED
-    tracker = SourceTracker(inbox)
-    service.archive_source_files(episode, tracker)
-
-    assert episode.source_file_states["clip.mp4"] == SourceFileState.ARCHIVED
 
 
-def test_episode_response_includes_production_chain_and_source_states():
-    from app.models import (
-        EpisodeIntakeMode,
-        ProductionChainStage,
-        ProductionChainStep,
-        SourceFileState,
-    )
-    from app.repository import EpisodeRepository
-    from app.schemas import EpisodeResponse
-
-    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 4))
-    episode = repo.today()
-    episode.intake_mode = EpisodeIntakeMode.PLANNED_SINGLE
-    episode.video_production_chain = [
-        ProductionChainStep(
-            stage=ProductionChainStage.SOURCE_CLIPS,
-            status="completed",
-        ),
-    ]
-    episode.source_file_states = {"clip.mp4": SourceFileState.PROCESSED}
-
-    response = EpisodeResponse.model_validate(episode, from_attributes=True)
-
-    assert len(response.video_production_chain) == 1
-    assert response.video_production_chain[0].stage == ProductionChainStage.SOURCE_CLIPS
-    assert response.source_file_states == {"clip.mp4": SourceFileState.PROCESSED}
 
 
 # ── Phase C: Publish feedback & episode history ─────────────────────
@@ -757,27 +476,6 @@ def test_update_publish_metrics_partial_update():
     assert result.status == EpisodeStatus.PUBLISHED  # unchanged
 
 
-def test_mark_published_request_validates_counts_non_negative():
-    from pydantic import ValidationError
-
-    from app.schemas import MarkPublishedRequest
-
-    with pytest.raises(ValidationError):
-        MarkPublishedRequest(play_count=-1)
-
-    with pytest.raises(ValidationError):
-        MarkPublishedRequest(like_count=-5)
-
-
-def test_publish_metrics_update_request_validates_counts_non_negative():
-    from pydantic import ValidationError
-
-    from app.schemas import PublishMetricsUpdateRequest
-
-    with pytest.raises(ValidationError):
-        PublishMetricsUpdateRequest(comment_count=-1)
-
-
 def test_episode_response_includes_platform_and_notes():
     from app.schemas import EpisodeResponse
 
@@ -813,141 +511,18 @@ def test_episode_summary_response_has_essential_fields():
     assert not hasattr(summary, "script")
 
 
-def test_repository_serializes_platform_and_notes(tmp_path):
-    from app.repository import EpisodeRepository
-
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    episode.platform = "bilibili"
-    episode.notes = "测试备注"
-    repo.save(episode)
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-    assert restored.platform == "bilibili"
-    assert restored.notes == "测试备注"
 
 
-def test_repository_handles_missing_platform_and_notes_gracefully(tmp_path):
-    """Backward compat: older episodes without platform/notes should load."""
-    import json
-    import sqlite3
-
-    from app.repository import EpisodeRepository
-
-    db_path = tmp_path / "episodes.sqlite3"
-    repo = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    episode = repo.today()
-    repo.save(episode)
-
-    # Simulate old data without platform and notes
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT id, payload FROM episodes").fetchall()
-        for ep_id, payload in rows:
-            data = json.loads(payload)
-            data.pop("platform", None)
-            data.pop("notes", None)
-            conn.execute(
-                "UPDATE episodes SET payload = ? WHERE id = ?",
-                (json.dumps(data, ensure_ascii=False), ep_id),
-            )
-
-    reloaded = EpisodeRepository(
-        today_provider=lambda: date(2026, 6, 4),
-        database_path=db_path,
-    )
-    restored = reloaded.today()
-    assert restored.platform is None
-    assert restored.notes is None
 
 
-def test_list_episodes_filters_by_status():
-    response = client.get("/api/episodes?status=created")
-    assert response.status_code == 200
-    body = response.json()
-    assert "episodes" in body
-    assert "total" in body
-    for ep in body["episodes"]:
-        assert ep["status"] == "created"
 
 
-def test_list_episodes_filters_by_intake_mode():
-    response = client.get("/api/episodes?intake_mode=planned_single")
-    assert response.status_code == 200
-    body = response.json()
-    for ep in body["episodes"]:
-        assert ep["intake_mode"] == "planned_single"
 
 
-def test_get_episode_detail_returns_full_response():
-    # Create an episode first
-    create_resp = client.post("/api/episodes")
-    assert create_resp.status_code == 200
-    episode_id = create_resp.json()["id"]
-
-    resp = client.get(f"/api/episodes/{episode_id}")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["id"] == episode_id
-    assert "script" in body
-    assert "topics" in body
-    assert "platform" in body
-    assert "notes" in body
-    assert "source_file_states" in body
-    assert "video_production_chain" in body
 
 
-def test_mark_published_endpoint_sets_status():
-    create_resp = client.post("/api/episodes")
-    episode_id = create_resp.json()["id"]
-
-    resp = client.post(
-        f"/api/episodes/{episode_id}/mark-published",
-        json={
-            "publish_url": "https://youtube.com/watch?v=abc",
-            "platform": "youtube",
-            "notes": "第一期发布",
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "published"
-    assert body["publish_url"] == "https://youtube.com/watch?v=abc"
-    assert body["platform"] == "youtube"
-    assert body["notes"] == "第一期发布"
-    assert body["published_at"] is not None
 
 
-def test_update_publish_metrics_partial_update_endpoint():
-    create_resp = client.post("/api/episodes")
-    episode_id = create_resp.json()["id"]
-
-    # First mark as published
-    client.post(
-        f"/api/episodes/{episode_id}/mark-published",
-        json={"play_count": 10, "like_count": 3},
-    )
-
-    # Then update metrics
-    resp = client.put(
-        f"/api/episodes/{episode_id}/publish-metrics",
-        json={"play_count": 1000, "like_count": 200, "comment_count": 50},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["play_count"] == 1000
-    assert body["like_count"] == 200
-    assert body["comment_count"] == 50
 
 # ── Phase D: Source sync status & preference cards ──────────────────
 
@@ -1092,26 +667,6 @@ def test_build_preference_memory_respects_disabled_state():
     assert prefer_signals.get("理论框架") is True
 
 
-def test_preference_response_includes_enabled_field():
-    from app.models import FeedbackEvent, FeedbackValue
-    from app.repository import EpisodeRepository
-
-    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 4))
-    episode = repo.today()
-    episode.feedback_events.append(
-        FeedbackEvent("topic", "t1", FeedbackValue.UP, "多讲真实项目")
-    )
-    repo.save(episode)
-
-    import app.main as main_module
-    main_module.repo = repo
-
-    resp = client.get("/api/preferences")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body["preferences"]) >= 1
-    assert "enabled" in body["preferences"][0]
-    assert body["preferences"][0]["enabled"] is True
 
 
 def test_preference_disable_endpoint(tmp_path, monkeypatch):

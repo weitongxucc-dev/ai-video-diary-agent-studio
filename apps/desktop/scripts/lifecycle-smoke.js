@@ -22,6 +22,11 @@ const serverFixture = `
 const http = require('node:http');
 const port = Number(process.env.FIXTURE_PORT || process.env.PORT || process.env.API_PORT);
 const server = http.createServer((request, response) => {
+  if (request.url === '/api/creation-tasks/task_missing/output') {
+    response.writeHead(404, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ detail: 'creation task output not found' }));
+    return;
+  }
   if (/^\\/api\\/creation-tasks\\/task_[a-zA-Z0-9_-]+\\/output$/.test(request.url)) {
     response.writeHead(200, { 'content-type': 'video/mp4' });
     response.end('fixture-mp4');
@@ -538,6 +543,25 @@ async function assertNativeRenderedVideoSaveBoundary() {
     assert.equal(typeof handler, 'function', 'native rendered-video save handler must be registered');
     const invalid = await handler({}, '/tmp/untrusted.mp4');
     assert.equal(invalid.saved, false, 'renderer paths must not be accepted as task ids');
+
+    test.runtime.setSaveDialogResult({ canceled: true });
+    const canceled = await handler({}, 'task_fixture');
+    assert.deepEqual(canceled, { saved: false, canceled: true }, 'canceling the native dialog must be a normal result');
+
+    const missingDestination = path.join(test.resources, 'missing-output.mp4');
+    test.runtime.setSaveDialogResult({ canceled: false, filePath: missingDestination });
+    const missing = await handler({}, 'task_missing');
+    assert.deepEqual(missing, {
+      saved: false,
+      error: '本地服务没有返回可保存的 MP4（HTTP 404）。',
+    });
+    assert.equal(fs.existsSync(missingDestination), false, 'a failed download must not create the destination');
+    assert.deepEqual(
+      fs.readdirSync(test.resources).filter((name) => name.startsWith('missing-output.mp4.partial-')),
+      [],
+      'a failed download must remove its partial file',
+    );
+
     const destination = path.join(test.resources, 'chosen-output.mp4');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: destination });
     const saved = await handler({}, 'task_fixture');

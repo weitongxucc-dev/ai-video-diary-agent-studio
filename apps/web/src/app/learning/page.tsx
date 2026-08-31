@@ -2,7 +2,6 @@ import Link from "next/link";
 import {
   disablePreferenceCardAction,
   restorePreferenceCardAction,
-  revertFeedbackAction,
 } from "@/app/actions";
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
@@ -128,8 +127,8 @@ export default async function LearningPage({
                     : "还没有反馈记录，先在选题或口播稿里点赞/踩。"}
               </p>
             </div>
-            <Link className="ui-button secondary" href="/topics">
-              去选题池反馈
+            <Link className="ui-button secondary" href="/production">
+              查看创作任务
             </Link>
           </div>
 
@@ -333,16 +332,6 @@ export default async function LearningPage({
                     {event.active ? "" : " · 已撤销"}
                   </span>
                   <p>{event.revert_reason || event.reason || "没有填写原因。"}</p>
-                  {event.active && event.episode_id ? (
-                    <form action={revertFeedbackAction} className="feedback-revert-form">
-                      <input name="episode_id" type="hidden" value={event.episode_id} />
-                      <input name="feedback_event_id" type="hidden" value={event.id} />
-                      <input name="reason" type="hidden" value="用户在反馈学习页撤销" />
-                      <button className="ui-button secondary" type="submit">
-                        撤销这条反馈
-                      </button>
-                    </form>
-                  ) : null}
                 </div>
               </article>
             ))}
