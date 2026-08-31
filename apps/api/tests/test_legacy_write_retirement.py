@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -43,3 +45,12 @@ def test_legacy_repositories_no_longer_expose_business_writers() -> None:
     assert not hasattr(DraftWorkspace, "create_package")
     assert not hasattr(DraftWorkspace, "create_package_and_import_to_jianying")
     assert not hasattr(DraftWorkspace, "import_package_to_jianying")
+
+
+def test_packaged_api_no_longer_includes_legacy_draft_tooling() -> None:
+    spec = (Path(__file__).resolve().parents[1] / "pyinstaller.spec").read_text(
+        encoding="utf-8"
+    )
+
+    for retired_dependency in ("pyJianYingDraft", "jianyingdraft", "capcut_mate"):
+        assert retired_dependency not in spec

@@ -32,19 +32,6 @@ _ENTRY = _SPEC_DIR / "server.py"
 # Assets shipped inside the bundle
 _ASSET_DIRS: list[tuple[str, str]] = []
 
-# ── pyJianYingDraft template assets ──────────────────────────────────────────
-_jyd_assets = (
-    _SPEC_DIR / ".venv" / "lib" / "python3.11"
-    / "site-packages" / "pyJianYingDraft" / "assets"
-)
-if _jyd_assets.is_dir():
-    _ASSET_DIRS.append(
-        (
-            str(_jyd_assets),
-            "pyJianYingDraft/assets",  # destination inside the bundle
-        )
-    )
-
 # ── Hidden imports ───────────────────────────────────────────────────────────
 # Every app.* module so the FastAPI router collection works
 _APP_MODULES = [
@@ -69,13 +56,6 @@ _UVICORN_HIDDEN = [
     "uvicorn.lifespan.off",
 ]
 
-# DraftWorkspace probes for these dynamically
-_DRAFT_TOOL_HIDDEN = [
-    "pyJianYingDraft",
-    "jianyingdraft",
-    "capcut_mate",
-]
-
 # langgraph + pydantic internals (often missed)
 _LANGGRAPH_HIDDEN: list[str] = [
     # "langgraph",
@@ -87,7 +67,6 @@ _HIDDEN_IMPORTS = sorted(
     set(
         _APP_MODULES
         + _UVICORN_HIDDEN
-        + _DRAFT_TOOL_HIDDEN
         + _LANGGRAPH_HIDDEN
     )
 )
