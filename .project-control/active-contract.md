@@ -2,7 +2,7 @@
 
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
-迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（独立质量复核未收口，保持 HOLD）
+迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（全新任务被 DeepSeek 余额阻断；独立质量复核未收口，保持 HOLD）
 实现基线：`codex/recovery-local-video-v01@7aae62f`；控制文档基线 `9e72860`；打包 build identity `342b65e0bd9789485bf8c9ee3efe5af856a577d7f5e7a6f380d0477ea44a1d97`
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
@@ -65,6 +65,7 @@
 | 用户动作 | 当前证据等级 | 状态与行为 |
 | --- | --- | --- |
 | 创建任务、选题、确认文案 | `PERSISTED_EFFECT_CONFIRMED`（既有验证任务） | 可继续使用，但最终验收必须在同一候选重跑 |
+| 最终 App 全新任务冷启动 | `REAL_INTERACTION_CONFIRMED / BLOCKED` | 已从首页创建 `task_f2b0470c0ee2`，预检确认 2 条资料、6 个已审核素材、7 个可用片段、Chinese-CLIP 与 Qwen3-TTS 就绪；首次 DeepSeek 选题调用返回 402 `Insufficient Balance`，任务停在选题失败恢复点，没有候选或回退。密钥和模型列表探针返回 200，阻断是账号余额，不是网络或模型标识 |
 | 回看选题和文案、全局搜索、阶段导航 | `REAL_INTERACTION_CONFIRMED@66fad77` | 1024/1180/1440 已验证，不代表成片完成 |
 | Qwen3-TTS 中文声音克隆 | `REAL_OUTPUT_CONFIRMED` | 已使用用户授权的 `cc` 人物/声音版本生成约 20.16 秒有效 WAV；未使用系统声音、静音或伪造回退 |
 | 配音阶段补选声音并原地恢复 | `PERSISTED_EFFECT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已在同一 CreationTask 绑定授权声音并原地继续，没有重做已确认文案 |
