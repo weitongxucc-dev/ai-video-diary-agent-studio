@@ -3,7 +3,7 @@
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
 迁移状态：`VERTICAL_SLICE_IMPLEMENTED`
-实现基线：本轮冻结提交生成后登记；该状态仍不代表桌面端或迁移验收通过
+实现基线：`codex/recovery-local-video-v01@dcd453a`；该状态仍不代表桌面端或迁移验收通过
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
 本文件是短期执行合同，不是产品或领域权威。范围、事实源或验收改变时直接替换本文件；达到 `MIGRATION_ACCEPTED`、任务取消或转入外部 Issue/PR 后删除，不归档旧副本。
