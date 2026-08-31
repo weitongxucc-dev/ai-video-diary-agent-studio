@@ -3,7 +3,7 @@
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
 迁移状态：`VERTICAL_SLICE_IMPLEMENTED`
-实现基线：`codex/recovery-local-video-v01@d4c9146`；该状态仍不代表打包客户端或迁移验收通过
+实现基线：`codex/recovery-local-video-v01@ab194ca`；该状态仍不代表打包客户端或迁移验收通过
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
 本文件是短期执行合同，不是产品或领域权威。范围、事实源或验收改变时直接替换本文件；达到 `MIGRATION_ACCEPTED`、任务取消或转入外部 Issue/PR 后删除，不归档旧副本。
@@ -72,7 +72,7 @@
 | Electron 原生保存 | `REAL_INTERACTION_CONFIRMED / REAL_OUTPUT_CONFIRMED` | 开发态 Electron 已真实取消一次并恢复，随后通过原生保存框导出与 API 成片逐字节一致的 MP4；打包候选仍待同一 SHA 复核 |
 | 旧 Web 入口与可见名称 | `ABSENCE_VERIFIED` | `/topics`、`/script`、`/draft` 在真实浏览器均为 404；`/production` 仅保留 CreationTask 创建和列表，任务页无 Episode/Batch 可见名称 |
 | 旧 API 写事实源 | `RUNTIME_CALL_CONFIRMED / ABSENCE_VERIFIED` | 当前 API 对旧写命名空间统一返回 410，CreationTask 仍返回 200；旧仓储 writer、隐式 GET 写回和 Episode 自动循环已移除 |
-| 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 353 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
+| 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 354 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
 
 ## 7. 阻断、停止和授权
 
