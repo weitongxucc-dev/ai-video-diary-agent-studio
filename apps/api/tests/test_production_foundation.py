@@ -467,6 +467,33 @@ def test_production_api_exposes_foundation_and_retires_batch_creation(tmp_path, 
     assert listed.json()["total_count"] == 0
 
 
+def test_production_foundation_reads_legacy_batches_without_recovery_writes(
+    tmp_path, monkeypatch
+):
+    production = _repository(tmp_path)
+    legacy_batch = ProductionBatch(
+        id="batch_history",
+        workspace_id=LEGACY_WORKSPACE_ID,
+        name="历史批次",
+        target_count=1,
+        status="interrupted",
+        message="只读历史记录",
+    )
+    monkeypatch.setattr(
+        production,
+        "list_batches",
+        lambda workspace_id: [legacy_batch] if workspace_id == LEGACY_WORKSPACE_ID else [],
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
+
+    response = TestClient(main_module.app).get("/api/production/foundation")
+
+    assert response.status_code == 200
+    assert response.json()["recent_batches"][0]["id"] == "batch_history"
+    assert response.json()["recent_batches"][0]["status"] == "interrupted"
+
+
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
     tmp_path,
     monkeypatch,

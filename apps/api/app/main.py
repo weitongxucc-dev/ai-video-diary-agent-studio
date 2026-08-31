@@ -620,10 +620,7 @@ def get_production_foundation(request: Request) -> ProductionFoundationResponse:
         readiness=production_repo.readiness(workspace_id, profile=profile),
         recent_batches=[
             _production_batch_response(batch)
-            for batch in (
-                _recover_production_batch_if_needed(item)
-                for item in production_repo.list_batches(workspace_id)[:8]
-            )
+            for batch in production_repo.list_batches(workspace_id)[:8]
         ],
         recent_montage_plans=[
             _montage_plan_response(plan)
