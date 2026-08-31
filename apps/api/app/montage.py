@@ -54,6 +54,7 @@ class NarrationCue:
     source_section_id: str
     text: str
     duration_seconds: float
+    narration_segment_id: str = ""
 
 
 @dataclass
@@ -380,6 +381,8 @@ class MontagePlanner:
         media_reference_for_asset: Callable[[str], str],
         narration_audio_path: str,
         narration_duration_seconds: float,
+        narration_segment_ids_by_section: dict[str, str] | None = None,
+        narration_segment_durations_by_section: dict[str, float] | None = None,
     ) -> CreationTaskMontagePlan:
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
@@ -418,6 +421,8 @@ class MontagePlanner:
             min_seconds=profile.target_duration_min_seconds,
             max_seconds=profile.target_duration_max_seconds,
             narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section=narration_segment_ids_by_section,
+            narration_segment_durations_by_section=narration_segment_durations_by_section,
         )
         cue_vectors, segment_vectors = self._semantic_vectors(
             workspace_id, cues, b_roll_candidates
@@ -579,19 +584,29 @@ class MontageRenderer:
         self,
         plan: MontagePlan | CreationTaskMontagePlan,
         audio_path: str | Path,
+        *,
+        job_staging_path: str | Path | None = None,
     ) -> MontagePlan | CreationTaskMontagePlan:
         if plan.status != "ready":
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
         if not plan.clips:
             raise ValueError("混剪计划没有镜头")
         narration_path = self._validated_audio_path(audio_path)
-        self.output_path.mkdir(parents=True, exist_ok=True)
         if isinstance(plan, CreationTaskMontagePlan):
-            task_output_root = self.output_path / "creation-tasks" / _safe_path_component(plan.task_id)
-            task_output_root.mkdir(parents=True, exist_ok=True)
-            output_path = task_output_root / "preview.mp4"
-            subtitle_path = task_output_root / "subtitles.srt"
+            if job_staging_path is None:
+                raise ValueError("CreationTask 渲染必须提供 job-scoped 暂存目录")
+            render_root = Path(job_staging_path).expanduser().resolve()
+            render_root.mkdir(parents=True, exist_ok=True)
+            output_path = render_root / "preview.mp4"
+            subtitle_path = render_root / "subtitles.srt"
+            output_path.unlink(missing_ok=True)
+            subtitle_path.unlink(missing_ok=True)
+            plan.output_path = None
+            plan.subtitle_path = None
         else:
+            if job_staging_path is not None:
+                raise ValueError("Legacy Batch/Episode 渲染不接受 CreationTask 暂存目录")
+            self.output_path.mkdir(parents=True, exist_ok=True)
             output_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}_preview.mp4"
             subtitle_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}.srt"
         subtitle_path.write_text(_plan_to_srt(plan), encoding="utf-8")
@@ -626,9 +641,12 @@ class MontageRenderer:
             plan.message = f"FFmpeg 渲染失败：{exc}"
             raise
         plan.status = "rendered"
-        plan.output_path = str(output_path)
-        plan.subtitle_path = str(subtitle_path)
-        plan.message = "带中文字幕的 9:16 初版成片和独立 SRT 已生成，等待检查。"
+        if isinstance(plan, CreationTaskMontagePlan):
+            plan.message = "MP4 与 SRT 已通过校验并写入任务暂存区，等待原子发布。"
+        else:
+            plan.output_path = str(output_path)
+            plan.subtitle_path = str(subtitle_path)
+            plan.message = "带中文字幕的 9:16 初版成片和独立 SRT 已生成，等待检查。"
         return plan
 
     def build_command(
@@ -781,6 +799,8 @@ def _build_creation_task_cues(
     min_seconds: int,
     max_seconds: int,
     narration_duration_seconds: float,
+    narration_segment_ids_by_section: dict[str, str] | None = None,
+    narration_segment_durations_by_section: dict[str, float] | None = None,
 ) -> list[NarrationCue]:
     if narration_duration_seconds > max_seconds:
         raise ValueError(
@@ -798,9 +818,24 @@ def _build_creation_task_cues(
     raw_total = sum(weight for _, _, weight in entries)
     requested_total = narration_duration_seconds
     scale = requested_total / raw_total
+    weights_by_section: dict[str, float] = {}
+    for section_id, _text, weight in entries:
+        weights_by_section[section_id] = weights_by_section.get(section_id, 0.0) + weight
     cues: list[NarrationCue] = []
     for section_id, text, weight in entries:
-        scaled_duration = max(0.75, weight * scale)
+        section_duration = (
+            narration_segment_durations_by_section.get(section_id)
+            if narration_segment_durations_by_section
+            else None
+        )
+        scaled_duration = max(
+            0.75,
+            (
+                section_duration * weight / weights_by_section[section_id]
+                if section_duration is not None
+                else weight * scale
+            ),
+        )
         part_count = max(1, math.ceil(scaled_duration / 8.0))
         text_parts = _split_text_evenly(text, part_count)
         part_duration = scaled_duration / len(text_parts)
@@ -811,6 +846,11 @@ def _build_creation_task_cues(
                     source_section_id=section_id,
                     text=text_part,
                     duration_seconds=round(part_duration, 3),
+                    narration_segment_id=(
+                        narration_segment_ids_by_section.get(section_id, "")
+                        if narration_segment_ids_by_section
+                        else ""
+                    ),
                 )
             )
     return cues
@@ -1003,28 +1043,33 @@ def _subtitle_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def _wrap_subtitle_text(text: str, *, max_chars: int) -> list[str]:
-    normalized = re.sub(r"\s+", " ", text.strip())
-    if not normalized:
+    explicit_lines = [
+        re.sub(r"[\t\f\v ]+", " ", line.strip())
+        for line in re.split(r"\r?\n", text.strip())
+        if line.strip()
+    ]
+    if not explicit_lines:
         return [""]
     lines: list[str] = []
-    remaining = normalized
-    while remaining:
-        if len(remaining) <= max_chars:
-            lines.append(remaining)
-            break
-        split_at = max(
-            remaining.rfind("，", 0, max_chars + 1),
-            remaining.rfind("。", 0, max_chars + 1),
-            remaining.rfind("？", 0, max_chars + 1),
-            remaining.rfind("！", 0, max_chars + 1),
-            remaining.rfind(" ", 0, max_chars + 1),
-        )
-        if split_at < max_chars // 2:
-            split_at = max_chars
-        else:
-            split_at += 1
-        lines.append(remaining[:split_at].strip())
-        remaining = remaining[split_at:].strip()
+    for explicit_line in explicit_lines:
+        remaining = explicit_line
+        while remaining:
+            if len(remaining) <= max_chars:
+                lines.append(remaining)
+                break
+            split_at = max(
+                remaining.rfind("，", 0, max_chars + 1),
+                remaining.rfind("。", 0, max_chars + 1),
+                remaining.rfind("？", 0, max_chars + 1),
+                remaining.rfind("！", 0, max_chars + 1),
+                remaining.rfind(" ", 0, max_chars + 1),
+            )
+            if split_at < max_chars // 2:
+                split_at = max_chars
+            else:
+                split_at += 1
+            lines.append(remaining[:split_at].strip())
+            remaining = remaining[split_at:].strip()
     return lines
 
 
@@ -1138,11 +1183,6 @@ def creation_task_montage_plan_from_payload(
         cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
         clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
     )
-
-
-def _safe_path_component(value: str) -> str:
-    clean = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
-    return clean[:80] or "task"
 
 
 def _plan_from_payload(data: dict[str, object]) -> MontagePlan:

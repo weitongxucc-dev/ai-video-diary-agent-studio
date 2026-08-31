@@ -9,6 +9,9 @@ import type {
   CreationTaskScriptSection,
   CreationTaskNarration,
   CreationTaskMontage,
+  CreationTaskExactEditInput,
+  CreationTaskEditConfirmResponse,
+  CreationTaskEditPreviewResponse,
   CreationTaskTopicsResponse,
   FeedbackSummary,
   KnowledgeNote,
@@ -432,32 +435,13 @@ export function createCreationTaskMontagePlan(taskId: string): Promise<CreationT
   );
 }
 
-export function updateCreationTaskMontageClip(
+export function applyCreationTaskExactEdit(
   taskId: string,
-  clipId: string,
-  input: {
-    asset_id?: string;
-    segment_id?: string;
-    source_start_seconds?: number;
-    position?: number;
-    locked?: boolean;
-    confirmed?: boolean;
-  },
-): Promise<CreationTaskMontage> {
-  return creationPlanRequest<CreationTaskMontage>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}`,
-    { method: "PATCH", body: JSON.stringify(input) },
-  );
-}
-
-export function updateCreationTaskSubtitleCue(
-  taskId: string,
-  cueId: string,
-  input: { text: string },
-): Promise<CreationTaskMontage> {
-  return creationPlanRequest<CreationTaskMontage>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/cues/${encodeURIComponent(cueId)}`,
-    { method: "PATCH", body: JSON.stringify(input) },
+  input: CreationTaskExactEditInput,
+): Promise<CreationTaskEditConfirmResponse> {
+  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`,
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
@@ -473,6 +457,40 @@ export function getCreationTaskMontageClipCandidates(
 export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskMontage> {
   return creationPlanRequest<CreationTaskMontage>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/render`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function previewCreationTaskEdit(
+  taskId: string,
+  input: {
+    raw_command: string;
+    context_stage: string;
+    selected_object_refs: string[];
+    playhead_ms: number | null;
+  },
+): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function confirmCreationTaskEdit(
+  taskId: string,
+  proposalId: string,
+): Promise<CreationTaskEditConfirmResponse> {
+  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function undoCreationTaskTimeline(
+  taskId: string,
+): Promise<CreationTaskEditConfirmResponse> {
+  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/undo`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }

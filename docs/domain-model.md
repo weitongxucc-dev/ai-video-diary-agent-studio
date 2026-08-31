@@ -1,146 +1,356 @@
-# 领域对象与状态
+# 领域模型
 
-状态：业务语义权威
-职责：定义产品名词、对象关系、状态和跨模块不变量；不规定数据库表名或页面布局。
+本文件定义 AI 视频日记的业务对象、关系、状态和不变量。界面文案以 DESIGN.md 为准，模块责任以 system-architecture.md 为准，产品范围以 product-requirements.md 为准。
 
-## 1. 用户语言
+## 1. 聚合边界
 
-普通用户界面统一使用以下名称，不显示内部实现名：
+Workspace 是顶层隔离边界。知识、来源、素材、人物、声音、任务、模型配置、模板、自动任务和产物都必须归属一个明确 Workspace。
 
-| 用户名称 | 定义 | 不应混用为 |
-| --- | --- | --- |
-| 工作区 | 一套品牌、内容、素材、人物、模型连接和平台连接的隔离边界 | 账号、文件夹 |
-| 知识库 | 用户已经拥有并有权使用的内容 | 外部订阅、视频素材 |
-| 信息源 | 从外部持续获取新内容的连接和规则 | 知识库、素材库 |
-| 素材库 | 用于成片的视频、音频、图片和镜头片段 | 所有内容的总称 |
-| 创作任务 | 一次从选题到监控的具体执行 | 视频模板、自动任务 |
-| 视频模板 | 已跑通且可重复使用的完整制作方法 | 单次任务、样式主题 |
-| 自动任务 | 模板加触发器、来源范围、审核点和通知规则 | 后台进程、模板 |
-| 运行记录 | 自动任务或创作任务的一次实际执行 | 自动任务本身 |
+CreationTask 是视频生产的唯一业务聚合根。选题、文案、配音、时间线、字幕、封面、输出和发布状态都通过 task_id 关联到同一条任务，不得再以 Episode、Batch、聊天记录、localStorage 或内存对象建立并行事实源。
 
-Episode、Batch、Run 等历史对象只能作为已登记的只读迁移读取器或边界映射短期存在，不得继续成为默认路由、用户写入口、fallback、自动任务事实源或新测试所保护的产品行为。每个剩余消费者必须在迁移合同中记录替代路径、删除条件和到期状态；迁移后的创作链只允许 CreationTask 及其 ProductionRepository 路径接受新写入。真实纵向闭环通过后，旧消费者必须删除并完成不存在证明，不能以“内部实现”名义无限共存。
+## 2. 内容与来源
 
-## 2. 核心对象
+### 2.1 KnowledgeItem
 
-### 2.1 工作区与内容
+用户已有或主动确认保存的知识内容。
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| Workspace | 名称、品牌规则、默认语言、存储位置、身份模式 | 拥有全部业务对象 |
-| KnowledgeItem | 类型、标题、正文或文件引用、授权、来源、版本 | 属于工作区，可被选题和文案引用 |
-| SourceConnector | 平台或协议、账号、获取规则、频率、权限、连接状态 | 产生 SourceItem |
-| SourceItem | 原始链接、内容类型、作者、发布时间、正文/字幕/媒体引用、许可 | 来自一个信息源，可转为知识或候选素材 |
+关键字段：
 
-知识库和信息源必须保留来源与授权。将 SourceItem 保存到知识库时创建新的 KnowledgeItem，并保留原始来源关系，不在原对象上偷偷改变类别。
+- id、workspace_id、title、content_type；
+- body_ref 或 file_ref；
+- source_ref、source_version；
+- use_state；
+- version、created_at、updated_at。
 
-### 2.2 素材与镜头
+### 2.2 SourceConnector
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| MediaAsset | 本地文件引用、媒体类型、时长、尺寸、编码、授权、分析状态 | 包含零到多个 Clip |
-| Clip | 来源区间、代表帧、转写、用途建议、质量、审核状态 | 属于一个 MediaAsset，可被多个任务使用 |
-| SystemTag | 标签名、类别、置信度、模型版本、证据 | 由分析产生，不覆盖用户标签 |
-| UserTag | 标签名、标签夹、创建人 | 由用户管理 |
-| UsageRecord | 任务、时间线位置、使用时间、最终是否采用 | 连接 Clip 与创作任务 |
-| MaterialReview | 用途、版权、品牌安全、审核人、审核时间 | 决定素材能否自动使用 |
+外部内容来源的连接配置，例如网站、RSS、Product Hunt、YouTube、B 站、抖音或小红书。
 
-自动选片只能使用通过所需授权和用途审核的片段。系统标签、用户标签和审核结论是三类不同事实，不能互相覆盖。
+关键字段：
 
-### 2.3 人物与声音
+- id、workspace_id、connector_type、display_name；
+- connection_state、schedule_policy；
+- capability_state、last_sync_at；
+- config_ref。
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| PersonProfile | 显示名称、形象版本、背景/景别能力、授权 | 可关联多个 VoiceProfile |
-| VoiceProfile | 语言、参考音频、参考文字、模型、版本、授权 | 可用于配音和口型 |
-| PronunciationEntry | 词语、语言、目标发音、适用范围 | 属于工作区、人物或任务 |
-| Authorization | 权利人、内容类型、用途范围、有效期、证据、状态 | 绑定人物、声音或媒体 |
+账号凭据只保存安全引用，不进入普通领域字段。
 
-人物形象、声音和授权分别版本化。换声音或人物版本后，缓存键必须变化，不能误用旧配音、旧口型或旧授权结论。
+### 2.3 SourceItem
 
-### 2.4 创作
+某个来源在某次抓取中获得的原始条目。
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| Topic | 标题、角度、目标观众、来源证据、选择状态 | 创建 Plan |
-| Plan | 目标、内容来源、格式、人物声音、素材规则、模型策略、审核点 | 创建 CreationTask 或保存为模板 |
-| CreationTask | 名称、场景、当前阶段、状态、进度、恢复点、模板版本 | 包含制作产物和运行记录 |
-| Script | 语言、段落、事实引用、画面提示、版本、审核状态 | 驱动配音、选片和字幕 |
-| Timeline | 比例、轨道/故事板、片段区间、声音、字幕、版本 | 产生 PlatformVariant |
-| Subtitle | 语言、时间轴、样式、术语与发音检查 | 属于任务或平台版本 |
-| Cover | 标题、图片来源或模型、比例、品牌规则、版本 | 属于平台版本 |
-| PlatformVariant | 平台、比例、时长、文案、字幕、封面和媒体文件 | 交给发布任务 |
+关键字段：
 
-CreationTask 是用户可见的一次创作任务。Plan 是任务开始前和任务内部的执行方案，不作为一级导航。
+- id、workspace_id、connector_id；
+- external_id、canonical_url；
+- content_type、raw_ref；
+- fetched_at、source_version；
+- use_state、saved_knowledge_item_id。
 
-### 2.5 复用、自动化和运营
+SourceItem 可以被确认保存为 KnowledgeItem，也可以把媒体部分登记为 MediaAsset；两种转换都必须保留来源关系。
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| VideoTemplate | 名称、场景、Plan 快照、版本、成功运行记录 | 创建任务或自动任务 |
-| Automation | 模板版本、触发器、来源范围、审核点、重试、通知、启用状态 | 产生 AutomationRun |
-| AutomationRun | 触发原因、开始/结束、CreationTask、状态、失败与恢复点 | 属于一个自动任务 |
-| PublishJob | 平台版本、发布方式、授权、计划时间、结果和平台标识 | 产生 MetricsSnapshot |
-| MetricsSnapshot | 平台、采集时间、指标、原始引用 | 用于监控和复盘 |
-| Alert | 类型、影响对象、严重度、需要动作、处理状态 | 显示在首页运行看板 |
+### 2.4 ContentUseState
 
-模板保存方法，不保存某次生成的可变结果。自动任务必须固定使用的模板版本；模板升级后由用户决定自动任务是否切换。
+用户给入当前 Workspace 的内容默认是 available。可选限制状态为：
 
-### 2.6 模型与检索
+- available：可用于当前工作区的人工和自动创作；
+- reference_only：只可用于理解和事实参考，不直接进入成片；
+- excluded：不得进入检索、生成或成片；
+- not_for_automation：可人工使用，不可被定时任务自动选用；
+- not_for_publish：可制作预览，不可进入发布产物。
 
-| 对象 | 必要属性 | 关键关系 |
-| --- | --- | --- |
-| ModelConnection | 供应商、接口、密钥引用、可用能力、连接状态 | 提供一个或多个模型 |
-| ModelRoute | 任务类型、质量/成本/隐私策略、首选与允许回退 | 由 Plan 或工作区引用 |
-| TextEmbeddingIndex | 内容范围、模型、维度、版本、更新时间 | 检索知识、信息、字幕和文案 |
-| VisualEmbeddingIndex | 媒体范围、图文模型、版本、帧/片段引用 | 检索视频帧、图片和补充画面 |
+这些状态由用户或明确的导入规则设置。模型可以提示风险，但不得自行把 available 降级、升级或绕过限制。
 
-文字索引和视觉索引不可混成一个“向量模型”开关。模型变更导致向量不兼容时必须创建新索引版本或明确重建。
+内容来源与版本是追溯字段，不是默认要求用户填写的逐条权利证明。
 
-## 3. 转换规则
+## 3. 素材
 
-Transform 是内部能力名称，不作为普通用户一级功能。它将对象转成适合下游使用的形态：
+### 3.1 MediaAsset
 
-1. **内容整理**：解析文档、网页、字幕和描述，保留来源、段落和授权。
-2. **媒体分析**：探测文件，按画面变化分镜，提取代表帧、转写、质量和用途。
-3. **标签与检索**：生成系统标签、文字向量和视觉向量；模型与版本必须可追溯。
-4. **内容生成**：从 Topic、Plan 和证据生成文案、翻译、配音、字幕和画面提示。
-5. **素材匹配**：按语义、质量、授权、比例和近期使用记录选择片段。
-6. **平台适配**：为目标比例裁切或重构画面，生成相应字幕安全区、封面和发布文案。
+用户导入、来源转换或生成流程产生的媒体资产。
 
-任何转换都不能丢失原始对象引用，也不能把低置信推断提升为已审核事实。
+关键字段：
 
-## 4. 创作任务状态
+- id、workspace_id、media_type；
+- original_ref、proxy_ref；
+- duration、width、height、codec；
+- source_ref、use_state；
+- analysis_state、review_state；
+- created_at、updated_at。
 
-创作任务阶段固定为：
+原始资产不可变。转码、裁剪、抽帧和生成结果必须创建派生产物，不覆盖 original_ref。
 
-    资料准备 → 选题 → 文案 → 配音 → 人物与口型
-    → 视频剪辑 → 字幕与封面 → 检查与发布 → 数据监控
+### 3.2 Clip
 
-每个阶段使用以下状态集合：
+MediaAsset 中可独立检索、预览和使用的时间片段。
 
-| 状态 | 含义 |
-| --- | --- |
-| 未开始 | 前置条件尚未满足或用户尚未启动 |
-| 运行中 | 后台正在产生结果 |
-| 等待确认 | 已有可见结果，需要用户决定 |
-| 已完成 | 当前版本通过该阶段验收 |
-| 失败 | 无法继续，必须提供原因、影响、修复和可重试点 |
-| 已跳过 | 用户明确选择且下游允许，不等于成功 |
-| 已取消 | 用户终止，保留已确认结果和清理说明 |
+关键字段：
 
-不得使用一个布尔 ready 或 completed 代替所有阶段状态。进度百分比只用于运行反馈，不能决定业务完成。
+- id、asset_id、start_ms、end_ms；
+- transcript_ref、speaker_ref；
+- system_tags、user_tags；
+- quality_score、confidence；
+- review_state。
 
-## 5. 自动任务状态
+### 3.3 标签与使用记录
 
-自动任务本身使用“启用、暂停、需要修复、已停用”；每次运行另建 AutomationRun，使用“排队、运行中、等待确认、成功、失败、取消”。
+- SystemTag：模型或规则产生的主体、人物、产品、场景、动作、物体、画幅和质量标签。
+- UserTag：用户创建或修正的标签。
+- TagFolder：用户管理标签的分组。
+- UsageRecord：记录素材或片段被哪条任务、哪个时间线版本、以什么用途使用。
 
-自动任务的人工确认点是状态机节点，不是通知文案。未确认时后续步骤不得悄悄执行。失败重试只针对已声明幂等的外部调用或可重复生成步骤，并保留每次尝试。
+系统分析不等于用户确认。低置信分类和影响成片的素材缺口必须等待人工选择。
 
-## 6. 不变量
+## 4. 人物、声音与语言
 
-- 所有业务对象属于一个明确 Workspace；跨 workspace 访问按安全文档处理。
-- 事实来源、媒体授权、人物声音授权和发布授权不能由生成模型推断。
-- 用户标签不被模型覆盖；系统标签保留模型、版本、置信度和证据。
-- 已发布文件、已确认任务和历史模板版本不可被后台任务静默覆盖。
-- 一个任务失败不污染其他并行任务；同一任务可以从最近确认点恢复。
-- 用户界面、API 和 Worker 对同一状态使用同一语义；如果内部名称不同，在边界处显式映射。
+### 4.1 PersonProfile
+
+可在任务中选择的人物形象档案。
+
+关键字段：
+
+- id、workspace_id、display_name；
+- version、reference_asset_ids；
+- supported_shots、supported_backgrounds；
+- use_state、capability_state。
+
+用户导入的人物参考默认可用于当前工作区，不要求每个版本重复填写权利人和证明。用户设置的 use_state 必须被任务遵守。
+
+### 4.2 VoiceProfile
+
+可用于配音或人物口型的声音档案。
+
+关键字段：
+
+- id、workspace_id、display_name；
+- version、reference_audio_ref、reference_text；
+- languages、pronunciation_dictionary_id；
+- model_ref、use_state、capability_state。
+
+声音克隆必须使用真实参考音频和已配置模型。模型或运行环境缺失时返回明确不可用状态，不得回退到系统声音、静音或伪造音频。
+
+### 4.3 PronunciationEntry
+
+特定词语在语言、人物或声音版本下的发音规则。
+
+### 4.4 ExternalConsent
+
+只有发生云端数据外发、平台账号连接、平台发布、付费调用或其他外部副作用时，才记录对应确认。它不是媒体、人物或声音默认可用性的前置对象。
+
+## 5. 制作方案与任务
+
+### 5.1 Plan
+
+由用户目标和当前 Workspace 状态编译出的可执行制作方案。
+
+关键字段：
+
+- id、workspace_id、goal；
+- content_type、audience、language；
+- duration_target、aspect_ratio、target_platforms；
+- knowledge_refs、source_refs、asset_refs；
+- person_profile_ref、voice_profile_ref；
+- topic_strategy、script_style、visual_strategy；
+- subtitle_strategy、cover_strategy；
+- confirmation_points、blocking_conditions；
+- status、version。
+
+Plan 必须引用真实可用对象。用户确认 Plan 后创建或推进 CreationTask。
+
+### 5.2 CreationTask
+
+视频生产全过程的唯一聚合根。
+
+关键字段：
+
+- id、workspace_id、plan_id、title；
+- stage、stage_state、status；
+- current_topic_id、current_script_id；
+- current_narration_id、current_timeline_version_id；
+- output_refs、blocking_issue；
+- created_at、updated_at。
+
+任务阶段为：
+
+1. preparation：资料准备；
+2. topic：选题；
+3. script：文案；
+4. narration：配音；
+5. person_lipsync：人物与口型；
+6. montage：视频剪辑；
+7. subtitle_cover：字幕与封面；
+8. review_output：检查与输出；
+9. publish_analytics：发布与数据。
+
+阶段状态为：
+
+- not_started；
+- working；
+- waiting_user；
+- blocked；
+- ready；
+- completed；
+- skipped。
+
+skipped 必须记录不适用原因；blocked 必须记录原因、影响和修复动作。
+
+### 5.3 Topic 与 Script
+
+Topic 保存候选标题、核心判断、目标受众、事实引用和确认状态。
+
+Script 保存结构化文案和段落。每个 ScriptSegment 有稳定 id，并记录正文、事实引用、预计时长、说话人和确认状态。局部编辑依赖稳定段落 id，不以纯文本位置作为唯一定位。
+
+### 5.4 Narration
+
+Narration 关联一个 Script 版本和 VoiceProfile 版本。NarrationSegment 与 ScriptSegment 一一或多对一对应，记录音频引用、时长、语言、模型运行和生成状态。
+
+## 6. 时间线与产物
+
+### 6.1 Timeline
+
+Timeline 是成片编辑的逻辑时间线，包含视频、人物、配音、音乐、字幕、图片和图形轨道。
+
+### 6.2 TimelineVersion
+
+每次已确认的自然语言或精确编辑创建一个不可变 TimelineVersion。
+
+关键字段：
+
+- id、task_id、parent_version_id；
+- edit_operation_ids；
+- track_snapshot_ref；
+- invalidated_artifact_refs；
+- preview_output_ref、created_at。
+
+CreationTask 只指向当前版本。撤销通过切换或创建反向版本完成，不覆盖历史版本。
+
+### 6.3 TimelineItem
+
+时间线中的最小可编辑对象。它引用 Clip、NarrationSegment、SubtitleCue、PersonRender、CoverAsset 或其他派生产物，并记录起止时间、裁切、布局、音量和效果参数。
+
+### 6.4 Subtitle、Cover 与 PlatformVariant
+
+- SubtitleTrack：语言、样式和 SubtitleCue 集合；
+- SubtitleCue：文本、起止时间、说话人和强调标记；
+- CoverAsset：封面图、标题、安全区和生成来源；
+- PlatformVariant：基于同一任务输出的画幅、码率、字幕和发布文案变体。
+
+## 7. 自然语言编辑
+
+### 7.1 EditIntent
+
+用户自然语言经过理解后形成的结构化意图。
+
+关键字段：
+
+- id、task_id、raw_command；
+- context_stage、selected_object_refs、playhead_ms；
+- intent_type、scope；
+- constraints、confidence；
+- status。
+
+典型 intent_type 包括：
+
+- update_script；
+- replace_visual；
+- trim_or_reorder；
+- regenerate_narration；
+- update_subtitle；
+- change_person；
+- change_style；
+- change_duration_or_format。
+
+### 7.2 EditProposal
+
+EditIntent 编译出的待确认提案，必须说明：
+
+- 系统理解的动作；
+- 目标对象和时间范围；
+- 计划写入的类型化操作；
+- 将失效或重新生成的依赖；
+- 可预览差异；
+- 是否产生付费调用或外部副作用。
+
+提案状态为 proposed、needs_scope、confirmed、rejected 或 expired。
+
+### 7.3 EditOperation
+
+确认后的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
+
+文字模型只能产生或修正 EditIntent 和 EditProposal，不得直接写文件路径、执行任意 FFmpeg 命令或绕过领域校验修改时间线。
+
+### 7.4 编辑状态机
+
+interpreted → proposed → confirmed → running → applied
+
+异常分支为：
+
+- needs_scope：范围不明确，等待用户补充或选择对象；
+- failed：执行失败，保留旧时间线版本并记录修复动作；
+- reverted：已通过新版本撤销。
+
+## 8. 变换与依赖
+
+### 8.1 TransformRun
+
+记录一次分析、生成或渲染：
+
+- transform_type；
+- input_refs、output_refs；
+- model_or_engine、parameters；
+- status、started_at、finished_at；
+- failure_reason、remediation。
+
+所有生成产物必须能通过 TransformRun 追溯输入和执行条件。
+
+### 8.2 DependencyEdge
+
+表达产物之间的依赖。例如：
+
+ScriptSegment → NarrationSegment → SubtitleCue
+
+ScriptSegment + NarrationSegment + Clip → TimelineItem
+
+TimelineVersion → PreviewOutput → FinalOutput
+
+编辑操作只使依赖图中受影响的下游节点 invalidated。未受影响且仍满足输入摘要的节点保持 valid。
+
+### 8.3 产物状态
+
+- valid：输入和依赖未变化，可直接复用；
+- invalidated：上游发生变化，需要重算；
+- running：正在生成；
+- failed：生成失败；
+- unavailable：当前能力或环境不存在；
+- superseded：已有新版本替代。
+
+## 9. 模板、自动任务与发布
+
+### 9.1 Template
+
+Template 保存可复用的 Plan 约束、内容结构、风格、素材选择规则、人物声音偏好、字幕封面策略和确认节点。内置模板与用户模板使用同一领域结构，用户模板必须版本化。
+
+### 9.2 Automation
+
+Automation 关联一个模板、触发规则、来源范围和确认策略。
+
+状态为 active、paused、running、waiting_review、blocked 或 failed。自动任务不得绕过 ContentUseState、模型外发确认或发布确认。
+
+### 9.3 PublishJob 与 AnalyticsSnapshot
+
+PublishJob 记录目标平台、账号引用、PlatformVariant、用户确认、排队、发布和失败状态。AnalyticsSnapshot 保存某次拉取的表现数据并关联发布任务和时间。
+
+## 10. 核心不变量
+
+1. 所有业务对象必须属于明确 Workspace，跨工作区引用无效。
+2. CreationTask 是生产链路唯一事实源；Episode、Batch 和聊天状态不得继续承担用户生产写入。
+3. 用户给入工作区的内容默认 available；只有显式限制才能改变其使用范围。
+4. 来源和版本必须保留，但逐条权利人或证据不是默认创作前置字段。
+5. 原始资产不可覆盖；派生产物必须有 TransformRun。
+6. 自然语言和精确编辑必须编译为同一组 EditOperation，并写入 TimelineVersion。
+7. 未确认的 EditProposal 不得改变任务或产物。
+8. 局部编辑只使真实下游依赖失效，不得无理由重做整条任务。
+9. 不可用能力必须返回 unavailable 或 blocked，不能使用虚假成功 fallback。
+10. 平台发布、云端外发、付费调用和删除等外部副作用按风险显式确认。
+11. 任务失败保留已经确认且仍有效的上游结果。
+12. 旧对象只有在消费者、写路径、入口、样式和错误测试全部移除并通过不存在证明后，才达到 RETIRED。

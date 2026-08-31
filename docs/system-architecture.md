@@ -1,132 +1,315 @@
-# 系统架构与模块边界
+# 系统架构
 
-状态：跨模块技术权威
-职责：定义运行单元、依赖方向、数据流和外部能力边界；产品语义见 [domain-model.md](domain-model.md)。
+本文件定义 AI 视频日记的运行模块、跨进程责任、外部能力适配和关键数据流。产品范围见 product-requirements.md，领域对象与状态见 domain-model.md。
 
-## 1. 运行拓扑
+## 1. 架构目标
 
-    Electron 桌面壳
-      ├─ Next.js Web 工作台
-      │    └─ HTTP / SSE → FastAPI
-      ├─ FastAPI 本地服务
-      │    ├─ SQLite 元数据与任务状态
-      │    ├─ 本地文件、素材、模型和输出
-      │    └─ 外部模型、信息源与发布平台
-      └─ Worker / 模型子进程
-           ├─ 定时与长任务
-           ├─ ffmpeg / ASR / TTS / 视觉检索
-           └─ 可恢复运行记录
+系统围绕一个 Workspace 和一条 CreationTask 事实链运行，满足：
 
-每个运行单元只承担一个主要责任。不要因为调用方便把业务状态放入 Electron，或让 Web 直接读取数据库和本地绝对路径。
+- 本地优先，网络能力可插拔；
+- 原始资产不可变，派生产物可追溯；
+- 自然语言与精确编辑共享同一领域操作；
+- 局部编辑按依赖图增量重算；
+- 模型可以更换，领域状态不依赖供应商；
+- 进程中断后任务可恢复；
+- 不可用能力诚实失败，不使用隐藏 fallback；
+- Web 不能绕过桌面权限提交任意本地路径。
 
-## 2. 模块责任
+## 2. 运行拓扑
 
-### 2.1 apps/web
+### 2.1 Desktop Shell
 
-- 呈现用户对象、输入和可见状态；
-- 发出明确命令，展示预检、进度、等待确认、失败和恢复；
-- 管理临时表单状态，不成为业务完成状态的事实源；
-- 不持有服务端密钥，不推断 workspace，不伪造后台成功；
-- 用户文案遵循 DESIGN.md 和领域模型，不暴露 Episode、Batch、embedding 等内部名。
+Electron 桌面壳负责：
 
-### 2.2 apps/api
+- 应用生命周期和窗口；
+- 选择文件、选择目录和保存成片的原生对话框；
+- 把用户选择转换为受控文件句柄或工作区引用；
+- 启动、监督和终止 API、Worker 及必要的本地模型进程；
+- 安全存储 API 密钥和平台凭据；
+- 打开文件、播放器和系统通知；
+- 退出时清理子进程、端口和临时资源。
 
-- 验证身份、workspace、输入和外部能力边界；
-- 实现领域命令、查询和状态迁移；
-- 持久化任务、模板、自动任务、审核、发布和运行记录；
-- 通过稳定接口调用媒体、模型、来源和平台适配器；
-- 返回原因、影响、修复动作和可重试点，不把异常吞成成功响应。
+桌面壳不实现产品领域规则，也不接受 Renderer 提交任意源绝对路径。
 
-现有 app/main.py 是 HTTP 组合入口，不应继续承载领域实现。现有 production.py、workflow.py、automation.py、video_pipeline.py、external_sources.py、voice_clone.py、visual_semantics.py 等模块应逐步按领域责任收拢；不为重命名本身做大规模重构。
+### 2.2 Web Renderer
 
-### 2.3 Worker
+Web 负责用户界面和短生命周期交互状态：
 
-- 执行定时任务、媒体分析、模型推理、渲染、发布监控等长任务；
-- 每次运行拥有明确 workspace、任务和幂等键；
-- 将进度、心跳、等待确认、失败和恢复点写入持久状态；
-- 进程退出后可恢复，不依赖内存队列保存唯一状态；
-- 不在缺少用户身份或明确本地 workspace 时操作登录账号的数据。
+- 首页目标与预检；
+- 素材、内容、人物声音、模板和自动任务管理；
+- CreationTask 阶段工作区；
+- 播放器、时间线、字幕和属性检查器；
+- 自然语言命令输入、影响预览、确认和撤销；
+- 运行状态、阻断原因和修复动作。
 
-### 2.4 Electron
+Web 不把 localStorage、React state 或聊天消息当作业务事实源。
 
-- 管理窗口、进程启动与关闭、本地端口、目录授权、系统菜单和安装包运行环境；
-- 不复制产品路由、认证规则或业务状态机；
-- 只向渲染进程暴露最小、可验证的桌面能力；
-- 子进程失败、移动硬盘移除和退出清理必须有可见结果。
+### 2.3 API
 
-## 3. 数据边界
+API 是同步领域入口，负责：
 
-| 数据 | 默认位置 | 可发送到外部的条件 |
-| --- | --- | --- |
-| 账号、workspace membership、必要首启状态 | Supabase 分发模式 | 仅认证与隔离所需 |
-| 视频、音频、图片、草稿、模型权重和缓存 | 用户选择的本地目录 | 用户选择云模型或平台上传，且界面说明范围 |
-| 任务、标签、审核、模板和自动任务元数据 | 本地 SQLite，按 workspace 分区 | 明确启用同步后才可发送 |
-| API Key 和平台令牌 | 本机安全配置或受信服务端 | 只能发送给对应服务，不进入日志、截图或普通 API |
-| 指标与发布结果 | 本地记录，必要时来自平台 API | 按平台授权范围获取 |
+- Workspace 和对象权限校验；
+- Knowledge、Source、Media、Profile、Plan、CreationTask、Template 和 Automation 的仓储访问；
+- 命令校验和状态转换；
+- 自然语言意图的上下文组装与类型化提案；
+- 提案确认后写入 EditOperation 和 TimelineVersion；
+- 能力状态、失败证据和修复动作；
+- 向 Worker 提交可恢复作业。
 
-本地优先不是“永不联网”。每个连接器必须说明发送内容、目的、保存位置和撤销方法。
+API 不执行长时间媒体渲染，也不建立 Episode、Batch 或内存 fallback。
 
-## 4. 命令、任务和事件
+### 2.4 Worker
 
-- Web 发送用户命令；API 验证后创建或推进领域对象。
-- 长操作创建持久任务并立即返回任务标识，Web 通过轮询或事件流读取状态。
-- Worker 只能通过已定义的状态迁移推进任务，不直接修改 Web 临时状态。
-- 人工确认是领域命令。界面按钮、通知已读和任务继续是不同事件。
-- 运行进度可以高频更新；完成、失败、等待确认和发布结果必须持久化。
-- 同一个命令重复提交时，要么使用幂等键返回同一结果，要么明确拒绝；不要靠宽泛 try/catch 猜测。
+Worker 执行可恢复的长任务：
 
-## 5. 能力接口
+- 来源抓取和内容解析；
+- 视频转写、分镜和多模态分析；
+- 选题、文案、配音、口型、字幕和封面生成；
+- 时间线预览、增量渲染和最终编码；
+- 平台发布和数据拉取；
+- 失败重试、进度和产物登记。
 
-不要建立一个包含所有 AI 能力的万能 Provider。按失败模式和数据类型分开：
+每个作业必须幂等或带明确的重试边界，并把状态、失败原因和产物引用持久化。
 
-| 接口 | 输入与输出 | 关键能力 |
-| --- | --- | --- |
-| TextModel | 文本/结构化上下文 → 文本或结构化结果 | 选题、方案、文案、翻译、提取 |
-| TextEmbedding | 文本 → 文字向量 | 知识库和信息源检索 |
-| VisualEmbedding | 图片/视频帧和文本 → 视觉检索向量 | 文案与镜头匹配 |
-| ImageGeneration | 提示、参考图、尺寸 → 图片 | 视频封面和视觉资产 |
-| SpeechToText | 音视频 → 带时间轴文字 | 素材理解、字幕 |
-| TextToSpeech | 文案、声音档案、发音词典 → 音频 | 配音 |
-| AvatarAndLipSync | 人物、音频、语言、动作 → 人物视频 | 人物形象与口型 |
-| SourceConnector | 外部规则与游标 → SourceItem | 信息源定时获取 |
-| PublishConnector | PlatformVariant、授权、方式 → 发布结果 | 草稿、发布、状态查询 |
-| MetricsConnector | 平台对象和时间范围 → 指标 | 发布后监控 |
+### 2.5 Local Model Runtimes
 
-接口返回统一的成功、能力不可用、需要登录、限流、拒绝、可重试失败和永久失败语义；领域层决定影响范围，不由适配器静默选择业务回退。
+语音、转写、视觉、向量或其他本地模型可以是独立进程。Supervisor 负责：
 
-## 6. 模型路由与降级
+- 启动和健康检查；
+- 模型文件和运行环境检测；
+- 并发、显存或内存限制；
+- 标准化能力状态；
+- 进程退出和资源清理。
 
-- 模型路由按任务类型、质量、成本、延迟和隐私策略选择，不按页面写死供应商。
-- 只有 Plan 或工作区允许的模型可以接收对应内容。
-- 回退必须预先声明：例如高质量文字模型不可用时可切换到允许的备用模型；人物授权失败、workspace 越权和历史覆盖没有回退。
-- 图片模型未连接时，创作可以继续到封面步骤并等待配置；不能全局阻断，也不能伪造封面。
-- 向量模型变化时，索引版本随之变化。旧索引只读或重建，不混用不同维度和语义空间。
+## 3. 核心服务
 
-## 7. 媒体与存储
+### 3.1 ProductionRepository
 
-- 原始媒体只读；分析、代理文件、缩略图、缓存、时间线和输出使用独立路径。
-- 文件引用持久化时保存 workspace、逻辑用途和已授权根目录，不把任意绝对路径当权限。
-- Web 与公开 API 只能交换逻辑媒体引用或受 workspace 校验的媒体 URL：已登记素材使用 `workspace://`，系统生成旁白使用 `narration://artifact/<id>`；不得接收或返回本机绝对路径。
-- 剪辑渲染命令以已持久化的时间线为准，不由客户端再次提交旁白或镜头文件路径。API 在调用渲染器前解析并校验全部逻辑引用；渲染器可以接收解析后的内部路径，但不能成为绕过 API 授权边界的第二个入口。
-- 输出文件的物理路径只保留在服务端持久化与进程边界。客户端通过按 workspace 和成片对象校验的媒体端点预览或下载，API 响应不得暴露 `output_path`、`subtitle_path` 等本机路径。
-- ffmpeg、模型进程和下载器是外部进程边界：命令参数结构化，退出码、标准错误和输出文件都要验证。
-- 移动硬盘不可用时暂停依赖任务并保留恢复点；不静默写入内置盘。
-- 删除源素材、缓存、模型或输出必须解析精确目标并说明是否可恢复。
+ProductionRepository 是 Plan、CreationTask、Script、Narration、Timeline、Output 和任务事件的唯一持久化入口。旧 Episode、Batch、repo.today 或模板成功 fallback 不得进入新写链路。
 
-## 8. 依赖方向
+### 3.2 ContentRepository
 
-    UI → API 契约 → 领域服务 → Repository / Capability interfaces
-                                  ↓
-                           具体适配器与进程
+管理 KnowledgeItem、SourceConnector、SourceItem、内容版本和 ContentUseState。知识库与信息源可以共享检索基础设施，但必须保留不同来源语义。
 
-- 领域对象不依赖 Next.js、Electron、Supabase 或具体模型供应商。
-- 适配器可以依赖领域接口，领域层不能导入适配器实现。
-- API schema 是进程边界，不是第二套领域模型；字段映射应集中。
-- 共享不变量只实现一次。UI 可做即时提示，但服务端仍在信任边界做最终验证。
+### 3.3 MediaRepository
 
-## 9. 演进规则
+管理 MediaAsset、Clip、标签、分析结果、代理文件和 UsageRecord。文件系统路径只在受信任的本地进程中解析，对 Web 和领域层暴露逻辑引用。
 
-- 优先沿现有模块小步收敛，不因本文档一次性重写整个仓库。
-- 新抽象至少有两个当前调用方，或由明确验收要求推动；否则直接实现当前路径。
-- 新旧路径不得无限并存。迁移必须定义调用方、数据兼容、删除条件和最小回归。
-- 跨模块改动先更新领域或架构权威，再修改契约和实现；实现完成后删除与新规则冲突的旧文案和分支。
+### 3.4 ProfileRepository
+
+管理 PersonProfile、VoiceProfile、PronunciationEntry 和版本。用户导入的档案默认可在当前 Workspace 使用；能力是否可执行由对应模型和运行环境单独决定。
+
+### 3.5 AssetIntelligenceService
+
+把长视频和多模态内容转化为可检索生产单元：
+
+- 转写、说话人和静音识别；
+- 镜头边界和关键帧；
+- 人物、产品、场景、动作、物体、屏幕内容和文字；
+- 质量、画幅、安全裁切和可复用性；
+- 索引、标签、缺口和低置信复核。
+
+分析结果写入 MediaRepository，不能只存在于模型响应或缓存。
+
+### 3.6 RetrievalService
+
+按任务规模组合：
+
+- 结构化字段和全文检索；
+- 时间范围、标签和来源过滤；
+- 可选向量索引和语义重排；
+- Workspace、ContentUseState 和任务上下文约束。
+
+小规模数据不强制依赖向量模型；启用向量检索时，索引必须可以从权威内容重建。
+
+### 3.7 PlanCompiler
+
+把用户目标、模板和当前能力编译为 Plan：
+
+- 读取可用内容、素材、人物声音和模型状态；
+- 形成内容、视觉、声音、字幕、封面和平台策略；
+- 标记确认节点、缺失条件和可执行步骤；
+- 在用户确认前不启动有成本或外部副作用的作业。
+
+PlanCompiler 的输出是领域对象，不是聊天回答。
+
+### 3.8 EditCompiler
+
+把自然语言与当前任务上下文编译为 EditIntent、EditProposal 和类型化 EditOperation：
+
+1. Web 发送命令、当前阶段、选中对象和播放位置。
+2. API 从 ProductionRepository 读取权威任务和时间线版本。
+3. 文字模型只负责理解意图、补全约束和生成候选提案。
+4. EditCompiler 校验范围、对象类型、ContentUseState、能力和副作用。
+5. Web 展示操作、影响范围、失效依赖和预览差异。
+6. 用户确认后，API 写入 EditOperation 并调度 Worker。
+7. 完成后生成 TimelineVersion，CreationTask 指向新版本。
+
+文字模型不能直接访问任意文件路径、执行 Shell 或构造任意 FFmpeg 命令。媒体操作由受控、类型化的执行器生成。
+
+### 3.9 DependencyGraphService
+
+维护 ScriptSegment、NarrationSegment、SubtitleCue、TimelineItem、PreviewOutput 和 FinalOutput 的依赖。
+
+每次编辑计算：
+
+- 直接变更对象；
+- 需要失效的下游节点；
+- 可以保持 valid 的已确认产物；
+- 需要重新预览或最终渲染的范围。
+
+Worker 只处理 invalidated 节点。输入摘要未变的 valid 产物可以复用。
+
+### 3.10 QualityEvaluationService
+
+在预览和输出阶段执行可解释检查：
+
+- 音视频流、时长和文件完整性；
+- 音量、静音、字幕时间和遮挡；
+- 画幅、安全区、裁切和平台规格；
+- 文案事实来源、重复、节奏和语言一致性；
+- 模型或媒体能力不可用；
+- 用户偏好与模板约束。
+
+自动评分只能提出问题和建议，不能替代用户对内容质量的最终确认。
+
+### 3.11 PreferenceService
+
+从用户明确选择、接受、撤销和模板保存中提取可解释偏好。偏好用于排序和默认值，不能静默覆盖 ContentUseState、事实来源或外部副作用确认。
+
+## 4. 能力接口
+
+外部模型和平台通过窄接口适配，领域层不直接依赖供应商 SDK。
+
+建议能力接口：
+
+- TopicGenerator；
+- ScriptGenerator；
+- EmbeddingProvider；
+- VisionAnalyzer；
+- SpeechToTextProvider；
+- VoiceCloneProvider；
+- LipSyncProvider；
+- ImageGenerationProvider；
+- MediaRenderer；
+- PublishConnector；
+- AnalyticsConnector。
+
+每个实现统一返回：
+
+- capability_state：available、degraded 或 unavailable；
+- execution_id；
+- output_refs；
+- usage 和成本信息；
+- failure_reason、impact、remediation。
+
+允许的降级必须是产品明确支持的替代选择，并由用户知情；不得在失败时偷偷切回旧事实源、旧模型或伪造产物。
+
+## 5. 关键数据流
+
+### 5.1 内容与素材导入
+
+原生选择器或 SourceConnector
+→ Desktop/API 建立 Workspace 引用
+→ ContentRepository 或 MediaRepository
+→ Worker 分析与索引
+→ 可检索 KnowledgeItem、SourceItem、MediaAsset 和 Clip
+
+### 5.2 新任务
+
+首页目标或模板
+→ PlanCompiler 预检
+→ Plan 预览
+→ 用户确认
+→ CreationTask
+→ 选题与文案确认
+→ 配音、故事板、时间线、字幕和封面
+→ PreviewOutput
+
+### 5.3 自然语言局部修改
+
+命令 + 选择上下文
+→ EditCompiler
+→ EditProposal
+→ 用户确认
+→ EditOperation
+→ DependencyGraph invalidation
+→ Worker 增量生成或渲染
+→ TimelineVersion
+→ 新预览
+
+### 5.4 精确编辑
+
+时间线控件
+→ 类型化 EditOperation
+→ 与自然语言相同的校验、依赖失效、版本和渲染路径
+
+### 5.5 本地输出
+
+当前 TimelineVersion
+→ MediaRenderer
+→ MP4、字幕和产物证据
+→ ffprobe 或等价校验
+→ 客户端播放
+→ Desktop 原生保存对话框
+
+### 5.6 发布与监控
+
+FinalOutput + PlatformVariant
+→ 发布前预检
+→ 用户确认目标账号和外发内容
+→ PublishJob
+→ PublishConnector
+→ 平台状态
+→ AnalyticsConnector 定时拉取
+→ AnalyticsSnapshot
+
+## 6. 存储
+
+### 6.1 数据库
+
+SQLite 或等价本地数据库保存结构化领域对象、状态、版本、事件、依赖和逻辑文件引用。Repository 是唯一写入口，不允许各模块维护结构不同的旁路数据库。
+
+### 6.2 文件存储
+
+Workspace 文件区建议区分：
+
+- originals：不可变原始资产；
+- proxies：预览代理；
+- analysis：转写、关键帧和索引派生数据；
+- artifacts：配音、字幕、口型、封面和渲染结果；
+- outputs：用户可检查的最终输出；
+- temp：可回收临时文件。
+
+数据库保存逻辑引用和摘要。真实路径由本地受信任层解析，迁移 Workspace 时可重新绑定。
+
+### 6.3 任务与事件
+
+长任务状态必须可恢复。进度事件用于界面展示，但最终状态以持久化任务和产物为准。进程崩溃后不能把 running 自动解释为 completed。
+
+## 7. 安全与外部边界
+
+- 所有 API 写入校验 Workspace 一致性。
+- Renderer 只能使用 Desktop 或 API 返回的受控引用。
+- API 密钥和账号凭据使用系统安全存储。
+- 云端模型调用明确展示数据类型、供应商和成本。
+- ContentUseState 约束素材用途；它与文件访问权限、账号连接和平台发布确认不是同一概念。
+- 删除、覆盖、付费调用和平台发布保留审计事件。
+- 日志不得记录密钥、完整凭据或不必要的用户内容。
+
+## 8. 迁移与退役
+
+产品迁移采用有限状态机：
+
+LEGACY_INVENTORIED
+→ NEW_AUTHORITY_FROZEN
+→ VERTICAL_SLICE_IMPLEMENTED
+→ REAL_CLIENT_VERIFIED
+→ OLD_PATH_DISABLED
+→ OLD_PATH_REMOVED
+→ ABSENCE_VERIFIED
+→ MIGRATION_ACCEPTED
+
+旧路径只有在入口、消费者、写接口、fallback、样式和保护旧行为的错误测试全部移除后才算 RETIRED。新界面存在、API 可追踪、构建成功或静态测试通过都不能单独证明迁移完成。
+
+当前实现状态不记录在本文。代码、Git、运行服务和活动任务合同分别提供实时证据。

@@ -55,6 +55,9 @@ function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
     confirmed_script_id: overrides.confirmed_script_id ?? null,
     narration_cache_key: overrides.narration_cache_key ?? null,
     montage_plan_id: overrides.montage_plan_id ?? null,
+    current_timeline_version_id: overrides.current_timeline_version_id ?? null,
+    timeline_sequence: overrides.timeline_sequence ?? 0,
+    can_undo: overrides.can_undo ?? false,
     output_ready: overrides.output_ready ?? false,
   };
 }

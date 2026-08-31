@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import re
 import sqlite3
 import subprocess
@@ -23,6 +24,7 @@ from app.avatar_lipsync import (
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
 )
+from app.database_migrations import apply_production_migrations
 from app.models import utc_now
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
@@ -190,6 +192,30 @@ class NarrationArtifactRecord:
     created_at: datetime = field(default_factory=utc_now)
 
 
+NarrationSegmentStatus = Literal["pending", "generating", "ready", "failed"]
+
+
+@dataclass(frozen=True)
+class NarrationSegment:
+    id: str
+    workspace_id: str
+    task_id: str
+    script_id: str
+    source_section_id: str
+    text: str
+    audio_reference: str | None
+    duration_seconds: float | None
+    sample_rate: int | None
+    model_id: str
+    voice_profile_id: str
+    voice_version: str
+    language: str
+    pronunciation_version: str
+    status: NarrationSegmentStatus
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
 @dataclass(frozen=True)
 class VersionedNarrationInputs:
     voice: VersionedVoiceProfile
@@ -245,6 +271,14 @@ class MaterialCollection:
     parent_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class MaterialSegmentMatch:
+    asset_ref: str
+    segment_ref: str
+    score: float
+    reasons: list[str]
 
 
 @dataclass
@@ -360,6 +394,7 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
@@ -381,6 +416,7 @@ class CreationTask:
     status: Literal["created", "running", "waiting_for_user", "completed", "failed"] = "created"
     progress: int = 0
     recovery_point: str = "topic"
+    current_timeline_version_id: str | None = None
     selected_topic_id: str | None = None
     confirmed_script_id: str | None = None
     narration_cache_key: str | None = None
@@ -495,12 +531,183 @@ class CreationTaskScript:
     confirmed_at: datetime | None = None
 
 
-class ProductionRepository:
-    """Workspace-scoped persistence for the batch-production foundation.
+JobRunStatus = Literal[
+    "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
+]
 
-    The production domain deliberately uses separate tables from legacy Episode
-    payloads. That keeps the migration reversible while allowing the existing
-    single-Episode flow to continue during the product transition.
+
+@dataclass(frozen=True)
+class TimelineVersion:
+    id: str
+    workspace_id: str
+    task_id: str
+    parent_version_id: str | None
+    sequence: int
+    snapshot: dict[str, object]
+    created_by_operation_id: str | None
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class JobRun:
+    id: str
+    workspace_id: str
+    task_id: str
+    kind: str
+    idempotency_key: str
+    input_digest: str
+    status: JobRunStatus = "queued"
+    progress: int = 0
+    attempt: int = 0
+    output_refs: list[str] = field(default_factory=list)
+    failure_reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class ArtifactRecord:
+    id: str
+    workspace_id: str
+    task_id: str
+    kind: str
+    logical_ref: str
+    sha256: str
+    size_bytes: int
+    producer_job_id: str
+    input_refs: list[str]
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class TaskEvent:
+    id: str
+    workspace_id: str
+    task_id: str
+    job_id: str | None
+    event_type: str
+    payload: dict[str, object]
+    created_at: datetime = field(default_factory=utc_now)
+
+
+TransformRunStatus = Literal["running", "succeeded", "failed"]
+
+
+@dataclass(frozen=True)
+class TransformRun:
+    id: str
+    workspace_id: str
+    task_id: str
+    job_id: str
+    transform_type: str
+    input_digest: str
+    input_refs: list[str]
+    output_refs: list[str]
+    engine: str
+    parameters: dict[str, object]
+    status: TransformRunStatus
+    started_at: datetime
+    finished_at: datetime | None = None
+    failure_reason: str | None = None
+    remediation: str | None = None
+
+
+@dataclass(frozen=True)
+class DependencyEdge:
+    id: str
+    workspace_id: str
+    task_id: str
+    upstream_ref: str
+    downstream_ref: str
+    created_by_transform_id: str
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class EditIntent:
+    id: str
+    workspace_id: str
+    task_id: str
+    raw_command: str
+    context_stage: str
+    selected_object_refs: list[str]
+    playhead_ms: int | None
+    intent_type: str
+    scope: dict[str, object]
+    constraints: dict[str, object]
+    confidence: float
+    status: str
+    created_at: datetime = field(default_factory=utc_now)
+
+
+EditProposalStatus = Literal["proposed", "confirmed", "rejected", "expired"]
+
+
+@dataclass(frozen=True)
+class EditProposal:
+    id: str
+    workspace_id: str
+    task_id: str
+    intent_id: str
+    summary: str
+    target_refs: list[str]
+    operation: dict[str, object]
+    invalidated_refs: list[str]
+    preview: dict[str, object]
+    external_effects: list[object]
+    status: EditProposalStatus = "proposed"
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+EditOperationStatus = Literal["running", "applied", "failed"]
+EditOperationType = Literal[
+    "ReplaceClip",
+    "TrimClip",
+    "ReorderClip",
+    "SetClipLock",
+    "ConfirmClip",
+    "UndoTimelineVersion",
+    "RegenerateNarrationSegment",
+    "UpdateSubtitleCue",
+]
+SUPPORTED_EDIT_OPERATION_TYPES = {
+    "ReplaceClip",
+    "TrimClip",
+    "ReorderClip",
+    "SetClipLock",
+    "ConfirmClip",
+    "UndoTimelineVersion",
+    "RegenerateNarrationSegment",
+    "UpdateSubtitleCue",
+}
+
+
+@dataclass(frozen=True)
+class EditOperation:
+    id: str
+    workspace_id: str
+    task_id: str
+    proposal_id: str
+    operation_type: EditOperationType
+    payload: dict[str, object]
+    base_version_id: str
+    result_version_id: str | None
+    status: EditOperationStatus
+    failure_reason: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    applied_at: datetime | None = None
+
+
+class ProductionRepository:
+    """Workspace-scoped persistence for the CreationTask production foundation.
+
+    Legacy tables remain migration inventory only; TimelineVersion, JobRun,
+    ArtifactRecord and TaskEvent are authoritative for the new task runtime.
     """
 
     def __init__(
@@ -963,6 +1170,7 @@ class ProductionRepository:
                 FROM media_preview_runs
                 """
             )
+            apply_production_migrations(conn)
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -2033,6 +2241,98 @@ class ProductionRepository:
         ]
         return assets, total
 
+    def search_material_segments(
+        self,
+        workspace_id: str,
+        *,
+        query: str = "",
+        usage_roles: list[AssetUsageRole] | None = None,
+        tags: list[str] | None = None,
+        min_duration_seconds: float | None = None,
+        max_duration_seconds: float | None = None,
+        limit: int = 20,
+    ) -> list[MaterialSegmentMatch]:
+        """Deterministically search approved, persisted segments in one workspace."""
+        roles = set(usage_roles or [])
+        if not roles <= {"unassigned", "a_roll", "b_roll", "exclude"}:
+            raise ValueError("素材用途条件无效")
+        requested_tags = [value.strip().casefold() for value in (tags or [])]
+        if any(not value for value in requested_tags):
+            raise ValueError("素材标签条件不能为空")
+        if min_duration_seconds is not None and min_duration_seconds < 0:
+            raise ValueError("最小镜头时长不能为负数")
+        if max_duration_seconds is not None and max_duration_seconds < 0:
+            raise ValueError("最大镜头时长不能为负数")
+        if (
+            min_duration_seconds is not None
+            and max_duration_seconds is not None
+            and min_duration_seconds > max_duration_seconds
+        ):
+            raise ValueError("镜头时长范围无效")
+        if not 1 <= limit <= 100:
+            raise ValueError("素材检索 limit 必须在 1 到 100 之间")
+
+        normalized_query = query.strip().casefold()
+        matches: list[MaterialSegmentMatch] = []
+        for asset in self.list_assets(workspace_id):
+            if asset.review_status != "approved":
+                continue
+            for segment in asset.segments:
+                if segment.review_status != "approved":
+                    continue
+                duration = max(0.0, segment.end_seconds - segment.start_seconds)
+                if (
+                    min_duration_seconds is not None
+                    and duration < min_duration_seconds
+                ):
+                    continue
+                if (
+                    max_duration_seconds is not None
+                    and duration > max_duration_seconds
+                ):
+                    continue
+                role = effective_segment_usage_role(asset, segment)
+                if roles and role not in roles:
+                    continue
+                segment_tags = {
+                    value.casefold()
+                    for value in (*segment.system_tags, *segment.user_tags)
+                }
+                if requested_tags and not set(requested_tags) <= segment_tags:
+                    continue
+
+                score = 0.1
+                reasons = ["已通过当前工作区素材审核"]
+                if roles:
+                    score += 0.25
+                    reasons.append(f"用途匹配 {role}")
+                if requested_tags:
+                    score += 0.15 * len(requested_tags)
+                    reasons.append("标签匹配 " + "、".join(tags or []))
+                if normalized_query:
+                    query_reasons = _material_query_reasons(
+                        normalized_query, segment
+                    )
+                    if not query_reasons:
+                        continue
+                    score += 0.35 + 0.1 * len(query_reasons)
+                    reasons.extend(query_reasons)
+                if min_duration_seconds is not None or max_duration_seconds is not None:
+                    score += 0.1
+                    reasons.append(f"时长 {duration:.1f} 秒符合范围")
+                matches.append(
+                    MaterialSegmentMatch(
+                        asset_ref=f"asset:{asset.id}",
+                        segment_ref=f"segment:{segment.id}",
+                        score=round(score, 4),
+                        reasons=reasons,
+                    )
+                )
+        return sorted(
+            matches,
+            key=lambda item: (-item.score, item.asset_ref, item.segment_ref),
+        )[:limit]
+
     def get_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
         with self._connect() as conn:
             row = conn.execute(
@@ -2121,10 +2421,6 @@ class ProductionRepository:
         if review_status == "approved":
             if usage_role not in {"a_roll", "b_roll"}:
                 raise ValueError("先选择人物主镜头或 B-roll，再加入可用库")
-            if not rights_confirmed:
-                raise ValueError("确认版权后才能将素材加入可用库")
-            if not brand_safe:
-                raise ValueError("确认品牌安全后才能将素材加入可用库")
             if asset.analysis_status != "ready" or not asset.segments:
                 raise ValueError("请先完成镜头分析再审核素材")
         asset.review_status = review_status
@@ -2301,12 +2597,40 @@ class ProductionRepository:
             raise ValueError("创作方案成片数必须在 1 到 50 之间")
         if any(blocker.blocks_confirmation for blocker in plan.blockers):
             raise ValueError("当前预检存在阻断选题阶段的事实缺口")
+        if plan.approved_clip_count > 0 and not plan.material_matches:
+            raise ValueError("新创作方案必须固化本次实际命中的素材片段")
+        _validate_plan_material_matches(plan.material_matches)
 
         now = utc_now()
         plan.creation_task_id = task.id
         plan.updated_at = now
         task.updated_at = now
         with self._connect() as conn:
+            for match in plan.material_matches:
+                asset_id = match.asset_ref.removeprefix("asset:")
+                segment_id = match.segment_ref.removeprefix("segment:")
+                asset_row = conn.execute(
+                    """
+                    SELECT payload FROM material_assets
+                    WHERE workspace_id = ? AND id = ?
+                    """,
+                    (plan.workspace_id, asset_id),
+                ).fetchone()
+                if asset_row is None:
+                    raise ValueError("创作方案引用的素材不属于当前工作区")
+                asset = self._asset_from_payload(
+                    json.loads(str(asset_row["payload"]))
+                )
+                segment = next(
+                    (item for item in asset.segments if item.id == segment_id),
+                    None,
+                )
+                if (
+                    segment is None
+                    or asset.review_status != "approved"
+                    or segment.review_status != "approved"
+                ):
+                    raise ValueError("创作方案引用的素材片段不可用")
             conn.execute(
                 """
                 INSERT INTO creation_plans (id, workspace_id, payload, updated_at)
@@ -2376,6 +2700,1512 @@ class ProductionRepository:
             self._creation_task_from_payload(json.loads(str(row["payload"])))
             for row in rows
         ]
+
+    def create_timeline_version(self, version: TimelineVersion) -> TimelineVersion:
+        _validate_timeline_version(version)
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+            existing_row = conn.execute(
+                "SELECT * FROM timeline_versions WHERE id = ?",
+                (version.id,),
+            ).fetchone()
+            if existing_row is None:
+                existing_row = conn.execute(
+                    """
+                    SELECT * FROM timeline_versions
+                    WHERE workspace_id = ? AND task_id = ? AND sequence = ?
+                    """,
+                    (version.workspace_id, version.task_id, version.sequence),
+                ).fetchone()
+            if existing_row is not None:
+                persisted = self._timeline_version_from_row(existing_row)
+                if persisted != version:
+                    raise ValueError("时间线版本已存在，不能覆盖")
+                if task.current_timeline_version_id != version.id:
+                    task.current_timeline_version_id = version.id
+                    task.updated_at = utc_now()
+                    conn.execute(
+                        """
+                        UPDATE creation_tasks SET payload = ?, updated_at = ?
+                        WHERE workspace_id = ? AND id = ?
+                        """,
+                        (
+                            _json_payload(task),
+                            task.updated_at.isoformat(),
+                            task.workspace_id,
+                            task.id,
+                        ),
+                    )
+                return persisted
+            latest_row = conn.execute(
+                """
+                SELECT id, sequence FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ?
+                ORDER BY sequence DESC LIMIT 1
+                """,
+                (version.workspace_id, version.task_id),
+            ).fetchone()
+            if latest_row is None:
+                if version.parent_version_id is not None or version.sequence != 1:
+                    raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
+            else:
+                parent = conn.execute(
+                    """
+                    SELECT sequence FROM timeline_versions
+                    WHERE workspace_id = ? AND task_id = ? AND id = ?
+                    """,
+                    (
+                        version.workspace_id,
+                        version.task_id,
+                        version.parent_version_id,
+                    ),
+                ).fetchone()
+                if parent is None:
+                    raise ValueError("父时间线版本不属于当前工作区与任务")
+                if version.sequence != int(latest_row["sequence"]) + 1:
+                    raise ValueError("时间线版本序号必须连续递增")
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO timeline_versions
+                        (id, workspace_id, task_id, parent_version_id, sequence,
+                         snapshot_json, created_by_operation_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        version.id,
+                        version.workspace_id,
+                        version.task_id,
+                        version.parent_version_id,
+                        version.sequence,
+                        _json_object(version.snapshot),
+                        version.created_by_operation_id,
+                        version.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("时间线版本已存在，不能覆盖") from exc
+            task.current_timeline_version_id = version.id
+            task.updated_at = utc_now()
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    task.updated_at.isoformat(),
+                    task.workspace_id,
+                    task.id,
+                ),
+            )
+        return self.get_timeline_version(version.workspace_id, version.id)
+
+    def get_timeline_version(
+        self, workspace_id: str, version_id: str
+    ) -> TimelineVersion:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM timeline_versions WHERE workspace_id = ? AND id = ?",
+                (workspace_id, version_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(version_id)
+        return self._timeline_version_from_row(row)
+
+    def list_timeline_versions(
+        self, workspace_id: str, task_id: str
+    ) -> list[TimelineVersion]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? ORDER BY sequence ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._timeline_version_from_row(row) for row in rows]
+
+    def create_job_run(self, run: JobRun) -> JobRun:
+        _validate_new_job_run(run)
+        with self._connect() as conn:
+            self._require_creation_task(conn, run.workspace_id, run.task_id)
+            existing = conn.execute(
+                """
+                SELECT * FROM job_runs
+                WHERE workspace_id = ? AND idempotency_key = ?
+                """,
+                (run.workspace_id, run.idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                persisted = self._job_run_from_row(existing)
+                if (
+                    persisted.task_id != run.task_id
+                    or persisted.kind != run.kind
+                    or persisted.input_digest != run.input_digest
+                ):
+                    raise ValueError("幂等键已绑定到不同的任务输入")
+                return persisted
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO job_runs
+                        (id, workspace_id, task_id, kind, idempotency_key,
+                         input_digest, status, progress, attempt, output_refs_json,
+                         failure_reason, impact, repair_action, created_at,
+                         started_at, finished_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    _job_run_values(run),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("任务运行记录 ID 已存在") from exc
+        return self.get_job_run(run.workspace_id, run.id)
+
+    def get_job_run(self, workspace_id: str, job_id: str) -> JobRun:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM job_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, job_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        return self._job_run_from_row(row)
+
+    def get_job_run_by_idempotency_key(
+        self, workspace_id: str, idempotency_key: str
+    ) -> JobRun | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM job_runs
+                WHERE workspace_id = ? AND idempotency_key = ?
+                """,
+                (workspace_id, idempotency_key),
+            ).fetchone()
+        return self._job_run_from_row(row) if row is not None else None
+
+    def list_job_runs(self, workspace_id: str, task_id: str) -> list[JobRun]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM job_runs
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._job_run_from_row(row) for row in rows]
+
+    def claim_job_run(self, workspace_id: str, job_id: str) -> JobRun:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM job_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, job_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            current = self._job_run_from_row(row)
+            if current.status not in {"queued", "interrupted"}:
+                raise ValueError("任务运行记录当前不可领取")
+            now = utc_now()
+            changed = conn.execute(
+                """
+                UPDATE job_runs
+                SET status = 'running', attempt = ?, started_at = ?, finished_at = NULL,
+                    failure_reason = NULL, impact = NULL, repair_action = NULL,
+                    updated_at = ?
+                WHERE workspace_id = ? AND id = ? AND status = ?
+                """,
+                (
+                    current.attempt + 1,
+                    now.isoformat(),
+                    now.isoformat(),
+                    workspace_id,
+                    job_id,
+                    current.status,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("任务运行记录已被其他执行者领取")
+        return self.get_job_run(workspace_id, job_id)
+
+    def update_job_run_progress(
+        self, workspace_id: str, job_id: str, progress: int
+    ) -> JobRun:
+        if not 0 <= progress <= 100:
+            raise ValueError("任务进度必须在 0 到 100 之间")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT progress, status FROM job_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, job_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            if str(row["status"]) != "running":
+                raise ValueError("只能更新运行中任务的进度")
+            if progress < int(row["progress"]):
+                raise ValueError("任务进度不能倒退")
+            now = utc_now()
+            changed = conn.execute(
+                """
+                UPDATE job_runs SET progress = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ? AND status = 'running'
+                """,
+                (progress, now.isoformat(), workspace_id, job_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("任务运行记录已结束，进度未写入")
+        return self.get_job_run(workspace_id, job_id)
+
+    def finish_job_run(
+        self,
+        workspace_id: str,
+        job_id: str,
+        *,
+        status: Literal["succeeded", "failed", "cancelled", "interrupted"],
+        output_refs: list[str] | None = None,
+        failure_reason: str | None = None,
+        impact: str | None = None,
+        repair_action: str | None = None,
+    ) -> JobRun:
+        if status != "succeeded" and not all(
+            value is not None and value.strip()
+            for value in (failure_reason, impact, repair_action)
+        ):
+            raise ValueError("未成功的任务必须记录原因、影响和修复动作")
+        refs = output_refs or []
+        for reference in refs:
+            _validate_logical_reference(reference, "产物输出引用")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, job_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            current_status = str(row["status"])
+            allowed_sources = {"running"}
+            if status == "cancelled":
+                allowed_sources.update({"queued", "interrupted"})
+            if current_status not in allowed_sources:
+                raise ValueError("任务运行记录当前不可结束")
+            if status == "succeeded" and refs:
+                registered_refs = {
+                    str(artifact_row["logical_ref"])
+                    for artifact_row in conn.execute(
+                        """
+                        SELECT logical_ref FROM artifact_records
+                        WHERE workspace_id = ? AND task_id = ? AND producer_job_id = ?
+                        """,
+                        (workspace_id, str(row["task_id"]), job_id),
+                    ).fetchall()
+                }
+                missing_refs = [ref for ref in refs if ref not in registered_refs]
+                if missing_refs:
+                    raise ValueError("成功任务的输出必须先登记为可追溯产物")
+            now = utc_now()
+            progress = 100 if status == "succeeded" else None
+            changed = conn.execute(
+                """
+                UPDATE job_runs
+                SET status = ?, progress = COALESCE(?, progress), output_refs_json = ?,
+                    failure_reason = ?, impact = ?, repair_action = ?,
+                    finished_at = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ? AND status = ?
+                """,
+                (
+                    status,
+                    progress,
+                    json.dumps(refs, ensure_ascii=False),
+                    None if status == "succeeded" else failure_reason,
+                    None if status == "succeeded" else impact,
+                    None if status == "succeeded" else repair_action,
+                    now.isoformat(),
+                    now.isoformat(),
+                    workspace_id,
+                    job_id,
+                    current_status,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("任务运行记录已被其他执行者结束")
+        return self.get_job_run(workspace_id, job_id)
+
+    def interrupt_running_job_runs(self, workspace_id: str | None = None) -> int:
+        now = utc_now().isoformat()
+        with self._connect() as conn:
+            workspace_clause = "" if workspace_id is None else " AND workspace_id = ?"
+            parameters = (
+                (now, now) if workspace_id is None else (now, now, workspace_id)
+            )
+            return conn.execute(
+                """
+                UPDATE job_runs
+                SET status = 'interrupted', failure_reason = 'process_interrupted',
+                    impact = '本次执行未产生可信的成功结果。',
+                    repair_action = '重新领取该任务并从已持久化输入恢复。',
+                    finished_at = ?, updated_at = ?
+                WHERE status = 'running'
+                """
+                + workspace_clause,
+                parameters,
+            ).rowcount
+
+    def create_artifact_record(self, artifact: ArtifactRecord) -> ArtifactRecord:
+        _validate_artifact_record(artifact)
+        with self._connect() as conn:
+            self._require_creation_task(conn, artifact.workspace_id, artifact.task_id)
+            job = conn.execute(
+                """
+                SELECT task_id FROM job_runs
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (artifact.workspace_id, artifact.producer_job_id),
+            ).fetchone()
+            if job is None or str(job["task_id"]) != artifact.task_id:
+                raise ValueError("产物生产任务不属于当前工作区与创作任务")
+            existing_row = conn.execute(
+                "SELECT * FROM artifact_records WHERE id = ?",
+                (artifact.id,),
+            ).fetchone()
+            if existing_row is None:
+                existing_row = conn.execute(
+                    """
+                    SELECT * FROM artifact_records
+                    WHERE workspace_id = ? AND logical_ref = ?
+                    """,
+                    (artifact.workspace_id, artifact.logical_ref),
+                ).fetchone()
+            if existing_row is not None:
+                persisted = self._artifact_record_from_row(existing_row)
+                if persisted != artifact:
+                    raise ValueError("产物记录或逻辑引用已存在，且领域字段不一致")
+                return persisted
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO artifact_records
+                        (id, workspace_id, task_id, kind, logical_ref, sha256,
+                         size_bytes, producer_job_id, input_refs_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        artifact.id,
+                        artifact.workspace_id,
+                        artifact.task_id,
+                        artifact.kind,
+                        artifact.logical_ref,
+                        artifact.sha256,
+                        artifact.size_bytes,
+                        artifact.producer_job_id,
+                        json.dumps(artifact.input_refs, ensure_ascii=False),
+                        artifact.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("产物记录或逻辑引用已存在") from exc
+        return self.get_artifact_record(artifact.workspace_id, artifact.id)
+
+    def get_artifact_record(
+        self, workspace_id: str, artifact_id: str
+    ) -> ArtifactRecord:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM artifact_records WHERE workspace_id = ? AND id = ?",
+                (workspace_id, artifact_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(artifact_id)
+        return self._artifact_record_from_row(row)
+
+    def list_artifact_records(
+        self, workspace_id: str, task_id: str
+    ) -> list[ArtifactRecord]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM artifact_records
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._artifact_record_from_row(row) for row in rows]
+
+    def append_task_event(self, event: TaskEvent) -> TaskEvent:
+        _validate_task_event(event)
+        with self._connect() as conn:
+            self._require_creation_task(conn, event.workspace_id, event.task_id)
+            if event.job_id is not None:
+                job = conn.execute(
+                    """
+                    SELECT task_id FROM job_runs
+                    WHERE workspace_id = ? AND id = ?
+                    """,
+                    (event.workspace_id, event.job_id),
+                ).fetchone()
+                if job is None or str(job["task_id"]) != event.task_id:
+                    raise ValueError("任务事件关联的运行记录不属于当前任务")
+            existing_row = conn.execute(
+                "SELECT * FROM task_events WHERE id = ?",
+                (event.id,),
+            ).fetchone()
+            if existing_row is not None:
+                persisted = self._task_event_from_row(existing_row)
+                if persisted != event:
+                    raise ValueError("任务事件 ID 已存在，且领域字段不一致")
+                return persisted
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO task_events
+                        (id, workspace_id, task_id, job_id, event_type,
+                         payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.id,
+                        event.workspace_id,
+                        event.task_id,
+                        event.job_id,
+                        event.event_type,
+                        _json_object(event.payload),
+                        event.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("任务事件 ID 已存在") from exc
+        return self.get_task_event(event.workspace_id, event.id)
+
+    def get_task_event(self, workspace_id: str, event_id: str) -> TaskEvent:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM task_events WHERE workspace_id = ? AND id = ?",
+                (workspace_id, event_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(event_id)
+        return self._task_event_from_row(row)
+
+    def list_task_events(self, workspace_id: str, task_id: str) -> list[TaskEvent]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM task_events
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._task_event_from_row(row) for row in rows]
+
+    def create_transform_run(self, run: TransformRun) -> TransformRun:
+        _validate_transform_run(run)
+        with self._connect() as conn:
+            self._require_creation_task(conn, run.workspace_id, run.task_id)
+            job = conn.execute(
+                """
+                SELECT task_id FROM job_runs
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (run.workspace_id, run.job_id),
+            ).fetchone()
+            if job is None or str(job["task_id"]) != run.task_id:
+                raise ValueError("变换运行关联的 JobRun 不属于当前工作区与任务")
+            if run.status == "succeeded":
+                placeholders = ", ".join("?" for _ in run.output_refs)
+                rows = conn.execute(
+                    f"""
+                    SELECT logical_ref, producer_job_id FROM artifact_records
+                    WHERE workspace_id = ? AND task_id = ?
+                      AND logical_ref IN ({placeholders})
+                    """,
+                    (run.workspace_id, run.task_id, *run.output_refs),
+                ).fetchall()
+                artifacts = {
+                    str(row["logical_ref"]): str(row["producer_job_id"])
+                    for row in rows
+                }
+                if any(
+                    artifacts.get(reference) != run.job_id
+                    for reference in run.output_refs
+                ):
+                    raise ValueError("成功变换的输出必须是该 JobRun 已登记的产物")
+            existing_row = conn.execute(
+                "SELECT * FROM transform_runs WHERE id = ?",
+                (run.id,),
+            ).fetchone()
+            if existing_row is not None:
+                persisted = self._transform_run_from_row(existing_row)
+                if persisted != run:
+                    raise ValueError("变换运行记录 ID 已存在，且领域字段不一致")
+                return persisted
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO transform_runs
+                        (id, workspace_id, task_id, job_id, transform_type,
+                         input_digest, input_refs_json, output_refs_json, engine,
+                         parameters_json, status, started_at, finished_at,
+                         failure_reason, remediation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run.id,
+                        run.workspace_id,
+                        run.task_id,
+                        run.job_id,
+                        run.transform_type,
+                        run.input_digest,
+                        json.dumps(run.input_refs, ensure_ascii=False),
+                        json.dumps(run.output_refs, ensure_ascii=False),
+                        run.engine,
+                        _json_object(run.parameters),
+                        run.status,
+                        run.started_at.isoformat(),
+                        run.finished_at.isoformat() if run.finished_at else None,
+                        run.failure_reason,
+                        run.remediation,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("变换运行记录 ID 已存在") from exc
+        return self.get_transform_run(run.workspace_id, run.id)
+
+    def get_transform_run(self, workspace_id: str, transform_id: str) -> TransformRun:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM transform_runs WHERE workspace_id = ? AND id = ?",
+                (workspace_id, transform_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(transform_id)
+        return self._transform_run_from_row(row)
+
+    def list_transform_runs(
+        self, workspace_id: str, task_id: str
+    ) -> list[TransformRun]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM transform_runs
+                WHERE workspace_id = ? AND task_id = ? ORDER BY started_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._transform_run_from_row(row) for row in rows]
+
+    def create_dependency_edge(self, edge: DependencyEdge) -> DependencyEdge:
+        _validate_dependency_edge(edge)
+        with self._connect() as conn:
+            self._require_creation_task(conn, edge.workspace_id, edge.task_id)
+            transform_row = conn.execute(
+                """
+                SELECT * FROM transform_runs
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (
+                    edge.workspace_id,
+                    edge.task_id,
+                    edge.created_by_transform_id,
+                ),
+            ).fetchone()
+            if transform_row is None:
+                raise ValueError("依赖边关联的变换不属于当前工作区与任务")
+            transform = self._transform_run_from_row(transform_row)
+            if transform.status != "succeeded":
+                raise ValueError("只能为成功变换登记依赖边")
+            if edge.upstream_ref not in transform.input_refs:
+                raise ValueError("依赖边上游不在变换输入引用中")
+            if edge.downstream_ref not in transform.output_refs:
+                raise ValueError("依赖边下游不在变换输出引用中")
+            existing_row = conn.execute(
+                "SELECT * FROM dependency_edges WHERE id = ?",
+                (edge.id,),
+            ).fetchone()
+            if existing_row is None:
+                existing_row = conn.execute(
+                    """
+                    SELECT * FROM dependency_edges
+                    WHERE workspace_id = ? AND task_id = ?
+                      AND upstream_ref = ? AND downstream_ref = ?
+                      AND created_by_transform_id = ?
+                    """,
+                    (
+                        edge.workspace_id,
+                        edge.task_id,
+                        edge.upstream_ref,
+                        edge.downstream_ref,
+                        edge.created_by_transform_id,
+                    ),
+                ).fetchone()
+            if existing_row is not None:
+                persisted = self._dependency_edge_from_row(existing_row)
+                if persisted != edge:
+                    raise ValueError("依赖边 ID 或逻辑唯一键已存在，且领域字段不一致")
+                return persisted
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO dependency_edges
+                        (id, workspace_id, task_id, upstream_ref, downstream_ref,
+                         created_by_transform_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        edge.id,
+                        edge.workspace_id,
+                        edge.task_id,
+                        edge.upstream_ref,
+                        edge.downstream_ref,
+                        edge.created_by_transform_id,
+                        edge.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("依赖边 ID 或同一变换中的边已存在") from exc
+        return self.get_dependency_edge(edge.workspace_id, edge.id)
+
+    def get_dependency_edge(
+        self, workspace_id: str, edge_id: str
+    ) -> DependencyEdge:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM dependency_edges WHERE workspace_id = ? AND id = ?",
+                (workspace_id, edge_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(edge_id)
+        return self._dependency_edge_from_row(row)
+
+    def list_dependency_edges(
+        self, workspace_id: str, task_id: str
+    ) -> list[DependencyEdge]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM dependency_edges
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._dependency_edge_from_row(row) for row in rows]
+
+    def save_narration_segments(
+        self,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        segments: list[NarrationSegment],
+    ) -> list[NarrationSegment]:
+        """Persist the complete current narration fact set for one confirmed script."""
+        with self._connect() as conn:
+            self._upsert_narration_segments(
+                conn,
+                workspace_id=workspace_id,
+                task_id=task_id,
+                script_id=script_id,
+                segments=segments,
+            )
+        return self.list_narration_segments(workspace_id, task_id, script_id)
+
+    def get_narration_segment(
+        self, workspace_id: str, task_id: str, segment_id: str
+    ) -> NarrationSegment:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                """
+                SELECT * FROM narration_segments
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, segment_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(segment_id)
+        return self._narration_segment_from_row(row)
+
+    def list_narration_segments(
+        self, workspace_id: str, task_id: str, script_id: str | None = None
+    ) -> list[NarrationSegment]:
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            current_script_id = script_id or task.confirmed_script_id
+            if current_script_id is None:
+                return []
+            rows = conn.execute(
+                """
+                SELECT * FROM narration_segments
+                WHERE workspace_id = ? AND task_id = ? AND script_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id, current_script_id),
+            ).fetchall()
+        return [self._narration_segment_from_row(row) for row in rows]
+
+    def create_edit_intent(self, intent: EditIntent) -> EditIntent:
+        _validate_edit_intent(intent)
+        with self._connect() as conn:
+            self._require_creation_task(conn, intent.workspace_id, intent.task_id)
+            existing_row = conn.execute(
+                "SELECT * FROM edit_intents WHERE id = ?",
+                (intent.id,),
+            ).fetchone()
+            if existing_row is not None:
+                persisted = self._edit_intent_from_row(existing_row)
+                if persisted != intent:
+                    raise ValueError("编辑意图 ID 已存在，不能覆盖")
+                return persisted
+            conn.execute(
+                """
+                INSERT INTO edit_intents
+                    (id, workspace_id, task_id, raw_command, context_stage,
+                     selected_object_refs_json, playhead_ms, intent_type,
+                     scope_json, constraints_json, confidence, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    intent.id,
+                    intent.workspace_id,
+                    intent.task_id,
+                    intent.raw_command,
+                    intent.context_stage,
+                    json.dumps(intent.selected_object_refs, ensure_ascii=False),
+                    intent.playhead_ms,
+                    intent.intent_type,
+                    _json_object(intent.scope),
+                    _json_object(intent.constraints),
+                    intent.confidence,
+                    intent.status,
+                    intent.created_at.isoformat(),
+                ),
+            )
+        return self.get_edit_intent(intent.workspace_id, intent.id)
+
+    def get_edit_intent(self, workspace_id: str, intent_id: str) -> EditIntent:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM edit_intents WHERE workspace_id = ? AND id = ?",
+                (workspace_id, intent_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(intent_id)
+        return self._edit_intent_from_row(row)
+
+    def list_edit_intents(
+        self, workspace_id: str, task_id: str
+    ) -> list[EditIntent]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM edit_intents
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._edit_intent_from_row(row) for row in rows]
+
+    def create_edit_proposal(self, proposal: EditProposal) -> EditProposal:
+        _validate_new_edit_proposal(proposal)
+        with self._connect() as conn:
+            self._require_creation_task(conn, proposal.workspace_id, proposal.task_id)
+            intent_row = conn.execute(
+                """
+                SELECT 1 FROM edit_intents
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (proposal.workspace_id, proposal.task_id, proposal.intent_id),
+            ).fetchone()
+            if intent_row is None:
+                raise ValueError("编辑提案关联的意图不属于当前工作区与任务")
+            existing_row = conn.execute(
+                "SELECT * FROM edit_proposals WHERE id = ?",
+                (proposal.id,),
+            ).fetchone()
+            if existing_row is not None:
+                persisted = self._edit_proposal_from_row(existing_row)
+                if persisted != proposal:
+                    raise ValueError("编辑提案 ID 已存在，且领域字段不一致")
+                return persisted
+            conn.execute(
+                """
+                INSERT INTO edit_proposals
+                    (id, workspace_id, task_id, intent_id, summary,
+                     target_refs_json, operation_json, invalidated_refs_json,
+                     preview_json, external_effects_json, status, created_at,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.id,
+                    proposal.workspace_id,
+                    proposal.task_id,
+                    proposal.intent_id,
+                    proposal.summary,
+                    json.dumps(proposal.target_refs, ensure_ascii=False),
+                    _json_object(proposal.operation),
+                    json.dumps(proposal.invalidated_refs, ensure_ascii=False),
+                    _json_object(proposal.preview),
+                    json.dumps(
+                        proposal.external_effects,
+                        ensure_ascii=False,
+                        default=_json_default,
+                    ),
+                    proposal.status,
+                    proposal.created_at.isoformat(),
+                    proposal.updated_at.isoformat(),
+                ),
+            )
+        return self.get_edit_proposal(proposal.workspace_id, proposal.id)
+
+    def get_edit_proposal(
+        self, workspace_id: str, proposal_id: str
+    ) -> EditProposal:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM edit_proposals WHERE workspace_id = ? AND id = ?",
+                (workspace_id, proposal_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(proposal_id)
+        return self._edit_proposal_from_row(row)
+
+    def list_edit_proposals(
+        self, workspace_id: str, task_id: str
+    ) -> list[EditProposal]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM edit_proposals
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._edit_proposal_from_row(row) for row in rows]
+
+    def transition_edit_proposal(
+        self,
+        workspace_id: str,
+        task_id: str,
+        proposal_id: str,
+        *,
+        status: Literal["confirmed", "rejected", "expired"],
+    ) -> EditProposal:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                """
+                SELECT * FROM edit_proposals
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, proposal_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(proposal_id)
+            current = self._edit_proposal_from_row(row)
+            if current.status != "proposed":
+                raise ValueError("只有 proposed 编辑提案可以确认、拒绝或过期")
+            now = utc_now()
+            changed = conn.execute(
+                """
+                UPDATE edit_proposals SET status = ?, updated_at = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                  AND status = 'proposed'
+                """,
+                (
+                    status,
+                    now.isoformat(),
+                    workspace_id,
+                    task_id,
+                    proposal_id,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("编辑提案已被其他操作转换")
+        return self.get_edit_proposal(workspace_id, proposal_id)
+
+    def confirm_edit_proposal(
+        self,
+        workspace_id: str,
+        task_id: str,
+        proposal_id: str,
+        *,
+        operation: EditOperation,
+        result_version: TimelineVersion,
+        montage_plan_id: str | None = None,
+        montage_payload: dict[str, object] | None = None,
+        narration_segments: list[NarrationSegment] | None = None,
+        narration_artifact: NarrationArtifactRecord | None = None,
+    ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
+        """Atomically confirm one proposal and persist its applied domain facts."""
+        _validate_edit_operation(operation)
+        _validate_timeline_version(result_version)
+        if operation.status != "applied":
+            raise ValueError("原子确认只能写入已应用编辑操作")
+        if (
+            operation.workspace_id != workspace_id
+            or operation.task_id != task_id
+            or operation.proposal_id != proposal_id
+            or result_version.workspace_id != workspace_id
+            or result_version.task_id != task_id
+            or operation.result_version_id != result_version.id
+            or result_version.parent_version_id != operation.base_version_id
+            or result_version.created_by_operation_id != operation.id
+        ):
+            raise ValueError("提案、编辑操作与结果时间线版本谱系不一致")
+        if (montage_plan_id is None) != (montage_payload is None):
+            raise ValueError("混剪计划 ID 与 payload 必须同时提供")
+        if operation.operation_type in {
+            "RegenerateNarrationSegment",
+            "UpdateSubtitleCue",
+        } and (narration_segments is None or montage_payload is None):
+            raise ValueError("声音或字幕编辑确认必须同时保存完整配音分段与 montage/cue 事实")
+        if narration_artifact is not None:
+            if narration_segments is None:
+                raise ValueError("整轨配音产物必须与完整分段事实同时保存")
+            if (
+                narration_artifact.workspace_id != workspace_id
+                or narration_artifact.task_id != task_id
+                or not Path(narration_artifact.audio_path).is_file()
+                or Path(narration_artifact.audio_path).stat().st_size == 0
+            ):
+                raise ValueError("整轨配音产物与当前任务不同源或音频无效")
+        if montage_payload is not None:
+            if (
+                str(montage_payload.get("task_id", "")) != task_id
+                or str(montage_payload.get("status", "")) != "ready"
+            ):
+                raise ValueError("确认编辑后的混剪计划必须同源且回到 ready")
+            _json_object(montage_payload)
+
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            proposal_row = conn.execute(
+                """
+                SELECT * FROM edit_proposals
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, proposal_id),
+            ).fetchone()
+            if proposal_row is None:
+                raise KeyError(proposal_id)
+            proposal = self._edit_proposal_from_row(proposal_row)
+            if proposal.status != "proposed":
+                raise ValueError("只能原子确认 proposed 编辑提案")
+            base_row = conn.execute(
+                """
+                SELECT sequence FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, operation.base_version_id),
+            ).fetchone()
+            if base_row is None:
+                raise ValueError("编辑操作基础版本不属于当前工作区与任务")
+            if task.current_timeline_version_id != operation.base_version_id:
+                raise ValueError("编辑操作基础版本已不是当前任务版本")
+            if result_version.sequence != int(base_row["sequence"]) + 1:
+                raise ValueError("结果时间线版本序号必须连续递增")
+            conflicts = (
+                conn.execute(
+                    "SELECT 1 FROM edit_operations WHERE id = ? OR (workspace_id = ? AND task_id = ? AND proposal_id = ?)",
+                    (operation.id, workspace_id, task_id, proposal_id),
+                ).fetchone(),
+                conn.execute(
+                    "SELECT 1 FROM timeline_versions WHERE id = ? OR (workspace_id = ? AND task_id = ? AND sequence = ?)",
+                    (
+                        result_version.id,
+                        workspace_id,
+                        task_id,
+                        result_version.sequence,
+                    ),
+                ).fetchone(),
+            )
+            if any(row is not None for row in conflicts):
+                raise ValueError("编辑操作或结果版本已存在，不能重复确认")
+            if montage_payload is not None:
+                montage_row = conn.execute(
+                    """
+                    SELECT id FROM creation_task_montage_plans
+                    WHERE workspace_id = ? AND task_id = ?
+                    """,
+                    (workspace_id, task_id),
+                ).fetchone()
+                if montage_row is None or str(montage_row["id"]) != montage_plan_id:
+                    raise ValueError("当前任务不存在同源混剪计划")
+            if narration_segments is not None:
+                script_ids = {segment.script_id for segment in narration_segments}
+                if len(script_ids) != 1:
+                    raise ValueError("原子确认只能保存当前已确认文案的分段")
+                narration_script_id = next(iter(script_ids))
+                self._upsert_narration_segments(
+                    conn,
+                    workspace_id=workspace_id,
+                    task_id=task_id,
+                    script_id=narration_script_id,
+                    segments=narration_segments,
+                )
+                if (
+                    narration_artifact is not None
+                    and narration_artifact.script_id != narration_script_id
+                ):
+                    raise ValueError("整轨配音产物与分段文案谱系不一致")
+
+            now = utc_now()
+            conn.execute(
+                """
+                INSERT INTO edit_operations
+                    (id, workspace_id, task_id, proposal_id, operation_type,
+                     payload_json, base_version_id, result_version_id, status,
+                     failure_reason, created_at, applied_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    operation.id,
+                    workspace_id,
+                    task_id,
+                    proposal_id,
+                    operation.operation_type,
+                    _json_object(operation.payload),
+                    operation.base_version_id,
+                    operation.result_version_id,
+                    operation.status,
+                    operation.failure_reason,
+                    operation.created_at.isoformat(),
+                    operation.applied_at.isoformat() if operation.applied_at else None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO timeline_versions
+                    (id, workspace_id, task_id, parent_version_id, sequence,
+                     snapshot_json, created_by_operation_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result_version.id,
+                    workspace_id,
+                    task_id,
+                    result_version.parent_version_id,
+                    result_version.sequence,
+                    _json_object(result_version.snapshot),
+                    result_version.created_by_operation_id,
+                    result_version.created_at.isoformat(),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE edit_proposals SET status = 'confirmed', updated_at = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                  AND status = 'proposed'
+                """,
+                (now.isoformat(), workspace_id, task_id, proposal_id),
+            )
+            if montage_payload is not None:
+                saved_montage = {**montage_payload, "updated_at": now.isoformat()}
+                conn.execute(
+                    """
+                    UPDATE creation_task_montage_plans
+                    SET payload = ?, updated_at = ?
+                    WHERE workspace_id = ? AND task_id = ? AND id = ?
+                    """,
+                    (
+                        json.dumps(saved_montage, ensure_ascii=False),
+                        now.isoformat(),
+                        workspace_id,
+                        task_id,
+                        montage_plan_id,
+                    ),
+                )
+                task.montage_plan_id = montage_plan_id
+                task.output_ready = False
+                task.stage = "montage"
+                task.stage_status = "waiting_for_user"
+                task.status = "waiting_for_user"
+                task.progress = 75
+                task.recovery_point = "montage"
+                task.stage_reason = None
+                task.stage_impact = None
+                task.stage_repair_action = None
+                task.stage_retryable = None
+            if narration_artifact is not None:
+                conn.execute(
+                    """
+                    INSERT INTO narration_artifacts
+                        (id, workspace_id, cache_key, payload, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
+                        id = excluded.id,
+                        payload = excluded.payload,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        narration_artifact.id,
+                        narration_artifact.workspace_id,
+                        narration_artifact.cache_key,
+                        _json_payload(narration_artifact),
+                        narration_artifact.created_at.isoformat(),
+                    ),
+                )
+                task.narration_cache_key = narration_artifact.cache_key
+            if narration_segments is not None and any(
+                segment.status in {"pending", "generating"}
+                for segment in narration_segments
+            ):
+                task.stage = "narration"
+                task.stage_status = (
+                    "running"
+                    if any(
+                        segment.status == "generating"
+                        for segment in narration_segments
+                    )
+                    else "not_started"
+                )
+                task.status = "running"
+                task.recovery_point = "narration"
+            task.current_timeline_version_id = result_version.id
+            task.updated_at = now
+            conn.execute(
+                """
+                UPDATE creation_tasks SET payload = ?, updated_at = ?
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (
+                    _json_payload(task),
+                    now.isoformat(),
+                    workspace_id,
+                    task_id,
+                ),
+            )
+
+        return (
+            self.get_edit_proposal(workspace_id, proposal_id),
+            self.get_edit_operation(workspace_id, operation.id),
+            self.get_timeline_version(workspace_id, result_version.id),
+            self.get_creation_task(workspace_id, task_id),
+        )
+
+    def create_edit_operation(self, operation: EditOperation) -> EditOperation:
+        _validate_edit_operation(operation)
+        with self._connect() as conn:
+            self._require_creation_task(
+                conn, operation.workspace_id, operation.task_id
+            )
+            proposal_row = conn.execute(
+                """
+                SELECT status FROM edit_proposals
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (
+                    operation.workspace_id,
+                    operation.task_id,
+                    operation.proposal_id,
+                ),
+            ).fetchone()
+            if proposal_row is None or str(proposal_row["status"]) != "confirmed":
+                raise ValueError("编辑操作必须关联同源且已确认的提案")
+            self._require_operation_timeline_lineage(conn, operation)
+            existing_row = conn.execute(
+                "SELECT * FROM edit_operations WHERE id = ?",
+                (operation.id,),
+            ).fetchone()
+            if existing_row is None:
+                existing_row = conn.execute(
+                    """
+                    SELECT * FROM edit_operations
+                    WHERE workspace_id = ? AND task_id = ? AND proposal_id = ?
+                    """,
+                    (
+                        operation.workspace_id,
+                        operation.task_id,
+                        operation.proposal_id,
+                    ),
+                ).fetchone()
+            if existing_row is not None:
+                persisted = self._edit_operation_from_row(existing_row)
+                if persisted != operation:
+                    raise ValueError("编辑操作 ID 或提案已存在，不能覆盖")
+                return persisted
+            conn.execute(
+                """
+                INSERT INTO edit_operations
+                    (id, workspace_id, task_id, proposal_id, operation_type,
+                     payload_json, base_version_id, result_version_id, status,
+                     failure_reason, created_at, applied_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    operation.id,
+                    operation.workspace_id,
+                    operation.task_id,
+                    operation.proposal_id,
+                    operation.operation_type,
+                    _json_object(operation.payload),
+                    operation.base_version_id,
+                    operation.result_version_id,
+                    operation.status,
+                    operation.failure_reason,
+                    operation.created_at.isoformat(),
+                    operation.applied_at.isoformat() if operation.applied_at else None,
+                ),
+            )
+        return self.get_edit_operation(operation.workspace_id, operation.id)
+
+    def finish_edit_operation(
+        self,
+        workspace_id: str,
+        task_id: str,
+        operation_id: str,
+        *,
+        status: Literal["applied", "failed"],
+        result_version_id: str | None = None,
+        failure_reason: str | None = None,
+        applied_at: datetime | None = None,
+    ) -> EditOperation:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                """
+                SELECT * FROM edit_operations
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, operation_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(operation_id)
+            current = self._edit_operation_from_row(row)
+            if current.status != "running":
+                raise ValueError("只有 running 编辑操作可以进入终态")
+            terminal = replace(
+                current,
+                status=status,
+                result_version_id=result_version_id,
+                failure_reason=failure_reason,
+                applied_at=applied_at,
+            )
+            _validate_edit_operation(terminal)
+            self._require_operation_timeline_lineage(conn, terminal)
+            changed = conn.execute(
+                """
+                UPDATE edit_operations
+                SET result_version_id = ?, status = ?, failure_reason = ?, applied_at = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                  AND status = 'running'
+                """,
+                (
+                    terminal.result_version_id,
+                    terminal.status,
+                    terminal.failure_reason,
+                    terminal.applied_at.isoformat() if terminal.applied_at else None,
+                    workspace_id,
+                    task_id,
+                    operation_id,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("编辑操作已被其他操作结束")
+        return self.get_edit_operation(workspace_id, operation_id)
+
+    def get_edit_operation(
+        self, workspace_id: str, operation_id: str
+    ) -> EditOperation:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM edit_operations WHERE workspace_id = ? AND id = ?",
+                (workspace_id, operation_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(operation_id)
+        return self._edit_operation_from_row(row)
+
+    def list_edit_operations(
+        self, workspace_id: str, task_id: str
+    ) -> list[EditOperation]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                """
+                SELECT * FROM edit_operations
+                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                """,
+                (workspace_id, task_id),
+            ).fetchall()
+        return [self._edit_operation_from_row(row) for row in rows]
+
+    @staticmethod
+    def _require_operation_timeline_lineage(
+        conn: sqlite3.Connection, operation: EditOperation
+    ) -> None:
+        base_row = conn.execute(
+            """
+            SELECT * FROM timeline_versions
+            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            """,
+            (
+                operation.workspace_id,
+                operation.task_id,
+                operation.base_version_id,
+            ),
+        ).fetchone()
+        if base_row is None:
+            raise ValueError("编辑操作基础版本不属于当前工作区与任务")
+        if operation.status != "applied":
+            return
+        result_row = conn.execute(
+            """
+            SELECT * FROM timeline_versions
+            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            """,
+            (
+                operation.workspace_id,
+                operation.task_id,
+                operation.result_version_id,
+            ),
+        ).fetchone()
+        if result_row is None:
+            raise ValueError("已应用编辑操作的结果版本不属于当前任务")
+        result = ProductionRepository._timeline_version_from_row(result_row)
+        if (
+            result.parent_version_id != operation.base_version_id
+            or result.created_by_operation_id != operation.id
+        ):
+            raise ValueError("编辑操作与时间线版本谱系不一致")
+
+    @staticmethod
+    def _require_creation_task(
+        conn: sqlite3.Connection, workspace_id: str, task_id: str
+    ) -> CreationTask:
+        row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return ProductionRepository._creation_task_from_payload(
+            json.loads(str(row["payload"]))
+        )
+
+    def _upsert_narration_segments(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        segments: list[NarrationSegment],
+    ) -> None:
+        task = self._require_creation_task(conn, workspace_id, task_id)
+        if task.confirmed_script_id != script_id:
+            raise ValueError("配音分段必须关联当前任务已确认的文案")
+        script_row = conn.execute(
+            """
+            SELECT payload FROM creation_task_scripts
+            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            """,
+            (workspace_id, task_id, script_id),
+        ).fetchone()
+        if script_row is None:
+            raise ValueError("配音分段关联的文案不属于当前工作区与任务")
+        script = self._creation_task_script_from_payload(
+            json.loads(str(script_row["payload"]))
+        )
+        if script.selection_status != "confirmed":
+            raise ValueError("配音分段只能关联已确认文案")
+        sections = {section.id: section for section in script.sections}
+        supplied_section_ids = [segment.source_section_id for segment in segments]
+        if (
+            not sections
+            or len(supplied_section_ids) != len(set(supplied_section_ids))
+            or set(supplied_section_ids) != set(sections)
+        ):
+            raise ValueError("必须为已确认文案的每个段落保存唯一配音分段")
+
+        existing_rows = conn.execute(
+            """
+            SELECT * FROM narration_segments
+            WHERE workspace_id = ? AND task_id = ? AND script_id = ?
+            """,
+            (workspace_id, task_id, script_id),
+        ).fetchall()
+        if existing_rows and len(existing_rows) != len(sections):
+            raise ValueError("已持久化的配音分段集不完整，不能覆盖")
+        existing_by_section = {
+            str(row["source_section_id"]): self._narration_segment_from_row(row)
+            for row in existing_rows
+        }
+
+        for segment in segments:
+            _validate_narration_segment(segment)
+            if (
+                segment.workspace_id != workspace_id
+                or segment.task_id != task_id
+                or segment.script_id != script_id
+            ):
+                raise ValueError("配音分段与当前工作区、任务或文案谱系不一致")
+            if segment.text != sections[segment.source_section_id].content:
+                raise ValueError("配音分段文字必须与已确认文案段落一致")
+            identity_row = conn.execute(
+                "SELECT * FROM narration_segments WHERE id = ?",
+                (segment.id,),
+            ).fetchone()
+            existing = existing_by_section.get(segment.source_section_id)
+            if identity_row is not None and (
+                existing is None or str(identity_row["id"]) != existing.id
+            ):
+                raise ValueError("配音分段 ID 已属于其他段落，不能覆盖")
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO narration_segments
+                        (id, workspace_id, task_id, script_id, source_section_id,
+                         text, audio_reference, duration_seconds, sample_rate,
+                         model_id, voice_profile_id, voice_version, language,
+                         pronunciation_version, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    _narration_segment_values(segment),
+                )
+                continue
+            if existing.id != segment.id or existing.created_at != segment.created_at:
+                raise ValueError("配音分段稳定 ID 或创建时间不能覆盖")
+            if segment.updated_at < existing.updated_at:
+                raise ValueError("不能用过期状态覆盖配音分段")
+            if segment == existing:
+                continue
+            conn.execute(
+                """
+                UPDATE narration_segments
+                SET text = ?, audio_reference = ?, duration_seconds = ?,
+                    sample_rate = ?, model_id = ?, voice_profile_id = ?,
+                    voice_version = ?, language = ?, pronunciation_version = ?,
+                    status = ?, updated_at = ?
+                WHERE workspace_id = ? AND task_id = ? AND script_id = ?
+                  AND source_section_id = ? AND id = ?
+                """,
+                (
+                    segment.text,
+                    segment.audio_reference,
+                    segment.duration_seconds,
+                    segment.sample_rate,
+                    segment.model_id,
+                    segment.voice_profile_id,
+                    segment.voice_version,
+                    segment.language,
+                    segment.pronunciation_version,
+                    segment.status,
+                    segment.updated_at.isoformat(),
+                    workspace_id,
+                    task_id,
+                    script_id,
+                    segment.source_section_id,
+                    segment.id,
+                ),
+            )
 
     def start_topic_generation(
         self,
@@ -2813,7 +4643,8 @@ class ProductionRepository:
                 task.stage == "narration"
                 and task.stage_status == "failed"
                 and task.stage_reason == "narration_generation_failed"
-                and "压缩并重新确认文案" in (task.stage_repair_action or "")
+                and "压缩" in (task.stage_repair_action or "")
+                and "文案" in (task.stage_repair_action or "")
             )
             if not duration_repair and (
                 task.stage != "script"
@@ -3071,6 +4902,36 @@ class ProductionRepository:
             raise KeyError(script_id)
         return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
 
+    def _demote_other_confirmed_scripts(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        task_id: str,
+        confirmed_script_id: str,
+        updated_at: datetime,
+    ) -> None:
+        rows = conn.execute(
+            """
+            SELECT id, payload FROM creation_task_scripts
+            WHERE workspace_id = ? AND task_id = ? AND id != ?
+            """,
+            (workspace_id, task_id, confirmed_script_id),
+        ).fetchall()
+        for row in rows:
+            other = self._creation_task_script_from_payload(
+                json.loads(str(row["payload"]))
+            )
+            if other.selection_status != "confirmed":
+                continue
+            other.selection_status = "draft"
+            other.confirmed_at = None
+            other.updated_at = updated_at
+            conn.execute(
+                "UPDATE creation_task_scripts SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json_payload(other), updated_at.isoformat(), other.id),
+            )
+
     def confirm_creation_task_script(
         self,
         workspace_id: str,
@@ -3109,6 +4970,13 @@ class ProductionRepository:
                 and script.selection_status == "confirmed"
                 and not confirmed_script_repair
             ):
+                self._demote_other_confirmed_scripts(
+                    conn,
+                    workspace_id=workspace_id,
+                    task_id=task_id,
+                    confirmed_script_id=script_id,
+                    updated_at=utc_now(),
+                )
                 return task, script
             if not confirmed_script_repair and (
                 task.stage != "script" or task.stage_status != "waiting_for_user"
@@ -3130,6 +4998,13 @@ class ProductionRepository:
             script.selection_status = "confirmed"
             script.confirmed_at = now
             script.updated_at = now
+            self._demote_other_confirmed_scripts(
+                conn,
+                workspace_id=workspace_id,
+                task_id=task_id,
+                confirmed_script_id=script.id,
+                updated_at=now,
+            )
             task.confirmed_script_id = script.id
             task.stage = "narration"
             task.stage_status = "not_started"
@@ -3251,7 +5126,9 @@ class ProductionRepository:
         )
 
     def complete_creation_task_narration(
-        self, artifact: NarrationArtifactRecord
+        self,
+        artifact: NarrationArtifactRecord,
+        segments: list[NarrationSegment] | None = None,
     ) -> tuple[CreationTask, NarrationArtifactRecord]:
         if artifact.task_id is None:
             raise ValueError("创作任务配音必须关联 task_id")
@@ -3271,6 +5148,14 @@ class ProductionRepository:
                 or task.confirmed_script_id != artifact.script_id
             ):
                 raise ValueError("配音产物与当前创作任务不一致")
+            if segments is not None:
+                self._upsert_narration_segments(
+                    conn,
+                    workspace_id=artifact.workspace_id,
+                    task_id=artifact.task_id,
+                    script_id=artifact.script_id,
+                    segments=segments,
+                )
             now = utc_now()
             conn.execute(
                 """
@@ -4030,6 +5915,7 @@ class ProductionRepository:
         voice_payload = data.pop("selected_voice", None)
         pronunciation_payloads = data.pop("pronunciation_references", [])
         blocker_payloads = data.pop("blockers", [])
+        material_match_payloads = data.pop("material_matches", [])
         data = _with_datetime(data, "created_at", "confirmed_at", "updated_at")
         return CreationPlan(
             **data,
@@ -4058,11 +5944,253 @@ class ProductionRepository:
                 for item in blocker_payloads
                 if isinstance(item, dict)
             ],
+            material_matches=[
+                MaterialSegmentMatch(**item)
+                for item in material_match_payloads
+                if isinstance(item, dict)
+            ],
         )
 
     @staticmethod
     def _creation_task_from_payload(data: dict[str, object]) -> CreationTask:
         return CreationTask(**_with_datetime(data, "created_at", "updated_at"))
+
+    @staticmethod
+    def _timeline_version_from_row(row: sqlite3.Row) -> TimelineVersion:
+        return TimelineVersion(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            parent_version_id=(
+                str(row["parent_version_id"])
+                if row["parent_version_id"] is not None
+                else None
+            ),
+            sequence=int(row["sequence"]),
+            snapshot=_json_object_from_text(str(row["snapshot_json"])),
+            created_by_operation_id=(
+                str(row["created_by_operation_id"])
+                if row["created_by_operation_id"] is not None
+                else None
+            ),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _job_run_from_row(row: sqlite3.Row) -> JobRun:
+        return JobRun(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            kind=str(row["kind"]),
+            idempotency_key=str(row["idempotency_key"]),
+            input_digest=str(row["input_digest"]),
+            status=str(row["status"]),  # type: ignore[arg-type]
+            progress=int(row["progress"]),
+            attempt=int(row["attempt"]),
+            output_refs=_string_list_from_text(str(row["output_refs_json"])),
+            failure_reason=(
+                str(row["failure_reason"])
+                if row["failure_reason"] is not None
+                else None
+            ),
+            impact=str(row["impact"]) if row["impact"] is not None else None,
+            repair_action=(
+                str(row["repair_action"])
+                if row["repair_action"] is not None
+                else None
+            ),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            started_at=(
+                datetime.fromisoformat(str(row["started_at"]))
+                if row["started_at"] is not None
+                else None
+            ),
+            finished_at=(
+                datetime.fromisoformat(str(row["finished_at"]))
+                if row["finished_at"] is not None
+                else None
+            ),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _artifact_record_from_row(row: sqlite3.Row) -> ArtifactRecord:
+        return ArtifactRecord(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            kind=str(row["kind"]),
+            logical_ref=str(row["logical_ref"]),
+            sha256=str(row["sha256"]),
+            size_bytes=int(row["size_bytes"]),
+            producer_job_id=str(row["producer_job_id"]),
+            input_refs=_string_list_from_text(str(row["input_refs_json"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _narration_segment_from_row(row: sqlite3.Row) -> NarrationSegment:
+        return NarrationSegment(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            script_id=str(row["script_id"]),
+            source_section_id=str(row["source_section_id"]),
+            text=str(row["text"]),
+            audio_reference=(
+                str(row["audio_reference"])
+                if row["audio_reference"] is not None
+                else None
+            ),
+            duration_seconds=(
+                float(row["duration_seconds"])
+                if row["duration_seconds"] is not None
+                else None
+            ),
+            sample_rate=(
+                int(row["sample_rate"]) if row["sample_rate"] is not None else None
+            ),
+            model_id=str(row["model_id"]),
+            voice_profile_id=str(row["voice_profile_id"]),
+            voice_version=str(row["voice_version"]),
+            language=str(row["language"]),
+            pronunciation_version=str(row["pronunciation_version"]),
+            status=str(row["status"]),  # type: ignore[arg-type]
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _task_event_from_row(row: sqlite3.Row) -> TaskEvent:
+        return TaskEvent(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            job_id=str(row["job_id"]) if row["job_id"] is not None else None,
+            event_type=str(row["event_type"]),
+            payload=_json_object_from_text(str(row["payload_json"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _transform_run_from_row(row: sqlite3.Row) -> TransformRun:
+        return TransformRun(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            job_id=str(row["job_id"]),
+            transform_type=str(row["transform_type"]),
+            input_digest=str(row["input_digest"]),
+            input_refs=_string_list_from_text(str(row["input_refs_json"])),
+            output_refs=_string_list_from_text(str(row["output_refs_json"])),
+            engine=str(row["engine"]),
+            parameters=_json_object_from_text(str(row["parameters_json"])),
+            status=str(row["status"]),  # type: ignore[arg-type]
+            started_at=datetime.fromisoformat(str(row["started_at"])),
+            finished_at=(
+                datetime.fromisoformat(str(row["finished_at"]))
+                if row["finished_at"] is not None
+                else None
+            ),
+            failure_reason=(
+                str(row["failure_reason"])
+                if row["failure_reason"] is not None
+                else None
+            ),
+            remediation=(
+                str(row["remediation"])
+                if row["remediation"] is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _dependency_edge_from_row(row: sqlite3.Row) -> DependencyEdge:
+        return DependencyEdge(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            upstream_ref=str(row["upstream_ref"]),
+            downstream_ref=str(row["downstream_ref"]),
+            created_by_transform_id=str(row["created_by_transform_id"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _edit_intent_from_row(row: sqlite3.Row) -> EditIntent:
+        return EditIntent(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            raw_command=str(row["raw_command"]),
+            context_stage=str(row["context_stage"]),
+            selected_object_refs=_string_list_from_text(
+                str(row["selected_object_refs_json"])
+            ),
+            playhead_ms=(
+                int(row["playhead_ms"])
+                if row["playhead_ms"] is not None
+                else None
+            ),
+            intent_type=str(row["intent_type"]),
+            scope=_json_object_from_text(str(row["scope_json"])),
+            constraints=_json_object_from_text(str(row["constraints_json"])),
+            confidence=float(row["confidence"]),
+            status=str(row["status"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _edit_proposal_from_row(row: sqlite3.Row) -> EditProposal:
+        return EditProposal(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            intent_id=str(row["intent_id"]),
+            summary=str(row["summary"]),
+            target_refs=_string_list_from_text(str(row["target_refs_json"])),
+            operation=_json_object_from_text(str(row["operation_json"])),
+            invalidated_refs=_string_list_from_text(
+                str(row["invalidated_refs_json"])
+            ),
+            preview=_json_object_from_text(str(row["preview_json"])),
+            external_effects=_json_list_from_text(
+                str(row["external_effects_json"])
+            ),
+            status=str(row["status"]),  # type: ignore[arg-type]
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _edit_operation_from_row(row: sqlite3.Row) -> EditOperation:
+        return EditOperation(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            task_id=str(row["task_id"]),
+            proposal_id=str(row["proposal_id"]),
+            operation_type=str(row["operation_type"]),
+            payload=_json_object_from_text(str(row["payload_json"])),
+            base_version_id=str(row["base_version_id"]),
+            result_version_id=(
+                str(row["result_version_id"])
+                if row["result_version_id"] is not None
+                else None
+            ),
+            status=str(row["status"]),  # type: ignore[arg-type]
+            failure_reason=(
+                str(row["failure_reason"])
+                if row["failure_reason"] is not None
+                else None
+            ),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            applied_at=(
+                datetime.fromisoformat(str(row["applied_at"]))
+                if row["applied_at"] is not None
+                else None
+            ),
+        )
 
     @staticmethod
     def _topic_generation_run_from_payload(data: dict[str, object]) -> TopicGenerationRun:
@@ -4105,6 +6233,77 @@ class ProductionRepository:
 
 def _json_payload(value: object) -> str:
     return json.dumps(asdict(value), ensure_ascii=False, default=_json_default)
+
+
+def _json_object(value: dict[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, default=_json_default)
+
+
+def _json_object_from_text(value: str) -> dict[str, object]:
+    decoded = json.loads(value)
+    if not isinstance(decoded, dict):
+        raise ValueError("持久化 JSON 对象无效")
+    return decoded
+
+
+def _string_list_from_text(value: str) -> list[str]:
+    decoded = json.loads(value)
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) for item in decoded
+    ):
+        raise ValueError("持久化引用列表无效")
+    return decoded
+
+
+def _json_list_from_text(value: str) -> list[object]:
+    decoded = json.loads(value)
+    if not isinstance(decoded, list):
+        raise ValueError("持久化 JSON 列表无效")
+    return decoded
+
+
+def _job_run_values(run: JobRun) -> tuple[object, ...]:
+    return (
+        run.id,
+        run.workspace_id,
+        run.task_id,
+        run.kind,
+        run.idempotency_key,
+        run.input_digest,
+        run.status,
+        run.progress,
+        run.attempt,
+        json.dumps(run.output_refs, ensure_ascii=False),
+        run.failure_reason,
+        run.impact,
+        run.repair_action,
+        run.created_at.isoformat(),
+        run.started_at.isoformat() if run.started_at else None,
+        run.finished_at.isoformat() if run.finished_at else None,
+        run.updated_at.isoformat(),
+    )
+
+
+def _narration_segment_values(segment: NarrationSegment) -> tuple[object, ...]:
+    return (
+        segment.id,
+        segment.workspace_id,
+        segment.task_id,
+        segment.script_id,
+        segment.source_section_id,
+        segment.text,
+        segment.audio_reference,
+        segment.duration_seconds,
+        segment.sample_rate,
+        segment.model_id,
+        segment.voice_profile_id,
+        segment.voice_version,
+        segment.language,
+        segment.pronunciation_version,
+        segment.status,
+        segment.created_at.isoformat(),
+        segment.updated_at.isoformat(),
+    )
 
 
 def _authorization_payload(authorization: Authorization) -> dict[str, object]:
@@ -4163,6 +6362,310 @@ def _pronunciation_entry_payload(entry: PronunciationEntry) -> dict[str, object]
         "scope_reference": entry.scope_reference,
         "version": entry.version,
     }
+
+
+def _validate_timeline_version(version: TimelineVersion) -> None:
+    if not all(
+        value.strip() for value in (version.id, version.workspace_id, version.task_id)
+    ):
+        raise ValueError("时间线版本缺少 ID、工作区或任务")
+    if version.sequence < 1:
+        raise ValueError("时间线版本序号必须从 1 开始")
+    if version.parent_version_id is not None and not version.parent_version_id.strip():
+        raise ValueError("父时间线版本 ID 不能为空")
+    if (
+        version.created_by_operation_id is not None
+        and not version.created_by_operation_id.strip()
+    ):
+        raise ValueError("创建时间线版本的操作 ID 不能为空")
+    _json_object(version.snapshot)
+
+
+def _validate_new_job_run(run: JobRun) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            run.id,
+            run.workspace_id,
+            run.task_id,
+            run.kind,
+            run.idempotency_key,
+            run.input_digest,
+        )
+    ):
+        raise ValueError("任务运行记录缺少必要标识或输入摘要")
+    if run.status != "queued" or run.progress != 0 or run.attempt != 0:
+        raise ValueError("新任务运行记录必须从 queued、0% 且未尝试开始")
+    if run.started_at is not None or run.finished_at is not None:
+        raise ValueError("新任务运行记录不能已有开始或结束时间")
+    if run.output_refs or any(
+        value is not None for value in (run.failure_reason, run.impact, run.repair_action)
+    ):
+        raise ValueError("新任务运行记录不能预先包含输出或失败结果")
+
+
+def _validate_artifact_record(artifact: ArtifactRecord) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            artifact.id,
+            artifact.workspace_id,
+            artifact.task_id,
+            artifact.kind,
+            artifact.logical_ref,
+            artifact.sha256,
+            artifact.producer_job_id,
+        )
+    ):
+        raise ValueError("产物记录缺少必要标识、逻辑引用或摘要")
+    _validate_logical_reference(artifact.logical_ref, "产物逻辑引用")
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact.sha256):
+        raise ValueError("产物摘要必须是小写 SHA-256")
+    if artifact.size_bytes < 0:
+        raise ValueError("产物大小不能为负数")
+    for reference in artifact.input_refs:
+        _validate_logical_reference(reference, "产物输入引用")
+
+
+def _validate_narration_segment(segment: NarrationSegment) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            segment.id,
+            segment.workspace_id,
+            segment.task_id,
+            segment.script_id,
+            segment.source_section_id,
+            segment.text,
+            segment.model_id,
+            segment.voice_profile_id,
+            segment.voice_version,
+            segment.language,
+        )
+    ):
+        raise ValueError("配音分段缺少必要谱系、文字、模型或声音版本")
+    if segment.audio_reference is not None:
+        _validate_logical_reference(segment.audio_reference, "配音分段音频引用")
+    if segment.duration_seconds is not None and (
+        not math.isfinite(segment.duration_seconds) or segment.duration_seconds < 0
+    ):
+        raise ValueError("配音分段时长无效")
+    if segment.sample_rate is not None and segment.sample_rate <= 0:
+        raise ValueError("配音分段采样率无效")
+    if segment.status == "ready" and (
+        segment.audio_reference is None
+        or segment.duration_seconds is None
+        or segment.duration_seconds <= 0
+        or segment.sample_rate is None
+    ):
+        raise ValueError("ready 配音分段必须有可定位音频、时长和采样率")
+    if segment.status not in {"pending", "generating", "ready", "failed"}:
+        raise ValueError("配音分段状态无效")
+    if segment.updated_at < segment.created_at:
+        raise ValueError("配音分段更新时间不能早于创建时间")
+
+
+def _validate_task_event(event: TaskEvent) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            event.id,
+            event.workspace_id,
+            event.task_id,
+            event.event_type,
+        )
+    ):
+        raise ValueError("任务事件缺少必要标识或类型")
+    if event.job_id is not None and not event.job_id.strip():
+        raise ValueError("任务事件的运行记录 ID 不能为空")
+    _json_object(event.payload)
+
+
+def _validate_transform_run(run: TransformRun) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            run.id,
+            run.workspace_id,
+            run.task_id,
+            run.job_id,
+            run.transform_type,
+            run.input_digest,
+            run.engine,
+        )
+    ):
+        raise ValueError("变换运行缺少必要标识、输入摘要或引擎")
+    for reference in (*run.input_refs, *run.output_refs):
+        _validate_logical_reference(reference, "变换输入输出引用")
+    if len(set(run.input_refs)) != len(run.input_refs) or len(
+        set(run.output_refs)
+    ) != len(run.output_refs):
+        raise ValueError("变换输入输出引用不能重复")
+    _json_object(run.parameters)
+    if run.finished_at is not None and run.finished_at < run.started_at:
+        raise ValueError("变换结束时间不能早于开始时间")
+    if run.status == "running":
+        if (
+            run.finished_at is not None
+            or run.output_refs
+            or run.failure_reason is not None
+            or run.remediation is not None
+        ):
+            raise ValueError("运行中变换不能已有输出或终态信息")
+    elif run.status == "succeeded":
+        if run.finished_at is None or not run.output_refs:
+            raise ValueError("成功变换必须包含结束时间和输出引用")
+        if run.failure_reason is not None or run.remediation is not None:
+            raise ValueError("成功变换不能包含失败信息")
+    elif run.status == "failed":
+        if (
+            run.finished_at is None
+            or not (run.failure_reason or "").strip()
+            or not (run.remediation or "").strip()
+        ):
+            raise ValueError("失败变换必须包含结束时间、原因和修复动作")
+        if run.output_refs:
+            raise ValueError("失败变换不能登记成功输出")
+    else:
+        raise ValueError("变换运行状态无效")
+
+
+def _validate_dependency_edge(edge: DependencyEdge) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            edge.id,
+            edge.workspace_id,
+            edge.task_id,
+            edge.created_by_transform_id,
+        )
+    ):
+        raise ValueError("依赖边缺少必要标识或变换引用")
+    _validate_logical_reference(edge.upstream_ref, "依赖边上游引用")
+    _validate_logical_reference(edge.downstream_ref, "依赖边下游引用")
+    if edge.upstream_ref == edge.downstream_ref:
+        raise ValueError("依赖边不能指向自身")
+
+
+def _validate_edit_intent(intent: EditIntent) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            intent.id,
+            intent.workspace_id,
+            intent.task_id,
+            intent.raw_command,
+            intent.context_stage,
+            intent.intent_type,
+            intent.status,
+        )
+    ):
+        raise ValueError("编辑意图缺少必要标识、命令、上下文或状态")
+    for reference in intent.selected_object_refs:
+        _validate_logical_reference(reference, "编辑意图选中对象引用")
+    if intent.playhead_ms is not None and intent.playhead_ms < 0:
+        raise ValueError("播放位置不能为负数")
+    if not 0.0 <= intent.confidence <= 1.0:
+        raise ValueError("编辑意图置信度必须在 0 到 1 之间")
+    _json_object(intent.scope)
+    _json_object(intent.constraints)
+
+
+def _validate_plan_material_matches(
+    matches: list[MaterialSegmentMatch],
+) -> None:
+    identities: set[tuple[str, str]] = set()
+    for match in matches:
+        if (
+            not match.asset_ref.startswith("asset:")
+            or not match.asset_ref.removeprefix("asset:").strip()
+            or not match.segment_ref.startswith("segment:")
+            or not match.segment_ref.removeprefix("segment:").strip()
+        ):
+            raise ValueError("创作方案素材命中必须使用逻辑 asset/segment 引用")
+        if not math.isfinite(match.score) or match.score < 0:
+            raise ValueError("创作方案素材命中分数无效")
+        if not match.reasons or any(not reason.strip() for reason in match.reasons):
+            raise ValueError("创作方案素材命中必须包含可解释理由")
+        identity = (match.asset_ref, match.segment_ref)
+        if identity in identities:
+            raise ValueError("创作方案不能重复引用同一素材片段")
+        identities.add(identity)
+
+
+def _validate_new_edit_proposal(proposal: EditProposal) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            proposal.id,
+            proposal.workspace_id,
+            proposal.task_id,
+            proposal.intent_id,
+            proposal.summary,
+        )
+    ):
+        raise ValueError("编辑提案缺少必要标识或摘要")
+    if proposal.status != "proposed":
+        raise ValueError("新编辑提案必须从 proposed 状态开始")
+    if not proposal.target_refs:
+        raise ValueError("编辑提案必须包含目标引用")
+    for reference in (*proposal.target_refs, *proposal.invalidated_refs):
+        _validate_logical_reference(reference, "编辑提案对象引用")
+    if not proposal.operation:
+        raise ValueError("编辑提案必须包含类型化操作")
+    _json_object(proposal.operation)
+    _json_object(proposal.preview)
+    json.dumps(proposal.external_effects, ensure_ascii=False, default=_json_default)
+    if proposal.updated_at < proposal.created_at:
+        raise ValueError("编辑提案更新时间不能早于创建时间")
+
+
+def _validate_edit_operation(operation: EditOperation) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            operation.id,
+            operation.workspace_id,
+            operation.task_id,
+            operation.proposal_id,
+            operation.operation_type,
+            operation.base_version_id,
+        )
+    ):
+        raise ValueError("编辑操作缺少必要标识、提案或基础版本")
+    if operation.operation_type not in SUPPORTED_EDIT_OPERATION_TYPES:
+        raise ValueError("编辑操作类型不在当前冻结集合中")
+    if not operation.payload:
+        raise ValueError("编辑操作必须包含类型化 payload")
+    _json_object(operation.payload)
+    if operation.status == "running":
+        if (
+            operation.result_version_id is not None
+            or operation.failure_reason is not None
+            or operation.applied_at is not None
+        ):
+            raise ValueError("运行中编辑操作不能已有终态字段")
+    elif operation.status == "applied":
+        if not (operation.result_version_id or "").strip() or operation.applied_at is None:
+            raise ValueError("已应用编辑操作必须包含结果版本和应用时间")
+        if operation.failure_reason is not None:
+            raise ValueError("已应用编辑操作不能包含失败原因")
+        if operation.applied_at < operation.created_at:
+            raise ValueError("编辑操作应用时间不能早于创建时间")
+    elif operation.status == "failed":
+        if not (operation.failure_reason or "").strip():
+            raise ValueError("失败编辑操作必须包含原因")
+        if operation.result_version_id is not None or operation.applied_at is not None:
+            raise ValueError("失败编辑操作不能包含成功结果")
+    else:
+        raise ValueError("编辑操作状态无效")
+
+
+def _validate_logical_reference(reference: str, label: str) -> None:
+    if not reference.strip():
+        raise ValueError(f"{label}不能为空")
+    if Path(reference).is_absolute() or reference.startswith("file://"):
+        raise ValueError(f"{label}不能是绝对路径")
 
 
 def _validate_authorization(authorization: Authorization) -> None:
@@ -4362,6 +6865,64 @@ def _infer_system_tags(
         if any(keyword in text for keyword in keywords):
             tags.append(tag)
     return _normalized_labels(tags)
+
+
+def _material_query_reasons(
+    normalized_query: str, segment: MaterialSegment
+) -> list[str]:
+    reasons: list[str] = []
+    text_fields = (
+        ("片段描述", segment.description),
+        ("片段转录", segment.transcript),
+    )
+    query_terms = [
+        value
+        for value in re.split(r"[^0-9a-z\u4e00-\u9fff]+", normalized_query)
+        if value
+    ]
+    for label, raw_value in text_fields:
+        value = raw_value.strip().casefold()
+        if not value:
+            continue
+        if (
+            normalized_query in value
+            or value in normalized_query
+            or any(term in value for term in query_terms)
+        ):
+            reasons.append(f"自然语言匹配{label}")
+    for source, values in (
+        ("系统标签", segment.system_tags),
+        ("用户标签", segment.user_tags),
+    ):
+        matched = []
+        for raw_value in values:
+            value = raw_value.casefold()
+            suffix = value.split(":", 1)[-1]
+            if value in normalized_query or suffix in normalized_query:
+                matched.append(raw_value)
+        reasons.extend(
+            f"自然语言匹配{source} {value}" for value in matched
+        )
+    role_aliases = {
+        "a_roll": ("人物主镜头", "主镜头", "口播画面", "人物画面"),
+        "b_roll": ("补充画面", "素材画面", "辅助镜头", "产品画面"),
+    }
+    role = segment.usage_role
+    if role == "unassigned":
+        role = next(
+            (
+                value.split(":", 1)[1]
+                for value in segment.system_tags
+                if value.startswith("用途:")
+                and value.split(":", 1)[1] in {"a_roll", "b_roll"}
+            ),
+            "unassigned",
+        )
+    if role in role_aliases and any(
+        alias in normalized_query for alias in role_aliases[role]
+    ):
+        reasons.append(f"自然语言匹配用途 {role}")
+    return reasons
 
 
 def _segment_id(asset_id: str, start: float, end: float) -> str:

@@ -682,6 +682,13 @@ class CreationPlanBlockerResponse(BaseModel):
     blocks_confirmation: bool
 
 
+class MaterialSegmentMatchResponse(BaseModel):
+    asset_ref: str
+    segment_ref: str
+    score: float = Field(ge=0)
+    reasons: list[str]
+
+
 class CreationTaskResponse(BaseModel):
     id: str
     workspace_id: str
@@ -699,6 +706,9 @@ class CreationTaskResponse(BaseModel):
     confirmed_script_id: str | None
     narration_cache_key: str | None
     montage_plan_id: str | None
+    current_timeline_version_id: str | None = None
+    timeline_sequence: int = Field(default=0, ge=0)
+    can_undo: bool = False
     output_ready: bool
     stage_reason: str | None
     stage_impact: str | None
@@ -853,6 +863,21 @@ class CreationTaskScriptsResponse(BaseModel):
     route_preflight: TopicRouteSnapshotResponse
 
 
+class CreationTaskNarrationSegmentResponse(BaseModel):
+    id: str
+    source_section_id: str
+    text: str
+    audio_reference: str | None
+    audio_url: str | None
+    duration_seconds: float | None = Field(default=None, gt=0)
+    sample_rate: int | None = Field(default=None, gt=0)
+    model_id: str
+    voice_profile_id: str
+    voice_version: str
+    language: Literal["zh"]
+    status: Literal["pending", "ready", "generating", "failed"]
+
+
 class CreationTaskNarrationResponse(BaseModel):
     task: CreationTaskResponse
     script_id: str
@@ -863,6 +888,7 @@ class CreationTaskNarrationResponse(BaseModel):
     voice_profile_id: str
     language: Literal["zh"]
     pronunciation_version: str
+    segments: list[CreationTaskNarrationSegmentResponse]
 
 
 class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
@@ -903,6 +929,7 @@ class CreationTaskMontageClipResponse(BaseModel):
 class CreationTaskNarrationCueResponse(BaseModel):
     id: str
     source_section_id: str
+    narration_segment_id: str = ""
     text: str
     duration_seconds: float = Field(gt=0)
 
@@ -940,10 +967,139 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     confirmed: bool | None = None
 
 
+class CreationTaskExactEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_type: Literal[
+        "ReplaceClip",
+        "TrimClip",
+        "ReorderClip",
+        "SetClipLock",
+        "ConfirmClip",
+        "RegenerateNarrationSegment",
+        "UpdateSubtitleCue",
+    ]
+    clip_id: str | None = Field(default=None, min_length=1, max_length=120)
+    narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    cue_id: str | None = Field(default=None, min_length=1, max_length=120)
+    text: str | None = Field(default=None, min_length=1, max_length=96)
+    delivery_instruction: str | None = Field(default=None, min_length=1, max_length=120)
+    asset_id: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    source_start_seconds: float | None = Field(default=None, ge=0)
+    position: int | None = Field(default=None, ge=0, le=99)
+    locked: bool | None = None
+
+
+class CreationTaskTimelineUndoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class CreationTaskSubtitleCueUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=48)
+
+
+class CreationTaskEditPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    raw_command: str = Field(min_length=2, max_length=500)
+    context_stage: Literal["topic", "script", "narration", "montage", "review"]
+    selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
+    playhead_ms: int | None = Field(default=None, ge=0)
+
+
+class EditIntentResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    raw_command: str
+    context_stage: str
+    selected_object_refs: list[str]
+    playhead_ms: int | None
+    intent_type: str
+    scope: dict[str, object]
+    constraints: dict[str, object]
+    confidence: float = Field(ge=0, le=1)
+    status: str
+    created_at: datetime
+
+
+class TypedEditOperationDraftResponse(BaseModel):
+    operation_type: Literal[
+        "ReplaceClip",
+        "TrimClip",
+        "ReorderClip",
+        "SetClipLock",
+        "ConfirmClip",
+        "RegenerateNarrationSegment",
+        "UpdateSubtitleCue",
+        "UndoTimelineVersion",
+    ]
+    payload: dict[str, object]
+
+
+class EditPreviewItemResponse(BaseModel):
+    ref: str
+    label: str
+    detail: str
+
+
+class EditChangePreviewResponse(BaseModel):
+    before: EditPreviewItemResponse
+    after: EditPreviewItemResponse
+
+
+class EditProposalResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    intent_id: str
+    summary: str
+    target_refs: list[str]
+    operation: TypedEditOperationDraftResponse
+    invalidated_refs: list[str]
+    preview: EditChangePreviewResponse
+    external_effects: list[str]
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreationTaskEditPreviewResponse(BaseModel):
+    intent: EditIntentResponse
+    proposal: EditProposalResponse
+
+
+class EditOperationResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    proposal_id: str
+    operation_type: Literal[
+        "ReplaceClip",
+        "TrimClip",
+        "ReorderClip",
+        "SetClipLock",
+        "ConfirmClip",
+        "RegenerateNarrationSegment",
+        "UpdateSubtitleCue",
+        "UndoTimelineVersion",
+    ]
+    payload: dict[str, object]
+    base_version_id: str | None
+    result_version_id: str | None
+    status: str
+    failure_reason: str | None
+    created_at: datetime
+    applied_at: datetime | None
+
+
+class CreationTaskEditConfirmResponse(BaseModel):
+    operation: EditOperationResponse
+    montage: CreationTaskMontagePlanResponse
+    narration: CreationTaskNarrationResponse | None = None
 
 
 class CreationPlanPreviewResponse(BaseModel):
@@ -960,6 +1116,7 @@ class CreationPlanPreviewResponse(BaseModel):
     approved_asset_count: int = Field(ge=0)
     approved_clip_count: int = Field(ge=0)
     material_rule_summary: str
+    material_matches: list[MaterialSegmentMatchResponse]
     model_snapshot: list[dict[str, object]]
     confirmation_points: list[str]
     blockers: list[CreationPlanBlockerResponse]

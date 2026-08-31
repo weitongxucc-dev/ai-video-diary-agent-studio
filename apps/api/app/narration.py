@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -246,6 +248,9 @@ class NarrationGenerator:
         voice_identity: VersionedVoiceProfile,
         pronunciation_entries: tuple[PronunciationEntry, ...],
         resolved_reference_audio_path: str | Path,
+        segment_id: str | None = None,
+        delivery_instruction: str | None = None,
+        generation_identity: str | None = None,
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
 
@@ -291,13 +296,20 @@ class NarrationGenerator:
             narration_text=text,
             voice_identity=voice_identity,
             pronunciation_dictionary=pronunciation_dictionary,
+            segment_id=segment_id,
+            delivery_instruction=delivery_instruction,
+            generation_identity=generation_identity,
         )
         output_path = (
             self.output_root
             / "creation-tasks"
             / _safe_component(workspace_id)
             / _safe_component(task_id)
-            / f"narration_{cache_key[:12]}.wav"
+            / (
+                f"segment_{_safe_component(segment_id)}_{cache_key[:12]}.wav"
+                if segment_id
+                else f"narration_{cache_key[:12]}.wav"
+            )
         )
         result: VoiceCloneResult = self.provider.generate(
             text=text,
@@ -314,6 +326,36 @@ class NarrationGenerator:
             or resolved_output.stat().st_size == 0
         ):
             raise ValueError("声音克隆没有生成当前创作任务的 WAV")
+        tempo = _delivery_tempo(delivery_instruction)
+        if tempo != 1.0:
+            adjusted_path = output_path.with_name(f"{output_path.stem}_adjusted.wav")
+            completed = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(resolved_output),
+                    "-filter:a",
+                    f"atempo={tempo:.3f}",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(adjusted_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode or not adjusted_path.is_file() or adjusted_path.stat().st_size == 0:
+                adjusted_path.unlink(missing_ok=True)
+                raise ValueError(
+                    "配音语速调整失败："
+                    + (completed.stderr.strip() or f"ffmpeg 退出码 {completed.returncode}")
+                )
+            adjusted_path.replace(resolved_output)
+            result = VoiceCloneResult(
+                audio_path=str(resolved_output),
+                duration_seconds=_probe_audio_duration(resolved_output),
+                sample_rate=result.sample_rate,
+            )
         if result.duration_seconds > max_duration_seconds:
             resolved_output.unlink(missing_ok=True)
             raise ValueError("实际配音时长超过创作方案上限，请先压缩并重新确认文案")
@@ -330,6 +372,76 @@ class NarrationGenerator:
             pronunciation_version=_pronunciation_version(pronunciation_dictionary),
         )
 
+    def combine_creation_task_segments(
+        self,
+        *,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        segments: list[NarrationArtifact],
+        max_duration_seconds: int,
+    ) -> NarrationArtifact:
+        if not segments:
+            raise ValueError("没有可拼合的配音片段")
+        if any(item.task_id != task_id or item.script_id != script_id for item in segments):
+            raise ValueError("配音片段与当前任务文案不一致")
+        cache_key = hashlib.sha256(
+            "\n".join(item.cache_key for item in segments).encode("utf-8")
+        ).hexdigest()
+        output_path = (
+            self.output_root
+            / "creation-tasks"
+            / _safe_component(workspace_id)
+            / _safe_component(task_id)
+            / f"narration_{cache_key[:12]}.wav"
+        ).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        source_paths = [Path(item.audio_path).expanduser().resolve() for item in segments]
+        if any(not path.is_file() or path.stat().st_size == 0 for path in source_paths):
+            raise ValueError("存在缺失或为空的配音片段")
+        if len(source_paths) == 1:
+            shutil.copyfile(source_paths[0], output_path)
+        else:
+            command = ["ffmpeg", "-y"]
+            for path in source_paths:
+                command.extend(["-i", str(path)])
+            inputs = "".join(f"[{index}:a]" for index in range(len(source_paths)))
+            command.extend(
+                [
+                    "-filter_complex",
+                    f"{inputs}concat=n={len(source_paths)}:v=0:a=1[out]",
+                    "-map",
+                    "[out]",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(output_path),
+                ]
+            )
+            completed = subprocess.run(command, capture_output=True, text=True)
+            if completed.returncode or not output_path.is_file() or output_path.stat().st_size == 0:
+                output_path.unlink(missing_ok=True)
+                raise ValueError(
+                    "配音片段拼合失败："
+                    + (completed.stderr.strip() or f"ffmpeg 退出码 {completed.returncode}")
+                )
+        duration = _probe_audio_duration(output_path)
+        if duration > max_duration_seconds:
+            output_path.unlink(missing_ok=True)
+            raise ValueError("拼合后的配音超过创作方案上限，请先压缩并重新确认文案")
+        first = segments[0]
+        return NarrationArtifact(
+            task_id=task_id,
+            script_id=script_id,
+            audio_path=str(output_path),
+            duration_seconds=duration,
+            sample_rate=first.sample_rate,
+            model_id=first.model_id,
+            voice_profile_id=first.voice_profile_id,
+            cache_key=cache_key,
+            language=first.language,
+            pronunciation_version=first.pronunciation_version,
+        )
+
     def creation_task_cache_key(
         self,
         *,
@@ -339,6 +451,9 @@ class NarrationGenerator:
         narration_text: str,
         voice_identity: VersionedVoiceProfile,
         pronunciation_dictionary: dict[str, str],
+        segment_id: str | None = None,
+        delivery_instruction: str | None = None,
+        generation_identity: str | None = None,
     ) -> str:
         payload = {
             "workspace_id": workspace_id,
@@ -357,6 +472,9 @@ class NarrationGenerator:
             },
             "pronunciation_dictionary": pronunciation_dictionary,
             "provider_model_id": self.provider.model_id,
+            "segment_id": segment_id,
+            "delivery_instruction": delivery_instruction,
+            "generation_identity": generation_identity,
         }
         return hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -665,6 +783,46 @@ def _estimated_text_seconds(text: str) -> float:
     chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
     latin_words = len(re.findall(r"[A-Za-z0-9]+", text))
     return chinese_chars / 4.0 + latin_words / 2.5
+
+
+def _delivery_tempo(instruction: str | None) -> float:
+    if not instruction:
+        return 1.0
+    value = instruction.casefold()
+    if any(token in value for token in ("慢一点", "慢些", "slower")):
+        return 0.9
+    if any(token in value for token in ("快一点", "快些", "faster")):
+        return 1.1
+    return 1.0
+
+
+def _probe_audio_duration(path: Path) -> float:
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise ValueError(
+            "无法验证配音时长："
+            + (completed.stderr.strip() or f"ffprobe 退出码 {completed.returncode}")
+        )
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as exc:
+        raise ValueError("ffprobe 没有返回有效的配音时长") from exc
+    if duration <= 0:
+        raise ValueError("配音时长无效")
+    return duration
 
 
 def _safe_component(value: str) -> str:

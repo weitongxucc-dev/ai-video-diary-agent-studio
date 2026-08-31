@@ -67,8 +67,10 @@ function PreflightFacts({ preview }: { preview: CreationPlanPreview }) {
         {!preview.knowledge_references.length && !preview.source_references.length ? <p>当前没有可用于选题的已保存资料或信息源。</p> : null}
       </section>
       <section>
-        <header><ShieldCheck size={16} /><div><span>素材与授权</span><strong>{preview.approved_asset_count} 个已审核素材 · {preview.approved_clip_count} 个可用片段</strong></div></header>
+        <header><ShieldCheck size={16} /><div><span>素材匹配</span><strong>{preview.material_matches.length} 个片段匹配当前目标</strong></div></header>
         <p>{materialSummary(preview.material_rule_summary)}</p>
+        {preview.material_matches.length ? <ul>{preview.material_matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`} title={`${item.asset_ref} · ${item.segment_ref}`}><strong>匹配 {Math.round(item.score * 100)}%</strong><span>{item.reasons.join("；")}</span></li>)}</ul> : <p>当前目标没有命中可用片段。</p>}
+        <p>已审核 {preview.approved_asset_count} 个素材 · {preview.approved_clip_count} 个可用片段</p>
         {preview.selected_voice ? <p>已核验声音及人物授权，适用语言：{preview.selected_voice.language}。</p> : <p>当前没有可用于本次目标的已授权声音。</p>}
         {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {item.language}</span></li>)}</ul> : null}
       </section>

@@ -29,30 +29,6 @@ async function loadCreationTasks(): Promise<CreationTask[] | null> {
     .catch(() => null);
 }
 
-function CreationPlanStartInspector({ goal }: { goal: string }) {
-  return (
-    <div className="creation-plan-inspector">
-      <div className="readiness-callout">
-        <Clock3 size={17} />
-        <div>
-          <strong>尚未检查可用内容</strong>
-          <span>
-            {goal
-              ? "先查看本次目标可用的资料、素材、声音与模型，再确认创建任务。"
-              : "在中间写下制作目标后，开始只读检查。"}
-          </span>
-        </div>
-      </div>
-      <section className="queue-blockers">
-        <h3>创建顺序</h3>
-        <p>1. 检查可用内容</p>
-        <p>2. 查看资料、授权、素材与模型状态</p>
-        <p>3. 确认并创建创作任务</p>
-      </section>
-    </div>
-  );
-}
-
 function displayTaskText(value?: string | null) {
   return (value || "")
     .replace(/\bb-?roll\b/gi, "补充画面")
@@ -138,11 +114,7 @@ export default async function ProductionPage({
   if (params.new === "1") {
     const initialGoal = params.goal ?? "";
     return (
-      <AppShell
-        creationTasks={creationTasks}
-        inspector={<CreationPlanStartInspector goal={initialGoal} />}
-        inspectorTitle="创建前检查"
-      >
+      <AppShell creationTasks={creationTasks}>
         <div className="modern-queue">
           <header className="modern-queue__header">
             <div>

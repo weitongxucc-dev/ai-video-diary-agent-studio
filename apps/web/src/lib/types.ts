@@ -983,6 +983,13 @@ export type CreationPlanBlocker = {
   blocks_confirmation: boolean;
 };
 
+export type MaterialSegmentMatch = {
+  asset_ref: string;
+  segment_ref: string;
+  score: number;
+  reasons: string[];
+};
+
 export type CreationTask = {
   id: string;
   workspace_id: string;
@@ -998,6 +1005,9 @@ export type CreationTask = {
   confirmed_script_id: string | null;
   narration_cache_key: string | null;
   montage_plan_id: string | null;
+  current_timeline_version_id: string | null;
+  timeline_sequence: number;
+  can_undo: boolean;
   output_ready: boolean;
   stage_reason: string | null;
   stage_impact: string | null;
@@ -1121,6 +1131,22 @@ export type CreationTaskScriptsResponse = {
   route_preflight: CreationTaskTopicRoutePreflight;
 };
 
+export type CreationTaskNarrationSegment = {
+  id: string;
+  source_section_id: string;
+  text: string;
+  audio_reference: string | null;
+  audio_url: string | null;
+  duration_seconds: number | null;
+  sample_rate: number | null;
+  model_id: string;
+  voice_profile_id: string;
+  voice_version: string;
+  language: "zh";
+  pronunciation_version: string;
+  status: "pending" | "ready" | "generating" | "failed";
+};
+
 export type CreationTaskNarration = {
   task: CreationTask;
   script_id: string;
@@ -1131,6 +1157,7 @@ export type CreationTaskNarration = {
   voice_profile_id: string;
   language: "zh";
   pronunciation_version: string;
+  segments: CreationTaskNarrationSegment[];
 };
 
 export type CreationTaskVoiceOption = {
@@ -1154,7 +1181,7 @@ export type CreationTaskMontageClip = {
   timeline_start_seconds: number;
   timeline_end_seconds: number;
   match_score: number;
-  match_reasons: string[];
+  match_reasons?: string[];
   needs_confirmation: boolean;
   role: "a_roll" | "b_roll";
   locked: boolean;
@@ -1190,6 +1217,91 @@ export type CreationTaskWorkspace = {
   montage: CreationTaskMontage | null;
 };
 
+export type CreationTaskEditIntent = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  raw_command: string;
+  context_stage: string;
+  selected_object_refs: string[];
+  playhead_ms: number | null;
+  intent_type: string;
+  scope: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  confidence: number;
+  status: string;
+  created_at: string;
+};
+
+export type CreationTaskExactEditInput =
+  | { operation_type: "ReplaceClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
+  | { operation_type: "TrimClip"; clip_id: string; source_start_seconds: number }
+  | { operation_type: "ReorderClip"; clip_id: string; position: number }
+  | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
+  | { operation_type: "ConfirmClip"; clip_id: string }
+  | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
+  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string };
+
+type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Input
+  ? Input extends { operation_type: string }
+    ? Omit<Input, "operation_type">
+    : never
+  : never;
+
+export type EditPreviewItem = {
+  ref: string;
+  label: string;
+  detail: string;
+};
+
+export type CreationTaskEditProposal = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  intent_id: string;
+  summary: string;
+  target_refs: string[];
+  operation: {
+    operation_type: CreationTaskExactEditInput["operation_type"];
+    payload: Record<string, unknown>;
+  };
+  invalidated_refs: string[];
+  preview: {
+    before: EditPreviewItem;
+    after: EditPreviewItem;
+  };
+  external_effects: string[];
+  status: "proposed" | "confirmed" | "rejected" | "expired";
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTaskEditPreviewResponse = {
+  intent: CreationTaskEditIntent;
+  proposal: CreationTaskEditProposal;
+};
+
+export type CreationTaskEditOperation = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  proposal_id: string;
+  operation_type: CreationTaskExactEditInput["operation_type"];
+  payload: CreationTaskExactEditPayload;
+  base_version_id: string | null;
+  result_version_id: string | null;
+  status: "running" | "applied" | "failed";
+  failure_reason: string | null;
+  created_at: string;
+  applied_at: string | null;
+};
+
+export type CreationTaskEditConfirmResponse = {
+  operation: CreationTaskEditOperation;
+  montage: CreationTaskMontage;
+  narration?: CreationTaskNarration | null;
+};
+
 export type CreationPlanPreview = CreationPlanInput & {
   name: string;
   knowledge_references: CreationPlanKnowledgeReference[];
@@ -1199,6 +1311,7 @@ export type CreationPlanPreview = CreationPlanInput & {
   approved_asset_count: number;
   approved_clip_count: number;
   material_rule_summary: string;
+  material_matches: MaterialSegmentMatch[];
   model_snapshot: CreationPlanModelStatus[];
   confirmation_points: string[];
   blockers: CreationPlanBlocker[];
@@ -1219,6 +1332,7 @@ export type CreationPlan = CreationPlanPreview & {
 export type NarrationCue = {
   id: string;
   source_section_id: string;
+  narration_segment_id: string;
   text: string;
   duration_seconds: number;
 };

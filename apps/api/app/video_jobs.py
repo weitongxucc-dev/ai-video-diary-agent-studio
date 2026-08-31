@@ -1,58 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
-
-from app.repository import reset_workspace_context, set_workspace_context
+from app.production import JobRun
+from app.task_runtime import JobStateStore, JobWork, TaskRuntime
 
 
 class VideoJobRunner:
-    def __init__(self) -> None:
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="ai-video-job",
-        )
-        self._lock = Lock()
-        self._active_episode_ids: set[str] = set()
+    """Video-work entry point backed exclusively by persisted JobRun state."""
 
-    def is_active(self, episode_id: str) -> bool:
-        with self._lock:
-            return episode_id in self._active_episode_ids
+    def __init__(self, store: JobStateStore | None = None) -> None:
+        self._runtime = TaskRuntime(store) if store is not None else None
 
-    def submit(
-        self,
-        episode_id: str,
-        job: Callable[[], None],
-        workspace_id: str | None = None,
-    ) -> bool:
-        with self._lock:
-            if episode_id in self._active_episode_ids:
-                return False
-            self._active_episode_ids.add(episode_id)
-        self._executor.submit(self._run, episode_id, self._wrap(job, workspace_id))
-        return True
+    def run(self, run: JobRun, work: JobWork) -> JobRun:
+        return self._require_runtime().run(run, work)
 
-    def _wrap(
-        self,
-        job: Callable[[], None],
-        workspace_id: str | None,
-    ) -> Callable[[], None]:
-        if not workspace_id:
-            return job
+    def resume(self, workspace_id: str, job_id: str, work: JobWork) -> JobRun:
+        return self._require_runtime().resume(workspace_id, job_id, work)
 
-        def run_in_workspace() -> None:
-            token = set_workspace_context(workspace_id)
-            try:
-                job()
-            finally:
-                reset_workspace_context(token)
+    def cancel(self, workspace_id: str, job_id: str) -> JobRun:
+        return self._require_runtime().cancel(workspace_id, job_id)
 
-        return run_in_workspace
+    def recover_after_restart(self, workspace_id: str | None = None) -> int:
+        return self._require_runtime().interrupt_running(workspace_id)
 
-    def _run(self, episode_id: str, job: Callable[[], None]) -> None:
-        try:
-            job()
-        finally:
-            with self._lock:
-                self._active_episode_ids.discard(episode_id)
+    def _require_runtime(self) -> TaskRuntime:
+        if self._runtime is None:
+            raise RuntimeError("VideoJobRunner 需要 JobStateStore")
+        return self._runtime

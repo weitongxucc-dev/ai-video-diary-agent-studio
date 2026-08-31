@@ -45,6 +45,7 @@ function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPrev
     approved_asset_count: 3,
     approved_clip_count: 5,
     material_rule_summary: "仅计入已审核的 B-roll 镜头。",
+    material_matches: [{ asset_ref: "asset:asset-1", segment_ref: "segment:segment-1", score: 0.86, reasons: ["用途匹配补充画面", "标签匹配产品"] }],
     model_snapshot: [{ id: "voice-local", capability: "voice_generation", state: "ready", ready: true, message: "本地声音模型已就绪。" }],
     confirmation_points: ["确认资料与来源事实"],
     blockers: [],
@@ -80,7 +81,9 @@ describe("CreateProductionTaskForm", () => {
     }));
     expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
     expect(await screen.findByText("产品资料")).toBeInTheDocument();
-    expect(screen.getByText("补充画面", { exact: false })).toBeInTheDocument();
+    expect(screen.getAllByText("补充画面", { exact: false })).toHaveLength(2);
+    expect(screen.getByText("匹配 86%")).toBeInTheDocument();
+    expect(screen.getByText("用途匹配补充画面；标签匹配产品")).toBeInTheDocument();
     expect(screen.getByText("声音生成 · 已就绪")).toBeInTheDocument();
   });
 
@@ -124,7 +127,7 @@ describe("CreateProductionTaskForm", () => {
       id: "plan-1",
       workspace_id: "workspace-1",
       status: "confirmed",
-      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
+      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, current_timeline_version_id: null, timeline_sequence: 0, can_undo: false, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
       created_at: "2026-08-29T00:00:00Z",
       confirmed_at: "2026-08-29T00:00:00Z",
       updated_at: "2026-08-29T00:00:00Z",
