@@ -2,8 +2,8 @@
 
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
-迁移状态：`VERTICAL_SLICE_IMPLEMENTED`
-实现基线：`codex/recovery-local-video-v01@7aae62f`；该状态仍不代表打包客户端或迁移验收通过
+迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（等待独立质量复核）
+实现基线：`codex/recovery-local-video-v01@7aae62f`；控制文档基线 `9e72860`；打包 build identity `342b65e0bd9789485bf8c9ee3efe5af856a577d7f5e7a6f380d0477ea44a1d97`
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
 本文件是短期执行合同，不是产品或领域权威。范围、事实源或验收改变时直接替换本文件；达到 `MIGRATION_ACCEPTED`、任务取消或转入外部 Issue/PR 后删除，不归档旧副本。
@@ -69,11 +69,11 @@
 | Qwen3-TTS 中文声音克隆 | `REAL_OUTPUT_CONFIRMED` | 已使用用户授权的 `cc` 人物/声音版本生成约 20.16 秒有效 WAV；未使用系统声音、静音或伪造回退 |
 | 配音阶段补选声音并原地恢复 | `PERSISTED_EFFECT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已在同一 CreationTask 绑定授权声音并原地继续，没有重做已确认文案 |
 | 故事板、FFmpeg MP4/SRT | `REAL_OUTPUT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已生成 6 个镜头的可编辑故事板、独立 SRT 与烧录中文字幕的 1080×1920 H.264/AAC MP4；ffprobe 证明时长约 20.23 秒且音视频流有效 |
-| Electron 原生保存 | `REAL_INTERACTION_CONFIRMED / REAL_OUTPUT_CONFIRMED` | 开发态 Electron 已真实取消一次并恢复，随后通过原生保存框导出与 API 成片逐字节一致的 MP4；打包候选仍待同一 SHA 复核 |
+| Electron 原生保存 | `REAL_INTERACTION_CONFIRMED / REAL_OUTPUT_CONFIRMED` | 最终打包候选已打开原生保存框并导出 `/Users/Zhuanz/Movies/task_d860f92365c5.mp4`；文件 5,178,349 bytes，SHA-256 `30ac5bed7a8313c0bdf41b8493cba6f629289ff802e0f7ad31d070d8422986d1`，与 API 成片逐字节一致 |
 | 旧 Web 入口与可见名称 | `ABSENCE_VERIFIED` | `/topics`、`/script`、`/draft` 在真实浏览器均为 404；`/production` 仅保留 CreationTask 创建和列表，任务页无 Episode/Batch 可见名称 |
 | 旧 API 写事实源 | `RUNTIME_CALL_CONFIRMED / ABSENCE_VERIFIED` | 当前 API 对旧写命名空间统一返回 410，CreationTask 仍返回 200；旧仓储 writer、隐式 GET 写回和 Episode 自动循环已移除 |
 | 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 355 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
-| 打包客户端 | `BLOCKED` | 候选 `085556…` 真实启动后发现 foundation 历史 Batch 读取仍调用已退役恢复函数，已在 `7aae62f` 修复并增加只读历史回归；新包尚待生成和复核 |
+| 打包客户端 | `REAL_TARGET_VERIFIED` | 最终候选 `342b65…` 的 Foundation 与 CreationTask 返回 200，旧 Episode 写请求返回 410；任务页播放器真实加载 1080×1920、20.233 秒 H.264/AAC MP4，画面可见烧录字幕，独立 SRT 返回 200。发现桌面用户配置仍指向旧输出目录后，已通过既有运行设置接口将模型、素材和输出目录重新绑定到当前移动硬盘；重启后配置、任务和成片保持一致。原生保存和退出清理均通过。DMG SHA-256 为 `8928341e44c1b0109943df295f8327cbe7e55a8dc372ae1c775ec0b8de8ee8b0`，仅 ad-hoc 签名，未签名、公证或分发 |
 
 ## 7. 阻断、停止和授权
 
