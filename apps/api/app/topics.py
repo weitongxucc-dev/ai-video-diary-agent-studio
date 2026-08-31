@@ -611,9 +611,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 retryable=False,
             )
         source_ids: set[str] = set()
+        source_aliases: dict[str, str] = {}
         serialized_sources: list[dict[str, str]] = []
         total_length = 0
-        for source in input.sources:
+        for index, source in enumerate(input.sources, start=1):
             reference_id = source.reference_id.strip()
             text = source.text.strip()
             if (
@@ -631,6 +632,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     retryable=False,
                 )
             source_ids.add(reference_id)
+            source_alias = f"evidence_{index}"
+            source_aliases[source_alias] = reference_id
             total_length += len(text)
             if total_length > 48_000:
                 raise self._failure(
@@ -642,7 +645,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 )
             serialized_sources.append(
                 {
-                    "reference_id": reference_id,
+                    "reference_id": source_alias,
                     "kind": source.kind,
                     "title": source.title.strip(),
                     "text": text,
@@ -721,10 +724,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="检查 OpenAI-compatible JSON 响应格式后重试。",
                 retryable=True,
             ) from exc
-        return self._validated_script(document, source_ids)
+        return self._validated_script(document, source_aliases)
 
     def _validated_script(
-        self, document: object, allowed_reference_ids: set[str]
+        self, document: object, allowed_reference_aliases: dict[str, str]
     ) -> CreationTaskGeneratedScript:
         raw = document.get("script") if isinstance(document, dict) else None
         if not isinstance(raw, dict):
@@ -744,7 +747,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 not isinstance(reference_ids, list)
                 or not reference_ids
                 or len(reference_ids) > 12
-                or any(not isinstance(item, str) or item not in allowed_reference_ids for item in reference_ids)
+                or any(
+                    not isinstance(item, str) or item not in allowed_reference_aliases
+                    for item in reference_ids
+                )
                 or len(set(reference_ids)) != len(reference_ids)
             ):
                 raise self._schema_failure("文字模型返回了无效或未授权的文案证据引用。")
@@ -755,7 +761,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     visual_prompt=self._text(
                         section.get("visual_prompt"), "visual prompt", 1_000
                     ),
-                    evidence_reference_ids=tuple(reference_ids),
+                    evidence_reference_ids=tuple(
+                        allowed_reference_aliases[item] for item in reference_ids
+                    ),
                 )
             )
         return CreationTaskGeneratedScript(

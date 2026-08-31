@@ -7,10 +7,15 @@ import httpx
 import pytest
 
 from app.topics import (
+    CreationTaskGeneratedScript,
+    CreationTaskGeneratedScriptSection,
     CreationTaskGeneratedTopic,
+    CreationTaskScriptGenerationError,
+    CreationTaskScriptInput,
     CreationTaskTopicGenerationError,
     CreationTaskTopicInput,
     CreationTaskTopicSource,
+    OpenAICompatibleCreationTaskScriptGenerator,
     OpenAICompatibleCreationTaskTopicGenerator,
 )
 
@@ -52,6 +57,94 @@ def _response(document: object) -> httpx.Response:
         200,
         json={"choices": [{"message": {"content": json.dumps(document, ensure_ascii=False)}}]},
     )
+
+
+def _script_input() -> CreationTaskScriptInput:
+    return CreationTaskScriptInput(
+        goal="解释本地创作如何保护隐私",
+        language="zh-CN",
+        duration_target_seconds=30,
+        topic_title="本地创作与隐私",
+        topic_angle="数据留在本机",
+        topic_audience="短视频创作者",
+        topic_outline=("说明风险", "解释本地链路"),
+        sources=_input().sources,
+    )
+
+
+def _script_document(*, evidence_ids: list[str]) -> dict[str, object]:
+    return {
+        "script": {
+            "title": "素材留在本机，创作更安心",
+            "language": "zh-CN",
+            "sections": [
+                {
+                    "title": "开场",
+                    "content": "你的素材，不必为了创作离开本机。",
+                    "visual_prompt": "本机素材库画面",
+                    "evidence_reference_ids": evidence_ids,
+                }
+            ],
+        }
+    }
+
+
+def test_script_uses_bounded_evidence_aliases_and_restores_authoritative_ids():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen["prompt"] = json.loads(payload["messages"][1]["content"])
+        return _response(_script_document(evidence_ids=["evidence_1", "evidence_2"]))
+
+    generated = OpenAICompatibleCreationTaskScriptGenerator(
+        "https://models.example/v1",
+        "script-model",
+        transport=httpx.MockTransport(handler),
+    ).generate(_script_input())
+
+    assert generated == CreationTaskGeneratedScript(
+        title="素材留在本机，创作更安心",
+        language="zh-CN",
+        sections=(
+            CreationTaskGeneratedScriptSection(
+                title="开场",
+                content="你的素材，不必为了创作离开本机。",
+                visual_prompt="本机素材库画面",
+                evidence_reference_ids=("knowledge-1", "source-1"),
+            ),
+        ),
+    )
+    assert seen["prompt"]["sources"] == [
+        {
+            "reference_id": "evidence_1",
+            "kind": "knowledge",
+            "title": "工作流笔记",
+            "text": "用户维护的工作流可以留下可验证的过程证据。",
+        },
+        {
+            "reference_id": "evidence_2",
+            "kind": "source",
+            "title": "行业观察",
+            "text": "行业文章指出模型能力会变化，但可靠流程应能复用。",
+        },
+    ]
+
+
+def test_script_rejects_unknown_evidence_alias_without_persisting_it():
+    generator = OpenAICompatibleCreationTaskScriptGenerator(
+        "https://models.example/v1",
+        "script-model",
+        transport=httpx.MockTransport(
+            lambda _request: _response(_script_document(evidence_ids=["knowledge-1"]))
+        ),
+    )
+
+    with pytest.raises(CreationTaskScriptGenerationError) as exc_info:
+        generator.generate(_script_input())
+
+    assert exc_info.value.code == "response_schema_invalid"
+    assert exc_info.value.reason == "文字模型返回了无效或未授权的文案证据引用。"
 
 
 def test_explicit_input_is_the_only_prompt_source_and_key_is_sent_when_given():
