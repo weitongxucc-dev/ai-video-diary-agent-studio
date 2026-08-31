@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import app.main as main_module
 from app.models import (
@@ -31,6 +32,8 @@ from app.montage import (
 )
 from app.narration import NarrationArtifact
 from app.production import (
+    CreationPlan,
+    CreationTask,
     CreationTaskScript,
     CreationTaskScriptSection,
     MaterialAsset,
@@ -853,6 +856,212 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
         "真实任务字幕"
     ) >= 0
     assert Path(rendered.output_path or "").parent.name == "task_real"
+    frame_path = tmp_path / "subtitle-frame.png"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "0.5",
+            "-i",
+            str(rendered.output_path),
+            "-frames:v",
+            "1",
+            str(frame_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    with Image.open(frame_path) as frame:
+        subtitle_region = frame.convert("RGB").crop((0, 1300, 1080, 1800))
+        white_pixels = sum(
+            red > 220 and green > 220 and blue > 220
+            for red, green, blue in subtitle_region.get_flattened_data()
+        )
+    assert white_pixels > 50
+
+
+def test_creation_task_render_helper_restores_logical_media_references(
+    tmp_path,
+    monkeypatch,
+):
+    workspace_id = "workspace_a"
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    production._save_asset(asset)
+    logical_clip_reference = production.workspace_media_reference_for_asset(
+        workspace_id, asset.id
+    )
+    logical_narration_reference = "narration://artifact/test-reference"
+    audio_path = tmp_path / "voice.wav"
+    audio_path.write_bytes(b"wave")
+    plan = CreationTaskMontagePlan(
+        id="task-montage-logical",
+        workspace_id=workspace_id,
+        task_id="task-logical",
+        script_id="script-logical",
+        script_title="逻辑引用",
+        status="ready",
+        cues=[NarrationCue("cue-logical", "section-logical", "逻辑引用", 4.0)],
+        clips=[
+            MontageClip(
+                id="clip-logical",
+                cue_id="cue-logical",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path=logical_clip_reference,
+                source_start_seconds=0,
+                source_end_seconds=4,
+                timeline_start_seconds=0,
+                timeline_end_seconds=4,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=False,
+            )
+        ],
+        duration_seconds=4,
+        low_confidence_clip_count=0,
+        narration_audio_path=logical_narration_reference,
+    )
+
+    class MutatingRenderer:
+        def render(self, rendered_plan, resolved_audio_path):
+            assert Path(rendered_plan.clips[0].source_path).is_absolute()
+            rendered_plan.narration_audio_path = str(resolved_audio_path)
+            rendered_plan.status = "rendered"
+            return rendered_plan
+
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "montage_renderer", MutatingRenderer())
+
+    rendered = main_module._render_montage_with_resolved_clip_sources(
+        workspace_id,
+        plan,
+        audio_path,
+    )
+
+    assert rendered.clips[0].source_path == logical_clip_reference
+    assert rendered.narration_audio_path == logical_narration_reference
+
+
+def test_rendered_creation_task_montage_can_return_to_editing(tmp_path, monkeypatch):
+    workspace_id = "workspace_a"
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    production._save_asset(asset)
+    creation_plan = CreationPlan(
+        id="creation-plan-review",
+        workspace_id=workspace_id,
+        goal="检查成片后修改镜头",
+        name="成片修订",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=30,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=None,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=1,
+        material_rule_summary="只使用已审核镜头",
+        model_snapshot=[],
+        confirmation_points=["确认镜头"],
+        blockers=[],
+        preflight_fingerprint="f" * 64,
+    )
+    task = CreationTask(
+        id="task-review-edit",
+        workspace_id=workspace_id,
+        plan_id=creation_plan.id,
+        name=creation_plan.name,
+        scenario=creation_plan.goal,
+        stage="review",
+        stage_status="waiting_for_user",
+        status="waiting_for_user",
+        progress=90,
+        recovery_point="review",
+        output_ready=True,
+        stage_reason="render_failed",
+        stage_impact="未生成成片。",
+        stage_repair_action="修复后重试。",
+        stage_retryable=True,
+    )
+    production.confirm_creation_plan(creation_plan, task)
+    plan = CreationTaskMontagePlan(
+        id="task-montage-review",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        script_id="script-review",
+        script_title="成片修订",
+        status="rendered",
+        cues=[NarrationCue("cue-review", "section-review", "检查镜头", 4.0)],
+        clips=[
+            MontageClip(
+                id="clip-review",
+                cue_id="cue-review",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path=production.workspace_media_reference_for_asset(
+                    workspace_id, asset.id
+                ),
+                source_start_seconds=0,
+                source_end_seconds=4,
+                timeline_start_seconds=0,
+                timeline_end_seconds=4,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=False,
+            )
+        ],
+        duration_seconds=4,
+        low_confidence_clip_count=0,
+        narration_audio_path="narration://artifact/test-review",
+        output_path=str(tmp_path / "rendered.mp4"),
+        subtitle_path=str(tmp_path / "rendered.srt"),
+    )
+    production.save_creation_task_montage_plan(
+        workspace_id,
+        task.id,
+        plan.id,
+        creation_task_montage_plan_to_payload(plan),
+    )
+    rendered_task = production.get_creation_task(workspace_id, task.id)
+    assert rendered_task.stage_reason is None
+    assert rendered_task.stage_impact is None
+    assert rendered_task.stage_repair_action is None
+    assert rendered_task.stage_retryable is None
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+
+    subtitle_response = TestClient(main_module.app).patch(
+        f"/api/creation-tasks/{task.id}/montage/cues/{plan.cues[0].id}",
+        json={"text": "修改后的画面字幕"},
+    )
+
+    assert subtitle_response.status_code == 200
+    assert subtitle_response.json()["status"] == "ready"
+    assert subtitle_response.json()["cues"][0]["text"] == "修改后的画面字幕"
+    assert subtitle_response.json()["output_url"] is None
+
+    response = TestClient(main_module.app).patch(
+        f"/api/creation-tasks/{task.id}/montage/clips/{plan.clips[0].id}",
+        json={"source_start_seconds": 1.0},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["output_url"] is None
+    restored_task = production.get_creation_task(workspace_id, task.id)
+    assert restored_task.stage == "montage"
+    assert restored_task.stage_status == "waiting_for_user"
+    assert restored_task.output_ready is False
 
 
 def test_montage_review_api_supports_candidates_trim_lock_and_confirm(tmp_path, monkeypatch):

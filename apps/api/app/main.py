@@ -142,6 +142,7 @@ from app.schemas import (
     CreationTaskMontagePlanResponse,
     CreationTaskMontageClipUpdateRequest,
     CreationTaskMontageRenderRequest,
+    CreationTaskSubtitleCueUpdateRequest,
     CreationTaskWorkspaceResponse,
     CreationTasksResponse,
     CreatorProfileLearnResult,
@@ -3790,8 +3791,8 @@ def update_creation_task_montage_clip(
         clip = next(item for item in plan.clips if item.id == clip_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    if plan.status in {"rendering", "rendered"}:
-        raise HTTPException(status_code=409, detail="rendered montage cannot be edited")
+    if plan.status == "rendering":
+        raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
     asset_id = payload.asset_id or clip.asset_id
     segment_id = payload.segment_id or clip.segment_id
     try:
@@ -3849,6 +3850,42 @@ def update_creation_task_montage_clip(
                 item.timeline_end_seconds = round(timeline_cursor + duration, 3)
                 timeline_cursor += duration
     _refresh_montage_review_state(plan)
+    production_repo.save_creation_task_montage_plan(
+        workspace_id,
+        task_id,
+        plan.id,
+        creation_task_montage_plan_to_payload(plan),
+    )
+    return _creation_task_montage_response(plan)
+
+
+@app.patch(
+    "/api/creation-tasks/{task_id}/montage/cues/{cue_id}",
+    response_model=CreationTaskMontagePlanResponse,
+)
+def update_creation_task_subtitle_cue(
+    task_id: str,
+    cue_id: str,
+    request: Request,
+    payload: CreationTaskSubtitleCueUpdateRequest,
+) -> CreationTaskMontagePlanResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        )
+        cue = next(item for item in plan.cues if item.id == cue_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="creation task subtitle cue not found") from exc
+    if plan.status == "rendering":
+        raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="subtitle text cannot be empty")
+    cue.text = text
+    _refresh_montage_review_state(plan)
+    plan.message = "字幕已修改，可以重新渲染带字幕成片。"
     production_repo.save_creation_task_montage_plan(
         workspace_id,
         task_id,
@@ -4539,6 +4576,7 @@ def _render_montage_with_resolved_clip_sources(
     narration_audio_path: Path,
 ):
     original_references = [clip.source_path for clip in plan.clips]
+    original_narration_reference = plan.narration_audio_path
     try:
         for clip in plan.clips:
             resolved_source_path = production_repo.resolve_clip_media_reference(
@@ -4557,6 +4595,7 @@ def _render_montage_with_resolved_clip_sources(
     finally:
         for clip, reference in zip(plan.clips, original_references, strict=True):
             clip.source_path = reference
+        plan.narration_audio_path = original_narration_reference
 
 
 @app.post(

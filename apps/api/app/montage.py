@@ -5,12 +5,15 @@ import math
 import re
 import sqlite3
 import subprocess
+from tempfile import TemporaryDirectory
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
+
+from PIL import Image, ImageDraw, ImageFont
 
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
@@ -619,7 +622,22 @@ class MontageRenderer:
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)
         try:
-            self.runner(self.build_command(plan, narration_path, output_path))
+            with TemporaryDirectory(
+                prefix=".subtitle-overlays-",
+                dir=output_path.parent,
+            ) as overlay_dir:
+                subtitle_overlays = _write_subtitle_overlays(
+                    plan,
+                    Path(overlay_dir),
+                )
+                self.runner(
+                    self.build_command(
+                        plan,
+                        narration_path,
+                        output_path,
+                        subtitle_overlays,
+                    )
+                )
             _validate_rendered_media(output_path)
         except subprocess.CalledProcessError as exc:
             render_error = _render_error_from_process(exc)
@@ -633,7 +651,7 @@ class MontageRenderer:
         plan.status = "rendered"
         plan.output_path = str(output_path)
         plan.subtitle_path = str(subtitle_path)
-        plan.message = "9:16 初版成片和 SRT 字幕已生成，等待检查。"
+        plan.message = "带中文字幕的 9:16 初版成片和独立 SRT 已生成，等待检查。"
         return plan
 
     def build_command(
@@ -641,6 +659,7 @@ class MontageRenderer:
         plan: MontagePlan | CreationTaskMontagePlan,
         audio_path: Path,
         output_path: Path,
+        subtitle_overlays: list[Path],
     ) -> list[str]:
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
@@ -663,8 +682,21 @@ class MontageRenderer:
         command.extend(["-i", str(audio_path)])
         output_label = "[v0]"
         if len(labels) > 1:
-            output_label = "[vout]"
-            filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vout]")
+            output_label = "[vbase]"
+            filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
+        for overlay_path in subtitle_overlays:
+            command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
+        for index, (clip, _overlay_path) in enumerate(
+            zip(plan.clips, subtitle_overlays, strict=True)
+        ):
+            overlay_input = audio_index + 1 + index
+            next_label = f"[vsub{index}]"
+            filters.append(
+                f"{output_label}[{overlay_input}:v]overlay=0:0:"
+                f"enable='between(t,{clip.timeline_start_seconds:.3f},"
+                f"{clip.timeline_end_seconds:.3f})'{next_label}"
+            )
+            output_label = next_label
         command.extend(
             [
                 "-filter_complex",
@@ -919,11 +951,104 @@ def _plan_to_srt(plan: MontagePlan | CreationTaskMontagePlan) -> str:
             [
                 str(index),
                 f"{_srt_time(clip.timeline_start_seconds)} --> {_srt_time(clip.timeline_end_seconds)}",
-                cue.text,
+                "\n".join(_wrap_subtitle_text(cue.text, max_chars=24)),
                 "",
             ]
         )
     return "\n".join(lines)
+
+
+def _write_subtitle_overlays(
+    plan: MontagePlan | CreationTaskMontagePlan,
+    output_dir: Path,
+) -> list[Path]:
+    cue_by_id = {cue.id: cue for cue in plan.cues}
+    overlays: list[Path] = []
+    for index, clip in enumerate(plan.clips, start=1):
+        cue = cue_by_id[clip.cue_id]
+        overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        font, lines = _subtitle_font_and_lines(cue.text)
+        stroke_width = 3
+        spacing = 10
+        line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
+        line_heights = [box[3] - box[1] for box in line_boxes]
+        block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
+        widest = max(box[2] - box[0] for box in line_boxes)
+        left = (1080 - widest) / 2 - 26
+        top = 1920 - 250 - block_height - 20
+        right = (1080 + widest) / 2 + 26
+        bottom = top + block_height + 40
+        draw.rounded_rectangle(
+            (left, top, right, bottom),
+            radius=18,
+            fill=(0, 0, 0, 158),
+        )
+        cursor_y = top + 20
+        for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
+            line_width = box[2] - box[0]
+            draw.text(
+                ((1080 - line_width) / 2, cursor_y),
+                line,
+                font=font,
+                fill=(255, 255, 255, 255),
+                stroke_width=stroke_width,
+                stroke_fill=(0, 0, 0, 230),
+            )
+            cursor_y += line_height + spacing
+        path = output_dir / f"subtitle-{index:03}.png"
+        overlay.save(path)
+        overlays.append(path)
+    return overlays
+
+
+def _subtitle_font_and_lines(
+    text: str,
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
+    for size in range(58, 41, -2):
+        font = _subtitle_font(size)
+        lines = _wrap_subtitle_text(text, max_chars=max(12, 880 // size))
+        if len(lines) <= 2:
+            return font, lines
+    return _subtitle_font(40), _wrap_subtitle_text(text, max_chars=24)
+
+
+def _subtitle_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for candidate in (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+    ):
+        if Path(candidate).is_file():
+            return ImageFont.truetype(candidate, size=size)
+    return ImageFont.load_default()
+
+
+def _wrap_subtitle_text(text: str, *, max_chars: int) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    if not normalized:
+        return [""]
+    lines: list[str] = []
+    remaining = normalized
+    while remaining:
+        if len(remaining) <= max_chars:
+            lines.append(remaining)
+            break
+        split_at = max(
+            remaining.rfind("，", 0, max_chars + 1),
+            remaining.rfind("。", 0, max_chars + 1),
+            remaining.rfind("？", 0, max_chars + 1),
+            remaining.rfind("！", 0, max_chars + 1),
+            remaining.rfind(" ", 0, max_chars + 1),
+        )
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        else:
+            split_at += 1
+        lines.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    return lines
 
 
 def _srt_time(seconds: float) -> str:

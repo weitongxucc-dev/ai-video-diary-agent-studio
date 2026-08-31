@@ -82,6 +82,24 @@ def _person_payload(
     }
 
 
+def test_person_profile_allows_empty_optional_capabilities(
+    client: TestClient,
+) -> None:
+    payload = _person_payload()
+    payload["background_capabilities"] = []
+    payload["shot_capabilities"] = []
+
+    saved = client.post("/api/media/person-profiles", json=payload)
+
+    assert saved.status_code == 200
+    assert saved.json()["background_capabilities"] == []
+    assert saved.json()["shot_capabilities"] == []
+    listed = client.get("/api/media/person-profiles")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["background_capabilities"] == []
+    assert listed.json()["items"][0]["shot_capabilities"] == []
+
+
 def test_source_run_history_persists_after_failure_and_is_workspace_scoped(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

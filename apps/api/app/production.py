@@ -2898,9 +2898,20 @@ class ProductionRepository:
             task = self._creation_task_from_payload(json.loads(str(row["payload"])))
             if task.plan_id != run.plan_id or task.selected_topic_id != run.topic_id:
                 raise ValueError("文案运行与已确认选题不一致")
-            if task.stage != "script" or task.stage_status not in {"not_started", "failed"}:
+            duration_repair = (
+                task.stage == "narration"
+                and task.stage_status == "failed"
+                and task.stage_reason == "narration_generation_failed"
+                and "压缩并重新确认文案" in (task.stage_repair_action or "")
+            )
+            if not duration_repair and (
+                task.stage != "script"
+                or task.stage_status not in {"not_started", "failed"}
+            ):
                 raise ValueError("当前创作任务不允许再次开始生成文案")
             now = utc_now()
+            if duration_repair:
+                task.stage = "script"
             task.stage_status = "running"
             task.status = "running"
             task.stage_reason = None
@@ -3176,9 +3187,21 @@ class ProductionRepository:
                 raise KeyError(script_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
             script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
-            if task.confirmed_script_id == script_id and script.selection_status == "confirmed":
+            confirmed_script_repair = (
+                task.confirmed_script_id == script_id
+                and script.selection_status == "confirmed"
+                and task.stage == "script"
+                and task.stage_status == "failed"
+            )
+            if (
+                task.confirmed_script_id == script_id
+                and script.selection_status == "confirmed"
+                and not confirmed_script_repair
+            ):
                 return task, script
-            if task.stage != "script" or task.stage_status != "waiting_for_user":
+            if not confirmed_script_repair and (
+                task.stage != "script" or task.stage_status != "waiting_for_user"
+            ):
                 raise ValueError("当前创作任务不在等待确认文案状态")
             allowed_references = {
                 reference_id
@@ -3408,6 +3431,12 @@ class ProductionRepository:
                 (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
             )
             task.montage_plan_id = plan_id
+            task.output_ready = status == "rendered"
+            if status != "failed":
+                task.stage_reason = None
+                task.stage_impact = None
+                task.stage_repair_action = None
+                task.stage_retryable = None
             if status == "rendering":
                 task.stage = "montage"
                 task.stage_status = "running"
@@ -3432,7 +3461,7 @@ class ProductionRepository:
                 task.stage = "montage"
                 task.stage_status = "waiting_for_user"
                 task.status = "waiting_for_user"
-                task.progress = max(task.progress, 70 if status == "waiting_for_user" else 75)
+                task.progress = 70 if status == "waiting_for_user" else 75
             task.updated_at = now
             conn.execute(
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
@@ -3982,8 +4011,10 @@ class ProductionRepository:
             display_name=_required_text(data, "display_name"),
             version=_required_text(data, "version"),
             avatar_reference=_required_text(data, "avatar_reference"),
-            background_capabilities=_string_tuple(data, "background_capabilities"),
-            shot_capabilities=_string_tuple(data, "shot_capabilities"),
+            background_capabilities=_optional_string_tuple(
+                data, "background_capabilities"
+            ),
+            shot_capabilities=_optional_string_tuple(data, "shot_capabilities"),
             authorization=authorization,
         )
 
@@ -4325,6 +4356,15 @@ def _required_text(data: dict[str, object], key: str) -> str:
 def _string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
     value = data.get(key)
     if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+        raise ValueError(f"持久化媒体对象的 {key} 无效")
+    return tuple(value)
+
+
+def _optional_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
         raise ValueError(f"持久化媒体对象的 {key} 无效")
     return tuple(value)
 

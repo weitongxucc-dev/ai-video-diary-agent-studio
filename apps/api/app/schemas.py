@@ -982,6 +982,12 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     confirmed: bool | None = None
 
 
+class CreationTaskSubtitleCueUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=48)
+
+
 class CreationPlanPreviewResponse(BaseModel):
     goal: str
     name: str

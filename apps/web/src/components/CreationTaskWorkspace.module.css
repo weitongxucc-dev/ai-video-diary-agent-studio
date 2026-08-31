@@ -67,7 +67,7 @@
   display: grid;
   width: 100%;
   min-width: 760px;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -181,6 +181,9 @@
 
 .sectionHeading { margin-bottom: 20px; }
 .sectionHeading > button { min-width: max-content; }
+.reviewActions { display: flex; align-items: center; gap: 8px; }
+.secondaryButton { min-height: 36px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 7px 12px; cursor: pointer; }
+.secondaryButton:hover:not(:disabled) { background: var(--surface-2); }
 
 .topicList,
 .scriptSections,
@@ -310,6 +313,20 @@
 .storyboard strong { font-weight: 500; }
 .storyboard p { margin: 4px 0; }
 .storyboard small { color: var(--text-3); }
+.subtitleEditor { display: grid; gap: 5px; margin: 8px 0; color: var(--text-2); font-size: 12px; }
+.subtitleEditor textarea {
+  width: 100%;
+  min-height: 56px;
+  resize: vertical;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  padding: 8px 10px;
+  font: inherit;
+  line-height: 1.5;
+}
+.subtitleEditor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .trimControl { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
 .trimControl input { width: 92px; min-height: 34px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 5px 8px; font: inherit; }
 .replacement { display: grid; gap: 5px; margin-top: 10px; color: var(--text-2); font-size: 12px; }

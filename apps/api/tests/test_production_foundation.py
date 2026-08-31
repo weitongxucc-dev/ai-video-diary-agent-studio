@@ -28,6 +28,7 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
+    ScriptGenerationRun,
     VersionedVoiceProfile,
     VoiceProfile,
 )
@@ -1036,6 +1037,55 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     )
     assert saved_task.stage == "narration"
     assert saved_script.sections[0].content.endswith("这句话由用户确认。")
+
+    reloaded.start_creation_task_narration("workspace_a", task_id)
+    reloaded.fail_creation_task_stage(
+        "workspace_a",
+        task_id,
+        stage="narration",
+        reason="narration_generation_failed",
+        impact="未生成配音。",
+        repair_action="文案预计时长超过创作方案上限，请先压缩并重新确认文案",
+        retryable=True,
+    )
+    repair_run = ScriptGenerationRun(
+        id="script-run-repair",
+        workspace_id="workspace_a",
+        task_id=task_id,
+        plan_id=saved_task.plan_id,
+        topic_id=saved_task.selected_topic_id,
+        status="running",
+        route_snapshot={},
+        prompt_schema_version="creation-task-script/v1",
+        input_references=[],
+    )
+    reloaded.start_script_generation(repair_run)
+    reloaded.fail_script_generation(
+        repair_run.id,
+        reason="文字模型服务拒绝了文案请求。",
+        impact="未生成压缩后的文案。",
+        repair_action="检查模型服务后重试，或手动修订并重新确认文案。",
+        retryable=False,
+        provider_attempted=True,
+    )
+    repaired_task, repaired_script = reloaded.confirm_creation_task_script(
+        "workspace_a",
+        task_id,
+        saved_script.id,
+        title="用户压缩后的文案",
+        sections=[
+            replace(
+                section,
+                content="用户在文案失败状态中压缩正文，并重新确认。",
+            )
+            for section in saved_script.sections
+        ],
+    )
+    assert repaired_task.stage == "narration"
+    assert repaired_task.stage_status == "not_started"
+    assert repaired_task.stage_reason is None
+    assert repaired_script.title == "用户压缩后的文案"
+    assert repaired_script.sections[0].content == "用户在文案失败状态中压缩正文，并重新确认。"
     with reloaded._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM production_batches").fetchone()[0] == 0
 
@@ -1139,6 +1189,72 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
     )
     assert reloaded.get_creation_task(workspace_id, task.id).confirmed_script_id == "script-confirmed"
     assert reloaded.get_creation_plan(workspace_id, plan.id).selected_voice.profile_id == voice.id
+
+
+def test_creation_task_can_regenerate_script_after_duration_preflight_failure(
+    tmp_path,
+):
+    production = _repository(tmp_path)
+    workspace_id = "workspace_a"
+    plan = CreationPlan(
+        id="plan-duration-repair",
+        workspace_id=workspace_id,
+        goal="制作一条三十秒中文口播",
+        name="文案压缩恢复",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=30,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=None,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=1,
+        material_rule_summary="只使用已审核镜头",
+        model_snapshot=[],
+        confirmation_points=["确认文案"],
+        blockers=[],
+        preflight_fingerprint="f" * 64,
+    )
+    task = CreationTask(
+        id="task-duration-repair",
+        workspace_id=workspace_id,
+        plan_id=plan.id,
+        name=plan.name,
+        scenario=plan.goal,
+        stage="narration",
+        stage_status="failed",
+        status="failed",
+        progress=40,
+        recovery_point="narration",
+        selected_topic_id="topic-confirmed",
+        confirmed_script_id="script-too-long",
+        stage_reason="narration_generation_failed",
+        stage_impact="未生成配音。",
+        stage_repair_action="文案预计时长超过创作方案上限，请先压缩并重新确认文案",
+        stage_retryable=True,
+    )
+    production.confirm_creation_plan(plan, task)
+    run = ScriptGenerationRun(
+        id="script-run-duration-repair",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        plan_id=plan.id,
+        topic_id="topic-confirmed",
+        status="running",
+        route_snapshot={},
+        prompt_schema_version="creation-task-script/v1",
+        input_references=[],
+    )
+
+    resumed, _ = production.start_script_generation(run)
+
+    assert resumed.stage == "script"
+    assert resumed.stage_status == "running"
+    assert resumed.status == "running"
+    assert resumed.confirmed_script_id == "script-too-long"
+    assert resumed.stage_reason is None
 
 
 def test_creation_task_topic_failure_records_capability_license_and_provider_errors(

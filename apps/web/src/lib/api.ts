@@ -488,6 +488,17 @@ export function updateCreationTaskMontageClip(
   );
 }
 
+export function updateCreationTaskSubtitleCue(
+  taskId: string,
+  cueId: string,
+  input: { text: string },
+): Promise<CreationTaskMontage> {
+  return creationPlanRequest<CreationTaskMontage>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/cues/${encodeURIComponent(cueId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
 export function getCreationTaskMontageClipCandidates(
   taskId: string,
   clipId: string,

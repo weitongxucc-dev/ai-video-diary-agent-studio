@@ -17,10 +17,12 @@ const mocks = vi.hoisted(() => {
   }
   return {
     MockCreationPlanApiError,
+    confirmScript: vi.fn(),
     generateNarration: vi.fn(),
     getWorkspace: vi.fn(),
     selectVoice: vi.fn(),
     updateClip: vi.fn(),
+    updateSubtitle: vi.fn(),
   };
 });
 
@@ -33,7 +35,7 @@ vi.mock("@/components/AppShell", () => ({
 vi.mock("@/lib/api", () => ({
   apiUrl: (path: string) => path,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
-  confirmCreationTaskScript: vi.fn(),
+  confirmCreationTaskScript: mocks.confirmScript,
   confirmCreationTaskTopic: vi.fn(),
   createCreationTaskMontagePlan: vi.fn(),
   generateCreationTaskNarration: mocks.generateNarration,
@@ -45,6 +47,7 @@ vi.mock("@/lib/api", () => ({
   renderCreationTaskMontage: vi.fn(),
   selectCreationTaskNarrationVoice: mocks.selectVoice,
   updateCreationTaskMontageClip: mocks.updateClip,
+  updateCreationTaskSubtitleCue: mocks.updateSubtitle,
 }));
 
 const baseTask: CreationTask = {
@@ -147,6 +150,44 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/不需要重做选题或文案/)).toBeInTheDocument();
   });
 
+  it("lets the user revise and reconfirm the persisted script after regeneration fails", async () => {
+    const failedTask = {
+      ...baseTask,
+      stage: "script" as const,
+      stage_reason: "文字模型服务拒绝了文案请求。",
+      stage_impact: "未生成压缩后的文案。",
+      stage_repair_action: "手动修订并重新确认文案。",
+    };
+    const initial = workspace(failedTask);
+    initial.scripts = [{
+      id: "script-1", task_id: failedTask.id, run_id: "run-2", topic_id: "topic-1", title: "原文案",
+      language: "zh-CN", selection_status: "confirmed", created_at: failedTask.created_at,
+      updated_at: failedTask.updated_at, confirmed_at: failedTask.updated_at,
+      sections: [{ id: "section-1", title: "正文", content: "原来的正文过长。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+    }];
+    const repaired = workspace({
+      ...failedTask,
+      stage: "narration" as const,
+      stage_status: "not_started" as const,
+      status: "running" as const,
+      stage_reason: null,
+      stage_impact: null,
+      stage_repair_action: null,
+    });
+    repaired.scripts = initial.scripts;
+    mocks.confirmScript.mockResolvedValue(repaired);
+    mocks.getWorkspace.mockResolvedValue(repaired);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByRole("heading", { name: "压缩并重新确认文案" })).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue("原来的正文过长。"), { target: { value: "压缩后的三十秒正文。" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认修订文案" }));
+
+    await waitFor(() => expect(mocks.confirmScript).toHaveBeenCalledWith("task-1", "script-1", expect.objectContaining({
+      sections: [expect.objectContaining({ content: "压缩后的三十秒正文。" })],
+    })));
+  });
+
   it("explicitly binds a later authorized voice before enabling generation", async () => {
     const initial = workspace(baseTask);
     initial.available_voices = [{
@@ -186,14 +227,17 @@ describe("CreationTaskWorkspace", () => {
     Object.defineProperty(window, "electronAPI", { configurable: true, value: { saveRenderedVideo } });
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(screen.getByTitle("人物与口型：未接入")).toBeInTheDocument();
-    expect(screen.getByTitle("字幕与封面：字幕已生成")).toBeInTheDocument();
-    expect(screen.getByTitle("检查与发布：检查成片")).toHaveAttribute("aria-current", "step");
+    expect(screen.queryByText("人物与口型")).not.toBeInTheDocument();
+    expect(screen.queryByText("字幕与封面")).not.toBeInTheDocument();
+    expect(screen.queryByText("数据监控")).not.toBeInTheDocument();
+    expect(screen.getByTitle("检查成片：当前")).toHaveAttribute("aria-current", "step");
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
     expect(saveRenderedVideo).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("status")).toHaveTextContent("成片.mp4");
+    fireEvent.click(screen.getByRole("button", { name: "修改镜头与字幕" }));
+    expect(screen.getByRole("heading", { name: "检查镜头、字幕和裁剪" })).toBeInTheDocument();
   });
 
   it("persists a reviewed clip trim through the CreationTask montage API", async () => {
@@ -209,6 +253,7 @@ describe("CreationTaskWorkspace", () => {
     };
     const initial = workspace(task, montage);
     mocks.updateClip.mockResolvedValue(montage);
+    mocks.updateSubtitle.mockResolvedValue(montage);
     mocks.getWorkspace.mockResolvedValue(initial);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
@@ -216,5 +261,10 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.blur(screen.getByLabelText("镜头 1 裁剪起点"));
 
     await waitFor(() => expect(mocks.updateClip).toHaveBeenCalledWith("task-1", "clip-1", { source_start_seconds: 1.5 }));
+
+    fireEvent.change(screen.getByLabelText("镜头 1 字幕"), { target: { value: "修改后的字幕" } });
+    fireEvent.blur(screen.getByLabelText("镜头 1 字幕"));
+
+    await waitFor(() => expect(mocks.updateSubtitle).toHaveBeenCalledWith("task-1", "cue-1", { text: "修改后的字幕" }));
   });
 });
