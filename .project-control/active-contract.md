@@ -2,8 +2,8 @@
 
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
-迁移状态：`REAL_TARGET_VERIFIED / ABSENCE_VERIFIED`（全新任务的选题已真实生成并确认；文案调用暴露证据引用协议缺陷，修复后候选待重建，保持 HOLD）
-实现基线：`codex/recovery-local-video-v01@8f97ee0`；文案证据别名修复在当前工作树，尚未形成新候选；上一打包 build identity `342b65e0bd9789485bf8c9ee3efe5af856a577d7f5e7a6f380d0477ea44a1d97`
+迁移状态：`END_TO_END_ACCEPTED / ABSENCE_VERIFIED / INDEPENDENT_QA_HOLD`（同一候选的本地真成片闭环已通过；独立质量线程未能出具最终结论，因此尚不标记 `MIGRATION_ACCEPTED`）
+实现基线：`codex/recovery-local-video-v01@e8b2b17`；打包 build identity `f5540b40827cdc5af0d6a9d68ce91bebccdcdc0f234a9cba2829218ea19548c4`；DMG SHA-256 `6d1ffcc35cf4117c4c5aabdbf0037b2ff8be9c27bc3c18ab9ef5f90fe7c32185`
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
 本文件是短期执行合同，不是产品或领域权威。范围、事实源或验收改变时直接替换本文件；达到 `MIGRATION_ACCEPTED`、任务取消或转入外部 Issue/PR 后删除，不归档旧副本。
@@ -65,7 +65,8 @@
 | 用户动作 | 当前证据等级 | 状态与行为 |
 | --- | --- | --- |
 | 创建任务、选题、确认文案 | `PERSISTED_EFFECT_CONFIRMED`（既有验证任务） | 可继续使用，但最终验收必须在同一候选重跑 |
-| 最终 App 全新任务冷启动 | `REAL_INTERACTION_CONFIRMED / HOLD` | 已从首页创建 `task_f2b0470c0ee2`，预检确认 2 条资料、6 个已审核素材、7 个可用片段、Chinese-CLIP 与 Qwen3-TTS 就绪。余额恢复后 DeepSeek 真实生成 3 个选题并确认 `本地AI视频创作如何守护你的隐私？`；随后文案调用返回 502，持久化原因是模型改写了长证据引用 ID，服务端按授权门禁拒绝并且没有保存无效文案。修复采用服务端短别名到权威引用 ID 的闭合映射，未知别名仍拒绝；待新候选重建后只重试文案阶段 |
+| 文案失败与恢复 | `FAILURE_PERSISTED / RECOVERY_CONFIRMED` | `task_f2b0470c0ee2` 暴露模型改写长证据引用 ID 的 502；服务端拒绝且未保存无效文案。修复改为服务端短别名到权威引用 ID 的闭合映射，未知别名仍拒绝；同一任务随后从文案恢复点完成配音、剪辑、成片、保存和重启 |
+| 最终 App 全新任务冷启动 | `REAL_INTERACTION_CONFIRMED / END_TO_END_ACCEPTED` | 固定候选 `e8b2b17 / f5540b…` 从首页创建 `task_fa6751ee08c7`，真实预检后恰好产生 1 条成功选题运行和 1 条成功文案运行，均使用 `deepseek-v4-flash`；用户确认后以 `cc / v1` 和 Qwen3-TTS 生成 20.4 秒 WAV，确认 2 个低置信镜头，生成 4 镜头故事板、独立 SRT 与烧录字幕的 MP4。任务停在 `review / waiting_for_user`，退出重启后任务、文案、配音、故事板和播放器全部恢复 |
 | 回看选题和文案、全局搜索、阶段导航 | `REAL_INTERACTION_CONFIRMED@66fad77` | 1024/1180/1440 已验证，不代表成片完成 |
 | Qwen3-TTS 中文声音克隆 | `REAL_OUTPUT_CONFIRMED` | 已使用用户授权的 `cc` 人物/声音版本生成约 20.16 秒有效 WAV；未使用系统声音、静音或伪造回退 |
 | 配音阶段补选声音并原地恢复 | `PERSISTED_EFFECT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已在同一 CreationTask 绑定授权声音并原地继续，没有重做已确认文案 |
@@ -74,8 +75,8 @@
 | 旧 Web 入口与可见名称 | `ABSENCE_VERIFIED` | `/topics`、`/script`、`/draft` 在真实浏览器均为 404；`/production` 仅保留 CreationTask 创建和列表，任务页无 Episode/Batch 可见名称 |
 | 旧 API 写事实源 | `RUNTIME_CALL_CONFIRMED / ABSENCE_VERIFIED` | 当前 API 对旧写命名空间统一返回 410，CreationTask 仍返回 200；旧仓储 writer、隐式 GET 写回和 Episode 自动循环已移除 |
 | 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 355 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
-| 打包客户端 | `REAL_TARGET_VERIFIED` | 最终候选 `342b65…` 的 Foundation 与 CreationTask 返回 200，旧 Episode 写请求返回 410；任务页播放器真实加载 1080×1920、20.233 秒 H.264/AAC MP4，画面可见烧录字幕，独立 SRT 返回 200。发现桌面用户配置仍指向旧输出目录后，已通过既有运行设置接口将模型、素材和输出目录重新绑定到当前移动硬盘；重启后配置、任务和成片保持一致。原生保存和退出清理均通过。DMG SHA-256 为 `8928341e44c1b0109943df295f8327cbe7e55a8dc372ae1c775ec0b8de8ee8b0`。主 Mach-O 只有 linker ad-hoc 标记，完整 App bundle 的 `codesign --verify --deep --strict` 不通过；因此仅允许本机功能测试，Release 明确 `NOT ACCEPTED`，未签名、公证或分发 |
-| 独立质量复核 | `HOLD` | 独立线程确认 Git/branch、DMG 与导出 MP4 哈希、arm64 和 build identity 精确匹配，并发现完整 App bundle 签名不可验证；该线程随后未能在限定时间内给出一次性最终结论，已按停止规则中断。其结果不能当作质量 ACCEPT，也不触发新的产品修改 |
+| 打包客户端 | `REAL_TARGET_VERIFIED` | 最终候选运行时自报 build identity `f5540b…`，API/Web 均 `ready`，CreationTask 返回 200、旧 Episode POST 返回 410。播放器真实加载 1080×1920、20.533 秒 H.264/AAC MP4；WAV 为 24kHz PCM、20.4 秒；SRT 有 4 条字幕，抽帧可见烧录字幕。原生保存导出 `/Users/Zhuanz/Movies/task_fa6751ee08c7.mp4`，与源成片 SHA-256 同为 `2d510a800f8b992505e4b4c288ee399e43497db0383ae1a5718f62aafe466b84`。1024×768、1180×800、1440×900 无横向溢出且保存按钮可达；原生退出后子进程和端口清理，重启后全部恢复。完整 App bundle 仍未签名，因此只允许本机小范围体验，Release 明确 `NOT ACCEPTED` |
+| 独立质量复核 | `HOLD` | 唯一独立质量线程在固定候选验收中再次超过限定时间，未给出一次性 ACCEPT/REJECT，已按停止规则中断。主线程证据不能替代独立结论；不再启动质量循环，也不因此修改已通过的产品链路 |
 
 ## 7. 阻断、停止和授权
 
