@@ -3,7 +3,7 @@
 状态：`ACTIVE`  
 合同版本：`LOCAL-VIDEO-V01-2026-08-30-V1`  
 迁移状态：`VERTICAL_SLICE_IMPLEMENTED`
-实现基线：`codex/recovery-local-video-v01@dcd453a`；该状态仍不代表桌面端或迁移验收通过
+实现基线：`codex/recovery-local-video-v01@d4c9146`；该状态仍不代表打包客户端或迁移验收通过
 纵向迁移负责人：主 Agent；任何技术层线程只能提交证据，不能单独宣布完成。
 
 本文件是短期执行合同，不是产品或领域权威。范围、事实源或验收改变时直接替换本文件；达到 `MIGRATION_ACCEPTED`、任务取消或转入外部 Issue/PR 后删除，不归档旧副本。
@@ -51,12 +51,12 @@
 
 | 旧目标 | 当前消费者 | 替代路径 | 删除条件 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| `/topics`、`/script`、`/draft` | 对应 App Router 页面、`app/actions.ts`、旧链接和认证测试假设 | `/tasks/{taskId}` 内的选题、文案、剪辑与成片阶段 | 新纵向闭环在同一候选真实通过 | `ACTIVE` |
-| `/api/episodes/*` 创作写接口与 `EpisodeRepository` 新写入 | 选题、文案、配音、视频、草稿、发布旧流程 | CreationTask 接口与 `ProductionRepository` | 新链路无 Episode 写入；旧写接口无活动消费者 | `ACTIVE` |
-| `/api/drafts/package`、`/api/drafts/import` | 旧 Draft 页面、API 客户端、Server Actions 和测试 | CreationTask montage/render/output 与原生保存 | MP4/SRT 真实生成和保存通过 | `ACTIVE` |
-| `/api/production/batches*` 及 Episode 驱动剪辑入口 | `/production`、`ProductionTaskControls`、旧 montage API | 单个 CreationTask 的剪辑计划和渲染 | 新剪辑与恢复从 CreationTask 完成 | `ACTIVE` |
-| `repo.today()` 与旧自动 Episode 循环 | onboarding、draft status、automation 和旧 API | 显式 workspace + CreationTask/AutomationRun | 没有默认/最近/今日 fallback | `ACTIVE` |
-| 旧快捷键、帮助入口、用户名称、死 CSS 和保护旧产品行为的测试 | 活动 Web 与测试代码中的剩余命中 | 当前 AppShell、DESIGN 和 CreationTask 工作台 | 剩余命中逐项分类，活动消费者归零 | `COEXISTING` |
+| `/topics`、`/script`、`/draft` | 对应 App Router 页面、`app/actions.ts`、旧链接和认证测试假设 | `/tasks/{taskId}` 内的选题、文案、剪辑与成片阶段 | 新纵向闭环在同一候选真实通过 | `RETIRED` |
+| `/api/episodes/*` 创作写接口与 `EpisodeRepository` 新写入 | 选题、文案、配音、视频、草稿、发布旧流程 | CreationTask 接口与 `ProductionRepository` | 新链路无 Episode 写入；旧写接口无活动消费者 | `RETIRED` |
+| `/api/drafts/package`、`/api/drafts/import` | 旧 Draft 页面、API 客户端、Server Actions 和测试 | CreationTask montage/render/output 与原生保存 | MP4/SRT 真实生成和保存通过 | `RETIRED` |
+| `/api/production/batches*` 及 Episode 驱动剪辑入口 | `/production`、`ProductionTaskControls`、旧 montage API | 单个 CreationTask 的剪辑计划和渲染 | 新剪辑与恢复从 CreationTask 完成 | `RETIRED` |
+| `repo.today()` 与旧自动 Episode 循环 | onboarding、draft status、automation 和旧 API | 显式 workspace + CreationTask；本轮不启用自动任务 | 没有默认/最近/今日 fallback | `RETIRED` |
+| 旧快捷键、帮助入口、用户名称、死 CSS 和保护旧产品行为的测试 | 活动 Web 与测试代码中的剩余命中 | 当前 AppShell、DESIGN 和 CreationTask 工作台 | 剩余命中逐项分类，活动消费者归零 | `RETIRED` |
 
 允许共存仅用于读取既有历史数据或尚未迁移的非本合同功能；不得产生新的 Episode/Batch 业务写入。共存到期条件是第 4 节正向验收通过，之后必须进入删除和不存在证明。
 
@@ -69,7 +69,10 @@
 | Qwen3-TTS 中文声音克隆 | `REAL_OUTPUT_CONFIRMED` | 已使用用户授权的 `cc` 人物/声音版本生成约 20.16 秒有效 WAV；未使用系统声音、静音或伪造回退 |
 | 配音阶段补选声音并原地恢复 | `PERSISTED_EFFECT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已在同一 CreationTask 绑定授权声音并原地继续，没有重做已确认文案 |
 | 故事板、FFmpeg MP4/SRT | `REAL_OUTPUT_CONFIRMED / REAL_INTERACTION_CONFIRMED` | 已生成 6 个镜头的可编辑故事板、独立 SRT 与烧录中文字幕的 1080×1920 H.264/AAC MP4；ffprobe 证明时长约 20.23 秒且音视频流有效 |
-| Electron 原生保存 | `STATIC_WIRING_CONFIRMED` | 组件测试存在，真实客户端保存仍待验证 |
+| Electron 原生保存 | `REAL_INTERACTION_CONFIRMED / REAL_OUTPUT_CONFIRMED` | 开发态 Electron 已真实取消一次并恢复，随后通过原生保存框导出与 API 成片逐字节一致的 MP4；打包候选仍待同一 SHA 复核 |
+| 旧 Web 入口与可见名称 | `ABSENCE_VERIFIED` | `/topics`、`/script`、`/draft` 在真实浏览器均为 404；`/production` 仅保留 CreationTask 创建和列表，任务页无 Episode/Batch 可见名称 |
+| 旧 API 写事实源 | `RUNTIME_CALL_CONFIRMED / ABSENCE_VERIFIED` | 当前 API 对旧写命名空间统一返回 410，CreationTask 仍返回 200；旧仓储 writer、隐式 GET 写回和 Episode 自动循环已移除 |
+| 当前回归门禁 | `STATIC_WIRING_CONFIRMED` | API 全量 353 项、Web 全量 175 项、TypeScript、ESLint（0 error）与 Desktop lifecycle smoke 通过；1024×768、1180×800、1440×900 无横向溢出或不可达主操作 |
 
 ## 7. 阻断、停止和授权
 
