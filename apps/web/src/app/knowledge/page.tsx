@@ -1,110 +1,65 @@
+"use client";
+
+import { AlertCircle, FileText, Link2, LoaderCircle, RefreshCw, Video } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { MetricCard } from "@/components/MetricCard";
-import { PixelIcon } from "@/components/PixelIcon";
-import { getKnowledgeNotes, getSystemStatus } from "@/lib/api.server";
-import type { KnowledgeNote, SystemStatus } from "@/lib/types";
+import { KnowledgeItem, listKnowledgeItems, sourceErrorMessage } from "@/lib/source-api";
 
-export const dynamic = "force-dynamic";
+function itemIcon(type: string) {
+  if (type === "video") return <Video size={16} />;
+  if (type === "link") return <Link2 size={16} />;
+  return <FileText size={16} />;
+}
 
-type KnowledgePageProps = {
-  searchParams?: Promise<{ q?: string }>;
-};
+function itemType(type: string) {
+  if (["text", "video", "file", "link"].includes(type)) return ({ text: "文字", video: "视频", file: "文件", link: "链接" } as Record<string, string>)[type];
+  return type || "未分类";
+}
 
-async function loadKnowledge(query?: string): Promise<{
-  notes: KnowledgeNote[];
-  status: SystemStatus | null;
-  offline: boolean;
-}> {
-  try {
-    const [notes, status] = await Promise.all([
-      getKnowledgeNotes(query),
-      getSystemStatus(),
-    ]);
-    return { notes, status, offline: false };
-  } catch {
-    return { notes: [], status: null, offline: true };
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+export default function KnowledgePage() {
+  const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const selected = items.find((item) => item.id === selectedId) ?? null;
+
+  async function refresh() {
+    setLoading(true); setError(null);
+    try {
+      const response = await listKnowledgeItems();
+      setItems(response.items);
+      if (!selectedId && response.items[0]) setSelectedId(response.items[0].id);
+    } catch (cause) {
+      setItems([]); setError(sourceErrorMessage(cause));
+    } finally { setLoading(false); }
   }
-}
 
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-    timeZone: "Asia/Shanghai",
-  }).format(new Date(value));
-}
-
-export default async function KnowledgePage({ searchParams }: KnowledgePageProps) {
-  const params = await searchParams;
-  const query = params?.q?.trim();
-  const { notes, status, offline } = await loadKnowledge(query);
+  useEffect(() => { void refresh(); }, []);
+  const visibleItems = useMemo(() => items.filter((item) => {
+    const matchesKind = kind === "all" || item.content_type === kind;
+    const searchable = `${item.title} ${item.body ?? ""} ${item.file_reference ?? ""}`.toLocaleLowerCase();
+    return matchesKind && searchable.includes(query.trim().toLocaleLowerCase());
+  }), [items, kind, query]);
 
   return (
-    <AppShell>
-      <div className="workspace-page">
-        <section className="workspace-main pixel-card">
-          <div className="workspace-header">
-            <div>
-              <span className="section-kicker">知识库</span>
-              <h1>Obsidian 本地索引</h1>
-              <p>
-                {offline
-                  ? "暂时无法连接本地 API。"
-                  : `当前索引 ${status?.obsidian.markdown_count ?? notes.length} 篇 Markdown。`}
-              </p>
-            </div>
-            <Link className="pixel-button secondary" href="/">
-              返回工作台
-            </Link>
-          </div>
-
-          <form className="workspace-search" action="/knowledge">
-            <input name="q" placeholder="搜索标题、路径、摘要" defaultValue={query ?? ""} />
-            <button className="pixel-button" type="submit">
-              搜索
-            </button>
-          </form>
-
-          <div className="workspace-list">
-            {notes.length > 0 ? (
-              notes.map((note) => (
-                <article className="workspace-row" key={note.ref}>
-                  <PixelIcon name="doc" />
-                  <div>
-                    <strong>{note.title}</strong>
-                    <span>{note.ref} · {formatDate(note.modified_at)}</span>
-                    {note.tags.length > 0 ? (
-                      <span>标签：{note.tags.join(" / ")}</span>
-                    ) : null}
-                    {note.wikilinks.length > 0 ? (
-                      <span>双链：{note.wikilinks.slice(0, 4).join(" / ")}</span>
-                    ) : null}
-                    <p>{note.excerpt || "这篇笔记暂无正文摘要。"}</p>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <div className="workspace-empty">
-                <PixelIcon name="folder" />
-                <strong>{offline ? "API 未连接" : "没有匹配笔记"}</strong>
-                <p>{status?.obsidian.path ?? "请在设置里检查 Obsidian 路径。"}</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="workspace-side">
-          <MetricCard icon="folder" value={String(status?.obsidian.markdown_count ?? 0)} label="Markdown" tone="blue" />
-          <MetricCard icon="check" value={status?.obsidian.exists ? "正常" : "异常"} label="Vault 状态" tone="green" />
-          <div className="pixel-card side-note">
-            <h2>路径</h2>
-            <code>{status?.obsidian.path ?? "--"}</code>
-          </div>
-        </aside>
+    <AppShell inspector={selected ? <KnowledgeInspector item={selected} /> : undefined} inspectorTitle="知识内容详情">
+      <div className="knowledge-workspace">
+        <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><span aria-current="page">知识库</span><Link href="/sources">信息源</Link></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh()} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
+        {error ? <section className="source-error" role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>本地服务恢复、登录或授权完成后再刷新；不会把空结果当作知识库内容。</p></div></section> : null}
+        <section className="knowledge-toolbar"><label><span>搜索</span><input onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文或文件引用" value={query} /></label><div role="group" aria-label="内容类型">{[["all", "全部"], ["text", "文字"], ["video", "视频"], ["file", "文件"], ["link", "链接"]].map(([value, label]) => <button className={kind === value ? "is-active" : ""} key={value} onClick={() => setKind(value)} type="button">{label}</button>)}</div></section>
+        <section className="knowledge-items"><header><h2>已保存内容</h2><small>{visibleItems.length} 条</small></header>{loading ? <p className="source-panel__state"><LoaderCircle className="is-spinning" size={16} />正在读取本地知识库…</p> : visibleItems.length ? <div className="knowledge-item-list">{visibleItems.map((item) => <button className={`knowledge-item${selectedId === item.id ? " is-selected" : ""}`} key={item.id} onClick={() => setSelectedId(item.id)} type="button"><span className="knowledge-item__icon">{itemIcon(item.content_type)}</span><div><strong>{item.title}</strong><p>{item.body || item.file_reference || "没有可预览的正文。"}</p><small>{itemType(item.content_type)} · {item.source_item_id ? "来自信息源" : "我的内容"} · 版本 {item.version}</small></div><time>{formatTime(item.created_at)}</time></button>)}</div> : <div className="knowledge-empty"><FileText size={22} /><div><strong>{error ? "无法读取知识库" : "知识库还没有内容"}</strong><p>{error ? "检查本地服务、登录状态或工作区权限。" : "在“信息源”添加文字、链接、视频或文件引用，再确认保存。"}</p></div></div>}</section>
       </div>
     </AppShell>
   );
+}
+
+function KnowledgeInspector({ item }: { item: KnowledgeItem }) {
+  return <div className="source-inspector"><span className="source-inspector__status">{itemType(item.content_type)}</span><h3>{item.title}</h3><dl><div><dt>内容来源</dt><dd>{item.source_item_id ? "从信息源确认保存" : "用户已有内容"}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权/使用范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{item.version}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div></dl><section><h4>内容摘要</h4><p>{item.body || "没有正文摘要；请通过文件引用查看原始内容。"}</p></section></div>;
 }

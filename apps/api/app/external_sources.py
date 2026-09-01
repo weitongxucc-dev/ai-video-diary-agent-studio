@@ -6,11 +6,26 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.sources import TopicSourceItem
+from app.sources import SourceBoundaryError, TopicSourceItem, source_error_from_http_status
 
 
-class ExternalSourceResponseError(RuntimeError):
-    pass
+class ExternalSourceResponseError(SourceBoundaryError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "temporary_failure",
+        impact: str | None = None,
+        repair_action: str | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(
+            kind,
+            message,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        )
 
 
 class HtmlPageSourceClient:
@@ -35,8 +50,22 @@ class HtmlPageSourceClient:
                 try:
                     response = client.get(url)
                     response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    semantic = source_error_from_http_status(
+                        exc.response.status_code, f"external source {url}"
+                    )
+                    raise ExternalSourceResponseError(
+                        str(semantic),
+                        kind=semantic.kind,
+                        impact=semantic.impact,
+                        repair_action=semantic.repair_action,
+                        retryable=semantic.retryable,
+                    ) from exc
                 except httpx.HTTPError as exc:
-                    raise ExternalSourceResponseError(f"external source failed: {url}") from exc
+                    raise ExternalSourceResponseError(
+                        f"external source failed: {url}",
+                        repair_action="Check the source URL and network connection, then retry.",
+                    ) from exc
                 items.append(self._item_from_html(url, response.text))
         return items
 
@@ -48,6 +77,7 @@ class HtmlPageSourceClient:
             title=title,
             ref=url,
             excerpt=excerpt,
+            source_url=url,
         )
 
     def _source_type(self, url: str) -> str:

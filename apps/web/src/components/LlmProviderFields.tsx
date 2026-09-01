@@ -86,9 +86,9 @@ export function LlmProviderFields({
   return (
     <div className="llm-settings-stack">
       <label className="settings-field wide">
-        <span>模型供应商</span>
+          <span>模型服务</span>
         <select
-          aria-label="模型供应商"
+          aria-label="模型服务"
           name="llm_provider"
           onChange={(event) => selectProvider(event.target.value)}
           value={provider}
@@ -100,7 +100,7 @@ export function LlmProviderFields({
           ))}
         </select>
         <small className="settings-field-helper">
-          供应商决定默认连接地址；模型仍可自由填写，不会锁定在预设列表中。
+          模型服务决定默认连接地址；模型仍可自由填写，不会锁定在预设列表中。
         </small>
       </label>
 
@@ -125,7 +125,7 @@ export function LlmProviderFields({
           placeholder={
             apiKeyConfigured
               ? "已配置 · 留空不修改"
-              : "粘贴供应商提供的 API Key"
+              : "粘贴模型服务提供的 API Key"
           }
           type="password"
         />
@@ -141,7 +141,7 @@ export function LlmProviderFields({
           list="llm-model-presets"
           name="llm_model"
           onChange={(event) => setModel(event.target.value)}
-          placeholder="输入供应商模型 ID"
+          placeholder="输入模型标识"
           required
           value={model}
         />

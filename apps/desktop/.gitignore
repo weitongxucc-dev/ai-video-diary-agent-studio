@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist-*/
 build-api/
+build-worker/
+build-identity.generated.json
 *.dmg
 *.zip

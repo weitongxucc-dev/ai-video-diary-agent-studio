@@ -84,23 +84,8 @@ jobs:
           cd apps/api
           uv sync --locked --group dev --python 3.11.15
 
-      - name: Build web application
-        run: |
-          node apps/desktop/scripts/write-distribution-config.js
-          pnpm --dir apps/web build
-          node apps/desktop/scripts/bundle-standalone.js
-
-      - name: Build native API and worker
-        working-directory: apps/api
-        run: |
-          .venv/bin/pyinstaller pyinstaller.spec \
-            --distpath ../desktop/dist \
-            --workpath ../desktop/build-api \
-            --clean --noconfirm
-          .venv/bin/pyinstaller worker.spec \
-            --distpath ../desktop/dist \
-            --workpath ../desktop/build-worker \
-            --clean --noconfirm
+      - name: Build desktop services
+        run: pnpm --dir apps/desktop build:services
 
       - name: Verify native service architecture
         shell: bash

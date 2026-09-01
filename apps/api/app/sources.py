@@ -1,9 +1,171 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from app.source_repository import SourceRepository
+
+
+@dataclass(frozen=True)
+class SourceConnector:
+    id: str
+    workspace_id: str
+    platform: str
+    protocol: str
+    account_or_rule: str
+    frequency: str
+    permissions: tuple[str, ...]
+    cursor: str | None = None
+    connection_status: str = "configured"
+    latest_run_id: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class SourceItem:
+    id: str
+    workspace_id: str
+    connector_id: str
+    source_label: str
+    source_url: str | None
+    content_type: str
+    author: str | None
+    published_at: datetime | None
+    body: str | None
+    subtitles: str | None
+    media_references: tuple[str, ...]
+    license: str
+    title: str
+    file_reference: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class KnowledgeItem:
+    id: str
+    workspace_id: str
+    content_type: str
+    title: str
+    body: str | None
+    file_reference: str | None
+    authorization: str
+    ownership: str
+    source_item_id: str | None
+    version: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class SourceRunEvidence:
+    id: str
+    workspace_id: str
+    connector_id: str
+    status: str
+    started_at: datetime
+    finished_at: datetime
+    cursor_before: str | None
+    cursor_after: str | None
+    item_count: int
+    reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    retryable: bool | None = None
+
+
+class SourceBoundaryError(RuntimeError):
+    """A platform boundary failure with a UI/API-safe, actionable semantic."""
+
+    def __init__(
+        self,
+        kind: str,
+        message: str,
+        *,
+        impact: str | None = None,
+        repair_action: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.impact = impact or "No new items were imported; existing items are unchanged."
+        self.repair_action = repair_action or "Review the source configuration before retrying."
+        self.retryable = retryable
+
+
+class SourceSyncFailedError(RuntimeError):
+    def __init__(self, run: SourceRunEvidence) -> None:
+        super().__init__(run.reason or "source sync failed")
+        self.run = run
+
+
+def source_error_from_http_status(status_code: int, source_name: str) -> SourceBoundaryError:
+    if status_code == 401:
+        return SourceBoundaryError(
+            "authentication_required", f"{source_name} requires login or a valid token",
+            repair_action="Sign in again or update the source credential.", retryable=False,
+        )
+    if status_code == 403:
+        return SourceBoundaryError(
+            "access_denied", f"{source_name} denied access for the configured account or rule",
+            repair_action="Confirm the account has permission for this source.", retryable=False,
+        )
+    if status_code == 429:
+        return SourceBoundaryError(
+            "rate_limited", f"{source_name} rate limit was reached",
+            repair_action="Wait for the platform limit window, then retry.", retryable=True,
+        )
+    return SourceBoundaryError(
+        "temporary_failure", f"{source_name} request failed with HTTP {status_code}",
+        repair_action="Check the source service and retry.", retryable=True,
+    )
+
+
+def sync_source_connector(
+    repository: SourceRepository,
+    workspace_id: str,
+    connector_id: str,
+    fetch: Callable[[str | None], tuple[list[SourceItem], str | None]],
+) -> SourceRunEvidence:
+    """Persist an import attempt and force callers to observe failures."""
+    connector = repository.get_connector(workspace_id, connector_id)
+    try:
+        items, cursor_after = fetch(connector.cursor)
+        return repository.record_sync_success(
+            workspace_id, connector_id, items, cursor_after
+        )
+    except SourceBoundaryError as exc:
+        run = repository.record_sync_failure(
+            workspace_id,
+            connector_id,
+            reason=str(exc),
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=exc.retryable,
+            connection_status=exc.kind,
+        )
+        raise SourceSyncFailedError(run) from exc
+    except Exception as exc:
+        boundary_error = SourceBoundaryError(
+            "temporary_failure",
+            f"{connector.platform} sync failed: {exc}",
+            repair_action="Check the connector configuration and retry.",
+            retryable=True,
+        )
+        run = repository.record_sync_failure(
+            workspace_id,
+            connector_id,
+            reason=str(boundary_error),
+            impact=boundary_error.impact,
+            repair_action=boundary_error.repair_action,
+            retryable=boundary_error.retryable,
+            connection_status=boundary_error.kind,
+        )
+        raise SourceSyncFailedError(run) from exc
 
 
 @dataclass(frozen=True)
@@ -12,6 +174,28 @@ class TopicSourceItem:
     title: str
     ref: str
     excerpt: str
+    source_url: str | None = None
+    author: str | None = None
+    published_at: datetime | None = None
+    license: str = "unknown"
+    media_references: tuple[str, ...] = ()
+
+    def to_source_item(self, workspace_id: str, connector_id: str) -> SourceItem:
+        return SourceItem(
+            id=f"src_{uuid4().hex}",
+            workspace_id=workspace_id,
+            connector_id=connector_id,
+            source_label=self.source_type,
+            source_url=self.source_url or self.ref,
+            content_type="article",
+            author=self.author,
+            published_at=self.published_at,
+            body=self.excerpt,
+            subtitles=None,
+            media_references=self.media_references,
+            license=self.license,
+            title=self.title,
+        )
 
 
 @dataclass(frozen=True)

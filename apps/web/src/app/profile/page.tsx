@@ -209,15 +209,15 @@ export default function ProfilePage() {
         <header className="page-header">
           <h1>创作者画像</h1>
         </header>
-        <div className="pixel-form-error" role="alert">
-          <span aria-hidden="true" className="pixel-form-error-light" />
-          <div className="pixel-form-error-body">
+        <div className="ui-form-error" role="alert">
+          <span aria-hidden="true" className="ui-form-error-light" />
+          <div className="ui-form-error-body">
             <strong>加载失败</strong>
             <span>{error ?? "未知错误"}</span>
           </div>
           <button
             aria-label="重试"
-            className="pixel-form-error-close"
+            className="ui-form-error-close"
             onClick={loadProfile}
             type="button"
           >

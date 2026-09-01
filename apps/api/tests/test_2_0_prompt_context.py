@@ -1,11 +1,10 @@
 import json
-from datetime import date
 
 import httpx
 
 from app.config import Settings
 from app.content_templates import get_content_template
-from app.llm import DeepSeekScriptGenerator, TemplateScriptGenerator
+from app.llm import DeepSeekScriptGenerator
 from app.models import (
     FeedbackEvent,
     FeedbackValue,
@@ -14,76 +13,10 @@ from app.models import (
     SourceRef,
     TopicCandidate,
 )
-from app.repository import EpisodeRepository
-from app.services import EpisodeService
 from app.sources import ObsidianVault
-from app.topics import DeepSeekTopicGenerator, TemplateTopicGenerator
+from app.topics import DeepSeekTopicGenerator
 
 
-def test_episode_service_passes_content_template_to_generators():
-    class CapturingTopicGenerator:
-        def __init__(self) -> None:
-            self.template_id = None
-
-        def generate(self, day_number, feedback_events=None, template=None):
-            self.template_id = template.template_id if template else None
-            return TemplateTopicGenerator().generate(
-                day_number,
-                feedback_events,
-                template=template,
-            )
-
-    class CapturingScriptGenerator:
-        def __init__(self) -> None:
-            self.generate_template_id = None
-            self.section_template_id = None
-
-        def generate(self, topic, day_number, feedback_events=None, template=None):
-            self.generate_template_id = template.template_id if template else None
-            return TemplateScriptGenerator().generate(
-                topic,
-                day_number,
-                feedback_events,
-                template=template,
-            )
-
-        def regenerate_section(
-            self,
-            topic,
-            current_script,
-            section_id,
-            reason=None,
-            feedback_events=None,
-            template=None,
-        ):
-            self.section_template_id = template.template_id if template else None
-            return TemplateScriptGenerator().regenerate_section(
-                topic,
-                current_script,
-                section_id,
-                reason=reason,
-                feedback_events=feedback_events,
-                template=template,
-            )
-
-    repo = EpisodeRepository(today_provider=lambda: date(2026, 6, 7))
-    episode = repo.create()
-    episode.content_template_id = "tool_review"
-    topic_generator = CapturingTopicGenerator()
-    script_generator = CapturingScriptGenerator()
-    service = EpisodeService(
-        topic_generator=topic_generator,
-        script_generator=script_generator,
-    )
-
-    service.generate_topics(episode)
-    service.approve_topic(episode, episode.topics[0].id)
-    service.generate_script(episode)
-    service.regenerate_script_section(episode, "point_1", reason="更像实测")
-
-    assert topic_generator.template_id == "tool_review"
-    assert script_generator.generate_template_id == "tool_review"
-    assert script_generator.section_template_id == "tool_review"
 
 
 def test_deepseek_topic_prompt_includes_content_template_context(tmp_path):

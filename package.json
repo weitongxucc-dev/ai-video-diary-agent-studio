@@ -10,10 +10,8 @@
     "test:design-system": "node apps/web/scripts/modern-desktop-contract-check.mjs",
     "test:pixel-style": "pnpm run test:design-system",
     "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
-    "dev:worker": "cd apps/api && uv run python -m app.automation",
     "test:api": "cd apps/api && uv run pytest",
     "test:web": "corepack pnpm --dir apps/web test",
-    "test:phase-a-browser": "node apps/web/scripts/run-phase-a-browser-check.mjs",
     "test": "pnpm run test:web-contract && pnpm run test:design-system && pnpm run test:web"
   }
 }

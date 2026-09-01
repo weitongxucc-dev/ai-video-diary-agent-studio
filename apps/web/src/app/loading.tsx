@@ -12,7 +12,7 @@ export default function HomeLoading() {
       <LoadingShell label="正在加载今日工作台...">
         <div className="workbench-grid">
           <div className="workbench-main">
-            <section className="episode-progress pixel-card">
+            <section className="episode-progress ui-panel">
               <div className="episode-progress-flow">
                 {Array.from({ length: 9 }).map((_, index) => (
                   <div className="progress-step" key={`step-${index}`}>
@@ -27,7 +27,7 @@ export default function HomeLoading() {
               </div>
             </section>
 
-            <section className="task-banner pixel-card">
+            <section className="task-banner ui-panel">
               <div className="task-terminal">
                 <Skeleton height={26} width="55%" />
                 <Skeleton height={14} width="80%" />
@@ -56,7 +56,7 @@ export default function HomeLoading() {
 
             <MetricSkeletonRow count={4} />
 
-            <section className="current-topic pixel-card">
+            <section className="current-topic ui-panel">
               <div className="current-topic-main">
                 <div>
                   <Skeleton height={12} width={92} />

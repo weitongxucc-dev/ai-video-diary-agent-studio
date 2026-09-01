@@ -149,6 +149,29 @@ def test_runtime_settings_response_includes_bgm_path_when_configured(tmp_path, m
     assert bgm_entry["secret"] is False
 
 
+def test_local_web_origins_can_call_the_api_but_remote_origins_cannot():
+    client = TestClient(main_module.app, client=("127.0.0.1", 50000))
+    headers = {
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type",
+    }
+
+    for origin in ("http://localhost:4179", "http://127.0.0.1:4179"):
+        response = client.options(
+            "/api/creation-tasks/example/edits/preview",
+            headers={**headers, "Origin": origin},
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
+
+    response = client.options(
+        "/api/creation-tasks/example/edits/preview",
+        headers={**headers, "Origin": "https://example.com"},
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
 def test_runtime_settings_response_includes_bgm_path_when_unconfigured(tmp_path, monkeypatch):
     from app.config import Settings
 

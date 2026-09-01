@@ -129,7 +129,7 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
       <div className="onboarding-checklist-actions">
         <button
           aria-busy={isPending || refresh.kind === "loading"}
-          className="pixel-button"
+          className="ui-button"
           disabled={isPending || refresh.kind === "loading"}
           onClick={handleRefresh}
           type="button"
@@ -155,7 +155,7 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
           </span>
         ) : null}
         <span className="onboarding-checklist-hint">
-          secret 字段仅展示「已配置 / 未配置」状态，不会回显值。
+          密钥只显示是否已配置，不会显示原文。
         </span>
       </div>
 
@@ -184,7 +184,7 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
                     <strong>{entry.title}</strong>
                     {entry.isSecret ? (
                       <span className="onboarding-entry-secret" title="仅显示状态，不展示值">
-                        secret
+                        敏感信息
                       </span>
                     ) : null}
                   </div>
@@ -199,12 +199,12 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
                     {entry.statusLabel}
                   </span>
                   {entry.fixHref.startsWith("/") ? (
-                    <a className="pixel-button secondary" href={entry.fixHref}>
+                    <a className="ui-button secondary" href={entry.fixHref}>
                       {entry.fixLabel}
                     </a>
                   ) : (
                     <a
-                      className="pixel-button secondary"
+                      className="ui-button secondary"
                       href={entry.fixHref}
                       rel="noreferrer"
                       target="_blank"

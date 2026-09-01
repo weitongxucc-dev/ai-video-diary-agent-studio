@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
-from app.sources import TopicSourceItem
+from app.sources import SourceBoundaryError, TopicSourceItem, source_error_from_http_status
 
 
 @dataclass(frozen=True)
@@ -17,12 +17,32 @@ class ProductHuntPost:
     votes_count: int
 
 
-class ProductHuntConfigurationError(RuntimeError):
-    pass
+class ProductHuntConfigurationError(SourceBoundaryError):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            "authentication_required",
+            message,
+            repair_action="Configure a valid Product Hunt token before syncing.",
+        )
 
 
-class ProductHuntResponseError(RuntimeError):
-    pass
+class ProductHuntResponseError(SourceBoundaryError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "temporary_failure",
+        impact: str | None = None,
+        repair_action: str | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(
+            kind,
+            message,
+            impact=impact,
+            repair_action=repair_action,
+            retryable=retryable,
+        )
 
 
 class ProductHuntClient:
@@ -55,11 +75,28 @@ class ProductHuntClient:
         }}
         """
         headers = {"Authorization": f"Bearer {self._settings.product_hunt_token}"}
-        with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
-            response = client.post(self._settings.product_hunt_api_url, json={"query": query}, headers=headers)
+        try:
+            with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
+                response = client.post(self._settings.product_hunt_api_url, json={"query": query}, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            semantic = source_error_from_http_status(
+                exc.response.status_code, "Product Hunt"
+            )
+            raise ProductHuntResponseError(
+                str(semantic),
+                kind=semantic.kind,
+                impact=semantic.impact,
+                repair_action=semantic.repair_action,
+                retryable=semantic.retryable,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProductHuntResponseError(
+                "Product Hunt request failed",
+                repair_action="Check the network and Product Hunt service, then retry.",
+            ) from exc
 
         try:
-            response.raise_for_status()
             edges = response.json()["data"]["posts"]["edges"]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise ProductHuntResponseError("Product Hunt did not return valid posts") from exc
@@ -85,6 +122,7 @@ class ProductHuntClient:
                 title=post.name,
                 ref=f"producthunt:{post.id}",
                 excerpt=f"{post.tagline}\nVotes: {post.votes_count}\nURL: {post.url}",
+                source_url=post.url,
             )
             for post in self.fetch_posts(limit=limit)
         ]

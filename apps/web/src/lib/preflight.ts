@@ -28,6 +28,7 @@ export type NormalizedSetupPreflightCheck = {
   impact: string;
   repairAction: string;
   settingsTarget: string | null;
+  required: boolean;
 };
 
 export type SetupPreflightCounts = {
@@ -54,14 +55,6 @@ const VALID_CHECK_STATUSES: ReadonlySet<string> = new Set([
   "degraded",
   "not_applicable",
 ]);
-
-const STATE_BY_STATUS: Record<SetupPreflightCheckStatus, SetupPreflightState> = {
-  ready: "ready",
-  degraded: "attention",
-  invalid: "blocked",
-  missing: "blocked",
-  not_applicable: "not_applicable",
-};
 
 function coerceString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -101,15 +94,24 @@ function parseGeneratedAt(value: unknown): {
 function normalizeCheck(raw: unknown): NormalizedSetupPreflightCheck {
   const item = (raw ?? {}) as Record<string, unknown>;
   const status = coerceCheckStatus(item.status);
+  // Missing metadata indicates an old or malformed server response. Keep the
+  // fail-safe behavior for that case instead of silently downgrading it.
+  const required = typeof item.required === "boolean" ? item.required : true;
+  let state: SetupPreflightState;
+  if (status === "ready") state = "ready";
+  else if (status === "not_applicable") state = "not_applicable";
+  else if (required && (status === "missing" || status === "invalid")) state = "blocked";
+  else state = "attention";
   return {
     id: coerceString(item.id),
     label: coerceString(item.label),
     status,
-    state: STATE_BY_STATUS[status],
+    state,
     summary: coerceString(item.summary),
     impact: coerceString(item.impact),
     repairAction: coerceString(item.repair_action),
     settingsTarget: coerceSettingsTarget(item.settings_target),
+    required,
   };
 }
 

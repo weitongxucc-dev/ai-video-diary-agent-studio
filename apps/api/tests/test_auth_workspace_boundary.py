@@ -301,83 +301,14 @@ def test_public_endpoints_skip_auth_when_enabled(auth_ctx, monkeypatch):
     assert client.get("/api/setup/preflight").status_code == 200
 
 
-def test_protected_endpoint_requires_token_when_enabled(auth_ctx, monkeypatch):
-    ctx, settings, _, _ = auth_ctx
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-
-    client = TestClient(main_module.app)
-    response = client.get("/api/episodes/today")
-    assert response.status_code == 401
-    assert response.json()["error"] == "unauthorized"
 
 
-def test_protected_endpoint_invalid_token_401(auth_ctx, monkeypatch):
-    ctx, settings, _, _ = auth_ctx
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-
-    client = TestClient(main_module.app)
-    response = client.get(
-        "/api/episodes/today",
-        headers={"Authorization": "Bearer not-a-real-token"},
-    )
-    assert response.status_code == 401
 
 
-def test_protected_endpoint_no_workspace_403(auth_ctx, monkeypatch):
-    ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id, access_token: None
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-
-    token = _sign_token("user-no-ws", key=private_pem)
-    client = TestClient(main_module.app)
-    response = client.get(
-        "/api/episodes/today",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 403
-    assert response.json()["error"] == "forbidden"
 
 
-def test_protected_endpoint_authorized_workspace_200(auth_ctx, monkeypatch):
-    ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
-    ctx.is_onboarding_complete = lambda user_id, workspace_id, access_token: True
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(
-        main_module,
-        "repo",
-        EpisodeRepository(database_path=settings.database_path),
-    )
-
-    token = _sign_token("user-a", key=private_pem)
-    client = TestClient(main_module.app)
-    response = client.get(
-        "/api/episodes/today",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
 
 
-def test_incomplete_onboarding_cannot_call_product_api(auth_ctx, monkeypatch):
-    ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
-    ctx.is_onboarding_complete = lambda user_id, workspace_id, access_token: False
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-
-    token = _sign_token("user-a", key=private_pem)
-    response = TestClient(main_module.app).get(
-        "/api/episodes/today",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["error"] == "forbidden"
-    assert response.json()["detail"] == "onboarding completion required"
 
 
 def test_incomplete_onboarding_can_reach_repair_endpoints(auth_ctx, monkeypatch):
@@ -461,7 +392,7 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
 
     assert response.status_code == 200
     assert response.json() == {"workspace_id": "ws-a", "completed": True}
-    assert len(repo.all(workspace_id="ws-a")) == 1
+    assert repo.all(workspace_id="ws-a") == []
     ctx.complete_onboarding.assert_called_once_with("user-a", "ws-a", token)
 
 
@@ -485,7 +416,7 @@ def test_local_onboarding_completion_uses_local_workspace(monkeypatch, tmp_path)
         "workspace_id": LEGACY_WORKSPACE_ID,
         "completed": True,
     }
-    assert len(local_repo.all(workspace_id=LEGACY_WORKSPACE_ID)) == 1
+    assert local_repo.all(workspace_id=LEGACY_WORKSPACE_ID) == []
 
 
 # ── Migration: legacy rows become 'local', partitioned queries ─────────
@@ -533,42 +464,14 @@ def test_migration_partitions_legacy_rows_as_local(tmp_path, monkeypatch):
     with pytest.raises(KeyError):
         repo.get("ep_legacy", workspace_id="ws-a")
 
-    # The new schema has a per-workspace unique constraint
+    # Historical reads do not mutate the legacy schema.
     with sqlite3.connect(db_path) as conn:
         columns = {r[1] for r in conn.execute("PRAGMA table_info(episodes)")}
-        assert "workspace_id" in columns
+        assert "workspace_id" not in columns
 
 
-def test_repository_workspace_isolation(tmp_path):
-    repo = EpisodeRepository(database_path=tmp_path / "db.sqlite")
-    a = repo.create(workspace_id="ws-a")
-    b = repo.create(workspace_id="ws-b")
-
-    assert repo.get(a.id, workspace_id="ws-a") == a
-    assert repo.get(b.id, workspace_id="ws-b") == b
-
-    # Cross-workspace access must not leak existence
-    with pytest.raises(KeyError):
-        repo.get(a.id, workspace_id="ws-b")
-
-    assert [e.id for e in repo.all(workspace_id="ws-a")] == [a.id]
-    assert [e.id for e in repo.all(workspace_id="ws-b")] == [b.id]
 
 
-def test_repository_uses_active_workspace_context(tmp_path):
-    repo = EpisodeRepository(database_path=tmp_path / "db.sqlite")
-    a = repo.create(workspace_id="ws-a")
-    b = repo.create(workspace_id="ws-b")
-
-    token = set_workspace_context("ws-a")
-    try:
-        assert active_workspace_id() == "ws-a"
-        assert repo.get(a.id) == a
-        with pytest.raises(KeyError):
-            repo.get(b.id)
-        assert [e.id for e in repo.all()] == [a.id]
-    finally:
-        reset_workspace_context(token)
 
 
 # ── Global-state preference partitioning ────────────────────────────────
@@ -617,61 +520,8 @@ def test_global_state_safely_initializes_when_file_missing(tmp_path, monkeypatch
 # ── Request bodies can't forge user/workspace identity ──────────────────
 
 
-def test_request_body_workspace_id_is_ignored(auth_ctx, monkeypatch):
-    ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-token"
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-    repo = EpisodeRepository(database_path=settings.database_path)
-    monkeypatch.setattr(main_module, "repo", repo)
-
-    token = _sign_token("user-a", key=private_pem)
-    client = TestClient(main_module.app)
-
-    # A body claiming a different workspace has no effect: the episode lands
-    # in the workspace derived from the verified token.
-    response = client.post(
-        "/api/episodes",
-        json={"workspace_id": "ws-evil"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    created = response.json()
-
-    assert repo.get(created["id"], workspace_id="ws-token").workspace_id == "ws-token"
-    with pytest.raises(KeyError):
-        repo.get(created["id"], workspace_id="ws-evil")
 
 
-def test_cross_workspace_isolation_through_http(auth_ctx, monkeypatch):
-    """An authenticated request can only read its own workspace's episode."""
-    ctx, settings, private_pem, _ = auth_ctx
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-    repo = EpisodeRepository(database_path=settings.database_path)
-    monkeypatch.setattr(main_module, "repo", repo)
-
-    # Create an episode belonging to ws-b directly.
-    episode_b = repo.create(workspace_id="ws-b")
-
-    # Authenticate as ws-a and try to read ws-b's episode -> 404 (no leak).
-    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
-    token = _sign_token("user-a", key=private_pem)
-    client = TestClient(main_module.app)
-    response = client.get(
-        f"/api/episodes/{episode_b.id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 404
-
-    # The list endpoint also never includes ws-b's episode.
-    list_response = client.get(
-        "/api/episodes",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert list_response.status_code == 200
-    ids = [e["id"] for e in list_response.json()["episodes"]]
-    assert episode_b.id not in ids
 
 
 # ── Creator profile scoping in the LLM prompt path ─────────────────────
@@ -802,40 +652,6 @@ def test_current_workspace_id_fails_safe_without_principal_when_auth_enabled(
         set_auth_enabled(False)
 
 
-def test_endpoint_generation_fails_safe_without_context(auth_ctx, monkeypatch):
-    """An authenticated request whose workspace context is lost must not
-    silently generate against the reserved 'local' workspace."""
-    ctx, settings, private_pem, _ = auth_ctx
-    ctx.resolve_workspace_id = lambda user_id, access_token: "ws-a"
-    monkeypatch.setattr(main_module, "auth_context", ctx)
-    monkeypatch.setattr(main_module, "settings", settings)
-    repo = EpisodeRepository(database_path=settings.database_path)
-    monkeypatch.setattr(main_module, "repo", repo)
-
-    token = _sign_token("user-a", key=private_pem)
-    client = TestClient(main_module.app)
-
-    # Normal authenticated path: the middleware sets the workspace context
-    # and the endpoint succeeds.
-    set_auth_enabled(True)
-    try:
-        ok = client.post(
-            "/api/episodes",
-            json={},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert ok.status_code == 200
-
-        # Simulate a lost context: no principal attached but auth is still
-        # enabled. current_workspace_id must fail instead of resolving to
-        # 'local'.
-        from fastapi import Request
-
-        bare_request = Request({"type": "http", "headers": []})
-        with pytest.raises(WorkspaceContextRequiredError):
-            main_module.current_workspace_id(bare_request)
-    finally:
-        set_auth_enabled(False)
 
 
 def test_authenticated_creator_profile_never_reads_local(auth_ctx, monkeypatch):

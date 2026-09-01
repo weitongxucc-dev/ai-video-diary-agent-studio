@@ -16,6 +16,7 @@ function makeCheck(
     impact: "AI 选题、脚本生成、语音指令草案均依赖此服务。",
     repair_action: "无需处理。",
     settings_target: "deepseek_api_key",
+    required: false,
     ...overrides,
   };
 }
@@ -58,7 +59,7 @@ describe("normalizeSetupPreflight", () => {
         overall: "blocked",
         checks: [
           makeCheck({ id: "deepseek", status: "missing" }),
-          makeCheck({ id: "ffmpeg", label: "ffmpeg", status: "missing", settings_target: null }),
+          makeCheck({ id: "ffmpeg", label: "ffmpeg", status: "missing", settings_target: null, required: true }),
           makeCheck({ id: "python", label: "Python 运行时", status: "ready", settings_target: null }),
         ],
       }),
@@ -68,7 +69,8 @@ describe("normalizeSetupPreflight", () => {
     expect(snapshot.ready).toBe(false);
     expect(snapshot.counts.total).toBe(3);
     expect(snapshot.counts.ready).toBe(1);
-    expect(snapshot.counts.blocked).toBe(2);
+    expect(snapshot.counts.attention).toBe(1);
+    expect(snapshot.counts.blocked).toBe(1);
   });
 
   it("maps degraded/invalid/not_applicable statuses to the UI state vocabulary", () => {
@@ -77,7 +79,7 @@ describe("normalizeSetupPreflight", () => {
         overall: "blocked",
         checks: [
           makeCheck({ id: "obsidian", status: "degraded" }),
-          makeCheck({ id: "video_inbox", status: "invalid" }),
+          makeCheck({ id: "video_inbox", status: "invalid", required: true }),
           makeCheck({ id: "jianying", status: "not_applicable" }),
           makeCheck({ id: "python", label: "Python 运行时", status: "ready", settings_target: null }),
         ],

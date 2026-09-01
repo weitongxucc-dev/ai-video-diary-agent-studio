@@ -11,7 +11,7 @@ export default function LearningLoading() {
     <AppShell>
       <LoadingShell label="正在汇总偏好记忆...">
         <div className="workspace-page">
-          <section className="workspace-main pixel-card">
+          <section className="workspace-main ui-panel">
             <div className="workspace-header">
               <div>
                 <Skeleton height={12} width={92} />

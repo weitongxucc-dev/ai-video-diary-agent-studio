@@ -20,6 +20,8 @@ apps/desktop/.desktop-bin/
 supabase/.temp/
 .playwright-cli/
 output/
+/build/
+/build-identity.generated.json
 *.sqlite
 *.sqlite3
 *.db

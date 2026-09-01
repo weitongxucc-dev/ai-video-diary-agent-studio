@@ -1,12 +1,8 @@
 "use client";
 
+import { CircleHelp, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import { PixelIcon, type PixelIconName } from "@/components/PixelIcon";
 import {
   closeHelpPanel,
   isHelpPanelOpen,
@@ -14,528 +10,140 @@ import {
   toggleHelpPanel,
 } from "@/lib/helpPanel";
 
-type HelpItem = {
-  title: string;
-  description: string;
-  hint?: string;
-};
-
 type HelpContent = {
   title: string;
-  icon: PixelIconName;
   intro: string;
-  items: HelpItem[];
-  shortcuts: { keys: string[]; label: string }[];
+  steps: string[];
 };
 
-const HELP_BY_PATH: { match: (path: string) => boolean; content: HelpContent }[] = [
+const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpContent }> = [
   {
     match: (path) => path === "/" || path === "",
     content: {
-      title: "今日工作台",
-      icon: "desk",
-      intro: "今天的总览 + 选题复核入口",
-      items: [
-        {
-          title: "今日 Episode",
-          description: "查看当前 Episode 的所有状态机和今天的进度",
-        },
-        {
-          title: "今日队列",
-          description: "4 步流程：复核选题 → 生成口播稿 → 视频处理 → 写入反馈",
-        },
-        {
-          title: "Agent 面板",
-          description: "模型服务 / Hermes / Obsidian 实时状态",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回到工作台" },
-        { keys: ["Ctrl", "2"], label: "口播稿" },
-        { keys: ["Ctrl", "3"], label: "视频处理" },
-      ],
+      title: "从一个制作目标开始",
+      intro: "首页只负责检查条件并创建任务，不会在你确认前直接运行模型。",
+      steps: ["写下想制作的内容", "检查资料、素材、声音和模型", "确认方案后进入创作任务"],
     },
   },
   {
-    match: (path) => path.startsWith("/topics"),
+    match: (path) => path.startsWith("/library"),
     content: {
-      title: "选题池",
-      icon: "note",
-      intro: "从素材生成、复核、打分到选中一个今日选题",
-      items: [
-        {
-          title: "生成 / 重新生成",
-          description: "点击按钮让 Agent 读取 Obsidian + 外链素材生成 3-5 个候选",
-        },
-        {
-          title: "证据",
-          description: "每个候选都标注来源类型、来源新鲜度（fresh/aging/stale）",
-        },
-        {
-          title: "反馈",
-          description: "赞/踩会进入下次 prompt 上下文并影响偏好记忆",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["?"], label: "应用帮助" },
-      ],
+      title: "管理可进入成片的素材",
+      intro: "素材必须经过用途、版权和品牌安全审核，才能被任务自动选用。",
+      steps: ["扫描素材目录或搜索文件", "在右侧预览识别片段", "批准用途、排除素材或补充自己的标签"],
     },
   },
   {
-    match: (path) => path.startsWith("/script"),
+    match: (path) => path.startsWith("/knowledge") || path.startsWith("/sources"),
     content: {
-      title: "口播稿",
-      icon: "script",
-      intro: "编辑、保存、重新生成整篇/段落、确认通过",
-      items: [
-        {
-          title: "钩子 + 段落",
-          description: "开头 3 秒 + 多段落结构，每段落独立标题/秒数/正文",
-          hint: "至少 1 个标题候选 + 钩子和段落必填",
-        },
-        {
-          title: "段落反馈",
-          description: "赞/踩单段时不会影响整篇，方便精修",
-        },
-        {
-          title: "版本历史",
-          description: "支持恢复任意旧版本，便于回滚",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "2"], label: "本页" },
-        { keys: ["Ctrl", "3"], label: "视频处理" },
-      ],
+      title: "区分已有内容与外部信息",
+      intro: "知识库保存你已经拥有的内容；信息源负责从外部获取候选内容。",
+      steps: ["在知识库搜索或添加已有内容", "在信息源配置连接和获取规则", "确认授权后再保存到知识库或素材库"],
     },
   },
   {
-    match: (path) => path.startsWith("/video"),
+    match: (path) => path.startsWith("/profiles"),
     content: {
-      title: "视频处理",
-      icon: "video",
-      intro: "扫描本地视频 → 预处理 → 拼接合并 → 准备剪辑",
-      items: [
-        {
-          title: "4 种生产模式",
-          description: "单条精剪 / 多段拼剪 / 临时单条 / 临时多段",
-        },
-        {
-          title: "源文件状态",
-          description: "pending / processing / processed / archived / skipped",
-        },
-        {
-          title: "重录报告",
-          description: "自动检测并剪掉重复口播，置信度高时自动剪",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "3"], label: "本页" },
-        { keys: ["Ctrl", "4"], label: "剪辑计划" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/edit-plan"),
-    content: {
-      title: "剪辑计划",
-      icon: "clip",
-      intro: "可视化剪辑时间轴 + 段落决策 + 剪映导入确认",
-      items: [
-        {
-          title: "决策三类",
-          description: "keep（保留）/ cut_silence（剪静音）/ remove_retake（去重录）",
-        },
-        {
-          title: "人工复核",
-          description: "对 AI 自动判定不确定的片段手动 keep/cut/review",
-        },
-        {
-          title: "确认后",
-          description: "生成完整素材包，自动导入剪映草稿箱",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "4"], label: "本页" },
-        { keys: ["Ctrl", "5"], label: "剪映草稿" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/draft"),
-    content: {
-      title: "剪映草稿",
-      icon: "clip",
-      intro: "草稿素材包管理 + 发布面板",
-      items: [
-        {
-          title: "已生成 / 已导入",
-          description: "显示所有素材包，区分已自动导入剪映与待导入",
-        },
-        {
-          title: "发布面板",
-          description: "Episode 草稿就绪后填 URL + 数据 → 标记已发布",
-          hint: "支持更新初始数据，二次提交仅更新数据不修改 URL/时间",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "5"], label: "本页" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/learning"),
-    content: {
-      title: "反馈学习",
-      icon: "spark",
-      intro: "查看偏好记忆卡 + 历史反馈事件",
-      items: [
-        {
-          title: "偏好记忆卡",
-          description: "每张卡代表一种偏好信号，可独立禁用 / 恢复",
-        },
-        {
-          title: "证据",
-          description: "点击卡片可看每条赞/踩对应的 Episode + 原因",
-        },
-        {
-          title: "撤销",
-          description: "最近反馈可单条撤销，撤销后会从偏好记忆移除",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "1"], label: "回工作台" },
-        { keys: ["Ctrl", "6"], label: "本页" },
-      ],
+      title: "建立可执行的人物与声音版本",
+      intro: "人物、声音和授权分别版本化；缺少真实模型或授权时不会生成占位结果。",
+      steps: ["从已审核素材创建人物或导入声音 WAV", "登记参考文字与授权证据", "确认模型状态后生成配音或口型预览"],
     },
   },
   {
     match: (path) => path.startsWith("/templates"),
     content: {
-      title: "内容模板",
-      icon: "product",
-      intro: "为 Episode 选择生产结构（脚本骨架 + 剪映样式）",
-      items: [
-        {
-          title: "2.0 第一组",
-          description: "video_diary / tool_review / tutorial_demo",
-        },
-        {
-          title: "生效后",
-          description: "影响后续选题生成、口播稿结构、剪映样式和素材需求",
-        },
-      ],
-      shortcuts: [],
+      title: "用成熟结构开始任务",
+      intro: "模板定义内容结构和素材需要，不代表人物、声音或发布能力已经可用。",
+      steps: ["选择一种内容结构", "在右侧检查时长、文案和素材要求", "用当前结构进入制作预检"],
     },
   },
   {
-    match: (path) => path.startsWith("/sources"),
+    match: (path) => path.startsWith("/tasks/"),
     content: {
-      title: "信息源",
-      icon: "link",
-      intro: "Hermes 雷达素材 + 手动链接",
-      items: [
-        {
-          title: "同步状态灯",
-          description: "绿 = 正常 / 黄 = 近期失败 / 红 = 同步失败 / 灰 = 未配置",
-        },
-        {
-          title: "手动链接",
-          description: "粘贴 Product Hunt / 观猹 / 任意文章 URL，自动识别",
-        },
-        {
-          title: "重试同步",
-          description: "点击重试按钮立刻触发该来源重新拉取",
-        },
-      ],
-      shortcuts: [],
+      title: "按确认点推进一条成片",
+      intro: "每个阶段只保留一个主要动作；生成结果先检查，再由你确认推进。",
+      steps: ["确认选题和文案", "生成授权配音并检查故事板", "渲染、播放并通过原生对话框保存成片"],
     },
   },
   {
-    match: (path) => path.startsWith("/knowledge"),
+    match: (path) => path.startsWith("/production"),
     content: {
-      title: "知识库",
-      icon: "folder",
-      intro: "Obsidian Vault 里的笔记列表",
-      items: [
-        {
-          title: "搜索",
-          description: "按标题关键词过滤，可看到 matching 的 wikilinks 与 tags",
-        },
-      ],
-      shortcuts: [],
+      title: "查看并行创作任务",
+      intro: "任务和自动任务是不同对象；尚未接入的自动能力会明确说明原因。",
+      steps: ["创建或打开一项创作任务", "处理等待确认和失败阻断", "从最近确认点继续执行"],
     },
   },
   {
     match: (path) => path.startsWith("/history"),
     content: {
-      title: "Episode 历史",
-      icon: "calendar",
-      intro: "按状态筛选 + 查看历史 Episode",
-      items: [
-        {
-          title: "筛选",
-          description: "全部 / 草稿就绪 / 已发布 / 失败",
-        },
-        {
-          title: "点击进入",
-          description: "跳转素材包 / 重录报告 / 发布链接",
-        },
-      ],
-      shortcuts: [],
+      title: "检查发布结果和数据",
+      intro: "当前没有平台连接时，只显示真实的本地创作记录，不模拟发布成功。",
+      steps: ["按状态筛选记录", "检查失败原因或成片状态", "连接平台后再创建发布和监控任务"],
     },
   },
   {
-    match: (path) => path.startsWith("/settings"),
+    match: (path) => path.startsWith("/settings") || path.startsWith("/health"),
     content: {
-      title: "设置",
-      icon: "settings",
-      intro: "本地运行配置 + 密钥管理",
-      items: [
-        {
-          title: "4 个分区",
-          description: "AI 模型 / 目录 / ASR / 外部信息源",
-        },
-        {
-          title: "密钥安全",
-          description: "API Key 类字段显示已配置 / 未配置徽标，留空 = 保持原值",
-        },
-        {
-          title: "目录选择器",
-          description: "点「选择目录」用浏览器原生选择文件夹，名字自动填入",
-        },
-      ],
-      shortcuts: [
-        { keys: ["Ctrl", "7"], label: "本页" },
-      ],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/health"),
-    content: {
-      title: "运行健康",
-      icon: "check",
-      intro: "依赖检查 + 修复动作清单",
-      items: [
-        {
-          title: "4 类状态",
-          description: "ready / missing / degraded / invalid",
-        },
-        {
-          title: "修复动作",
-          description: "每项缺失都有明确修复指引，跳到对应设置页",
-        },
-      ],
-      shortcuts: [],
-    },
-  },
-  {
-    match: (path) => path.startsWith("/welcome"),
-    content: {
-      title: "首次运行",
-      icon: "agent",
-      intro: "首次配置向导",
-      items: [
-        {
-          title: "4 步",
-          description: "欢迎 → 模型 → 目录 → 验证并完成",
-        },
-      ],
-      shortcuts: [],
+      title: "修复运行条件",
+      intro: "模型、目录、授权和本地服务都必须显示真实状态与可执行修复动作。",
+      steps: ["定位需要处理的能力", "进入对应设置完成配置", "重新检查后回到原任务继续"],
     },
   },
 ];
 
 const GLOBAL_HELP: HelpContent = {
-  title: "应用帮助",
-  icon: "agent",
-  intro: "全局功能说明与快捷键",
-  items: [
-    {
-      title: "侧边栏工作流",
-      description: "5 阶段进度：选题 → 脚本 → 录制 → 剪辑 → 导出，点击跳转",
-    },
-    {
-      title: "Toast 通知",
-      description: "所有操作通过右下角 Toast 反馈，3 秒自动消失",
-    },
-    {
-      title: "错误边界",
-      description: "每个核心页面有 error.tsx，路由级错误不会击穿整站",
-    },
-  ],
-  shortcuts: [
-    { keys: ["Ctrl", "1"], label: "工作台" },
-    { keys: ["Ctrl", "2"], label: "口播稿" },
-    { keys: ["Ctrl", "3"], label: "视频处理" },
-    { keys: ["Ctrl", "4"], label: "剪辑计划" },
-    { keys: ["Ctrl", "5"], label: "剪映草稿" },
-    { keys: ["Ctrl", "6"], label: "反馈学习" },
-    { keys: ["Ctrl", "7"], label: "设置" },
-    { keys: ["Ctrl", "Shift", "H"], label: "切换帮助" },
-    { keys: ["?"], label: "切换帮助" },
-  ],
+  title: "AI 视频日记工作台",
+  intro: "左侧选择模块和并行任务，中间完成当前工作，右侧只显示所选对象的参数、证据和阻断。",
+  steps: ["⌘K 搜索页面和任务", "⌘N 开始制作新视频", "⌘1–7 切换主要模块"],
 };
 
 function resolveHelp(path: string): HelpContent {
-  for (const entry of HELP_BY_PATH) {
-    if (entry.match(path)) {
-      return entry.content;
-    }
-  }
-  return GLOBAL_HELP;
+  return HELP_BY_PATH.find((entry) => entry.match(path))?.content ?? GLOBAL_HELP;
 }
 
 function isEditable(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tag = target.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-    return true;
-  }
-  return target.isContentEditable;
-}
-
-const KEY_LABEL: Record<string, string> = {
-  Ctrl: "Ctrl",
-  Shift: "Shift",
-  Alt: "Alt",
-  Meta: "⌘",
-  "?": "?",
-};
-
-function ShortcutKeys({ keys }: { keys: string[] }) {
-  return (
-    <span className="help-panel-keys" aria-label={keys.join(" + ")}>
-      {keys.map((key, index) => (
-        <span
-          className="help-panel-keys-item"
-          key={`${key}-${index}`}
-        >
-          {KEY_LABEL[key] ?? key}
-        </span>
-      ))}
-    </span>
-  );
+  return target instanceof HTMLElement && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable);
 }
 
 export function HelpPanel() {
-  const pathname = usePathname();
-  const [open, setOpen] = useState<boolean>(isHelpPanelOpen());
+  const pathname = usePathname() ?? "";
+  const [open, setOpen] = useState(isHelpPanelOpen());
+  const help = useMemo(() => resolveHelp(pathname), [pathname]);
 
-  useEffect(() => {
-    return subscribeHelpPanel(setOpen);
-  }, []);
+  useEffect(() => subscribeHelpPanel(setOpen), []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (isEditable(event.target)) {
-        return;
-      }
-      if (event.key !== "?") {
-        return;
-      }
-      if (event.ctrlKey || event.metaKey || event.altKey) {
-        return;
-      }
-      event.preventDefault();
-      toggleHelpPanel();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  const help = useMemo(() => resolveHelp(pathname ?? ""), [pathname]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && open) {
         event.preventDefault();
         closeHelpPanel();
+      } else if (event.key === "?" && !isEditable(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        toggleHelpPanel();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open]);
 
-  if (!open) {
-    return null;
-  }
+  if (!open) return null;
 
   return (
-    <aside
-      aria-label="应用帮助"
-      className="help-panel"
-      role="complementary"
-    >
-      <button
-        aria-label="关闭帮助"
-        className="help-panel-backdrop"
-        onClick={() => closeHelpPanel()}
-        type="button"
-      />
-      <div className="help-panel-card pixel-card">
+    <div className="help-panel" role="presentation">
+      <button aria-label="关闭帮助" className="help-panel-backdrop" onClick={closeHelpPanel} type="button" />
+      <aside aria-label="应用帮助" className="help-panel-card" role="complementary">
         <header className="help-panel-head">
-          <div className="help-panel-icon-frame" aria-hidden="true">
-            <PixelIcon name={help.icon} />
-          </div>
-          <div>
-            <span className="section-kicker">应用帮助</span>
-            <h2>{help.title}</h2>
-            <p>{help.intro}</p>
-          </div>
-          <button
-            aria-label="关闭"
-            className="pixel-button secondary"
-            onClick={() => closeHelpPanel()}
-            type="button"
-          >
-            关闭
-          </button>
+          <span className="help-panel-icon-frame" aria-hidden="true"><CircleHelp size={19} /></span>
+          <div><h2>{help.title}</h2><p>{help.intro}</p></div>
+          <button aria-label="关闭帮助" className="shell-icon-button" onClick={closeHelpPanel} type="button"><X size={16} /></button>
         </header>
-
-        <section className="help-panel-section">
-          <h3>功能说明</h3>
-          <ul>
-            {help.items.map((item, index) => (
-              <li className="help-panel-item" key={`${help.title}-${index}`}>
-                <strong>{item.title}</strong>
-                <span>{item.description}</span>
-                {item.hint ? (
-                  <em>{item.hint}</em>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        {help.shortcuts.length > 0 ? (
-          <section className="help-panel-section">
-            <h3>本页快捷键</h3>
-            <ul className="help-panel-shortcut-list">
-              {help.shortcuts.map((entry, index) => (
-                <li
-                  className="help-panel-shortcut"
-                  key={`${help.title}-shortcut-${index}`}
-                >
-                  <ShortcutKeys keys={entry.keys} />
-                  <span>{entry.label}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-      </div>
-    </aside>
+        <ol className="help-panel-steps">
+          {help.steps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}
+        </ol>
+        <footer><kbd>?</kbd> 打开帮助 <span>·</span> <kbd>Esc</kbd> 关闭</footer>
+      </aside>
+    </div>
   );
 }
 
-export type { HelpContent, HelpItem };
+export type { HelpContent };

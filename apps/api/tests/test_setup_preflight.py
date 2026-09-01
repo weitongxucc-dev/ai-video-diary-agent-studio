@@ -55,6 +55,7 @@ def test_preflight_endpoint_returns_stable_structure(tmp_path, monkeypatch):
         assert "summary" in check
         assert "impact" in check
         assert "repair_action" in check
+        assert isinstance(check["required"], bool)
         # settings_target is optional but present on most
         assert "settings_target" in check
 
@@ -114,16 +115,25 @@ def test_preflight_all_ready_with_mock_ffmpeg(tmp_path, monkeypatch):
 # ── Missing API key ─────────────────────────────────────────────────────
 
 
-def test_preflight_missing_deepseek_key_uses_local_degraded_mode():
+def test_preflight_missing_deepseek_key_uses_local_degraded_mode(tmp_path):
     """No DeepSeek key keeps the local source-grounded generator available."""
-    settings = Settings(deepseek_api_key=None)
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
+    settings = Settings(
+        deepseek_api_key=None,
+        video_inbox_path=str(inbox),
+        video_output_path=str(output),
+    )
 
     with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
         result = setup_preflight(settings)
 
-    assert result["overall"] == "blocked"
+    assert result["overall"] == "ready"
     deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
     assert deepseek["status"] == "degraded"
+    assert deepseek["required"] is False
     assert "本地" in deepseek["summary"]
     assert "未配置" in deepseek["summary"]
 
@@ -174,11 +184,17 @@ def test_preflight_directory_invalid_blocks(tmp_path):
     assert result["overall"] == "blocked"
 
 
-def test_preflight_invalid_obsidian_directory_blocks(tmp_path):
-    """Obsidian configured but path does not exist → invalid → overall blocked."""
+def test_preflight_invalid_obsidian_directory_is_optional(tmp_path):
+    """An invalid optional Obsidian path is visible without locking the app."""
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
     settings = Settings(
         deepseek_api_key="sk-test",
         obsidian_vault_path=str(tmp_path / "missing_vault"),
+        video_inbox_path=str(inbox),
+        video_output_path=str(output),
         database_path=str(tmp_path / "db.sqlite"),
     )
 
@@ -187,7 +203,8 @@ def test_preflight_invalid_obsidian_directory_blocks(tmp_path):
 
     obsidian = next(c for c in result["checks"] if c["id"] == "obsidian")
     assert obsidian["status"] == "invalid"
-    assert result["overall"] == "blocked"
+    assert obsidian["required"] is False
+    assert result["overall"] == "ready"
 
 
 # ── Binary not available ────────────────────────────────────────────────
@@ -212,9 +229,13 @@ def test_preflight_ffmpeg_missing(tmp_path):
 
 
 def test_preflight_asr_degraded_partial_whisper(tmp_path):
-    """ASR is critical: partial Whisper → degraded → overall blocked."""
+    """ASR is optional: partial Whisper is visible without blocking text use."""
     whisper_python = tmp_path / "python"
     whisper_python.write_text("fake")
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
 
     settings = Settings(
         deepseek_api_key="sk-test",
@@ -222,6 +243,8 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
         local_whisper_model_path=None,
         tencentcloud_secret_id=None,
         tencentcloud_secret_key=None,
+        video_inbox_path=str(inbox),
+        video_output_path=str(output),
         database_path=str(tmp_path / "db.sqlite"),
     )
 
@@ -230,8 +253,8 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
 
     asr = next(c for c in result["checks"] if c["id"] == "asr")
     assert asr["status"] == "degraded"
-    # Critical checks must be ready (not just non-missing)
-    assert result["overall"] == "blocked"
+    assert asr["required"] is False
+    assert result["overall"] == "ready"
 
 
 def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):

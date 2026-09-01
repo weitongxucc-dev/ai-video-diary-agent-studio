@@ -47,8 +47,8 @@ describe("PixelPrimitives", () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toHaveClass(
-      "pixel-control-button",
-      "pixel-control-button--secondary",
+      "ui-button",
+      "ui-button--secondary",
     );
     expect(button).not.toHaveClass("pixel-button");
   });
@@ -98,7 +98,7 @@ describe("PixelPrimitives", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     expect(onClick).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "重新检查" })).toHaveClass(
-      "pixel-control-button--primary",
+      "ui-button--primary",
     );
   });
 
@@ -121,7 +121,7 @@ describe("PixelPrimitives", () => {
       "/health",
     );
     expect(screen.getByRole("button", { name: "稍后重试" })).toHaveClass(
-      "pixel-control-button--secondary",
+      "ui-button--secondary",
     );
   });
 
@@ -139,7 +139,7 @@ describe("PixelPrimitives", () => {
     Object.defineProperty(viewport, "scrollWidth", { configurable: true, value: 600 });
     Object.defineProperty(viewport, "scrollLeft", { configurable: true, writable: true, value: 400 });
     fireEvent.scroll(viewport);
-    expect(container.querySelector(".pixel-scrollable-region")).toHaveAttribute(
+    expect(container.querySelector(".ui-scroll-region")).toHaveAttribute(
       "data-scroll-position",
       "end",
     );

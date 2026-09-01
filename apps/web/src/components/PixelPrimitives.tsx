@@ -55,18 +55,18 @@ export function PixelPanel({
   return (
     <Component
       aria-labelledby={title ? resolvedHeadingId : undefined}
-      className={`pixel-panel${className ? ` ${className}` : ""}`}
+      className={`ui-panel${className ? ` ${className}` : ""}`}
     >
       {title || description || actions ? (
-        <header className="pixel-panel__header">
+        <header className="ui-panel__header">
           <div>
             {title ? <h2 id={resolvedHeadingId}>{title}</h2> : null}
             {description ? <p>{description}</p> : null}
           </div>
-          {actions ? <div className="pixel-panel__actions">{actions}</div> : null}
+          {actions ? <div className="ui-panel__actions">{actions}</div> : null}
         </header>
       ) : null}
-      <div className="pixel-panel__body">{children}</div>
+      <div className="ui-panel__body">{children}</div>
     </Component>
   );
 }
@@ -97,12 +97,12 @@ export const PixelButton = forwardRef<HTMLButtonElement, PixelButtonProps>(
       <button
         {...props}
         aria-busy={loading || undefined}
-        className={`pixel-control-button pixel-control-button--${variant} pixel-control-button--${size}${className ? ` ${className}` : ""}`}
+        className={`ui-button ui-button--${variant} ui-button--${size}${className ? ` ${className}` : ""}`}
         disabled={disabled || loading}
         ref={ref}
         type={type}
       >
-        {loading ? <span aria-hidden="true" className="pixel-control-button__busy" /> : null}
+        {loading ? <span aria-hidden="true" className="ui-button__busy" /> : null}
         <span>{children}</span>
       </button>
     );
@@ -125,18 +125,18 @@ export const PixelInput = forwardRef<HTMLInputElement, PixelInputProps>(
     const messageId = `${inputId}-message`;
 
     return (
-      <div className={`pixel-field${error ? " is-invalid" : ""}${className ? ` ${className}` : ""}`}>
-        <label className="pixel-field__label" htmlFor={inputId}>{label}</label>
+      <div className={`ui-field${error ? " is-invalid" : ""}${className ? ` ${className}` : ""}`}>
+        <label className="ui-field__label" htmlFor={inputId}>{label}</label>
         <input
           {...props}
           aria-describedby={hint || error ? messageId : undefined}
           aria-invalid={error ? true : undefined}
-          className="pixel-input"
+          className="ui-input"
           id={inputId}
           ref={ref}
         />
         {error || hint ? (
-          <span className="pixel-field__message" id={messageId}>
+          <span className="ui-field__message" id={messageId}>
             {error ?? hint}
           </span>
         ) : null}
@@ -158,10 +158,10 @@ export function PixelStatus({
 }: PixelStatusProps) {
   return (
     <span
-      className={`pixel-status pixel-status--${kind}${className ? ` ${className}` : ""}`}
+      className={`ui-status ui-status--${kind}${className ? ` ${className}` : ""}`}
       data-status={kind}
     >
-      <span aria-hidden="true" className="pixel-status__mark" />
+      <span aria-hidden="true" className="ui-status__mark" />
       <span>{label ?? statusLabels[kind]}</span>
     </span>
   );
@@ -210,7 +210,7 @@ function PixelStateActionControl({
   if (action.kind === "link") {
     return (
       <Link
-        className={`pixel-control-button pixel-control-button--${tone} pixel-control-button--default`}
+        className={`ui-button ui-button--${tone} ui-button--default`}
         href={action.href}
       >
         {action.label}
@@ -240,17 +240,17 @@ function PixelState({
 }) {
   return (
     <section
-      className={`pixel-state pixel-state--${kind}${className ? ` ${className}` : ""}`}
+      className={`ui-state ui-state--${kind}${className ? ` ${className}` : ""}`}
       role={role}
     >
       <PixelStatus kind={kind} />
-      <div className="pixel-state__copy">
+      <div className="ui-state__copy">
         <h2>{title}</h2>
         <p>{description}</p>
         {children}
       </div>
       {action || secondaryAction ? (
-        <div className="pixel-state__actions">
+        <div className="ui-state__actions">
           {action ? (
             <PixelStateActionControl action={action} defaultTone="primary" />
           ) : null}
@@ -367,12 +367,12 @@ export function PixelScrollableRegion({
 
   return (
     <section
-      className={`pixel-scrollable-region${className ? ` ${className}` : ""}`}
+      className={`ui-scroll-region${className ? ` ${className}` : ""}`}
       data-scroll-position={position}
     >
       <div
         aria-label={label}
-        className="pixel-scrollable-region__viewport"
+        className="ui-scroll-region__viewport"
         data-scroll-region="local-x"
         onKeyDown={(event) => {
           if (event.key === "Home") {
@@ -392,12 +392,12 @@ export function PixelScrollableRegion({
         {children}
       </div>
       {hasOverflow ? (
-        <div className="pixel-scrollable-region__footer">
-          <p aria-live="polite" className="pixel-scrollable-region__hint">
+        <div className="ui-scroll-region__footer">
+          <p aria-live="polite" className="ui-scroll-region__hint">
             {hint}
           </p>
           {showControls ? (
-            <div aria-label={`${label}滚动控制`} className="pixel-scrollable-region__controls">
+            <div aria-label={`${label}滚动控制`} className="ui-scroll-region__controls">
               <PixelButton
                 aria-label={`向左滚动${label}`}
                 disabled={position === "start"}

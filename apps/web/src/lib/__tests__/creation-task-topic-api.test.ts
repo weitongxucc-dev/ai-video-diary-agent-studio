@@ -1,0 +1,103 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  confirmCreationTaskTopic,
+  CreationPlanApiError,
+  generateCreationTaskTopics,
+  generateCreationTaskNarration,
+  getCreationTaskTopics,
+  selectCreationTaskNarrationVoice,
+} from "../api";
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("creation-task topic API", () => {
+  it("uses the frozen GET and empty generation body", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await getCreationTaskTopics("task/1");
+    await generateCreationTaskTopics("task/1");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/creation-tasks/task%2F1/topics", expect.objectContaining({ cache: "no-store" }));
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/creation-tasks/task%2F1/topics/generate", expect.objectContaining({
+      method: "POST",
+      body: "{}",
+    }));
+  });
+
+  it("uses the persisted topic identity and an empty confirmation body", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ task: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await confirmCreationTaskTopic("task-1", "topic-1");
+
+    expect(fetch).toHaveBeenCalledWith("/api/creation-tasks/task-1/topics/topic-1/confirm", expect.objectContaining({
+      method: "POST",
+      body: "{}",
+    }));
+  });
+
+  it("keeps the structured failure fields from the topic service", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        error: "capability_unavailable",
+        reason: "capability_unavailable",
+        impact: "没有调用文字模型，也没有生成候选。",
+        repair_action: "配置文字模型后重新开始选题。",
+        retryable: true,
+      },
+    }), { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(generateCreationTaskTopics("task-1")).rejects.toMatchObject({
+      status: 503,
+      code: "capability_unavailable",
+      message: "当前文字模型不可用",
+      reason: "capability_unavailable",
+      impact: "没有调用文字模型，也没有生成候选。",
+      repairAction: "配置文字模型后重新开始选题。",
+    } satisfies Partial<CreationPlanApiError>);
+  });
+
+  it("explains a missing authorized voice in user language", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        error: "voice_identity_missing",
+        reason: "voice_identity_missing",
+        impact: "当前创作任务未生成配音，未调用声音模型。",
+        repair_action: "重新预检并选择已授权的中文声音版本。",
+        retryable: true,
+      },
+    }), { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(generateCreationTaskNarration("task-1")).rejects.toMatchObject({
+      status: 503,
+      code: "voice_identity_missing",
+      message: "缺少已授权的声音版本",
+      impact: "当前创作任务未生成配音，未调用声音模型。",
+      repairAction: "重新预检并选择已授权的中文声音版本。",
+    } satisfies Partial<CreationPlanApiError>);
+  });
+
+  it("binds an explicit versioned voice without sending a local path", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ task: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await selectCreationTaskNarrationVoice("task-1", {
+      voice_profile_id: "voice-1",
+      voice_version: "v2",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/creation-tasks/task-1/narration/voice",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ voice_profile_id: "voice-1", voice_version: "v2" }),
+      }),
+    );
+    expect(fetch.mock.calls[0]?.[1]?.body).not.toContain("/Users/");
+  });
+});

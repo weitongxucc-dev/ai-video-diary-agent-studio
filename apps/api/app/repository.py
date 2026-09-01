@@ -3,11 +3,29 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
+
+from app.models import (
+    Episode,
+    EpisodeIntakeMode,
+    EpisodeStatus,
+    FeedbackEvent,
+    FeedbackValue,
+    ProductionChainStage,
+    ProductionChainStep,
+    ScriptPackage,
+    ScriptSection,
+    ScriptVersion,
+    ScriptVersionSource,
+    SourceFileState,
+    SourceRef,
+    TopicCandidate,
+    VideoJobStatus,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,67 +77,17 @@ def active_workspace_id() -> str:
     return LEGACY_WORKSPACE_ID
 
 
-from app.models import (
-    Episode,
-    EpisodeIntakeMode,
-    EpisodeStatus,
-    FeedbackEvent,
-    FeedbackValue,
-    ProductionChainStage,
-    ProductionChainStep,
-    ScriptPackage,
-    ScriptSection,
-    ScriptVersion,
-    ScriptVersionSource,
-    SourceFileState,
-    SourceRef,
-    TopicCandidate,
-    VideoJobStatus,
-    utc_now,
-)
-
-
 class EpisodeRepository:
     def __init__(
         self,
-        today_provider: Callable[[], date] = date.today,
+        today_provider: object | None = None,
         database_path: str | Path | None = None,
     ) -> None:
-        self._today_provider = today_provider
+        del today_provider
         self._episodes: dict[str, Episode] = {}
-        self._episode_ids_by_date: dict[tuple[str, date], str] = {}
         self._database_path = Path(database_path).expanduser() if database_path else None
-        if self._database_path is not None:
-            self._database_path.parent.mkdir(parents=True, exist_ok=True)
-            self._init_database()
+        if self._database_path is not None and self._database_path.is_file():
             self._load_database()
-
-    def create(
-        self,
-        episode_date: date | None = None,
-        workspace_id: str | None = None,
-    ) -> Episode:
-        ws = workspace_id or active_workspace_id()
-        episode_date = episode_date or self._today_provider()
-        episode = Episode(
-            id=f"ep_{uuid4().hex[:8]}",
-            day_number=len(self.all(workspace_id=ws)) + 1,
-            episode_date=episode_date,
-            status=EpisodeStatus.CREATED,
-            workspace_id=ws,
-        )
-        self._episodes[episode.id] = episode
-        self._episode_ids_by_date[(ws, episode_date)] = episode.id
-        self._persist_episode(episode)
-        return episode
-
-    def today(self, workspace_id: str | None = None) -> Episode:
-        ws = workspace_id or active_workspace_id()
-        today = self._today_provider()
-        episode_id = self._episode_ids_by_date.get((ws, today))
-        if episode_id is None:
-            return self.create(today, workspace_id=ws)
-        return self._episodes[episode_id]
 
     def get(self, episode_id: str, workspace_id: str | None = None) -> Episode:
         ws = workspace_id or active_workspace_id()
@@ -141,115 +109,42 @@ class EpisodeRepository:
             reverse=True,
         )
 
-    def save(self, episode: Episode) -> Episode:
-        episode.updated_at = utc_now()
-        self._episodes[episode.id] = episode
-        self._episode_ids_by_date[(episode.workspace_id, episode.episode_date)] = episode.id
-        self._persist_episode(episode)
-        return episode
-
-    def _init_database(self) -> None:
-        assert self._database_path is not None
-        with sqlite3.connect(self._database_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS episodes (
-                    id TEXT PRIMARY KEY,
-                    episode_date TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            self._migrate_episodes_schema(conn)
-
-    def _migrate_episodes_schema(self, conn: sqlite3.Connection) -> None:
-        """Backwards-compatible migration to workspace-partitioned episodes.
-
-        Legacy rows (no workspace_id) are assigned the reserved 'local'
-        workspace so that pre-auth local data never becomes visible to any
-        authenticated account.
-        """
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(episodes)").fetchall()
-        }
-        if "workspace_id" in columns:
-            return
-        conn.execute(
-            "ALTER TABLE episodes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local'"
-        )
-        # The legacy schema made episode_date globally unique. Rebuild to a
-        # per-workspace unique constraint so two accounts can each have a
-        # record for the same calendar date.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS episodes_migrated (
-                id TEXT PRIMARY KEY,
-                workspace_id TEXT NOT NULL DEFAULT 'local',
-                episode_date TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (workspace_id, episode_date)
-            )
-        """)
-        rows = conn.execute(
-            "SELECT id, workspace_id, episode_date, payload, updated_at FROM episodes"
-        ).fetchall()
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO episodes_migrated
-                (id, workspace_id, episode_date, payload, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        conn.execute("DROP TABLE episodes")
-        conn.execute("ALTER TABLE episodes_migrated RENAME TO episodes")
-
     def _load_database(self) -> None:
         assert self._database_path is not None
-        with sqlite3.connect(self._database_path) as conn:
-            rows = conn.execute(
-                "SELECT payload, workspace_id FROM episodes"
-            ).fetchall()
+        try:
+            with sqlite3.connect(self._database_path) as conn:
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(episodes)").fetchall()
+                }
+                rows = (
+                    conn.execute("SELECT payload, workspace_id FROM episodes").fetchall()
+                    if "workspace_id" in columns
+                    else [
+                        (payload, LEGACY_WORKSPACE_ID)
+                        for (payload,) in conn.execute(
+                            "SELECT payload FROM episodes"
+                        ).fetchall()
+                    ]
+                )
+        except sqlite3.Error:
+            logger.warning(
+                "unable to read historical episodes from %s",
+                self._database_path,
+                exc_info=True,
+            )
+            return
         for payload, workspace_id in rows:
             try:
                 episode = self._episode_from_dict(json.loads(payload))
                 episode.workspace_id = str(workspace_id or "local")
                 self._episodes[episode.id] = episode
-                self._episode_ids_by_date[
-                    (episode.workspace_id, episode.episode_date)
-                ] = episode.id
             except Exception:
                 logger.warning(
                     'skipping unparseable episode row in %s',
                     self._database_path,
                     exc_info=True,
                 )
-
-    def _persist_episode(self, episode: Episode) -> None:
-        if self._database_path is None:
-            return
-        try:
-            payload = json.dumps(self._episode_to_dict(episode), ensure_ascii=False)
-            with sqlite3.connect(self._database_path) as conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO episodes
-                        (id, workspace_id, episode_date, payload, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        episode.id,
-                        episode.workspace_id,
-                        episode.episode_date.isoformat(),
-                        payload,
-                        episode.updated_at.isoformat(),
-                    ),
-                )
-        except (sqlite3.Error, OSError) as exc:
-            raise RuntimeError(
-                f"failed to persist episode {episode.id}"
-            ) from exc
 
     def _episode_to_dict(self, episode: Episode) -> dict[str, object]:
         return {

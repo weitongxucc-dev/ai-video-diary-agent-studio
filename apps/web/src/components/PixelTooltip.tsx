@@ -27,18 +27,18 @@ export function PixelTooltip({ label, children }: PixelTooltipProps) {
   const mergedProps: ChildAriaProps = {
     ...original.props,
     "aria-label": existingLabel ?? label,
-    "aria-describedby": `pixel-tooltip-${slugify(label)}`,
+    "aria-describedby": `ui-tooltip-${slugify(label)}`,
   };
   return (
-    <span className="pixel-tooltip-wrap">
+    <span className="ui-tooltip-wrap">
       {cloneElement(original, mergedProps)}
       <span
-        className="pixel-tooltip-bubble"
-        id={`pixel-tooltip-${slugify(label)}`}
+        className="ui-tooltip-bubble"
+        id={`ui-tooltip-${slugify(label)}`}
         role="tooltip"
       >
-        <span aria-hidden="true" className="pixel-tooltip-arrow" />
-        <span className="pixel-tooltip-text">{label}</span>
+        <span aria-hidden="true" className="ui-tooltip-arrow" />
+        <span className="ui-tooltip-text">{label}</span>
       </span>
     </span>
   );
@@ -60,20 +60,20 @@ export function PixelTooltipText({
   children: ReactNode;
 }) {
   return (
-    <span className="pixel-tooltip-wrap inline">
+    <span className="ui-tooltip-wrap inline">
       <span
-        aria-describedby={`pixel-tooltip-${slugify(label)}`}
-        className="pixel-tooltip-trigger"
+        aria-describedby={`ui-tooltip-${slugify(label)}`}
+        className="ui-tooltip-trigger"
       >
         {children}
       </span>
       <span
-        className="pixel-tooltip-bubble"
-        id={`pixel-tooltip-${slugify(label)}`}
+        className="ui-tooltip-bubble"
+        id={`ui-tooltip-${slugify(label)}`}
         role="tooltip"
       >
-        <span aria-hidden="true" className="pixel-tooltip-arrow" />
-        <span className="pixel-tooltip-text">{label}</span>
+        <span aria-hidden="true" className="ui-tooltip-arrow" />
+        <span className="ui-tooltip-text">{label}</span>
       </span>
     </span>
   );

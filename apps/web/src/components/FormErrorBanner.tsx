@@ -114,17 +114,17 @@ export function FormErrorBanner({
       {error ? (
         <div
           aria-live="assertive"
-          className="pixel-form-error"
+          className="ui-form-error"
           role="alert"
         >
-          <span aria-hidden="true" className="pixel-form-error-light" />
-          <div className="pixel-form-error-body">
+          <span aria-hidden="true" className="ui-form-error-light" />
+          <div className="ui-form-error-body">
             <strong>{emptyMessage ?? "请检查表单字段"}</strong>
             <span>{error.message}</span>
           </div>
           <button
             aria-label="关闭错误"
-            className="pixel-form-error-close"
+            className="ui-form-error-close"
             onClick={() => setError(null)}
             type="button"
           >

@@ -150,7 +150,7 @@ function ToastViewport({
     return null;
   }
   return (
-    <div aria-label="通知" className="pixel-toast-viewport" role="status">
+    <div aria-label="通知" className="ui-toast-viewport" role="status">
       {toasts.map((toast) => (
         <PixelToast
           key={toast.id}
@@ -185,17 +185,17 @@ export function PixelToast({ kind, message, onDismiss }: PixelToastProps) {
   return (
     <div
       aria-live="polite"
-      className={`pixel-toast ${kind}`}
+      className={`ui-toast ${kind}`}
       role={kind === "error" ? "alert" : "status"}
     >
-      <span aria-hidden="true" className={`pixel-toast-light ${kind}`} />
-      <div className="pixel-toast-body">
+      <span aria-hidden="true" className={`ui-toast-light ${kind}`} />
+      <div className="ui-toast-body">
         <strong>{kindLabel(kind)}</strong>
         <span>{message}</span>
       </div>
       <button
         aria-label="关闭通知"
-        className="pixel-toast-close"
+        className="ui-toast-close"
         onClick={onDismiss}
         type="button"
       >

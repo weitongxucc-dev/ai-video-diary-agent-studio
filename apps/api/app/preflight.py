@@ -27,22 +27,21 @@ def setup_preflight(settings: Settings) -> dict:
         _asr_check(settings),
     ]
 
-    critical = {"video_inbox", "video_output", "ffmpeg", "asr"}
-    critical_missing_or_invalid = any(
-        check["status"] in ("missing", "invalid")
-        for check in checks
-        if check["id"] in critical
-    )
-    critical_ready = all(
+    # Text input keeps the workbench usable without ASR, while Obsidian,
+    # Jianying and remote model services are optional integrations. Only the
+    # local video pipeline prerequisites block first-run completion.
+    required = {"video_inbox", "video_output", "ffmpeg"}
+    for check in checks:
+        check["required"] = check["id"] in required
+
+    required_ready = all(
         check["status"] == "ready"
         for check in checks
-        if check["id"] in critical
+        if check["id"] in required
     )
 
-    overall_ready = critical_ready and not critical_missing_or_invalid
-
     return {
-        "overall": "ready" if overall_ready else "blocked",
+        "overall": "ready" if required_ready else "blocked",
         "checks": checks,
         "generated_at": generated_at.isoformat(),
     }

@@ -14,6 +14,12 @@ declare global {
     electronAPI?: {
       openDirectory?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;
+      saveRenderedVideo?: (taskId: string) => Promise<{
+        saved: boolean;
+        canceled?: boolean;
+        fileName?: string;
+        error?: string;
+      }>;
     };
   }
 }

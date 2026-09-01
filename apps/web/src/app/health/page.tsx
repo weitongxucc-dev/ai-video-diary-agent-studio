@@ -62,10 +62,9 @@ export default async function HealthPage() {
   return (
     <AppShell>
       <div className="workspace-page health-page">
-        <section className="workspace-main pixel-card">
+        <section className="workspace-main ui-panel">
           <div className="workspace-header">
             <div>
-              <span className="section-kicker">运行健康</span>
               <h1>本地依赖诊断台</h1>
               <p>
                 {offline
@@ -73,7 +72,7 @@ export default async function HealthPage() {
                   : "检查 DeepSeek、Obsidian、ffmpeg、Whisper、视频目录和剪映草稿目录是否可用。"}
               </p>
             </div>
-            <Link className="pixel-button secondary" href="/settings">
+            <Link className="ui-button secondary" href="/settings">
               去设置
             </Link>
           </div>
@@ -142,11 +141,11 @@ export default async function HealthPage() {
         </section>
 
         <aside className="workspace-side">
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>检查重点</h2>
             <p>DeepSeek 决定选题和脚本生成；ffmpeg 决定视频处理；Whisper 决定本地转写和重复录制检测。</p>
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>内测建议</h2>
             <p>分享给同事前，先确认缺失项为 0；降级项可接受但需要在剪映里人工验证。</p>
           </div>

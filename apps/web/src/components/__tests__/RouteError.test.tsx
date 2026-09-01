@@ -179,7 +179,7 @@ describe("RouteError", () => {
     screen.getByText("重新加载页面").click();
     expect(resetFn).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "重新加载页面" })).toHaveClass(
-      "pixel-control-button--primary",
+      "ui-button--primary",
     );
   });
 

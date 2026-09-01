@@ -69,20 +69,20 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
       <div className="workspace-page onboarding-page">
         <section
           aria-labelledby="onboarding-heading"
-          className="workspace-main pixel-card onboarding-main"
+          className="workspace-main ui-panel onboarding-main"
         >
           <div className="workspace-header">
             <div>
-              <span className="section-kicker">First-run Readiness</span>
-              <h1 id="onboarding-heading">创作者启动检查</h1>
+              <span className="section-kicker">首次设置</span>
+              <h1 id="onboarding-heading">准备你的创作工作区</h1>
               <p>
-                集中检查 AI 模型、本地目录、系统依赖是否就绪。
-                不会展示任何密钥原文，只会显示「已配置 / 未配置」状态。
+                先确认素材输入、成片输出和视频处理环境。
+                语音识别、知识库等增强功能可以进入工作台后再配置。
               </p>
             </div>
             {snapshot.ready ? (
-              <Link className="pixel-button secondary" href="/">
-                返回工作台
+              <Link className="ui-button secondary" href="/">
+                进入工作台
               </Link>
             ) : null}
           </div>
@@ -159,17 +159,17 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
 
           <div className="onboarding-completion-gate">
             <strong>
-              {snapshot.ready ? "本机预检已通过" : "首次启动仍被预检阻断"}
+              {snapshot.ready ? "核心环境已就绪" : "还有必需项未就绪"}
             </strong>
             <span>
               {snapshot.ready
-                ? "提交后服务端会重新运行真实预检，仅在仍然就绪时创建第一条 Episode 并标记 onboarding 完成。"
-                : "请按上方每一项的修复动作处理并重新检查。未就绪时不能进入工作台。"}
+                ? `可以开始创作。${snapshot.attentionCount > 0 ? ` ${snapshot.attentionCount} 项增强能力不会影响进入，可以稍后完成。` : ""}`
+                : "请只处理上方「开始创作所需」中的阻断项，然后重新检查。"}
             </span>
             {snapshot.ready ? (
               <form action={completeOnboardingAction}>
                 <PixelButton type="submit" variant="primary">
-                  完成启动并进入工作台
+                  进入工作台
                 </PixelButton>
               </form>
             ) : (
@@ -181,7 +181,7 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
         </section>
 
         <aside className="workspace-side onboarding-side">
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>下一步建议</h2>
             <ol className="onboarding-next-steps">
               {snapshot.blockingCount > 0 ? (
@@ -196,11 +196,11 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
               ) : null}
               {snapshot.ready ? (
                 <li>
-                  <Link href="/">回到今日工作台开始第一条 Episode</Link>
+                  <Link href="/">回到今日工作台开始第一条创作内容</Link>
                 </li>
               ) : (
                 <li>
-                  <Link href="/welcome">使用引导式 onboarding 重新检查</Link>
+                  <Link href="/welcome">返回首次使用引导</Link>
                 </li>
               )}
               <li>
@@ -211,33 +211,12 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
               </li>
             </ol>
           </div>
-          <div className="pixel-card side-note">
+          <div className="ui-panel side-note">
             <h2>隐私边界</h2>
             <p>
               本页面只显示每项配置的「已配置 / 未配置」状态与必要说明。
-              任何标记为 secret 的字段都不会回显其值。
+              密钥和凭据不会回显原文。
             </p>
-          </div>
-          <div className="pixel-card side-note">
-            <h2>数据来源</h2>
-            <ul className="onboarding-source-list">
-              <li>
-                <code>GET /api/is_setup</code>
-                <span>{snapshot.sources.setup ? "已就绪" : "未连通"}</span>
-              </li>
-              <li>
-                <code>GET /api/runtime/health</code>
-                <span>{snapshot.sources.health ? "已就绪" : "未连通"}</span>
-              </li>
-              <li>
-                <code>GET /api/settings/runtime</code>
-                <span>{snapshot.sources.settings ? "已就绪" : "未连通"}</span>
-              </li>
-              <li>
-                <code>GET /api/system/status</code>
-                <span>{snapshot.sources.status ? "已就绪" : "未连通"}</span>
-              </li>
-            </ul>
           </div>
         </aside>
       </div>

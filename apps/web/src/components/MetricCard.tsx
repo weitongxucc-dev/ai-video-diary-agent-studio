@@ -14,7 +14,7 @@ export function MetricCard({ icon, value, label, tone, detail, progress = 0 }: M
   const filledBlocks = Math.round((safeProgress / 100) * 8);
 
   return (
-    <div className={`metric-card pixel-card ${tone}`}>
+    <div className={`metric-card ui-panel ${tone}`}>
       <PixelIcon name={icon} />
       <div>
         <strong>{value}</strong>

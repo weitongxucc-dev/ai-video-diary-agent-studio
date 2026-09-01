@@ -24,7 +24,7 @@ const SECTIONS: Section[] = [
     title: "仅供个人创作使用",
     icon: "person",
     paragraphs: [
-      "AI 视频日记 Agent Studio 是一个辅助个人创作者整理每日选题、生成口播稿、剪辑视频并发布到第三方平台的本地工具。",
+      "AI 视频日记是一个辅助个人创作者整理选题、生成口播稿、剪辑视频并发布到第三方平台的本地工具。",
       "请勿将本项目用于：批量生产低质量内容、伪造权威人物言论、规避平台审核、或任何违反所在地法律法规的活动。",
       "你对自己发布到第三方平台（抖音、B 站、YouTube 等）的内容承担全部责任，包括版权、内容合规和受众影响。",
     ],
@@ -58,7 +58,7 @@ export default function TermsPage() {
   return (
     <AppShell>
       <div className="legal-page">
-        <section className="legal-main pixel-card">
+        <section className="legal-main ui-panel">
           <header className="legal-header">
             <span className="section-kicker">使用条款</span>
             <h1>AI 视频日记 · 使用条款</h1>
@@ -86,10 +86,10 @@ export default function TermsPage() {
           ))}
 
           <footer className="legal-footer">
-            <Link className="pixel-button" href="/">
+            <Link className="ui-button" href="/">
               返回工作台
             </Link>
-            <Link className="pixel-button secondary" href="/privacy">
+            <Link className="ui-button secondary" href="/privacy">
               阅读隐私政策
             </Link>
           </footer>

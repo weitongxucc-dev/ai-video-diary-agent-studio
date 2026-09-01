@@ -1,300 +1,174 @@
+"use client";
+
+import { AlertCircle, CheckCircle2, ExternalLink, FileText, Link2, LoaderCircle, Plus, RefreshCw, Save, Upload } from "lucide-react";
 import Link from "next/link";
-import {
-  ingestManualLinkAction,
-  retrySourceSyncAction,
-  syncSourcesAction,
-} from "@/app/actions";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { MetricCard } from "@/components/MetricCard";
-import { PixelIcon } from "@/components/PixelIcon";
-import { getSourceItems, getSourcesStatus, getSystemStatus } from "@/lib/api.server";
-import type {
-  SourceItems,
-  SourcesStatus,
-  SourceSyncStatus,
-  SystemStatus,
-} from "@/lib/types";
+import {
+  createManualSourceItem,
+  createSourceConnector,
+  listSourceConnectors,
+  listSourceItems,
+  saveSourceItemToKnowledge,
+  sourceErrorMessage,
+  SourceApiError,
+  SourceConnector,
+  SourceItem,
+  SourceRun,
+  syncSourceConnector,
+} from "@/lib/source-api";
 
-export const dynamic = "force-dynamic";
+const platforms = [
+  { key: "douyin", label: "抖音", available: false },
+  { key: "xiaohongshu", label: "小红书", available: false },
+  { key: "bilibili", label: "B站", available: false },
+  { key: "youtube", label: "YouTube", available: false },
+  { key: "product_hunt", label: "Product Hunt", available: true },
+  { key: "external_urls", label: "通用网页/订阅源", available: true },
+];
 
-type SourceTone = "green" | "yellow" | "red" | "muted";
-
-type SourcesLoadState = {
-  sources: SourceItems | null;
-  sourcesStatus: SourcesStatus | null;
-  status: SystemStatus | null;
-  offline: boolean;
-};
-
-async function loadSources(): Promise<SourcesLoadState> {
-  try {
-    const [sources, sourcesStatus, status] = await Promise.all([
-      getSourceItems(),
-      getSourcesStatus().catch(() => null),
-      getSystemStatus(),
-    ]);
-    return { sources, sourcesStatus, status, offline: false };
-  } catch {
-    return { sources: null, sourcesStatus: null, status: null, offline: true };
-  }
+function platformLabel(value: string) {
+  if (value === "manual") return "手工添加";
+  return platforms.find((platform) => platform.key === value)?.label ?? "其他信息源";
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return "从未同步";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    month: "2-digit",
-    timeZone: "Asia/Shanghai",
-  }).format(new Date(value));
+function sourceLabel(value: string) {
+  return value === "manual" ? "手工添加" : platformLabel(value);
 }
 
-function formatDate(value: string | null): string {
-  if (!value) {
-    return "从未同步";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-    timeZone: "Asia/Shanghai",
-  }).format(new Date(value));
+function frequencyLabel(value: string) {
+  return value === "on_demand" ? "按需" : value;
 }
 
-function getSourceTone(source: SourceSyncStatus): SourceTone {
-  if (!source.configured) {
-    return "muted";
-  }
-  if (source.error_message && !source.last_success_at) {
-    return "red";
-  }
-  if (source.error_message) {
-    return "yellow";
-  }
-  return "green";
+function permissionLabel(value: string) {
+  if (value === "write:source_items") return "可添加信息条目";
+  if (value === "read:source_items") return "可读取信息条目";
+  return "已授权访问";
 }
 
-const TONE_LABEL: Record<SourceTone, string> = {
-  green: "同步正常",
-  yellow: "近期失败",
-  red: "同步失败",
-  muted: "未配置",
-};
+function connectorState(connector: SourceConnector) {
+  if (["ready", "connected"].includes(connector.connection_status)) return { label: "已连接", tone: "success" };
+  if (connector.connection_status === "capability_unavailable") return { label: "尚未支持", tone: "warning" };
+  if (connector.connection_status === "authentication_required") return { label: "需要登录", tone: "danger" };
+  if (connector.connection_status === "access_denied") return { label: "无权限", tone: "danger" };
+  if (connector.connection_status === "rate_limited") return { label: "被限流", tone: "warning" };
+  if (connector.connection_status === "configuration_required") return { label: "需要配置", tone: "warning" };
+  if (connector.connection_status === "failed") return { label: "同步失败", tone: "danger" };
+  return { label: "待同步", tone: "idle" };
+}
 
-export default async function SourcesPage() {
-  const { sources, sourcesStatus, status, offline } = await loadSources();
-  const counts = sources?.source_counts ?? {};
-  const syncSources = sourcesStatus?.statuses ?? [];
-  const healthyCount = syncSources.filter(
-    (s) => s.configured && !s.error_message,
-  ).length;
-  const degradedCount = syncSources.filter(
-    (s) => s.configured && s.error_message && s.last_success_at,
-  ).length;
-  const failedCount = syncSources.filter(
-    (s) => s.configured && s.error_message && !s.last_success_at,
-  ).length;
-  const notConfiguredCount = syncSources.filter((s) => !s.configured).length;
+function formatTime(value: string | null) {
+  if (!value) return "暂无记录";
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+export default function SourcesPage() {
+  const [connectors, setConnectors] = useState<SourceConnector[]>([]);
+  const [items, setItems] = useState<SourceItem[]>([]);
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [lastRuns, setLastRuns] = useState<Record<string, SourceRun>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const selectedConnector = connectors.find((connector) => connector.id === selectedConnectorId) ?? null;
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
+
+  async function refresh(connectorId: string | null = selectedConnectorId) {
+    setLoading(true);
+    setError(null);
+    try {
+      const [connectorResponse, itemResponse] = await Promise.all([listSourceConnectors(), listSourceItems(connectorId ?? undefined)]);
+      setConnectors(connectorResponse.items);
+      setItems(itemResponse.items);
+      if (!connectorId && connectorResponse.items[0]) setSelectedConnectorId(connectorResponse.items[0].id);
+    } catch (cause) {
+      setError(sourceErrorMessage(cause));
+      setConnectors([]);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void refresh(selectedConnectorId); }, [selectedConnectorId]);
+
+  const platformEntries = useMemo(() => platforms.map((platform) => ({ ...platform, connector: connectors.find((connector) => connector.platform === platform.key) ?? null })), [connectors]);
+
+  async function addConnector(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy("create-connector"); setError(null); setNotice(null);
+    try {
+      const connector = await createSourceConnector({ platform: String(form.get("platform") ?? ""), protocol: "https", account_or_rule: String(form.get("account_or_rule") ?? ""), frequency: String(form.get("frequency") ?? "每天"), permissions: ["读取公开内容"] });
+      setConnectors((current) => [connector, ...current.filter((item) => item.id !== connector.id)]);
+      setSelectedConnectorId(connector.id); setNotice("信息源已保存，可执行同步。");
+      event.currentTarget.reset();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setBusy(null); }
+  }
+
+  async function addManualItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy("manual-item"); setError(null); setNotice(null);
+    try {
+      const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, license: String(form.get("license") ?? "使用范围待确认") });
+      setSelectedConnectorId(null); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，确认授权后可保存到知识库。"); event.currentTarget.reset();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setBusy(null); }
+  }
+
+  async function sync(connector: SourceConnector) {
+    setBusy(`sync-${connector.id}`); setError(null); setNotice(null);
+    try {
+      const response = await syncSourceConnector(connector.id);
+      setLastRuns((current) => ({ ...current, [connector.id]: response.run }));
+      setConnectors((current) => current.map((item) => item.id === connector.id ? response.connector : item)); setNotice(`同步完成，获取 ${response.run.item_count} 条内容。`);
+      const itemResponse = await listSourceItems(selectedConnectorId ?? undefined); setItems(itemResponse.items);
+    } catch (cause) {
+      const run = cause instanceof SourceApiError ? cause.run : null;
+      if (run) setLastRuns((current) => ({ ...current, [connector.id]: run }));
+      setError(sourceErrorMessage(cause)); void refresh(selectedConnectorId);
+    } finally { setBusy(null); }
+  }
+
+  async function saveToKnowledge(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!selectedItem) return;
+    const form = new FormData(event.currentTarget);
+    setBusy(`save-${selectedItem.id}`); setError(null); setNotice(null);
+    try { await saveSourceItemToKnowledge(selectedItem.id, { ownership: String(form.get("ownership") ?? ""), authorization: String(form.get("authorization") ?? ""), version: String(form.get("version") ?? "1") }); setNotice("已保存到知识库，可在“内容资料”中继续查看。"); }
+    catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setBusy(null); }
+  }
 
   return (
-    <AppShell>
-      <div className="workspace-page">
-        <section className="workspace-main pixel-card">
-          <div className="workspace-header">
-            <div>
-              <span className="section-kicker">信息源</span>
-              <h1>Hermes 雷达素材</h1>
-              <p>
-                {offline
-                  ? "暂时无法连接本地 API。"
-                  : `已读取 ${sources?.total_count ?? 0} 条今日外部素材。`}
-              </p>
-            </div>
-            <div className="topic-actions">
-              <form action={syncSourcesAction}>
-                <button className="pixel-button secondary" type="submit">
-                  同步信息源
-                </button>
-              </form>
-              <Link className="pixel-button" href="/topics">
-                去生成选题
-              </Link>
-            </div>
-          </div>
-
-          <form action={ingestManualLinkAction} className="manual-link-form">
-            <PixelIcon name="link" />
-            <input
-              aria-label="手动链接"
-              name="url"
-              placeholder="粘贴 Product Hunt、观猹或任意文章链接"
-              type="url"
-            />
-            <button className="pixel-button secondary" type="submit">
-              识别链接
-            </button>
-          </form>
-
-          <div className="source-counts">
-            {Object.entries(counts).map(([source, count]) => (
-              <span className="source-badge" key={source}>
-                {source} · {count}
-              </span>
-            ))}
-          </div>
-
-          <section aria-label="来源同步健康" className="source-health-section">
-            <div className="source-health-heading">
-              <strong>同步健康</strong>
-              <span>
-                健康 {healthyCount} · 降级 {degradedCount} · 失败 {failedCount} · 未配置{" "}
-                {notConfiguredCount}
-              </span>
-            </div>
-            {syncSources.length > 0 ? (
-              <div className="source-health-grid">
-                {syncSources.map((source) => {
-                  const tone = getSourceTone(source);
-                  const retryable = source.configured && tone !== "green";
-                  return (
-                    <article
-                      className={`source-health-card ${tone}`}
-                      data-source-key={source.source_type}
-                      key={source.source_type}
-                    >
-                      <header className="source-health-card-head">
-                        <span
-                          aria-label={`状态：${TONE_LABEL[tone]}`}
-                          className={`source-health-light ${tone}`}
-                          title={TONE_LABEL[tone]}
-                        />
-                        <strong>{source.source_type}</strong>
-                        <span className={`step-state ${tone}`}>
-                          {TONE_LABEL[tone]}
-                        </span>
-                      </header>
-                      <div className="source-health-body">
-                        <span>
-                          最近同步 {formatDateTime(source.last_sync_at)}
-                        </span>
-                        <span>
-                          最近成功 {formatDateTime(source.last_success_at)}
-                        </span>
-                        {source.error_message ? (
-                          <code className="source-health-reason">
-                            失败原因：{source.error_message}
-                          </code>
-                        ) : (
-                          <code className="source-health-reason muted">
-                            暂无失败记录
-                          </code>
-                        )}
-                      </div>
-                      <form
-                        action={retrySourceSyncAction}
-                        className="source-health-actions"
-                      >
-                        <input
-                          name="source_key"
-                          type="hidden"
-                          value={source.source_type}
-                        />
-                        <button
-                          className="pixel-button secondary"
-                          disabled={!retryable}
-                          title={
-                            retryable
-                              ? "触发该来源重新拉取"
-                              : source.configured
-                                ? "当前来源同步正常"
-                                : "来源未配置，无法重试"
-                          }
-                          type="submit"
-                        >
-                          重试同步
-                        </button>
-                      </form>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="source-health-empty">
-                <PixelIcon name="ingest" />
-                <div>
-                  <strong>
-                    {offline
-                      ? "API 未连接"
-                      : "尚未拉取来源同步状态"}
-                  </strong>
-                  <p>
-                    {offline
-                      ? "连接恢复后会显示每个来源的同步灯。"
-                      : "调用 /api/sources/status 后会展示每个来源的健康状态。"}
-                  </p>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <div className="workspace-list">
-            {(sources?.items ?? []).map((item) => (
-              <article className="workspace-row" key={item.ref}>
-                <PixelIcon name={item.source_type === "Product Hunt" ? "product" : "link"} />
-                <div>
-                  <strong>{item.title}</strong>
-                  <span>{item.source_type} · {item.ref}</span>
-                  <p>{item.excerpt}</p>
-                </div>
-              </article>
-            ))}
-            {sources?.items.length === 0 && (
-              <div className="workspace-empty">
-                <PixelIcon name="link" />
-                <strong>还没有素材</strong>
-                <p>等待 Hermes 日报落盘，或检查 `HERMES_RADAR_PATH`。</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="workspace-side">
-          <MetricCard icon="ingest" value={String(status?.hermes_radar.total_count ?? 0)} label="Hermes" tone="blue" />
-          <MetricCard icon="product" value={String(status?.hermes_radar.product_hunt_count ?? 0)} label="Product Hunt" tone="green" />
-          <MetricCard icon="link" value={String(status?.hermes_radar.watcha_count ?? 0)} label="观猹" tone="orange" />
-          <div className="pixel-card side-note">
-            <h2>日报文件</h2>
-            <p>{status?.hermes_radar.latest_report ?? "未发现"}</p>
-            <code>{status?.hermes_radar.path ?? "--"}</code>
-            <span>
-              同步状态 ·{" "}
-              {sourcesStatus
-                ? `${healthyCount} 健康 / ${degradedCount} 降级 / ${failedCount} 失败`
-                : "尚未拉取"}
-            </span>
-          </div>
-          <div className="pixel-card side-note">
-            <h2>最近同步时间</h2>
-            {syncSources.length > 0 ? (
-              <ul className="source-health-list-compact">
-                {syncSources.map((source) => (
-                  <li key={`compact-${source.source_type}`}>
-                    <span>{source.source_type}</span>
-                    <code>{formatDate(source.last_sync_at)}</code>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>暂未拉取同步状态。</p>
-            )}
-          </div>
-        </aside>
+    <AppShell inspector={selectedItem ? <SourceItemInspector item={selectedItem} busy={busy} onSave={saveToKnowledge} /> : selectedConnector ? <SourceInspector connector={selectedConnector} lastRun={lastRuns[selectedConnector.id] ?? null} /> : undefined} inspectorTitle={selectedItem ? "信息条目详情" : "信息源详情"}>
+      <div className="source-workspace">
+        {error ? <section className="source-error" role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>已有信息不会被改写；修复连接、登录或权限后再重试。</p></div></section> : null}
+        {notice ? <p className="source-notice" role="status">{notice}</p> : null}
+        <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><Link href="/knowledge">知识库</Link><span aria-current="page">信息源</span></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh(selectedConnectorId)} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
+        <section className="source-platforms" aria-label="可连接平台">{platformEntries.map(({ key, label, available, connector }) => <button className={`source-platform${selectedConnectorId === connector?.id ? " is-selected" : ""}`} key={key} onClick={() => connector && setSelectedConnectorId(connector.id)} type="button"><span>{label}</span><small className={available ? "status-success" : "status-warning"}>{connector ? connectorState(connector).label : available ? "可配置" : "尚未支持"}</small></button>)}</section>
+        <div className="source-workspace__grid">
+          <section className="source-panel"><header><h2>已配置信息源</h2><small>{connectors.length} 个</small></header>{loading ? <p className="source-panel__state"><LoaderCircle className="is-spinning" size={16} />正在读取本地服务…</p> : connectors.length ? <div className="source-connector-list">{connectors.map((connector) => { const state = connectorState(connector); const run = lastRuns[connector.id]; return <article className={`source-connector${selectedConnectorId === connector.id ? " is-selected" : ""}`} key={connector.id}><button onClick={() => { setSelectedConnectorId(connector.id); setSelectedItemId(null); }} type="button"><span className={`source-state-dot status-${state.tone}`} /><div><strong>{platformLabel(connector.platform)}</strong><p>{connector.account_or_rule === "user-provided content" ? "由你手工添加的内容" : connector.account_or_rule}</p><small>{state.label} · 最近运行 {run ? formatTime(run.finished_at) : connector.latest_run_id ? "有记录" : "暂无记录"}</small></div></button><button aria-label={`同步 ${platformLabel(connector.platform)}`} className="source-sync-button" disabled={busy === `sync-${connector.id}`} onClick={() => void sync(connector)} type="button"><RefreshCw className={busy === `sync-${connector.id}` ? "is-spinning" : ""} size={14} />同步</button></article>; })}</div> : <Empty icon={<Link2 size={20} />} title="还没有信息源" text="选择平台并填写可访问的地址或规则。" />}</section>
+          <section className="source-panel source-panel--form"><header><h2>添加信息源</h2></header><form onSubmit={addConnector}><label><span>平台</span><select defaultValue="external_urls" name="platform">{platforms.map((platform) => <option key={platform.key} value={platform.key}>{platform.label}{platform.available ? "" : "（尚未支持）"}</option>)}</select></label><label><span>地址或规则</span><input name="account_or_rule" placeholder="例如：https://example.com/feed" required /></label><label><span>同步频率</span><select defaultValue="每天" name="frequency"><option>每天</option><option>每周</option><option>手动</option></select></label><button disabled={busy === "create-connector"} type="submit"><Plus size={15} />保存信息源</button></form></section>
+        </div>
+        <section className="source-manual-entry"><header><div><h2>手工添加内容</h2><p>文件上传尚未接入；可以登记文字、链接、视频或本机文件引用。</p></div><span><Upload size={15} />上传待接入</span></header><form onSubmit={addManualItem}><label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label><label><span>类型</span><select defaultValue="text" name="content_type"><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件</option></select></label><label><span>链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label><label><span>文件引用（可选）</span><input name="file_reference" placeholder="例如：本机导入目录中的文件路径" /></label><label className="source-manual-entry__body"><span>正文或说明（可选）</span><textarea name="body" placeholder="粘贴文字，或说明视频、文件的内容与出处。" rows={3} /></label><label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label><button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button></form></section>
+        <section className="source-items"><header><h2>{selectedConnector ? `${platformLabel(selectedConnector.platform)}最近获取` : "最近获取"}</h2><small>{items.length} 条</small></header>{loading ? null : items.length ? <div className="source-item-list">{items.map((item) => <button className={`source-item${selectedItemId === item.id ? " is-selected" : ""}`} key={item.id} onClick={() => setSelectedItemId(item.id)} type="button"><span className="source-item__type">{item.content_type}</span><div><strong>{item.title}</strong><p>{item.body || item.subtitles || item.source_url || item.file_reference || "没有可预览的正文。"}</p><small>{sourceLabel(item.source_label)} · {formatTime(item.created_at)} · {item.license}</small></div><Save size={15} /></button>)}</div> : <Empty icon={<FileText size={20} />} title="还没有信息条目" text="同步已配置的信息源，或手工添加已有内容。" />}</section>
       </div>
     </AppShell>
   );
+}
+
+function Empty({ icon, title, text }: { icon: ReactNode; title: string; text: string }) { return <div className="source-panel__empty">{icon}<strong>{title}</strong><p>{text}</p></div>; }
+
+function SourceInspector({ connector, lastRun }: { connector: SourceConnector | null; lastRun: SourceRun | null }) {
+  if (!connector) return <p className="source-inspector-empty">选择一个信息源或信息条目，查看来源、授权与可执行操作。</p>;
+  const state = connectorState(connector);
+  return <div className="source-inspector"><span className={`source-inspector__status status-${state.tone}`}>{state.label}</span><h3>{platformLabel(connector.platform)}</h3><dl><div><dt>地址或规则</dt><dd>{connector.account_or_rule === "user-provided content" ? "由你手工添加的内容" : connector.account_or_rule}</dd></div><div><dt>同步频率</dt><dd>{frequencyLabel(connector.frequency)}</dd></div><div><dt>权限范围</dt><dd>{connector.permissions.map(permissionLabel).join("、") || "未声明"}</dd></div></dl>{lastRun ? <section><h4>本次同步结果</h4><p>获取 {lastRun.item_count} 条 · {formatTime(lastRun.finished_at)}</p>{lastRun.reason ? <p>{lastRun.reason}</p> : null}{lastRun.impact ? <p>影响：{lastRun.impact}</p> : null}{lastRun.repair_action ? <p>处理：{lastRun.repair_action}</p> : null}</section> : <section><h4>最近结果</h4><p>{connector.latest_run_id ? "服务只返回了最近运行标识；结果详情需在下一次同步后显示。" : "尚未同步。"}</p></section>}</div>;
+}
+
+function SourceItemInspector({ item, busy, onSave }: { item: SourceItem; busy: string | null; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+  return <div className="source-inspector"><span className="source-inspector__status">信息条目</span><h3>{item.title}</h3><dl><div><dt>来源</dt><dd>{sourceLabel(item.source_label)}</dd></div><div><dt>原始地址</dt><dd>{item.source_url ? <a href={item.source_url} rel="noreferrer" target="_blank">打开原文 <ExternalLink size={12} /></a> : "无"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div><div><dt>当前使用范围</dt><dd>{item.license}</dd></div></dl><form className="source-save-form" onSubmit={(event) => void onSave(event)}><h4>保存到知识库</h4><label><span>归属</span><input defaultValue="我的内容" name="ownership" required /></label><label><span>授权/使用范围</span><input defaultValue={item.license === "unknown" ? "使用范围待确认" : item.license} name="authorization" required /></label><label><span>版本</span><input defaultValue="1" name="version" required /></label><button disabled={busy === `save-${item.id}`} type="submit"><CheckCircle2 size={14} />保存到知识库</button></form></div>;
 }
