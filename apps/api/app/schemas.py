@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import (
     EpisodeIntakeMode,

@@ -8,6 +8,25 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.models import (
+    Episode,
+    EpisodeIntakeMode,
+    EpisodeStatus,
+    FeedbackEvent,
+    FeedbackValue,
+    ProductionChainStage,
+    ProductionChainStep,
+    ScriptPackage,
+    ScriptSection,
+    ScriptVersion,
+    ScriptVersionSource,
+    SourceFileState,
+    SourceRef,
+    TopicCandidate,
+    VideoJobStatus,
+    utc_now,
+)
+
 logger = logging.getLogger(__name__)
 
 # The active workspace for the current request/worker scope. Set by the
@@ -56,26 +75,6 @@ def active_workspace_id() -> str:
             "workspace context is required when Supabase auth is enabled"
         )
     return LEGACY_WORKSPACE_ID
-
-
-from app.models import (
-    Episode,
-    EpisodeIntakeMode,
-    EpisodeStatus,
-    FeedbackEvent,
-    FeedbackValue,
-    ProductionChainStage,
-    ProductionChainStep,
-    ScriptPackage,
-    ScriptSection,
-    ScriptVersion,
-    ScriptVersionSource,
-    SourceFileState,
-    SourceRef,
-    TopicCandidate,
-    VideoJobStatus,
-    utc_now,
-)
 
 
 class EpisodeRepository:

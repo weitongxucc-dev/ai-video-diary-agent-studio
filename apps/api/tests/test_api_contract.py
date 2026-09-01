@@ -9,7 +9,6 @@ requirements in docs/product-requirements.md.
 
 from datetime import UTC, date, datetime
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -26,11 +25,9 @@ from app.models import (
     ScriptVersionSource,
     VideoJobStatus,
 )
-from app.repository import EpisodeRepository
 from app.schemas import (
     EpisodeResponse,
     FeedbackEventResponse,
-    ScriptVersionResponse,
 )
 
 app = main_module.app
@@ -477,7 +474,6 @@ def test_update_publish_metrics_partial_update():
 
 
 def test_episode_response_includes_platform_and_notes():
-    from app.schemas import EpisodeResponse
 
     episode = Episode(
         id="ep_test",

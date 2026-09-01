@@ -397,7 +397,6 @@ def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
 
 def test_media_preview_attempt_migrates_existing_latest_record(tmp_path):
     database_path = tmp_path / "legacy.sqlite3"
-    output = tmp_path / "legacy.wav"
     started_at = datetime(2026, 8, 28, tzinfo=timezone.utc)
     with sqlite3.connect(database_path) as conn:
         conn.execute(

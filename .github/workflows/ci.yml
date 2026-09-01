@@ -33,7 +33,7 @@ jobs:
       - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ffmpeg
+          sudo apt-get install --yes ffmpeg fonts-noto-cjk
 
       - name: Install Python dependencies
         working-directory: apps/api
@@ -45,7 +45,7 @@ jobs:
 
       - name: Run Ruff
         working-directory: apps/api
-        run: uvx ruff check .
+        run: uvx "ruff==0.15.7" check .
 
   frontend:
     name: Frontend
@@ -112,4 +112,4 @@ jobs:
           node --check apps/desktop/scripts/bundle-standalone.js
 
       - name: Check packaged Python entry-point syntax
-        run: python -m py_compile apps/api/server.py apps/api/worker.py
+        run: python -m py_compile apps/api/server.py

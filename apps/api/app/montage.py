@@ -1036,6 +1036,9 @@ def _subtitle_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         "/System/Library/Fonts/STHeiti Medium.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
         "/Library/Fonts/Arial Unicode.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "C:/Windows/Fonts/msyh.ttc",
     ):
         if Path(candidate).is_file():
             return ImageFont.truetype(candidate, size=size)

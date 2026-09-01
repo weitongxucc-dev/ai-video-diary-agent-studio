@@ -1,11 +1,10 @@
 import json
-from datetime import date
 
 import httpx
 
 from app.config import Settings
 from app.content_templates import get_content_template
-from app.llm import DeepSeekScriptGenerator, TemplateScriptGenerator
+from app.llm import DeepSeekScriptGenerator
 from app.models import (
     FeedbackEvent,
     FeedbackValue,
@@ -14,10 +13,8 @@ from app.models import (
     SourceRef,
     TopicCandidate,
 )
-from app.repository import EpisodeRepository
-from app.services import EpisodeService
 from app.sources import ObsidianVault
-from app.topics import DeepSeekTopicGenerator, TemplateTopicGenerator
+from app.topics import DeepSeekTopicGenerator
 
 
 

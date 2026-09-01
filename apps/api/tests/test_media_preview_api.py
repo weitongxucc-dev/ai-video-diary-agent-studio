@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.avatar_lipsync import (
     Authorization,
-    AvatarAndLipSyncResult,
     AvatarPreviewService,
     PersonProfile,
     UnavailableAvatarAndLipSyncProvider,

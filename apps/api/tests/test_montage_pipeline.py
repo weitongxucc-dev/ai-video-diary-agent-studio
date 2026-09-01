@@ -28,13 +28,11 @@ from app.montage import (
     MontagePlanner,
     MontageRenderError,
     MontageRenderer,
-    MontageRepository,
     NarrationCue,
     _plan_to_srt,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
 )
-from app.narration import NarrationArtifact
 from app.production import (
     CreationPlan,
     CreationTask,
@@ -46,11 +44,9 @@ from app.production import (
     NarrationArtifactRecord,
     NarrationSegment,
     ProductionBatch,
-    ProductionBatchItem,
     ProductionProfile,
     ProductionRepository,
 )
-from app.repository import LEGACY_WORKSPACE_ID, EpisodeRepository
 from app.video_jobs import VideoJobRunner
 
 

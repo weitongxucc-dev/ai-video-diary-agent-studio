@@ -36,24 +36,19 @@ from app.config import (
     configure_process_temporary_directory,
     runtime_env_file_path,
 )
-from app.content_templates import get_content_template, list_content_templates
+from app.content_templates import list_content_templates
 from app.creator_profile import (
     get_or_create_profile,
     upsert_creator_profile,
 )
 from app.drafts import DraftWorkspace
 from app.edit_plan import (
-    apply_confirmed_edit_plan,
     build_edit_plan_workspace,
-    revert_edit_plan_segment_decision,
     safe_processed_video_path,
-    update_edit_plan_segment_decision,
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
-    LLMConfigurationError,
-    LLMResponseError,
     script_generator_from_settings,
 )
 from app.model_installer import ModelInstaller, ModelInstallError
@@ -103,7 +98,6 @@ from app.production import (
     NarrationArtifactRecord,
     NarrationSegment,
     ProductionBatch,
-    ProductionBatchItem,
     ProductionProfile,
     ProductionRepository,
     ScriptGenerationRun,
@@ -113,7 +107,6 @@ from app.production import (
     TaskEvent,
     TimelineVersion,
     TransformRun,
-    VoiceProfile,
     effective_segment_usage_role,
 )
 from app.task_runtime import JobFailure, JobResult
@@ -141,7 +134,6 @@ from app.schemas import (
     CreationPlanPreviewRequest,
     CreationPlanPreviewResponse,
     CreationPlanResponse,
-    CreationTaskTopicCandidateResponse,
     CreationTaskTopicConfirmRequest,
     CreationTaskTopicGenerateRequest,
     CreationTaskTopicsResponse,
@@ -247,10 +239,6 @@ from app.schemas import (
     SystemStatusResponse,
     TopicEvidenceItemResponse,
     TopicEvidenceResponse,
-    TopicEgressPreflightResponse,
-    TopicEvidenceReferenceResponse,
-    TopicGenerationRunResponse,
-    TopicRouteSnapshotResponse,
     VoicePreviewRequest,
     VoiceProfileResponse,
     VoiceReferenceImportResponse,
@@ -275,7 +263,6 @@ from app.sources import (
 )
 from app.topics import (
     CreationTaskGeneratedScript,
-    CreationTaskGeneratedTopic,
     CreationTaskScriptGenerationError,
     CreationTaskScriptInput,
     CreationTaskTopicGenerationError,
@@ -283,8 +270,6 @@ from app.topics import (
     CreationTaskTopicSource,
     OpenAICompatibleCreationTaskTopicGenerator,
     OpenAICompatibleCreationTaskScriptGenerator,
-    TopicGenerationConfigurationError,
-    TopicGenerationResponseError,
     topic_generator_from_settings,
 )
 from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
@@ -825,7 +810,7 @@ def get_production_voice_media(
 ) -> FileResponse:
     workspace_id = current_workspace_id(request)
     try:
-        voice = production_repo.get_voice_profile(workspace_id, voice_profile_id)
+        production_repo.get_voice_profile(workspace_id, voice_profile_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="voice profile not found") from exc
     raise _capability_unavailable(
@@ -3704,7 +3689,7 @@ def create_creation_task_montage_plan(
 ) -> CreationTaskMontagePlanResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    _creation_plan_for_task_or_404(workspace_id, task)
     if task.confirmed_script_id is None or task.narration_cache_key is None:
         raise HTTPException(status_code=409, detail="confirmed script or narration missing")
     try:
@@ -6140,7 +6125,6 @@ def list_production_montage_clip_candidates(
 @app.get("/api/version")
 async def get_version():
     """Return the current API version, build info, and completed phases."""
-    import subprocess
     from pathlib import Path as _Path
 
     # Read version from pyproject.toml

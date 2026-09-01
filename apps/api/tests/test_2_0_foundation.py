@@ -1,10 +1,8 @@
-from datetime import date
 
 from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.config import Settings
-from app.repository import EpisodeRepository
 
 client = TestClient(main_module.app)
 
