@@ -2,12 +2,13 @@
 
 ## 1. 合同状态
 
-- 状态：ACTIVE
-- 阶段：MILESTONE_3_2_TYPED_TIMELINE_SLICE
+- 状态：ACCEPTED
+- 阶段：MILESTONE_3_2_ACCEPTED
 - 模式：MIGRATE
 - 纵向负责人：主 Agent
 - 基线：`e37a79c629a3c1f7b8b4e582d05de8a0dd140938`
 - 分支：`codex/milestone-3-2-avatar-lipsync`
+- 验收候选：`f43580f`
 - 建立日期：2026-09-01
 
 本合同是当前唯一活动执行合同。被替换的长合同只保留在 Git 历史与已合并的 PR #41 中，普通任务不得读取或复制。
@@ -43,10 +44,15 @@
 - 2026-09-02 已用 `person_cc:v1 + voice_cc:v1` 的真实任务配音分段生成 5.496 秒 MP4；`ffprobe` 证明包含 H.264 544×960 视频与 AAC 24kHz 单声道音频，任务媒体接口下载结果与产物 SHA-256 一致。
 - 长人物参考会在 worker 内按目标配音时长截取，避免为一个短片段预处理整段参考视频。
 - 2026-09-02 已在真实任务 `task_45c4865fc904` 上输入“这一段换成 cc 出镜”，生成并确认 `ChangePersonSegment`，将 `person_render_63cc8446ce609f2a109812ed` 写入第一段镜头；撤销后恢复原镜头，再次确认后复用已验证人物片段。
-- 最终成片已重新渲染为 1080×1920、26.633 秒、6,947,465 字节的 H.264 + AAC MP4，并保留烧录中文字幕和独立 SRT；任务进入 `review`，当前时间线序号为 23。
-- 当前仍缺少 `ArtifactRecord`、`DependencyEdge` 和任务运行记录的完整谱系，`RegeneratePersonRender`、动作/表情/口型偏移控制及三尺寸界面验收也尚未完成。
+- 2026-09-02 已对同一真实任务执行“只重做口型”：生成新 `person_render_22e31cf16e8906b414280d91`，与旧人物片段的字节大小和 SHA-256 均不同。
+- 新人物片段已绑定独立的 succeeded `JobRun`、`ArtifactRecord(kind=person_render)`、succeeded `TransformRun` 和 5 条上游 `DependencyEdge`。
+- 真实撤销后旧 `PersonRender` 恢复；再次应用时提案通过 `reuse_person_render_id` 精确恢复最新人物片段，没有再次运行 MuseTalk。
+- 当前成片为 1080×1920、26.633 秒、6,943,350 字节的 H.264 + AAC MP4，并保留烧录中文字幕和 6 段独立 SRT；任务处于 `review/waiting_for_user`。
+- API 重启后，当前时间线、新人物片段、成片、SRT 和实时能力投影均已恢复。
+- 浏览器实测证明人物命令先出现变更预览，确认前不执行；右栏区分“模型能力”与“片段状态”，并展示真实模型与固定参数。
+- 1024×768、1180×800 与主机默认尺寸无横向溢出或不可达按钮；相关 API 测试 64 项、Web 交互测试 10 项、TypeScript、ESLint、Next.js 生产构建均通过。
 
-因此，真实 provider、`PersonRender`、类型化时间线修改、撤销和最终混剪已经形成一个真实纵向切片，但 M3.2 仍未验收。不得把该单片段证据扩写为完整人物编辑、依赖治理或最终 UI 验收。
+因此，M3.2 在候选 `f43580f` 上已完成真实人物口型生成、类型化局部修改、精确重生成、撤销/恢复、谱系、最终混剪和 UI 门禁，独立审查结论为 `ACCEPT`，剩余 P0/P1 为零。
 
 ## 4. 正向交付契约
 
@@ -121,12 +127,12 @@
 
 | 旧对象或行为 | 替代结果 | 完成状态 |
 | --- | --- | --- |
-| 档案页口型预览被当作任务成片能力 | 任务内 `PersonRender` | MIGRATED |
-| API 固定不可用且没有可配置真实 provider | 显式配置、校验和报告的本地 provider | MIGRATED |
-| 人物修改只改变界面状态 | 类型化操作和新 `TimelineVersion` | MIGRATED |
-| 局部人物修改触发整条任务重做 | 精确依赖失效和增量重算 | COEXISTING |
-| 无真实模型时仍提供可点击生成入口 | 禁用并显示唯一修复动作 | ACTIVE |
-| 任务流继续强制逐条授权证明 | 工作区输入默认可创作 | ACTIVE |
+| 档案页口型预览被当作任务成片能力 | 任务内 `PersonRender` | RETIRED |
+| API 固定不可用且没有可配置真实 provider | 显式配置、校验和报告的本地 provider | RETIRED |
+| 人物修改只改变界面状态 | 类型化操作和新 `TimelineVersion` | RETIRED |
+| 局部人物修改触发整条任务重做 | 精确依赖失效和增量重算 | RETIRED |
+| 无真实模型时仍提供可点击生成入口 | 禁用并显示唯一修复动作 | RETIRED |
+| 任务流继续强制逐条授权证明 | 工作区输入默认可创作 | RETIRED |
 
 状态只能按 `ACTIVE → COEXISTING → MIGRATED → RETIRED` 推进；只有 `RETIRED` 才计入完成。
 
