@@ -31,6 +31,7 @@ from app.production import (
     NarrationArtifactRecord,
     NarrationSegment,
     PersonProfile,
+    PersonRender,
     PronunciationEntry,
     ProductionBatch,
     ProductionProfile,
@@ -638,7 +639,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -892,7 +893,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     with sqlite3.connect(production.database_path) as conn:
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
 
 
 def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
@@ -1194,7 +1195,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -1422,6 +1423,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         production.get_narration_segment(
             "workspace_b", "task-narration", initial_segments[0].id
         )
+
 
     montage_plan_id = "montage-narration"
     initial_cues = [
@@ -1994,6 +1996,155 @@ def test_production_foundation_reads_legacy_batches_without_recovery_writes(
     assert response.status_code == 200
     assert response.json()["recent_batches"][0]["id"] == "batch_history"
     assert response.json()["recent_batches"][0]["status"] == "interrupted"
+
+
+def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
+    production = _repository(tmp_path)
+    _save_creation_task(production, workspace_id="workspace_a", task_id="task-person")
+    script_id, sections = _seed_confirmed_script(
+        production,
+        workspace_id="workspace_a",
+        task_id="task-person",
+    )
+    created_at = datetime.now(timezone.utc)
+    segment = NarrationSegment(
+        id="narration-segment-person",
+        workspace_id="workspace_a",
+        task_id="task-person",
+        script_id=script_id,
+        source_section_id=str(sections[0]["id"]),
+        text=str(sections[0]["content"]),
+        audio_reference="narration://segment/person/v1",
+        duration_seconds=5.5,
+        sample_rate=24_000,
+        model_id="qwen3-tts",
+        voice_profile_id="voice-person",
+        voice_version="v1",
+        language="zh-CN",
+        pronunciation_version="v1",
+        status="ready",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    second_segment = replace(
+        segment,
+        id="narration-segment-person-2",
+        source_section_id=str(sections[1]["id"]),
+        text=str(sections[1]["content"]),
+    )
+    production.save_narration_segments(
+        "workspace_a", "task-person", script_id, [segment, second_segment]
+    )
+
+    visual = production.video_library_path / "person.mp4"
+    visual.write_bytes(b"person-video")
+    asset = production.scan_library("workspace_a")[0]
+    visual_reference = production.workspace_media_reference_for_asset(
+        "workspace_a", asset.id
+    )
+    (production.video_library_path / "voice.wav").write_bytes(b"voice")
+    authorization = Authorization(
+        id="person-authorization",
+        workspace_id="workspace_a",
+        version="v1",
+        rights_holder="本人",
+        content_types=("person_likeness",),
+        usage_scopes=("avatar_lipsync",),
+        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        expires_at=None,
+        evidence_reference="consent://person/v1",
+        status="active",
+    )
+    person = production.save_person_profile(
+        PersonProfile(
+            id="person-a",
+            workspace_id="workspace_a",
+            display_name="cc",
+            version="v1",
+            avatar_reference=visual_reference,
+            background_capabilities=("office",),
+            shot_capabilities=("medium",),
+            authorization=authorization,
+        )
+    )
+    production.save_versioned_voice_profile(
+        VersionedVoiceProfile(
+            id="voice-person",
+            workspace_id="workspace_a",
+            person_profile_id=person.id,
+            person_version=person.version,
+            version="v1",
+            language="zh",
+            reference_audio_path="workspace://voice.wav",
+            reference_text="参考声音",
+            model_id="qwen3-tts",
+            authorization=replace(
+                authorization,
+                id="voice-authorization",
+                content_types=("voice",),
+                usage_scopes=("narration", "avatar_lipsync"),
+            ),
+        )
+    )
+    pending = production.create_person_render(
+        PersonRender(
+            id="person-render-a",
+            workspace_id="workspace_a",
+            task_id="task-person",
+            person_profile_id=person.id,
+            person_version=person.version,
+            voice_profile_id="voice-person",
+            voice_version="v1",
+            narration_segment_id=segment.id,
+            visual_reference=visual_reference,
+            model_id="musetalk-v1.5-mps",
+            motion="natural",
+            expression="neutral",
+            cache_key="a" * 64,
+            status="pending",
+        )
+    )
+    assert production.claim_person_render(
+        "workspace_a", "task-person", pending.id
+    ).status == "running"
+    output = tmp_path / "outputs" / "person-render.mp4"
+    output.parent.mkdir()
+    output.write_bytes(b"person-render")
+    ready = production.finish_person_render(
+        "workspace_a",
+        "task-person",
+        pending.id,
+        status="ready",
+        output_path=str(output),
+        duration_seconds=5.5,
+        alignment_evidence='{"engine":"musetalk-v1.5"}',
+    )
+    restarted = ProductionRepository(
+        database_path=production.database_path,
+        video_library_path=production.video_library_path,
+        duration_reader=lambda _path: 25.0,
+        scene_reader=lambda _path, _duration: [5.0, 17.0],
+    )
+    assert restarted.list_person_renders("workspace_a", "task-person") == [ready]
+    with pytest.raises(KeyError):
+        restarted.get_person_render("workspace_b", "task-person", ready.id)
+    interrupted = restarted.create_person_render(
+        replace(
+            pending,
+            id="person-render-interrupted",
+            narration_segment_id=second_segment.id,
+            cache_key="b" * 64,
+        )
+    )
+    restarted.claim_person_render("workspace_a", "task-person", interrupted.id)
+    assert restarted.interrupt_running_person_renders("workspace_a") == 1
+    recovered = restarted.get_person_render(
+        "workspace_a", "task-person", interrupted.id
+    )
+    assert (recovered.status, recovered.failure_reason) == (
+        "failed",
+        "process_interrupted",
+    )
 
 
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(

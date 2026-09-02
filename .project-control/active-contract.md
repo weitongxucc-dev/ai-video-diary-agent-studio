@@ -3,7 +3,7 @@
 ## 1. 合同状态
 
 - 状态：ACTIVE
-- 阶段：MILESTONE_3_2_PREFLIGHT
+- 阶段：MILESTONE_3_2_PERSON_RENDER_FOUNDATION
 - 模式：MIGRATE
 - 纵向负责人：主 Agent
 - 基线：`e37a79c629a3c1f7b8b4e582d05de8a0dd140938`
@@ -38,12 +38,13 @@
 - M1–M3.1 已合并到 `origin/main`，PR #41 的合并提交为本合同基线。
 - Chinese-CLIP 和 Qwen3-TTS 本地模型已真实就绪。
 - `AvatarAndLipSyncProvider`、本地子进程协议、预览运行记录和失败持久化边界已经存在。
-- 当前 API 固定使用 `UnavailableAvatarAndLipSyncProvider`。
-- 当前机器没有已登记的人物口型模型、worker 或模型文件。
-- 现有口型预览属于人物档案预览，不是 `CreationTask` 的 `PersonRender`，也没有进入任务时间线。
-- 当前自然语言与精确编辑只支持镜头、配音和字幕，不支持人物片段。
+- MuseTalk v1.5 的 macOS arm64 本地运行环境、官方模型文件和受控 worker 已配置；任务能力只在运行时与模型文件完整时报告可用。
+- 当前 `CreationTask` 已有持久化 `PersonRender` 基础记录和受控媒体读取接口，但尚未写入 `TimelineVersion`。
+- 2026-09-02 已用 `person_cc:v1 + voice_cc:v1` 的真实任务配音分段生成 5.496 秒 MP4；`ffprobe` 证明包含 H.264 544×960 视频与 AAC 24kHz 单声道音频，任务媒体接口下载结果与产物 SHA-256 一致。
+- 长人物参考会在 worker 内按目标配音时长截取，避免为一个短片段预处理整段参考视频。
+- 当前自然语言与精确编辑仍只支持镜头、配音和字幕；人物片段尚未进入类型化编辑、时间线、依赖图和撤销链路。
 
-因此，现阶段不得把人物口型标记为可用，也不得用静态图、原视频、静音视频或测试 fixture 冒充真实结果。
+因此，真实 provider 与 `PersonRender` 基础链路已接通，但 M3.2 仍未验收。不得把任务级预览扩写为时间线集成或最终成片能力。
 
 ## 4. 正向交付契约
 

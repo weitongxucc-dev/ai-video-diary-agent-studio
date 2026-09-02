@@ -13,6 +13,7 @@ import {
   Play,
   Save,
   Sparkles,
+  UserRound,
   Volume2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +27,7 @@ import {
   createCreationTaskMontagePlan,
   CreationPlanApiError,
   generateCreationTaskNarration,
+  generateCreationTaskPersonRender,
   generateCreationTaskScript,
   generateCreationTaskTopics,
   getCreationTaskMontageClipCandidates,
@@ -54,7 +56,7 @@ type Props = {
   initialTasks: CreationTask[];
 };
 
-type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "voice-select" | "narration" | "plan" | "clip" | "render" | "save" | "edit-preview" | "edit-confirm" | "exact-edit" | "undo";
+type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "voice-select" | "narration" | "person-render" | "plan" | "clip" | "render" | "save" | "edit-preview" | "edit-confirm" | "exact-edit" | "undo";
 
 type SelectedEditContext = {
   kind: "narration" | "cue" | "clip";
@@ -174,14 +176,18 @@ function narrationSegmentStatus(status: CreationTaskNarrationSegment["status"]) 
   return "生成失败";
 }
 
-function NarrationResultView({ busy, onSelect, selectedSegmentId, workspace }: {
+function NarrationResultView({ busy, onGeneratePersonRender, onSelect, selectedSegmentId, workspace }: {
   busy: boolean;
+  onGeneratePersonRender: (segmentId: string) => void;
   onSelect: (segmentId: string) => void;
   selectedSegmentId: string | null;
   workspace: WorkspaceState;
 }) {
   const narration = workspace.narration;
   if (!narration) return null;
+  const selectedRender = workspace.person_renders.find(
+    (render) => render.narration_segment_id === selectedSegmentId,
+  ) ?? null;
   return (
     <section className={styles.workSection}>
       <div className={styles.sectionHeading}><div><span>已生成配音</span><h2>试听当前声音版本</h2><p>{narration.model_id} · {narration.duration_seconds.toFixed(1)} 秒 · {narration.sample_rate} Hz</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已生成</span></div>
@@ -203,6 +209,17 @@ function NarrationResultView({ busy, onSelect, selectedSegmentId, workspace }: {
             {segment.audio_url ? <audio aria-label={`试听配音 ${index + 1}`} controls preload="metadata" src={apiUrl(segment.audio_url)} /> : null}
           </article>
         ))}
+      </div>
+      <div className={styles.personRenderPanel}>
+        <div>
+          <UserRound size={18} />
+          <div><strong>人物口型预览</strong><p>选择一段配音，用当前人物版本检查口型效果；确认编辑后才会进入成片时间线。</p></div>
+        </div>
+        {!selectedSegmentId ? <span>先选择上方一段配音</span> : null}
+        {selectedSegmentId && !selectedRender ? <button className="modern-primary-button" disabled={busy || !workspace.plan.selected_voice} onClick={() => onGeneratePersonRender(selectedSegmentId)} type="button">生成人物口型预览</button> : null}
+        {selectedRender?.status === "running" || selectedRender?.status === "pending" ? <span><LoaderCircle className="is-spinning" size={15} />正在生成人物口型预览</span> : null}
+        {selectedRender?.status === "failed" ? <div className={styles.personRenderFailure}><strong>生成没有完成</strong><p>{selectedRender.impact ?? selectedRender.failure_reason}</p>{selectedRender.repair_action ? <small>{selectedRender.repair_action}</small> : null}<button className="modern-primary-button" disabled={busy} onClick={() => onGeneratePersonRender(selectedSegmentId!)} type="button">重新生成</button></div> : null}
+        {selectedRender?.status === "ready" && selectedRender.media_url ? <div className={styles.personRenderPreview}><video controls preload="metadata" src={apiUrl(selectedRender.media_url)} /><p>{selectedRender.model_id} · {selectedRender.duration_seconds?.toFixed(1)} 秒 · 人物 {selectedRender.person_version}</p></div> : null}
       </div>
     </section>
   );
@@ -560,7 +577,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "script" && task.stage !== "script" && latestScript ? <ConfirmedScriptView script={latestScript} /> : null}
 
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? <section className={styles.workSection}><div className={styles.emptyAction}><Volume2 size={30} /><h2>使用已授权声音生成中文配音</h2><p>必须由 Qwen3-TTS 0.6B 基于已授权 WAV 和参考文字生成；运行环境缺失会明确停止。</p>{workspace.plan.selected_voice ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("narration", () => generateCreationTaskNarration(task.id), "真实配音已生成，可以制作故事板。") } type="button">{busy === "narration" ? <LoaderCircle className="is-spinning" size={16} /> : <Volume2 size={16} />}生成真实配音</button> : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于本任务的声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，可以生成真实配音。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用这个声音继续</button></div> : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于中文配音的授权声音</strong><p>登记人物身份、导入已授权 WAV 并逐字填写参考文字后，可回到本任务继续，不需要重做选题或文案。</p></div><Link className="modern-primary-button" href="/profiles">去登记授权声音</Link></div>}</div></section> : null}
-        {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
+        {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={(segmentId) => { const selectedVoice = workspace.plan.selected_voice; if (selectedVoice) void run("person-render", () => generateCreationTaskPersonRender(task.id, { narration_segment_id: segmentId, person_profile_id: selectedVoice.person_profile_id, person_version: selectedVoice.person_version, motion: "natural", expression: "neutral" }), "人物口型预览已生成；尚未写入成片时间线。"); }} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>用已审核素材生成故事板</h2><p>系统只使用当前工作区中已审核并标注用途的镜头；低置信镜头必须由你确认。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("plan", () => createCreationTaskMontagePlan(task.id), "故事板已生成。") } type="button">{busy === "plan" ? <LoaderCircle className="is-spinning" size={16} /> : <Clapperboard size={16} />}生成故事板</button></div></section> : null}
         {activeView === "montage" && workspace.montage ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>故事板、剪辑与字幕</span><h2>检查镜头、字幕和裁剪</h2><p>{workspace.montage.message}</p></div><div className={styles.storyboardTools}><span className={styles.versionBadge} title={task.current_timeline_version_id ?? "尚无时间线版本"}>当前版本 {task.timeline_sequence}</span><button className={styles.secondaryButton} disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button">{busy === "undo" ? <LoaderCircle className="is-spinning" size={15} /> : null}撤销</button>{workspace.montage.status === "ready" || (workspace.montage.status === "rendered" && !task.current_timeline_version_id) ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("render", () => renderCreationTaskMontage(task.id), !task.current_timeline_version_id ? "已生成可继续修改的成片版本。" : "带字幕初版成片已生成，等待检查。") } type="button">{busy === "render" ? <LoaderCircle className="is-spinning" size={16} /> : <Play size={16} />}{workspace.montage.status === "rendered" ? "生成可编辑版本" : "渲染带字幕成片"}</button> : null}</div></div><div className={styles.storyboard}>{workspace.montage.clips.map((clip, index) => <article className={[clip.needs_confirmation ? styles.needsReview : "", selectedClipId === clip.id ? styles.selectedClip : ""].filter(Boolean).join(" ")} key={clip.id} onClick={() => selectClip(clip.id)}><button aria-label={`选择镜头 ${index + 1}`} aria-pressed={selectedClipId === clip.id} className={styles.clipSelector} onClick={() => selectClip(clip.id)} type="button"><span className={styles.clipIndex}>{index + 1}</span></button><div><strong>{clip.role === "a_roll" ? "人物主镜头" : "补充画面"}</strong>{clip.match_reasons?.length ? <p className={styles.matchReasons}>匹配理由：{clip.match_reasons.join("；")}</p> : null}<div className={[styles.subtitleEditor, selectedCueId === clip.cue_id ? styles.selectedCue : ""].filter(Boolean).join(" ")} onClick={(event) => event.stopPropagation()}><div className={styles.subtitleHeader}><button aria-label={`选择字幕 ${index + 1}`} aria-pressed={selectedCueId === clip.cue_id} onClick={() => selectCue(clip.cue_id)} type="button">字幕 {index + 1}</button></div><textarea aria-label={`镜头 ${index + 1} 字幕`} defaultValue={workspace.montage?.cues.find((cue) => cue.id === clip.cue_id)?.text ?? ""} disabled={busy !== null} key={`${clip.cue_id}:${workspace.montage?.cues.find((cue) => cue.id === clip.cue_id)?.text ?? ""}`} onBlur={(event) => { const currentText = workspace.montage?.cues.find((cue) => cue.id === clip.cue_id)?.text ?? ""; const text = event.target.value; if (text !== currentText) void applyExactEdit({ operation_type: "UpdateSubtitleCue", cue_id: clip.cue_id, text }); }} onFocus={() => selectCue(clip.cue_id)} rows={2} /></div><small>字幕时间跟随当前旁白，不会改变配音 · {clip.source_start_seconds.toFixed(1)}–{clip.source_end_seconds.toFixed(1)} 秒 · 匹配 {Math.round(clip.match_score * 100)}%</small><label className={styles.trimControl}><span>裁剪起点（秒）</span><input aria-label={`镜头 ${index + 1} 裁剪起点`} defaultValue={clip.source_start_seconds.toFixed(1)} disabled={busy !== null || clip.locked} key={`${clip.id}:${clip.source_start_seconds}`} min="0" onBlur={(event) => { const nextStart = Number(event.target.value); if (Number.isFinite(nextStart) && Math.abs(nextStart - clip.source_start_seconds) >= 0.05) void applyExactEdit({ operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: nextStart }); }} step="0.1" type="number" /></label>{replacementClipId === clip.id ? <label className={styles.replacement}><span>替换为已审核镜头</span><select defaultValue="" onChange={(event) => { const candidate = replacementCandidates.find((item) => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) void applyExactEdit({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option disabled value="">选择镜头</option>{replacementCandidates.map((candidate) => <option key={`${candidate.asset_id}:${candidate.segment_id}`} value={`${candidate.asset_id}:${candidate.segment_id}`}>{candidate.file_name} · {candidate.start_seconds.toFixed(1)} 秒 · {Math.round(candidate.score * 100)}%</option>)}</select></label> : null}</div><div className={styles.clipActions}><button aria-label="向前移动" disabled={busy !== null || index === 0 || clip.locked} onClick={() => void applyExactEdit({ operation_type: "ReorderClip", clip_id: clip.id, position: index - 1 })} type="button"><ArrowUp size={15} /></button><button aria-label="向后移动" disabled={busy !== null || index === workspace.montage!.clips.length - 1 || clip.locked} onClick={() => void applyExactEdit({ operation_type: "ReorderClip", clip_id: clip.id, position: index + 1 })} type="button"><ArrowDown size={15} /></button><button disabled={busy !== null} onClick={() => void showReplacementCandidates(clip.id)} type="button">替换</button><button disabled={busy !== null} onClick={() => void applyExactEdit({ operation_type: "SetClipLock", clip_id: clip.id, locked: !clip.locked })} type="button">{clip.locked ? "解锁" : "锁定"}</button>{clip.needs_confirmation ? <button disabled={busy !== null} onClick={() => void applyExactEdit({ operation_type: "ConfirmClip", clip_id: clip.id })} type="button"><Check size={15} />确认镜头</button> : <span><CheckCircle2 size={15} />已确认</span>}</div></article>)}</div></section> : null}

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.avatar_lipsync import UnavailableAvatarAndLipSyncProvider
 from app.external_sources import ExternalSourceResponseError
 from app.production import ProductionRepository
 from app.source_repository import SourceRepository
@@ -35,6 +36,11 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         ),
     )
     monkeypatch.setattr(main_module, "voice_clone_provider", _UnavailableVoiceCloneProvider())
+    monkeypatch.setattr(
+        main_module,
+        "avatar_lipsync_provider",
+        UnavailableAvatarAndLipSyncProvider(),
+    )
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",

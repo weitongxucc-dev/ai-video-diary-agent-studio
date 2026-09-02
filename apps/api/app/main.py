@@ -18,10 +18,12 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.avatar_lipsync import (
     Authorization,
+    AvatarAndLipSyncService,
     AvatarPreviewService,
     PersonProfile,
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
+    avatar_lipsync_cache_key,
     avatar_lipsync_provider_from_settings,
 )
 from app.auth import (
@@ -97,6 +99,7 @@ from app.production import (
     MaterialCollection,
     NarrationArtifactRecord,
     NarrationSegment,
+    PersonRender,
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
@@ -142,6 +145,9 @@ from app.schemas import (
     CreationTaskScriptsResponse,
     CreationTaskNarrationResponse,
     CreationTaskNarrationVoiceSelectionRequest,
+    CreationTaskPersonRenderRequest,
+    CreationTaskPersonRenderResponse,
+    CreationTaskPersonRendersResponse,
     CreationTaskMontagePlanResponse,
     CreationTaskMontageClipUpdateRequest,
     CreationTaskMontageRenderRequest,
@@ -386,6 +392,7 @@ video_job_runner = VideoJobRunner(production_repo)
 # A process that disappeared while a durable job was running must leave an
 # explicit recoverable state; it must never be interpreted as a success.
 video_job_runner.recover_after_restart()
+production_repo.interrupt_running_person_renders()
 edit_plan_apply_runner = None
 source_tracker = SourceTracker(video_inbox)
 auth_context = SupabaseAuthContext(settings)
@@ -2825,6 +2832,10 @@ def _creation_task_workspace_response(
                 if artifact is not None
                 else None
             ),
+            "person_renders": [
+                _person_render_response(render).model_dump()
+                for render in production_repo.list_person_renders(workspace_id, task.id)
+            ],
             "montage": (
                 _creation_task_montage_response(montage).model_dump()
                 if montage is not None
@@ -3687,6 +3698,176 @@ def get_creation_task_narration_segment_audio(
         workspace_id, segment.audio_reference
     )
     return FileResponse(path, media_type="audio/wav", filename=f"{segment.id}.wav")
+
+
+def _person_render_media_path(render: PersonRender) -> Path | None:
+    if render.status != "ready" or not render.output_path:
+        return None
+    root = Path(settings.video_output_path).expanduser().resolve()
+    output = Path(render.output_path).expanduser().resolve()
+    try:
+        output.relative_to(root)
+    except ValueError:
+        return None
+    if not output.is_file() or output.stat().st_size == 0:
+        return None
+    return output
+
+
+def _person_render_response(render: PersonRender) -> CreationTaskPersonRenderResponse:
+    payload = asdict(render)
+    payload.pop("cache_key", None)
+    payload.pop("output_path", None)
+    payload["media_url"] = (
+        f"/api/creation-tasks/{render.task_id}/person-renders/{render.id}/media"
+        if _person_render_media_path(render) is not None
+        else None
+    )
+    return CreationTaskPersonRenderResponse.model_validate(payload)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/person-renders",
+    response_model=CreationTaskPersonRendersResponse,
+)
+def list_creation_task_person_renders(
+    task_id: str, request: Request
+) -> CreationTaskPersonRendersResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    items = production_repo.list_person_renders(workspace_id, task_id)
+    return CreationTaskPersonRendersResponse(
+        items=[_person_render_response(item) for item in items],
+        total_count=len(items),
+    )
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/person-renders/generate",
+    response_model=CreationTaskPersonRenderResponse,
+)
+def generate_creation_task_person_render(
+    task_id: str,
+    payload: CreationTaskPersonRenderRequest,
+    request: Request,
+) -> CreationTaskPersonRenderResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    if not avatar_lipsync_provider.ready:
+        raise _capability_unavailable(
+            "avatar_lipsync",
+            message=avatar_lipsync_provider.message,
+            impact="人物片段未生成，当前任务继续使用原始素材。",
+            repair_action="配置本地人物口型运行环境后重试。",
+        )
+    try:
+        segment = production_repo.get_narration_segment(
+            workspace_id, task_id, payload.narration_segment_id
+        )
+        if segment.status != "ready" or not segment.audio_reference:
+            raise ValueError("人物片段只能使用已完成的配音分段")
+        person = production_repo.get_person_profile(
+            workspace_id,
+            payload.person_profile_id,
+            payload.person_version,
+        )
+        audio_path = production_repo.resolve_authorized_narration_audio_reference(
+            workspace_id, segment.audio_reference
+        )
+        render_request = production_repo.resolve_avatar_lipsync_request(
+            workspace_id=workspace_id,
+            person_id=person.id,
+            person_version=person.version,
+            voice_profile_id=segment.voice_profile_id,
+            voice_version=segment.voice_version,
+            audio_path=str(audio_path),
+            audio_cache_key=segment.audio_reference,
+            language="zh",
+            motion=payload.motion,
+            expression=payload.expression,
+            authorization_id=person.authorization.id,
+            authorization_version=person.authorization.version,
+            model_id=avatar_lipsync_provider.model_id,
+        )
+        cache_key = avatar_lipsync_cache_key(render_request)
+        render = production_repo.create_person_render(
+            PersonRender(
+                id=f"person_render_{cache_key[:24]}",
+                workspace_id=workspace_id,
+                task_id=task_id,
+                person_profile_id=person.id,
+                person_version=person.version,
+                voice_profile_id=segment.voice_profile_id,
+                voice_version=segment.voice_version,
+                narration_segment_id=segment.id,
+                visual_reference=person.avatar_reference,
+                model_id=avatar_lipsync_provider.model_id,
+                motion=payload.motion,
+                expression=payload.expression,
+                cache_key=cache_key,
+                status="pending",
+            )
+        )
+        if render.status == "ready":
+            if _person_render_media_path(render) is None:
+                raise ValueError("已记录的人物片段输出缺失，请重新生成")
+            return _person_render_response(render)
+        if render.status == "running":
+            return _person_render_response(render)
+        production_repo.claim_person_render(workspace_id, task_id, render.id)
+        result = AvatarAndLipSyncService(
+            settings.video_output_path,
+            avatar_lipsync_provider,
+        ).render(render_request)
+        if result.status == "succeeded":
+            completed = production_repo.finish_person_render(
+                workspace_id,
+                task_id,
+                render.id,
+                status="ready",
+                output_path=result.artifact_path,
+                duration_seconds=result.duration_seconds,
+                alignment_evidence=result.alignment_evidence,
+            )
+            return _person_render_response(completed)
+        failed = production_repo.finish_person_render(
+            workspace_id,
+            task_id,
+            render.id,
+            status="failed",
+            failure_reason=result.failure_code or "person_render_failed",
+            impact=result.failure_impact or "人物片段未生成，当前任务继续使用原始素材。",
+            repair_action=result.remediation_action or "检查人物口型运行环境后重试。",
+        )
+        return _person_render_response(failed)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="person render input not found") from exc
+    except MediaAuthorityError as exc:
+        raise _topic_failure_response(
+            status_code=409,
+            error=exc.reason,
+            reason=exc.reason,
+            impact=exc.impact,
+            repair_action=exc.repair_action,
+            retryable=False,
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/creation-tasks/{task_id}/person-renders/{render_id}/media")
+def get_creation_task_person_render_media(
+    task_id: str, render_id: str, request: Request
+) -> FileResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        render = production_repo.get_person_render(workspace_id, task_id, render_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="person render not found") from exc
+    output = _person_render_media_path(render)
+    if output is None:
+        raise HTTPException(status_code=409, detail="person render is not ready")
+    return FileResponse(output, media_type="video/mp4", filename=f"{render.id}.mp4")
 
 
 @app.post(

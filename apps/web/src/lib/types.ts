@@ -1160,6 +1160,29 @@ export type CreationTaskNarration = {
   segments: CreationTaskNarrationSegment[];
 };
 
+export type CreationTaskPersonRender = {
+  id: string;
+  task_id: string;
+  person_profile_id: string;
+  person_version: string;
+  voice_profile_id: string;
+  voice_version: string;
+  narration_segment_id: string;
+  visual_reference: string;
+  model_id: string;
+  motion: "natural";
+  expression: "neutral";
+  status: "pending" | "running" | "ready" | "failed";
+  duration_seconds: number | null;
+  alignment_evidence: string | null;
+  media_url: string | null;
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CreationTaskVoiceOption = {
   profile_id: string;
   version: string;
@@ -1214,6 +1237,7 @@ export type CreationTaskWorkspace = {
   scripts: CreationTaskScript[];
   available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
+  person_renders: CreationTaskPersonRender[];
   montage: CreationTaskMontage | null;
 };
 

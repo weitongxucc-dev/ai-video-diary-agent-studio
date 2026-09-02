@@ -91,6 +91,66 @@ def _probe_output(path: Path) -> tuple[float, str]:
     return duration, evidence
 
 
+def _probe_duration(path: Path) -> float:
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise WorkerFailure(completed.stderr.strip() or "ffprobe failed")
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as exc:
+        raise WorkerFailure("ffprobe returned an invalid duration") from exc
+    if duration <= 0:
+        raise WorkerFailure("media duration must be positive")
+    return duration
+
+
+def _stage_visual_source(source: Path, target: Path, audio_duration: float) -> None:
+    completed = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-t",
+            f"{audio_duration:.3f}",
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            str(target),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if completed.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+        raise WorkerFailure(completed.stderr.strip() or "failed to stage visual source")
+
+
 def _render(payload: dict[str, object], runtime_root: Path) -> dict[str, object]:
     if payload.get("schema_version") != 1:
         raise WorkerFailure("unsupported request schema")
@@ -112,7 +172,8 @@ def _render(payload: dict[str, object], runtime_root: Path) -> dict[str, object]
         work = Path(temporary)
         staged_source = work / "source.mp4"
         staged_audio = work / "audio.wav"
-        shutil.copy2(source, staged_source)
+        audio_duration = _probe_duration(audio)
+        _stage_visual_source(source, staged_source, audio_duration)
         shutil.copy2(audio, staged_audio)
         config = work / "job.yaml"
         result_root = work / "results"

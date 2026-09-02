@@ -54,12 +54,14 @@ def _profiles(
     reference = repository.video_library_path / "approved" / f"{workspace_id}-reference.wav"
     reference.parent.mkdir(parents=True, exist_ok=True)
     reference.write_bytes(b"fixture reference")
+    avatar = repository.video_library_path / "approved" / f"{workspace_id}-avatar.mp4"
+    avatar.write_bytes(b"fixture avatar")
     person = PersonProfile(
         id="person_a",
         workspace_id=workspace_id,
         display_name="主播 A",
         version="person-v1",
-        avatar_reference="asset://avatar/person-a",
+        avatar_reference=f"workspace://approved/{avatar.name}",
         background_capabilities=("studio",),
         shot_capabilities=("medium",),
         authorization=_authorization(workspace_id, "person_likeness", ("avatar_lipsync",)),

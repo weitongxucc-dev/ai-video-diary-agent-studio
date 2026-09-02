@@ -405,6 +405,19 @@ class AvatarAndLipSyncService:
             / _safe_component(request.workspace_id)
             / f"{cache_key}.mp4"
         )
+        reusable = _probe_avatar_output(output)
+        if reusable is not None:
+            duration_seconds, alignment_evidence = reusable
+            return AvatarAndLipSyncResult(
+                status="succeeded",
+                cache_key=cache_key,
+                artifact_path=str(output.resolve()),
+                duration_seconds=duration_seconds,
+                alignment_evidence=alignment_evidence,
+                failure_code=None,
+                failure_impact=None,
+                remediation_action=None,
+            )
         return self.provider.render(request=request, output_path=output)
 
     def render_from_repository(
@@ -856,3 +869,59 @@ def avatar_lipsync_provider_from_settings(
         model_id=settings.avatar_model_id,
         supported_languages=("zh",),
     )
+
+
+def _probe_avatar_output(path: Path) -> tuple[float, str] | None:
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+        duration = float(payload["format"]["duration"])
+        streams = payload["streams"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    video = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if (
+        duration <= 0
+        or video is None
+        or audio is None
+        or video.get("codec_name") != "h264"
+        or audio.get("codec_name") != "aac"
+        or not video.get("width")
+        or not video.get("height")
+    ):
+        return None
+    evidence = json.dumps(
+        {
+            "engine": "musetalk-v1.5",
+            "duration_seconds": round(duration, 3),
+            "video_codec": video.get("codec_name"),
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "audio_codec": audio.get("codec_name"),
+            "sample_rate": audio.get("sample_rate"),
+            "channels": audio.get("channels"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return round(duration, 3), evidence

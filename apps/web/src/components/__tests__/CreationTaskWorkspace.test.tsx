@@ -112,6 +112,7 @@ function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null
     scripts: [],
     available_voices: [],
     narration: null,
+    person_renders: [],
     montage,
   };
 }

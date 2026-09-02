@@ -898,6 +898,44 @@ class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
     voice_version: str = Field(min_length=1, max_length=120)
 
 
+class CreationTaskPersonRenderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    narration_segment_id: str = Field(min_length=1, max_length=160)
+    person_profile_id: str = Field(min_length=1, max_length=120)
+    person_version: str = Field(min_length=1, max_length=120)
+    motion: Literal["natural"] = "natural"
+    expression: Literal["neutral"] = "neutral"
+
+
+class CreationTaskPersonRenderResponse(BaseModel):
+    id: str
+    task_id: str
+    person_profile_id: str
+    person_version: str
+    voice_profile_id: str
+    voice_version: str
+    narration_segment_id: str
+    visual_reference: str
+    model_id: str
+    motion: Literal["natural"]
+    expression: Literal["neutral"]
+    status: Literal["pending", "running", "ready", "failed"]
+    duration_seconds: float | None = Field(default=None, gt=0)
+    alignment_evidence: str | None
+    media_url: str | None
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreationTaskPersonRendersResponse(BaseModel):
+    items: list[CreationTaskPersonRenderResponse]
+    total_count: int = Field(ge=0)
+
+
 class CreationTaskVoiceOptionResponse(BaseModel):
     profile_id: str
     version: str
@@ -1142,6 +1180,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     scripts: list[CreationTaskScriptResponse]
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
+    person_renders: list[CreationTaskPersonRenderResponse] = Field(default_factory=list)
     montage: CreationTaskMontagePlanResponse | None
 
 
