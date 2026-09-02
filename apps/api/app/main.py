@@ -3742,16 +3742,11 @@ def list_creation_task_person_renders(
     )
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/person-renders/generate",
-    response_model=CreationTaskPersonRenderResponse,
-)
-def generate_creation_task_person_render(
+def _generate_creation_task_person_render_record(
+    workspace_id: str,
     task_id: str,
     payload: CreationTaskPersonRenderRequest,
-    request: Request,
-) -> CreationTaskPersonRenderResponse:
-    workspace_id = current_workspace_id(request)
+) -> PersonRender:
     _creation_task_or_404(workspace_id, task_id)
     if not avatar_lipsync_provider.ready:
         raise _capability_unavailable(
@@ -3811,9 +3806,9 @@ def generate_creation_task_person_render(
         if render.status == "ready":
             if _person_render_media_path(render) is None:
                 raise ValueError("已记录的人物片段输出缺失，请重新生成")
-            return _person_render_response(render)
+            return render
         if render.status == "running":
-            return _person_render_response(render)
+            return render
         production_repo.claim_person_render(workspace_id, task_id, render.id)
         result = AvatarAndLipSyncService(
             settings.video_output_path,
@@ -3829,7 +3824,7 @@ def generate_creation_task_person_render(
                 duration_seconds=result.duration_seconds,
                 alignment_evidence=result.alignment_evidence,
             )
-            return _person_render_response(completed)
+            return completed
         failed = production_repo.finish_person_render(
             workspace_id,
             task_id,
@@ -3839,7 +3834,7 @@ def generate_creation_task_person_render(
             impact=result.failure_impact or "人物片段未生成，当前任务继续使用原始素材。",
             repair_action=result.remediation_action or "检查人物口型运行环境后重试。",
         )
-        return _person_render_response(failed)
+        return failed
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="person render input not found") from exc
     except MediaAuthorityError as exc:
@@ -3853,6 +3848,23 @@ def generate_creation_task_person_render(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/person-renders/generate",
+    response_model=CreationTaskPersonRenderResponse,
+)
+def generate_creation_task_person_render(
+    task_id: str,
+    payload: CreationTaskPersonRenderRequest,
+    request: Request,
+) -> CreationTaskPersonRenderResponse:
+    render = _generate_creation_task_person_render_record(
+        current_workspace_id(request),
+        task_id,
+        payload,
+    )
+    return _person_render_response(render)
 
 
 @app.get("/api/creation-tasks/{task_id}/person-renders/{render_id}/media")
@@ -4698,6 +4710,159 @@ def preview_creation_task_edit(
             )
         )
         return _edit_preview_response(intent, proposal)
+    if selected_ref.startswith("clip:") and any(
+        token in command.casefold()
+        for token in ("出镜", "口型", "人物", "avatar", "lip sync", "lipsync")
+    ):
+        if payload.context_stage not in {"montage", "review"}:
+            raise _topic_failure_response(
+                status_code=409,
+                error="edit_scope_unavailable",
+                reason="当前步骤还不能把人物口型片段写入成片。",
+                impact="任务内容没有发生变化。",
+                repair_action="进入视频剪辑或检查成片后选择一个镜头。",
+                retryable=True,
+            )
+        clip_id = selected_ref.removeprefix("clip:")
+        try:
+            montage = creation_task_montage_plan_from_payload(
+                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+            )
+            clip = next(item for item in montage.clips if item.id == clip_id)
+            cue = next(item for item in montage.cues if item.id == clip.cue_id)
+            segment = production_repo.get_narration_segment(
+                workspace_id, task.id, cue.narration_segment_id
+            )
+            creation_plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
+            selected_voice = creation_plan.selected_voice
+            if selected_voice is None:
+                raise ValueError("当前任务没有绑定人物声音版本")
+            person = production_repo.get_person_profile(
+                workspace_id,
+                selected_voice.person_profile_id,
+                selected_voice.person_version,
+            )
+        except (KeyError, StopIteration) as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="creation task person edit target not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if montage.status != "rendered":
+            raise _topic_failure_response(
+                status_code=409,
+                error="rendered_version_required",
+                reason="当前任务还没有可比较的成片版本。",
+                impact="无法准确展示人物出镜会替换哪一个镜头。",
+                repair_action="先渲染当前成片，再选择镜头提出人物出镜要求。",
+                retryable=True,
+            )
+        if segment.status != "ready" or not segment.audio_reference:
+            raise _topic_failure_response(
+                status_code=409,
+                error="narration_segment_unavailable",
+                reason="所选镜头没有可用于口型生成的已完成配音。",
+                impact="当前镜头和成片保持不变。",
+                repair_action="先完成对应配音分段，再重新提交人物出镜要求。",
+                retryable=True,
+            )
+        existing_render = next(
+            (
+                item
+                for item in reversed(
+                    production_repo.list_person_renders(workspace_id, task.id)
+                )
+                if item.narration_segment_id == segment.id
+                and item.person_profile_id == person.id
+                and item.person_version == person.version
+                and item.status == "ready"
+                and _person_render_media_path(item) is not None
+            ),
+            None,
+        )
+        base_version = _ensure_montage_base_version(workspace_id, task, montage)
+        now = utc_now()
+        intent = production_repo.create_edit_intent(
+            EditIntent(
+                id=f"intent_{uuid4().hex}",
+                workspace_id=workspace_id,
+                task_id=task.id,
+                raw_command=command,
+                context_stage=payload.context_stage,
+                selected_object_refs=[selected_ref],
+                playhead_ms=payload.playhead_ms,
+                intent_type="change_person_segment",
+                scope={
+                    "kind": "clip",
+                    "clip_id": clip.id,
+                    "narration_segment_id": segment.id,
+                },
+                constraints={
+                    "preserve_narration": True,
+                    "preserve_subtitles": True,
+                    "preserve_other_clips": True,
+                },
+                confidence=0.98,
+                status="interpreted",
+                created_at=now,
+            )
+        )
+        proposal = production_repo.create_edit_proposal(
+            EditProposal(
+                id=f"proposal_{uuid4().hex}",
+                workspace_id=workspace_id,
+                task_id=task.id,
+                intent_id=intent.id,
+                summary=(
+                    f"把所选镜头换成 {person.display_name} 的口型片段；"
+                    "配音、字幕和其他镜头保持不变。"
+                ),
+                target_refs=[selected_ref],
+                operation={
+                    "operation_type": "ChangePersonSegment",
+                    "payload": {
+                        "clip_id": clip.id,
+                        "cue_id": cue.id,
+                        "narration_segment_id": segment.id,
+                        "person_profile_id": person.id,
+                        "person_version": person.version,
+                        "expected_asset_id": clip.asset_id,
+                        "expected_segment_id": clip.segment_id,
+                        "expected_person_render_id": clip.person_render_id,
+                        "motion": "natural",
+                        "expression": "neutral",
+                        "base_version_id": base_version.id,
+                    },
+                },
+                invalidated_refs=_logical_montage_output_refs(montage),
+                preview={
+                    "before": {
+                        "ref": selected_ref,
+                        "label": "当前镜头",
+                        "detail": (
+                            f"{clip.timeline_start_seconds:.1f}–"
+                            f"{clip.timeline_end_seconds:.1f} 秒"
+                        ),
+                    },
+                    "after": {
+                        "ref": f"person:{person.id}:{person.version}",
+                        "label": f"{person.display_name} 出镜",
+                        "detail": "自然动作 · 中性表情 · 沿用当前配音和字幕",
+                    },
+                },
+                external_effects=[
+                    (
+                        "确认后复用已验证的人物口型片段，只使当前成片输出失效。"
+                        if existing_render is not None
+                        else "确认后调用一次真实人物口型模型；不会重做文案、配音、字幕或其他镜头。"
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return _edit_preview_response(intent, proposal)
     if payload.context_stage not in {"montage", "review"}:
         raise _topic_failure_response(
             status_code=409,
@@ -4866,6 +5031,94 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "ChangePersonSegment" and isinstance(operation_payload, dict):
+        required_strings = {
+            key: operation_payload.get(key)
+            for key in (
+                "clip_id",
+                "cue_id",
+                "narration_segment_id",
+                "person_profile_id",
+                "person_version",
+                "expected_asset_id",
+                "expected_segment_id",
+                "motion",
+                "expression",
+                "base_version_id",
+            )
+        }
+        if any(
+            not isinstance(value, str) or not value
+            for value in required_strings.values()
+        ):
+            raise HTTPException(status_code=409, detail="invalid person segment edit operation")
+        if task.current_timeline_version_id != required_strings["base_version_id"]:
+            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        try:
+            base_version = production_repo.get_timeline_version(
+                workspace_id, required_strings["base_version_id"]
+            )
+            montage = creation_task_montage_plan_from_payload(
+                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+            )
+            clip = next(
+                item for item in montage.clips if item.id == required_strings["clip_id"]
+            )
+            cue = next(item for item in montage.cues if item.id == required_strings["cue_id"])
+        except (KeyError, StopIteration) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="person segment edit base no longer exists",
+            ) from exc
+        if (
+            clip.asset_id != required_strings["expected_asset_id"]
+            or clip.segment_id != required_strings["expected_segment_id"]
+            or clip.person_render_id != operation_payload.get("expected_person_render_id")
+            or cue.narration_segment_id != required_strings["narration_segment_id"]
+        ):
+            raise HTTPException(status_code=409, detail="person segment edit target has changed")
+        render = _generate_creation_task_person_render_record(
+            workspace_id,
+            task.id,
+            CreationTaskPersonRenderRequest(
+                narration_segment_id=required_strings["narration_segment_id"],
+                person_profile_id=required_strings["person_profile_id"],
+                person_version=required_strings["person_version"],
+                motion=required_strings["motion"],
+                expression=required_strings["expression"],
+            ),
+        )
+        if render.status != "ready" or _person_render_media_path(render) is None:
+            raise _topic_failure_response(
+                status_code=503,
+                error=render.failure_reason or "person_render_failed",
+                reason=render.failure_reason or "人物口型片段没有生成可信输出。",
+                impact=render.impact or "当前时间线和成片保持不变。",
+                repair_action=render.repair_action or "检查人物口型运行环境后重试。",
+                retryable=True,
+            )
+        clip.person_render_id = render.id
+        clip.match_reasons = [
+            f"人物 {render.person_profile_id} · {render.person_version}",
+            "口型使用当前配音分段生成",
+        ]
+        clip.role = "a_roll"
+        clip.manually_selected = True
+        montage, _ = _prepare_changed_montage(
+            montage,
+            message="人物口型片段已写入当前版本；配音、字幕和其他镜头保持不变，可以重新渲染。",
+        )
+        applied_payload = dict(operation_payload)
+        applied_payload["person_render_id"] = render.id
+        return _persist_typed_montage_edit(
+            workspace_id=workspace_id,
+            task=task,
+            proposal=proposal,
+            base_version=base_version,
+            updated_plan=montage,
+            operation_type="ChangePersonSegment",
+            operation_payload=applied_payload,
+        )
     if operation_type == "UpdateSubtitleCue" and isinstance(operation_payload, dict):
         cue_id = operation_payload.get("cue_id")
         text = operation_payload.get("text")
@@ -5019,6 +5272,19 @@ def apply_creation_task_exact_edit(
 ) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
+    if payload.operation_type == "ChangePersonSegment":
+        if not payload.clip_id:
+            raise HTTPException(status_code=422, detail="person edit requires clip_id")
+        preview = preview_creation_task_edit(
+            task_id,
+            request,
+            CreationTaskEditPreviewRequest(
+                raw_command="这一段换成当前人物出镜并匹配口型",
+                context_stage="review" if task.stage == "review" else "montage",
+                selected_object_refs=[f"clip:{payload.clip_id}"],
+            ),
+        )
+        return confirm_creation_task_edit(task_id, preview.proposal.id, request)
     if payload.operation_type == "UpdateSubtitleCue":
         if not payload.cue_id or payload.text is None:
             raise HTTPException(status_code=422, detail="subtitle edit requires cue_id and text")
@@ -5473,6 +5739,11 @@ def render_creation_task_montage(
                 f"montage-plan://{task.id}/{plan.id}",
                 plan.narration_audio_path,
                 *(clip.source_path for clip in plan.clips),
+                *(
+                    f"person-render://{clip.person_render_id}"
+                    for clip in plan.clips
+                    if clip.person_render_id
+                ),
             ]
         )
     )
@@ -6119,6 +6390,8 @@ def get_production_batch(
 
 def _record_montage_usage(workspace_id: str, plan) -> None:
     for clip in plan.clips:
+        if clip.person_render_id:
+            continue
         production_repo.record_segment_usage(
             workspace_id,
             clip.asset_id,
@@ -6138,9 +6411,36 @@ def _render_montage_with_resolved_clip_sources(
     job_staging_path: Path | None = None,
 ):
     original_references = [clip.source_path for clip in plan.clips]
+    original_ranges = [
+        (clip.source_start_seconds, clip.source_end_seconds) for clip in plan.clips
+    ]
     original_narration_reference = plan.narration_audio_path
+    cues_by_id = {cue.id: cue for cue in plan.cues}
     try:
         for clip in plan.clips:
+            if clip.person_render_id:
+                render = production_repo.get_person_render(
+                    workspace_id, plan.task_id, clip.person_render_id
+                )
+                output = _person_render_media_path(render)
+                cue = cues_by_id.get(clip.cue_id)
+                if (
+                    output is None
+                    or cue is None
+                    or render.narration_segment_id != cue.narration_segment_id
+                ):
+                    raise MediaAuthorityError(
+                        reason="person_render_unavailable",
+                        impact="人物口型片段未被传给渲染器，当前成片没有改变。",
+                        repair_action="重新生成所选人物口型片段后再渲染。",
+                    )
+                clip.source_path = str(output)
+                clip.source_start_seconds = 0.0
+                clip.source_end_seconds = min(
+                    render.duration_seconds or 0.0,
+                    clip.timeline_end_seconds - clip.timeline_start_seconds,
+                )
+                continue
             resolved_source_path = production_repo.resolve_clip_media_reference(
                 workspace_id,
                 clip.asset_id,
@@ -6159,8 +6459,11 @@ def _render_montage_with_resolved_clip_sources(
             plan, narration_audio_path, job_staging_path=job_staging_path
         )
     finally:
-        for clip, reference in zip(plan.clips, original_references, strict=True):
+        for clip, reference, source_range in zip(
+            plan.clips, original_references, original_ranges, strict=True
+        ):
             clip.source_path = reference
+            clip.source_start_seconds, clip.source_end_seconds = source_range
         plan.narration_audio_path = original_narration_reference
 
 

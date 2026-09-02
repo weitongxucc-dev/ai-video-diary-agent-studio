@@ -962,6 +962,7 @@ class CreationTaskMontageClipResponse(BaseModel):
     role: Literal["a_roll", "b_roll"]
     locked: bool
     manually_selected: bool
+    person_render_id: str | None = None
 
 
 class CreationTaskNarrationCueResponse(BaseModel):
@@ -1016,6 +1017,7 @@ class CreationTaskExactEditRequest(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ChangePersonSegment",
     ]
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1073,6 +1075,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ChangePersonSegment",
         "UndoTimelineVersion",
     ]
     payload: dict[str, object]
@@ -1123,6 +1126,7 @@ class EditOperationResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ChangePersonSegment",
         "UndoTimelineVersion",
     ]
     payload: dict[str, object]

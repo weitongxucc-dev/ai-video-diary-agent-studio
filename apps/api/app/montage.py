@@ -74,6 +74,7 @@ class MontageClip:
     role: Literal["a_roll", "b_roll"] = "b_roll"
     locked: bool = False
     manually_selected: bool = False
+    person_render_id: str | None = None
 
 
 @dataclass

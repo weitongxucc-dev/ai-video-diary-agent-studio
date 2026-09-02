@@ -703,6 +703,7 @@ EditOperationType = Literal[
     "UndoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "ChangePersonSegment",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
     "ReplaceClip",
@@ -713,6 +714,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
     "UndoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "ChangePersonSegment",
 }
 
 

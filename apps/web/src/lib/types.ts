@@ -1209,6 +1209,7 @@ export type CreationTaskMontageClip = {
   role: "a_roll" | "b_roll";
   locked: boolean;
   manually_selected: boolean;
+  person_render_id?: string | null;
 };
 
 export type CreationTaskMontage = {
@@ -1264,7 +1265,8 @@ export type CreationTaskExactEditInput =
   | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
-  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string };
+  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string }
+  | { operation_type: "ChangePersonSegment"; clip_id: string };
 
 type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Input
   ? Input extends { operation_type: string }
