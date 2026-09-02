@@ -118,7 +118,7 @@ function errorDetails(cause: unknown) {
   };
 }
 
-function Inspector({ activeView, busy, workspace, error, onChangePersonSegment, selectedContext }: { activeView: CreationTask["stage"]; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onChangePersonSegment: (clipId: string) => void; selectedContext: SelectedEditContext | null }) {
+function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, selectedContext }: { activeView: CreationTask["stage"]; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
   const { task, plan, selected_topic: topic, narration, montage } = workspace;
   const latestScript = workspace.scripts[0] ?? null;
   const viewingCurrentStage = activeView === task.stage;
@@ -128,6 +128,22 @@ function Inspector({ activeView, busy, workspace, error, onChangePersonSegment, 
   const selectedPersonRender = selectedClip?.person_render_id
     ? workspace.person_renders.find((render) => render.id === selectedClip.person_render_id) ?? null
     : null;
+  const selectedPersonNarration = selectedPersonRender
+    ? narration?.segments.find((segment) => segment.id === selectedPersonRender.narration_segment_id) ?? null
+    : null;
+  const personRenderCapability = workspace.person_render_capability;
+  const personRenderCanRegenerate = selectedPersonRender?.status === "ready" || selectedPersonRender?.status === "failed";
+  const personRenderStatus = selectedPersonRender?.status === "ready"
+    ? "已写入当前版本"
+    : selectedPersonRender?.status === "failed"
+      ? "生成失败，可重新对口型"
+      : selectedPersonRender?.status === "running"
+        ? "正在生成口型"
+        : selectedPersonRender?.status === "pending"
+          ? "等待生成口型"
+          : selectedClip?.person_render_id
+            ? "人物片段记录缺失"
+            : "尚未写入";
   return (
     <div className={styles.inspector}>
       <section>
@@ -139,7 +155,7 @@ function Inspector({ activeView, busy, workspace, error, onChangePersonSegment, 
       {viewingCurrentStage && task.stage_reason ? <section className={styles.blocker}><AlertCircle size={17} /><div><strong>{task.stage_impact ?? task.stage_reason}</strong>{task.stage_repair_action ? <p>处理方式：{task.stage_repair_action}</p> : null}</div></section> : null}
       {selectedNarration ? <section aria-label="已选配音详情"><span className={styles.eyebrow}>已选配音</span><h3>{selectedContext?.label}</h3><p>{selectedNarration.text}</p><dl><div><dt>片段时长</dt><dd>{selectedNarration.duration_seconds?.toFixed(1) ?? "—"} 秒</dd></div><div><dt>声音版本</dt><dd>{selectedNarration.voice_version}</dd></div><div><dt>模型</dt><dd>{selectedNarration.model_id}</dd></div><div><dt>状态</dt><dd>{narrationSegmentStatus(selectedNarration.status)}</dd></div></dl></section> : null}
       {selectedCue ? <section aria-label="已选字幕详情"><span className={styles.eyebrow}>已选字幕</span><h3>{selectedContext?.label}</h3><p>{selectedCue.text}</p><dl><div><dt>对应配音</dt><dd>{selectedCue.narration_segment_id ? "已关联" : "未关联"}</dd></div><div><dt>显示时长</dt><dd>{selectedCue.duration_seconds.toFixed(1)} 秒</dd></div><div><dt>修改影响</dt><dd>仅重渲染字幕与成片</dd></div></dl></section> : null}
-      {selectedClip ? <section aria-label="已选镜头详情"><span className={styles.eyebrow}>已选镜头</span><h3>{selectedContext?.label}</h3><dl><div><dt>用途</dt><dd>{selectedClip.person_render_id ? "人物口型" : selectedClip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div><div><dt>成片位置</dt><dd>{selectedClip.timeline_start_seconds.toFixed(1)}–{selectedClip.timeline_end_seconds.toFixed(1)} 秒</dd></div><div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : "当前任务人物"}</dd></div><div><dt>口型状态</dt><dd>{selectedPersonRender?.status === "ready" ? "已写入当前版本" : "尚未写入"}</dd></div><div><dt>锁定</dt><dd>{selectedClip.locked ? "已锁定" : "可调整"}</dd></div></dl>{!selectedClip.person_render_id ? <button className="modern-primary-button" disabled={busy} onClick={() => onChangePersonSegment(selectedClip.id)} type="button"><UserRound size={15} />换成当前人物出镜</button> : null}</section> : null}
+      {selectedClip ? <section aria-label="已选镜头详情"><span className={styles.eyebrow}>已选镜头</span><h3>{selectedContext?.label}</h3><dl><div><dt>用途</dt><dd>{selectedClip.person_render_id ? "人物口型" : selectedClip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div><div><dt>成片位置</dt><dd>{selectedClip.timeline_start_seconds.toFixed(1)}–{selectedClip.timeline_end_seconds.toFixed(1)} 秒</dd></div><div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : selectedClip.person_render_id ? "未读取到人物片段记录" : plan.selected_voice ? `${plan.selected_voice.person_profile_id} · ${plan.selected_voice.person_version}` : "当前任务人物"}</dd></div>{selectedPersonRender ? <><div><dt>声音版本</dt><dd>{selectedPersonRender.voice_profile_id} · {selectedPersonRender.voice_version}</dd></div><div><dt>语言</dt><dd>{selectedPersonNarration?.language === "zh" ? "中文" : "未记录"}</dd></div><div><dt>当前模型</dt><dd>{selectedPersonRender.model_id}</dd></div><div><dt>动作</dt><dd>{selectedPersonRender.motion === "natural" ? "自然（固定）" : selectedPersonRender.motion}</dd></div><div><dt>表情</dt><dd>{selectedPersonRender.expression === "neutral" ? "中性（固定）" : selectedPersonRender.expression}</dd></div><div><dt>口型偏移</dt><dd>自动匹配（暂不可手动调整）</dd></div></> : null}<div><dt>片段状态</dt><dd>{personRenderStatus}</dd></div><div><dt>锁定</dt><dd>{selectedClip.locked ? "已锁定" : "可调整"}</dd></div><div><dt>模型能力</dt><dd>{personRenderCapability.available ? "可用" : "不可用"} · {personRenderCapability.model_id ?? "未配置模型"}</dd></div></dl>{!personRenderCapability.available ? <div aria-label="人物口型不可用原因" className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{personRenderCapability.message}</p>{personRenderCapability.repair_action ? <small>处理方式：{personRenderCapability.repair_action}</small> : null}</div> : null}{selectedPersonRender ? <p className={styles.personCapability}>动作/表情沿用原人物素材，口型匹配当前配音。</p> : null}{!selectedClip.person_render_id ? <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available} onClick={() => onPreparePersonEdit(selectedClip.id, "这一段换成当前人物出镜")} type="button"><UserRound size={15} />换成当前人物出镜</button> : <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available || !personRenderCanRegenerate} onClick={() => onPreparePersonEdit(selectedClip.id, "这里只重做口型，其他都不要动")} type="button"><UserRound size={15} />重新对口型</button>}</section> : null}
       {activeView === "topic" ? <section><span className={styles.eyebrow}>事实来源</span><dl><div><dt>知识库</dt><dd>{plan.knowledge_references.length} 条</dd></div><div><dt>信息源</dt><dd>{plan.source_references.length} 条</dd></div><div><dt>已确认选题</dt><dd>{topic?.title ?? "尚未确认"}</dd></div></dl></section> : null}
       {activeView === "script" ? <section><span className={styles.eyebrow}>文案版本</span><dl><div><dt>标题</dt><dd>{latestScript?.title ?? "尚未生成"}</dd></div><div><dt>段落</dt><dd>{latestScript?.sections.length ?? 0} 段</dd></div><div><dt>状态</dt><dd>{latestScript?.selection_status === "confirmed" ? "已确认" : "等待确认"}</dd></div></dl></section> : null}
       {activeView === "narration" ? <section><span className={styles.eyebrow}>声音与授权</span><dl><div><dt>声音版本</dt><dd>{plan.selected_voice?.version ?? "未选择"}</dd></div><div><dt>语言</dt><dd>中文</dd></div><div><dt>模型</dt><dd>{narration?.model_id ?? plan.selected_voice?.model_id ?? "未就绪"}</dd></div><div><dt>授权</dt><dd>{plan.selected_voice ? "已纳入方案" : "缺失"}</dd></div></dl></section> : null}
@@ -460,6 +476,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSelectedNarrationSegmentId(segmentId);
   }
 
+  function preparePersonEdit(clipId: string, command: string) {
+    selectClip(clipId);
+    setEditCommand(command);
+    setEditPreview(null);
+  }
+
   async function previewEdit() {
     const rawCommand = editCommand.trim();
     if (!selectedEditContext || !rawCommand) return;
@@ -556,7 +578,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   return (
-    <AppShell creationTasks={shellTasks} inspector={<Inspector activeView={activeView} busy={busy !== null} error={error} onChangePersonSegment={(clipId) => void applyExactEdit({ operation_type: "ChangePersonSegment", clip_id: clipId })} selectedContext={selectedEditContext} workspace={workspace} />} inspectorTitle="任务详情" workspaceStatus={workspaceStatus}>
+    <AppShell creationTasks={shellTasks} inspector={<Inspector activeView={activeView} busy={busy !== null} error={error} onPreparePersonEdit={preparePersonEdit} selectedContext={selectedEditContext} workspace={workspace} />} inspectorTitle="任务详情" workspaceStatus={workspaceStatus}>
       <div className={styles.workspace}>
         <header className={styles.taskHeader}><div><span className={styles.eyebrow}>创作任务</span><h1>{task.name}</h1><p>{task.scenario}</p></div><div className={styles.progress}><strong>{task.progress}%</strong><span>本地真成片进度</span></div></header>
         <nav className={styles.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage, index) => {

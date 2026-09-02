@@ -1018,6 +1018,7 @@ class CreationTaskExactEditRequest(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ChangePersonSegment",
+        "RegeneratePersonRender",
     ]
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1076,6 +1077,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ChangePersonSegment",
+        "RegeneratePersonRender",
         "UndoTimelineVersion",
     ]
     payload: dict[str, object]
@@ -1127,6 +1129,7 @@ class EditOperationResponse(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ChangePersonSegment",
+        "RegeneratePersonRender",
         "UndoTimelineVersion",
     ]
     payload: dict[str, object]
@@ -1176,6 +1179,13 @@ class CreationPlanResponse(CreationPlanPreviewResponse):
     updated_at: datetime
 
 
+class PersonRenderCapabilityResponse(BaseModel):
+    available: bool
+    model_id: str | None
+    message: str
+    repair_action: str | None
+
+
 class CreationTaskWorkspaceResponse(BaseModel):
     task: CreationTaskResponse
     plan: CreationPlanPreviewResponse
@@ -1184,6 +1194,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     scripts: list[CreationTaskScriptResponse]
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
+    person_render_capability: PersonRenderCapabilityResponse
     person_renders: list[CreationTaskPersonRenderResponse] = Field(default_factory=list)
     montage: CreationTaskMontagePlanResponse | None
 

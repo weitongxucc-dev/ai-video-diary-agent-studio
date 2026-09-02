@@ -240,3 +240,40 @@ def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path):
 
     assert result.status == "succeeded"
     assert Path(result.artifact_path or "").is_file()
+
+
+def test_avatar_lipsync_can_create_an_immutable_regeneration_output(tmp_path):
+    request = _request(tmp_path)
+    calls: list[Path] = []
+
+    def success_runner(command):
+        request_path = Path(command[command.index("--request") + 1])
+        response_path = Path(command[command.index("--response") + 1])
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        output = Path(payload["output_path"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"regenerated media")
+        calls.append(output)
+        response_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "succeeded",
+                    "artifact_path": str(output),
+                    "duration_seconds": 8.0,
+                    "alignment_evidence": "phoneme alignment v1",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    service = AvatarAndLipSyncService(
+        tmp_path / "outputs", _configured_provider(tmp_path, success_runner)
+    )
+    original = service.render(request)
+    regenerated = service.render(request, output_cache_key="regeneration-version-2")
+
+    assert original.status == regenerated.status == "succeeded"
+    assert original.artifact_path != regenerated.artifact_path
+    assert regenerated.cache_key == "regeneration-version-2"
+    assert calls == [Path(original.artifact_path or ""), Path(regenerated.artifact_path or "")]

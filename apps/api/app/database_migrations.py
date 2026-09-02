@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 5
+PRODUCTION_SCHEMA_VERSION = 6
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -345,6 +345,19 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         )
         BEGIN
             SELECT RAISE(ABORT, 'person_render identity is immutable');
+        END;
+        """,
+    ),
+    (
+        6,
+        """
+        ALTER TABLE person_renders ADD COLUMN artifact_ref TEXT;
+        CREATE TRIGGER IF NOT EXISTS person_renders_artifact_ref_write_once
+        BEFORE UPDATE ON person_renders
+        WHEN OLD.artifact_ref IS NOT NULL
+             AND NEW.artifact_ref IS NOT OLD.artifact_ref
+        BEGIN
+            SELECT RAISE(ABORT, 'person_render artifact ref is immutable');
         END;
         """,
     ),

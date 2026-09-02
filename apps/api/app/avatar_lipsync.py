@@ -358,8 +358,13 @@ class AvatarAndLipSyncService:
         self.output_root = Path(output_root).expanduser()
         self.provider = provider
 
-    def render(self, request: AvatarAndLipSyncRequest) -> AvatarAndLipSyncResult:
-        cache_key = avatar_lipsync_cache_key(request)
+    def render(
+        self,
+        request: AvatarAndLipSyncRequest,
+        *,
+        output_cache_key: str | None = None,
+    ) -> AvatarAndLipSyncResult:
+        cache_key = output_cache_key or avatar_lipsync_cache_key(request)
         failure = _authorization_failure(request)
         if failure is not None:
             return _failure(
@@ -418,7 +423,8 @@ class AvatarAndLipSyncService:
                 failure_impact=None,
                 remediation_action=None,
             )
-        return self.provider.render(request=request, output_path=output)
+        result = self.provider.render(request=request, output_path=output)
+        return replace(result, cache_key=cache_key)
 
     def render_from_repository(
         self,

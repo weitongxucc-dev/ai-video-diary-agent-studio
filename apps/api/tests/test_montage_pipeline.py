@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ from PIL import Image
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
+from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
 from app.models import (
     Episode,
     EpisodeStatus,
@@ -34,7 +36,9 @@ from app.montage import (
     creation_task_montage_plan_to_payload,
 )
 from app.production import (
+    Authorization,
     CreationPlan,
+    CreationPlanVoiceReference,
     CreationTask,
     CreationTaskScript,
     CreationTaskScriptSection,
@@ -43,9 +47,12 @@ from app.production import (
     MaterialSegmentMatch,
     NarrationArtifactRecord,
     NarrationSegment,
+    PersonProfile,
+    PersonRender,
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
+    VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
 
@@ -202,6 +209,374 @@ def _profile() -> ProductionProfile:
         workspace_id="workspace_a",
         brand_name="Studio",
         brand_template_name="Vertical",
+    )
+
+
+@pytest.fixture
+def person_render_edit_state(tmp_path, monkeypatch):
+    workspace_id = "workspace_a"
+    output_root = tmp_path / "output"
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    production._save_asset(asset)
+    visual_reference = production.workspace_media_reference_for_asset(
+        workspace_id, asset.id
+    )
+    voice_path = tmp_path / "voice-reference.wav"
+    voice_path.write_bytes(b"voice-reference")
+    voice_reference = "workspace://voice-reference.wav"
+    effective_from = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    person_authorization = Authorization(
+        id="person-authorization",
+        workspace_id=workspace_id,
+        version="v1",
+        rights_holder="本人",
+        content_types=("person_likeness", "avatar_video"),
+        usage_scopes=("avatar_lipsync",),
+        effective_from=effective_from,
+        expires_at=None,
+        evidence_reference="consent://person/v1",
+        status="active",
+    )
+    person = production.save_person_profile(
+        PersonProfile(
+            id="person-a",
+            workspace_id=workspace_id,
+            display_name="cc",
+            version="v1",
+            avatar_reference=visual_reference,
+            background_capabilities=("office",),
+            shot_capabilities=("medium",),
+            authorization=person_authorization,
+        )
+    )
+    voice_authorization = Authorization(
+        id="voice-authorization",
+        workspace_id=workspace_id,
+        version="v1",
+        rights_holder="本人",
+        content_types=("voice",),
+        usage_scopes=("avatar_lipsync",),
+        effective_from=effective_from,
+        expires_at=None,
+        evidence_reference="consent://voice/v1",
+        status="active",
+    )
+    voice = production.save_versioned_voice_profile(
+        VersionedVoiceProfile(
+            id="voice-person",
+            workspace_id=workspace_id,
+            person_profile_id=person.id,
+            person_version=person.version,
+            version="v1",
+            language="zh",
+            reference_audio_path=voice_reference,
+            reference_text="参考声音",
+            model_id="qwen3-tts",
+            authorization=voice_authorization,
+        )
+    )
+    selected_voice = CreationPlanVoiceReference(
+        profile_id=voice.id,
+        version=voice.version,
+        person_profile_id=person.id,
+        person_version=person.version,
+        person_authorization_id=person_authorization.id,
+        person_authorization_version=person_authorization.version,
+        authorization_id=voice_authorization.id,
+        authorization_version=voice_authorization.version,
+        language="zh",
+        model_id=voice.model_id,
+    )
+    creation_plan = CreationPlan(
+        id="plan-person-edit",
+        workspace_id=workspace_id,
+        goal="只重新生成目标人物口型",
+        name="人物口型编辑",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=30,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=selected_voice,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=2,
+        material_rule_summary="使用当前人物与素材",
+        model_snapshot=[],
+        confirmation_points=[],
+        blockers=[],
+        preflight_fingerprint="p" * 64,
+        material_matches=[
+            MaterialSegmentMatch(
+                asset_ref=f"asset:{asset.id}",
+                segment_ref=f"segment:{asset.segments[0].id}",
+                score=1,
+                reasons=["测试素材"],
+            )
+        ],
+    )
+    task = CreationTask(
+        id="task-person-edit",
+        workspace_id=workspace_id,
+        plan_id=creation_plan.id,
+        name=creation_plan.name,
+        scenario=creation_plan.goal,
+    )
+    production.confirm_creation_plan(creation_plan, task)
+    now = datetime.now(timezone.utc)
+    script = CreationTaskScript(
+        id="script-person-edit",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        run_id="run-person-edit",
+        topic_id="topic-person-edit",
+        title="人物口型编辑",
+        language="zh-CN",
+        sections=[
+            CreationTaskScriptSection(
+                id="section-person-edit",
+                title="正文",
+                content="人物出镜讲解。",
+                visual_prompt="人物中景",
+                evidence_reference_ids=["knowledge:test"],
+            )
+        ],
+        selection_status="confirmed",
+        confirmed_at=now,
+    )
+    task = production.get_creation_task(workspace_id, task.id)
+    task.confirmed_script_id = script.id
+    task.stage = "narration"
+    task.stage_status = "running"
+    task.status = "running"
+    with production._connect() as conn:
+        conn.execute(
+            "INSERT INTO creation_task_scripts "
+            "(id, workspace_id, task_id, run_id, payload, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                script.id,
+                workspace_id,
+                task.id,
+                script.run_id,
+                json.dumps(
+                    asdict(script),
+                    ensure_ascii=False,
+                    default=lambda value: value.isoformat(),
+                ),
+                now.isoformat(),
+            ),
+        )
+        conn.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? "
+            "WHERE workspace_id = ? AND id = ?",
+            (
+                json.dumps(
+                    task.__dict__,
+                    ensure_ascii=False,
+                    default=lambda value: value.isoformat(),
+                ),
+                now.isoformat(),
+                workspace_id,
+                task.id,
+            ),
+        )
+    narration_path = tmp_path / "person-narration.wav"
+    narration_path.write_bytes(b"person-narration")
+    narration_cache_key = "person-segment-cache"
+    narration_reference = production.narration_artifact_reference(
+        narration_cache_key
+    )
+    segment = NarrationSegment(
+        id="narration-person-edit",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        script_id=script.id,
+        source_section_id=script.sections[0].id,
+        text=script.sections[0].content,
+        audio_reference=narration_reference,
+        duration_seconds=4,
+        sample_rate=24_000,
+        model_id="qwen3-tts",
+        voice_profile_id=voice.id,
+        voice_version=voice.version,
+        language="zh",
+        pronunciation_version="p1",
+        status="ready",
+    )
+    production.complete_creation_task_narration(
+        NarrationArtifactRecord(
+            id="narration-artifact-person-edit",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            script_id=script.id,
+            voice_profile_id=voice.id,
+            cache_key=narration_cache_key,
+            audio_path=str(narration_path),
+            duration_seconds=4,
+            sample_rate=24_000,
+            model_id="qwen3-tts",
+        ),
+        segments=[segment],
+    )
+    provider = SimpleNamespace(
+        model_id="musetalk-test",
+        supported_languages=("zh",),
+        ready=True,
+        message="ready",
+        output_cache_keys=[],
+    )
+
+    def fake_person_render(*, request, output_path):
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"new-person-render")
+        provider.output_cache_keys.append(output.stem)
+        return AvatarAndLipSyncResult(
+            status="succeeded",
+            cache_key=output.stem,
+            artifact_path=str(output.resolve()),
+            duration_seconds=4,
+            alignment_evidence='{"engine":"fake-musetalk"}',
+            failure_code=None,
+            failure_impact=None,
+            remediation_action=None,
+        )
+
+    provider.render = fake_person_render
+    render_request = production.resolve_avatar_lipsync_request(
+        workspace_id=workspace_id,
+        person_id=person.id,
+        person_version=person.version,
+        voice_profile_id=voice.id,
+        voice_version=voice.version,
+        audio_path=str(narration_path),
+        audio_cache_key=narration_reference,
+        language="zh",
+        motion="natural",
+        expression="neutral",
+        authorization_id=person_authorization.id,
+        authorization_version=person_authorization.version,
+        model_id=provider.model_id,
+    )
+    base_cache_key = avatar_lipsync_cache_key(render_request)
+    old_render = production.create_person_render(
+        PersonRender(
+            id=f"person_render_{base_cache_key[:24]}",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            person_profile_id=person.id,
+            person_version=person.version,
+            voice_profile_id=voice.id,
+            voice_version=voice.version,
+            narration_segment_id=segment.id,
+            visual_reference=visual_reference,
+            model_id=provider.model_id,
+            motion="natural",
+            expression="neutral",
+            cache_key=base_cache_key,
+            status="pending",
+        )
+    )
+    production.claim_person_render(workspace_id, task.id, old_render.id)
+    old_render_path = output_root / "legacy" / "old-person-render.mp4"
+    old_render_path.parent.mkdir(parents=True, exist_ok=True)
+    old_render_path.write_bytes(b"old-person-render")
+    old_render = production.finish_person_render(
+        workspace_id,
+        task.id,
+        old_render.id,
+        status="ready",
+        output_path=str(old_render_path),
+        duration_seconds=4,
+        alignment_evidence='{"engine":"existing-musetalk"}',
+    )
+    montage = CreationTaskMontagePlan(
+        id="montage-person-edit",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        script_id=script.id,
+        script_title=script.title,
+        status="rendered",
+        cues=[
+            NarrationCue(
+                id="cue-person-edit",
+                source_section_id=script.sections[0].id,
+                text=script.sections[0].content,
+                duration_seconds=4,
+                narration_segment_id=segment.id,
+            )
+        ],
+        clips=[
+            MontageClip(
+                id="clip-person-target",
+                cue_id="cue-person-edit",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path=visual_reference,
+                source_start_seconds=0,
+                source_end_seconds=4,
+                timeline_start_seconds=0,
+                timeline_end_seconds=4,
+                match_score=1,
+                match_reasons=["已生成人物口型"],
+                needs_confirmation=False,
+                role="a_roll",
+                manually_selected=True,
+                person_render_id=old_render.id,
+            ),
+            MontageClip(
+                id="clip-person-unchanged",
+                cue_id="cue-person-edit",
+                asset_id=asset.id,
+                segment_id=asset.segments[1].id,
+                source_path=visual_reference,
+                source_start_seconds=4,
+                source_end_seconds=8,
+                timeline_start_seconds=4,
+                timeline_end_seconds=8,
+                match_score=1,
+                match_reasons=["不受影响镜头"],
+                needs_confirmation=False,
+            ),
+        ],
+        duration_seconds=8,
+        low_confidence_clip_count=0,
+        narration_audio_path=narration_reference,
+        output_path="artifacts/task-person-edit/rendered/preview.mp4",
+        subtitle_path="artifacts/task-person-edit/rendered/subtitles.srt",
+    )
+    production.save_creation_task_montage_plan(
+        workspace_id,
+        task.id,
+        montage.id,
+        creation_task_montage_plan_to_payload(montage),
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        SimpleNamespace(video_output_path=str(output_root)),
+    )
+    monkeypatch.setattr(main_module, "avatar_lipsync_provider", provider)
+    monkeypatch.setattr(
+        main_module, "current_workspace_id", lambda _request: workspace_id
+    )
+    return SimpleNamespace(
+        workspace_id=workspace_id,
+        production=production,
+        task=task,
+        montage=montage,
+        old_render=old_render,
+        provider=provider,
+        client=TestClient(main_module.app),
     )
 
 
@@ -1545,3 +1920,242 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert production.list_edit_operations(workspace_id, task.id)[0].operation_type == "UpdateSubtitleCue"
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
+
+
+def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(
+    person_render_edit_state,
+    monkeypatch,
+):
+    state = person_render_edit_state
+    production = state.production
+    workspace_response = state.client.get(
+        f"/api/creation-tasks/{state.task.id}"
+    )
+    assert workspace_response.status_code == 200, workspace_response.text
+    assert workspace_response.json()["person_render_capability"] == {
+        "available": True,
+        "model_id": state.provider.model_id,
+        "message": state.provider.message,
+        "repair_action": None,
+    }
+    old_output_refs = [
+        state.montage.output_path,
+        state.montage.subtitle_path,
+    ]
+    unchanged_clip = asdict(state.montage.clips[1])
+    unchanged_cues = [asdict(cue) for cue in state.montage.cues]
+
+    preview = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/edits/preview",
+        json={
+            "raw_command": "这里只重做口型，其他都不要动",
+            "context_stage": "review",
+            "selected_object_refs": ["clip:clip-person-target"],
+            "playhead_ms": 500,
+        },
+    )
+
+    assert preview.status_code == 200, preview.text
+    preview_payload = preview.json()
+    assert preview_payload["intent"]["intent_type"] == "regenerate_person_render"
+    assert (
+        preview_payload["proposal"]["operation"]["operation_type"]
+        == "RegeneratePersonRender"
+    )
+    assert preview_payload["proposal"]["invalidated_refs"] == old_output_refs
+    assert len(production.list_timeline_versions(state.workspace_id, state.task.id)) == 1
+
+    confirm = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/edits/"
+        f"{preview_payload['proposal']['id']}/confirm"
+    )
+
+    assert confirm.status_code == 200, confirm.text
+    operation = confirm.json()["operation"]
+    assert operation["operation_type"] == "RegeneratePersonRender"
+    new_render_id = operation["payload"]["person_render_id"]
+    assert new_render_id != state.old_render.id
+    renders = production.list_person_renders(state.workspace_id, state.task.id)
+    assert {render.id for render in renders} == {
+        state.old_render.id,
+        new_render_id,
+    }
+    new_render = next(render for render in renders if render.id == new_render_id)
+    expected_cache_key = hashlib.sha256(
+        (
+            f"{state.old_render.cache_key}\n"
+            f"regenerate:{preview_payload['proposal']['id']}"
+        ).encode("utf-8")
+    ).hexdigest()
+    assert new_render.cache_key == expected_cache_key
+    assert state.provider.output_cache_keys == [expected_cache_key]
+    assert new_render.artifact_ref
+
+    changed_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(
+            state.workspace_id, state.task.id
+        )
+    )
+    assert changed_plan.clips[0].person_render_id == new_render_id
+    assert asdict(changed_plan.clips[1]) == unchanged_clip
+    assert [asdict(cue) for cue in changed_plan.cues] == unchanged_cues
+    assert changed_plan.narration_audio_path == state.montage.narration_audio_path
+    assert changed_plan.output_path is None
+    assert changed_plan.subtitle_path is None
+    versions = production.list_timeline_versions(
+        state.workspace_id, state.task.id
+    )
+    assert len(versions) == 2
+    assert versions[-1].snapshot["invalidated_refs"] == old_output_refs
+    version_plan = creation_task_montage_plan_from_payload(
+        versions[-1].snapshot["montage"]
+    )
+    assert version_plan.clips[0].person_render_id == new_render_id
+    assert asdict(version_plan.clips[1]) == unchanged_clip
+
+    undo = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/timeline/undo",
+        json={},
+    )
+
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["operation"]["operation_type"] == "UndoTimelineVersion"
+    restored_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(
+            state.workspace_id, state.task.id
+        )
+    )
+    assert restored_plan.clips[0].person_render_id == state.old_render.id
+    assert asdict(restored_plan.clips[1]) == unchanged_clip
+    assert {render.id for render in production.list_person_renders(
+        state.workspace_id, state.task.id
+    )} == {state.old_render.id, new_render_id}
+
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+        job_staging_path.mkdir(parents=True, exist_ok=True)
+        (job_staging_path / "preview.mp4").write_bytes(b"rerendered-video")
+        (job_staging_path / "subtitles.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:04,000\n人物出镜讲解。\n",
+            encoding="utf-8",
+        )
+        rendered_plan.status = "rendered"
+        return rendered_plan
+
+    monkeypatch.setattr(
+        main_module,
+        "_render_montage_with_resolved_clip_sources",
+        fake_render,
+    )
+    rerender = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/montage/render",
+        json={},
+    )
+    assert rerender.status_code == 200, rerender.text
+    rerendered_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(
+            state.workspace_id, state.task.id
+        )
+    )
+    rerendered_output_refs = [
+        rerendered_plan.output_path,
+        rerendered_plan.subtitle_path,
+    ]
+    unchanged_after_undo = asdict(rerendered_plan.clips[1])
+    cues_after_undo = [asdict(cue) for cue in rerendered_plan.cues]
+
+    reuse_preview = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/edits/preview",
+        json={
+            "raw_command": "这一段换成当前人物出镜",
+            "context_stage": "review",
+            "selected_object_refs": ["clip:clip-person-target"],
+            "playhead_ms": 500,
+        },
+    )
+
+    assert reuse_preview.status_code == 200, reuse_preview.text
+    reuse_payload = reuse_preview.json()
+    assert (
+        reuse_payload["proposal"]["operation"]["operation_type"]
+        == "ChangePersonSegment"
+    )
+    assert (
+        reuse_payload["proposal"]["operation"]["payload"][
+            "reuse_person_render_id"
+        ]
+        == new_render_id
+    )
+    assert reuse_payload["proposal"]["invalidated_refs"] == rerendered_output_refs
+
+    reuse_confirm = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/edits/"
+        f"{reuse_payload['proposal']['id']}/confirm"
+    )
+
+    assert reuse_confirm.status_code == 200, reuse_confirm.text
+    assert reuse_confirm.json()["operation"]["payload"]["person_render_id"] == new_render_id
+    assert state.provider.output_cache_keys == [expected_cache_key]
+    reused_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(
+            state.workspace_id, state.task.id
+        )
+    )
+    assert reused_plan.clips[0].person_render_id == new_render_id
+    assert asdict(reused_plan.clips[1]) == unchanged_after_undo
+    assert [asdict(cue) for cue in reused_plan.cues] == cues_after_undo
+    assert reused_plan.narration_audio_path == rerendered_plan.narration_audio_path
+    assert reused_plan.output_path is None
+    assert reused_plan.subtitle_path is None
+    assert {render.id for render in production.list_person_renders(
+        state.workspace_id, state.task.id
+    )} == {state.old_render.id, new_render_id}
+
+
+def test_person_expression_unavailable_creates_no_edit_or_timeline(
+    person_render_edit_state,
+    monkeypatch,
+):
+    state = person_render_edit_state
+    unavailable_provider = SimpleNamespace(
+        ready=False,
+        model_id="avatar-lipsync-unconfigured",
+        message="人物口型能力尚未配置。",
+    )
+    monkeypatch.setattr(
+        main_module, "avatar_lipsync_provider", unavailable_provider
+    )
+    workspace_response = state.client.get(
+        f"/api/creation-tasks/{state.task.id}"
+    )
+    assert workspace_response.status_code == 200, workspace_response.text
+    assert workspace_response.json()["person_render_capability"] == {
+        "available": False,
+        "model_id": unavailable_provider.model_id,
+        "message": unavailable_provider.message,
+        "repair_action": "配置本地人物口型运行环境后重试。",
+    }
+
+    response = state.client.post(
+        f"/api/creation-tasks/{state.task.id}/edits/preview",
+        json={
+            "raw_command": "表情更自然",
+            "context_stage": "review",
+            "selected_object_refs": ["clip:clip-person-target"],
+            "playhead_ms": 500,
+        },
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["error"]
+        == "person_expression_control_unavailable"
+    )
+    assert state.production.list_edit_intents(
+        state.workspace_id, state.task.id
+    ) == []
+    assert state.production.list_edit_proposals(
+        state.workspace_id, state.task.id
+    ) == []
+    assert state.production.list_timeline_versions(
+        state.workspace_id, state.task.id
+    ) == []

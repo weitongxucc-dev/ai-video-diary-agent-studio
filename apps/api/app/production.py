@@ -235,6 +235,7 @@ class PersonRender:
     expression: str
     cache_key: str
     status: PersonRenderStatus
+    artifact_ref: str | None = None
     output_path: str | None = None
     duration_seconds: float | None = None
     alignment_evidence: str | None = None
@@ -704,6 +705,7 @@ EditOperationType = Literal[
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
     "ChangePersonSegment",
+    "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
     "ReplaceClip",
@@ -715,6 +717,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
     "ChangePersonSegment",
+    "RegeneratePersonRender",
 }
 
 
@@ -3557,9 +3560,9 @@ class ProductionRepository:
                     (id, workspace_id, task_id, person_profile_id, person_version,
                      voice_profile_id, voice_version, narration_segment_id,
                      visual_reference, model_id, motion, expression, cache_key,
-                     status, output_path, duration_seconds, alignment_evidence,
+                     status, artifact_ref, output_path, duration_seconds, alignment_evidence,
                      failure_reason, impact, repair_action, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _person_render_values(render),
             )
@@ -3649,6 +3652,57 @@ class ProductionRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("只能结束运行中的人物片段")
+        return self.get_person_render(workspace_id, task_id, render_id)
+
+    def bind_person_render_artifact(
+        self,
+        workspace_id: str,
+        task_id: str,
+        render_id: str,
+        artifact_ref: str,
+    ) -> PersonRender:
+        _validate_logical_reference(artifact_ref, "人物片段产物引用")
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            render_row = conn.execute(
+                """
+                SELECT * FROM person_renders
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, render_id),
+            ).fetchone()
+            if render_row is None:
+                raise KeyError(render_id)
+            render = self._person_render_from_row(render_row)
+            if render.status != "ready":
+                raise ValueError("只能为 ready 人物片段绑定产物")
+            if render.artifact_ref is not None:
+                if render.artifact_ref != artifact_ref:
+                    raise ValueError("人物片段已绑定其他产物引用")
+                return render
+            artifact_row = conn.execute(
+                """
+                SELECT task_id, kind FROM artifact_records
+                WHERE workspace_id = ? AND logical_ref = ?
+                """,
+                (workspace_id, artifact_ref),
+            ).fetchone()
+            if artifact_row is None or str(artifact_row["task_id"]) != task_id:
+                raise ValueError("人物片段产物不属于当前工作区与创作任务")
+            if str(artifact_row["kind"]) != "person_render":
+                raise ValueError("人物片段产物类型必须为 person_render")
+            now = utc_now().isoformat()
+            changed = conn.execute(
+                """
+                UPDATE person_renders
+                SET artifact_ref = ?, updated_at = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                  AND status = 'ready' AND artifact_ref IS NULL
+                """,
+                (artifact_ref, now, workspace_id, task_id, render_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("人物片段产物引用未能绑定")
         return self.get_person_render(workspace_id, task_id, render_id)
 
     def get_person_render(
@@ -6332,6 +6386,11 @@ class ProductionRepository:
             expression=str(row["expression"]),
             cache_key=str(row["cache_key"]),
             status=str(row["status"]),  # type: ignore[arg-type]
+            artifact_ref=(
+                str(row["artifact_ref"])
+                if row["artifact_ref"] is not None
+                else None
+            ),
             output_path=(
                 str(row["output_path"]) if row["output_path"] is not None else None
             ),
@@ -6621,6 +6680,7 @@ def _person_render_values(render: PersonRender) -> tuple[object, ...]:
         render.expression,
         render.cache_key,
         render.status,
+        render.artifact_ref,
         render.output_path,
         render.duration_seconds,
         render.alignment_evidence,
@@ -6829,6 +6889,8 @@ def _validate_person_render(render: PersonRender) -> None:
     ):
         raise ValueError("人物片段缺少必要谱系、输入版本或模型参数")
     _validate_logical_reference(render.visual_reference, "人物片段画面引用")
+    if render.artifact_ref is not None:
+        _validate_logical_reference(render.artifact_ref, "人物片段产物引用")
     if not re.fullmatch(r"[0-9a-f]{64}", render.cache_key):
         raise ValueError("人物片段缓存键必须是小写 SHA-256")
     if render.updated_at < render.created_at:
@@ -6838,6 +6900,7 @@ def _validate_person_render(render: PersonRender) -> None:
             value is not None
             for value in (
                 render.output_path,
+                render.artifact_ref,
                 render.duration_seconds,
                 render.alignment_evidence,
                 render.failure_reason,
@@ -6871,6 +6934,7 @@ def _validate_person_render(render: PersonRender) -> None:
             value is not None
             for value in (
                 render.output_path,
+                render.artifact_ref,
                 render.duration_seconds,
                 render.alignment_evidence,
             )

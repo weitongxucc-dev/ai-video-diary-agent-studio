@@ -1183,6 +1183,13 @@ export type CreationTaskPersonRender = {
   updated_at: string;
 };
 
+export type CreationTaskPersonRenderCapability = {
+  available: boolean;
+  model_id: string | null;
+  message: string;
+  repair_action: string | null;
+};
+
 export type CreationTaskVoiceOption = {
   profile_id: string;
   version: string;
@@ -1239,6 +1246,7 @@ export type CreationTaskWorkspace = {
   available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
   person_renders: CreationTaskPersonRender[];
+  person_render_capability: CreationTaskPersonRenderCapability;
   montage: CreationTaskMontage | null;
 };
 
@@ -1266,7 +1274,8 @@ export type CreationTaskExactEditInput =
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string }
-  | { operation_type: "ChangePersonSegment"; clip_id: string };
+  | { operation_type: "ChangePersonSegment"; clip_id: string }
+  | { operation_type: "RegeneratePersonRender"; clip_id: string };
 
 type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Input
   ? Input extends { operation_type: string }
