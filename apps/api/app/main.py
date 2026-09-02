@@ -21,8 +21,8 @@ from app.avatar_lipsync import (
     AvatarPreviewService,
     PersonProfile,
     PronunciationEntry,
-    UnavailableAvatarAndLipSyncProvider,
     VoiceProfile as VersionedVoiceProfile,
+    avatar_lipsync_provider_from_settings,
 )
 from app.auth import (
     ForbiddenError,
@@ -352,6 +352,7 @@ model_installer = ModelInstaller(
 )
 visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
 voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
+avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)
 production_repo = ProductionRepository(
     database_path=settings.database_path,
     video_library_path=settings.video_inbox_path,
@@ -368,7 +369,7 @@ narration_generator = NarrationGenerator(settings.video_output_path, voice_clone
 voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
 avatar_preview_service = AvatarPreviewService(
     settings.video_output_path,
-    UnavailableAvatarAndLipSyncProvider(),
+    avatar_lipsync_provider,
 )
 vault = ObsidianVault(settings.obsidian_vault_path)
 video_inbox = VideoInbox(settings.video_inbox_path)
@@ -1386,11 +1387,20 @@ def get_voice_clone_capability() -> MediaCapabilityResponse:
     response_model=MediaCapabilityResponse,
 )
 def get_avatar_lipsync_capability() -> MediaCapabilityResponse:
-    raise _capability_unavailable(
-        "avatar_lipsync",
-        message="人物口型能力尚未配置。",
-        impact="人物与口型步骤未完成，不能生成或返回人物视频。",
-        repair_action="配置明确的本地人物口型运行环境后重新查询。",
+    if not avatar_lipsync_provider.ready:
+        raise _capability_unavailable(
+            "avatar_lipsync",
+            message=avatar_lipsync_provider.message,
+            impact="人物与口型步骤未完成，不能生成或返回人物视频。",
+            repair_action="配置明确的本地人物口型运行环境后重新查询。",
+        )
+    return MediaCapabilityResponse(
+        capability_id="avatar_lipsync",
+        available=True,
+        model_id=avatar_lipsync_provider.model_id,
+        message=avatar_lipsync_provider.message,
+        impact=None,
+        repair_action=None,
     )
 
 
@@ -6292,7 +6302,7 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner
+    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner
 
     settings = Settings.from_env()
     configure_process_temporary_directory(settings)
@@ -6312,6 +6322,7 @@ def _reload_runtime_dependencies() -> None:
     )
     visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
     voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
+    avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)
     production_repo = ProductionRepository(
         database_path=settings.database_path,
         video_library_path=settings.video_inbox_path,
@@ -6329,7 +6340,7 @@ def _reload_runtime_dependencies() -> None:
     voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
     avatar_preview_service = AvatarPreviewService(
         settings.video_output_path,
-        UnavailableAvatarAndLipSyncProvider(),
+        avatar_lipsync_provider,
     )
     vault = ObsidianVault(settings.obsidian_vault_path)
     video_inbox = VideoInbox(settings.video_inbox_path)

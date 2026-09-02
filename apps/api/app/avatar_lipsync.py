@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from app.voice_clone import MediaRuntimeFailure
 
 if TYPE_CHECKING:
+    from app.config import Settings
     from app.production import ProductionRepository
 
 
@@ -145,6 +146,7 @@ class AvatarAndLipSyncRequest:
     expression: str
     authorization: Authorization
     model_id: str
+    visual_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -233,19 +235,27 @@ class SubprocessAvatarAndLipSyncProvider:
         *,
         runtime_path: str | Path,
         worker_path: str | Path,
+        runtime_root: str | Path,
         model_id: str,
         supported_languages: tuple[str, ...] = (),
         runner: Callable[[list[str]], None] | None = None,
     ) -> None:
         self.runtime_path = Path(runtime_path).expanduser()
         self.worker_path = Path(worker_path).expanduser()
+        self.runtime_root = Path(runtime_root).expanduser()
         self.model_id = model_id
         self.supported_languages = supported_languages
         self._runner = runner or self._run_command
 
     @property
     def ready(self) -> bool:
-        return self.runtime_path.is_file() and self.worker_path.is_file()
+        return (
+            self.runtime_path.is_file()
+            and self.worker_path.is_file()
+            and self.runtime_root.is_dir()
+            and (self.runtime_root / "scripts" / "inference.py").is_file()
+            and (self.runtime_root / "models" / "musetalkV15" / "unet.pth").is_file()
+        )
 
     @property
     def message(self) -> str:
@@ -280,6 +290,7 @@ class SubprocessAvatarAndLipSyncProvider:
                         "voice_profile_id": request.voice.id,
                         "voice_version": request.voice.version,
                         "audio_path": str(Path(request.audio_path).expanduser().resolve()),
+                        "visual_path": str(Path(request.visual_path).expanduser().resolve()),
                         "audio_cache_key": request.audio_cache_key,
                         "language": request.language,
                         "motion": request.motion,
@@ -301,6 +312,8 @@ class SubprocessAvatarAndLipSyncProvider:
                         str(request_path),
                         "--response",
                         str(response_path),
+                        "--runtime-root",
+                        str(self.runtime_root.resolve()),
                     ]
                 )
             except (OSError, subprocess.SubprocessError) as exc:
@@ -365,6 +378,16 @@ class AvatarAndLipSyncService:
                 code="audio_missing",
                 impact="人物与口型步骤没有可用配音，不能生成视频。",
                 action="重新生成并确认当前版本的配音文件后重试。",
+                retryable=False,
+            )
+        visual = Path(request.visual_path).expanduser()
+        if self.provider.ready and (not visual.is_file() or visual.stat().st_size == 0):
+            return _failure(
+                status="failed",
+                cache_key=cache_key,
+                code="visual_source_missing",
+                impact="人物与口型步骤没有可用人物画面，不能生成视频。",
+                action="从当前工作区选择已批准的人物参考视频后重试。",
                 retryable=False,
             )
         if self.provider.ready and request.model_id != self.provider.model_id:
@@ -603,6 +626,7 @@ def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest) -> str:
         "person": {
             "id": request.person.id,
             "version": request.person.version,
+            "avatar_reference": request.person.avatar_reference,
             "authorization": _authorization_cache_identity(request.person.authorization),
         },
         "voice": {
@@ -690,6 +714,15 @@ def _parse_avatar_result(
             code="provider_rejected",
             impact="供应商拒绝生成人物视频，当前视频不能进入后续剪辑。",
             action=str(reason).strip() or "检查供应商限制或输入后重试。",
+        )
+    if payload.get("status") == "failed":
+        reason = payload.get("reason")
+        return _failure(
+            status="failed",
+            cache_key=cache_key,
+            code="provider_failed",
+            impact="人物与口型步骤失败，当前视频不能进入后续剪辑。",
+            action=str(reason).strip() or "检查本地人物口型运行环境后重试。",
         )
     if payload.get("status") != "succeeded":
         return _failure(
@@ -807,3 +840,19 @@ def _authorization_cache_identity(authorization: Authorization) -> dict[str, str
         "status": authorization.status,
         "expires_at": authorization.expires_at.isoformat() if authorization.expires_at else None,
     }
+
+
+def avatar_lipsync_provider_from_settings(
+    settings: Settings,
+) -> AvatarAndLipSyncProvider:
+    runtime = settings.avatar_model_runtime_python_path
+    runtime_root = settings.avatar_model_root_path
+    if not runtime or not runtime_root:
+        return UnavailableAvatarAndLipSyncProvider()
+    return SubprocessAvatarAndLipSyncProvider(
+        runtime_path=runtime,
+        worker_path=settings.avatar_model_worker_path,
+        runtime_root=runtime_root,
+        model_id=settings.avatar_model_id,
+        supported_languages=("zh",),
+    )

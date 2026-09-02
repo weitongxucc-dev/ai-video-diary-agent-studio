@@ -168,6 +168,10 @@ def _default_voice_model_worker_path() -> str:
     return str(Path(__file__).resolve().parents[1] / "model_workers" / "qwen3_tts_worker.py")
 
 
+def _default_avatar_model_worker_path() -> str:
+    return str(Path(__file__).resolve().parents[1] / "model_workers" / "musetalk_worker.py")
+
+
 def _default_hermes_radar_path() -> str:
     return str(Path.home() / "Desktop" / "product-hunt-raw" / "daily-reports")
 
@@ -261,6 +265,10 @@ class Settings:
     model_runtime_python_path: str = _default_model_runtime_python_path()
     visual_model_worker_path: str = _default_visual_model_worker_path()
     voice_model_worker_path: str = _default_voice_model_worker_path()
+    avatar_model_runtime_python_path: str | None = None
+    avatar_model_worker_path: str = _default_avatar_model_worker_path()
+    avatar_model_root_path: str | None = None
+    avatar_model_id: str = "musetalk-v1.5-mps"
     draft_background_music_path: str | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
@@ -394,6 +402,13 @@ class Settings:
             or _default_visual_model_worker_path(),
             voice_model_worker_path=os.getenv("VOICE_MODEL_WORKER_PATH")
             or _default_voice_model_worker_path(),
+            avatar_model_runtime_python_path=os.getenv(
+                "AVATAR_MODEL_RUNTIME_PYTHON_PATH"
+            ),
+            avatar_model_worker_path=os.getenv("AVATAR_MODEL_WORKER_PATH")
+            or _default_avatar_model_worker_path(),
+            avatar_model_root_path=os.getenv("AVATAR_MODEL_ROOT_PATH"),
+            avatar_model_id=os.getenv("AVATAR_MODEL_ID", cls.avatar_model_id),
             draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
@@ -614,6 +629,24 @@ class Settings:
                     "name": "LOCAL_WHISPER_LANGUAGE",
                     "configured": bool(self.local_whisper_language),
                     "value": self.local_whisper_language,
+                    "secret": False,
+                },
+                {
+                    "name": "AVATAR_MODEL_RUNTIME_PYTHON_PATH",
+                    "configured": bool(self.avatar_model_runtime_python_path),
+                    "value": self.avatar_model_runtime_python_path,
+                    "secret": False,
+                },
+                {
+                    "name": "AVATAR_MODEL_ROOT_PATH",
+                    "configured": bool(self.avatar_model_root_path),
+                    "value": self.avatar_model_root_path,
+                    "secret": False,
+                },
+                {
+                    "name": "AVATAR_MODEL_ID",
+                    "configured": bool(self.avatar_model_id),
+                    "value": self.avatar_model_id,
                     "secret": False,
                 },
                 {

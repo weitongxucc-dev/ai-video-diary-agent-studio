@@ -34,6 +34,8 @@ def _authorization(content_type: str, *, status: str = "active") -> Authorizatio
 def _request(tmp_path: Path) -> AvatarAndLipSyncRequest:
     audio = tmp_path / "narration.wav"
     audio.write_bytes(b"audio")
+    visual = tmp_path / "person.mp4"
+    visual.write_bytes(b"visual")
     person = PersonProfile(
         id="person_a",
         workspace_id="workspace_a",
@@ -67,6 +69,7 @@ def _request(tmp_path: Path) -> AvatarAndLipSyncRequest:
         expression="neutral",
         authorization=_authorization("avatar_video"),
         model_id="avatar-model-v1",
+        visual_path=str(visual),
     )
 
 
@@ -127,6 +130,11 @@ def test_avatar_lipsync_reports_missing_provider_output(tmp_path):
     worker = tmp_path / "worker.py"
     runtime.write_text("runtime", encoding="utf-8")
     worker.write_text("worker", encoding="utf-8")
+    runtime_root = tmp_path / "musetalk"
+    (runtime_root / "scripts").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "scripts" / "inference.py").write_text("", encoding="utf-8")
+    (runtime_root / "models" / "musetalkV15").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "models" / "musetalkV15" / "unet.pth").write_bytes(b"model")
 
     def runner(command):
         response_path = Path(command[command.index("--response") + 1])
@@ -148,6 +156,7 @@ def test_avatar_lipsync_reports_missing_provider_output(tmp_path):
     provider = SubprocessAvatarAndLipSyncProvider(
         runtime_path=runtime,
         worker_path=worker,
+        runtime_root=runtime_root,
         model_id="avatar-model-v1",
         runner=runner,
     )
@@ -164,9 +173,15 @@ def _configured_provider(tmp_path, runner):
     worker = tmp_path / "worker.py"
     runtime.write_text("runtime", encoding="utf-8")
     worker.write_text("worker", encoding="utf-8")
+    runtime_root = tmp_path / "musetalk"
+    (runtime_root / "scripts").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "scripts" / "inference.py").write_text("", encoding="utf-8")
+    (runtime_root / "models" / "musetalkV15").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "models" / "musetalkV15" / "unet.pth").write_bytes(b"model")
     return SubprocessAvatarAndLipSyncProvider(
         runtime_path=runtime,
         worker_path=worker,
+        runtime_root=runtime_root,
         model_id="avatar-model-v1",
         runner=runner,
     )

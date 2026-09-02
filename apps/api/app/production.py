@@ -1512,6 +1512,17 @@ class ProductionRepository:
             expression=expression,
             authorization=authorization,
             model_id=model_id,
+            visual_path=(
+                str(
+                    self.resolve_workspace_media_reference(
+                        workspace_id,
+                        person.avatar_reference,
+                        require_registered=True,
+                    )
+                )
+                if person.avatar_reference.startswith("workspace://")
+                else ""
+            ),
         )
 
     def migrate_legacy_voice_profile(
