@@ -16,11 +16,11 @@ describe("apiUrl", () => {
     );
   });
 
-  it("preserves query parameters in the path", async () => {
+  it("keeps media URLs on the same-origin API proxy", async () => {
     vi.stubEnv("NEXT_PUBLIC_API_BASE", "http://localhost:8000");
     const { apiUrl } = await import("../api");
     expect(apiUrl("/api/knowledge/notes?q=test")).toBe(
-      "http://localhost:8000/api/knowledge/notes?q=test",
+      "/api/knowledge/notes?q=test",
     );
   });
 

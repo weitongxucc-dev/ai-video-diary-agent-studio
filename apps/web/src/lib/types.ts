@@ -1190,6 +1190,89 @@ export type CreationTaskPersonRenderCapability = {
   repair_action: string | null;
 };
 
+export type CreationTaskCapability = {
+  available: boolean;
+  model_id: string | null;
+  message: string;
+  repair_action: string | null;
+};
+
+export type CreationTaskSubtitleStyle = {
+  name: string;
+  font_family: string;
+  font_size: number;
+  primary_color: string;
+  emphasis_color: string;
+  position: "top" | "middle" | "bottom";
+  bilingual_order: "source_then_translation" | "translation_then_source";
+};
+
+export type CreationTaskSubtitleCue = {
+  id: string;
+  source_cue_id: string | null;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  speaker: string | null;
+  line_breaks: number[];
+  emphasis: string[];
+};
+
+export type CreationTaskSubtitleTrack = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  timeline_version_id: string;
+  language: "zh-CN" | "en-US";
+  source_language: "zh-CN" | "en-US" | null;
+  style: CreationTaskSubtitleStyle;
+  cues: CreationTaskSubtitleCue[];
+  generation_method: "timeline" | "translation";
+  model_id: string | null;
+  artifact_ref: string | null;
+  transform_id: string | null;
+  status: "valid" | "failed" | "unavailable" | "superseded";
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTaskCoverLayout = {
+  title_position: "center" | "bottom";
+  text_align: "left" | "center";
+};
+
+export type CreationTaskCoverSafeArea = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+};
+
+export type CreationTaskCoverAsset = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  timeline_version_id: string;
+  source_video_ref: string;
+  frame_time_seconds: number;
+  title: string;
+  safe_area: CreationTaskCoverSafeArea;
+  layout: CreationTaskCoverLayout;
+  generation_method: "video_frame" | "image_model";
+  model_or_engine: string;
+  artifact_ref: string | null;
+  transform_id: string | null;
+  status: "valid" | "failed" | "unavailable" | "superseded";
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CreationTaskVoiceOption = {
   profile_id: string;
   version: string;
@@ -1248,6 +1331,11 @@ export type CreationTaskWorkspace = {
   person_renders: CreationTaskPersonRender[];
   person_render_capability: CreationTaskPersonRenderCapability;
   montage: CreationTaskMontage | null;
+  subtitle_tracks: CreationTaskSubtitleTrack[];
+  cover_asset: CreationTaskCoverAsset | null;
+  subtitle_translation_capability: CreationTaskCapability;
+  cover_frame_capability: CreationTaskCapability;
+  image_generation_capability: CreationTaskCapability;
 };
 
 export type CreationTaskEditIntent = {
@@ -1273,7 +1361,9 @@ export type CreationTaskExactEditInput =
   | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
-  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string }
+  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
+  | { operation_type: "ConfigureSubtitleTrack"; track_id: string; target_language?: "en-US"; style: CreationTaskSubtitleStyle }
+  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };
 

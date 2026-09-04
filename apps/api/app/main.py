@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+import shutil
 import subprocess
 from collections import Counter
 from dataclasses import asdict, replace
@@ -33,6 +35,12 @@ from app.auth import (
     UnauthorizedError,
 )
 from app.artifact_store import ArtifactStore
+from app.cover_generation import (
+    CoverGenerationRequest,
+    CoverGenerationService,
+    CoverSafeArea,
+    unconfigured_image_generation_capability,
+)
 from app.config import (
     Settings,
     configure_process_temporary_directory,
@@ -90,6 +98,7 @@ from app.production import (
     CreationTask,
     CreationTaskScript,
     CreationTaskScriptSection,
+    CoverAsset,
     DependencyEdge,
     EditIntent,
     EditOperation,
@@ -109,10 +118,20 @@ from app.production import (
     TopicGenerationRun,
     TaskEvent,
     TimelineVersion,
+    SubtitleCue,
+    SubtitleTrack,
     TransformRun,
     effective_segment_usage_role,
 )
 from app.task_runtime import JobFailure, JobResult
+from app.subtitle_tracks import (
+    SubtitleCue as SubtitleExecutionCue,
+    SubtitleStyle as SubtitleExecutionStyle,
+    SubtitleTrack as SubtitleExecutionTrack,
+    SubtitleTranslationService,
+    render_srt,
+    subtitle_translation_provider_from_settings,
+)
 from app.voice_clone import VoiceCloneError
 from app.repository import (
     LEGACY_WORKSPACE_ID,
@@ -2746,6 +2765,105 @@ def _creation_task_voice_options(
     return options
 
 
+def _default_subtitle_style() -> dict[str, object]:
+    return {
+        "name": "default",
+        "font_family": "PingFang SC",
+        "font_size": 40,
+        "primary_color": "#FFFFFF",
+        "emphasis_color": "#FFD54F",
+        "position": "bottom",
+        "bilingual_order": "source_then_translation",
+    }
+
+
+def _subtitle_track_from_montage(
+    workspace_id: str,
+    task: CreationTask,
+    version: TimelineVersion,
+    montage: CreationTaskMontagePlan,
+) -> SubtitleTrack | None:
+    if montage.status != "rendered" or not montage.subtitle_path:
+        return None
+    transform_id = version.snapshot.get("transform_run_id")
+    if not isinstance(transform_id, str) or not transform_id:
+        transform_id = version.snapshot.get("reused_job_id")
+        if isinstance(transform_id, str) and transform_id:
+            transform_id = f"transform_{transform_id}"
+    if not isinstance(transform_id, str) or not transform_id:
+        return None
+    clip_by_cue = {clip.cue_id: clip for clip in montage.clips}
+    cues: list[SubtitleCue] = []
+    cursor = 0.0
+    for cue in montage.cues:
+        clip = clip_by_cue.get(cue.id)
+        start = clip.timeline_start_seconds if clip is not None else cursor
+        end = (
+            clip.timeline_end_seconds
+            if clip is not None
+            else start + cue.duration_seconds
+        )
+        cues.append(
+            SubtitleCue(
+                id=cue.id,
+                source_cue_id=None,
+                text=cue.text,
+                start_seconds=start,
+                end_seconds=end,
+            )
+        )
+        cursor = end
+    return SubtitleTrack(
+        id=f"subtitle_{version.id}_zh",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        timeline_version_id=version.id,
+        language="zh-CN",
+        source_language=None,
+        style=_default_subtitle_style(),
+        cues=cues,
+        generation_method="timeline",
+        model_id=None,
+        artifact_ref=montage.subtitle_path,
+        transform_id=transform_id,
+        status="valid",
+    )
+
+
+def _current_subtitle_tracks(
+    workspace_id: str,
+    task: CreationTask,
+    *,
+    current_version: TimelineVersion | None = None,
+    montage: CreationTaskMontagePlan | None = None,
+) -> list[SubtitleTrack]:
+    if current_version is None and task.current_timeline_version_id:
+        try:
+            current_version = production_repo.get_timeline_version(
+                workspace_id, task.current_timeline_version_id
+            )
+        except KeyError:
+            current_version = None
+    if current_version is None:
+        return []
+    tracks = production_repo.list_subtitle_tracks(
+        workspace_id, task.id, timeline_version_id=current_version.id
+    )
+    if tracks:
+        return tracks
+    if montage is None:
+        try:
+            montage = creation_task_montage_plan_from_payload(
+                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+            )
+        except KeyError:
+            return []
+    projected = _subtitle_track_from_montage(
+        workspace_id, task, current_version, montage
+    )
+    return [projected] if projected is not None else []
+
+
 def _creation_task_workspace_response(
     workspace_id: str,
     task: CreationTask,
@@ -2786,6 +2904,31 @@ def _creation_task_workspace_response(
     )
     can_undo = _undo_target_versions(workspace_id, task)[0] is not None
     person_render_available = avatar_lipsync_provider.ready
+    subtitle_tracks = _current_subtitle_tracks(
+        workspace_id, task, current_version=current_version, montage=montage
+    )
+    cover_assets = (
+        production_repo.list_cover_assets(
+            workspace_id,
+            task.id,
+            timeline_version_id=current_version.id,
+        )
+        if current_version is not None
+        else []
+    )
+    translation_provider = (
+        subtitle_translation_provider_from_settings(settings)
+        if isinstance(settings, Settings)
+        else None
+    )
+    cover_frame_available = bool(
+        montage is not None
+        and montage.status == "rendered"
+        and montage.output_path
+        and shutil.which("ffmpeg")
+        and shutil.which("ffprobe")
+    )
+    image_capability = unconfigured_image_generation_capability()
     return CreationTaskWorkspaceResponse.model_validate(
         {
             "task": {
@@ -2852,6 +2995,44 @@ def _creation_task_workspace_response(
                 if montage is not None
                 else None
             ),
+            "subtitle_tracks": [asdict(track) for track in subtitle_tracks],
+            "cover_asset": asdict(cover_assets[-1]) if cover_assets else None,
+            "subtitle_translation_capability": {
+                "available": bool(translation_provider and translation_provider.ready),
+                "model_id": translation_provider.model_id if translation_provider else None,
+                "message": (
+                    translation_provider.message
+                    if translation_provider
+                    else "当前测试运行时未配置文字模型翻译能力。"
+                ),
+                "repair_action": (
+                    None
+                    if translation_provider and translation_provider.ready
+                    else translation_provider.message
+                    if translation_provider
+                    else "配置完整运行时设置后重试。"
+                ),
+            },
+            "cover_frame_capability": {
+                "available": cover_frame_available,
+                "model_id": "ffmpeg+Pillow" if cover_frame_available else None,
+                "message": (
+                    "可以从当前成片选择真实画面生成封面。"
+                    if cover_frame_available
+                    else "先生成可播放成片，并确认本机 FFmpeg 可用。"
+                ),
+                "repair_action": (
+                    None
+                    if cover_frame_available
+                    else "先完成成片渲染或修复 FFmpeg/FFprobe 环境。"
+                ),
+            },
+            "image_generation_capability": {
+                "available": False,
+                "model_id": None,
+                "message": image_capability.impact,
+                "repair_action": image_capability.remediation,
+            },
         }
     )
 @app.post(
@@ -4449,6 +4630,249 @@ def _persist_typed_montage_edit(
     )
 
 
+def _execution_subtitle_track(track: SubtitleTrack) -> SubtitleExecutionTrack:
+    return SubtitleExecutionTrack(
+        id=track.id,
+        workspace_id=track.workspace_id,
+        task_id=track.task_id,
+        timeline_version_id=track.timeline_version_id,
+        language=track.language,
+        source_language=track.source_language or track.language,
+        style=SubtitleExecutionStyle(**track.style),
+        cues=tuple(
+            SubtitleExecutionCue(
+                id=cue.id,
+                source_cue_id=cue.source_cue_id,
+                text=cue.text,
+                start_seconds=cue.start_seconds,
+                end_seconds=cue.end_seconds,
+                speaker=cue.speaker,
+                line_breaks=tuple(cue.line_breaks),
+                emphasis=tuple(cue.emphasis),
+            )
+            for cue in track.cues
+        ),
+        generation_method=track.generation_method,
+        status=track.status,
+        model_id=track.model_id,
+        artifact_ref=track.artifact_ref,
+        transform_id=track.transform_id,
+    )
+
+
+def _clone_subtitle_track(
+    track: SubtitleTrack,
+    *,
+    timeline_version_id: str,
+    track_id: str | None = None,
+    artifact_ref: str | None = None,
+    transform_id: str | None = None,
+    cues: list[SubtitleCue] | None = None,
+    style: dict[str, object] | None = None,
+    model_id: str | None = None,
+) -> SubtitleTrack:
+    now = utc_now()
+    return SubtitleTrack(
+        id=track_id or f"subtitle_{timeline_version_id}_{track.language.lower()}",
+        workspace_id=track.workspace_id,
+        task_id=track.task_id,
+        timeline_version_id=timeline_version_id,
+        language=track.language,
+        source_language=track.source_language,
+        style=style or track.style,
+        cues=cues or track.cues,
+        generation_method=track.generation_method,
+        model_id=model_id if model_id is not None else track.model_id,
+        artifact_ref=artifact_ref or track.artifact_ref,
+        transform_id=transform_id or track.transform_id,
+        status="valid",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _publish_subtitle_text(
+    *,
+    workspace_id: str,
+    task_id: str,
+    proposal_id: str,
+    kind: str,
+    input_refs: list[str],
+    content: str,
+    engine: str,
+    parameters: dict[str, object],
+) -> tuple[str, str]:
+    input_digest = hashlib.sha256(
+        json.dumps(
+            {"inputs": input_refs, "content": content, "parameters": parameters},
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    job = production_repo.create_job_run(
+        JobRun(
+            id=f"job_{uuid4().hex}",
+            workspace_id=workspace_id,
+            task_id=task_id,
+            kind=kind,
+            idempotency_key=f"{kind}:{proposal_id}:{input_digest}",
+            input_digest=input_digest,
+        )
+    )
+    running = production_repo.claim_job_run(workspace_id, job.id)
+    logical_ref = f"artifacts/{task_id}/{job.id}/subtitles.srt"
+    staging_root = Path(settings.video_output_path).expanduser() / ".job-staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    try:
+        with TemporaryDirectory(prefix=f"{job.id}-", dir=staging_root) as staging:
+            staged = Path(staging) / "subtitles.srt"
+            staged.write_text(content, encoding="utf-8")
+            publication = artifact_store.publish_file(logical_ref, staged)
+        artifact = production_repo.create_artifact_record(
+            ArtifactRecord(
+                id=f"artifact_{job.id}_subtitles",
+                workspace_id=workspace_id,
+                task_id=task_id,
+                kind="subtitle_track",
+                logical_ref=publication.logical_ref,
+                sha256=publication.sha256,
+                size_bytes=publication.size_bytes,
+                producer_job_id=job.id,
+                input_refs=input_refs,
+            )
+        )
+        transform = production_repo.create_transform_run(
+            TransformRun(
+                id=f"transform_{job.id}",
+                workspace_id=workspace_id,
+                task_id=task_id,
+                job_id=job.id,
+                transform_type=kind,
+                input_digest=input_digest,
+                input_refs=input_refs,
+                output_refs=[artifact.logical_ref],
+                engine=engine,
+                parameters=parameters,
+                status="succeeded",
+                started_at=running.started_at or utc_now(),
+                finished_at=utc_now(),
+            )
+        )
+        for upstream in input_refs:
+            production_repo.create_dependency_edge(
+                DependencyEdge(
+                    id=f"edge_{job.id}_{hashlib.sha256(upstream.encode()).hexdigest()[:20]}",
+                    workspace_id=workspace_id,
+                    task_id=task_id,
+                    upstream_ref=upstream,
+                    downstream_ref=artifact.logical_ref,
+                    created_by_transform_id=transform.id,
+                )
+            )
+        production_repo.finish_job_run(
+            workspace_id, job.id, status="succeeded", output_refs=[artifact.logical_ref]
+        )
+        return artifact.logical_ref, transform.id
+    except Exception as exc:
+        try:
+            production_repo.finish_job_run(
+                workspace_id,
+                job.id,
+                status="failed",
+                failure_reason=str(exc) or type(exc).__name__,
+                impact="没有保存新的字幕轨，当前版本保持不变。",
+                repair_action="检查字幕内容与本机产物目录后重试。",
+            )
+        except (KeyError, ValueError):
+            pass
+        raise
+
+
+def _persist_subtitle_cover_edit(
+    *,
+    workspace_id: str,
+    task: CreationTask,
+    proposal: EditProposal,
+    base_version: TimelineVersion,
+    result_version_id: str,
+    operation_type: str,
+    operation_payload: dict[str, object],
+    subtitle_tracks: list[SubtitleTrack],
+    cover_asset: CoverAsset | None = None,
+    updated_plan: CreationTaskMontagePlan | None = None,
+) -> CreationTaskEditConfirmResponse:
+    now = utc_now()
+    operation = EditOperation(
+        id=f"operation_{uuid4().hex}",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        proposal_id=proposal.id,
+        operation_type=operation_type,
+        payload=operation_payload,
+        base_version_id=base_version.id,
+        result_version_id=result_version_id,
+        status="applied",
+        created_at=now,
+        applied_at=now,
+    )
+    montage_payload = (
+        creation_task_montage_plan_to_payload(updated_plan)
+        if updated_plan is not None
+        else None
+    )
+    snapshot = {
+        **base_version.snapshot,
+        **({"montage": montage_payload} if montage_payload is not None else {}),
+        "subtitle_track_ids": [track.id for track in subtitle_tracks],
+        "cover_asset_id": cover_asset.id if cover_asset is not None else base_version.snapshot.get("cover_asset_id"),
+        "invalidated_refs": proposal.invalidated_refs,
+        "edit_operation_id": operation.id,
+    }
+    result_version = TimelineVersion(
+        id=result_version_id,
+        workspace_id=workspace_id,
+        task_id=task.id,
+        parent_version_id=base_version.id,
+        sequence=base_version.sequence + 1,
+        snapshot=snapshot,
+        created_by_operation_id=operation.id,
+        created_at=now,
+    )
+    try:
+        _proposal, persisted_operation, _version, current_task = production_repo.confirm_edit_proposal(
+            workspace_id,
+            task.id,
+            proposal.id,
+            operation=operation,
+            result_version=result_version,
+            montage_plan_id=updated_plan.id if updated_plan is not None else None,
+            montage_payload=montage_payload,
+            subtitle_tracks=subtitle_tracks,
+            cover_asset=cover_asset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    persisted_plan = creation_task_montage_plan_from_payload(
+        production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+    )
+    narration = (
+        production_repo.get_narration_artifact(workspace_id, current_task.narration_cache_key)
+        if current_task.narration_cache_key
+        else None
+    )
+    return CreationTaskEditConfirmResponse.model_validate(
+        {
+            "operation": asdict(persisted_operation),
+            "montage": _creation_task_montage_response(persisted_plan).model_dump(),
+            "narration": (
+                _creation_task_narration_response(current_task, narration).model_dump()
+                if narration is not None
+                else None
+            ),
+        }
+    )
+
+
 def _undo_target_versions(
     workspace_id: str,
     task: CreationTask,
@@ -4835,8 +5259,62 @@ def preview_creation_task_edit(
             )
         )
         return _edit_preview_response(intent, proposal)
+    if selected_ref.startswith("cover:"):
+        if payload.context_stage != "subtitle_cover":
+            raise _topic_failure_response(
+                status_code=409,
+                error="edit_scope_unavailable",
+                reason="当前步骤不能修改封面。",
+                impact="任务内容没有发生变化。",
+                repair_action="进入字幕与封面步骤后选择封面。",
+                retryable=True,
+            )
+        try:
+            montage = creation_task_montage_plan_from_payload(
+                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
+        title_match = re.search(
+            r"标题(?:写|改成|改为|为)?[：:]?\s*[“\"']?(.+?)[”\"']?(?:[，,。]|$)",
+            command,
+        )
+        title = title_match.group(1).strip(" “”。\"'") if title_match else None
+        if not title:
+            raise _topic_failure_response(
+                status_code=409,
+                error="cover_title_missing",
+                reason="没有识别出要显示的封面标题。",
+                impact="没有生成封面，当前任务保持不变。",
+                repair_action="输入“标题写……”并保留完整标题。",
+                retryable=True,
+            )
+        seconds_match = re.search(r"(\d+(?:\.\d+)?)\s*秒", command)
+        frame_time = float(seconds_match.group(1)) if seconds_match else None
+        ordinal_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+        ordinal_match = re.search(r"第([一二三四五六七八九十]|\d+)个?镜头", command)
+        if frame_time is None and ordinal_match:
+            raw_index = ordinal_match.group(1)
+            index = int(raw_index) if raw_index.isdigit() else ordinal_map.get(raw_index, 0)
+            if 1 <= index <= len(montage.clips):
+                clip = montage.clips[index - 1]
+                frame_time = min(
+                    clip.timeline_end_seconds - 0.05,
+                    clip.timeline_start_seconds + 0.2,
+                )
+        if frame_time is None:
+            frame_time = payload.playhead_ms / 1000 if payload.playhead_ms is not None else 0.0
+        return preview_creation_task_exact_edit(
+            task_id,
+            request,
+            CreationTaskExactEditRequest(
+                operation_type="GenerateCoverFromFrame",
+                frame_time_seconds=frame_time,
+                title=title,
+            ),
+        )
     if selected_ref.startswith("cue:"):
-        if payload.context_stage not in {"montage", "review"}:
+        if payload.context_stage not in {"montage", "review", "subtitle_cover"}:
             raise _topic_failure_response(
                 status_code=409,
                 error="edit_scope_unavailable",
@@ -4873,6 +5351,17 @@ def preview_creation_task_edit(
                 retryable=True,
             )
         base_version = _ensure_montage_base_version(workspace_id, task, montage)
+        task = production_repo.get_creation_task(workspace_id, task.id)
+        subtitle_track = next(
+            (
+                track
+                for track in _current_subtitle_tracks(
+                    workspace_id, task, current_version=base_version, montage=montage
+                )
+                if any(track_cue.id == cue.id for track_cue in track.cues)
+            ),
+            None,
+        )
         now = utc_now()
         intent = production_repo.create_edit_intent(
             EditIntent(
@@ -4895,6 +5384,24 @@ def preview_creation_task_edit(
                 operation={"operation_type": "UpdateSubtitleCue", "payload": {
                     "cue_id": cue.id, "text": new_text,
                     "expected_text": cue.text, "base_version_id": base_version.id,
+                    **(
+                        {
+                            "track_id": subtitle_track.id,
+                            "line_breaks": next(
+                                item.line_breaks
+                                for item in subtitle_track.cues
+                                if item.id == cue.id
+                            ),
+                            "emphasis": next(
+                                item.emphasis
+                                for item in subtitle_track.cues
+                                if item.id == cue.id
+                            ),
+                            "style": subtitle_track.style,
+                        }
+                        if subtitle_track is not None
+                        else {}
+                    ),
                 }},
                 invalidated_refs=_logical_montage_output_refs(montage),
                 preview={
@@ -5313,6 +5820,349 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict):
+        source_track_id = operation_payload.get("source_track_id")
+        base_version_id = operation_payload.get("base_version_id")
+        if (
+            not isinstance(source_track_id, str)
+            or not source_track_id
+            or not isinstance(base_version_id, str)
+            or not base_version_id
+            or operation_payload.get("target_language") != "en-US"
+        ):
+            raise HTTPException(status_code=409, detail="invalid subtitle track configuration")
+        if task.current_timeline_version_id != base_version_id:
+            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
+        try:
+            montage = creation_task_montage_plan_from_payload(
+                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="subtitle edit base no longer exists") from exc
+        current_tracks = _current_subtitle_tracks(
+            workspace_id, task, current_version=base_version, montage=montage
+        )
+        source = next((track for track in current_tracks if track.id == source_track_id), None)
+        if source is None or source.language != "zh-CN" or source.status != "valid":
+            raise HTTPException(status_code=409, detail="subtitle source track has changed")
+        result_version_id = f"timeline_{uuid4().hex}"
+        service = SubtitleTranslationService(
+            subtitle_translation_provider_from_settings(settings)
+        )
+        execution = service.translate_zh_to_en(
+            _execution_subtitle_track(source),
+            translated_track_id=f"subtitle_{result_version_id}_en-us",
+            timeline_version_id=result_version_id,
+        )
+        if execution.status != "succeeded" or execution.translated_track is None:
+            raise _topic_failure_response(
+                status_code=503,
+                error=execution.failure_code or "subtitle_translation_failed",
+                reason=execution.failure_reason or "英文字幕没有生成可信结果。",
+                impact=execution.impact or "中文字幕和当前成片保持不变。",
+                repair_action=execution.repair_action or "检查文字模型后重试。",
+                retryable=bool(execution.retryable),
+            )
+        try:
+            english_ref, transform_id = _publish_subtitle_text(
+                workspace_id=workspace_id,
+                task_id=task.id,
+                proposal_id=proposal.id,
+                kind="subtitle_translation",
+                input_refs=[source.artifact_ref or f"subtitle-track:{source.id}"],
+                content=render_srt(execution.translated_track),
+                engine=f"{execution.provider_name}:{execution.model_id}",
+                parameters={
+                    "prompt_schema_version": execution.prompt_schema_version,
+                    "provider_execution_id": execution.provider_execution_id,
+                    "source_track_id": source.id,
+                    "target_language": "en-US",
+                },
+            )
+        except (OSError, ValueError) as exc:
+            raise _topic_failure_response(
+                status_code=503,
+                error="subtitle_artifact_failed",
+                reason="英文字幕已返回，但未能保存为可信字幕产物。",
+                impact="当前时间线和成片保持不变。",
+                repair_action=str(exc),
+                retryable=True,
+            ) from exc
+        translated = execution.translated_track
+        english_track = SubtitleTrack(
+            id=translated.id,
+            workspace_id=workspace_id,
+            task_id=task.id,
+            timeline_version_id=result_version_id,
+            language="en-US",
+            source_language="zh-CN",
+            style=asdict(translated.style),
+            cues=[
+                SubtitleCue(
+                    id=cue.id,
+                    source_cue_id=cue.source_cue_id,
+                    text=cue.text,
+                    start_seconds=cue.start_seconds,
+                    end_seconds=cue.end_seconds,
+                    speaker=cue.speaker,
+                    line_breaks=list(cue.line_breaks),
+                    emphasis=list(cue.emphasis),
+                )
+                for cue in translated.cues
+            ],
+            generation_method="translation",
+            model_id=execution.model_id,
+            artifact_ref=english_ref,
+            transform_id=transform_id,
+            status="valid",
+        )
+        chinese_track = _clone_subtitle_track(
+            source,
+            timeline_version_id=result_version_id,
+            track_id=f"subtitle_{result_version_id}_zh-cn",
+        )
+        montage, _ = _prepare_changed_montage(
+            montage,
+            message="中英字幕已生成并保持原时间轴；请重新渲染以写入成片。",
+        )
+        return _persist_subtitle_cover_edit(
+            workspace_id=workspace_id,
+            task=task,
+            proposal=proposal,
+            base_version=base_version,
+            result_version_id=result_version_id,
+            operation_type="ConfigureSubtitleTrack",
+            operation_payload=dict(operation_payload),
+            subtitle_tracks=[chinese_track, english_track],
+            updated_plan=montage,
+        )
+    if operation_type == "GenerateCoverFromFrame" and isinstance(operation_payload, dict):
+        base_version_id = operation_payload.get("base_version_id")
+        source_video_ref = operation_payload.get("source_video_ref")
+        title = operation_payload.get("title")
+        frame_time_seconds = operation_payload.get("frame_time_seconds")
+        if (
+            not isinstance(base_version_id, str)
+            or not isinstance(source_video_ref, str)
+            or not isinstance(title, str)
+            or not isinstance(frame_time_seconds, (int, float))
+        ):
+            raise HTTPException(status_code=409, detail="invalid cover generation operation")
+        if task.current_timeline_version_id != base_version_id:
+            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
+        job = production_repo.create_job_run(
+            JobRun(
+                id=f"job_{uuid4().hex}",
+                workspace_id=workspace_id,
+                task_id=task.id,
+                kind="cover_frame_generation",
+                idempotency_key=f"cover:{proposal.id}",
+                input_digest=hashlib.sha256(
+                    json.dumps(operation_payload, ensure_ascii=False, sort_keys=True).encode()
+                ).hexdigest(),
+            )
+        )
+        running = production_repo.claim_job_run(workspace_id, job.id)
+        cover_ref = f"artifacts/{task.id}/{job.id}/cover.png"
+        try:
+            generated = CoverGenerationService(settings.video_output_path).generate(
+                CoverGenerationRequest(
+                    source_video_path=artifact_store.resolve_file(source_video_ref),
+                    output_ref=cover_ref,
+                    frame_time_seconds=float(frame_time_seconds),
+                    title=title,
+                    safe_area=CoverSafeArea(),
+                )
+            )
+            evidence = generated.evidence
+            artifact = production_repo.create_artifact_record(
+                ArtifactRecord(
+                    id=f"artifact_{job.id}_cover",
+                    workspace_id=workspace_id,
+                    task_id=task.id,
+                    kind="cover_image",
+                    logical_ref=evidence.output_ref,
+                    sha256=evidence.output_sha256,
+                    size_bytes=evidence.output_size_bytes,
+                    producer_job_id=job.id,
+                    input_refs=[source_video_ref],
+                )
+            )
+            transform = production_repo.create_transform_run(
+                TransformRun(
+                    id=f"transform_{job.id}",
+                    workspace_id=workspace_id,
+                    task_id=task.id,
+                    job_id=job.id,
+                    transform_type="cover_from_frame",
+                    input_digest=job.input_digest,
+                    input_refs=[source_video_ref],
+                    output_refs=[artifact.logical_ref],
+                    engine=f"{evidence.engine}+{evidence.layout_engine}",
+                    parameters=evidence.parameters,
+                    status="succeeded",
+                    started_at=running.started_at or utc_now(),
+                    finished_at=utc_now(),
+                )
+            )
+            production_repo.create_dependency_edge(
+                DependencyEdge(
+                    id=f"edge_{job.id}_cover",
+                    workspace_id=workspace_id,
+                    task_id=task.id,
+                    upstream_ref=source_video_ref,
+                    downstream_ref=artifact.logical_ref,
+                    created_by_transform_id=transform.id,
+                )
+            )
+            production_repo.finish_job_run(
+                workspace_id, job.id, status="succeeded", output_refs=[artifact.logical_ref]
+            )
+        except Exception as exc:
+            try:
+                production_repo.finish_job_run(
+                    workspace_id,
+                    job.id,
+                    status="failed",
+                    failure_reason=str(exc) or type(exc).__name__,
+                    impact="当前时间线和已有成片保持不变。",
+                    repair_action="检查成片、选帧时间与 FFmpeg 后重试。",
+                )
+            except (KeyError, ValueError):
+                pass
+            raise _topic_failure_response(
+                status_code=503,
+                error="cover_generation_failed",
+                reason="封面没有生成可信图片产物。",
+                impact="当前时间线和已有成片保持不变。",
+                repair_action=str(exc),
+                retryable=True,
+            ) from exc
+        result_version_id = f"timeline_{uuid4().hex}"
+        tracks = [
+            _clone_subtitle_track(track, timeline_version_id=result_version_id)
+            for track in _current_subtitle_tracks(
+                workspace_id, task, current_version=base_version
+            )
+        ]
+        cover = CoverAsset(
+            id=f"cover_{uuid4().hex}",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            timeline_version_id=result_version_id,
+            source_video_ref=source_video_ref,
+            frame_time_seconds=float(frame_time_seconds),
+            title=title,
+            safe_area={key: float(value) for key, value in asdict(CoverSafeArea()).items()},
+            layout={"title_position": "bottom", "text_align": "center"},
+            generation_method="video_frame",
+            model_or_engine=f"{generated.evidence.engine}+{generated.evidence.layout_engine}",
+            artifact_ref=generated.evidence.output_ref,
+            transform_id=transform.id,
+            status="valid",
+        )
+        return _persist_subtitle_cover_edit(
+            workspace_id=workspace_id,
+            task=task,
+            proposal=proposal,
+            base_version=base_version,
+            result_version_id=result_version_id,
+            operation_type="GenerateCoverFromFrame",
+            operation_payload=dict(operation_payload),
+            subtitle_tracks=tracks,
+            cover_asset=cover,
+        )
+    if (
+        operation_type == "UpdateSubtitleCue"
+        and isinstance(operation_payload, dict)
+        and isinstance(operation_payload.get("track_id"), str)
+    ):
+        track_id = str(operation_payload["track_id"])
+        cue_id = operation_payload.get("cue_id")
+        text = operation_payload.get("text")
+        expected_text = operation_payload.get("expected_text")
+        base_version_id = operation_payload.get("base_version_id")
+        if any(
+            not isinstance(value, str) or not value
+            for value in (cue_id, text, expected_text, base_version_id)
+        ):
+            raise HTTPException(status_code=409, detail="invalid subtitle edit operation")
+        if task.current_timeline_version_id != base_version_id:
+            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        base_version = production_repo.get_timeline_version(workspace_id, str(base_version_id))
+        montage = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+        )
+        current_tracks = _current_subtitle_tracks(
+            workspace_id, task, current_version=base_version, montage=montage
+        )
+        track = next((item for item in current_tracks if item.id == track_id), None)
+        if track is None:
+            raise HTTPException(status_code=409, detail="subtitle track has changed")
+        cue = next((item for item in track.cues if item.id == cue_id), None)
+        if cue is None or cue.text != expected_text:
+            raise HTTPException(status_code=409, detail="subtitle cue has changed")
+        updated_cue = replace(
+            cue,
+            text=str(text),
+            line_breaks=list(operation_payload.get("line_breaks") or []),
+            emphasis=list(operation_payload.get("emphasis") or []),
+        )
+        updated_cues = [updated_cue if item.id == cue.id else item for item in track.cues]
+        updated_style = operation_payload.get("style")
+        if not isinstance(updated_style, dict):
+            raise HTTPException(status_code=409, detail="invalid subtitle style")
+        result_version_id = f"timeline_{uuid4().hex}"
+        provisional = _clone_subtitle_track(
+            track,
+            timeline_version_id=result_version_id,
+            cues=updated_cues,
+            style=dict(updated_style),
+        )
+        subtitle_ref, transform_id = _publish_subtitle_text(
+            workspace_id=workspace_id,
+            task_id=task.id,
+            proposal_id=proposal.id,
+            kind="subtitle_cue_update",
+            input_refs=[track.artifact_ref or f"subtitle-track:{track.id}"],
+            content=render_srt(_execution_subtitle_track(provisional)),
+            engine="subtitle-srt/v1",
+            parameters={"track_id": track.id, "cue_id": cue.id},
+        )
+        changed_track = _clone_subtitle_track(
+            track,
+            timeline_version_id=result_version_id,
+            cues=updated_cues,
+            style=dict(updated_style),
+            artifact_ref=subtitle_ref,
+            transform_id=transform_id,
+        )
+        retained = [
+            _clone_subtitle_track(item, timeline_version_id=result_version_id)
+            for item in current_tracks
+            if item.id != track.id and not (track.language == "zh-CN" and item.language == "en-US")
+        ]
+        if track.language == "zh-CN":
+            montage_cue = next((item for item in montage.cues if item.id == cue.id), None)
+            if montage_cue is not None:
+                montage_cue.text = str(text)
+        montage, _ = _prepare_changed_montage(
+            montage,
+            message="字幕已修改；请重新渲染以写入成片。",
+        )
+        return _persist_subtitle_cover_edit(
+            workspace_id=workspace_id,
+            task=task,
+            proposal=proposal,
+            base_version=base_version,
+            result_version_id=result_version_id,
+            operation_type="UpdateSubtitleCue",
+            operation_payload=dict(operation_payload),
+            subtitle_tracks=[changed_track, *retained],
+            updated_plan=montage,
+        )
     if operation_type in {"ChangePersonSegment", "RegeneratePersonRender"} and isinstance(
         operation_payload, dict
     ):
@@ -5606,6 +6456,198 @@ def confirm_creation_task_edit(
 
 
 @app.post(
+    "/api/creation-tasks/{task_id}/edits/exact/preview",
+    response_model=CreationTaskEditPreviewResponse,
+)
+def preview_creation_task_exact_edit(
+    task_id: str,
+    request: Request,
+    payload: CreationTaskExactEditRequest,
+) -> CreationTaskEditPreviewResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if payload.operation_type not in {
+        "UpdateSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="该精确操作尚未迁移到预览确认入口",
+        )
+    try:
+        montage = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
+    base_version = _ensure_montage_base_version(workspace_id, task, montage)
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    tracks = _current_subtitle_tracks(
+        workspace_id, task, current_version=base_version, montage=montage
+    )
+    now = utc_now()
+
+    if payload.operation_type == "ConfigureSubtitleTrack":
+        source = next((track for track in tracks if track.language == "zh-CN"), None)
+        if source is None:
+            raise _topic_failure_response(
+                status_code=409,
+                error="subtitle_source_missing",
+                reason="当前时间线没有可用的中文字幕轨。",
+                impact="没有调用文字模型，当前成片保持不变。",
+                repair_action="先生成带中文字幕的成片，再启用双语字幕。",
+                retryable=True,
+            )
+        if any(track.language == "en-US" and track.status == "valid" for track in tracks):
+            raise _topic_failure_response(
+                status_code=409,
+                error="edit_no_change",
+                reason="当前时间线已经启用中英双语字幕。",
+                impact="没有创建新的时间线版本。",
+                repair_action="可直接编辑具体字幕，或先撤销到上一版本。",
+                retryable=False,
+            )
+        provider = subtitle_translation_provider_from_settings(settings)
+        if not provider.ready:
+            raise _topic_failure_response(
+                status_code=409,
+                error="subtitle_translation_unavailable",
+                reason="文字模型翻译能力不可用。",
+                impact="未生成英文字幕，中文字幕和成片保持不变。",
+                repair_action=provider.message,
+                retryable=True,
+            )
+        summary = "把当前中文字幕逐条翻译为英文，保持原时间轴，并启用中英双语字幕。"
+        target_refs = [f"subtitle-track:{source.id}"]
+        operation_payload = {
+            "source_track_id": source.id,
+            "target_language": "en-US",
+            "base_version_id": base_version.id,
+        }
+        preview = {
+            "before": {"ref": target_refs[0], "label": "中文字幕", "detail": f"{len(source.cues)} 条"},
+            "after": {"ref": "subtitle-track:en-US", "label": "中英双语字幕", "detail": "逐条对齐原时间轴，确认后调用一次文字模型"},
+        }
+        effects = ["确认后调用一次当前已配置文字模型；不会改写字幕时间轴。"]
+    elif payload.operation_type == "UpdateSubtitleCue":
+        if not payload.cue_id or payload.text is None:
+            raise HTTPException(status_code=422, detail="subtitle edit requires cue_id and text")
+        track = next(
+            (
+                item
+                for item in tracks
+                if (payload.track_id is None or item.id == payload.track_id)
+                and any(cue.id == payload.cue_id for cue in item.cues)
+            ),
+            None,
+        )
+        if track is None:
+            raise HTTPException(status_code=404, detail="subtitle track or cue not found")
+        cue = next(cue for cue in track.cues if cue.id == payload.cue_id)
+        changed = (
+            payload.text != cue.text
+            or payload.line_breaks is not None
+            or payload.emphasis is not None
+            or payload.style is not None
+        )
+        if not changed:
+            raise _topic_failure_response(
+                status_code=409,
+                error="edit_no_change",
+                reason="字幕文字和样式没有变化。",
+                impact="没有创建新的时间线版本。",
+                repair_action="修改文字、断行、强调词或字幕样式后再预览。",
+                retryable=False,
+            )
+        summary = "只修改所选字幕条目；配音、镜头和其他字幕保持不变。"
+        target_refs = [f"subtitle-cue:{track.id}:{cue.id}"]
+        operation_payload = {
+            "track_id": track.id,
+            "cue_id": cue.id,
+            "text": payload.text,
+            "line_breaks": payload.line_breaks if payload.line_breaks is not None else cue.line_breaks,
+            "emphasis": payload.emphasis if payload.emphasis is not None else cue.emphasis,
+            "style": payload.style if payload.style is not None else track.style,
+            "expected_text": cue.text,
+            "base_version_id": base_version.id,
+        }
+        preview = {
+            "before": {"ref": target_refs[0], "label": "当前字幕", "detail": cue.text},
+            "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": payload.text},
+        }
+        effects = ["确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。"]
+    else:
+        if payload.title is None or payload.frame_time_seconds is None:
+            raise HTTPException(status_code=422, detail="cover edit requires title and frame_time_seconds")
+        if montage.status != "rendered" or not montage.output_path:
+            raise _topic_failure_response(
+                status_code=409,
+                error="rendered_version_required",
+                reason="当前任务没有可选帧的已渲染成片。",
+                impact="没有生成封面，当前任务保持不变。",
+                repair_action="先渲染当前成片，再选择画面和标题生成封面。",
+                retryable=True,
+            )
+        summary = f"从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并叠加标题生成封面。"
+        target_refs = [montage.output_path]
+        operation_payload = {
+            "source_video_ref": montage.output_path,
+            "frame_time_seconds": payload.frame_time_seconds,
+            "title": payload.title,
+            "base_version_id": base_version.id,
+        }
+        preview = {
+            "before": {"ref": montage.output_path, "label": "当前成片画面", "detail": f"{payload.frame_time_seconds:.1f} 秒"},
+            "after": {"ref": "cover:preview", "label": "封面标题", "detail": payload.title},
+        }
+        effects = ["确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。"]
+
+    intent = production_repo.create_edit_intent(
+        EditIntent(
+            id=f"intent_{uuid4().hex}",
+            workspace_id=workspace_id,
+            task_id=task_id,
+            raw_command=f"精确操作：{summary}",
+            context_stage="review" if task.stage == "review" else "montage",
+            selected_object_refs=target_refs,
+            playhead_ms=(
+                round((payload.frame_time_seconds or 0) * 1000)
+                if payload.operation_type == "GenerateCoverFromFrame"
+                else None
+            ),
+            intent_type="exact_subtitle_cover_edit",
+            scope={"kind": payload.operation_type},
+            constraints={"preserve_narration": True, "preserve_clips": True},
+            confidence=1.0,
+            status="interpreted",
+            created_at=now,
+        )
+    )
+    proposal = production_repo.create_edit_proposal(
+        EditProposal(
+            id=f"proposal_{uuid4().hex}",
+            workspace_id=workspace_id,
+            task_id=task_id,
+            intent_id=intent.id,
+            summary=summary,
+            target_refs=target_refs,
+            operation={"operation_type": payload.operation_type, "payload": operation_payload},
+            invalidated_refs=(
+                _logical_montage_output_refs(montage)
+                if payload.operation_type != "GenerateCoverFromFrame"
+                else []
+            ),
+            preview=preview,
+            external_effects=effects,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return _edit_preview_response(intent, proposal)
+
+
+@app.post(
     "/api/creation-tasks/{task_id}/edits/exact",
     response_model=CreationTaskEditConfirmResponse,
 )
@@ -5616,6 +6658,11 @@ def apply_creation_task_exact_edit(
 ) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
+    if payload.operation_type in {"ConfigureSubtitleTrack", "GenerateCoverFromFrame"} or (
+        payload.operation_type == "UpdateSubtitleCue" and payload.track_id is not None
+    ):
+        preview = preview_creation_task_exact_edit(task_id, request, payload)
+        return confirm_creation_task_edit(task_id, preview.proposal.id, request)
     if payload.operation_type in {"ChangePersonSegment", "RegeneratePersonRender"}:
         if not payload.clip_id:
             raise HTTPException(status_code=422, detail="person edit requires clip_id")
@@ -6050,6 +7097,35 @@ def update_creation_task_subtitle_cue(
     return result.montage
 
 
+def _apply_subtitle_tracks_to_render_plan(
+    plan: CreationTaskMontagePlan,
+    tracks: list[SubtitleTrack],
+) -> None:
+    chinese = next(
+        (track for track in tracks if track.language == "zh-CN" and track.status == "valid"),
+        None,
+    )
+    english = next(
+        (track for track in tracks if track.language == "en-US" and track.status == "valid"),
+        None,
+    )
+    if chinese is None:
+        return
+    chinese_by_id = {cue.id: cue for cue in chinese.cues}
+    english_by_source = {
+        cue.source_cue_id: cue for cue in english.cues if cue.source_cue_id
+    } if english is not None else {}
+    for cue in plan.cues:
+        source = chinese_by_id.get(cue.id)
+        if source is None:
+            continue
+        lines = [source.text]
+        translated = english_by_source.get(source.id)
+        if translated is not None:
+            lines.append(translated.text)
+        cue.text = "\n".join(lines)
+
+
 @app.post(
     "/api/creation-tasks/{task_id}/montage/render",
     response_model=CreationTaskMontagePlanResponse,
@@ -6071,6 +7147,7 @@ def render_creation_task_montage(
         raise HTTPException(status_code=409, detail="montage clips still require confirmation")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
+    active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
     plan_input = creation_task_montage_plan_to_payload(plan)
     for transient_key in (
         "status",
@@ -6081,6 +7158,15 @@ def render_creation_task_montage(
     ):
         plan_input.pop(transient_key, None)
     plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    plan_input["subtitle_tracks"] = [
+        {
+            "language": track.language,
+            "style": track.style,
+            "cues": [asdict(cue) for cue in track.cues],
+        }
+        for track in active_subtitle_tracks
+        if track.status == "valid"
+    ]
     input_refs = list(
         dict.fromkeys(
             [
@@ -6166,6 +7252,33 @@ def render_creation_task_montage(
                         created_by_operation_id=None,
                     )
                 )
+                if not production_repo.list_subtitle_tracks(
+                    workspace_id, task.id, timeline_version_id=version.id
+                ):
+                    if active_subtitle_tracks:
+                        for active_track in active_subtitle_tracks:
+                            production_repo.create_subtitle_track(
+                                _clone_subtitle_track(
+                                    active_track,
+                                    timeline_version_id=version.id,
+                                    artifact_ref=(
+                                        reusable_subtitles.logical_ref
+                                        if active_track.language == "zh-CN"
+                                        else active_track.artifact_ref
+                                    ),
+                                    transform_id=(
+                                        f"transform_{latest_matching_job.id}"
+                                        if active_track.language == "zh-CN"
+                                        else active_track.transform_id
+                                    ),
+                                )
+                            )
+                    else:
+                        initial_track = _subtitle_track_from_montage(
+                            workspace_id, task, version, plan
+                        )
+                        if initial_track is not None:
+                            production_repo.create_subtitle_track(initial_track)
                 production_repo.append_task_event(
                     TaskEvent(
                         id=f"event_{version.id}_render_reused",
@@ -6225,12 +7338,20 @@ def render_creation_task_montage(
                 staging_root = Path(settings.video_output_path).expanduser() / ".job-staging"
                 staging_root.mkdir(parents=True, exist_ok=True)
                 with TemporaryDirectory(prefix=f"{context.job_id}-", dir=staging_root) as staging:
-                    rendered = _render_montage_with_resolved_clip_sources(
+                    rendering_plan = creation_task_montage_plan_from_payload(
+                        creation_task_montage_plan_to_payload(plan)
+                    )
+                    _apply_subtitle_tracks_to_render_plan(
+                        rendering_plan, active_subtitle_tracks
+                    )
+                    rendered_variant = _render_montage_with_resolved_clip_sources(
                         workspace_id,
-                        plan,
+                        rendering_plan,
                         narration_path,
                         job_staging_path=Path(staging),
                     )
+                    rendered = plan
+                    rendered.status = rendered_variant.status
                     staged_video = Path(staging) / "preview.mp4"
                     staged_subtitles = Path(staging) / "subtitles.srt"
 
@@ -6369,6 +7490,34 @@ def render_creation_task_montage(
                     )
                 )
             production_repo.create_timeline_version(version)
+            persisted_tracks = production_repo.list_subtitle_tracks(
+                workspace_id, task.id, timeline_version_id=version.id
+            )
+            if not persisted_tracks:
+                if active_subtitle_tracks:
+                    for active_track in active_subtitle_tracks:
+                        production_repo.create_subtitle_track(
+                            _clone_subtitle_track(
+                                active_track,
+                                timeline_version_id=version.id,
+                                artifact_ref=(
+                                    subtitle_ref
+                                    if active_track.language == "zh-CN"
+                                    else active_track.artifact_ref
+                                ),
+                                transform_id=(
+                                    transform.id
+                                    if active_track.language == "zh-CN"
+                                    else active_track.transform_id
+                                ),
+                            )
+                        )
+                else:
+                    initial_track = _subtitle_track_from_montage(
+                        workspace_id, task, version, rendered
+                    )
+                    if initial_track is not None:
+                        production_repo.create_subtitle_track(initial_track)
             context.report_progress(100)
             return JobResult(tuple(output_refs))
         except JobFailure:
@@ -6483,6 +7632,36 @@ def get_creation_task_subtitles(task_id: str, request: Request) -> FileResponse:
         current_workspace_id(request), task_id, subtitle=True
     )
     return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
+
+
+@app.get("/api/creation-tasks/{task_id}/covers/{cover_id}/image")
+def get_creation_task_cover_image(
+    task_id: str, cover_id: str, request: Request
+) -> FileResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        cover = production_repo.get_cover_asset(workspace_id, task_id, cover_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task cover not found") from exc
+    if cover.status != "valid" or not cover.artifact_ref:
+        raise HTTPException(status_code=404, detail="creation task cover is not available")
+    registered = next(
+        (
+            artifact
+            for artifact in production_repo.list_artifact_records(workspace_id, task_id)
+            if artifact.logical_ref == cover.artifact_ref and artifact.kind == "cover_image"
+        ),
+        None,
+    )
+    if registered is None:
+        raise HTTPException(status_code=409, detail="creation task cover is not a registered artifact")
+    try:
+        path = artifact_store.resolve_file(cover.artifact_ref)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="creation task cover not found") from exc
+    media_type = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @app.get(

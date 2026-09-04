@@ -1017,13 +1017,22 @@ class CreationTaskExactEditRequest(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
     ]
+    track_id: str | None = Field(default=None, min_length=1, max_length=120)
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
     cue_id: str | None = Field(default=None, min_length=1, max_length=120)
     text: str | None = Field(default=None, min_length=1, max_length=96)
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    target_language: Literal["en-US"] | None = None
+    line_breaks: list[int] | None = Field(default=None, max_length=8)
+    emphasis: list[str] | None = Field(default=None, max_length=8)
+    style: dict[str, object] | None = None
+    frame_time_seconds: float | None = Field(default=None, ge=0)
     delivery_instruction: str | None = Field(default=None, min_length=1, max_length=120)
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
     segment_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1046,7 +1055,9 @@ class CreationTaskEditPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     raw_command: str = Field(min_length=2, max_length=500)
-    context_stage: Literal["topic", "script", "narration", "montage", "review"]
+    context_stage: Literal[
+        "topic", "script", "narration", "montage", "review", "subtitle_cover"
+    ]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
 
@@ -1076,6 +1087,8 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
@@ -1128,6 +1141,8 @@ class EditOperationResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
@@ -1186,6 +1201,67 @@ class PersonRenderCapabilityResponse(BaseModel):
     repair_action: str | None
 
 
+class SubtitleCueTrackResponse(BaseModel):
+    id: str
+    source_cue_id: str | None
+    text: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    speaker: str | None
+    line_breaks: list[int]
+    emphasis: list[str]
+
+
+class SubtitleTrackResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    language: Literal["zh-CN", "en-US"]
+    source_language: Literal["zh-CN", "en-US"] | None
+    style: dict[str, object]
+    cues: list[SubtitleCueTrackResponse]
+    generation_method: Literal["timeline", "translation"]
+    model_id: str | None
+    artifact_ref: str | None
+    transform_id: str | None
+    status: Literal["valid", "failed", "unavailable", "superseded"]
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CoverAssetResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    source_video_ref: str
+    frame_time_seconds: float = Field(ge=0)
+    title: str
+    safe_area: dict[str, float]
+    layout: dict[str, object]
+    generation_method: Literal["video_frame", "image_model"]
+    model_or_engine: str
+    artifact_ref: str | None
+    transform_id: str | None
+    status: Literal["valid", "failed", "unavailable", "superseded"]
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskCapabilityResponse(BaseModel):
+    available: bool
+    model_id: str | None
+    message: str
+    repair_action: str | None
+
+
 class CreationTaskWorkspaceResponse(BaseModel):
     task: CreationTaskResponse
     plan: CreationPlanPreviewResponse
@@ -1197,6 +1273,11 @@ class CreationTaskWorkspaceResponse(BaseModel):
     person_render_capability: PersonRenderCapabilityResponse
     person_renders: list[CreationTaskPersonRenderResponse] = Field(default_factory=list)
     montage: CreationTaskMontagePlanResponse | None
+    subtitle_tracks: list[SubtitleTrackResponse] = Field(default_factory=list)
+    cover_asset: CoverAssetResponse | None = None
+    subtitle_translation_capability: TaskCapabilityResponse
+    cover_frame_capability: TaskCapabilityResponse
+    image_generation_capability: TaskCapabilityResponse
 
 
 class NarrationCueResponse(BaseModel):

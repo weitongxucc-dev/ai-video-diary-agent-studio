@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 6
+PRODUCTION_SCHEMA_VERSION = 7
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -359,6 +359,47 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN
             SELECT RAISE(ABORT, 'person_render artifact ref is immutable');
         END;
+        """,
+    ),
+    (
+        7,
+        """
+        CREATE TABLE IF NOT EXISTS subtitle_tracks (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            timeline_version_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, task_id, timeline_version_id, language)
+        );
+        CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_task
+            ON subtitle_tracks(
+                workspace_id,
+                task_id,
+                created_at ASC,
+                id ASC
+            );
+
+        CREATE TABLE IF NOT EXISTS cover_assets (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            timeline_version_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, task_id, timeline_version_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cover_assets_task
+            ON cover_assets(
+                workspace_id,
+                task_id,
+                created_at ASC,
+                id ASC
+            );
         """,
     ),
 )

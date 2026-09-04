@@ -6,7 +6,7 @@
 - 阶段：MILESTONE_3_3_IMPLEMENTATION
 - 模式：MIGRATE
 - 纵向负责人：主 Agent
-- 基线：`a58635c1afacc3034eb827cacf30ff72a2caee42`
+- 实施代码基线：`a58635c1afacc3034eb827cacf30ff72a2caee42`
 - 分支：`codex/milestone-3-3-subtitles-cover`
 - 建立日期：2026-09-04
 

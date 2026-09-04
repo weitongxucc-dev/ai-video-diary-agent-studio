@@ -67,7 +67,7 @@
   display: grid;
   width: 100%;
   min-width: 760px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -395,38 +395,6 @@
 .storyboard p { margin: 4px 0; }
 .storyboard .matchReasons { color: var(--text-2); font-size: 12px; }
 .storyboard small { color: var(--text-3); }
-.subtitleEditor { display: grid; gap: 5px; margin: 8px 0; color: var(--text-2); font-size: 12px; }
-.subtitleEditor.selectedCue {
-  padding: 8px;
-  border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.subtitleHeader { display: flex; align-items: center; justify-content: space-between; }
-.subtitleHeader button {
-  min-height: 32px;
-  padding: 5px 8px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
-  background: var(--surface-1);
-  color: var(--text-2);
-  cursor: pointer;
-  font: inherit;
-}
-.subtitleHeader button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.subtitleHeader button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.subtitleEditor textarea {
-  width: 100%;
-  min-height: 56px;
-  resize: vertical;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
-  background: var(--surface-1);
-  color: var(--text-1);
-  padding: 8px 10px;
-  font: inherit;
-  line-height: 1.5;
-}
-.subtitleEditor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .trimControl { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
 .trimControl input { width: 92px; min-height: 34px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 5px 8px; font: inherit; }
 .replacement { display: grid; gap: 5px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
@@ -506,6 +474,190 @@
 .videoReview video { width: min(100%, 420px); max-height: 56vh; margin: 0 auto; border-radius: 10px; background: #111; box-shadow: var(--shadow-float); }
 .videoReview a { color: var(--accent); }
 
+.subtitleCoverWorkspace {
+  display: grid;
+  gap: 16px;
+}
+
+.subtitleCoverToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-1);
+  flex-wrap: wrap;
+}
+
+.subtitleCoverToolbar > .secondaryButton { margin-left: auto; }
+
+.segmentedControl {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.segmentedControl button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.segmentedControl button[aria-pressed="true"] {
+  background: var(--surface-1);
+  color: var(--text-1);
+  box-shadow: 0 0 0 1px var(--border-1);
+}
+
+.segmentedControl button:focus-visible,
+.trackTabs button:focus-visible,
+.cueTime:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.capabilityLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.capabilityLine svg { flex: 0 0 auto; margin-top: 2px; }
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.mediaPanel,
+.coverPanel {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.mediaPanel > header,
+.coverPanel > header {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.mediaPanel > header > span,
+.coverPanel > header > span { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
+.mediaPanel > header small,
+.coverPanel > header small { color: var(--text-3); font-size: 12px; }
+.mediaPanel video,
+.coverPanel img {
+  display: block;
+  width: 100%;
+  height: min(42vh, 420px);
+  background: #111;
+  object-fit: contain;
+}
+
+.coverPanel.selectedCover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+.coverControls {
+  display: grid;
+  grid-template-columns: minmax(120px, .7fr) minmax(180px, 1.3fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.coverControls label { display: grid; min-width: 0; gap: 5px; color: var(--text-2); font-size: 13px; }
+.coverControls input,
+.cueFields input,
+.cueFields textarea {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.coverControls input:focus-visible,
+.cueFields input:focus-visible,
+.cueFields textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.coverControls > button { grid-column: 1 / -1; justify-self: end; }
+
+.subtitleTracks {
+  min-width: 0;
+  border-top: 1px solid var(--border-1);
+  padding-top: 12px;
+}
+
+.trackTabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.trackTabs button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+.trackTabs button[aria-selected="true"] { border-color: var(--border-1); background: var(--surface-2); color: var(--text-1); }
+.trackTabs small { color: var(--text-3); font-size: 12px; }
+
+.subtitleCueList { display: grid; border-top: 1px solid var(--border-1); }
+.subtitleCue {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border-1);
+}
+.subtitleCue.selectedSubtitleCue { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.cueTime {
+  display: grid;
+  min-height: 48px;
+  align-content: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+.cueTime[aria-pressed="true"] { background: var(--surface-2); }
+.cueTime strong { font-size: 13px; font-weight: 500; }
+.cueTime small { color: var(--text-3); font-size: 12px; }
+.cueFields { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.4fr) minmax(160px, .6fr); gap: 8px; }
+.cueFields label { display: grid; min-width: 0; gap: 4px; color: var(--text-2); font-size: 12px; }
+.cueFields textarea { min-height: 58px; resize: vertical; line-height: 1.45; }
+.cueAction { display: grid; justify-items: end; gap: 5px; }
+.cueAction small { color: var(--text-3); font-size: 12px; }
+.inspectorRepair { margin-top: 12px !important; color: var(--warning) !important; font-size: 13px; }
+
 .inspector { display: grid; gap: 16px; }
 .inspector section { padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
 .inspector h3 { margin: 4px 0 6px; font-size: 18px; font-weight: 500; }
@@ -534,6 +686,9 @@
   .workspace { padding: 20px 24px 32px; }
   .storyboard article { grid-template-columns: 32px minmax(0, 1fr); }
   .clipActions { grid-column: 2; flex-wrap: wrap; }
+  .previewGrid { grid-template-columns: 1fr; }
+  .mediaPanel video,
+  .coverPanel img { height: min(50vh, 440px); }
 }
 
 @media (max-width: 1080px) {
@@ -545,6 +700,9 @@
   .storyboardTools { justify-content: flex-start; }
   .artifactGrid { grid-template-columns: 1fr; }
   .narrationSegments article { grid-template-columns: 1fr; }
+  .subtitleCue { grid-template-columns: 88px minmax(0, 1fr); }
+  .cueFields { grid-template-columns: 1fr; }
+  .cueAction { grid-column: 2; justify-items: start; }
   .commandRow { grid-template-columns: 1fr auto; }
   .contextSelection,
   .contextEmpty { grid-column: 1 / -1; justify-self: start; }

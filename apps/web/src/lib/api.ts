@@ -60,7 +60,7 @@ export const API_BASE =
     : (process.env.NEXT_PUBLIC_API_BASE ?? "");
 
 export function apiUrl(path: string): string {
-  return `${API_BASE}${path}`;
+  return path;
 }
 
 type ServerAuthorizationProvider = () => Promise<string | null>;
@@ -458,6 +458,16 @@ export function applyCreationTaskExactEdit(
 ): Promise<CreationTaskEditConfirmResponse> {
   return creationPlanRequest<CreationTaskEditConfirmResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function previewCreationTaskExactEdit(
+  taskId: string,
+  input: CreationTaskExactEditInput,
+): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
