@@ -8,6 +8,7 @@ import type {
   CreationTaskScriptsResponse,
   CreationTaskScriptSection,
   CreationTaskNarration,
+  CreationTaskPersonRender,
   CreationTaskMontage,
   CreationTaskExactEditInput,
   CreationTaskEditConfirmResponse,
@@ -424,6 +425,22 @@ export function selectCreationTaskNarrationVoice(
 ): Promise<CreationTaskWorkspace> {
   return creationPlanRequest<CreationTaskWorkspace>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function generateCreationTaskPersonRender(
+  taskId: string,
+  input: {
+    narration_segment_id: string;
+    person_profile_id: string;
+    person_version: string;
+    motion: "natural";
+    expression: "neutral";
+  },
+): Promise<CreationTaskPersonRender> {
+  return creationPlanRequest<CreationTaskPersonRender>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/generate`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }

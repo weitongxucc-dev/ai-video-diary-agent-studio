@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.config import Settings
+from app.database_migrations import _MIGRATIONS, apply_production_migrations
 from app.model_runtime import ModelCatalog
 from app.production import (
     ArtifactRecord,
@@ -31,6 +32,7 @@ from app.production import (
     NarrationArtifactRecord,
     NarrationSegment,
     PersonProfile,
+    PersonRender,
     PronunciationEntry,
     ProductionBatch,
     ProductionProfile,
@@ -638,7 +640,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -892,7 +894,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     with sqlite3.connect(production.database_path) as conn:
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
@@ -1194,7 +1196,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -1422,6 +1424,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         production.get_narration_segment(
             "workspace_b", "task-narration", initial_segments[0].id
         )
+
 
     montage_plan_id = "montage-narration"
     initial_cues = [
@@ -1994,6 +1997,317 @@ def test_production_foundation_reads_legacy_batches_without_recovery_writes(
     assert response.status_code == 200
     assert response.json()["recent_batches"][0]["id"] == "batch_history"
     assert response.json()["recent_batches"][0]["status"] == "interrupted"
+
+
+def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
+    production = _repository(tmp_path)
+    _save_creation_task(production, workspace_id="workspace_a", task_id="task-person")
+    script_id, sections = _seed_confirmed_script(
+        production,
+        workspace_id="workspace_a",
+        task_id="task-person",
+    )
+    created_at = datetime.now(timezone.utc)
+    segment = NarrationSegment(
+        id="narration-segment-person",
+        workspace_id="workspace_a",
+        task_id="task-person",
+        script_id=script_id,
+        source_section_id=str(sections[0]["id"]),
+        text=str(sections[0]["content"]),
+        audio_reference="narration://segment/person/v1",
+        duration_seconds=5.5,
+        sample_rate=24_000,
+        model_id="qwen3-tts",
+        voice_profile_id="voice-person",
+        voice_version="v1",
+        language="zh-CN",
+        pronunciation_version="v1",
+        status="ready",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    second_segment = replace(
+        segment,
+        id="narration-segment-person-2",
+        source_section_id=str(sections[1]["id"]),
+        text=str(sections[1]["content"]),
+    )
+    production.save_narration_segments(
+        "workspace_a", "task-person", script_id, [segment, second_segment]
+    )
+
+    visual = production.video_library_path / "person.mp4"
+    visual.write_bytes(b"person-video")
+    asset = production.scan_library("workspace_a")[0]
+    visual_reference = production.workspace_media_reference_for_asset(
+        "workspace_a", asset.id
+    )
+    (production.video_library_path / "voice.wav").write_bytes(b"voice")
+    authorization = Authorization(
+        id="person-authorization",
+        workspace_id="workspace_a",
+        version="v1",
+        rights_holder="本人",
+        content_types=("person_likeness",),
+        usage_scopes=("avatar_lipsync",),
+        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        expires_at=None,
+        evidence_reference="consent://person/v1",
+        status="active",
+    )
+    person = production.save_person_profile(
+        PersonProfile(
+            id="person-a",
+            workspace_id="workspace_a",
+            display_name="cc",
+            version="v1",
+            avatar_reference=visual_reference,
+            background_capabilities=("office",),
+            shot_capabilities=("medium",),
+            authorization=authorization,
+        )
+    )
+    production.save_versioned_voice_profile(
+        VersionedVoiceProfile(
+            id="voice-person",
+            workspace_id="workspace_a",
+            person_profile_id=person.id,
+            person_version=person.version,
+            version="v1",
+            language="zh",
+            reference_audio_path="workspace://voice.wav",
+            reference_text="参考声音",
+            model_id="qwen3-tts",
+            authorization=replace(
+                authorization,
+                id="voice-authorization",
+                content_types=("voice",),
+                usage_scopes=("narration", "avatar_lipsync"),
+            ),
+        )
+    )
+    pending = production.create_person_render(
+        PersonRender(
+            id="person-render-a",
+            workspace_id="workspace_a",
+            task_id="task-person",
+            person_profile_id=person.id,
+            person_version=person.version,
+            voice_profile_id="voice-person",
+            voice_version="v1",
+            narration_segment_id=segment.id,
+            visual_reference=visual_reference,
+            model_id="musetalk-v1.5-mps",
+            motion="natural",
+            expression="neutral",
+            cache_key="a" * 64,
+            status="pending",
+        )
+    )
+    producer_job = production.create_job_run(
+        JobRun(
+            id="job-person-render-a",
+            workspace_id="workspace_a",
+            task_id="task-person",
+            kind="person_render",
+            idempotency_key="person-render:task-person:a",
+            input_digest="c" * 64,
+        )
+    )
+    artifact = production.create_artifact_record(
+        ArtifactRecord(
+            id="artifact-person-render-a",
+            workspace_id="workspace_a",
+            task_id="task-person",
+            kind="person_render",
+            logical_ref="artifacts/task-person/person-render-a.mp4",
+            sha256="d" * 64,
+            size_bytes=13,
+            producer_job_id=producer_job.id,
+            input_refs=[visual_reference, segment.audio_reference],
+        )
+    )
+    with pytest.raises(ValueError, match="ready"):
+        production.bind_person_render_artifact(
+            "workspace_a", "task-person", pending.id, artifact.logical_ref
+        )
+    assert production.claim_person_render(
+        "workspace_a", "task-person", pending.id
+    ).status == "running"
+    output = tmp_path / "outputs" / "person-render.mp4"
+    output.parent.mkdir()
+    output.write_bytes(b"person-render")
+    ready = production.finish_person_render(
+        "workspace_a",
+        "task-person",
+        pending.id,
+        status="ready",
+        output_path=str(output),
+        duration_seconds=5.5,
+        alignment_evidence='{"engine":"musetalk-v1.5"}',
+    )
+    _save_creation_task(
+        production,
+        workspace_id="workspace_a",
+        task_id="task-person-other",
+    )
+    foreign_job = production.create_job_run(
+        JobRun(
+            id="job-person-render-other",
+            workspace_id="workspace_a",
+            task_id="task-person-other",
+            kind="person_render",
+            idempotency_key="person-render:task-person-other:a",
+            input_digest="e" * 64,
+        )
+    )
+    foreign_artifact = production.create_artifact_record(
+        ArtifactRecord(
+            id="artifact-person-render-other",
+            workspace_id="workspace_a",
+            task_id="task-person-other",
+            kind="person_render",
+            logical_ref="artifacts/task-person-other/person-render.mp4",
+            sha256="f" * 64,
+            size_bytes=13,
+            producer_job_id=foreign_job.id,
+            input_refs=[visual_reference],
+        )
+    )
+    with pytest.raises(ValueError, match="不属于当前工作区与创作任务"):
+        production.bind_person_render_artifact(
+            "workspace_a", "task-person", ready.id, foreign_artifact.logical_ref
+        )
+    wrong_kind_artifact = production.create_artifact_record(
+        replace(
+            artifact,
+            id="artifact-person-render-wrong-kind",
+            kind="preview",
+            logical_ref="artifacts/task-person/preview.mp4",
+        )
+    )
+    with pytest.raises(ValueError, match="类型必须为 person_render"):
+        production.bind_person_render_artifact(
+            "workspace_a", "task-person", ready.id, wrong_kind_artifact.logical_ref
+        )
+    ready = production.bind_person_render_artifact(
+        "workspace_a", "task-person", ready.id, artifact.logical_ref
+    )
+    assert ready.artifact_ref == artifact.logical_ref
+    assert (
+        production.bind_person_render_artifact(
+            "workspace_a", "task-person", ready.id, artifact.logical_ref
+        )
+        == ready
+    )
+    with pytest.raises(ValueError, match="已绑定其他"):
+        production.bind_person_render_artifact(
+            "workspace_a", "task-person", ready.id, foreign_artifact.logical_ref
+        )
+    with sqlite3.connect(production.database_path) as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="identity is immutable"):
+            conn.execute(
+                "UPDATE person_renders SET person_profile_id = 'other' WHERE id = ?",
+                (ready.id,),
+            )
+    with sqlite3.connect(production.database_path) as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="artifact ref is immutable"):
+            conn.execute(
+                "UPDATE person_renders SET artifact_ref = 'artifacts/other.mp4' WHERE id = ?",
+                (ready.id,),
+            )
+    restarted = ProductionRepository(
+        database_path=production.database_path,
+        video_library_path=production.video_library_path,
+        duration_reader=lambda _path: 25.0,
+        scene_reader=lambda _path, _duration: [5.0, 17.0],
+    )
+    assert restarted.list_person_renders("workspace_a", "task-person") == [ready]
+    with pytest.raises(KeyError):
+        restarted.get_person_render("workspace_b", "task-person", ready.id)
+    interrupted = restarted.create_person_render(
+        replace(
+            pending,
+            id="person-render-interrupted",
+            narration_segment_id=second_segment.id,
+            cache_key="b" * 64,
+        )
+    )
+    restarted.claim_person_render("workspace_a", "task-person", interrupted.id)
+    assert restarted.interrupt_running_person_renders("workspace_a") == 1
+    recovered = restarted.get_person_render(
+        "workspace_a", "task-person", interrupted.id
+    )
+    assert (recovered.status, recovered.failure_reason) == (
+        "failed",
+        "process_interrupted",
+    )
+
+
+def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path):
+    database_path = tmp_path / "production-v5.sqlite3"
+    migration_five = dict(_MIGRATIONS)[5]
+    created_at = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(database_path) as conn:
+        conn.executescript(migration_five)
+        conn.execute(
+            """
+            CREATE TABLE production_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO production_schema_migrations (version) VALUES (?)",
+            [(version,) for version in range(1, 6)],
+        )
+        conn.execute(
+            """
+            INSERT INTO person_renders
+                (id, workspace_id, task_id, person_profile_id, person_version,
+                 voice_profile_id, voice_version, narration_segment_id,
+                 visual_reference, model_id, motion, expression, cache_key,
+                 status, output_path, duration_seconds, alignment_evidence,
+                 failure_reason, impact, repair_action, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "person-render-v5",
+                "workspace_a",
+                "task-person",
+                "person-a",
+                "v1",
+                "voice-person",
+                "v1",
+                "narration-person",
+                "workspace://person.mp4",
+                "musetalk-v1.5-mps",
+                "natural",
+                "neutral",
+                "a" * 64,
+                "ready",
+                str(tmp_path / "person-render.mp4"),
+                5.5,
+                '{"engine":"musetalk-v1.5"}',
+                None,
+                None,
+                None,
+                created_at,
+                created_at,
+            ),
+        )
+        apply_production_migrations(conn)
+        row = conn.execute(
+            "SELECT id, artifact_ref, output_path FROM person_renders"
+        ).fetchone()
+        versions = conn.execute(
+            "SELECT version FROM production_schema_migrations ORDER BY version"
+        ).fetchall()
+
+    assert row == ("person-render-v5", None, str(tmp_path / "person-render.mp4"))
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(

@@ -112,6 +112,13 @@ function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null
     scripts: [],
     available_voices: [],
     narration: null,
+    person_renders: [],
+    person_render_capability: {
+      available: true,
+      model_id: "musetalk-local",
+      message: "本地人物口型模型可用。",
+      repair_action: null,
+    },
     montage,
   };
 }
@@ -599,5 +606,171 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
     expect(await screen.findByText("镜头已替换，需要重新渲染。")).toBeInTheDocument();
     expect(screen.queryByText("这个 confirm 响应不应直接显示")).not.toBeInTheDocument();
+  });
+
+  it("prepares person commands and requires preview before confirmation", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+    };
+    const clip = {
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip-1.mp4", source_start_seconds: 1, source_end_seconds: 4,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: ["已审核"], needs_confirmation: false,
+      role: "b_roll" as const, locked: false, manually_selected: false,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [
+        { id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 },
+        { id: "cue-2", source_section_id: "section-2", narration_segment_id: "narration-segment-2", text: "第二段旁白", duration_seconds: 3 },
+      ],
+      clips: [
+        clip,
+        { ...clip, id: "clip-2", cue_id: "cue-2", person_render_id: "person-render-1", timeline_start_seconds: 3, timeline_end_seconds: 6 },
+      ],
+      duration_seconds: 6, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "可以修改", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    initial.narration = {
+      task,
+      script_id: "script-1",
+      audio_reference: "narration://artifact/audio-1",
+      duration_seconds: 6,
+      sample_rate: 24000,
+      model_id: "qwen3-tts",
+      voice_profile_id: "voice-cc",
+      language: "zh",
+      pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-2", source_section_id: "section-2", text: "第二段旁白",
+        audio_reference: "narration://artifact/segment-2", audio_url: "/api/audio-2",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
+        voice_profile_id: "voice-cc", voice_version: "voice-v3", language: "zh",
+        pronunciation_version: "v1", status: "ready",
+      }],
+    };
+    initial.person_renders = [{
+      id: "person-render-1", task_id: task.id,
+      person_profile_id: "person-cc", person_version: "person-v2",
+      voice_profile_id: "voice-cc", voice_version: "voice-v3",
+      narration_segment_id: "narration-segment-2", visual_reference: "workspace://cc.mp4",
+      model_id: "musetalk-local", motion: "natural", expression: "neutral",
+      status: "ready", duration_seconds: 3, alignment_evidence: "aligned",
+      media_url: "/api/person-render-1", failure_reason: null, impact: null, repair_action: null,
+      created_at: task.created_at, updated_at: task.updated_at,
+    }];
+    mocks.previewEdit
+      .mockResolvedValueOnce({
+        intent: {
+          id: "intent-person-add", workspace_id: "local", task_id: task.id,
+          raw_command: "这一段换成当前人物出镜", context_stage: "montage",
+          selected_object_refs: ["clip:clip-1"], playhead_ms: null,
+          intent_type: "change_person_segment", scope: { clip_id: "clip-1" }, constraints: {},
+          confidence: .99, status: "compiled", created_at: task.created_at,
+        },
+        proposal: {
+          id: "proposal-person-add", workspace_id: "local", task_id: task.id, intent_id: "intent-person-add",
+          summary: "把镜头 1 换成当前人物出镜。", target_refs: ["clip:clip-1"],
+          operation: { operation_type: "ChangePersonSegment", payload: { clip_id: "clip-1" } },
+          invalidated_refs: ["clip:clip-1", "artifact:preview:v1"],
+          preview: {
+            before: { ref: "clip:clip-1", label: "当前镜头", detail: "补充画面" },
+            after: { ref: "clip:clip-1", label: "人物口型", detail: "当前人物版本" },
+          },
+          external_effects: ["其他镜头与配音保持不变。"], status: "proposed",
+          created_at: task.created_at, updated_at: task.updated_at,
+        },
+      })
+      .mockResolvedValueOnce({
+        intent: {
+          id: "intent-person-regenerate", workspace_id: "local", task_id: task.id,
+          raw_command: "这里只重做口型，其他都不要动", context_stage: "montage",
+          selected_object_refs: ["clip:clip-2"], playhead_ms: null,
+          intent_type: "regenerate_person_render", scope: { clip_id: "clip-2" }, constraints: {},
+          confidence: .99, status: "compiled", created_at: task.created_at,
+        },
+        proposal: {
+          id: "proposal-person-regenerate", workspace_id: "local", task_id: task.id, intent_id: "intent-person-regenerate",
+          summary: "只重做镜头 2 的口型。", target_refs: ["clip:clip-2"],
+          operation: { operation_type: "RegeneratePersonRender", payload: { clip_id: "clip-2" } },
+          invalidated_refs: ["person-render:person-render-1", "artifact:preview:v1"],
+          preview: {
+            before: { ref: "person-render:person-render-1", label: "当前口型", detail: "person-v2" },
+            after: { ref: "clip:clip-2", label: "重做口型", detail: "匹配当前配音" },
+          },
+          external_effects: ["其他镜头、文案和配音保持不变。"], status: "proposed",
+          created_at: task.created_at, updated_at: task.updated_at,
+        },
+      });
+
+    const availableView = render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "换成当前人物出镜" }));
+    expect(screen.getByLabelText("局部修改要求")).toHaveValue("这一段换成当前人物出镜");
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "预览修改" }));
+    await waitFor(() => expect(mocks.previewEdit).toHaveBeenNthCalledWith(1, "task-1", {
+      raw_command: "这一段换成当前人物出镜",
+      context_stage: "montage",
+      selected_object_refs: ["clip:clip-1"],
+      playhead_ms: null,
+    }));
+    expect(await screen.findByLabelText("变更预览")).toHaveTextContent("把镜头 1 换成当前人物出镜");
+
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 2" }));
+    const details = screen.getByLabelText("已选镜头详情");
+    expect(details).toHaveTextContent("人物版本person-cc · person-v2");
+    expect(details).toHaveTextContent("声音版本voice-cc · voice-v3");
+    expect(details).toHaveTextContent("当前模型musetalk-local");
+    expect(details).toHaveTextContent("动作自然（固定）");
+    expect(details).toHaveTextContent("表情中性（固定）");
+    expect(details).toHaveTextContent("片段状态已写入当前版本");
+    expect(details).not.toHaveTextContent("能力状态");
+    expect(details).toHaveTextContent("模型能力可用 · musetalk-local");
+    expect(details).toHaveTextContent("动作/表情沿用原人物素材，口型匹配当前配音。");
+    fireEvent.click(screen.getByRole("button", { name: "重新对口型" }));
+    expect(screen.getByLabelText("局部修改要求")).toHaveValue("这里只重做口型，其他都不要动");
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "预览修改" }));
+    await waitFor(() => expect(mocks.previewEdit).toHaveBeenNthCalledWith(2, "task-1", {
+      raw_command: "这里只重做口型，其他都不要动",
+      context_stage: "montage",
+      selected_object_refs: ["clip:clip-2"],
+      playhead_ms: null,
+    }));
+    expect(await screen.findByLabelText("变更预览")).toHaveTextContent("只重做镜头 2 的口型");
+
+    availableView.unmount();
+    mocks.previewEdit.mockClear();
+    const unavailable = {
+      ...initial,
+      person_render_capability: {
+        available: false,
+        model_id: null,
+        message: "本地 MuseTalk 运行环境尚未配置。",
+        repair_action: "配置本地人物口型运行环境后重试。",
+      },
+    };
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={unavailable} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    expect(screen.getByRole("button", { name: "换成当前人物出镜" })).toBeDisabled();
+    const unavailableReason = screen.getByLabelText("人物口型不可用原因");
+    expect(unavailableReason).toHaveTextContent("本地 MuseTalk 运行环境尚未配置。");
+    expect(unavailableReason).toHaveTextContent("处理方式：配置本地人物口型运行环境后重试。");
+    expect(screen.getByLabelText("已选镜头详情")).toHaveTextContent("模型能力不可用 · 未配置模型");
+
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 2" }));
+    expect(screen.getByRole("button", { name: "重新对口型" })).toBeDisabled();
+    expect(mocks.previewEdit).not.toHaveBeenCalled();
   });
 });

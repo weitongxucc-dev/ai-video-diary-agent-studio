@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 4
+PRODUCTION_SCHEMA_VERSION = 6
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -283,6 +283,81 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         )
         BEGIN
             SELECT RAISE(ABORT, 'narration_segment identity is immutable');
+        END;
+        """,
+    ),
+    (
+        5,
+        """
+        CREATE TABLE IF NOT EXISTS person_renders (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            person_profile_id TEXT NOT NULL,
+            person_version TEXT NOT NULL,
+            voice_profile_id TEXT NOT NULL,
+            voice_version TEXT NOT NULL,
+            narration_segment_id TEXT NOT NULL,
+            visual_reference TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            motion TEXT NOT NULL,
+            expression TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'running', 'ready', 'failed')
+            ),
+            output_path TEXT,
+            duration_seconds REAL,
+            alignment_evidence TEXT,
+            failure_reason TEXT,
+            impact TEXT,
+            repair_action TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, task_id, cache_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_person_renders_task
+            ON person_renders(workspace_id, task_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_person_renders_narration
+            ON person_renders(
+                workspace_id,
+                task_id,
+                narration_segment_id,
+                created_at ASC
+            );
+        CREATE TRIGGER IF NOT EXISTS person_renders_stable_identity
+        BEFORE UPDATE ON person_renders
+        WHEN NOT (
+            OLD.id = NEW.id
+            AND OLD.workspace_id = NEW.workspace_id
+            AND OLD.task_id = NEW.task_id
+            AND OLD.person_profile_id = NEW.person_profile_id
+            AND OLD.person_version = NEW.person_version
+            AND OLD.voice_profile_id = NEW.voice_profile_id
+            AND OLD.voice_version = NEW.voice_version
+            AND OLD.narration_segment_id = NEW.narration_segment_id
+            AND OLD.visual_reference = NEW.visual_reference
+            AND OLD.model_id = NEW.model_id
+            AND OLD.motion = NEW.motion
+            AND OLD.expression = NEW.expression
+            AND OLD.cache_key = NEW.cache_key
+            AND OLD.created_at = NEW.created_at
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'person_render identity is immutable');
+        END;
+        """,
+    ),
+    (
+        6,
+        """
+        ALTER TABLE person_renders ADD COLUMN artifact_ref TEXT;
+        CREATE TRIGGER IF NOT EXISTS person_renders_artifact_ref_write_once
+        BEFORE UPDATE ON person_renders
+        WHEN OLD.artifact_ref IS NOT NULL
+             AND NEW.artifact_ref IS NOT OLD.artifact_ref
+        BEGIN
+            SELECT RAISE(ABORT, 'person_render artifact ref is immutable');
         END;
         """,
     ),

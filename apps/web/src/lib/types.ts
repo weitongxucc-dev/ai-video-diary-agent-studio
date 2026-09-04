@@ -1160,6 +1160,36 @@ export type CreationTaskNarration = {
   segments: CreationTaskNarrationSegment[];
 };
 
+export type CreationTaskPersonRender = {
+  id: string;
+  task_id: string;
+  person_profile_id: string;
+  person_version: string;
+  voice_profile_id: string;
+  voice_version: string;
+  narration_segment_id: string;
+  visual_reference: string;
+  model_id: string;
+  motion: "natural";
+  expression: "neutral";
+  status: "pending" | "running" | "ready" | "failed";
+  duration_seconds: number | null;
+  alignment_evidence: string | null;
+  media_url: string | null;
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTaskPersonRenderCapability = {
+  available: boolean;
+  model_id: string | null;
+  message: string;
+  repair_action: string | null;
+};
+
 export type CreationTaskVoiceOption = {
   profile_id: string;
   version: string;
@@ -1186,6 +1216,7 @@ export type CreationTaskMontageClip = {
   role: "a_roll" | "b_roll";
   locked: boolean;
   manually_selected: boolean;
+  person_render_id?: string | null;
 };
 
 export type CreationTaskMontage = {
@@ -1214,6 +1245,8 @@ export type CreationTaskWorkspace = {
   scripts: CreationTaskScript[];
   available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
+  person_renders: CreationTaskPersonRender[];
+  person_render_capability: CreationTaskPersonRenderCapability;
   montage: CreationTaskMontage | null;
 };
 
@@ -1240,7 +1273,9 @@ export type CreationTaskExactEditInput =
   | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
-  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string };
+  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string }
+  | { operation_type: "ChangePersonSegment"; clip_id: string }
+  | { operation_type: "RegeneratePersonRender"; clip_id: string };
 
 type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Input
   ? Input extends { operation_type: string }

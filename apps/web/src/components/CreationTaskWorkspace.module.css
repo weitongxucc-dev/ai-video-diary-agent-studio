@@ -193,6 +193,23 @@
 .narrationSegments button > small { color: var(--text-3); font-size: 12px; }
 .narrationSegments button > strong { overflow-wrap: anywhere; font-size: 14px; font-weight: 500; }
 .narrationSegments audio { width: 100%; min-width: 0; height: 36px; }
+.personRenderPanel {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.personRenderPanel > div:first-child { display: flex; align-items: flex-start; gap: 10px; }
+.personRenderPanel p { margin: 3px 0 0; color: var(--text-2); font-size: 13px; }
+.personRenderPanel > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 13px; }
+.personRenderPanel > button { justify-self: start; }
+.personRenderFailure { display: grid; gap: 6px; color: var(--danger); }
+.personRenderFailure button { justify-self: start; margin-top: 4px; }
+.personRenderPreview { display: grid; grid-template-columns: minmax(160px, 280px) 1fr; align-items: center; gap: 14px; }
+.personRenderPreview video { width: 100%; max-height: 320px; border-radius: 8px; background: #111; }
 
 .notice {
   display: flex;
@@ -496,6 +513,20 @@
 .inspector dl > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
 .inspector dt { color: var(--text-3); }
 .inspector dd { margin: 0; overflow-wrap: anywhere; color: var(--text-1); }
+.inspector .personCapability { margin-top: 12px; }
+.personCapabilityIssue {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-1));
+  border-radius: 8px;
+  color: var(--danger);
+}
+.personCapabilityIssue strong { font-size: 13px; font-weight: 500; }
+.personCapabilityIssue p { color: inherit; font-size: 12px; }
+.personCapabilityIssue small { color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.personAction { margin-top: 12px; }
 .blocker { display: flex; gap: 10px; color: var(--danger); }
 .blocker p { margin-top: 6px; }
 
