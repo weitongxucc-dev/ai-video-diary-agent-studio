@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -323,8 +324,8 @@ def _layout_cover(
     widths = [box[2] - box[0] for box in boxes]
     heights = [box[3] - box[1] for box in boxes]
     text_height = sum(heights) + spacing * max(0, len(lines) - 1)
-    panel_width = max(widths) + 2 * horizontal_padding
-    panel_height = text_height + 2 * vertical_padding
+    panel_width = safe_right - safe_left
+    panel_height = max(text_height + 2 * vertical_padding, min(260, safe_bottom - safe_top))
     panel_left = safe_left + (safe_right - safe_left - panel_width) / 2
     panel_top = safe_bottom - panel_height
     panel_right = panel_left + panel_width
@@ -334,9 +335,9 @@ def _layout_cover(
     draw.rounded_rectangle(
         (panel_left, panel_top, panel_right, panel_bottom),
         radius=28,
-        fill=(0, 0, 0, 176),
+        fill=(24, 25, 23, 255),
     )
-    cursor_y = panel_top + vertical_padding
+    cursor_y = panel_top + (panel_height - text_height) / 2
     for line, box, line_width, line_height in zip(
         lines,
         boxes,
@@ -374,7 +375,7 @@ def _fit_title(
     measuring_image = Image.new("L", (1, 1))
     draw = ImageDraw.Draw(measuring_image)
     for size in range(96, 47, -4):
-        font = _subtitle_font(size)
+        font = _subtitle_font(size, family="PingFang SC" if sys.platform == "darwin" else None)
         lines = _wrap_title(draw, title, font, max_width)
         spacing = max(12, size // 5)
         boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=2) for line in lines]
@@ -392,11 +393,16 @@ def _wrap_title(
 ) -> list[str]:
     lines: list[str] = []
     for paragraph in title.split("\n"):
+        box = draw.textbbox((0, 0), paragraph, font=font, stroke_width=2)
+        paragraph_width = box[2] - box[0]
+        line_count = max(1, math.ceil(paragraph_width / max_width))
+        # Balance wrapped headings instead of leaving one or two characters orphaned.
+        wrap_width = min(max_width, paragraph_width / line_count + font.size / 2)
         current = ""
         for character in paragraph:
             candidate = current + character
             box = draw.textbbox((0, 0), candidate, font=font, stroke_width=2)
-            if current and box[2] - box[0] > max_width:
+            if current and box[2] - box[0] > wrap_width:
                 lines.append(current.rstrip())
                 current = character.lstrip()
             else:

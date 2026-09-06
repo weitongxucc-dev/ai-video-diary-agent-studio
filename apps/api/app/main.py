@@ -306,7 +306,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v2"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v4"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2777,6 +2777,30 @@ def _default_subtitle_style() -> dict[str, object]:
     }
 
 
+def _normalize_subtitle_text_and_breaks(
+    text: str,
+    line_breaks: list[int] | None,
+) -> tuple[str, list[int]]:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if "\n" not in normalized:
+        return normalized, list(line_breaks or [])
+    lines = normalized.split("\n")
+    if any(not line.strip() for line in lines):
+        raise HTTPException(status_code=422, detail="subtitle lines cannot be empty")
+    compact = "".join(lines)
+    inferred: list[int] = []
+    cursor = 0
+    for line in lines[:-1]:
+        cursor += len(line)
+        inferred.append(cursor)
+    if line_breaks is not None and list(line_breaks) != inferred:
+        raise HTTPException(
+            status_code=422,
+            detail="subtitle text line breaks conflict with line_breaks",
+        )
+    return compact, inferred
+
+
 def _subtitle_track_from_montage(
     workspace_id: str,
     task: CreationTask,
@@ -2803,13 +2827,18 @@ def _subtitle_track_from_montage(
             if clip is not None
             else start + cue.duration_seconds
         )
+        normalized_text, line_breaks = _normalize_subtitle_text_and_breaks(
+            cue.text,
+            None,
+        )
         cues.append(
             SubtitleCue(
                 id=cue.id,
                 source_cue_id=None,
-                text=cue.text,
+                text=normalized_text,
                 start_seconds=start,
                 end_seconds=end,
+                line_breaks=line_breaks,
             )
         )
         cursor = end
@@ -2921,6 +2950,18 @@ def _creation_task_workspace_response(
         if isinstance(settings, Settings)
         else None
     )
+    last_translation = next((
+        event for event in reversed(production_repo.list_task_events(workspace_id, task.id))
+        if event.event_type == "subtitle_translation_returned"
+        and translation_provider is not None
+        and event.payload.get("model_id") == translation_provider.model_id
+        and event.payload.get("provider_name") == translation_provider.provider_name
+    ), None)
+    translation_failure = (
+        last_translation.payload
+        if last_translation and last_translation.payload.get("status") != "succeeded"
+        else None
+    )
     cover_frame_available = bool(
         montage is not None
         and montage.status == "rendered"
@@ -3001,11 +3042,17 @@ def _creation_task_workspace_response(
                 "available": bool(translation_provider and translation_provider.ready),
                 "model_id": translation_provider.model_id if translation_provider else None,
                 "message": (
+                    f"上次翻译未完成：{translation_failure['failure_reason']}"
+                    if translation_failure
+                    else
                     translation_provider.message
                     if translation_provider
                     else "当前测试运行时未配置文字模型翻译能力。"
                 ),
                 "repair_action": (
+                    translation_failure.get("repair_action")
+                    if translation_failure
+                    else
                     None
                     if translation_provider and translation_provider.ready
                     else translation_provider.message
@@ -4691,6 +4738,35 @@ def _clone_subtitle_track(
     )
 
 
+def _cover_asset_for_version(
+    workspace_id: str,
+    task_id: str,
+    version: TimelineVersion,
+) -> CoverAsset | None:
+    cover_id = version.snapshot.get("cover_asset_id")
+    if not isinstance(cover_id, str) or not cover_id:
+        return None
+    try:
+        return production_repo.get_cover_asset(workspace_id, task_id, cover_id)
+    except KeyError:
+        return None
+
+
+def _clone_cover_asset(
+    cover: CoverAsset,
+    *,
+    timeline_version_id: str,
+) -> CoverAsset:
+    now = utc_now()
+    return replace(
+        cover,
+        id=f"cover_{uuid4().hex}",
+        timeline_version_id=timeline_version_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+
 def _publish_subtitle_text(
     *,
     workspace_id: str,
@@ -4800,6 +4876,7 @@ def _persist_subtitle_cover_edit(
     subtitle_tracks: list[SubtitleTrack],
     cover_asset: CoverAsset | None = None,
     updated_plan: CreationTaskMontagePlan | None = None,
+    snapshot_source: dict[str, object] | None = None,
 ) -> CreationTaskEditConfirmResponse:
     now = utc_now()
     operation = EditOperation(
@@ -4821,13 +4898,16 @@ def _persist_subtitle_cover_edit(
         else None
     )
     snapshot = {
-        **base_version.snapshot,
+        **(snapshot_source if snapshot_source is not None else base_version.snapshot),
         **({"montage": montage_payload} if montage_payload is not None else {}),
         "subtitle_track_ids": [track.id for track in subtitle_tracks],
-        "cover_asset_id": cover_asset.id if cover_asset is not None else base_version.snapshot.get("cover_asset_id"),
         "invalidated_refs": proposal.invalidated_refs,
         "edit_operation_id": operation.id,
     }
+    if cover_asset is not None:
+        snapshot["cover_asset_id"] = cover_asset.id
+    else:
+        snapshot.pop("cover_asset_id", None)
     result_version = TimelineVersion(
         id=result_version_id,
         workspace_id=workspace_id,
@@ -4886,15 +4966,13 @@ def _undo_target_versions(
     except KeyError:
         return None, None
     changed = current
-    if current.created_by_operation_id is None and current.parent_version_id:
+    while changed.created_by_operation_id is None and changed.parent_version_id:
         try:
-            parent = production_repo.get_timeline_version(
-                workspace_id, current.parent_version_id
+            changed = production_repo.get_timeline_version(
+                workspace_id, changed.parent_version_id
             )
         except KeyError:
             return None, None
-        if parent.created_by_operation_id is not None:
-            changed = parent
     if changed.created_by_operation_id is None or changed.parent_version_id is None:
         return None, None
     try:
@@ -5855,6 +5933,25 @@ def confirm_creation_task_edit(
             translated_track_id=f"subtitle_{result_version_id}_en-us",
             timeline_version_id=result_version_id,
         )
+        production_repo.append_task_event(TaskEvent(
+            id=f"event_{execution.execution_id}",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            job_id=None,
+            event_type="subtitle_translation_returned",
+            payload={
+                "proposal_id": proposal.id,
+                "source_track_id": source.id,
+                "provider_name": execution.provider_name,
+                "model_id": execution.model_id,
+                "status": execution.status,
+                "failure_code": execution.failure_code,
+                "failure_reason": execution.failure_reason,
+                "impact": execution.impact,
+                "repair_action": execution.repair_action,
+                "retryable": execution.retryable,
+            },
+        ))
         if execution.status != "succeeded" or execution.translated_track is None:
             raise _topic_failure_response(
                 status_code=503,
@@ -5922,6 +6019,12 @@ def confirm_creation_task_edit(
             timeline_version_id=result_version_id,
             track_id=f"subtitle_{result_version_id}_zh-cn",
         )
+        current_cover = _cover_asset_for_version(workspace_id, task.id, base_version)
+        carried_cover = (
+            _clone_cover_asset(current_cover, timeline_version_id=result_version_id)
+            if current_cover is not None
+            else None
+        )
         montage, _ = _prepare_changed_montage(
             montage,
             message="中英字幕已生成并保持原时间轴；请重新渲染以写入成片。",
@@ -5935,6 +6038,7 @@ def confirm_creation_task_edit(
             operation_type="ConfigureSubtitleTrack",
             operation_payload=dict(operation_payload),
             subtitle_tracks=[chinese_track, english_track],
+            cover_asset=carried_cover,
             updated_plan=montage,
         )
     if operation_type == "GenerateCoverFromFrame" and isinstance(operation_payload, dict):
@@ -6142,12 +6246,20 @@ def confirm_creation_task_edit(
         retained = [
             _clone_subtitle_track(item, timeline_version_id=result_version_id)
             for item in current_tracks
-            if item.id != track.id and not (track.language == "zh-CN" and item.language == "en-US")
+            if item.id != track.id and not (
+                track.language == "zh-CN" and item.language == "en-US" and str(text) != expected_text
+            )
         ]
         if track.language == "zh-CN":
             montage_cue = next((item for item in montage.cues if item.id == cue.id), None)
             if montage_cue is not None:
                 montage_cue.text = str(text)
+        current_cover = _cover_asset_for_version(workspace_id, task.id, base_version)
+        carried_cover = (
+            _clone_cover_asset(current_cover, timeline_version_id=result_version_id)
+            if current_cover is not None
+            else None
+        )
         montage, _ = _prepare_changed_montage(
             montage,
             message="字幕已修改；请重新渲染以写入成片。",
@@ -6161,6 +6273,7 @@ def confirm_creation_task_edit(
             operation_type="UpdateSubtitleCue",
             operation_payload=dict(operation_payload),
             subtitle_tracks=[changed_track, *retained],
+            cover_asset=carried_cover,
             updated_plan=montage,
         )
     if operation_type in {"ChangePersonSegment", "RegeneratePersonRender"} and isinstance(
@@ -6545,9 +6658,15 @@ def preview_creation_task_exact_edit(
         if track is None:
             raise HTTPException(status_code=404, detail="subtitle track or cue not found")
         cue = next(cue for cue in track.cues if cue.id == payload.cue_id)
+        if track.language == "en-US" and payload.style is not None and payload.style != track.style:
+            raise HTTPException(status_code=422, detail="双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。")
+        normalized_text, normalized_line_breaks = _normalize_subtitle_text_and_breaks(
+            payload.text,
+            payload.line_breaks,
+        )
         changed = (
-            payload.text != cue.text
-            or payload.line_breaks is not None
+            normalized_text != cue.text
+            or normalized_line_breaks != cue.line_breaks
             or payload.emphasis is not None
             or payload.style is not None
         )
@@ -6565,8 +6684,8 @@ def preview_creation_task_exact_edit(
         operation_payload = {
             "track_id": track.id,
             "cue_id": cue.id,
-            "text": payload.text,
-            "line_breaks": payload.line_breaks if payload.line_breaks is not None else cue.line_breaks,
+            "text": normalized_text,
+            "line_breaks": normalized_line_breaks,
             "emphasis": payload.emphasis if payload.emphasis is not None else cue.emphasis,
             "style": payload.style if payload.style is not None else track.style,
             "expected_text": cue.text,
@@ -6577,6 +6696,8 @@ def preview_creation_task_exact_edit(
             "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": payload.text},
         }
         effects = ["确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。"]
+        if track.language == "zh-CN" and normalized_text != cue.text and any(item.language == "en-US" for item in tracks):
+            effects.append("中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。")
     else:
         if payload.title is None or payload.frame_time_seconds is None:
             raise HTTPException(status_code=422, detail="cover edit requires title and frame_time_seconds")
@@ -6870,6 +6991,17 @@ def undo_creation_task_timeline(
             repair_action="先完成一次镜头、配音或字幕修改，再使用撤销。",
             retryable=False,
         )
+    try:
+        changed_operation = production_repo.get_edit_operation(
+            workspace_id, changed_version.created_by_operation_id or ""
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail="timeline undo operation is unavailable") from exc
+    subtitle_cover_undo = changed_operation.operation_type in {
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
+        "UpdateSubtitleCue",
+    }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):
         raise HTTPException(status_code=409, detail="timeline undo snapshot is unavailable")
@@ -6889,11 +7021,54 @@ def undo_creation_task_timeline(
                 raise ValueError("时间线引用的配音总轨已丢失")
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=409, detail="timeline undo snapshot is invalid") from exc
-    invalidated_refs = _logical_montage_output_refs(current_plan)
-    restored_plan, _montage_payload = _prepare_changed_montage(
-        restored_plan,
-        message="已撤销上一次镜头修改，可以重新渲染。",
+    current_version = production_repo.get_timeline_version(
+        workspace_id, task.current_timeline_version_id or ""
     )
+    restored_tracks: list[SubtitleTrack] = []
+    restored_cover: CoverAsset | None = None
+    result_version_id: str | None = None
+    if subtitle_cover_undo:
+        result_version_id = f"timeline_{uuid4().hex}"
+        target_tracks = _current_subtitle_tracks(
+            workspace_id,
+            task,
+            current_version=target_version,
+            montage=restored_plan,
+        )
+        restored_tracks = [
+            _clone_subtitle_track(track, timeline_version_id=result_version_id)
+            for track in target_tracks
+        ]
+        target_cover = _cover_asset_for_version(workspace_id, task.id, target_version)
+        restored_cover = (
+            _clone_cover_asset(target_cover, timeline_version_id=result_version_id)
+            if target_cover is not None
+            else None
+        )
+        current_tracks = _current_subtitle_tracks(
+            workspace_id,
+            task,
+            current_version=current_version,
+            montage=current_plan,
+        )
+        current_cover = _cover_asset_for_version(workspace_id, task.id, current_version)
+        restored_refs = {
+            *_logical_montage_output_refs(restored_plan),
+            *(track.artifact_ref for track in target_tracks if track.artifact_ref),
+            *([target_cover.artifact_ref] if target_cover and target_cover.artifact_ref else []),
+        }
+        current_refs = [
+            *_logical_montage_output_refs(current_plan),
+            *(track.artifact_ref for track in current_tracks if track.artifact_ref),
+            *([current_cover.artifact_ref] if current_cover and current_cover.artifact_ref else []),
+        ]
+        invalidated_refs = [reference for reference in current_refs if reference not in restored_refs]
+    else:
+        invalidated_refs = _logical_montage_output_refs(current_plan)
+        restored_plan, _montage_payload = _prepare_changed_montage(
+            restored_plan,
+            message="已撤销上一次镜头修改，可以重新渲染。",
+        )
     now = utc_now()
     intent = production_repo.create_edit_intent(
         EditIntent(
@@ -6901,7 +7076,7 @@ def undo_creation_task_timeline(
             workspace_id=workspace_id,
             task_id=task_id,
             raw_command="撤销上一次内容修改",
-            context_stage="montage",
+            context_stage="subtitle_cover" if subtitle_cover_undo else "montage",
             selected_object_refs=[],
             playhead_ms=None,
             intent_type="undo_timeline",
@@ -6946,9 +7121,20 @@ def undo_creation_task_timeline(
             updated_at=now,
         )
     )
-    current_version = production_repo.get_timeline_version(
-        workspace_id, task.current_timeline_version_id or ""
-    )
+    if subtitle_cover_undo and result_version_id is not None:
+        return _persist_subtitle_cover_edit(
+            workspace_id=workspace_id,
+            task=task,
+            proposal=proposal,
+            base_version=current_version,
+            result_version_id=result_version_id,
+            operation_type="UndoTimelineVersion",
+            operation_payload=dict(proposal.operation["payload"]),
+            subtitle_tracks=restored_tracks,
+            cover_asset=restored_cover,
+            updated_plan=restored_plan,
+            snapshot_source=target_version.snapshot,
+        )
     return _persist_typed_montage_edit(
         workspace_id=workspace_id,
         task=task,
@@ -7119,11 +7305,47 @@ def _apply_subtitle_tracks_to_render_plan(
         source = chinese_by_id.get(cue.id)
         if source is None:
             continue
-        lines = [source.text]
+        source_text, _ = _normalize_subtitle_text_and_breaks(
+            source.text,
+            list(source.line_breaks),
+        )
+        boundaries = (0, *source.line_breaks, len(source_text))
+        rendered_source = "\n".join(
+            source_text[start:end]
+            for start, end in zip(boundaries, boundaries[1:])
+        )
+        lines = [rendered_source]
         translated = english_by_source.get(source.id)
         if translated is not None:
-            lines.append(translated.text)
+            translated_boundaries = (
+                0,
+                *translated.line_breaks,
+                len(translated.text),
+            )
+            lines.append(
+                "\n".join(
+                    translated.text[start:end]
+                    for start, end in zip(
+                        translated_boundaries,
+                        translated_boundaries[1:],
+                    )
+                )
+            )
         cue.text = "\n".join(lines)
+        cue.subtitle_emphasis = list(source.emphasis)
+        cue.subtitle_emphasis_ranges = []
+        offset = 0
+        for language_cue in [source, *([translated] if translated is not None else [])]:
+            compact = re.sub(r"\s+", "", language_cue.text)
+            for term in language_cue.emphasis:
+                term = re.sub(r"\s+", "", term)
+                if term:
+                    cue.subtitle_emphasis_ranges.extend(
+                        (offset + match.start(), offset + match.end())
+                        for match in re.finditer(re.escape(term), compact)
+                    )
+            offset += len(compact)
+        cue.subtitle_style = dict(chinese.style)
 
 
 @app.post(
@@ -7148,6 +7370,16 @@ def render_creation_task_montage(
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
     active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+    active_version = (
+        production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        if task.current_timeline_version_id
+        else None
+    )
+    active_cover = (
+        _cover_asset_for_version(workspace_id, task.id, active_version)
+        if active_version is not None
+        else None
+    )
     plan_input = creation_task_montage_plan_to_payload(plan)
     for transient_key in (
         "status",
@@ -7197,12 +7429,8 @@ def render_creation_task_montage(
         "running",
     }:
         raise HTTPException(status_code=409, detail="montage render is already running")
-    migrating_legacy_render = (
-        plan.status == "rendered" and task.current_timeline_version_id is None
-    )
     if (
-        plan.status != "ready"
-        and not migrating_legacy_render
+        plan.status == "rendering"
         and (latest_matching_job is None or latest_matching_job.status != "interrupted")
     ):
         raise HTTPException(status_code=409, detail="montage render is not resumable")
@@ -7233,9 +7461,14 @@ def render_creation_task_montage(
                 )
                 versions = production_repo.list_timeline_versions(workspace_id, task.id)
                 current_task = production_repo.get_creation_task(workspace_id, task.id)
+                version_id = f"timeline_{uuid4().hex}"
+                inherited_cover = (
+                    _clone_cover_asset(active_cover, timeline_version_id=version_id)
+                    if active_cover is not None else None
+                )
                 version = production_repo.create_timeline_version(
                     TimelineVersion(
-                        id=f"timeline_{uuid4().hex}",
+                        id=version_id,
                         workspace_id=workspace_id,
                         task_id=task.id,
                         parent_version_id=current_task.current_timeline_version_id,
@@ -7248,10 +7481,13 @@ def render_creation_task_montage(
                                 reusable_subtitles.logical_ref,
                             ],
                             "reused_job_id": latest_matching_job.id,
+                            **({"cover_asset_id": inherited_cover.id} if inherited_cover else {}),
                         },
                         created_by_operation_id=None,
                     )
                 )
+                if inherited_cover is not None:
+                    production_repo.create_cover_asset(inherited_cover)
                 if not production_repo.list_subtitle_tracks(
                     workspace_id, task.id, timeline_version_id=version.id
                 ):
@@ -7441,7 +7677,7 @@ def render_creation_task_montage(
 
             rendered.output_path = video_ref
             rendered.subtitle_path = subtitle_ref
-            rendered.message = "带中文字幕的初版成片已生成，等待检查。"
+            rendered.message = "带字幕的成片已生成，等待检查。"
             rendered_payload = creation_task_montage_plan_to_payload(rendered)
             production_repo.save_creation_task_montage_plan(
                 workspace_id, task.id, rendered.id, rendered_payload
@@ -7468,6 +7704,7 @@ def render_creation_task_montage(
                         **_current_narration_snapshot(workspace_id, current_task),
                         "output_refs": output_refs,
                         "transform_run_id": transform.id,
+                        **({"cover_asset_id": f"cover_{version_id}"} if active_cover else {}),
                     },
                     created_by_operation_id=None,
                 )
@@ -7490,6 +7727,17 @@ def render_creation_task_montage(
                     )
                 )
             production_repo.create_timeline_version(version)
+            # The selected cover is an immutable image with its own source reference;
+            # rendering a video must not silently discard or retarget that selection.
+            if active_cover is not None and not production_repo.list_cover_assets(
+                workspace_id, task.id, timeline_version_id=version.id
+            ):
+                production_repo.create_cover_asset(
+                    replace(
+                        _clone_cover_asset(active_cover, timeline_version_id=version.id),
+                        id=version.snapshot["cover_asset_id"],
+                    )
+                )
             persisted_tracks = production_repo.list_subtitle_tracks(
                 workspace_id, task.id, timeline_version_id=version.id
             )

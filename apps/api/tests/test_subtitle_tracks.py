@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 from app.subtitle_tracks import (
     OpenAICompatibleSubtitleTranslationProvider,
@@ -49,6 +50,30 @@ def _source_track() -> SubtitleTrack:
         ),
         generation_method="timeline",
     )
+
+
+@pytest.mark.parametrize("status,repair,retryable", [
+    (401, "API 密钥", False),
+    (402, "余额", False),
+    (403, "有权", False),
+    (404, "模型名称", False),
+    (429, "限流", True),
+    (503, "服务状态", True),
+])
+def test_http_failure_is_actionable_without_exposing_provider_body(status, repair, retryable):
+    provider = OpenAICompatibleSubtitleTranslationProvider(
+        provider_name="test", base_url="https://llm.example/v1", model_id="test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(status, text="private-provider-body")),
+    )
+    result = SubtitleTranslationService(provider).translate_zh_to_en(
+        _source_track(), translated_track_id="en", timeline_version_id="v4",
+    )
+    assert result.failure_code == f"http_{status}"
+    assert f"HTTP {status}" in result.failure_reason
+    assert repair in result.repair_action
+    assert result.retryable is retryable
+    assert result.translated_track is None
+    assert "private-provider-body" not in result.failure_reason
 
 
 class _SuccessfulProvider:

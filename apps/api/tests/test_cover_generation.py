@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,12 +15,19 @@ from app.cover_generation import (
     CoverGenerationRequest,
     CoverGenerationService,
     CoverSafeArea,
+    _fit_title,
     unconfigured_image_generation_capability,
 )
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS cover typography")
+def test_cover_title_balances_chinese_lines():
+    _, lines = _fit_title("本地创作，数据更清楚", 848, 1400)
+    assert lines == ["本地创作，", "数据更清楚"]
 
 
 def _write_two_scene_video(path: Path) -> None:
@@ -79,6 +87,7 @@ def test_real_ffmpeg_selects_requested_frame_and_renders_visible_chinese_title(t
         assert image.size == (COVER_WIDTH, COVER_HEIGHT)
         top_pixel = image.convert("RGB").getpixel((100, 100))
         assert top_pixel[2] > top_pixel[0] * 3
+        assert image.convert("RGB").getpixel((100, 1600)) == (24, 25, 23)
         title_region = image.convert("RGB").crop((80, 1200, 1000, 1740))
         colors = title_region.getcolors(maxcolors=title_region.width * title_region.height)
         assert colors is not None
@@ -97,6 +106,8 @@ def test_real_ffmpeg_selects_requested_frame_and_renders_visible_chinese_title(t
     assert evidence.engine_version.startswith("ffmpeg version")
     assert evidence.layout_engine == "Pillow"
     assert evidence.font_path
+    if sys.platform == "darwin":
+        assert "PingFang" in evidence.font_family
     assert evidence.parameters["frame_time_seconds"] == 1.25
     assert evidence.parameters["safe_area"] == {
         "left": 80,

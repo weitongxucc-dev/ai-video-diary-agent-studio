@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -32,11 +33,15 @@ from app.montage import (
     MontageRenderer,
     NarrationCue,
     _plan_to_srt,
+    _subtitle_font,
+    _subtitle_font_and_lines,
+    _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
 )
 from app.production import (
     Authorization,
+    CoverAsset,
     CreationPlan,
     CreationPlanVoiceReference,
     CreationTask,
@@ -52,6 +57,9 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
+    SubtitleCue as ProductionSubtitleCue,
+    SubtitleTrack,
+    TimelineVersion,
     VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
@@ -95,6 +103,148 @@ def test_srt_preserves_user_authored_subtitle_line_breaks() -> None:
     )
 
     assert "本机页面记录来源，\n每一步都能追溯" in _plan_to_srt(plan)
+
+
+def test_render_plan_applies_track_line_breaks_and_emphasis_metadata() -> None:
+    plan = CreationTaskMontagePlan(
+        id="montage-track-style",
+        workspace_id="workspace_a",
+        task_id="task-track-style",
+        script_id="script-track-style",
+        script_title="字幕轨渲染",
+        status="ready",
+        cues=[NarrationCue("cue-track-style", "section", "旧字幕", 4.0)],
+        clips=[],
+        duration_seconds=4.0,
+        low_confidence_clip_count=0,
+    )
+    track = SubtitleTrack(
+        id="subtitle-track-style",
+        workspace_id="workspace_a",
+        task_id="task-track-style",
+        timeline_version_id="timeline-track-style",
+        language="zh-CN",
+        source_language=None,
+        style={"name": "emphasis", "emphasis_color": "#FFD54F"},
+        cues=[
+            ProductionSubtitleCue(
+                id="cue-track-style",
+                source_cue_id=None,
+                text="本机页面记录来源，每一步都能追溯",
+                start_seconds=0.0,
+                end_seconds=4.0,
+                line_breaks=[9],
+                emphasis=["本机页面"],
+            )
+        ],
+        generation_method="timeline",
+        model_id=None,
+        artifact_ref="artifacts/subtitles.srt",
+        transform_id="transform-track-style",
+        status="valid",
+    )
+
+    main_module._apply_subtitle_tracks_to_render_plan(plan, [track])
+
+    assert plan.cues[0].text == "本机页面记录来源，\n每一步都能追溯"
+    assert plan.cues[0].subtitle_emphasis == ["本机页面"]
+    assert plan.cues[0].subtitle_style["emphasis_color"] == "#FFD54F"
+    english = replace(track, id="english", language="en-US", source_language="zh-CN", cues=[
+        replace(track.cues[0], id="english-cue", source_cue_id=track.cues[0].id,
+                text="本机页面 English", line_breaks=[], emphasis=["English"])
+    ])
+    main_module._apply_subtitle_tracks_to_render_plan(plan, [track, english])
+    assert plan.cues[0].subtitle_emphasis_ranges == [(0, 4), (len(track.cues[0].text) + 4, len(track.cues[0].text) + 11)]
+
+
+@pytest.mark.parametrize("position", ["top", "middle", "bottom"])
+@pytest.mark.parametrize("size", [28, 72])
+def test_subtitle_overlay_renders_confirmed_style_and_manual_breaks(tmp_path, position, size):
+    family = _subtitle_font(40).getname()[0]
+    style = {
+        "font_family": family,
+        "font_size": size,
+        "primary_color": "#00FF00",
+        "emphasis_color": "#FFD54F",
+        "position": position,
+    }
+    font, lines = _subtitle_font_and_lines("真实运行\n字幕效果", style)
+    assert font.getname()[0] == family
+    assert font.size == size
+    assert lines == ["真实运行", "字幕效果"]
+    plan = SimpleNamespace(
+        cues=[NarrationCue("cue", "section", "真实运行\n字幕效果", 1, subtitle_style=style,
+                           subtitle_emphasis=["真实运行"])],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    path = _write_subtitle_overlays(plan, tmp_path)[0]
+    with Image.open(path) as overlay:
+        assert overlay.size == (1080, 1920)
+        assert overlay.getpixel((0, 0)) == (0, 0, 0, 0)
+        colors = {color for _, color in overlay.getcolors(1080 * 1920)}
+        assert (0, 255, 0, 255) in colors
+        assert (255, 213, 79, 255) in colors
+        left, top, right, bottom = overlay.getbbox()
+        assert 0 < left < right < 1080
+        if position == "top":
+            assert top == 250
+        elif position == "middle":
+            assert abs((top + bottom) / 2 - 960) <= 1
+        else:
+            assert bottom == 1671
+        assert bottom - top > size * 1.5
+
+
+def test_subtitle_layout_wraps_to_safe_width_without_resetting_font_size():
+    font, lines = _subtitle_font_and_lines("字幕参数真正进入画面，" * 6, {"font_size": 72})
+    assert font.size == 72
+    assert len(lines) > 2
+    assert all(font.getbbox(line, stroke_width=3)[2] <= 880 for line in lines)
+
+
+def test_subtitle_font_reports_missing_confirmed_family():
+    with pytest.raises(OSError, match="未安装.*请安装"):
+        _subtitle_font_and_lines("真实运行", {"font_family": "Missing Subtitle Family 123456"})
+
+
+def test_subtitle_font_resolves_pingfang_sc_collection_face():
+    try:
+        font = _subtitle_font(72, family="PingFang SC")
+    except OSError:
+        pytest.skip("PingFang SC is not installed on this host")
+    assert font.getname()[0] == "PingFang SC"
+    assert font.size == 72
+
+
+@pytest.mark.parametrize("style, message", [
+    ({"font_size": 0}, "字号"),
+    ({"font_size": True}, "字号"),
+    ({"font_size": 1921}, "字号"),
+    ({"font_family": ""}, "字体名称"),
+    ({"position": "center"}, "字幕位置"),
+])
+def test_subtitle_overlay_rejects_unrenderable_style(tmp_path, style, message):
+    plan = SimpleNamespace(
+        cues=[NarrationCue("cue", "section", "真实运行", 1, subtitle_style=style)],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    with pytest.raises(OSError, match=message):
+        _write_subtitle_overlays(plan, tmp_path)
+
+
+def test_subtitle_emphasis_survives_line_break_inside_term(tmp_path):
+    plan = SimpleNamespace(
+        cues=[NarrationCue(
+            "cue", "section", "真实\n运行", 1,
+            subtitle_style={"font_size": 72, "primary_color": "#00FF00"},
+            subtitle_emphasis=["真实运行"],
+        )],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    with Image.open(_write_subtitle_overlays(plan, tmp_path)[0]) as overlay:
+        colors = {color for _, color in overlay.getcolors(1080 * 1920)}
+        assert (255, 213, 79, 255) in colors
+        assert (0, 255, 0, 255) not in colors
 
 
 def _episode(workspace_id: str = "workspace_a") -> Episode:
@@ -907,7 +1057,15 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
         episode_id="episode_real",
         script_title="Real render",
         status="ready",
-        cues=[NarrationCue("cue_001", "hook", "真实渲染验收", 1.5)],
+        cues=[NarrationCue(
+            "cue_001", "hook", "真实运行\n字幕效果", 1.5,
+            subtitle_style={
+                "font_family": _subtitle_font(40).getname()[0],
+                "font_size": 72, "position": "middle",
+                "primary_color": "#00FF00", "emphasis_color": "#FFD54F",
+            },
+            subtitle_emphasis=["真实运行"],
+        )],
         clips=[
             MontageClip(
                 id="clip_real",
@@ -953,6 +1111,17 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
     }
     video = next(stream for stream in streams if stream["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1080, 1920)
+    frame_path = tmp_path / "rendered-style-frame.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.5", "-i", str(output_path), "-frames:v", "1", str(frame_path)],
+        check=True, capture_output=True,
+    )
+    with Image.open(frame_path) as frame:
+        center = frame.convert("RGB").crop((100, 800, 980, 1120))
+        colors = center.get_flattened_data()
+        assert sum(g > 180 and r < 80 and b < 80 for r, g, b in colors) > 100
+        assert sum(r > 180 and g > 140 and b < 130 for r, g, b in colors) > 100
+        assert frame.getpixel((540, 1500))[2] > 200
 
 
 def test_creation_task_planner_uses_confirmed_script_and_logical_material_references(tmp_path):
@@ -1001,7 +1170,8 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
 )
-def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
+@pytest.mark.parametrize("bilingual", [False, True])
+def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingual):
     video_path = tmp_path / "source-task.mp4"
     audio_path = tmp_path / "voice-task.wav"
     subprocess.run(
@@ -1061,6 +1231,29 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
     )
 
     renderer = MontageRenderer(tmp_path / "legacy-output")
+    if bilingual:
+        # Explicit artificial translation fixture: exercises the production track-to-render
+        # path, never a model-call assertion or a persisted user task.
+        chinese = SubtitleTrack(
+            id="fixture-zh", workspace_id="workspace_a", task_id="task_real",
+            timeline_version_id="fixture-version", language="zh-CN", source_language=None,
+            style={"font_family": "PingFang SC" if sys.platform == "darwin" else _subtitle_font(40).getname()[0], "font_size": 40, "position": "bottom"},
+            cues=[ProductionSubtitleCue(
+                id="cue_001", source_cue_id=None, text="人工测试字幕", start_seconds=0, end_seconds=1.2,
+                line_breaks=[2], emphasis=[],
+            )],
+            generation_method="timeline", model_id=None, artifact_ref=None, transform_id=None, status="valid",
+        )
+        english = replace(
+            chinese, id="fixture-en", language="en-US", source_language="zh-CN",
+            cues=[ProductionSubtitleCue(
+                id="fixture-en-cue", source_cue_id="cue_001",
+                text="MANUAL TEST SUBTITLESNot a model translation",
+                start_seconds=0, end_seconds=1.2, line_breaks=[21], emphasis=["MANUAL"],
+            )],
+        )
+        main_module._apply_subtitle_tracks_to_render_plan(plan, [chinese, english])
+        assert plan.cues[0].text == "人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation"
     with pytest.raises(ValueError, match="job-scoped"):
         renderer.render(plan, audio_path)
 
@@ -1074,7 +1267,15 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
     staged_output = job_staging_path / "preview.mp4"
     staged_subtitle = job_staging_path / "subtitles.srt"
     assert staged_output.is_file()
-    assert staged_subtitle.read_text(encoding="utf-8").find("真实任务字幕") >= 0
+    srt = staged_subtitle.read_text(encoding="utf-8")
+    assert ("人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation" if bilingual else "真实任务字幕") in srt
+    probe = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration,size:stream=codec_type,codec_name,width,height", "-of", "json", str(staged_output)],
+        check=True, capture_output=True, text=True,
+    ).stdout)
+    assert {stream["codec_type"] for stream in probe["streams"]} == {"video", "audio"}
+    assert float(probe["format"]["duration"]) == pytest.approx(1.2, abs=0.1)
+    assert int(probe["format"]["size"]) > 0
     assert rendered.output_path is None
     assert rendered.subtitle_path is None
     assert not (tmp_path / "legacy-output" / "creation-tasks").exists()
@@ -1101,6 +1302,9 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
             for red, green, blue in subtitle_region.get_flattened_data()
         )
     assert white_pixels > 50
+    if bilingual:
+        assert sum(red > 180 and green > 140 and blue < 130
+                   for red, green, blue in subtitle_region.get_flattened_data()) > 50
 
 
 def test_creation_task_render_helper_restores_logical_media_references(
@@ -1652,6 +1856,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     workspace_after_rerender = client.get(f"/api/creation-tasks/{task.id}").json()
     assert workspace_after_rerender["task"]["timeline_sequence"] == 3
     assert workspace_after_rerender["task"]["can_undo"] is True
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
 
     exact_trim = client.post(
@@ -1671,7 +1878,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert trimmed_plan.clips[1].source_start_seconds == 1.0
     assert trimmed_plan.narration_audio_path == rendered_narration_reference
     assert trimmed_plan.output_path is None and trimmed_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 4
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 6
 
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
@@ -1684,7 +1891,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert restored_plan.clips[1].source_start_seconds == 1
     assert restored_plan.narration_audio_path == rendered_narration_reference
     assert restored_plan.output_path is None and restored_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 5
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 7
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -1703,15 +1910,17 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     final_render = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
     assert final_render.status_code == 200, final_render.text
     assert final_render.json()["status"] == "rendered"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 6
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
 
 
+@pytest.mark.parametrize("visual_only", [False, True])
 def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, visual_only
 ):
+    runtime_settings = main_module.settings
     workspace_id = "workspace_a"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
@@ -1864,7 +2073,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
             NarrationCue(
                 id="cue-subtitle-edit",
                 source_section_id=script.sections[0].id,
-                text=script.sections[0].content,
+                text="原始字幕\n内容。",
                 duration_seconds=4,
                 narration_segment_id=segment.id,
             )
@@ -1894,15 +2103,53 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     production.save_creation_task_montage_plan(
         workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage)
     )
+    production.create_timeline_version(
+        TimelineVersion(
+            id="timeline-subtitle-edit-base",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            parent_version_id=None,
+            sequence=1,
+            snapshot={
+                "montage": creation_task_montage_plan_to_payload(montage),
+                "transform_run_id": "transform-subtitle-edit-rendered",
+                "cover_asset_id": "cover_subtitle_edit_base",
+            },
+            created_by_operation_id=None,
+        )
+    )
+    cover = production.create_cover_asset(CoverAsset(
+        id="cover_subtitle_edit_base", workspace_id=workspace_id, task_id=task.id,
+        timeline_version_id="timeline-subtitle-edit-base",
+        source_video_ref=montage.output_path, frame_time_seconds=0.5,
+        title="保留用户选择", safe_area={"left": 80, "top": 140, "right": 80, "bottom": 180},
+        layout={"title_position": "bottom"}, generation_method="video_frame",
+        model_or_engine="ffmpeg+Pillow", artifact_ref="artifacts/cover.png",
+        transform_id="transform_cover", status="valid",
+    ))
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
 
+    base = production.get_timeline_version(workspace_id, "timeline-subtitle-edit-base")
+    chinese = main_module._subtitle_track_from_montage(workspace_id, task, base, montage)
+    production.create_subtitle_track(chinese)
+    production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
+        replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
+    ]))
+    rejected_style = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/edits/exact", json={
+            "operation_type": "UpdateSubtitleCue", "track_id": "fixture-english",
+            "cue_id": "english-cue", "text": "MANUAL TEST", "style": {"name": "emphasis"},
+        },
+    )
+    assert rejected_style.status_code == 422
     response = TestClient(main_module.app).post(
         f"/api/creation-tasks/{task.id}/edits/exact",
         json={
             "operation_type": "UpdateSubtitleCue",
+            "track_id": "subtitle_timeline-subtitle-edit-base_zh",
             "cue_id": montage.cues[0].id,
-            "text": "修改后的字幕\n保留换行",
+            "text": "原始\n字幕内容。" if visual_only else "修改后的字幕\n保留换行",
         },
     )
 
@@ -1912,7 +2159,17 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     saved = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
-    assert saved.cues[0].text == "修改后的字幕\n保留换行"
+    assert saved.cues[0].text == ("原始字幕内容。" if visual_only else "修改后的字幕保留换行")
+    edited_track = production.list_subtitle_tracks(
+        workspace_id,
+        task.id,
+        timeline_version_id=production.get_creation_task(
+            workspace_id, task.id
+        ).current_timeline_version_id,
+    )
+    assert len(edited_track) == (2 if visual_only else 1)
+    edited_track = next(track for track in edited_track if track.language == "zh-CN")
+    assert edited_track.cues[0].line_breaks == ([2] if visual_only else [6])
     assert saved.narration_audio_path == montage.narration_audio_path
     assert saved.output_path is None and saved.subtitle_path is None
     assert production.get_creation_task(workspace_id, task.id).narration_cache_key == "whole-cache"
@@ -1920,6 +2177,96 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert production.list_edit_operations(workspace_id, task.id)[0].operation_type == "UpdateSubtitleCue"
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
+
+    undo = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/timeline/undo",
+        json={},
+    )
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["operation"]["operation_type"] == "UndoTimelineVersion"
+    restored = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(workspace_id, task.id)
+    )
+    assert restored.status == "rendered"
+    assert restored.output_path == montage.output_path
+    assert restored.subtitle_path == montage.subtitle_path
+    restored_workspace = TestClient(main_module.app).get(
+        f"/api/creation-tasks/{task.id}"
+    ).json()
+    assert restored_workspace["task"]["stage"] == "review"
+    assert restored_workspace["task"]["output_ready"] is True
+    assert restored_workspace["task"]["can_undo"] is False
+    assert {track["language"] for track in restored_workspace["subtitle_tracks"]} == {"zh-CN", "en-US"}
+    assert next(track for track in restored_workspace["subtitle_tracks"] if track["language"] == "zh-CN")["cues"][0]["line_breaks"] == [
+        4
+    ]
+    assert restored_workspace["cover_asset"]["artifact_ref"] == cover.artifact_ref
+
+    render_calls = []
+    def render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+        render_calls.append(rendered_plan)
+        (job_staging_path / "preview.mp4").write_bytes(b"render-fixture")
+        (job_staging_path / "subtitles.srt").write_text(_plan_to_srt(rendered_plan))
+        rendered_plan.status = "rendered"
+        return rendered_plan
+
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output")))
+    monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
+    client = TestClient(main_module.app)
+    # New renderer, then cache hit: both must carry the same immutable cover selection.
+    for _ in range(2):
+        result = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
+        assert result.status_code == 200, result.text
+        current = client.get(f"/api/creation-tasks/{task.id}").json()
+        assert current["cover_asset"]["title"] == cover.title
+        assert current["cover_asset"]["artifact_ref"] == cover.artifact_ref
+        assert current["cover_asset"]["source_video_ref"] == cover.source_video_ref
+        assert current["cover_asset"]["timeline_version_id"] == current["task"]["current_timeline_version_id"]
+    assert len(render_calls) == 1
+
+    # A rendering-contract change must not reuse an output from the previous engine.
+    monkeypatch.setattr(main_module, "CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION", "next-render-contract")
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert len(render_calls) == 2
+
+    from app.subtitle_tracks import SubtitleTranslationProviderError
+
+    class FailedTranslationProvider:
+        ready = True
+        provider_name = "test-configured"
+        model_id = "test-model"
+        message = "configured"
+
+        def translate(self, cues):
+            raise SubtitleTranslationProviderError(
+                code="insufficient_balance", reason="余额不足",
+                impact="中文字幕和成片保持不变。", repair_action="充值后重试。", retryable=True,
+            )
+
+    monkeypatch.setattr(main_module, "settings", runtime_settings)
+    monkeypatch.setattr(main_module, "subtitle_translation_provider_from_settings", lambda _: FailedTranslationProvider())
+    current_workspace = client.get(f"/api/creation-tasks/{task.id}").json()
+    current_chinese = next(track for track in current_workspace["subtitle_tracks"] if track["language"] == "zh-CN")
+    changed_source = client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": current_chinese["id"],
+        "cue_id": current_chinese["cues"][0]["id"], "text": "测试新的翻译来源",
+    })
+    assert changed_source.status_code == 200, changed_source.text
+    before = client.get(f"/api/creation-tasks/{task.id}").json()
+    preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={"operation_type": "ConfigureSubtitleTrack"})
+    assert preview.status_code == 200, preview.text
+    failed = client.post(f"/api/creation-tasks/{task.id}/edits/{preview.json()['proposal']['id']}/confirm")
+    assert failed.status_code == 503, failed.text
+    monkeypatch.setattr(main_module, "production_repo", ProductionRepository(production.database_path, production.video_library_path))
+    after = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert after["task"]["current_timeline_version_id"] == before["task"]["current_timeline_version_id"]
+    assert after["subtitle_tracks"] == before["subtitle_tracks"]
+    assert after["cover_asset"] == before["cover_asset"]
+    assert after["subtitle_translation_capability"]["message"] == "上次翻译未完成：余额不足"
+    assert after["subtitle_translation_capability"]["repair_action"] == "充值后重试。"
+    assert after["subtitle_translation_capability"]["available"] is True
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(

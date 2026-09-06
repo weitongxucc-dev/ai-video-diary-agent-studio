@@ -210,12 +210,104 @@ function exactPreview(task: CreationTask, operationType: "UpdateSubtitleCue" | "
   };
 }
 
+function workspaceWithCover() {
+  const initial = subtitleCoverWorkspace();
+  initial.cover_asset = {
+    id: "cover-1", workspace_id: "local", task_id: initial.task.id, timeline_version_id: "timeline-version-6",
+    source_video_ref: "artifact:video:v6", frame_time_seconds: 2.4, title: "别只讲概念",
+    safe_area: { top: 144, right: 72, bottom: 180, left: 72 },
+    layout: { title_position: "bottom", text_align: "center" }, generation_method: "video_frame",
+    model_or_engine: "ffmpeg", status: "valid", artifact_ref: "artifact:cover:v6",
+    transform_id: "transform:cover:v6", failure_reason: null, impact: null, repair_action: null,
+    created_at: initial.task.created_at, updated_at: initial.task.updated_at,
+  };
+  return initial;
+}
+
 afterEach(() => {
   vi.clearAllMocks();
   Reflect.deleteProperty(window, "electronAPI");
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("restores server line breaks, equal-length emphasis and cover fields after undo", async () => {
+    const initial = workspaceWithCover();
+    initial.subtitle_tracks[0].cues[0].emphasis = ["真实运行"];
+    const restored = structuredClone(initial);
+    restored.subtitle_tracks[0].cues[0].line_breaks = [4];
+    restored.subtitle_tracks[0].cues[0].emphasis = ["不是口号"];
+    restored.cover_asset!.title = "恢复后的标题";
+    restored.cover_asset!.frame_time_seconds = 1.2;
+    mocks.undoTimeline.mockResolvedValue({});
+    mocks.getWorkspace.mockResolvedValue(restored);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "未保存草稿" } });
+    fireEvent.change(screen.getByLabelText("封面标题"), { target: { value: "未保存封面" } });
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("真实运行\n不是口号"));
+    expect(screen.getByLabelText("字幕 1 强调词")).toHaveValue("不是口号");
+    await waitFor(() => expect(screen.getByLabelText("封面标题")).toHaveValue("恢复后的标题"));
+    expect(screen.getByLabelText("封面画面时间")).toHaveValue(1.2);
+  });
+
+  it("uses persisted cues when switching tracks and selecting another cue", () => {
+    const initial = subtitleCoverWorkspace();
+    const chinese = initial.subtitle_tracks[0];
+    chinese.cues.push({ ...chinese.cues[0], id: "subtitle-cue-2", text: "第二条字幕", line_breaks: [3] });
+    initial.subtitle_tracks.push({ ...structuredClone(chinese), id: "subtitle-track-en", language: "en-US", cues: [{ ...chinese.cues[0], id: "subtitle-en-1", text: "Real work" }] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "未保存" } });
+    fireEvent.click(screen.getByRole("tab", { name: /英文轨/ }));
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("Real work");
+    expect(screen.getByRole("button", { name: "清爽底栏" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重点强调" })).toBeDisabled();
+    expect(screen.getByText("双语共用样式，在中文轨调整")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /中文轨/ }));
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("真实运行不是口号");
+    fireEvent.change(screen.getByLabelText("选择字幕"), { target: { value: "subtitle-cue-2" } });
+    expect(screen.getByLabelText("字幕 2 文本")).toHaveValue("第二条\n字幕");
+  });
+
+  it("saves the persisted cover through ids and reports cancellation and failure", async () => {
+    const initial = workspaceWithCover();
+    const saveCoverImage = vi.fn()
+      .mockResolvedValueOnce({ saved: true, fileName: "封面.png" })
+      .mockResolvedValueOnce({ saved: false, canceled: true })
+      .mockResolvedValueOnce({ saved: false, error: "目标目录不可写" });
+    Object.defineProperty(window, "electronAPI", { configurable: true, value: { saveCoverImage } });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
+    await waitFor(() => expect(saveCoverImage).toHaveBeenCalledWith("task-1", "cover-1"));
+    expect(await screen.findByText("封面已保存：封面.png")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
+    expect(await screen.findByText("已取消保存封面。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("目标目录不可写");
+  });
+
+  it("explains the desktop requirement when cover saving is unavailable", async () => {
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspaceWithCover()} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请在桌面客户端中保存封面");
+    expect(screen.queryByText(/封面已保存/)).not.toBeInTheDocument();
+  });
+
+  it("requires a fresh preview after changing an already previewed subtitle draft", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "第一版修改" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    expect(await screen.findByRole("button", { name: "确认修改" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "第二版修改" } });
+    expect(screen.queryByRole("button", { name: "确认修改" })).not.toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
   it("lets the user review persisted topic and script results without rerunning them", () => {
     const initial = workspace(baseTask);
     initial.selected_topic = {
@@ -358,7 +450,7 @@ describe("CreationTaskWorkspace", () => {
       timeline_version_id: "timeline-version-7",
       cues: [{
         ...refreshed.subtitle_tracks[0].cues[0],
-        text: "真实运行\n不是口号",
+        text: "真实运行不是口号",
         line_breaks: [4],
         emphasis: ["真实运行"],
       }],
@@ -404,6 +496,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
     await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-UpdateSubtitleCue"));
     await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("真实运行\n不是口号"));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
 
     mocks.previewEdit.mockResolvedValue({ ...exactPreview(refreshed.task, "UpdateSubtitleCue"), proposal: { ...exactPreview(refreshed.task, "UpdateSubtitleCue").proposal, id: "proposal-natural" } });

@@ -4235,11 +4235,17 @@ class ProductionRepository:
             ):
                 raise ValueError("整轨配音产物与当前任务不同源或音频无效")
         if montage_payload is not None:
+            allowed_montage_statuses = (
+                {"ready", "rendered"}
+                if operation.operation_type == "UndoTimelineVersion"
+                else {"ready"}
+            )
             if (
                 str(montage_payload.get("task_id", "")) != task_id
-                or str(montage_payload.get("status", "")) != "ready"
+                or str(montage_payload.get("status", ""))
+                not in allowed_montage_statuses
             ):
-                raise ValueError("确认编辑后的混剪计划必须同源且回到 ready")
+                raise ValueError("确认编辑后的混剪计划状态与操作类型不一致")
             _json_object(montage_payload)
 
         with self._connect() as conn:
@@ -4418,12 +4424,17 @@ class ProductionRepository:
                     ),
                 )
                 task.montage_plan_id = montage_plan_id
-                task.output_ready = False
-                task.stage = "montage"
+                restored_rendered_output = bool(
+                    operation.operation_type == "UndoTimelineVersion"
+                    and montage_payload.get("status") == "rendered"
+                    and montage_payload.get("output_path")
+                )
+                task.output_ready = restored_rendered_output
+                task.stage = "review" if restored_rendered_output else "montage"
                 task.stage_status = "waiting_for_user"
                 task.status = "waiting_for_user"
-                task.progress = 75
-                task.recovery_point = "montage"
+                task.progress = 90 if restored_rendered_output else 75
+                task.recovery_point = "review" if restored_rendered_output else "montage"
                 task.stage_reason = None
                 task.stage_impact = None
                 task.stage_repair_action = None

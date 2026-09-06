@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -55,6 +56,9 @@ class NarrationCue:
     text: str
     duration_seconds: float
     narration_segment_id: str = ""
+    subtitle_emphasis: list[str] = field(default_factory=list)
+    subtitle_style: dict[str, object] = field(default_factory=dict)
+    subtitle_emphasis_ranges: list[tuple[int, int]] | None = None
 
 
 @dataclass
@@ -986,7 +990,7 @@ def _write_subtitle_overlays(
         cue = cue_by_id[clip.cue_id]
         overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
-        font, lines = _subtitle_font_and_lines(cue.text)
+        font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style)
         stroke_width = 3
         spacing = 10
         line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
@@ -994,7 +998,16 @@ def _write_subtitle_overlays(
         block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
         widest = max(box[2] - box[0] for box in line_boxes)
         left = (1080 - widest) / 2 - 26
-        top = 1920 - 250 - block_height - 20
+        panel_height = block_height + 40
+        position = cue.subtitle_style.get("position", "bottom")
+        if position == "top":
+            top = 250
+        elif position == "middle":
+            top = (1920 - panel_height) / 2
+        elif position == "bottom":
+            top = 1920 - 250 - panel_height
+        else:
+            raise OSError(f"不支持的字幕位置：{position}；请选择 top、middle 或 bottom")
         right = (1080 + widest) / 2 + 26
         bottom = top + block_height + 40
         draw.rounded_rectangle(
@@ -1002,16 +1015,40 @@ def _write_subtitle_overlays(
             radius=18,
             fill=(0, 0, 0, 158),
         )
+        compact_text = re.sub(r"\s+", "", "".join(lines))
+        terms = sorted({re.sub(r"\s+", "", term) for term in cue.subtitle_emphasis} - {""}, key=len, reverse=True)
+        emphasized_indices: set[int] = set()
+        if cue.subtitle_emphasis_ranges is not None:
+            for start, end in cue.subtitle_emphasis_ranges:
+                emphasized_indices.update(range(start, end))
+        elif terms:
+            for match in re.finditer("|".join(re.escape(term) for term in terms), compact_text):
+                emphasized_indices.update(range(match.start(), match.end()))
+        text_offset = 0
         cursor_y = top + 20
         for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
+            emphasis_mask = []
+            for character in line:
+                emphasis_mask.append(not character.isspace() and text_offset in emphasized_indices)
+                if not character.isspace():
+                    text_offset += 1
             line_width = box[2] - box[0]
-            draw.text(
-                ((1080 - line_width) / 2, cursor_y),
-                line,
+            _draw_subtitle_line(
+                draw,
+                line=line,
+                x=(1080 - line_width) / 2 - box[0],
+                y=cursor_y - box[1],
                 font=font,
-                fill=(255, 255, 255, 255),
+                primary_color=_subtitle_color(
+                    cue.subtitle_style.get("primary_color"),
+                    fallback=(255, 255, 255, 255),
+                ),
+                emphasis_mask=emphasis_mask,
+                emphasis_color=_subtitle_color(
+                    cue.subtitle_style.get("emphasis_color"),
+                    fallback=(255, 213, 79, 255),
+                ),
                 stroke_width=stroke_width,
-                stroke_fill=(0, 0, 0, 230),
             )
             cursor_y += line_height + spacing
         path = output_dir / f"subtitle-{index:03}.png"
@@ -1020,18 +1057,131 @@ def _write_subtitle_overlays(
     return overlays
 
 
+def _draw_subtitle_line(
+    draw: ImageDraw.ImageDraw,
+    *,
+    line: str,
+    x: float,
+    y: float,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    primary_color: tuple[int, int, int, int],
+    emphasis_mask: list[bool],
+    emphasis_color: tuple[int, int, int, int],
+    stroke_width: int,
+) -> None:
+    start = 0
+    while start < len(line):
+        end = start + 1
+        while end < len(line) and emphasis_mask[end] == emphasis_mask[start]:
+            end += 1
+        draw.text(
+            (x + draw.textlength(line[:start], font=font), y), line[start:end], font=font,
+            fill=emphasis_color if emphasis_mask[start] else primary_color,
+            stroke_width=stroke_width, stroke_fill=(0, 0, 0, 230),
+        )
+        start = end
+
+
+def _subtitle_color(
+    value: object,
+    *,
+    fallback: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return (
+            int(value[1:3], 16),
+            int(value[3:5], 16),
+            int(value[5:7], 16),
+            255,
+        )
+    return fallback
+
+
 def _subtitle_font_and_lines(
     text: str,
+    style: dict[str, object],
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
-    for size in range(58, 41, -2):
-        font = _subtitle_font(size)
-        lines = _wrap_subtitle_text(text, max_chars=max(12, 880 // size))
-        if len(lines) <= 2:
+    size = style.get("font_size", 40)
+    if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 1920:
+        raise OSError("字幕字号必须是 1–1920 的整数；请调整字号后重试")
+    family = style.get("font_family")
+    font = _subtitle_font(size, family=family)
+    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    while size > 0:
+        lines: list[str] = []
+        for explicit_line in _wrap_subtitle_text(text, max_chars=max(1, len(text))):
+            remaining = explicit_line
+            while remaining:
+                low, high = 1, len(remaining)
+                while low < high:
+                    end = (low + high + 1) // 2
+                    box = draw.textbbox((0, 0), remaining[:end], font=font, stroke_width=3)
+                    if box[2] - box[0] <= 880:
+                        low = end
+                    else:
+                        high = end - 1
+                line = _wrap_subtitle_text(remaining, max_chars=low)[0]
+                if len(line) > low:
+                    line = remaining[:low].rstrip()
+                lines.append(line)
+                remaining = remaining[len(line):].lstrip()
+            if not explicit_line:
+                lines.append("")
+        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=3) for line in lines]
+        height = sum(box[3] - box[1] for box in boxes) + 10 * max(0, len(lines) - 1)
+        if height <= 1380 and all(box[2] - box[0] <= 880 for box in boxes):
             return font, lines
-    return _subtitle_font(40), _wrap_subtitle_text(text, max_chars=24)
+        size -= 1
+        font = _subtitle_font(size, family=family) if size else font
+    raise OSError("字幕无法放入画面安全区；请缩短字幕后重试")
 
 
-def _subtitle_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+@lru_cache(maxsize=32)
+def _resolve_subtitle_font(family: str) -> tuple[str, int]:
+    # Resolve the actual family, including TTC faces; never substitute a different
+    # installed font for a family the user explicitly confirmed.
+    roots = (
+        Path("/System/Library/Fonts"), Path("/Library/Fonts"),
+        Path.home() / "Library/Fonts", Path("/usr/share/fonts"),
+        Path("/usr/local/share/fonts"), Path.home() / ".local/share/fonts",
+        Path("C:/Windows/Fonts"),
+    )
+    candidates = sorted({
+        path for root in roots if root.is_dir() for path in root.rglob("*")
+        if path.suffix.lower() in {".ttf", ".ttc", ".otf"}
+    })
+    candidates.extend(sorted(Path("/System/Library/AssetsV2").glob(
+        "com_apple_MobileAsset_Font*/*.asset/AssetData/*.[to]t[fc]"
+    )))
+    matched: tuple[str, int] | None = None
+    for path in candidates:
+        index = 0
+        while True:
+            try:
+                font = ImageFont.truetype(str(path), size=40, index=index)
+            except OSError:
+                break  # End of a collection or a font Pillow cannot load.
+            actual_family, face = font.getname()
+            if actual_family.casefold() == family.casefold():
+                matched = (str(path), index)
+                if face.casefold() in {"regular", "normal", "book"}:
+                    return matched
+            if path.suffix.lower() != ".ttc":
+                break
+            index += 1
+    if matched is not None:
+        return matched
+    raise OSError(f"字幕字体“{family}”未安装或无法读取；请安装该字体或选择已安装字体后重试")
+
+
+def _subtitle_font(
+    size: int, *, family: object = None,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if family is not None:
+        if not isinstance(family, str) or not family.strip():
+            raise OSError("字幕字体名称无效；请选择已安装字体后重试")
+        path, index = _resolve_subtitle_font(family.strip())
+        return ImageFont.truetype(path, size=size, index=index)
     for candidate in (
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Medium.ttc",

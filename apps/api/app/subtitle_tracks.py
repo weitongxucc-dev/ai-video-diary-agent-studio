@@ -206,7 +206,7 @@ class OpenAICompatibleSubtitleTranslationProvider:
     @property
     def message(self) -> str:
         if self.ready:
-            return "文字模型翻译能力可用。"
+            return "文字模型已配置；确认生成后将实际调用，余额与服务状态以调用结果为准。"
         return "在本机运行时设置中填写有效的 OpenAI-compatible 地址和模型标识。"
 
     def translate(
@@ -272,12 +272,20 @@ class OpenAICompatibleSubtitleTranslationProvider:
                 retryable=True,
             ) from exc
         if response.is_error:
+            status = response.status_code
+            repair = {
+                401: "检查当前文字模型的 API 密钥后重试。",
+                402: "检查当前文字模型账号的余额或付费状态后重试。",
+                403: "检查账号是否有权使用当前模型。",
+                404: "检查文字模型地址和模型名称。",
+                429: "请求受到限流或配额限制；检查配额并稍后重试。",
+            }.get(status, "检查模型服务状态和请求配置后重试。")
             raise self._failure(
-                code="http_failed",
-                reason="文字模型服务拒绝了字幕翻译请求。",
+                code=f"http_{status}",
+                reason=f"文字模型服务拒绝了字幕翻译请求（HTTP {status}）。",
                 impact="未生成英文字幕轨；中文字幕轨保持不变。",
-                repair_action="检查模型服务状态、账号权限或请求配额后重试。",
-                retryable=response.status_code >= 500,
+                repair_action=repair,
+                retryable=status == 429 or status >= 500,
             )
         try:
             envelope = response.json()
