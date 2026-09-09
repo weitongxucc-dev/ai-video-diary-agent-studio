@@ -187,7 +187,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip") {
+function exactPreview(task: CreationTask, operationType: "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -734,6 +734,16 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
     expect(screen.queryByText("不直接采用 exact 响应")).not.toBeInTheDocument();
     expect(screen.queryByText("不直接采用 undo 响应")).not.toBeInTheDocument();
+    mocks.exactPreview.mockResolvedValue(exactPreview(task, "ChangeCrop"));
+    fireEvent.click(screen.getAllByText("画面适配")[0]);
+    fireEvent.change(screen.getAllByLabelText("画面显示方式")[0], { target: { value: "fit" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "预览适配修改" })[0]);
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
+      operation_type: "ChangeCrop", clip_id: "clip-1", fit_mode: "fit", crop_x: .5, crop_y: .5,
+    }));
+    expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    fireEvent.change(screen.getAllByLabelText("画面显示方式")[0], { target: { value: "fill" } });
+    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
   });
 
   it("selects and previews persisted narration segments with API-owned audio URLs", async () => {

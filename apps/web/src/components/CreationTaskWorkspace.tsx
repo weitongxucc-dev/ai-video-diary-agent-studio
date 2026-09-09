@@ -45,6 +45,7 @@ import {
 } from "@/lib/api";
 import type {
   CreationTask,
+  CreationTaskMontageClip,
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
   CreationTaskNarrationSegment,
@@ -144,6 +145,23 @@ function errorDetails(cause: unknown) {
     impact: null,
     repairAction: null,
   };
+}
+
+function ClipFraming({ clip, busy, onPreview, onDraftChange }: { clip: CreationTaskMontageClip; busy: boolean; onPreview: (input: CreationTaskExactEditInput) => void; onDraftChange: () => void }) {
+  const [mode, setMode] = useState<"fill" | "fit">(clip.fit_mode ?? "fill");
+  const [x, setX] = useState(clip.crop_x ?? 0.5);
+  const [y, setY] = useState(clip.crop_y ?? 0.5);
+  return <details onClick={(event) => event.stopPropagation()}>
+    <summary>画面适配</summary>
+    <form className={styles.framingControls} onSubmit={(event) => { event.preventDefault(); onPreview({ operation_type: "ChangeCrop", clip_id: clip.id, fit_mode: mode, crop_x: x, crop_y: y }); }}>
+      <label>显示方式<select aria-label="画面显示方式" disabled={busy || clip.locked} value={mode} onChange={(event) => { onDraftChange(); setMode(event.target.value as "fill" | "fit"); }}><option value="fill">填满画面（裁切边缘）</option><option value="fit">完整显示（保留黑边）</option></select></label>
+      {mode === "fill" ? <div className={styles.framingPosition}>
+        <label>水平位置 {Math.round(x * 100)}%<input aria-label="裁切水平位置" type="range" min="0" max="1" step="0.05" value={x} disabled={busy || clip.locked} onChange={(event) => { onDraftChange(); setX(Number(event.target.value)); }} /></label>
+        <label>垂直位置 {Math.round(y * 100)}%<input aria-label="裁切垂直位置" type="range" min="0" max="1" step="0.05" value={y} disabled={busy || clip.locked} onChange={(event) => { onDraftChange(); setY(Number(event.target.value)); }} /></label>
+      </div> : null}
+      <button className={styles.secondaryButton} disabled={busy || clip.locked} type="submit">预览适配修改</button>
+    </form>
+  </details>;
 }
 
 function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, selectedContext }: { activeView: CreationTask["stage"]; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
@@ -1081,6 +1099,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
                   <strong>{clip.person_render_id ? "人物口型" : clip.role === "a_roll" ? "人物主镜头" : "补充画面"}</strong>
                   {clip.match_reasons?.length ? <p className={styles.matchReasons}>匹配理由：{clip.match_reasons.join("；")}</p> : null}
                   <small>成片 {clip.timeline_start_seconds.toFixed(1)}–{clip.timeline_end_seconds.toFixed(1)} 秒 · 素材 {clip.source_start_seconds.toFixed(1)}–{clip.source_end_seconds.toFixed(1)} 秒 · 匹配 {Math.round(clip.match_score * 100)}%</small>
+                  <ClipFraming key={`${task.current_timeline_version_id}:${clip.id}`} clip={clip} busy={busy !== null} onDraftChange={invalidateEditPreview} onPreview={(input) => { selectClip(clip.id); void previewExactEdit(input); }} />
                   <label className={styles.trimControl}><span>裁剪起点（秒）</span><input aria-label={`镜头 ${index + 1} 裁剪起点`} defaultValue={clip.source_start_seconds.toFixed(1)} disabled={busy !== null || clip.locked} key={`${clip.id}:${clip.source_start_seconds}`} min="0" onBlur={(event) => { const nextStart = Number(event.target.value); if (Number.isFinite(nextStart) && Math.abs(nextStart - clip.source_start_seconds) >= 0.05) void applyExactEdit({ operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: nextStart }); }} step="0.1" type="number" /></label>
                   {replacementClipId === clip.id ? replacementCandidates.length === 0 ? <p role="status">没有满足时长的其他可用镜头，请补充素材后重试。</p> : <label className={styles.replacement}><span>替换为已审核镜头</span><select disabled={busy !== null} defaultValue="" onChange={(event) => { const candidate = replacementCandidates.find((item) => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) void previewExactEdit({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option disabled value="">选择候选，预览后确认</option>{replacementCandidates.map((candidate) => <option key={`${candidate.asset_id}:${candidate.segment_id}`} value={`${candidate.asset_id}:${candidate.segment_id}`}>{candidate.file_name} · {candidate.start_seconds.toFixed(1)} 秒 · {candidate.description !== candidate.file_name ? candidate.description : candidate.reasons.join("、")}</option>)}</select></label> : null}
                 </div>

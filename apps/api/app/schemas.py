@@ -947,6 +947,9 @@ class CreationTaskVoiceOptionResponse(BaseModel):
 
 
 class CreationTaskMontageClipResponse(BaseModel):
+    fit_mode: Literal["fill", "fit"] = "fill"
+    crop_x: float = Field(default=0.5, ge=0, le=1)
+    crop_y: float = Field(default=0.5, ge=0, le=1)
     id: str
     cue_id: str
     asset_id: str
@@ -996,6 +999,9 @@ class CreationTaskMontageRenderRequest(BaseModel):
 
 
 class CreationTaskMontageClipUpdateRequest(BaseModel):
+    fit_mode: Literal["fill", "fit"] | None = None
+    crop_x: float | None = Field(default=None, ge=0, le=1)
+    crop_y: float | None = Field(default=None, ge=0, le=1)
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1007,10 +1013,14 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 
 class CreationTaskExactEditRequest(BaseModel):
+    fit_mode: Literal["fill", "fit"] | None = None
+    crop_x: float | None = Field(default=None, ge=0, le=1)
+    crop_y: float | None = Field(default=None, ge=0, le=1)
     model_config = ConfigDict(extra="forbid")
 
     operation_type: Literal[
         "ReplaceClip",
+        "ChangeCrop",
         "TrimClip",
         "ReorderClip",
         "SetClipLock",
@@ -1080,6 +1090,7 @@ class EditIntentResponse(BaseModel):
 
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",
@@ -1134,6 +1145,7 @@ class EditOperationResponse(BaseModel):
     task_id: str
     proposal_id: str
     operation_type: Literal[
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",

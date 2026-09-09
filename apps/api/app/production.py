@@ -756,6 +756,7 @@ class EditProposal:
 
 EditOperationStatus = Literal["running", "applied", "failed"]
 EditOperationType = Literal[
+    "ChangeCrop",
     "ReplaceClip",
     "TrimClip",
     "ReorderClip",
@@ -770,6 +771,7 @@ EditOperationType = Literal[
     "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
+    "ChangeCrop",
     "ReplaceClip",
     "TrimClip",
     "ReorderClip",

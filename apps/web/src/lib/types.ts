@@ -1284,6 +1284,9 @@ export type CreationTaskVoiceOption = {
 };
 
 export type CreationTaskMontageClip = {
+  fit_mode?: "fill" | "fit";
+  crop_x?: number;
+  crop_y?: number;
   id: string;
   cue_id: string;
   asset_id: string;
@@ -1355,6 +1358,7 @@ export type CreationTaskEditIntent = {
 };
 
 export type CreationTaskExactEditInput =
+  | { operation_type: "ChangeCrop"; clip_id: string; fit_mode: "fill" | "fit"; crop_x: number; crop_y: number }
   | { operation_type: "ReplaceClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
   | { operation_type: "TrimClip"; clip_id: string; source_start_seconds: number }
   | { operation_type: "ReorderClip"; clip_id: string; position: number }

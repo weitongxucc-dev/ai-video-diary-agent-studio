@@ -306,7 +306,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v4"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v5"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -6504,7 +6504,7 @@ def confirm_creation_task_edit(
             operation_payload=dict(operation_payload),
             narration_segments=segments, narration_artifact=narration_record,
         )
-    if operation_draft.get("operation_type") != "ReplaceClip" or not isinstance(operation_payload, dict):
+    if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop"} or not isinstance(operation_payload, dict):
         raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
     required_strings = {
         key: operation_payload.get(key)
@@ -6541,21 +6541,25 @@ def confirm_creation_task_edit(
     source_start = operation_payload.get("source_start_seconds")
     if not isinstance(source_start, (int, float)):
         raise HTTPException(status_code=409, detail="invalid creation task edit trim")
+    crop_edit = operation_draft["operation_type"] == "ChangeCrop"
+    update = CreationTaskMontageClipUpdateRequest(
+        fit_mode=operation_payload.get("fit_mode"),
+        crop_x=operation_payload.get("crop_x"),
+        crop_y=operation_payload.get("crop_y"),
+    ) if crop_edit else CreationTaskMontageClipUpdateRequest(
+        asset_id=required_strings["asset_id"], segment_id=required_strings["segment_id"],
+        source_start_seconds=float(source_start), confirmed=True,
+    )
     updated_plan = _apply_creation_task_montage_clip_update(
         workspace_id,
         task_id,
         plan,
         required_strings["clip_id"],
-        CreationTaskMontageClipUpdateRequest(
-            asset_id=required_strings["asset_id"],
-            segment_id=required_strings["segment_id"],
-            source_start_seconds=float(source_start),
-            confirmed=True,
-        ),
+        update,
     )
     updated_plan, _payload = _prepare_changed_montage(
         updated_plan,
-        message="镜头已替换；文案、配音和其他镜头保持不变，可以重新渲染。",
+        message="镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。",
     )
     return _persist_typed_montage_edit(
         workspace_id=workspace_id,
@@ -6563,7 +6567,7 @@ def confirm_creation_task_edit(
         proposal=proposal,
         base_version=base_version,
         updated_plan=updated_plan,
-        operation_type="ReplaceClip",
+        operation_type=operation_draft["operation_type"],
         operation_payload=dict(operation_payload),
     )
 
@@ -6577,7 +6581,7 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
-    if payload.operation_type == "ReplaceClip":
+    if payload.operation_type in {"ReplaceClip", "ChangeCrop"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
@@ -6876,6 +6880,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         creation_task_montage_plan_to_payload(persisted_plan)
     )
     supplied = {
+        "fit_mode": payload.fit_mode,
+        "crop_x": payload.crop_x,
+        "crop_y": payload.crop_y,
         "asset_id": payload.asset_id,
         "segment_id": payload.segment_id,
         "source_start_seconds": payload.source_start_seconds,
@@ -6883,6 +6890,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         "locked": payload.locked,
     }
     required_by_type = {
+        "ChangeCrop": {"fit_mode", "crop_x", "crop_y"},
         "ReplaceClip": {"asset_id", "segment_id"},
         "TrimClip": {"source_start_seconds"},
         "ReorderClip": {"position"},
@@ -6898,6 +6906,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     if any(value is not None and key not in permitted for key, value in supplied.items()):
         raise HTTPException(status_code=422, detail="exact edit mixes multiple operations")
     update = CreationTaskMontageClipUpdateRequest(
+        fit_mode=payload.fit_mode if payload.operation_type == "ChangeCrop" else None,
+        crop_x=payload.crop_x if payload.operation_type == "ChangeCrop" else None,
+        crop_y=payload.crop_y if payload.operation_type == "ChangeCrop" else None,
         asset_id=payload.asset_id if payload.operation_type == "ReplaceClip" else None,
         segment_id=payload.segment_id if payload.operation_type == "ReplaceClip" else None,
         source_start_seconds=(
@@ -6923,6 +6934,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             retryable=True,
         )
     labels = {
+        "ChangeCrop": "调整画面适配",
         "ReplaceClip": "替换镜头",
         "TrimClip": "调整镜头起点",
         "ReorderClip": "调整镜头顺序",
@@ -6940,6 +6952,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             operation_payload[key] = value
     if payload.operation_type == "ReplaceClip":
         operation_payload["source_start_seconds"] = after_clip.source_start_seconds
+    if payload.operation_type == "ChangeCrop":
+        operation_payload.update(asset_id=before_clip.asset_id, segment_id=before_clip.segment_id,
+                                 source_start_seconds=before_clip.source_start_seconds)
     before_asset = production_repo.get_asset(workspace_id, before_clip.asset_id)
     after_asset = production_repo.get_asset(workspace_id, after_clip.asset_id)
     now = utc_now()
@@ -6977,12 +6992,12 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                 "before": {
                     "ref": f"clip:{before_clip.id}",
                     "label": before_asset.file_name,
-                    "detail": f"{before_clip.source_start_seconds:.1f}–{before_clip.source_end_seconds:.1f} 秒",
+                    "detail": (f"{'完整显示' if before_clip.fit_mode == 'fit' else '填满画面'} · 水平 {before_clip.crop_x:.0%} · 垂直 {before_clip.crop_y:.0%}" if payload.operation_type == "ChangeCrop" else f"{before_clip.source_start_seconds:.1f}–{before_clip.source_end_seconds:.1f} 秒"),
                 },
                 "after": {
                     "ref": f"clip:{after_clip.id}",
                     "label": after_asset.file_name,
-                    "detail": f"{after_clip.source_start_seconds:.1f}–{after_clip.source_end_seconds:.1f} 秒",
+                    "detail": (f"{'完整显示' if after_clip.fit_mode == 'fit' else '填满画面'} · 水平 {after_clip.crop_x:.0%} · 垂直 {after_clip.crop_y:.0%}" if payload.operation_type == "ChangeCrop" else f"{after_clip.source_start_seconds:.1f}–{after_clip.source_end_seconds:.1f} 秒"),
                 },
             },
             external_effects=["只更新任务版本；重新渲染前不会执行媒体进程。"],
@@ -7184,6 +7199,8 @@ def _apply_creation_task_montage_clip_update(
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
     if plan.status == "rendering":
         raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
+    if clip.locked and any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y)):
+        raise HTTPException(status_code=409, detail="请先解锁镜头，再调整画面适配。")
     asset_id = payload.asset_id or clip.asset_id
     segment_id = payload.segment_id or clip.segment_id
     try:
@@ -7224,6 +7241,12 @@ def _apply_creation_task_montage_clip_update(
     clip.source_end_seconds = round(source_end, 3)
     if payload.locked is not None:
         clip.locked = payload.locked
+    if payload.fit_mode is not None:
+        clip.fit_mode = payload.fit_mode
+    if payload.crop_x is not None:
+        clip.crop_x = payload.crop_x
+    if payload.crop_y is not None:
+        clip.crop_y = payload.crop_y
     if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
         clip.needs_confirmation = False
     if payload.position is not None:
@@ -7252,6 +7275,8 @@ def update_creation_task_montage_clip(
     request: Request,
     payload: CreationTaskMontageClipUpdateRequest,
 ) -> CreationTaskMontagePlanResponse:
+    if any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y)):
+        raise HTTPException(status_code=409, detail="请通过画面适配预览确认修改。")
     categories = [
         name
         for name, active in (

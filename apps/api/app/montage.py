@@ -79,6 +79,9 @@ class MontageClip:
     locked: bool = False
     manually_selected: bool = False
     person_render_id: str | None = None
+    fit_mode: Literal["fill", "fit"] = "fill"
+    crop_x: float = 0.5
+    crop_y: float = 0.5
 
 
 @dataclass
@@ -598,6 +601,10 @@ class MontageRenderer:
             raise ValueError("混剪计划没有镜头")
         narration_path = self._validated_audio_path(audio_path)
         if isinstance(plan, CreationTaskMontagePlan):
+            narration_duration = self.audio_duration(narration_path)
+            # Allow encoder padding, but never let -shortest silently truncate a changed voice track.
+            if abs(narration_duration - plan.duration_seconds) > 0.25:
+                raise ValueError("配音与剪辑时长不一致，请按当前配音重新生成故事板后渲染。")
             if job_staging_path is None:
                 raise ValueError("CreationTask 渲染必须提供 job-scoped 暂存目录")
             render_root = Path(job_staging_path).expanduser().resolve()
@@ -672,10 +679,16 @@ class MontageRenderer:
             command.extend(
                 ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
             )
-            filters.append(
-                f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920,fps=30,setpts=PTS-STARTPTS[v{index}]"
+            if clip.fit_mode not in {"fill", "fit"} or not (0 <= clip.crop_x <= 1 and 0 <= clip.crop_y <= 1):
+                raise ValueError("镜头画面适配参数无效")
+            framing = (
+                "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
+                if clip.fit_mode == "fit" else
+                "scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920:(iw-ow)*{clip.crop_x}:(ih-oh)*{clip.crop_y}"
             )
+            filters.append(f"[{index}:v]{framing},setsar=1,fps=30,setpts=PTS-STARTPTS[v{index}]")
             labels.append(f"[v{index}]")
 
         audio_index = len(plan.clips)

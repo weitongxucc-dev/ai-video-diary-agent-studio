@@ -1019,7 +1019,8 @@ def test_renderer_rejects_unconfirmed_plan(tmp_path):
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
 )
-def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
+@pytest.mark.parametrize("fit_mode,crop_x", [("fill", 0), ("fill", 1), ("fit", 0.5)])
+def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path, fit_mode, crop_x):
     video_path = tmp_path / "source.mp4"
     audio_path = tmp_path / "voice.wav"
     subprocess.run(
@@ -1029,7 +1030,7 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
             "-f",
             "lavfi",
             "-i",
-            "color=c=blue:s=640x360:d=1.5",
+            "color=c=blue:s=640x360:d=1.5,drawbox=x=320:y=0:w=320:h=360:color=red:t=fill",
             "-pix_fmt",
             "yuv420p",
             str(video_path),
@@ -1080,6 +1081,8 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
                 match_score=1,
                 match_reasons=["test"],
                 needs_confirmation=False,
+                fit_mode=fit_mode,
+                crop_x=crop_x,
             )
         ],
         duration_seconds=1.5,
@@ -1121,7 +1124,15 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
         colors = center.get_flattened_data()
         assert sum(g > 180 and r < 80 and b < 80 for r, g, b in colors) > 100
         assert sum(r > 180 and g > 140 and b < 130 for r, g, b in colors) > 100
-        assert frame.getpixel((540, 1500))[2] > 200
+        pixel = frame.convert("RGB").getpixel((540, 1500))
+        if fit_mode == "fit":
+            assert max(pixel) < 15  # The whole landscape frame is letterboxed.
+            assert frame.convert("RGB").getpixel((100, 700))[2] > 200
+            assert frame.convert("RGB").getpixel((980, 700))[0] > 200
+        elif crop_x == 0:
+            assert pixel[2] > 200 and pixel[0] < 30
+        else:
+            assert pixel[0] > 200 and pixel[2] < 30
 
 
 def test_creation_task_planner_uses_confirmed_script_and_logical_material_references(tmp_path):
@@ -1231,6 +1242,11 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
     )
 
     renderer = MontageRenderer(tmp_path / "legacy-output")
+    for mismatched_duration in (0.6, 2.0):
+        mismatched = replace(plan, duration_seconds=mismatched_duration)
+        with pytest.raises(ValueError, match="配音与剪辑时长不一致"):
+            renderer.render(mismatched, audio_path, job_staging_path=tmp_path / "rejected")
+        assert not (tmp_path / "rejected" / "preview.mp4").exists()
     if bilingual:
         # Explicit artificial translation fixture: exercises the production track-to-render
         # path, never a model-call assertion or a persisted user task.
@@ -1936,6 +1952,30 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
+
+    before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
+    crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
+    crop_preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload)
+    assert crop_preview.status_code == 200, crop_preview.text
+    proposal = crop_preview.json()["proposal"]
+    assert proposal["preview"]["before"]["detail"] != proposal["preview"]["after"]["detail"]
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_crop["montage"]["clips"]
+    crop_confirm = client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm")
+    assert crop_confirm.status_code == 200, crop_confirm.text
+    assert crop_confirm.json()["operation"]["operation_type"] == "ChangeCrop"
+    cropped = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert cropped["montage"]["clips"][0]["fit_mode"] == "fit"
+    assert cropped["montage"]["clips"][0]["crop_x"] == 0
+    assert cropped["montage"]["clips"][0]["crop_y"] == 1
+    assert cropped["montage"]["clips"][1:] == before_crop["montage"]["clips"][1:]
+    assert cropped["narration"] == before_crop["narration"]
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    restored = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert restored["montage"]["clips"] == before_crop["montage"]["clips"]
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**crop_payload, "crop_x": 2}).status_code == 422
+    assert client.patch(f"/api/creation-tasks/{task.id}/montage/clips/clip-route", json={"fit_mode": "fit", "confirmed": True}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={"operation_type": "SetClipLock", "clip_id": "clip-route", "locked": True}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload).status_code == 409
 
 
 @pytest.mark.parametrize("visual_only", [False, True])
