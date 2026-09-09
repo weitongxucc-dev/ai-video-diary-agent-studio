@@ -6577,6 +6577,9 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "ReplaceClip":
+        _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
+        return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     if payload.operation_type not in {
@@ -6827,6 +6830,26 @@ def apply_creation_task_exact_edit(
             ),
         )
         return confirm_creation_task_edit(task_id, preview.proposal.id, request)
+    task, base_version, plan, _intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
+    plan, _montage_payload = _prepare_changed_montage(
+        plan,
+        message=f"{proposal.summary} 可以重新渲染。",
+    )
+    return _persist_typed_montage_edit(
+        workspace_id=workspace_id,
+        task=task,
+        proposal=proposal,
+        base_version=base_version,
+        updated_plan=plan,
+        operation_type=payload.operation_type,
+        operation_payload=dict(proposal.operation["payload"]),
+    )
+
+
+
+def _preview_exact_montage_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
     if not payload.clip_id:
         raise HTTPException(status_code=422, detail="visual edit requires clip_id")
     try:
@@ -6836,6 +6859,16 @@ def apply_creation_task_exact_edit(
         before_clip = next(item for item in persisted_plan.clips if item.id == payload.clip_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
+    if payload.operation_type == "ReplaceClip" and (
+        payload.asset_id == before_clip.asset_id
+        and payload.segment_id == before_clip.segment_id
+        and payload.source_start_seconds in {None, before_clip.source_start_seconds}
+    ):
+        raise _topic_failure_response(
+            status_code=409, error="edit_no_change",
+            reason="这个候选就是当前镜头。", impact="原镜头和成片保持不变。",
+            repair_action="选择另一个片段，或调整裁剪起点。", retryable=True,
+        )
     invalidated_refs = _logical_montage_output_refs(persisted_plan)
     base_version = _ensure_montage_base_version(workspace_id, task, persisted_plan)
     task = production_repo.get_creation_task(workspace_id, task_id)
@@ -6905,6 +6938,8 @@ def apply_creation_task_exact_edit(
     for key, value in supplied.items():
         if value is not None:
             operation_payload[key] = value
+    if payload.operation_type == "ReplaceClip":
+        operation_payload["source_start_seconds"] = after_clip.source_start_seconds
     before_asset = production_repo.get_asset(workspace_id, before_clip.asset_id)
     after_asset = production_repo.get_asset(workspace_id, after_clip.asset_id)
     now = utc_now()
@@ -6955,20 +6990,8 @@ def apply_creation_task_exact_edit(
             updated_at=now,
         )
     )
-    plan, _montage_payload = _prepare_changed_montage(
-        plan,
-        message=f"{labels[payload.operation_type]}已保存，可以重新渲染。",
-    )
-    return _persist_typed_montage_edit(
-        workspace_id=workspace_id,
-        task=task,
-        proposal=proposal,
-        base_version=base_version,
-        updated_plan=plan,
-        operation_type=payload.operation_type,
-        operation_payload=operation_payload,
-    )
 
+    return task, base_version, plan, intent, proposal
 
 @app.post(
     "/api/creation-tasks/{task_id}/timeline/undo",

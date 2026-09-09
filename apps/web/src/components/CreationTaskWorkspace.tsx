@@ -663,6 +663,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const montageVideoRef = useRef<HTMLVideoElement>(null);
+  const playheadRef = useRef<number | null>(null);
+  const editContextRevision = useRef(0);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [selectedCover, setSelectedCover] = useState(false);
   const [activeSubtitleTrackId, setActiveSubtitleTrackId] = useState<string | null>(
@@ -709,7 +712,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             placeholder: "例如：用第三个镜头做封面，标题写“别只讲概念”",
             ref: `cover:${workspace.cover_asset?.id ?? task.id}`,
           }
-      : activeView === "montage" && selectedClipIndex >= 0
+      : (activeView === "montage" || activeView === "review") && selectedClipIndex >= 0
         ? {
             kind: "clip" as const,
             id: selectedClipId!,
@@ -719,8 +722,17 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }
         : null;
 
+  function invalidateEditPreview() {
+    editContextRevision.current += 1;
+    setEditPreview(null);
+  }
+
   async function refresh(preserveActiveView = false) {
     const next = await getCreationTaskWorkspace(task.id);
+    invalidateEditPreview();
+    setReplacementClipId(null);
+    setReplacementCandidates([]);
+    playheadRef.current = null;
     setWorkspace(next);
     if (!preserveActiveView) setActiveView(defaultWorkspaceView(next));
     setSelectedClipId((current) => next.montage?.clips.some((clip) => clip.id === current) ? current : null);
@@ -743,7 +755,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setError(null);
     setNotice(null);
     if (action === "clip" || action === "render") {
-      setEditPreview(null);
+      invalidateEditPreview();
     }
     try {
       await operation();
@@ -798,7 +810,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("clip");
     setError(null);
     try {
-      setReplacementCandidates(await getCreationTaskMontageClipCandidates(task.id, clipId));
+      const candidates = await getCreationTaskMontageClipCandidates(task.id, clipId);
+      const clip = workspace.montage?.clips.find((item) => item.id === clipId);
+      setReplacementCandidates(candidates.filter((candidate) => candidate.asset_id !== clip?.asset_id || candidate.segment_id !== clip?.segment_id));
       setReplacementClipId(clipId);
     } catch (cause) {
       setError(errorDetails(cause));
@@ -808,15 +822,34 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectClip(clipId: string) {
-    if (selectedClipId !== clipId || selectedCueId || selectedNarrationSegmentId) setEditPreview(null);
+    if (selectedClipId !== clipId || selectedCueId || selectedNarrationSegmentId) invalidateEditPreview();
     setSelectedClipId(clipId);
+    setSelectedCueId(null);
+    setSelectedNarrationSegmentId(null);
+    setSelectedCover(false);
+    const clip = workspace.montage?.clips.find((item) => item.id === clipId);
+    if (clip && montageVideoRef.current) {
+      montageVideoRef.current.currentTime = clip.timeline_start_seconds;
+      playheadRef.current = clip.timeline_start_seconds;
+    }
+  }
+
+  function selectPlayingClip(video: HTMLVideoElement) {
+    playheadRef.current = video.currentTime;
+    const clips = workspace.montage?.clips ?? [];
+    const clip = clips.find((item, index) => video.currentTime >= item.timeline_start_seconds
+      && (video.currentTime < item.timeline_end_seconds
+        || (index === clips.length - 1 && video.currentTime === item.timeline_end_seconds)));
+    if (!clip) return;
+    if (selectedClipId !== clip.id) invalidateEditPreview();
+    setSelectedClipId(clip.id);
     setSelectedCueId(null);
     setSelectedNarrationSegmentId(null);
     setSelectedCover(false);
   }
 
   function selectCue(cueId: string) {
-    if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId) setEditPreview(null);
+    if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(cueId);
     setSelectedNarrationSegmentId(null);
@@ -824,7 +857,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectNarrationSegment(segmentId: string) {
-    if (selectedNarrationSegmentId !== segmentId || selectedClipId || selectedCueId) setEditPreview(null);
+    if (selectedNarrationSegmentId !== segmentId || selectedClipId || selectedCueId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
     setSelectedNarrationSegmentId(segmentId);
@@ -832,7 +865,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCover() {
-    if (!selectedCover || selectedClipId || selectedCueId || selectedNarrationSegmentId) setEditPreview(null);
+    if (!selectedCover || selectedClipId || selectedCueId || selectedNarrationSegmentId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
     setSelectedNarrationSegmentId(null);
@@ -840,7 +873,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectSubtitleTrack(trackId: string) {
-    if (activeSubtitleTrackId !== trackId) setEditPreview(null);
+    if (activeSubtitleTrackId !== trackId) invalidateEditPreview();
     setActiveSubtitleTrackId(trackId);
     setSelectedCueId(null);
     setSelectedCover(false);
@@ -848,22 +881,28 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   function openView(view: WorkspaceView) {
     setActiveView(view);
-    setSelectedClipId(null);
+    if (!(["montage", "review"].includes(activeView) && ["montage", "review"].includes(view))) {
+      setSelectedClipId(null);
+      playheadRef.current = null;
+    }
     setSelectedCueId(null);
     setSelectedNarrationSegmentId(null);
     setSelectedCover(false);
-    setEditPreview(null);
+    invalidateEditPreview();
   }
 
   function preparePersonEdit(clipId: string, command: string) {
     selectClip(clipId);
     setEditCommand(command);
-    setEditPreview(null);
+    invalidateEditPreview();
   }
 
   async function previewEdit() {
     const rawCommand = editCommand.trim();
     if (!selectedEditContext || !rawCommand) return;
+    if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
+    invalidateEditPreview();
+    const revision = editContextRevision.current;
     setBusy("edit-preview");
     setError(null);
     setNotice(null);
@@ -872,9 +911,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         raw_command: rawCommand,
         context_stage: activeView,
         selected_object_refs: [selectedEditContext.ref],
-        playhead_ms: null,
+        playhead_ms: selectedEditContext.kind === "clip" && playheadRef.current !== null
+          ? Math.round(playheadRef.current * 1000) : null,
       });
-      setEditPreview(preview);
+      if (revision === editContextRevision.current) setEditPreview(preview);
     } catch (cause) {
       setError(errorDetails(cause));
       await refresh(true).catch(() => undefined);
@@ -890,7 +930,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setNotice(null);
     try {
       await confirmCreationTaskEdit(task.id, editPreview.proposal.id);
-      setEditPreview(null);
+      invalidateEditPreview();
       setEditCommand("");
       await refresh(true);
     } catch (cause) {
@@ -905,7 +945,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("exact-edit");
     setError(null);
     setNotice(null);
-    setEditPreview(null);
+    invalidateEditPreview();
     try {
       await applyCreationTaskExactEdit(task.id, input);
       await refresh(true);
@@ -921,9 +961,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("edit-preview");
     setError(null);
     setNotice(null);
-    setEditPreview(null);
+    invalidateEditPreview();
     try {
-      setEditPreview(await previewCreationTaskExactEdit(task.id, input));
+      const revision = editContextRevision.current;
+      const preview = await previewCreationTaskExactEdit(task.id, input);
+      if (revision === editContextRevision.current) setEditPreview(preview);
     } catch (cause) {
       setError(errorDetails(cause));
       await refresh(true).catch(() => undefined);
@@ -936,7 +978,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("undo");
     setError(null);
     setNotice(null);
-    setEditPreview(null);
+    invalidateEditPreview();
     try {
       await undoCreationTaskTimeline(task.id);
       setSelectedClipId(null);
@@ -982,7 +1024,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   return (
     <AppShell creationTasks={shellTasks} inspector={inspector} inspectorTitle={activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <div className={[styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
-        {activeView === "subtitle_cover" ? <header className={styles.editingHeader}><h1>{task.name}</h1><span className={styles.versionBadge}>版本 {task.timeline_sequence}</span></header> : <header className={styles.taskHeader}><div><span className={styles.eyebrow}>创作任务</span><h1>{task.name}</h1><p>{task.scenario}</p></div><div className={styles.progress}><strong>{task.progress}%</strong><span>本地真成片进度</span></div></header>}
+        {["subtitle_cover", "montage", "review"].includes(activeView) ? <header className={styles.editingHeader}><h1>{task.name}</h1><span className={styles.versionBadge}>版本 {task.timeline_sequence}</span></header> : <header className={styles.taskHeader}><div><span className={styles.eyebrow}>创作任务</span><h1>{task.name}</h1><p>{task.scenario}</p></div><div className={styles.progress}><strong>{task.progress}%</strong><span>本地真成片进度</span></div></header>}
         <nav className={styles.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage, index) => {
           const presentation = productStageState(
             stage.id,
@@ -1023,6 +1065,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
                 {workspace.montage.status === "ready" || (workspace.montage.status === "rendered" && !task.current_timeline_version_id) ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("render", () => renderCreationTaskMontage(task.id), !task.current_timeline_version_id ? "已生成可继续修改的成片版本。" : "初版成片已生成，可以继续处理字幕与封面。")} type="button">{busy === "render" ? <LoaderCircle className="is-spinning" size={16} /> : <Play size={16} />}{workspace.montage.status === "rendered" ? "生成可编辑版本" : "渲染初版成片"}</button> : null}
               </div>
             </div>
+            {workspace.montage.output_url ? <div className={styles.editVideoPreview}>
+              <video aria-label="剪辑成片预览" controls preload="metadata" ref={montageVideoRef}
+                onPause={(event) => selectPlayingClip(event.currentTarget)}
+                onSeeked={(event) => selectPlayingClip(event.currentTarget)}
+                onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)}
+                onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }}
+                src={apiUrl(workspace.montage.output_url)} />
+              <span>{selectedClipIndex >= 0 ? `当前编辑：镜头 ${selectedClipIndex + 1}` : "暂停或拖动进度，选择要修改的镜头"}</span>
+            </div> : null}
             <div className={styles.storyboard}>{workspace.montage.clips.map((clip, index) => (
               <article className={[clip.needs_confirmation ? styles.needsReview : "", selectedClipId === clip.id ? styles.selectedClip : ""].filter(Boolean).join(" ")} key={clip.id} onClick={() => selectClip(clip.id)}>
                 <button aria-label={`选择镜头 ${index + 1}`} aria-pressed={selectedClipId === clip.id} className={styles.clipSelector} onClick={() => selectClip(clip.id)} type="button"><span className={styles.clipIndex}>{index + 1}</span></button>
@@ -1031,7 +1082,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
                   {clip.match_reasons?.length ? <p className={styles.matchReasons}>匹配理由：{clip.match_reasons.join("；")}</p> : null}
                   <small>成片 {clip.timeline_start_seconds.toFixed(1)}–{clip.timeline_end_seconds.toFixed(1)} 秒 · 素材 {clip.source_start_seconds.toFixed(1)}–{clip.source_end_seconds.toFixed(1)} 秒 · 匹配 {Math.round(clip.match_score * 100)}%</small>
                   <label className={styles.trimControl}><span>裁剪起点（秒）</span><input aria-label={`镜头 ${index + 1} 裁剪起点`} defaultValue={clip.source_start_seconds.toFixed(1)} disabled={busy !== null || clip.locked} key={`${clip.id}:${clip.source_start_seconds}`} min="0" onBlur={(event) => { const nextStart = Number(event.target.value); if (Number.isFinite(nextStart) && Math.abs(nextStart - clip.source_start_seconds) >= 0.05) void applyExactEdit({ operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: nextStart }); }} step="0.1" type="number" /></label>
-                  {replacementClipId === clip.id ? <label className={styles.replacement}><span>替换为已审核镜头</span><select defaultValue="" onChange={(event) => { const candidate = replacementCandidates.find((item) => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) void applyExactEdit({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option disabled value="">选择镜头</option>{replacementCandidates.map((candidate) => <option key={`${candidate.asset_id}:${candidate.segment_id}`} value={`${candidate.asset_id}:${candidate.segment_id}`}>{candidate.file_name} · {candidate.start_seconds.toFixed(1)} 秒 · {Math.round(candidate.score * 100)}%</option>)}</select></label> : null}
+                  {replacementClipId === clip.id ? replacementCandidates.length === 0 ? <p role="status">没有满足时长的其他可用镜头，请补充素材后重试。</p> : <label className={styles.replacement}><span>替换为已审核镜头</span><select disabled={busy !== null} defaultValue="" onChange={(event) => { const candidate = replacementCandidates.find((item) => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) void previewExactEdit({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option disabled value="">选择候选，预览后确认</option>{replacementCandidates.map((candidate) => <option key={`${candidate.asset_id}:${candidate.segment_id}`} value={`${candidate.asset_id}:${candidate.segment_id}`}>{candidate.file_name} · {candidate.start_seconds.toFixed(1)} 秒 · {candidate.description !== candidate.file_name ? candidate.description : candidate.reasons.join("、")}</option>)}</select></label> : null}
                 </div>
                 <div className={styles.clipActions}><button aria-label="向前移动" disabled={busy !== null || index === 0 || clip.locked} onClick={() => void applyExactEdit({ operation_type: "ReorderClip", clip_id: clip.id, position: index - 1 })} type="button"><ArrowUp size={15} /></button><button aria-label="向后移动" disabled={busy !== null || index === workspace.montage!.clips.length - 1 || clip.locked} onClick={() => void applyExactEdit({ operation_type: "ReorderClip", clip_id: clip.id, position: index + 1 })} type="button"><ArrowDown size={15} /></button><button disabled={busy !== null} onClick={() => void showReplacementCandidates(clip.id)} type="button">替换</button><button disabled={busy !== null} onClick={() => void applyExactEdit({ operation_type: "SetClipLock", clip_id: clip.id, locked: !clip.locked })} type="button">{clip.locked ? "解锁" : "锁定"}</button>{clip.needs_confirmation ? <button disabled={busy !== null} onClick={() => void applyExactEdit({ operation_type: "ConfirmClip", clip_id: clip.id })} type="button"><Check size={15} />确认镜头</button> : <span><CheckCircle2 size={15} />已确认</span>}</div>
               </article>
@@ -1039,10 +1090,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           </section>
         ) : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => setEditPreview(null)} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 
-        {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>播放并保存检查结果</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? "中英双语轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">修改字幕与封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.videoReview}><video controls preload="metadata" src={apiUrl(workspace.montage.output_url)} /><div><p>成片已通过视频流、音频流、尺寸和非空校验。</p></div></div></section> : null}
-        {((activeView === "montage" && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)) ? <ContextCommandBar busy={busy} command={editCommand} onCancel={() => setEditPreview(null)} onCommandChange={(value) => { setEditCommand(value); setEditPreview(null); }} onConfirm={() => void confirmEdit()} onPreview={() => void previewEdit()} preview={editPreview} selectedContextLabel={selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedEditContext?.placeholder ?? "先选择要修改的内容"} /> : null}
+        {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>播放并保存检查结果</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? "中英双语轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">修改字幕与封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片已通过视频流、音频流、尺寸和非空校验。</p></div></div></section> : null}
+        {(((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)) ? <ContextCommandBar busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void previewEdit()} preview={editPreview} selectedContextLabel={selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedEditContext?.placeholder ?? "先选择要修改的内容"} /> : null}
       </div>
     </AppShell>
   );

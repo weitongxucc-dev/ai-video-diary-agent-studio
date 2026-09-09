@@ -1496,8 +1496,9 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
     assert production.list_edit_operations(workspace_id, task.id) == []
 
 
+@pytest.mark.parametrize("exact_replacement", [False, True])
 def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, exact_replacement
 ):
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -1795,9 +1796,22 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert scope_required_response.status_code == 409
     assert scope_required_response.json()["detail"]["error"] == "edit_scope_required"
 
+    unchanged = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
+        "operation_type": "ReplaceClip", "clip_id": "clip-route",
+        "asset_id": asset.id, "segment_id": asset.segments[0].id,
+    })
+    assert unchanged.status_code == 409
+    assert unchanged.json()["detail"]["error"] == "edit_no_change"
+    assert production.list_edit_intents(workspace_id, task.id) == []
+
     preview_response = client.post(
-        f"/api/creation-tasks/{task.id}/edits/preview",
+        f"/api/creation-tasks/{task.id}/edits/" + ("exact/preview" if exact_replacement else "preview"),
         json={
+            "operation_type": "ReplaceClip",
+            "clip_id": "clip-route",
+            "asset_id": replacement_asset.id,
+            "segment_id": replacement_segment.id,
+        } if exact_replacement else {
             "raw_command": "把这个镜头换成户外画面",
             "context_stage": "review",
             "selected_object_refs": ["clip:clip-route"],
@@ -1806,7 +1820,14 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert preview_response.status_code == 200, preview_response.text
     preview_payload = preview_response.json()
-    assert preview_payload["intent"]["intent_type"] == "replace_visual"
+    assert preview_payload["intent"]["intent_type"] == ("exact_montage_edit" if exact_replacement else "replace_visual")
+    unchanged_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(workspace_id, task.id)
+    )
+    assert unchanged_plan.clips[0].asset_id == asset.id
+    assert unchanged_plan.output_path == migrated_plan.output_path
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 1
+    assert production.list_edit_operations(workspace_id, task.id) == []
     assert preview_payload["proposal"]["operation"]["operation_type"] == "ReplaceClip"
     replacement_payload = preview_payload["proposal"]["operation"]["payload"]
     assert (replacement_payload["asset_id"], replacement_payload["segment_id"]) != (
@@ -1815,7 +1836,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert preview_payload["proposal"]["invalidated_refs"] == jobs[0].output_refs
     assert preview_payload["proposal"]["external_effects"] == [
-        "确认后只更新任务版本，不会立即调用模型或渲染。"
+        "只更新任务版本；重新渲染前不会执行媒体进程。" if exact_replacement
+        else "确认后只更新任务版本，不会立即调用模型或渲染。"
     ]
 
     confirm_response = client.post(
