@@ -36,6 +36,8 @@ from app.auth import (
 )
 from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
+from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
+from app.task_audio import TaskAudio
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -311,7 +313,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v5"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v6"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2683,6 +2685,134 @@ def _creation_task_narration_response(
     )
 
 
+def _task_audio() -> TaskAudio:
+    return TaskAudio(production_repo, artifact_store, Path(settings.temporary_root_path).expanduser())
+
+
+def _effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
+    return plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or "", plan.duration_seconds)
+
+
+@app.post("/api/creation-tasks/{task_id}/audio/import")
+def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile = File(...)):
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    suffix = Path(audio.filename or "").suffix.lower()
+    if suffix not in {".wav", ".mp3", ".m4a", ".aac", ".flac"}:
+        raise HTTPException(status_code=422, detail="请选择 WAV、MP3、M4A、AAC 或 FLAC 音频")
+    def produce(path):
+        total = 0
+        with path.open("wb") as output:
+            while chunk := audio.file.read(1024 * 1024):
+                total += len(chunk)
+                if total > 512 * 1024 * 1024:
+                    raise ValueError("单个导入音频不能超过 512 MB，请先裁短")
+                output.write(chunk)
+        if not total:
+            raise ValueError("音频文件为空")
+    try:
+        record = _task_audio().publish(workspace_id, task_id, kind="audio_source", parameters={"name": Path(audio.filename or "音频").name[:120]},
+                                      input_refs=[], produce=produce, suffix=suffix)
+        duration = probe_audio_source(_task_audio().source(workspace_id, task_id, record.logical_ref))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail="音频导入失败，请检查文件格式、时长及外接盘。") from exc
+    return {"source_ref": record.logical_ref, "name": Path(audio.filename or "音频").name[:120], "duration_ms": round(duration*1000)}
+
+
+@app.get("/api/creation-tasks/{task_id}/audio/artifacts/{artifact_id}")
+def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Request):
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        record = production_repo.get_artifact_record(workspace_id, artifact_id)
+        if record.task_id != task_id:
+            raise KeyError(artifact_id)
+        path = _task_audio().source(workspace_id, task_id, record.logical_ref)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="当前任务的音频不存在") from exc
+    return FileResponse(path, media_type="audio/wav" if path.suffix == ".wav" else None)
+
+
+@app.get("/api/creation-tasks/{task_id}/audio/waveform/{clip_id}")
+def get_creation_task_audio_waveform(task_id: str, clip_id: str, request: Request):
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        clip = next(clip for track in _effective_audio_timeline(plan).tracks for clip in track.clips if clip.id == clip_id)
+        source = _task_audio().source(workspace_id, task_id, clip.source_ref)
+        return audio_waveform(source, Path(settings.temporary_root_path) / "audio-waveforms" / workspace_id)
+    except (KeyError, StopIteration, ValueError, AudioWaveformError) as exc:
+        raise HTTPException(status_code=422, detail="无法读取所选音频的波形，请检查源文件") from exc
+
+
+@app.post("/api/creation-tasks/{task_id}/audio/listen")
+def listen_creation_task_audio(task_id: str, request: Request, payload: AudioListenRequest):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.current_timeline_version_id != payload.base_version_id:
+        raise HTTPException(status_code=409, detail="时间线已经变化，请刷新后试听")
+    try:
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        graph = _effective_audio_timeline(plan)
+        service = _task_audio()
+        record = service.publish(workspace_id, task_id, kind="audio_preview",
+            parameters={"audio_timeline": graph.model_dump(), "start_seconds": payload.start_seconds,
+                        "end_seconds": payload.end_seconds, "solo_track_ids": sorted(payload.solo_track_ids)},
+            input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
+            produce=lambda path: render_audio_mix(graph, plan.duration_seconds,
+                lambda ref: service.source(workspace_id, task_id, ref), path, start_seconds=payload.start_seconds,
+                end_seconds=payload.end_seconds, solo_track_ids=payload.solo_track_ids))
+    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "试听生成失败，请检查音频和外接盘") from exc
+    return {"audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
+
+
+@app.post("/api/creation-tasks/{task_id}/audio/preview", response_model=CreationTaskEditPreviewResponse)
+def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEditRequest):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.current_timeline_version_id != payload.base_version_id:
+        raise HTTPException(status_code=409, detail="时间线已经变化，请刷新后重新预览音频修改")
+    try:
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        before = _effective_audio_timeline(plan)
+        after = apply_audio_edit(before, payload, round(plan.duration_seconds*1000))
+        service = _task_audio()
+        service.validate(workspace_id, task_id, after, plan.duration_seconds)
+        start, end = audio_edit_preview_range(before, after, payload, plan.duration_seconds)
+        previews = []
+        for graph in (before, after):
+            record = service.publish(workspace_id, task_id, kind="audio_preview",
+                parameters={"audio_timeline": graph.model_dump(), "start_seconds": start, "end_seconds": end},
+                input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
+                produce=lambda path, graph=graph: render_audio_mix(graph, plan.duration_seconds,
+                    lambda ref: service.source(workspace_id, task_id, ref), path, start_seconds=start, end_seconds=end))
+            previews.append(record)
+    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        detail = str(exc) if isinstance(exc, ValueError) else "本地音频预览失败，请检查源文件、FFmpeg 与外接盘"
+        raise HTTPException(status_code=422, detail=detail) from exc
+    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
+        raise HTTPException(status_code=409, detail="试听生成期间时间线发生变化，请重新预览")
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
+        raw_command=payload.raw_command, context_stage="montage", selected_object_refs=[f"audio:{payload.target_id}"],
+        playhead_ms=round(start*1000), intent_type="edit_audio", scope={"kind": "audio", "target_id": payload.target_id},
+        constraints={"preserve_video": True}, confidence=1, status="interpreted"))
+    labels = {"add": "添加音频片段", "update": "修改音频片段", "delete": "删除音频片段（保留时间空隙）", "split": "分割音频片段", "duplicate": "复制音频片段", "track": "修改音轨设置"}
+    summary = labels[payload.action]
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
+        task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
+        operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
+            "edit": payload.model_dump(), "expected_audio_timeline": before.model_dump()}},
+        invalidated_refs=_logical_montage_output_refs(plan),
+        preview={side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else summary,
+            "detail": f"试听 {start:.1f}–{end:.1f} 秒；完整音轨在确认后生效",
+            "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
+            for side, record in zip(("before", "after"), previews)}, external_effects=[]))
+    return _edit_preview_response(intent, proposal)
+
+
 def _creation_task_montage_response(
     plan: CreationTaskMontagePlan,
 ) -> CreationTaskMontagePlanResponse:
@@ -2704,6 +2834,7 @@ def _creation_task_montage_response(
             "duration_seconds": plan.duration_seconds,
             "low_confidence_clip_count": plan.low_confidence_clip_count,
             "narration_reference": plan.narration_audio_path,
+            "audio_timeline": _effective_audio_timeline(plan).model_dump(),
             "output_url": (
                 f"/api/creation-tasks/{plan.task_id}/output"
                 if plan.status == "rendered" and plan.output_path
@@ -5235,6 +5366,9 @@ def _retime_montage_for_narration_segments(
         cursor += duration
         clip.timeline_end_seconds = round(cursor, 3)
     updated.duration_seconds = round(cursor, 3)
+    if updated.audio_timeline is not None:
+        updated.audio_timeline = rebind_narration_audio(updated.audio_timeline, plan.narration_audio_path or "", narration_reference,
+            round(plan.duration_seconds*1000), round(updated.duration_seconds*1000))
     updated.narration_audio_path = narration_reference
     updated.output_path = None
     updated.subtitle_path = None
@@ -5252,6 +5386,11 @@ def _regenerate_creation_task_narration_segment(
     generation_identity: str,
 ) -> tuple[list[NarrationSegment], NarrationArtifactRecord, CreationTaskMontagePlan]:
     plan = _creation_plan_for_task_or_404(workspace_id, task)
+    current_montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+    if current_montage.audio_timeline is not None:
+        reference = current_montage.narration_audio_path or ""
+        duration_ms = round(current_montage.duration_seconds*1000)
+        rebind_narration_audio(current_montage.audio_timeline, reference, reference, duration_ms, duration_ms)
     if task.confirmed_script_id is None:
         raise ValueError("当前任务没有已确认文案")
     script = production_repo.get_creation_task_script(
@@ -5403,6 +5542,14 @@ def preview_creation_task_edit(
         if len(payload.selected_object_refs) == 1
         else ""
     )
+    if selected_ref.startswith("audio:"):
+        try:
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+            audio_edit = compile_audio_command(command, selected_ref.removeprefix("audio:"), _effective_audio_timeline(montage),
+                task.current_timeline_version_id, payload.playhead_ms)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return preview_creation_task_audio(task_id, request, audio_edit)
     if selected_ref.startswith("narration:"):
         if payload.context_stage not in {"narration", "montage", "review"}:
             raise _topic_failure_response(
@@ -6066,6 +6213,22 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "EditAudioTimeline" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="时间线已经变化，不能确认旧的音频提案")
+        try:
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+            if _effective_audio_timeline(montage).model_dump() != operation_payload.get("expected_audio_timeline"):
+                raise ValueError("原音轨已变化，请重新预览")
+            updated_audio = AudioTimeline.model_validate(operation_payload["audio_timeline"])
+            _task_audio().validate(workspace_id, task_id, updated_audio, montage.duration_seconds)
+        except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise HTTPException(status_code=409, detail="音频提案不再适用，请检查源文件并重新预览") from exc
+        montage.audio_timeline = updated_audio
+        _prepare_changed_montage(montage, message="音轨已更新，可以试听或重新渲染成片。")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
+            updated_plan=montage, operation_type="EditAudioTimeline", operation_payload=operation_payload)
     if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict):
         source_track_id = operation_payload.get("source_track_id")
         base_version_id = operation_payload.get("base_version_id")
@@ -7643,6 +7806,7 @@ def render_creation_task_montage(
                 f"montage-plan://{task.id}/{plan.id}",
                 plan.narration_audio_path,
                 *(clip.source_path for clip in plan.clips),
+                *((clip.source_ref for track in plan.audio_timeline.tracks for clip in track.clips) if plan.audio_timeline else ()),
                 *(
                     f"person-render://{clip.person_render_id}"
                     for clip in plan.clips
@@ -8470,6 +8634,12 @@ def _render_montage_with_resolved_clip_sources(
             clip.source_path = str(resolved_source_path)
         if job_staging_path is None:
             return montage_renderer.render(plan, narration_audio_path)
+        if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:
+            mixed_audio = Path(job_staging_path) / "timeline-mix.wav"
+            service = _task_audio()
+            render_audio_mix(plan.audio_timeline, plan.duration_seconds,
+                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio)
+            narration_audio_path = mixed_audio
         return montage_renderer.render(
             plan, narration_audio_path, job_staging_path=job_staging_path
         )

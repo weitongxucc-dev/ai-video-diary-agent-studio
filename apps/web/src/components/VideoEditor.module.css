@@ -105,3 +105,22 @@
 @media (max-width: 1279px) { .stage { padding-inline: 16px; } .stageRail { padding-inline: 12px; } .stageRail button { padding-inline: 8px; } .contextCommandBar { padding-inline: 16px; } }
 
 .commandRow:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-2)); }
+
+.audioTimeline { display: grid; gap: 8px; min-width: 0; }
+.audioToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-2); }
+.audioToolbar label { display: flex; align-items: center; gap: 6px; }
+.audioToolbar input[type=number] { width: 70px; }
+.audioToolbar input[type=range] { width: 80px; }
+.audioToolbar select, .audioToolbar input[type=number] { min-height: 30px; padding: 3px 6px; border: 1px solid var(--border-2); border-radius: 5px; background: var(--surface-1); color: var(--text-1); font: inherit; }
+.audioScroll { overflow-x: auto; max-height: 230px; overflow-y: auto; }
+.audioTrack { display: grid; grid-template-columns: 86px minmax(0,1fr); gap: 8px; min-height: 48px; margin-bottom: 4px; }
+.audioTrackLabel { display: flex; align-items: center; gap: 4px; position: sticky; left: 0; z-index: 1; background: var(--surface-1); }
+.audioTrackLabel button { padding: 3px; border: 0; color: var(--text-2); background: transparent; font-size: 12px; cursor: pointer; }
+.audioTrackLabel button[aria-pressed=true] { color: var(--accent); background: var(--accent-muted); }
+.audioLane { position: relative; min-height: 48px; border-block: 1px solid var(--border-1); background: var(--surface-2); }
+.audioClip { position: absolute; top: 2px; height: 42px; min-width: 4px; overflow: hidden; border: 1px solid var(--border-2); border-radius: 4px; background: color-mix(in srgb,var(--accent) 6%,var(--surface-1)); color: var(--accent); cursor: pointer; padding: 0; text-align: left; }
+.audioClip[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.audioClip svg { width: 100%; height: 30px; stroke: currentColor; stroke-width: 1px; fill: none; }
+.audioClip > span { position: absolute; left: 5px; top: 1px; max-width: calc(100% - 10px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); background: var(--surface-1); }
+.audioTimeline audio, .previewDiff audio { width: 100%; min-width: 0; height: 32px; }
+.audioPlayhead { position: absolute; inset-block: 0; width: 1px; background: var(--text-1); pointer-events: none; }

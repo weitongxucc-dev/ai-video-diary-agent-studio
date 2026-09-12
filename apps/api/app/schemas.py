@@ -4,8 +4,9 @@ from datetime import date, datetime
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
+from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 
 from app.models import (
@@ -1036,6 +1037,23 @@ class CreationTaskNarrationCueResponse(BaseModel):
     duration_seconds: float = Field(gt=0)
 
 
+class TimelineAudioClipResponse(TimelineAudioClip):
+    editor_gain_points: list[AudioGainPoint] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def project_editor_gain_points(self):
+        self.editor_gain_points = visible_gain_points(self)
+        return self
+
+
+class TimelineAudioTrackResponse(TimelineAudioTrack):
+    clips: list[TimelineAudioClipResponse] = Field(default_factory=list)
+
+
+class AudioTimelineResponse(AudioTimeline):
+    tracks: list[TimelineAudioTrackResponse] = Field(default_factory=list)
+
+
 class CreationTaskMontagePlanResponse(BaseModel):
     id: str
     task_id: str
@@ -1046,6 +1064,7 @@ class CreationTaskMontagePlanResponse(BaseModel):
     clips: list[CreationTaskMontageClipResponse]
     duration_seconds: float = Field(gt=0)
     low_confidence_clip_count: int = Field(ge=0)
+    audio_timeline: AudioTimelineResponse | None = None
     narration_reference: str
     output_url: str | None
     subtitle_url: str | None
@@ -1080,7 +1099,7 @@ class CreationTaskExactEditRequest(BaseModel):
 
     operation_type: Literal[
         "ReplaceClip",
-        "ChangeCrop",
+    "ChangeCrop",
         "TrimClip",
         "ReorderClip",
         "SetClipLock",
@@ -1150,7 +1169,8 @@ class EditIntentResponse(BaseModel):
 
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
-        "ChangeCrop",
+        "EditAudioTimeline",
+    "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",
@@ -1169,6 +1189,7 @@ class TypedEditOperationDraftResponse(BaseModel):
 
 
 class EditPreviewItemResponse(BaseModel):
+    audio_url: str | None = None
     ref: str
     label: str
     detail: str
@@ -1206,7 +1227,8 @@ class EditOperationResponse(BaseModel):
     task_id: str
     proposal_id: str
     operation_type: Literal[
-        "ChangeCrop",
+        "EditAudioTimeline",
+    "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",

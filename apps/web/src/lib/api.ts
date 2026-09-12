@@ -1,4 +1,4 @@
-import type { VideoTemplate } from "./types";
+import type { VideoTemplate, AudioEditInput } from "./types";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -665,4 +665,18 @@ export function saveVideoTemplate(taskId: string, input: {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/templates`, {
     method: "POST", body: JSON.stringify(input),
   });
+}
+
+export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
+}
+export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string }> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/listen`, { method: "POST", body: JSON.stringify(input) });
+}
+export async function importCreationTaskAudio(taskId: string, file: File): Promise<{ source_ref: string; name: string; duration_ms: number }> {
+  const body = new FormData(); body.append("audio", file);
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
+  return payload;
 }

@@ -777,6 +777,7 @@ class EditProposal:
 
 EditOperationStatus = Literal["running", "applied", "failed"]
 EditOperationType = Literal[
+    "EditAudioTimeline",
     "ChangeCrop",
     "ReplaceClip",
     "TrimClip",
@@ -793,6 +794,7 @@ EditOperationType = Literal[
     "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
+    "EditAudioTimeline",
     "ChangeCrop",
     "ReplaceClip",
     "TrimClip",

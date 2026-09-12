@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.audio_timeline import AudioTimeline
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
@@ -121,6 +122,7 @@ class CreationTaskMontagePlan:
     output_path: str | None = None
     subtitle_path: str | None = None
     message: str = ""
+    audio_timeline: AudioTimeline | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -674,8 +676,7 @@ class MontageRenderer:
                 output_label,
                 "-map",
                 f"{audio_index}:a:0",
-                "-af",
-                "loudnorm",
+                *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["-af", "loudnorm"]),
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -1298,13 +1299,17 @@ def _json_default(value: object) -> str:
 def creation_task_montage_plan_to_payload(
     plan: CreationTaskMontagePlan,
 ) -> dict[str, object]:
-    return json.loads(json.dumps(asdict(plan), ensure_ascii=False, default=_json_default))
+    payload = asdict(plan)
+    payload["audio_timeline"] = plan.audio_timeline.model_dump() if plan.audio_timeline else None
+    return json.loads(json.dumps(payload, ensure_ascii=False, default=_json_default))
 
 
 def creation_task_montage_plan_from_payload(
     data: dict[str, object],
 ) -> CreationTaskMontagePlan:
     payload = dict(data)
+    if payload.get("audio_timeline") is not None:
+        payload["audio_timeline"] = AudioTimeline.model_validate(payload["audio_timeline"])
     cue_payloads = payload.pop("cues", [])
     clip_payloads = payload.pop("clips", [])
     for key in ("created_at", "updated_at"):

@@ -1336,7 +1336,21 @@ export type CreationTaskMontageClip = {
   person_render_id?: string | null;
 };
 
+export type TimelineAudioClip = {
+  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number;
+  gain_db: number; fade_in_ms: number; fade_out_ms: number; muted: boolean; locked: boolean; denoise_db: number; loudness_target_lufs?: number | null;
+  gain_points: { offset_ms: number; gain_db: number }[]; editor_gain_points?: { offset_ms: number; gain_db: number }[]; envelope_offset_ms: number; envelope_duration_ms: number | null;
+};
+export type TimelineAudioTrack = {
+  id: string; name: string; role: "narration" | "original" | "music" | "effect";
+  gain_db: number; muted: boolean; locked: boolean; duck_under_voice: boolean; clips: TimelineAudioClip[];
+};
+export type AudioTimeline = { format_version: 1; tracks: TimelineAudioTrack[] };
+export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track";
+  target_id: string; values: Record<string, unknown>; raw_command?: string };
+
 export type CreationTaskMontage = {
+  audio_timeline?: AudioTimeline | null;
   id: string;
   task_id: string;
   script_id: string;
@@ -1409,6 +1423,7 @@ type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Inp
   : never;
 
 export type EditPreviewItem = {
+  audio_url?: string | null;
   ref: string;
   label: string;
   detail: string;
@@ -1422,7 +1437,7 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"];
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
@@ -1446,7 +1461,7 @@ export type CreationTaskEditOperation = {
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"];
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;
