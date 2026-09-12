@@ -2451,6 +2451,17 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert undone.status_code==200, undone.text
     restored=client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"][0]["cues"][0]
     assert (restored["start_seconds"],restored["end_seconds"])==(selected_cue["start_seconds"],selected_cue["end_seconds"])
+    before_lock=client.get(f"/api/creation-tasks/{task.id}").json()
+    clip_id=before_lock["montage"]["clips"][0]["id"]
+    result=client.post(f"/api/creation-tasks/{task.id}/edits/exact",json={"operation_type":"SetClipLock","clip_id":clip_id,"locked":True})
+    assert result.status_code==200, result.text
+    for endpoint in (None,"/timeline/undo","/timeline/redo"):
+        if endpoint:
+            result=client.post(f"/api/creation-tasks/{task.id}"+endpoint,json={})
+            assert result.status_code==200, result.text
+        state=client.get(f"/api/creation-tasks/{task.id}").json()
+        assert [track["cues"] for track in state["subtitle_tracks"]]==[track["cues"] for track in before_lock["subtitle_tracks"]]
+        assert all(track["timeline_version_id"]==state["task"]["current_timeline_version_id"] for track in state["subtitle_tracks"])
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(

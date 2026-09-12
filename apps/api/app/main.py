@@ -4954,6 +4954,7 @@ def _persist_typed_montage_edit(
     operation_payload: dict[str, object],
     narration_segments: list[NarrationSegment] | None = None,
     narration_artifact: NarrationArtifactRecord | None = None,
+    subtitle_source_version: TimelineVersion | None = None,
 ) -> CreationTaskEditConfirmResponse:
     montage_payload = creation_task_montage_plan_to_payload(updated_plan)
     applied_at = utc_now()
@@ -4970,6 +4971,14 @@ def _persist_typed_montage_edit(
         created_at=applied_at,
         applied_at=applied_at,
     )
+    source_version = subtitle_source_version or base_version
+    source_plan = creation_task_montage_plan_from_payload(source_version.snapshot["montage"])
+    carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
+        for track in _current_subtitle_tracks(workspace_id, task,
+            current_version=source_version, montage=source_plan)]
+    source_cover = _cover_asset_for_version(workspace_id, task.id, source_version)
+    carried_cover = (_clone_cover_asset(source_cover, timeline_version_id=operation.result_version_id)
+        if source_cover is not None else None)
     result_version = TimelineVersion(
         id=operation.result_version_id or "",
         workspace_id=workspace_id,
@@ -4977,7 +4986,9 @@ def _persist_typed_montage_edit(
         parent_version_id=base_version.id,
         sequence=base_version.sequence + 1,
         snapshot={
-            **base_version.snapshot,
+            **source_version.snapshot,
+            "subtitle_track_ids": [track.id for track in carried_tracks],
+            "cover_asset_id": carried_cover.id if carried_cover is not None else None,
             "montage": montage_payload,
             **(
                 {"narration_segments": [asdict(segment) for segment in narration_segments]}
@@ -5007,6 +5018,8 @@ def _persist_typed_montage_edit(
                 montage_payload=montage_payload,
                 narration_segments=narration_segments,
                 narration_artifact=narration_artifact,
+                subtitle_tracks=carried_tracks,
+                cover_asset=carried_cover,
             )
         )
     except ValueError as exc:
@@ -7671,6 +7684,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         operation_payload=dict(proposal.operation["payload"]),
         narration_segments=restored_segments,
         narration_artifact=restored_narration,
+        subtitle_source_version=target_version,
     )
 
 
