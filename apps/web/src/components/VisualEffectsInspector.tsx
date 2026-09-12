@@ -1,0 +1,29 @@
+"use client";
+import { useState } from "react";
+import type { CreationTaskMontageClip, VisualEditInput, VisualEffects } from "@/lib/types";
+import ui from "./VideoEditor.module.css";
+
+export function VisualEffectsInspector({clip,allClipIds,versionId,busy,onPreview,onDraftChange}:{
+  clip:CreationTaskMontageClip;allClipIds:string[];versionId:string|null;busy:boolean;
+  onPreview:(input:VisualEditInput)=>void;onDraftChange:()=>void;
+}) {
+  const original=clip.visual_effects ?? {exposure:0,contrast:1,saturation:1,temperature:0};
+  const [effects,setEffects]=useState<VisualEffects>(original);
+  const [all,setAll]=useState(false);
+  const changed=Object.keys(effects).some(key=>effects[key as keyof VisualEffects]!==original[key as keyof VisualEffects]);
+  const controls: {key:keyof VisualEffects;label:string;min:number;max:number;step:number}[]=[
+    {key:"exposure",label:"曝光（EV）",min:-2,max:2,step:.1},
+    {key:"contrast",label:"对比度",min:.5,max:1.5,step:.05},
+    {key:"saturation",label:"饱和度",min:0,max:2,step:.1},
+    {key:"temperature",label:"冷暖",min:-1,max:1,step:.05},
+  ];
+  return <details className={ui.propertySection}><summary>画面颜色</summary>
+    <form onSubmit={event=>{event.preventDefault();onPreview({base_version_id:versionId,clip_ids:all?allClipIds:[clip.id],effects});}}>
+      {controls.map(control=><label className={ui.field} key={control.key}>{control.label}<input aria-label={control.label} type="number" min={control.min} max={control.max} step={control.step} disabled={busy||clip.locked} value={effects[control.key]} onChange={event=>{onDraftChange();setEffects({...effects,[control.key]:Number(event.target.value)});}} /></label>)}
+      <label className={ui.actionRow}>应用同一组参数到全部镜头<input type="checkbox" checked={all} disabled={busy||clip.locked} onChange={event=>{onDraftChange();setAll(event.target.checked);}} /></label>
+      {all?<p>{allClipIds.length} 个镜头；不会自动逐镜头校色，锁定镜头会阻止执行。</p>:null}
+      <div className={ui.actions}><button className={ui.primary} type="submit" disabled={busy||clip.locked||(!changed&&!all)}>预览调色</button>
+      <button className={ui.button} type="button" disabled={busy||clip.locked} onClick={()=>{onDraftChange();setEffects({exposure:0,contrast:1,saturation:1,temperature:0});}}>重置参数</button></div>
+    </form>
+  </details>;
+}

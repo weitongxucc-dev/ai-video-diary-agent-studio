@@ -12,6 +12,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+# FFmpeg loudnorm can emit NaN for fully silent input; preserve silence for encoders.
+FINITE_LOUDNESS_FILTER = "aeval=exprs=\'if(isnan(val(ch)),0,val(ch))\':c=same"
+
+
 class AudioGainPoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
     offset_ms: int = Field(ge=0)
@@ -347,7 +351,7 @@ def build_audio_mix_command(
                 # A conservative stationary-noise preset; preview remains required before applying.
                 chain.append(f"afftdn=nr={clip.denoise_db}:nf=-40:tn=1")
             if clip.loudness_target_lufs is not None:
-                chain.extend([f"loudnorm=I={clip.loudness_target_lufs}:LRA=11:TP=-1.5", "aresample=48000", "asetpts=N/SR/TB"])
+                chain.extend([f"loudnorm=I={clip.loudness_target_lufs}:LRA=11:TP=-1.5", FINITE_LOUDNESS_FILTER, "aresample=48000", "asetpts=N/SR/TB"])
             gain = _gain_expression(clip, track.gain_db)
             chain.append(f"aeval='val(0)*({gain})|val(1)*({gain})'" if clip.gain_points or clip.fade_in_ms or clip.fade_out_ms
                          else f"volume='{gain}'")

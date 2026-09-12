@@ -224,3 +224,14 @@ def test_duplicate_preserves_source_and_effects_and_rejects_overrun():
     assert len(timeline.tracks[0].clips) == 1
     with pytest.raises(ValueError,match="超出成片"):
         apply_audio_edit(timeline,edit,3000)
+
+
+def test_loudness_preserves_silence_and_can_encode_aac(tmp_path):
+    from app.audio_timeline import narration_audio_timeline
+    source=tmp_path/"silent.wav"
+    render_audio_mix(AudioTimeline(),1,lambda ref:None,source)
+    timeline=narration_audio_timeline("narration://silence",1)
+    timeline.tracks[0].clips[0].loudness_target_lufs=-16
+    mixed=render_audio_mix(timeline,1,lambda ref:source,tmp_path/"normalized.wav")
+    assert max(map(abs,samples(mixed,0,1))) == 0
+    subprocess.run(["ffmpeg","-v","error","-i",str(mixed),"-c:a","aac",str(tmp_path/"audio.m4a")],check=True)

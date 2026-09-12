@@ -57,8 +57,8 @@ import type {
 } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
-import { previewCreationTaskAudio } from "@/lib/api";
-import type { AudioEditInput } from "@/lib/types";
+import { previewCreationTaskAudio, previewCreationTaskVisual } from "@/lib/api";
+import type { AudioEditInput, VisualEditInput } from "@/lib/types";
 import { SaveVideoTemplateForm } from "./SaveVideoTemplateForm";
 import { VideoEditingStage, VideoClipInspector, editorTime } from "./VideoEditor";
 import editorUi from "./VideoEditor.module.css";
@@ -416,8 +416,8 @@ function ContextCommandBar({
         <div aria-label="变更预览" aria-live="polite" className={ui.changePreview}>
           <header><strong>{preview.proposal.summary}</strong><span>等待确认</span></header>
           <div className={ui.previewDiff}>
-            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
-            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
+            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.video_url ? <video className={editorUi.effectPreview} aria-label="修改前画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.before.video_url)} />:null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
+            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.video_url ? <video className={editorUi.effectPreview} aria-label="修改后画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.after.video_url)} />:null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
           </div>
           <div className={ui.previewEffects}>
             <span><strong>将失效</strong>{preview.proposal.invalidated_refs.map(ref => compact ? ref.endsWith(".mp4") ? "当前成片" : ref.endsWith(".srt") ? "字幕输出" : ref : ref).join("、") || "无"}</span>
@@ -977,6 +977,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  async function previewVisual(input: VisualEditInput) {
+    setBusy("edit-preview"); setError(null); setNotice(null); invalidateEditPreview();
+    const revision=editContextRevision.current;
+    try {
+      const preview=await previewCreationTaskVisual(task.id,input);
+      if(revision===editContextRevision.current) setEditPreview(preview);
+    } catch(cause) {setError(errorDetails(cause));}
+    finally {setBusy(null);}
+  }
+
   async function previewAudio(input: AudioEditInput) {
     setBusy("edit-preview"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -1049,7 +1059,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const selectedClip = selectedClipIndex >= 0 ? workspace.montage?.clips[selectedClipIndex] : undefined;
   const inspector = isEditor
     ? selectedAudioTrack ? <AudioTimelineInspector key={`${task.current_timeline_version_id}:${selectedAudioId}`} track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewAudio({base_version_id:task.current_timeline_version_id,action:"add",target_id:"audio-original",values:{source_ref:selectedClip.source_reference,name:`镜头 ${selectedClipIndex+1} 原声`,source_start_ms:Math.round(selectedClip.source_start_seconds*1000),source_end_ms:Math.round(selectedClip.source_end_seconds*1000),timeline_start_ms:Math.round(selectedClip.timeline_start_seconds*1000)}})} /> : undefined
+    : selectedClip ? <VideoClipInspector onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewAudio({base_version_id:task.current_timeline_version_id,action:"add",target_id:"audio-original",values:{source_ref:selectedClip.source_reference,name:`镜头 ${selectedClipIndex+1} 原声`,source_start_ms:Math.round(selectedClip.source_start_seconds*1000),source_end_ms:Math.round(selectedClip.source_end_seconds*1000),timeline_start_ms:Math.round(selectedClip.timeline_start_seconds*1000)}})} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} workspace={workspace} />

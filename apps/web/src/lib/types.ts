@@ -1314,7 +1314,11 @@ export type CreationTaskVoiceOption = {
   runnable_reason: string | null;
 };
 
+export type VisualEffects = { exposure: number; contrast: number; saturation: number; temperature: number };
+export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
+
 export type CreationTaskMontageClip = {
+  visual_effects?: VisualEffects;
   fit_mode?: "fill" | "fit";
   crop_x?: number;
   crop_y?: number;
@@ -1423,6 +1427,7 @@ type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Inp
   : never;
 
 export type EditPreviewItem = {
+  video_url?: string | null;
   audio_url?: string | null;
   ref: string;
   label: string;
@@ -1437,7 +1442,7 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline";
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "AdjustVisualEffects";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
@@ -1461,7 +1466,7 @@ export type CreationTaskEditOperation = {
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline";
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "AdjustVisualEffects";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;

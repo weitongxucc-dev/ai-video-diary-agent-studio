@@ -6,6 +6,7 @@ from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
+from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 
@@ -1008,6 +1009,7 @@ class CreationTaskVoiceOptionResponse(BaseModel):
 
 
 class CreationTaskMontageClipResponse(BaseModel):
+    visual_effects: VisualEffects = Field(default_factory=VisualEffects)
     fit_mode: Literal["fill", "fit"] = "fill"
     crop_x: float = Field(default=0.5, ge=0, le=1)
     crop_y: float = Field(default=0.5, ge=0, le=1)
@@ -1170,7 +1172,8 @@ class EditIntentResponse(BaseModel):
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
-    "ChangeCrop",
+        "AdjustVisualEffects",
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",
@@ -1189,6 +1192,7 @@ class TypedEditOperationDraftResponse(BaseModel):
 
 
 class EditPreviewItemResponse(BaseModel):
+    video_url: str | None = None
     audio_url: str | None = None
     ref: str
     label: str
@@ -1228,7 +1232,8 @@ class EditOperationResponse(BaseModel):
     proposal_id: str
     operation_type: Literal[
         "EditAudioTimeline",
-    "ChangeCrop",
+        "AdjustVisualEffects",
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
         "ReorderClip",

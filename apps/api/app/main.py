@@ -38,6 +38,7 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
 from app.task_audio import TaskAudio
+from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_color_command
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -2813,6 +2814,77 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
     return _edit_preview_response(intent, proposal)
 
 
+@app.get("/api/creation-tasks/{task_id}/visual/artifacts/{artifact_id}")
+def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Request):
+    workspace_id=current_workspace_id(request)
+    _creation_task_or_404(workspace_id,task_id)
+    try:
+        record=production_repo.get_artifact_record(workspace_id,artifact_id)
+        if record.task_id != task_id or record.kind != "color_preview":
+            raise KeyError(artifact_id)
+        path=artifact_store.resolve_file(record.logical_ref)
+    except (KeyError,ValueError,FileNotFoundError) as exc:
+        raise HTTPException(status_code=404,detail="当前任务的画面预览不存在") from exc
+    return FileResponse(path,media_type="video/mp4")
+
+
+@app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
+def preview_creation_task_visual(task_id: str, request: Request, payload: VisualEditRequest):
+    workspace_id=current_workspace_id(request)
+    task=_creation_task_or_404(workspace_id,task_id)
+    if task.current_timeline_version_id != payload.base_version_id:
+        raise HTTPException(status_code=409,detail="时间线已经变化，请刷新后重新预览")
+    plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+    clips=[clip for clip in plan.clips if clip.id in payload.clip_ids]
+    if len(clips) != len(set(payload.clip_ids)):
+        raise HTTPException(status_code=404,detail="所选镜头不存在")
+    if any(clip.locked for clip in clips):
+        raise HTTPException(status_code=409,detail="所选范围包含锁定镜头，请先解锁或缩小范围")
+    if all(VisualEffects.model_validate(clip.visual_effects)==payload.effects for clip in clips):
+        raise HTTPException(status_code=422,detail="画面参数没有变化")
+    # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
+    clip=clips[0]
+    try:
+        if clip.person_render_id:
+            person=production_repo.get_person_render(workspace_id,task_id,clip.person_render_id)
+            source=_person_render_media_path(person)
+            cue=next(cue for cue in plan.cues if cue.id==clip.cue_id)
+            if source is None or person.narration_segment_id != cue.narration_segment_id:
+                raise ValueError("当前人物口型产物已失效，请先重新生成")
+        else:
+            source=production_repo.resolve_clip_media_reference(workspace_id,clip.asset_id,clip.source_path)
+        preview_clip=replace(clip)
+        if clip.person_render_id:
+            preview_clip.source_start_seconds=0
+            preview_clip.source_end_seconds=clip.timeline_end_seconds-clip.timeline_start_seconds
+        records=[]
+        for effects in (clip.visual_effects,payload.effects.model_dump()):
+            preview_clip.visual_effects=effects
+            records.append(publish_color_preview(production_repo,artifact_store,settings.effective_temporary_root_path,
+                workspace_id,task_id,preview_clip,source))
+    except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
+        raise HTTPException(status_code=422,detail="本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
+    if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
+        raise HTTPException(status_code=409,detail="预览期间时间线发生变化，请重新预览")
+    base=_ensure_montage_base_version(workspace_id,task,plan)
+    refs=[f"clip:{clip.id}" for clip in clips]
+    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="color_adjustment",
+        scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True},confidence=1,status="interpreted"))
+    detail=(f"曝光 {payload.effects.exposure:+.1f} EV · 对比度 {payload.effects.contrast:.2f} · "
+            f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f}")
+    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的颜色",target_refs=refs,
+        operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
+            "effects":payload.effects.model_dump(),"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
+        invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
+        preview={side:{"ref":record.logical_ref,"label":"当前画面" if side=="before" else detail,
+            "detail":f"预览镜头 {plan.clips.index(clip)+1} 的开头（最多 5 秒）；确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
+            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
+            for side,record in zip(("before","after"),records)}))
+    return _edit_preview_response(intent,proposal)
+
+
 def _creation_task_montage_response(
     plan: CreationTaskMontagePlan,
 ) -> CreationTaskMontagePlanResponse:
@@ -5542,6 +5614,16 @@ def preview_creation_task_edit(
         if len(payload.selected_object_refs) == 1
         else ""
     )
+    if selected_ref.startswith("clip:"):
+        try:
+            visual_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+            selected_clip=next(clip for clip in visual_plan.clips if clip.id==selected_ref.removeprefix("clip:"))
+            effects=compile_color_command(command,selected_clip.visual_effects)
+        except (ValueError,KeyError,StopIteration) as exc:
+            raise HTTPException(status_code=422,detail=str(exc) or "当前镜头不可用") from exc
+        if effects is not None:
+            return preview_creation_task_visual(task_id,request,VisualEditRequest(base_version_id=task.current_timeline_version_id,
+                clip_ids=[selected_clip.id],effects=effects,raw_command=command))
     if selected_ref.startswith("audio:"):
         try:
             montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
@@ -6213,6 +6295,21 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "AdjustVisualEffects" and isinstance(operation_payload,dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409,detail="时间线已经变化，不能确认旧的画面提案")
+        montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+        expected=operation_payload["expected_clips"]
+        targets=[clip for clip in montage.clips if clip.id in expected]
+        if len(targets)!=len(expected) or any(clip.locked or asdict(clip)!=expected[clip.id] for clip in targets):
+            raise HTTPException(status_code=409,detail="所选镜头已变化，请重新预览")
+        effects=VisualEffects.model_validate(operation_payload["effects"]).model_dump()
+        for clip in targets:
+            clip.visual_effects=dict(effects)
+        _prepare_changed_montage(montage,message="画面颜色已更新，可以重新渲染。")
+        base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
+        return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,base_version=base,
+            updated_plan=montage,operation_type="AdjustVisualEffects",operation_payload=operation_payload)
     if operation_type == "EditAudioTimeline" and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已经变化，不能确认旧的音频提案")

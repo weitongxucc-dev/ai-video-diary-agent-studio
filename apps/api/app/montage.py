@@ -16,7 +16,8 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.audio_timeline import AudioTimeline
+from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
+from app.visual_effects import clip_video_filters
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
@@ -84,6 +85,7 @@ class MontageClip:
     fit_mode: Literal["fill", "fit"] = "fill"
     crop_x: float = 0.5
     crop_y: float = 0.5
+    visual_effects: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -637,16 +639,7 @@ class MontageRenderer:
             command.extend(
                 ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
             )
-            if clip.fit_mode not in {"fill", "fit"} or not (0 <= clip.crop_x <= 1 and 0 <= clip.crop_y <= 1):
-                raise ValueError("镜头画面适配参数无效")
-            framing = (
-                "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,"
-                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
-                if clip.fit_mode == "fit" else
-                "scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920:(iw-ow)*{clip.crop_x}:(ih-oh)*{clip.crop_y}"
-            )
-            filters.append(f"[{index}:v]{framing},setsar=1,fps=30,setpts=PTS-STARTPTS[v{index}]")
+            filters.append(f"[{index}:v]{clip_video_filters(clip)}[v{index}]")
             labels.append(f"[v{index}]")
 
         audio_index = len(plan.clips)
@@ -676,7 +669,7 @@ class MontageRenderer:
                 output_label,
                 "-map",
                 f"{audio_index}:a:0",
-                *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["-af", "loudnorm"]),
+                *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["-af", f"loudnorm,{FINITE_LOUDNESS_FILTER}"]),
                 "-c:v",
                 "libx264",
                 "-preset",

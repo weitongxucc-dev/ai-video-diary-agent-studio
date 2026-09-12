@@ -680,3 +680,7 @@ export async function importCreationTaskAudio(taskId: string, file: File): Promi
   if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
   return payload;
 }
+
+export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview`, { method: "POST", body: JSON.stringify(input) });
+}
