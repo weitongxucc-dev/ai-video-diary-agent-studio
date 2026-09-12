@@ -494,7 +494,10 @@ function SubtitleCueEditor({
   const storedText = cueTextWithLineBreaks(cue);
   const [text, setText] = useState(storedText);
   const [terms, setTerms] = useState(cueEmphasisTerms(cue));
-  const changed = text !== storedText || terms !== cueEmphasisTerms(cue) || style.name !== track.style.name;
+  const [start, setStart] = useState(String(cue.start_seconds));
+  const [end, setEnd] = useState(String(cue.end_seconds));
+  const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
+  const changed = Number(start) !== cue.start_seconds || Number(end) !== cue.end_seconds || text !== storedText || terms !== cueEmphasisTerms(cue) || style.name !== track.style.name;
 
   return (
     <article className={[styles.subtitleCue, selected ? styles.selectedSubtitleCue : ""].filter(Boolean).join(" ")}>
@@ -502,6 +505,8 @@ function SubtitleCueEditor({
         <strong>{cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)}</strong>
       </button>
       <div className={styles.cueFields} onFocus={onSelect}>
+        <label><span>出现时间（秒）</span><input aria-label={`字幕 ${index + 1} 出现时间`} type="number" min="0" step="0.01" disabled={busy} value={start} onChange={(event) => { onDraftChange(); setStart(event.target.value); }} /></label>
+        <label><span>结束时间（秒）</span><input aria-label={`字幕 ${index + 1} 结束时间`} type="number" min="0" step="0.01" disabled={busy} value={end} onChange={(event) => { onDraftChange(); setEnd(event.target.value); }} /></label>
         <label>
           <span>字幕文本与断行</span>
           <textarea aria-label={`字幕 ${index + 1} 文本`} disabled={busy} onChange={(event) => { onDraftChange(); setText(event.target.value); }} rows={2} value={text} />
@@ -513,9 +518,11 @@ function SubtitleCueEditor({
       </div>
       <div className={styles.cueAction}>
         {changed ? <small>待预览</small> : <small>已保存</small>}
-        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim()} onClick={() => onPreview({
+        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime} onClick={() => onPreview({
           operation_type: "UpdateSubtitleCue",
           cue_id: cue.id,
+          start_seconds: Number(start),
+          end_seconds: Number(end),
           text,
           line_breaks: lineBreakPositions(text),
           emphasis: emphasisTerms(text, terms),

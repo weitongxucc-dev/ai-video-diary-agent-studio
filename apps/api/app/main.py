@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.subtitle_schedule import subtitle_schedule
 from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncService,
@@ -5806,6 +5807,11 @@ def preview_creation_task_edit(
                 repair_action="进入视频剪辑或检查成片后选择一条字幕。",
                 retryable=True,
             )
+        timing = re.fullmatch(r"(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\s*(\d+(?:\.\d+)?)\s*秒?\s*(?:到|至|–|-)\s*(\d+(?:\.\d+)?)\s*秒[。！]?", command)
+        if timing:
+            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
+                operation_type="UpdateSubtitleCue", cue_id=selected_ref.removeprefix("cue:"),
+                start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2))))
         new_text = _subtitle_text_from_command(command)
         if new_text is None:
             raise _topic_failure_response(
@@ -5821,6 +5827,12 @@ def preview_creation_task_edit(
             montage = creation_task_montage_plan_from_payload(
                 production_repo.get_creation_task_montage_plan(workspace_id, task.id)
             )
+            tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
+            selected_track = next((track for track in tracks if any(cue.id == cue_id for cue in track.cues)), None)
+            if selected_track is not None:
+                return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
+                    operation_type="UpdateSubtitleCue", track_id=selected_track.id,
+                    cue_id=cue_id, text=new_text))
             cue = next(item for item in montage.cues if item.id == cue_id)
         except (KeyError, StopIteration) as exc:
             raise HTTPException(status_code=404, detail="creation task subtitle edit target not found") from exc
@@ -6647,6 +6659,8 @@ def confirm_creation_task_edit(
         updated_cue = replace(
             cue,
             text=str(text),
+            start_seconds=operation_payload.get("start_seconds", cue.start_seconds),
+            end_seconds=operation_payload.get("end_seconds", cue.end_seconds),
             line_breaks=list(operation_payload.get("line_breaks") or []),
             emphasis=list(operation_payload.get("emphasis") or []),
         )
@@ -6654,6 +6668,10 @@ def confirm_creation_task_edit(
         updated_style = operation_payload.get("style")
         if not isinstance(updated_style, dict):
             raise HTTPException(status_code=409, detail="invalid subtitle style")
+        try:
+            subtitle_schedule([replace(track, status="valid", style={**updated_style, "enabled": True}, cues=updated_cues)], montage.duration_seconds)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         result_version_id = f"timeline_{uuid4().hex}"
         provisional = _clone_subtitle_track(
             track,
@@ -7085,8 +7103,8 @@ def preview_creation_task_exact_edit(
         }
         effects = ["确认后调用一次当前已配置文字模型；不会改写字幕时间轴。"]
     elif payload.operation_type == "UpdateSubtitleCue":
-        if not payload.cue_id or payload.text is None:
-            raise HTTPException(status_code=422, detail="subtitle edit requires cue_id and text")
+        if not payload.cue_id:
+            raise HTTPException(status_code=422, detail="subtitle edit requires cue_id")
         track = next(
             (
                 item
@@ -7102,10 +7120,20 @@ def preview_creation_task_exact_edit(
         if track.language == "en-US" and payload.style is not None and payload.style != track.style:
             raise HTTPException(status_code=422, detail="双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。")
         normalized_text, normalized_line_breaks = _normalize_subtitle_text_and_breaks(
-            payload.text,
-            payload.line_breaks,
+            payload.text if payload.text is not None else cue.text,
+            payload.line_breaks if payload.line_breaks is not None else (cue.line_breaks if payload.text is None or payload.text == cue.text else None),
         )
+        start = payload.start_seconds if payload.start_seconds is not None else cue.start_seconds
+        end = payload.end_seconds if payload.end_seconds is not None else cue.end_seconds
+        candidate = replace(cue, start_seconds=start, end_seconds=end)
+        try:
+            subtitle_schedule([replace(track, status="valid", style={**track.style, "enabled": True},
+                cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         changed = (
+            start != cue.start_seconds or end != cue.end_seconds
+            or
             normalized_text != cue.text
             or normalized_line_breaks != cue.line_breaks
             or payload.emphasis is not None
@@ -7115,7 +7143,7 @@ def preview_creation_task_exact_edit(
             raise _topic_failure_response(
                 status_code=409,
                 error="edit_no_change",
-                reason="字幕文字和样式没有变化。",
+                reason="字幕文字、时轴和样式没有变化。",
                 impact="没有创建新的时间线版本。",
                 repair_action="修改文字、断行、强调词或字幕样式后再预览。",
                 retryable=False,
@@ -7126,6 +7154,8 @@ def preview_creation_task_exact_edit(
             "track_id": track.id,
             "cue_id": cue.id,
             "text": normalized_text,
+            "start_seconds": start,
+            "end_seconds": end,
             "line_breaks": normalized_line_breaks,
             "emphasis": payload.emphasis if payload.emphasis is not None else cue.emphasis,
             "style": payload.style if payload.style is not None else track.style,
@@ -7133,8 +7163,8 @@ def preview_creation_task_exact_edit(
             "base_version_id": base_version.id,
         }
         preview = {
-            "before": {"ref": target_refs[0], "label": "当前字幕", "detail": cue.text},
-            "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": payload.text},
+            "before": {"ref": target_refs[0], "label": "当前字幕", "detail": f"{cue.start_seconds:.2f}–{cue.end_seconds:.2f} 秒 · {cue.text}"},
+            "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": f"{start:.2f}–{end:.2f} 秒 · {normalized_text}"},
         }
         effects = ["确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。"]
         if track.language == "zh-CN" and normalized_text != cue.text and any(item.language == "en-US" for item in tracks):

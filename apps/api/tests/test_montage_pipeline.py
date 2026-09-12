@@ -2290,6 +2290,12 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         },
     )
     assert rejected_style.status_code == 422
+    english_preview = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/edits/preview", json={
+            "context_stage":"subtitle_cover", "selected_object_refs":["cue:english-cue"],
+            "raw_command":"把这句字幕改成 Manual edited English"})
+    assert english_preview.status_code == 200, english_preview.text
+    assert english_preview.json()["proposal"]["operation"]["payload"]["track_id"] == "fixture-english"
     response = TestClient(main_module.app).post(
         f"/api/creation-tasks/{task.id}/edits/exact",
         json={
@@ -2414,6 +2420,26 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert after["subtitle_translation_capability"]["message"] == "上次翻译未完成：余额不足"
     assert after["subtitle_translation_capability"]["repair_action"] == "充值后重试。"
     assert after["subtitle_translation_capability"]["available"] is True
+
+    selected=after["subtitle_tracks"][0]
+    selected_cue=selected["cues"][0]
+    timing_preview=client.post(f"/api/creation-tasks/{task.id}/edits/preview", json={
+        "context_stage":"subtitle_cover", "selected_object_refs":[f"cue:{selected_cue['id']}"],
+        "raw_command":"这条字幕从0.4秒到3.6秒"})
+    assert timing_preview.status_code==200, timing_preview.text
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"]==after["subtitle_tracks"]
+    timing_result=client.post(f"/api/creation-tasks/{task.id}/edits/{timing_preview.json()['proposal']['id']}/confirm")
+    assert timing_result.status_code==200, timing_result.text
+    timed=client.get(f"/api/creation-tasks/{task.id}").json()
+    assert (timed["subtitle_tracks"][0]["cues"][0]["start_seconds"],timed["subtitle_tracks"][0]["cues"][0]["end_seconds"])==(.4,3.6)
+    assert timed["montage"]["clips"]==after["montage"]["clips"]
+    invalid=client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={
+        "operation_type":"UpdateSubtitleCue","cue_id":selected_cue["id"],"end_seconds":5})
+    assert invalid.status_code==422
+    undone=client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={})
+    assert undone.status_code==200, undone.text
+    restored=client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"][0]["cues"][0]
+    assert (restored["start_seconds"],restored["end_seconds"])==(selected_cue["start_seconds"],selected_cue["end_seconds"])
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(

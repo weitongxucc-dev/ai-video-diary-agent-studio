@@ -512,6 +512,8 @@ describe("CreationTaskWorkspace", () => {
     expect(inspector).toHaveTextContent("运行证据transform:subtitle:v6");
 
     fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "真实运行\n不是口号" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
     fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
     fireEvent.click(screen.getByRole("button", { name: "重点强调" }));
     fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
@@ -520,6 +522,8 @@ describe("CreationTaskWorkspace", () => {
       operation_type: "UpdateSubtitleCue",
       cue_id: "subtitle-cue-1",
       text: "真实运行\n不是口号",
+      start_seconds: 0.4,
+      end_seconds: 2.8,
       line_breaks: [4],
       emphasis: ["真实运行"],
       style: {

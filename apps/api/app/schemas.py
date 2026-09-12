@@ -1117,6 +1117,8 @@ class CreationTaskExactEditRequest(BaseModel):
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
     cue_id: str | None = Field(default=None, min_length=1, max_length=120)
+    start_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     text: str | None = Field(default=None, min_length=1, max_length=96)
     title: str | None = Field(default=None, min_length=1, max_length=80)
     target_language: Literal["en-US"] | None = None
