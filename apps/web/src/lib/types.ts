@@ -1314,7 +1314,7 @@ export type CreationTaskVoiceOption = {
   runnable_reason: string | null;
 };
 
-export type VisualEffects = { exposure: number; contrast: number; saturation: number; temperature: number };
+export type VisualEffects = { beauty_strength?: number; skin_exposure?: number; exposure: number; contrast: number; saturation: number; temperature: number };
 export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
 
 export type CreationTaskMontageClip = {
@@ -1381,6 +1381,7 @@ export type CreationTaskWorkspace = {
   available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
   person_renders: CreationTaskPersonRender[];
+  portrait_available?: boolean;
   person_render_capability: CreationTaskPersonRenderCapability;
   montage: CreationTaskMontage | null;
   subtitle_tracks: CreationTaskSubtitleTrack[];

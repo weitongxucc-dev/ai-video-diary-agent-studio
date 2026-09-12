@@ -14,8 +14,8 @@ it("selects an actual audio range and keeps solo in listening requests",async()=
   vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,json:async()=>({peaks:[.1,.5,.8,.4],seconds_per_peak:1})})));
   vi.mocked(listenCreationTaskAudio).mockResolvedValue({audio_url:"/preview.wav"});
   const workspace={task:{id:"task",current_timeline_version_id:"version"},montage:{duration_seconds:10,audio_timeline:{format_version:1,tracks:[track]}}} as unknown as CreationTaskWorkspace;
-  const select=vi.fn(),preview=vi.fn();
-  render(<AudioTimelineTracks workspace={workspace} selectedId={null} onSelect={select} onPreview={preview} busy={false} />);
+  const select=vi.fn(),preview=vi.fn(),position=vi.fn();
+  render(<AudioTimelineTracks workspace={workspace} selectedId={null} onSelect={select} onListenPosition={position} onPreview={preview} busy={false} />);
   fireEvent.click(screen.getByRole("button",{name:"选择音频：背景音乐"}));
   expect(select).toHaveBeenCalledWith("clip",4);
   fireEvent.click(screen.getByRole("button",{name:"独听音乐"}));
@@ -23,6 +23,8 @@ it("selects an actual audio range and keeps solo in listening requests",async()=
   await waitFor(()=>expect(listenCreationTaskAudio).toHaveBeenCalledWith("task",{base_version_id:"version",start_seconds:4,end_seconds:6,solo_track_ids:["music"]}));
   expect(preview).not.toHaveBeenCalled();
   expect(screen.getByLabelText("选区音频试听")).toHaveAttribute("src","/preview.wav");
+  fireEvent.timeUpdate(screen.getByLabelText("选区音频试听"),{target:{currentTime:.5}});
+  expect(position).toHaveBeenCalledWith(4.5);
 });
 
 it("sends an exact gain proposal without changing the source range",()=>{

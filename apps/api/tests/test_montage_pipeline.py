@@ -734,7 +734,7 @@ def person_render_edit_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main_module,
         "settings",
-        SimpleNamespace(video_output_path=str(output_root)),
+        SimpleNamespace(video_output_path=str(output_root), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"),
     )
     monkeypatch.setattr(main_module, "avatar_lipsync_provider", provider)
     monkeypatch.setattr(
@@ -1677,7 +1677,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
     monkeypatch.setattr(
-        main_module, "settings", SimpleNamespace(video_output_path=str(output_root))
+        main_module, "settings", SimpleNamespace(video_output_path=str(output_root), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp")
     )
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
@@ -2347,7 +2347,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
 
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
-    monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output")))
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
     monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
     client = TestClient(main_module.app)
     # New renderer, then cache hit: both must carry the same immutable cover selection.

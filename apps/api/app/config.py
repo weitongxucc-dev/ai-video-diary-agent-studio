@@ -276,6 +276,7 @@ class Settings:
     understanding_runtime_python_path: str | None = None
     understanding_worker_path: str = str(Path(__file__).resolve().parents[1] / "model_workers" / "qwen3_vl_worker.py")
     native_ocr_worker_path: str | None = None
+    native_portrait_worker_path: str | None = None
     avatar_model_runtime_python_path: str | None = None
     avatar_model_worker_path: str = _default_avatar_model_worker_path()
     avatar_model_root_path: str | None = None
@@ -441,6 +442,7 @@ class Settings:
             or _default_voice_model_worker_path(),
             understanding_runtime_python_path=os.getenv("UNDERSTANDING_RUNTIME_PYTHON_PATH") or str(Path(model_root_path).parent / "model-runtimes" / "qwen-vl" / ".venv" / "bin" / "python"),
             native_ocr_worker_path=os.getenv("NATIVE_OCR_WORKER_PATH"),
+            native_portrait_worker_path=os.getenv("NATIVE_PORTRAIT_WORKER_PATH"),
             avatar_model_runtime_python_path=os.getenv(
                 "AVATAR_MODEL_RUNTIME_PYTHON_PATH"
             ),

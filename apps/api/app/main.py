@@ -38,7 +38,8 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
 from app.task_audio import TaskAudio
-from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_color_command
+from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command
+from app.local_portrait import LocalPortrait
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -314,7 +315,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v6"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v7"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2686,6 +2687,10 @@ def _creation_task_narration_response(
     )
 
 
+def _portrait_processor(workspace_id: str) -> LocalPortrait:
+    return LocalPortrait(settings.native_portrait_worker_path, settings.effective_temporary_root_path / "portrait-cache" / workspace_id)
+
+
 def _task_audio() -> TaskAudio:
     return TaskAudio(production_repo, artifact_store, Path(settings.temporary_root_path).expanduser())
 
@@ -2844,37 +2849,45 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         raise HTTPException(status_code=422,detail="画面参数没有变化")
     # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
     clip=clips[0]
-    try:
-        if clip.person_render_id:
-            person=production_repo.get_person_render(workspace_id,task_id,clip.person_render_id)
+    def resolve_target(target):
+        preview_target=replace(target)
+        if target.person_render_id:
+            person=production_repo.get_person_render(workspace_id,task_id,target.person_render_id)
             source=_person_render_media_path(person)
-            cue=next(cue for cue in plan.cues if cue.id==clip.cue_id)
+            cue=next(cue for cue in plan.cues if cue.id==target.cue_id)
             if source is None or person.narration_segment_id != cue.narration_segment_id:
                 raise ValueError("当前人物口型产物已失效，请先重新生成")
+            preview_target.source_start_seconds=0
+            preview_target.source_end_seconds=target.timeline_end_seconds-target.timeline_start_seconds
         else:
-            source=production_repo.resolve_clip_media_reference(workspace_id,clip.asset_id,clip.source_path)
-        preview_clip=replace(clip)
-        if clip.person_render_id:
-            preview_clip.source_start_seconds=0
-            preview_clip.source_end_seconds=clip.timeline_end_seconds-clip.timeline_start_seconds
+            source=production_repo.resolve_clip_media_reference(workspace_id,target.asset_id,target.source_path)
+        return preview_target,source
+    try:
+        preview_clip,source=resolve_target(clip)
+        if payload.effects.beauty_strength or payload.effects.skin_exposure:
+            for target in clips:
+                resolved,path=resolve_target(target)
+                _portrait_processor(workspace_id).process(path,resolved.source_start_seconds,resolved.source_end_seconds,
+                    payload.effects.beauty_strength,payload.effects.skin_exposure)
         records=[]
         for effects in (clip.visual_effects,payload.effects.model_dump()):
             preview_clip.visual_effects=effects
             records.append(publish_color_preview(production_repo,artifact_store,settings.effective_temporary_root_path,
-                workspace_id,task_id,preview_clip,source))
+                workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id)))
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
-        raise HTTPException(status_code=422,detail="本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
+        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
         raise HTTPException(status_code=409,detail="预览期间时间线发生变化，请重新预览")
     base=_ensure_montage_base_version(workspace_id,task,plan)
     refs=[f"clip:{clip.id}" for clip in clips]
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="color_adjustment",
-        scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True},confidence=1,status="interpreted"))
+        scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True,"preserve_audio":True,"preserve_face_geometry":True},confidence=1,status="interpreted"))
     detail=(f"曝光 {payload.effects.exposure:+.1f} EV · 对比度 {payload.effects.contrast:.2f} · "
-            f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f}")
+            f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f} · "
+            f"磨皮 {payload.effects.beauty_strength:.0%} · 肤色曝光 {payload.effects.skin_exposure:+.2f} EV")
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
-        intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的颜色",target_refs=refs,
+        intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
         operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
             "effects":payload.effects.model_dump(),"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
         invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
@@ -3340,6 +3353,7 @@ def _creation_task_workspace_response(
                 if artifact is not None
                 else None
             ),
+            "portrait_available": _portrait_processor(workspace_id).available,
             "person_render_capability": {
                 "available": person_render_available,
                 "model_id": avatar_lipsync_provider.model_id,
@@ -5618,7 +5632,7 @@ def preview_creation_task_edit(
         try:
             visual_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
             selected_clip=next(clip for clip in visual_plan.clips if clip.id==selected_ref.removeprefix("clip:"))
-            effects=compile_color_command(command,selected_clip.visual_effects)
+            effects=compile_visual_command(command,selected_clip.visual_effects)
         except (ValueError,KeyError,StopIteration) as exc:
             raise HTTPException(status_code=422,detail=str(exc) or "当前镜头不可用") from exc
         if effects is not None:
@@ -6131,7 +6145,7 @@ def preview_creation_task_edit(
         raise _topic_failure_response(
             status_code=409,
             error="edit_scope_unavailable",
-            reason="当前自然语言切片只支持镜头替换。",
+            reason="当前步骤不支持这项镜头修改。",
             impact="任务内容没有发生变化。",
             repair_action="进入视频剪辑或检查成片，选中一个镜头后再输入替换要求。",
             retryable=True,
@@ -6140,9 +6154,9 @@ def preview_creation_task_edit(
         raise _topic_failure_response(
             status_code=409,
             error="edit_intent_unsupported",
-            reason="当前只支持把选中的镜头换成另一个可用镜头。",
+            reason="这条镜头指令还无法完整执行。",
             impact="任务内容没有发生变化。",
-            repair_action="选中一个镜头并输入“换成另一个镜头”。",
+            repair_action="可指定替换镜头、曝光、冷暖或美颜；其他操作暂时使用右侧已有控件。",
             retryable=True,
         )
     if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith("clip:"):
@@ -6306,7 +6320,7 @@ def confirm_creation_task_edit(
         effects=VisualEffects.model_validate(operation_payload["effects"]).model_dump()
         for clip in targets:
             clip.visual_effects=dict(effects)
-        _prepare_changed_montage(montage,message="画面颜色已更新，可以重新渲染。")
+        _prepare_changed_montage(montage,message="画面效果已更新，可以重新渲染。")
         base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,base_version=base,
             updated_plan=montage,operation_type="AdjustVisualEffects",operation_payload=operation_payload)
@@ -7888,6 +7902,11 @@ def render_creation_task_montage(
     ):
         plan_input.pop(transient_key, None)
     plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure") for clip in plan.clips):
+        try:
+            plan_input["portrait_runtime_fingerprint"]=_portrait_processor(workspace_id).fingerprint()
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
     plan_input["subtitle_tracks"] = [
         {
             "language": track.language,
@@ -8729,6 +8748,14 @@ def _render_montage_with_resolved_clip_sources(
                     repair_action="重新扫描当前工作区素材并更新剪辑计划。",
                 )
             clip.source_path = str(resolved_source_path)
+        for clip in plan.clips:
+            effects=VisualEffects.model_validate(clip.visual_effects)
+            if effects.beauty_strength or effects.skin_exposure:
+                processed,metadata=_portrait_processor(workspace_id).process(Path(clip.source_path),clip.source_start_seconds,
+                    clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
+                clip.source_path=str(processed)
+                clip.source_start_seconds=0
+                clip.source_end_seconds=metadata["duration_seconds"]
         if job_staging_path is None:
             return montage_renderer.render(plan, narration_audio_path)
         if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:

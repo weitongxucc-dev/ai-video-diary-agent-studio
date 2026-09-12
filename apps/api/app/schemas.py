@@ -1382,6 +1382,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     scripts: list[CreationTaskScriptResponse]
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
+    portrait_available: bool = False
     person_render_capability: PersonRenderCapabilityResponse
     person_renders: list[CreationTaskPersonRenderResponse] = Field(default_factory=list)
     montage: CreationTaskMontagePlanResponse | None

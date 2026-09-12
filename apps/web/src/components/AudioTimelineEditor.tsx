@@ -30,9 +30,9 @@ function AudioWave({ taskId, clip }: { taskId: string; clip: TimelineAudioClip }
   return <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
 }
 
-export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview, busy, playhead = 0 }: {
+export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition }: {
   workspace: CreationTaskWorkspace; selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
-  onPreview: (input: AudioEditInput) => void; busy: boolean;
+  onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void;
 }) {
   const graph = workspace.montage!.audio_timeline!;
   const duration = workspace.montage!.duration_seconds;
@@ -41,7 +41,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
   const [solo, setSolo] = useState<string[]>([]);
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(Math.min(10,duration));
-  const [audio, setAudio] = useState<string | null>(null);
+  const [audio, setAudio] = useState<{url:string;start:number;end:number;soloKey:string} | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -60,7 +60,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
     try {
       const result = await listenCreationTaskAudio(workspace.task.id, { base_version_id: workspace.task.current_timeline_version_id,
         start_seconds: start, end_seconds: end, solo_track_ids: solo });
-      setAudio(result.audio_url);
+      setAudio({url:result.audio_url,start,end,soloKey:solo.join(",")});
     } catch (cause) { setError(cause instanceof Error ? cause.message : "试听失败"); }
     finally { setWorking(false); }
   }
@@ -87,7 +87,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
       <button className={ui.button} disabled={busy || working || start >= end} type="button" onClick={() => void listen()}>{working ? "处理中…" : solo.length ? "试听独听轨道" : "试听混音"}</button>
       {solo.length ? <small>独听只影响试听</small> : null}
     </div>
-    {audio ? <audio aria-label="选区音频试听" controls src={apiUrl(audio)} /> : null}
+    {audio && audio.start===start && audio.end===end && audio.soloKey===solo.join(",") ? <audio aria-label="选区音频试听" controls src={apiUrl(audio.url)} onPlay={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} onTimeUpdate={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} /> : null}
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }

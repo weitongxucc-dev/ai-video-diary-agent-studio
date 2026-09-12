@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class VisualEffects(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    beauty_strength: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
+    skin_exposure: float = Field(default=0, ge=-.5, le=.5, allow_inf_nan=False)
     exposure: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
     contrast: float = Field(default=1, ge=.5, le=1.5, allow_inf_nan=False)
     saturation: float = Field(default=1, ge=0, le=2, allow_inf_nan=False)
@@ -52,7 +54,14 @@ def clip_video_filters(clip, *, width=1080, height=1920) -> str:
                      "setsar=1","fps=30","setpts=PTS-STARTPTS"])
 
 
-def render_color_preview(clip, source: Path, output: Path) -> Path:
+def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Path:
+    from dataclasses import replace
+    effects=VisualEffects.model_validate(clip.visual_effects)
+    if effects.beauty_strength or effects.skin_exposure:
+        if portrait is None:
+            raise ValueError("本地人像组件未就绪")
+        source,metadata=portrait.process(source,clip.source_start_seconds,clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
+        clip=replace(clip,source_start_seconds=0,source_end_seconds=metadata["duration_seconds"])
     duration=min(5,clip.source_end_seconds-clip.source_start_seconds)
     subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe",
         "-ss",str(clip.source_start_seconds),"-t",str(duration),"-i",str(source),
@@ -63,7 +72,7 @@ def render_color_preview(clip, source: Path, output: Path) -> Path:
 
 
 def publish_color_preview(repository, artifact_store, temporary_root: Path, workspace_id: str,
-                          task_id: str, clip, source: Path):
+                          task_id: str, clip, source: Path, portrait=None):
     import hashlib
     import json
     from dataclasses import asdict
@@ -72,6 +81,10 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     from app.models import utc_now
     from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     parameters={"clip":asdict(clip),"width":360,"height":640,"max_seconds":5}
+    effects=VisualEffects.model_validate(clip.visual_effects)
+    if effects.beauty_strength or effects.skin_exposure:
+        if portrait is None: raise ValueError("本地人像组件未就绪")
+        parameters["portrait_runtime_fingerprint"]=portrait.fingerprint()
     digest=hashlib.sha256(json.dumps(parameters,sort_keys=True).encode()).hexdigest()
     identity=uuid4().hex
     job=repository.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
@@ -80,7 +93,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix="color-preview-",dir=temporary_root) as directory:
-            output=render_color_preview(clip,source,Path(directory)/"preview.mp4")
+            output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait)
             publication=artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/preview.mp4",output)
         record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind="color_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,
@@ -99,19 +112,31 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
         raise
 
 
-def compile_color_command(command: str, current: dict) -> VisualEffects | None:
+def compile_visual_command(command: str, current: dict) -> VisualEffects | None:
     text=command.strip().casefold()
-    tokens=("亮一点","暗一点","曝光","对比度","饱和度","暖一点","冷一点","重置调色","恢复原色")
+    tokens=("亮一点","暗一点","曝光","对比度","饱和度","暖一点","冷一点","重置调色","恢复原色","美颜","磨皮","皮肤亮一点","肤色亮一点")
     if not any(token in text for token in tokens):
         return None
-    text=text.replace("其他不要动", "").replace("其他别动", "")
-    if any(token in text for token in ("不要", "别", "美颜", "裁剪", "替换", "配音", "字幕", "音乐", "音量", "降噪", "放大", "缩小", "旋转", "删除", "复制", "logo")):
+    for constraint in ("其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变"):
+        text=text.replace(constraint, "")
+    if any(token in text for token in ("不要", "别", "裁剪", "替换", "配音", "字幕", "音乐", "音量", "降噪", "放大", "缩小", "旋转", "删除", "复制", "logo")):
         raise ValueError("这条指令包含调色之外的限制或操作，当前请分别预览，以免漏改")
     if "重置调色" in text or "恢复原色" in text:
-        return VisualEffects()
+        current=VisualEffects.model_validate(current)
+        return VisualEffects(beauty_strength=current.beauty_strength,skin_exposure=current.skin_exposure)
     import re
     values=VisualEffects.model_validate(current).model_dump()
-    if "亮一点" in text: values["exposure"] += .25
+    if "美颜" in text or "磨皮" in text:
+        values["beauty_strength"] = 0 if "关闭" in text or "取消" in text else .2 if "轻" in text else .35
+        if "美颜" in text and ("关闭" in text or "取消" in text): values["skin_exposure"]=0
+        amount=re.search(r"(?:磨皮|美颜)(?:强度)?(?:设为|改为|为)?\s*(\d+(?:\.\d+)?)",text)
+        if amount: values["beauty_strength"]=float(amount[1])
+    skin_amount=re.search(r"(?:肤色|皮肤)曝光(?:设为|改为|为)?\s*([+-]?\d+(?:\.\d+)?)",text)
+    if skin_amount:
+        values["skin_exposure"]=float(skin_amount[1])
+        text=text[:skin_amount.start()]+text[skin_amount.end():]
+    if "皮肤亮一点" in text or "肤色亮一点" in text: values["skin_exposure"] += .15
+    elif "亮一点" in text: values["exposure"] += .25
     if "暗一点" in text: values["exposure"] -= .25
     if "暖一点" in text: values["temperature"] += .15
     if "冷一点" in text: values["temperature"] -= .15

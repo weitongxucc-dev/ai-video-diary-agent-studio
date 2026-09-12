@@ -4,7 +4,7 @@ import subprocess
 from PIL import Image
 import pytest
 from app.montage import MontageRenderer
-from app.visual_effects import VisualEffects, compile_color_command, render_color_preview
+from app.visual_effects import VisualEffects, compile_visual_command, render_color_preview
 
 
 def frame(path):
@@ -37,14 +37,35 @@ def test_local_color_preview_and_export_apply_same_effects(tmp_path):
 
 
 def test_color_commands_are_local_bounded_and_do_not_silently_drop_constraints():
-    effect=compile_color_command("亮一点，暖一点",{})
+    effect=compile_visual_command("亮一点，暖一点",{})
     assert effect.exposure==.25 and effect.temperature==.15
-    assert compile_color_command("恢复原色",effect.model_dump())==VisualEffects()
-    assert compile_color_command("曝光设为0.5",{}).exposure==.5
-    assert compile_color_command("替换这个镜头",{}) is None
+    assert compile_visual_command("恢复原色",effect.model_dump())==VisualEffects()
+    assert compile_visual_command("曝光设为0.5",{}).exposure==.5
+    assert compile_visual_command("替换这个镜头",{}) is None
     with pytest.raises(ValueError,match="限制或操作"):
-        compile_color_command("亮一点，同时美颜",{})
+        compile_visual_command("亮一点，同时改字幕",{})
     with pytest.raises(ValueError):
         VisualEffects(exposure=float("nan"))
     with pytest.raises(ValueError):
         VisualEffects(unknown_filter="shell")
+
+
+def test_portrait_commands_preserve_color_and_respect_face_constraints():
+    effects=compile_visual_command("美颜一下，轻一点，不要改变脸型，配音不变",{"exposure":.4})
+    assert effects.beauty_strength==.2 and effects.exposure==.4
+    assert effects.skin_exposure==0
+    brighter=compile_visual_command("肤色亮一点",effects.model_dump())
+    assert brighter.skin_exposure==.15 and brighter.exposure==.4
+    off=compile_visual_command("关闭美颜",effects.model_dump())
+    assert off.beauty_strength==0 and off.exposure==.4
+    specific=compile_visual_command("肤色曝光设为0.2",effects.model_dump())
+    assert specific.skin_exposure==.2 and specific.exposure==.4
+
+
+def test_missing_portrait_runtime_rejects_processing_before_touching_source(tmp_path):
+    from app.local_portrait import LocalPortrait
+    processor=LocalPortrait(None,tmp_path/"cache")
+    assert processor.available is False
+    with pytest.raises(ValueError,match="未就绪"):
+        processor.process(tmp_path/"missing.mp4",0,1,.3,0)
+    assert not (tmp_path/"cache").exists()
