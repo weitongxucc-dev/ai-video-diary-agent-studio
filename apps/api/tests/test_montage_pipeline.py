@@ -33,8 +33,10 @@ from app.montage import (
     MontageRenderer,
     NarrationCue,
     _plan_to_srt,
+    _score_candidate,
     _subtitle_font,
     _subtitle_font_and_lines,
+    _tokens,
     _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
@@ -63,6 +65,25 @@ from app.production import (
     VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
+
+
+def test_matching_preserves_english_words_and_chinese_phrase_boundaries() -> None:
+    assert _tokens("USB port 特写，桌面 操作") == {"usb", "port", "特写", "桌面", "操作"}
+    cue = NarrationCue(
+        id="cue-port", source_section_id="section-port", narration_segment_id="voice-port",
+        text="Show the USB port", duration_seconds=4.0,
+    )
+    asset = SimpleNamespace(file_name="001.mp4")
+    relevant = MaterialSegment(
+        id="port", asset_id="asset", start_seconds=0, end_seconds=4,
+        description="A close-up of a USB port",
+    )
+    unrelated = replace(relevant, id="desk", description="A wooden desk near a window")
+    port_score = _score_candidate(cue, asset, relevant, 0, 0)
+    desk_score = _score_candidate(cue, asset, unrelated, 0, 0)
+    assert port_score[1] == 0.5
+    assert desk_score[1] == 0.0
+    assert port_score[0] > desk_score[0]
 
 
 def test_srt_preserves_user_authored_subtitle_line_breaks() -> None:

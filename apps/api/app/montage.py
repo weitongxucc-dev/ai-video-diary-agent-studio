@@ -970,10 +970,13 @@ def _cosine_similarity(
 
 
 def _tokens(value: str) -> set[str]:
-    normalized = re.sub(r"\s+", "", value.lower())
+    normalized = value.lower()
     ascii_tokens = set(re.findall(r"[a-z0-9]{2,}", normalized))
-    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", normalized))
-    chinese_tokens = {chinese[index : index + 2] for index in range(max(0, len(chinese) - 1))}
+    chinese_tokens = {
+        phrase[index : index + 2]
+        for phrase in re.findall(r"[\u4e00-\u9fff]+", normalized)
+        for index in range(len(phrase) - 1)
+    }
     return ascii_tokens | chinese_tokens
 
 
