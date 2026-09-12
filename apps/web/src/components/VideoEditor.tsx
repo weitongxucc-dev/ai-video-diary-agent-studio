@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Repl
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskWorkspace, MontageClipCandidate } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
+import { NarrationWaveformTrack } from "./NarrationWaveformTrack";
 
 export const editorTime = (value: number) => `${Math.floor(value / 60).toString().padStart(2, "0")}:${(value % 60).toFixed(1).padStart(4, "0")}`;
 const sourceUrl = (clip: CreationTaskMontageClip) => apiUrl(`/api/production/materials/${encodeURIComponent(clip.asset_id)}/media`);
@@ -52,7 +53,7 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
     </button>)}</div>
     <div className={ui.tracks} aria-label="配音与字幕时间范围">
       <div className={ui.ruler}><span>时间</span><div>{Array.from({ length: 5 }, (_, i) => <time key={i}>{editorTime(montage.duration_seconds * i / 4)}</time>)}</div></div>
-      <div className={ui.track}><span>配音</span><div>{montage.cues.map(cue => { const clip = montage.clips.find(item => item.cue_id === cue.id); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ flex: cue.duration_seconds }} aria-label={`定位配音：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => onSelect(clip.id)}>{cue.text}</button> : null; })}</div></div>
+      <NarrationWaveformTrack workspace={workspace} selectedId={selectedId} onSelect={onSelect} />
       <div className={ui.track}><span>字幕</span><div>{workspace.subtitle_tracks.find(track => track.language === "zh-CN")?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ flex: cue.end_seconds - cue.start_seconds }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => onSelect(clip.id)}>{cue.text}</button> : null; })}</div></div>
     </div>
   </div>;

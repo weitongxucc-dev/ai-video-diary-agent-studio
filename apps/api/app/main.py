@@ -35,6 +35,7 @@ from app.auth import (
     UnauthorizedError,
 )
 from app.artifact_store import ArtifactStore
+from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.cover_generation import (
     CoverGenerationRequest,
     CoverGenerationService,
@@ -4035,6 +4036,25 @@ def get_creation_task_narration_audio(task_id: str, request: Request) -> FileRes
     if artifact is None or artifact.task_id != task.id:
         raise HTTPException(status_code=404, detail="creation task narration not found")
     return FileResponse(artifact.audio_path, media_type="audio/wav", filename="narration.wav")
+
+
+@app.get("/api/creation-tasks/{task_id}/narration/waveform")
+def get_creation_task_narration_waveform(task_id: str, request: Request) -> dict:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    artifact = (
+        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
+        if task.narration_cache_key else None
+    )
+    if artifact is None or artifact.task_id != task.id:
+        raise HTTPException(status_code=404, detail="当前任务还没有可读取的配音。")
+    try:
+        return audio_waveform(
+            Path(artifact.audio_path),
+            settings.effective_temporary_root_path / "audio-waveforms" / workspace_id,
+        )
+    except AudioWaveformError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/narration/segments/{segment_id}/audio")
