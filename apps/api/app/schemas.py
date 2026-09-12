@@ -1980,6 +1980,9 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None
     product_hunt_token: str | None = None
+    asr_provider: Literal["local_whisper", "tencentcloud"] | None = None
+    local_whisper_backend: Literal["openai_whisper", "whisper_cpp"] | None = None
+    local_whisper_cli_path: str | None = None
     tencentcloud_secret_id: str | None = None
     tencentcloud_secret_key: str | None = None
     tencentcloud_asr_region: str | None = None

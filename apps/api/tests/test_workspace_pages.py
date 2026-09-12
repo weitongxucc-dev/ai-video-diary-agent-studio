@@ -140,6 +140,7 @@ def test_sources_links_endpoint_converts_url_to_material(monkeypatch):
 def test_runtime_settings_endpoint_hides_secrets(tmp_path):
     main_module.settings = Settings(
         deepseek_api_key="secret-key",
+        asr_provider="tencentcloud",
         tencentcloud_secret_id="tencent-id",
         tencentcloud_secret_key="tencent-key",
         obsidian_vault_path=str(tmp_path / "vault"),

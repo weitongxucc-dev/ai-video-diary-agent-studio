@@ -254,6 +254,7 @@ class Settings:
     draft_output_path: str = _default_draft_output_path()
     jianying_draft_root_path: str = _default_jianying_draft_root_path()
     database_path: str = _default_database_path()
+    asr_provider: str = "local_whisper"
     tencentcloud_secret_id: str | None = None
     tencentcloud_secret_key: str | None = None
     tencentcloud_asr_region: str = "ap-shanghai"
@@ -261,9 +262,11 @@ class Settings:
     tencentcloud_asr_max_wait_seconds: int = 120
     tencentcloud_asr_poll_interval_seconds: float = 2.0
     tencentcloud_asr_max_local_audio_bytes: int = 5_000_000
+    local_whisper_backend: str = "openai_whisper"
+    local_whisper_cli_path: str | None = None
     local_whisper_python_path: str | None = None
     local_whisper_model_path: str | None = None
-    local_whisper_language: str = "zh"
+    local_whisper_language: str = "auto"
     model_root_path: str = _default_model_root_path()
     model_root_path_configured: bool = False
     temporary_root_path: str | None = None
@@ -279,6 +282,29 @@ class Settings:
     supabase_publishable_key: str | None = None
     supabase_jwt_audience: str = "authenticated"
     supabase_jwt_issuer: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.asr_provider not in {"local_whisper", "tencentcloud"}:
+            raise ValueError("ASR_PROVIDER 必须是 local_whisper 或 tencentcloud。")
+
+        if self.local_whisper_backend not in {"openai_whisper", "whisper_cpp"}:
+            raise ValueError("LOCAL_WHISPER_BACKEND 必须是 openai_whisper 或 whisper_cpp。")
+
+    @property
+    def local_whisper_runtime_path(self) -> str | None:
+        return self.local_whisper_cli_path if self.local_whisper_backend == "whisper_cpp" else self.local_whisper_python_path
+
+    @property
+    def local_whisper_configured(self) -> bool:
+        runtime = self.local_whisper_runtime_path
+        return bool(runtime and Path(runtime).expanduser().is_file()
+                    and self.local_whisper_model_path and Path(self.local_whisper_model_path).expanduser().is_file())
+
+    @property
+    def asr_configured(self) -> bool:
+        if self.asr_provider == "tencentcloud":
+            return bool(self.tencentcloud_secret_id and self.tencentcloud_secret_key)
+        return self.local_whisper_configured
 
     @property
     def effective_llm_provider(self) -> str:
@@ -390,6 +416,9 @@ class Settings:
                     str(cls.tencentcloud_asr_max_local_audio_bytes),
                 )
             ),
+            asr_provider=os.getenv("ASR_PROVIDER", cls.asr_provider),
+            local_whisper_backend=os.getenv("LOCAL_WHISPER_BACKEND", cls.local_whisper_backend),
+            local_whisper_cli_path=os.getenv("LOCAL_WHISPER_CLI_PATH"),
             local_whisper_python_path=os.getenv("LOCAL_WHISPER_PYTHON_PATH")
             or _default_local_whisper_python_path(),
             local_whisper_model_path=os.getenv("LOCAL_WHISPER_MODEL_PATH")
@@ -470,22 +499,15 @@ class Settings:
                 "database_exists": database_path.exists(),
             },
             "asr": {
-                "provider": "tencentcloud",
-                "configured": bool(
-                    self.tencentcloud_secret_id and self.tencentcloud_secret_key
-                ),
+                "provider": self.asr_provider,
+                "configured": self.asr_configured,
                 "region": self.tencentcloud_asr_region,
                 "engine_model_type": self.tencentcloud_asr_engine_model_type,
                 "max_local_audio_mb": round(
                     self.tencentcloud_asr_max_local_audio_bytes / 1_000_000,
                     2,
                 ),
-                "local_whisper_configured": bool(
-                    self.local_whisper_python_path
-                    and Path(self.local_whisper_python_path).expanduser().is_file()
-                    and self.local_whisper_model_path
-                    and Path(self.local_whisper_model_path).expanduser().is_file()
-                ),
+                "local_whisper_configured": self.local_whisper_configured,
                 "local_whisper_python_path": self.local_whisper_python_path,
                 "local_whisper_model_path": self.local_whisper_model_path,
             },
@@ -595,6 +617,12 @@ class Settings:
                     "secret": True,
                 },
                 {
+                    "name": "ASR_PROVIDER",
+                    "configured": True,
+                    "value": self.asr_provider,
+                    "secret": False,
+                },
+                {
                     "name": "TENCENTCLOUD_SECRET_ID",
                     "configured": bool(self.tencentcloud_secret_id),
                     "value": "已配置" if self.tencentcloud_secret_id else "未配置",
@@ -618,6 +646,8 @@ class Settings:
                     "value": self.tencentcloud_asr_engine_model_type,
                     "secret": False,
                 },
+                {"name": "LOCAL_WHISPER_BACKEND", "configured": True, "value": self.local_whisper_backend, "secret": False},
+                {"name": "LOCAL_WHISPER_CLI_PATH", "configured": bool(self.local_whisper_cli_path), "value": self.local_whisper_cli_path, "secret": False},
                 {
                     "name": "LOCAL_WHISPER_PYTHON_PATH",
                     "configured": bool(self.local_whisper_python_path),

@@ -185,8 +185,8 @@ def _ffmpeg_item(checked_at) -> dict[str, Any]:
 
 def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
     python_ok = bool(
-        settings.local_whisper_python_path
-        and Path(settings.local_whisper_python_path).expanduser().is_file()
+        settings.local_whisper_runtime_path
+        and Path(settings.local_whisper_runtime_path).expanduser().is_file()
     )
     model_ok = bool(
         settings.local_whisper_model_path
@@ -195,12 +195,12 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
     fix_command = None
     if python_ok and model_ok:
         status = "ready"
-        reason = "本地 Whisper Python 和模型均可访问。"
+        reason = "所选本地 Whisper 程序和模型可访问，尚需实际转写验证。"
         repair_action = "无需处理。"
     elif python_ok or model_ok:
         status = "invalid"
-        reason = "本地 Whisper Python 或模型路径不完整。"
-        repair_action = "在设置页同时配置 Python 路径和模型文件路径。"
+        reason = "所选本地 Whisper 程序或模型路径不完整。"
+        repair_action = "在设置页配置所选运行方式的程序和对应模型文件。"
     else:
         status = "missing"
         reason = "未配置本地 Whisper。"

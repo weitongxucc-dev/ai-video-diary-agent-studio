@@ -91,6 +91,7 @@ def test_preflight_all_ready_with_mock_ffmpeg(tmp_path, monkeypatch):
         video_inbox_path=str(dirs["inbox"]),
         video_output_path=str(dirs["output"]),
         jianying_draft_root_path=str(dirs["jianying"]),
+        asr_provider="tencentcloud",
         tencentcloud_secret_id="test-id",
         tencentcloud_secret_key="test-key",
         database_path=str(tmp_path / "db.sqlite"),
@@ -262,6 +263,7 @@ def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):
     verified, and defer Tencent remote availability to /api/runtime/health."""
     settings = Settings(
         deepseek_api_key="sk-test",
+        asr_provider="tencentcloud",
         tencentcloud_secret_id="test-id",
         tencentcloud_secret_key="test-key",
         database_path=str(tmp_path / "db.sqlite"),
@@ -272,8 +274,8 @@ def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):
 
     asr = next(c for c in result["checks"] if c["id"] == "asr")
     assert asr["status"] == "ready"
-    assert "配置已提供" in asr["summary"]
-    assert "runtime/health" in asr["summary"]
+    assert "凭据已配置" in asr["summary"]
+    assert "未验证远端调用" in asr["summary"]
     assert "已验证" not in asr["summary"]
 
 
@@ -343,6 +345,7 @@ def test_preflight_non_critical_degraded_does_not_block(tmp_path):
         video_inbox_path=str(inbox),
         video_output_path=str(output),
         jianying_draft_root_path=str(jianying_root),
+        asr_provider="tencentcloud",
         tencentcloud_secret_id="test-id",
         tencentcloud_secret_key="test-key",
         database_path=str(tmp_path / "db.sqlite"),
@@ -472,3 +475,11 @@ def test_preflight_settings_target_present_on_relevant_checks(tmp_path):
     for cid in ("deepseek", "obsidian", "video_inbox", "video_output", "jianying", "asr"):
         check = next(c for c in result["checks"] if c["id"] == cid)
         assert check["settings_target"] is not None, f"{cid} missing settings_target"
+
+
+def test_default_local_preflight_does_not_report_ready_from_cloud_credentials():
+    from app.preflight import _asr_check
+    settings = Settings(tencentcloud_secret_id="saved", tencentcloud_secret_key="saved")
+    check = _asr_check(settings)
+    assert check["status"] == "missing"
+    assert check["settings_target"] == "local_whisper_backend"

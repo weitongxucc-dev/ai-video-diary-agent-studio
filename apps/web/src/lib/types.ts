@@ -613,6 +613,9 @@ export type RuntimeSettings = {
 };
 
 export type RuntimeSettingsUpdate = {
+  asr_provider?: string;
+  local_whisper_backend?: string;
+  local_whisper_cli_path?: string;
   llm_provider?: string;
   llm_api_key?: string;
   llm_base_url?: string;

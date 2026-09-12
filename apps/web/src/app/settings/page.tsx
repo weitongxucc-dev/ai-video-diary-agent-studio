@@ -60,7 +60,8 @@ type FieldDef = {
   name: string;
   label: string;
   helper?: string;
-  kind: "text" | "secret" | "directory" | "textarea";
+  kind: "text" | "secret" | "directory" | "textarea" | "select";
+  options?: { value: string; label: string }[];
   defaultValue?: string;
   placeholder?: string;
   configured?: boolean;
@@ -78,7 +79,7 @@ const SECTIONS: SectionDef[] = [
     id: "asr",
     title: "语音识别 (ASR)",
     description:
-      "腾讯云 ASR 与本地 Whisper 二选一或叠加；填错会导致字幕生成失败。",
+      "默认本地 Whisper；只有主动选择腾讯云才会外发音频，失败不自动切换。",
     tone: "orange",
   },
   {
@@ -186,6 +187,20 @@ function buildFields(
     ],
     asr: [
       {
+        name: "local_whisper_backend", label: "本地运行方式", kind: "select",
+        defaultValue: valueOf("LOCAL_WHISPER_BACKEND") || "openai_whisper",
+        options: [{ value: "whisper_cpp", label: "whisper.cpp（原生运行）" }, { value: "openai_whisper", label: "OpenAI Whisper（Python）" }],
+      },
+      {
+        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "text",
+        defaultValue: valueOf("LOCAL_WHISPER_CLI_PATH"), helper: "选择 whisper.cpp 时使用；模型须为 GGML 格式。",
+      },
+      {
+        name: "asr_provider", label: "转写方式", kind: "select",
+        defaultValue: valueOf("ASR_PROVIDER") || "local_whisper",
+        options: [{ value: "local_whisper", label: "本地 Whisper" }, { value: "tencentcloud", label: "腾讯云（音频外发，可能产生费用）" }],
+      },
+      {
         name: "tencentcloud_secret_id",
         label: "Tencent SecretId",
         helper: "腾讯云访问凭证 SecretId。",
@@ -236,7 +251,7 @@ function buildFields(
       {
         name: "local_whisper_model_path",
         label: "Local Whisper Model",
-        helper: "本地 Whisper 模型目录或文件路径。",
+        helper: "模型文件路径：whisper.cpp 使用 ggml .bin，Python 使用 .pt。",
         kind: "text",
         defaultValue: valueOf("LOCAL_WHISPER_MODEL_PATH"),
         placeholder: "/Users/you/.cache/whisper/medium",
@@ -244,9 +259,9 @@ function buildFields(
       {
         name: "local_whisper_language",
         label: "Local Whisper Language",
-        helper: "默认 zh；空表示自动检测。",
+        helper: "auto 自动检测；也可指定 zh 中文或 en 英文。",
         kind: "text",
-        defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "zh",
+        defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "auto",
       },
     ],
     sources: [
@@ -280,6 +295,14 @@ function buildFields(
 }
 
 function FieldRow({ field }: { field: FieldDef }) {
+  if (field.kind === "select") {
+    return <label className="settings-field"><span>{field.label}</span>
+      <select aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
+        {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      {field.helper ? <small className="settings-field-helper">{field.helper}</small> : null}
+    </label>;
+  }
   if (field.kind === "secret") {
     return (
       <label className="settings-field">

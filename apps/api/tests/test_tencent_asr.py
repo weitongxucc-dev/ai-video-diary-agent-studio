@@ -1,10 +1,12 @@
 from pathlib import Path
+from dataclasses import replace
+import pytest
 
 from app.asr import (
     ASRAudioTooLargeError,
     ASRTranscription,
     ASRTranscriptionError,
-    FallbackASRTranscriber,
+    asr_transcriber_from_settings,
     LocalWhisperTranscriber,
     SubtitleSegment,
     TencentCloudASRTranscriber,
@@ -116,7 +118,8 @@ def test_tencent_asr_wraps_provider_create_errors(tmp_path):
         raise AssertionError("provider errors should be wrapped as ASRTranscriptionError")
 
 
-def test_local_whisper_transcriber_runs_local_module_and_parses_srt(tmp_path):
+@pytest.mark.parametrize("language", ["auto", "", "en", "zh"])
+def test_local_whisper_transcriber_runs_local_module_and_parses_srt(tmp_path, language):
     python_path = tmp_path / "python"
     model_path = tmp_path / "small.pt"
     audio_path = tmp_path / "audio.wav"
@@ -137,41 +140,49 @@ def test_local_whisper_transcriber_runs_local_module_and_parses_srt(tmp_path):
         Settings(
             local_whisper_python_path=str(python_path),
             local_whisper_model_path=str(model_path),
+            local_whisper_language=language,
         ),
         runner=runner,
     )
 
     transcription = transcriber.transcribe(audio_path)
 
+    if language in {"", "auto"}:
+        assert "--language" not in calls[0]
+    else:
+        assert calls[0][calls[0].index("--language") + 1] == language
     assert calls[0][:3] == [str(python_path), "-m", "whisper"]
     assert transcription.provider == "local_whisper"
     assert transcription.text == "本地字幕"
     assert transcription.segments == [SubtitleSegment(0, 1_200, "本地字幕")]
 
 
-def test_asr_fallback_uses_local_whisper_when_primary_provider_fails(tmp_path):
-    class FailingTranscriber:
-        configured = True
+def test_default_asr_does_not_use_saved_cloud_credentials():
+    settings = Settings(tencentcloud_secret_id="test-id", tencentcloud_secret_key="test-key")
+    assert isinstance(asr_transcriber_from_settings(settings), LocalWhisperTranscriber)
+    assert not settings.asr_configured
+    explicit = replace(settings, asr_provider="tencentcloud")
+    assert isinstance(asr_transcriber_from_settings(explicit), TencentCloudASRTranscriber)
+    assert explicit.asr_configured
+    with pytest.raises(ValueError, match="ASR_PROVIDER"):
+        replace(settings, asr_provider="unknown")
 
-        def transcribe(self, audio_path):
-            raise ASRTranscriptionError("cloud quota exhausted")
 
-    class LocalTranscriber:
-        configured = True
+def test_local_whisper_cpp_uses_selected_binary_and_existing_ggml_model(tmp_path):
+    binary, model, audio = [tmp_path / name for name in ("whisper-cli", "ggml-small.bin", "voice.wav")]
+    for path in (binary, model, audio):
+        path.write_bytes(b"fixture")
+    calls = []
 
-        def transcribe(self, audio_path):
-            return ASRTranscription(
-                provider="local_whisper",
-                text="本地兜底",
-                segments=[SubtitleSegment(0, 900, "本地兜底")],
-            )
+    def runner(command):
+        calls.append(command)
+        Path(command[command.index("-of") + 1] + ".srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nShow the USB port\n", encoding="utf-8")
 
-    audio_path = tmp_path / "audio.wav"
-    audio_path.write_bytes(b"fake-audio")
-
-    transcription = FallbackASRTranscriber(
-        [FailingTranscriber(), LocalTranscriber()]
-    ).transcribe(audio_path)
-
-    assert transcription.provider == "local_whisper"
-    assert transcription.text == "本地兜底"
+    settings = Settings(local_whisper_backend="whisper_cpp", local_whisper_cli_path=str(binary),
+                        local_whisper_model_path=str(model))
+    transcription = LocalWhisperTranscriber(settings, runner=runner).transcribe(audio)
+    assert settings.asr_configured
+    assert calls[0][0] == str(binary)
+    assert calls[0][calls[0].index("-l") + 1] == "auto"
+    assert transcription.text == "Show the USB port"

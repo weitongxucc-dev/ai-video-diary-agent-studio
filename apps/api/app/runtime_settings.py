@@ -9,6 +9,9 @@ LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 FIELD_TO_ENV = {
+    "asr_provider": "ASR_PROVIDER",
+    "local_whisper_backend": "LOCAL_WHISPER_BACKEND",
+    "local_whisper_cli_path": "LOCAL_WHISPER_CLI_PATH",
     "llm_provider": "LLM_PROVIDER",
     "llm_api_key": "LLM_API_KEY",
     "llm_base_url": "LLM_BASE_URL",
