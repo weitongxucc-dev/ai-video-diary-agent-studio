@@ -760,9 +760,11 @@ def test_planner_matches_approved_segments_with_traceable_reasons(tmp_path):
         assets=[_asset(tmp_path)],
     )
 
-    assert plan.status == "ready"
+    assert plan.status == "waiting_for_user"
     assert plan.clips
-    assert plan.low_confidence_clip_count == 0
+    assert plan.low_confidence_clip_count == 1
+    pending = next(clip for clip in plan.clips if clip.needs_confirmation)
+    assert next(cue.text for cue in plan.cues if cue.id == pending.cue_id) == "工具处理，"
     assert all(clip.match_reasons for clip in plan.clips)
     assert 30 <= plan.duration_seconds <= 90
 
@@ -819,9 +821,8 @@ def test_planner_rejects_narration_longer_than_profile_limit(tmp_path):
         )
 
 
-def test_planner_keeps_duration_only_matches_waiting_for_confirmation(tmp_path):
+def test_planner_keeps_duration_or_filename_only_matches_waiting_for_confirmation(tmp_path):
     asset = _asset(tmp_path, with_metadata=False)
-    asset.file_name = "素材001.mp4"
     plan = MontagePlanner().build(
         workspace_id="workspace_a",
         batch=_batch(),
@@ -956,6 +957,10 @@ def test_renderer_rejects_placeholder_output_after_running_command(tmp_path):
         profile=_profile(),
         assets=[asset],
     )
+    plan.status = "ready"
+    plan.low_confidence_clip_count = 0
+    for clip in plan.clips:
+        clip.needs_confirmation = False
     commands: list[list[str]] = []
 
     def runner(command: list[str]) -> None:
@@ -986,6 +991,10 @@ def test_renderer_keeps_ffmpeg_exit_code_and_stderr(tmp_path):
         profile=_profile(),
         assets=[asset],
     )
+    plan.status = "ready"
+    plan.low_confidence_clip_count = 0
+    for clip in plan.clips:
+        clip.needs_confirmation = False
 
     def runner(_command: list[str]) -> None:
         raise subprocess.CalledProcessError(23, ["ffmpeg"], stderr="invalid filter")

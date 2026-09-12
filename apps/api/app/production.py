@@ -25,6 +25,7 @@ from app.avatar_lipsync import (
     VoiceProfile as VersionedVoiceProfile,
 )
 from app.database_migrations import apply_production_migrations
+from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
 from app.asr import SubtitleSegment as SpeechObservation
 from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis, speech_text_for_range
@@ -94,6 +95,7 @@ class MaterialSegment:
     visual_status: AnalysisStatus = "pending"
     visual_model_id: str = ""
     visual_sample_count: int = 0
+    understanding: SegmentUnderstanding | None = None
     usage_role: AssetUsageRole = "unassigned"
     suggested_usage_role: SuggestedUsageRole = "unassigned"
     usage_role_confidence: float = 0.0
@@ -839,6 +841,7 @@ class ProductionRepository:
         scene_reader: Callable[[Path, float], list[float]] | None = None,
         visual_provider: VisualSemanticProvider | None = None,
         speech_analyzer: LocalMaterialSpeechAnalyzer | None = None,
+        visual_understanding: LocalVisualUnderstanding | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser()
         self.video_library_path = Path(video_library_path).expanduser()
@@ -846,6 +849,7 @@ class ProductionRepository:
         self.scene_reader = scene_reader or self._detect_scene_boundaries
         self.visual_provider = visual_provider or UnavailableVisualSemanticProvider()
         self.speech_analyzer = speech_analyzer
+        self.visual_understanding = visual_understanding
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
@@ -2366,8 +2370,32 @@ class ProductionRepository:
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
         if query:
-            clauses.append("LOWER(payload) LIKE ?")
-            parameters.append(f"%{query.strip().lower()}%")
+            clauses.append("""(
+                LOWER(json_extract(payload, '$.file_name')) LIKE ?
+                OR EXISTS (
+                    SELECT 1 FROM json_each(material_assets.payload, '$.segments') AS segment
+                    WHERE LOWER(CASE WHEN trim(json_extract(segment.value, '$.description')) != ''
+                        THEN json_extract(segment.value, '$.description')
+                        WHEN json_extract(segment.value, '$.understanding.status') = 'ready'
+                        THEN json_extract(segment.value, '$.understanding.summary') ELSE '' END) LIKE ?
+                    OR LOWER(CASE WHEN trim(json_extract(segment.value, '$.transcript')) != ''
+                        THEN json_extract(segment.value, '$.transcript')
+                        ELSE (SELECT group_concat(json_extract(speech.value, '$.text'), ' ')
+                            FROM json_each(material_assets.payload, '$.speech_analysis.observations') AS speech
+                            WHERE json_extract(material_assets.payload, '$.speech_analysis.status') = 'ready'
+                            AND json_extract(speech.value, '$.end_ms') > json_extract(segment.value, '$.start_seconds') * 1000
+                            AND json_extract(speech.value, '$.start_ms') < json_extract(segment.value, '$.end_seconds') * 1000)
+                        END) LIKE ?
+                    OR EXISTS (SELECT 1 FROM json_each(segment.value, '$.user_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
+                    OR EXISTS (SELECT 1 FROM json_each(segment.value, '$.system_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
+                    OR (json_extract(segment.value, '$.understanding.ocr_status') = 'ready' AND EXISTS (
+                        SELECT 1 FROM json_each(segment.value, '$.understanding.ocr_frames') AS frame,
+                            json_each(frame.value, '$.observations') AS observation
+                        WHERE LOWER(json_extract(observation.value, '$.text')) LIKE ?
+                        AND json_extract(observation.value, '$.confidence') >= ?))
+                )
+            )""")
+            parameters.extend([*[f"%{query.strip().lower()}%"] * 6, OCR_RETRIEVAL_MIN_CONFIDENCE])
         if review_status:
             clauses.append("json_extract(payload, '$.review_status') = ?")
             parameters.append(review_status)
@@ -2500,6 +2528,7 @@ class ProductionRepository:
     def analyze_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
         path = self._validated_library_file(asset.path)
+        source_stat = path.stat()
         try:
             duration = float(self.duration_reader(path))
             if duration <= 0:
@@ -2523,20 +2552,32 @@ class ProductionRepository:
             asset.duration_seconds = round(duration, 3)
             asset.segments = segments
             asset.analysis_status = "ready"
+            source_fingerprint = None
+            if self.visual_understanding is not None:
+                with path.open("rb") as source:
+                    source_fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
             if self.speech_analyzer is not None:
-                asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis)
+                asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis, source_fingerprint)
+            if self.visual_understanding is not None:
+                observations = self.visual_understanding.analyze(path, segments, source_fingerprint)
+                for segment in segments:
+                    segment.understanding = observations[segment.id]
             visual_message = self._analyze_visual_semantics(asset, path)
             role_message = self._suggest_usage_roles(asset)
             for segment in asset.segments:
                 segment.system_tags = _infer_system_tags(asset, segment)
             asset.analysis_message = (
                 f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message} "
-                f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'}"
+                f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'} "
+                f"画面观察 {sum(bool(item.understanding and item.understanding.status == 'ready') for item in segments)}/{len(segments)} 个片段。"
             ).strip()
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             asset.analysis_status = "failed"
             asset.analysis_message = f"镜头分析失败：{exc}"
-        return self._save_asset(asset)
+        final_stat = path.stat()
+        if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+            raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
+        return self._save_asset(asset, analysis_only=True)
 
     def get_visual_feature(
         self,
@@ -6141,9 +6182,35 @@ class ProductionRepository:
             existing.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
         return self._save_asset(existing)
 
-    def _save_asset(self, asset: MaterialAsset) -> MaterialAsset:
+    def _save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
         asset.updated_at = utc_now()
         with self._connect() as conn:
+            if analysis_only:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT payload FROM material_assets WHERE id = ? AND workspace_id = ?", (asset.id, asset.workspace_id)).fetchone()
+                if row is None:
+                    raise ValueError("素材已移除，未保存过期的分析结果。")
+                current = self._asset_from_payload(json.loads(row["payload"]))
+                if current.size_bytes != asset.size_bytes or current.modified_at != asset.modified_at:
+                    raise ValueError("分析期间素材文件发生变化，请重新分析。")
+                current_segments = {item.id: item for item in current.segments}
+                merged_segments = []
+                for analyzed in asset.segments:
+                    latest = current_segments.get(analyzed.id)
+                    if latest is not None:
+                        for name in ("visual_status", "visual_model_id", "visual_sample_count", "understanding",
+                                     "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
+                            setattr(latest, name, getattr(analyzed, name))
+                        latest.system_tags = _infer_system_tags(current, latest)
+                        merged_segments.append(latest)
+                    else:
+                        merged_segments.append(analyzed)
+                for name in ("duration_seconds", "analysis_status", "analysis_message", "speech_analysis",
+                             "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
+                    setattr(current, name, getattr(asset, name))
+                current.segments = merged_segments
+                current.updated_at = asset.updated_at
+                asset = current
             conn.execute(
                 """
                 INSERT INTO material_assets
@@ -6556,6 +6623,8 @@ class ProductionRepository:
         ) if isinstance(speech, dict) else None
         asset = MaterialAsset(**data, segments=segments, speech_analysis=speech_analysis)
         for segment in asset.segments:
+            if isinstance(segment.understanding, dict):
+                segment.understanding = SegmentUnderstanding(**segment.understanding)
             if not segment.system_tags:
                 segment.system_tags = _infer_system_tags(asset, segment)
         return asset
@@ -7823,6 +7892,10 @@ def _infer_system_tags(
     for tag, keywords in rules.items():
         if any(keyword in text for keyword in keywords):
             tags.append(tag)
+    if not segment.description and segment.understanding and segment.understanding.status == "ready":
+        for fact in segment.understanding.facts:
+            prefix = {"object": "主体", "scene": "场景", "action": "动作"}[fact["kind"]]
+            tags.append(f"{prefix}:{fact['text']}")
     return _normalized_labels(tags)
 
 
@@ -7832,21 +7905,24 @@ def _material_query_reasons(
     reasons: list[str] = []
     text_fields = (
         ("片段描述", segment.description),
+        ("本地画面观察", segment.understanding.summary if not segment.description and segment.understanding and segment.understanding.status == "ready" else ""),
+        ("原片画面文字", searchable_ocr_text(segment.understanding)),
         ("片段转录", segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds)),
     )
-    query_terms = [
-        value
-        for value in re.split(r"[^0-9a-z\u4e00-\u9fff]+", normalized_query)
-        if value
-    ]
+    query_terms = re.findall(r"[^\W_]+", normalized_query)
+
+    def contains_text(text: str, phrase: str) -> bool:
+        if re.search(r"[\u4e00-\u9fff]", phrase):
+            return phrase in text
+        return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
     for label, raw_value in text_fields:
         value = raw_value.strip().casefold()
         if not value:
             continue
         if (
-            normalized_query in value
-            or value in normalized_query
-            or any(term in value for term in query_terms)
+            contains_text(value, normalized_query)
+            or contains_text(normalized_query, value)
+            or any(contains_text(value, term) for term in query_terms)
         ):
             reasons.append(f"自然语言匹配{label}")
     for source, values in (

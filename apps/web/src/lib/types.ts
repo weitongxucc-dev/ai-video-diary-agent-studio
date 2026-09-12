@@ -613,6 +613,8 @@ export type RuntimeSettings = {
 };
 
 export type RuntimeSettingsUpdate = {
+  understanding_runtime_python_path?: string;
+  native_ocr_worker_path?: string;
   asr_provider?: string;
   local_whisper_backend?: string;
   local_whisper_cli_path?: string;
@@ -1556,6 +1558,16 @@ export type MaterialSegment = {
   visual_status: "pending" | "ready" | "blocked" | "failed";
   visual_model_id: string;
   visual_sample_count: number;
+  understanding?: {
+    status: "ready" | "blocked" | "failed"; fingerprint: string; model_id: string;
+    sample_times: number[]; summary: string;
+    facts: { kind: "object" | "action" | "scene"; text: string; sample_times: number[] }[];
+    unknowns: string[];
+    ocr_status: "ready" | "blocked" | "failed"; ocr_model_id: string;
+    ocr_frames: { id: string; timestamp_seconds: number; width: number; height: number;
+      observations: { text: string; confidence: number; box: number[]; retrieval_eligible: boolean }[] }[];
+    message: string;
+  } | null;
   usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
   suggested_usage_role: "unassigned" | "a_roll" | "b_roll";
   usage_role_confidence: number;

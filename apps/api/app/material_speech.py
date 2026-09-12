@@ -43,12 +43,14 @@ class LocalMaterialSpeechAnalyzer:
             self._model_identity = identity
         return self._model_id
 
-    def analyze(self, path: Path, duration: float, previous: MaterialSpeechAnalysis | None) -> MaterialSpeechAnalysis:
+    def analyze(self, path: Path, duration: float, previous: MaterialSpeechAnalysis | None, source_fingerprint: str | None = None) -> MaterialSpeechAnalysis:
         fingerprint = ""
         model_id = ""
         try:
-            with path.open("rb") as source:
-                fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
+            if source_fingerprint is None:
+                with path.open("rb") as source:
+                    source_fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
+            fingerprint = source_fingerprint
             probe = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
                 capture_output=True, text=True, check=True, timeout=15,
@@ -61,7 +63,7 @@ class LocalMaterialSpeechAnalyzer:
             if previous and previous.status == "ready" and previous.source_fingerprint == fingerprint and previous.model_id == model_id:
                 return previous
             temporary_root = self.settings.effective_temporary_root_path
-            temporary_root.mkdir(parents=True, exist_ok=True)
+            temporary_root.mkdir(exist_ok=True)
             with TemporaryDirectory(prefix="material-speech-", dir=temporary_root) as directory:
                 audio = Path(directory) / "speech.wav"
                 subprocess.run(

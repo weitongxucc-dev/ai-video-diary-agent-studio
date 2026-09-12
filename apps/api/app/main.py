@@ -37,6 +37,7 @@ from app.auth import (
 from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.material_speech import LocalMaterialSpeechAnalyzer
+from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
     CoverGenerationRequest,
     CoverGenerationService,
@@ -374,6 +375,8 @@ model_catalog = ModelCatalog(
     settings.model_runtime_python_path,
     settings.visual_model_worker_path,
     settings.voice_model_worker_path,
+    understanding_runtime_python_path=settings.understanding_runtime_python_path,
+    understanding_worker_path=settings.understanding_worker_path,
 )
 model_installer = ModelInstaller(
     model_catalog,
@@ -387,6 +390,7 @@ production_repo = ProductionRepository(
     video_library_path=settings.video_inbox_path,
     visual_provider=visual_semantic_provider,
     speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
+    visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
 )
 montage_repo = MontageRepository(settings.database_path)
 montage_planner = MontagePlanner(
@@ -8298,6 +8302,8 @@ def analyze_production_material(
         asset = production_repo.analyze_asset(current_workspace_id(request), asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _material_asset_response(asset)
 
 
@@ -8808,6 +8814,8 @@ def _reload_runtime_dependencies() -> None:
         settings.model_runtime_python_path,
         settings.visual_model_worker_path,
         settings.voice_model_worker_path,
+        understanding_runtime_python_path=settings.understanding_runtime_python_path,
+        understanding_worker_path=settings.understanding_worker_path,
     )
     model_installer = ModelInstaller(
         model_catalog,
@@ -8821,6 +8829,7 @@ def _reload_runtime_dependencies() -> None:
         video_library_path=settings.video_inbox_path,
         visual_provider=visual_semantic_provider,
         speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
+        visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
     )
     video_job_runner = VideoJobRunner(production_repo)
     montage_repo = MontageRepository(settings.database_path)

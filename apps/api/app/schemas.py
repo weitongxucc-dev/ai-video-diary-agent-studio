@@ -4,7 +4,9 @@ from datetime import date, datetime
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field
+
+from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 
 from app.models import (
     EpisodeIntakeMode,
@@ -369,6 +371,45 @@ class EpisodeVoiceSelectionResponse(BaseModel):
     source: Literal["episode", "none"]
 
 
+class VisualFactResponse(BaseModel):
+    kind: Literal["object", "action", "scene"]
+    text: str
+    sample_times: list[float]
+
+
+class OCRTextResponse(BaseModel):
+    text: str
+    confidence: float
+    box: list[float]
+
+    @computed_field
+    @property
+    def retrieval_eligible(self) -> bool:
+        return self.confidence >= OCR_RETRIEVAL_MIN_CONFIDENCE
+
+
+class OCRFrameResponse(BaseModel):
+    id: str
+    timestamp_seconds: float
+    width: int
+    height: int
+    observations: list[OCRTextResponse]
+
+
+class SegmentUnderstandingResponse(BaseModel):
+    status: Literal["ready", "blocked", "failed"]
+    fingerprint: str
+    model_id: str
+    sample_times: list[float]
+    summary: str
+    facts: list[VisualFactResponse]
+    unknowns: list[str]
+    ocr_status: Literal["ready", "blocked", "failed"]
+    ocr_model_id: str
+    ocr_frames: list[OCRFrameResponse]
+    message: str
+
+
 class MaterialSegmentResponse(BaseModel):
     id: str
     asset_id: str
@@ -379,6 +420,7 @@ class MaterialSegmentResponse(BaseModel):
     visual_status: Literal["pending", "ready", "blocked", "failed"]
     visual_model_id: str
     visual_sample_count: int = Field(ge=0, le=3)
+    understanding: SegmentUnderstandingResponse | None = None
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"]
     suggested_usage_role: Literal["unassigned", "a_roll", "b_roll"]
     usage_role_confidence: float = Field(ge=0, le=1)
@@ -1996,6 +2038,8 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     deepseek_model: str | None = None
     product_hunt_token: str | None = None
     asr_provider: Literal["local_whisper", "tencentcloud"] | None = None
+    understanding_runtime_python_path: str | None = None
+    native_ocr_worker_path: str | None = None
     local_whisper_backend: Literal["openai_whisper", "whisper_cpp"] | None = None
     local_whisper_cli_path: str | None = None
     tencentcloud_secret_id: str | None = None

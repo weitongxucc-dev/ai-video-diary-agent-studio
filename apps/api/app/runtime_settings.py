@@ -9,6 +9,8 @@ LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 FIELD_TO_ENV = {
+    "understanding_runtime_python_path": "UNDERSTANDING_RUNTIME_PYTHON_PATH",
+    "native_ocr_worker_path": "NATIVE_OCR_WORKER_PATH",
     "asr_provider": "ASR_PROVIDER",
     "local_whisper_backend": "LOCAL_WHISPER_BACKEND",
     "local_whisper_cli_path": "LOCAL_WHISPER_CLI_PATH",

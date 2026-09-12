@@ -49,6 +49,7 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     assert reanalyzed.segments[0].transcript == "HDMI port"
     assert reanalyzed.segments[0].description == "人物在讲解"
     assert restarted.search_material_segments("workspace", query="USB") == []
+    assert restarted.list_assets_page("workspace", limit=20, offset=0, query="USB")[1] == 0
     assert restarted.search_material_segments("workspace", query="HDMI")[0].segment_ref == f"segment:{segment.id}"
     assert not list((tmp_path / "temp").iterdir())
 
@@ -73,3 +74,13 @@ def test_missing_audio_is_explicit_and_bad_media_does_not_keep_stale_evidence(tm
     assert failed.status == "failed"
     assert failed.observations == []
     assert failed.source_fingerprint != result.source_fingerprint
+
+
+def test_material_query_respects_non_chinese_word_boundaries():
+    from app.production import MaterialSegment, _material_query_reasons
+    from unittest.mock import Mock
+    asset = Mock(usage_role="b_roll", speech_analysis=None)
+    segment = MaterialSegment("segment", "asset", 0, 1, transcript="Education USB port", usage_role="b_roll")
+    assert not _material_query_reasons("cat", segment, asset)
+    assert not _material_query_reasons("пеuр", segment, asset)
+    assert _material_query_reasons("usb", segment, asset)

@@ -102,6 +102,8 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   >;
   const textFieldNames: RuntimeTextField[] = [
     "asr_provider",
+    "understanding_runtime_python_path",
+    "native_ocr_worker_path",
     "local_whisper_backend",
     "local_whisper_cli_path",
     "llm_provider",

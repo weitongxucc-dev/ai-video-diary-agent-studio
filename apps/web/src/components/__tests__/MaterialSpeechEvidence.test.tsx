@@ -18,6 +18,9 @@ it("seeks original speech evidence and saves a user correction without replacing
     usage_role: "b_roll", review_status: "approved", analysis_status: "ready",
     speech_analysis: { status: "ready", observations: [{ start_ms: 6000, end_ms: 8000, text: "USB port" }], message: "本地转写" },
     segments: [{ id: "segment", start_seconds: 5, end_seconds: 10, description: "接口", transcript: "", usage_role: "b_roll",
+      understanding: { status: "ready", summary: "桌面上的电脑", sample_times: [5.75, 7.5, 9.25],
+        facts: [{ kind: "object", text: "电脑", sample_times: [7.5] }], unknowns: [], ocr_status: "ready",
+        ocr_frames: [{ timestamp_seconds: 9.25, observations: [{ text: "模糊文字", confidence: .3, retrieval_eligible: false }] }] },
       review_status: "approved", user_tags: [], system_tags: [], collection_ids: [], usage_count: 0 }],
   } as unknown as MaterialAsset;
   vi.mocked(updateProductionMaterialSegment).mockResolvedValue(asset);
@@ -29,6 +32,10 @@ it("seeks original speech evidence and saves a user correction without replacing
   expect(video.currentTime).toBe(5);
   fireEvent.click(screen.getByRole("button", { name: /USB port/ }));
   expect(video.currentTime).toBe(6);
+  fireEvent.click(screen.getByRole("button", { name: "查看采样帧 7.50 秒" }));
+  expect(video.currentTime).toBe(7.5);
+  fireEvent.click(screen.getByText(/模糊文字 · 低置信度/));
+  expect(video.currentTime).toBe(9.25);
   fireEvent.change(screen.getByLabelText("转写纠正（留空使用识别结果）"), { target: { value: "HDMI port" } });
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ transcript: "HDMI port", description: "接口" })));

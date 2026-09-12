@@ -920,10 +920,11 @@ def _score_candidate(
     *,
     visual_score: float | None = None,
 ):
-    metadata = " ".join(
-        item for item in (segment.description, segment.transcript or speech_text_for_range(
-            asset.speech_analysis, segment.start_seconds, segment.end_seconds), Path(asset.file_name).stem) if item
-    )
+    automatic_description = segment.understanding.summary if segment.understanding and segment.understanding.status == "ready" else ""
+    metadata = " ".join(item for item in (
+        segment.description or automatic_description or Path(asset.file_name).stem,
+        segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds),
+    ) if item)
     cue_tokens = _tokens(cue.text)
     metadata_tokens = _tokens(metadata)
     lexical_score = (
@@ -931,7 +932,7 @@ def _score_candidate(
         if metadata_tokens
         else 0.0
     )
-    reviewed_tokens = _tokens(" ".join((segment.description, segment.transcript, Path(asset.file_name).stem)))
+    reviewed_tokens = _tokens(segment.description)
     reviewed_lexical_score = len(cue_tokens & reviewed_tokens) / max(1, len(cue_tokens))
     available = segment.end_seconds - segment.start_seconds
     duration_score = max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
@@ -944,11 +945,11 @@ def _score_candidate(
     score -= min(0.36, segment_usage * 0.22 + asset_usage * 0.04)
     score -= min(0.3, segment.usage_count * 0.05)
     reasons = [
-        f"语义词重合 {round(lexical_score * 100)}%",
+        f"文字词重合 {round(lexical_score * 100)}%",
         f"镜头时长适配 {round(duration_score * 100)}%",
     ]
     if lexical_score > reviewed_lexical_score:
-        reasons.append("原片语音提及相关内容；语音证据不能确认画面匹配")
+        reasons.append("自动观察命中相关内容；仍需核对画面，语音证据不能确认画面匹配")
     if visual_score is not None:
         reasons.insert(1, f"画面向量相似度 {round(visual_score * 100)}%")
     if segment_usage == 0:

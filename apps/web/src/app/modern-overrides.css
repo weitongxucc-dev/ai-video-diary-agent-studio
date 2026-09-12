@@ -675,6 +675,7 @@ h4 {
 .library-speech-evidence strong { font-weight: 500; }
 .library-speech-evidence button { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 5px 0; border: 0; background: transparent; color: var(--text-2); text-align: left; font: inherit; cursor: pointer; }
 .library-speech-evidence button:hover { color: var(--accent); }
+.library-evidence-times { display: flex; gap: 10px; }
 .library-speech-evidence time { color: var(--accent); font-variant-numeric: tabular-nums; }
 .library-collection-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .library-collection-create button,

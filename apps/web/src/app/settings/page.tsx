@@ -118,6 +118,8 @@ function buildFields(
 
   return {
     paths: [
+      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "text", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
+      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "text", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
       {
         name: "obsidian_vault_path",
         label: "Obsidian Vault 路径",

@@ -436,6 +436,7 @@ export function MaterialLibraryWorkspace({
               </span>
               <p>
                 {segment.description ||
+                  segment.understanding?.summary ||
                   segment.transcript ||
                   "等待补充片段描述"}
               </p>
@@ -455,6 +456,28 @@ export function MaterialLibraryWorkspace({
                 : ""}
             </span>
           </div>
+          {selectedSegment.understanding ? <section className="library-speech-evidence" aria-label="画面观察证据">
+            <strong>画面观察</strong>
+            {selectedSegment.understanding.status === "ready" ? <>
+              <p>{selectedSegment.understanding.summary}</p>
+              <div className="library-evidence-times" aria-label="采样帧">{selectedSegment.understanding.sample_times.map(time =>
+                <button key={time} type="button" aria-label={`查看采样帧 ${time.toFixed(2)} 秒`} onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = time; }}><time>{duration(time)}</time></button>)}</div>
+              {selectedSegment.understanding.facts.length ? <details><summary>查看 {selectedSegment.understanding.facts.length} 条观察依据</summary>
+                {selectedSegment.understanding.facts.map((fact, index) => <button key={index} type="button" aria-label={`核对画面：${fact.text}`} onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = fact.sample_times[0]; }}>
+                  <time>{duration(fact.sample_times[0])}</time><span>{fact.text}</span>
+                </button>)}
+              </details> : null}
+              {selectedSegment.understanding.unknowns.length ? <p>待核对：{selectedSegment.understanding.unknowns.join("；")}</p> : null}
+            </> : <p>{selectedSegment.understanding.message}</p>}
+            <strong>画面文字</strong>
+            {selectedSegment.understanding.ocr_status === "ready" ? selectedSegment.understanding.ocr_frames.some(frame => frame.observations.length) ?
+              Array.from(new Set(selectedSegment.understanding.ocr_frames.flatMap(frame => frame.observations.map(item => item.text)))).map(text => {
+                const frame = selectedSegment.understanding!.ocr_frames.find(frame => frame.observations.some(item => item.text === text))!;
+                const eligible = selectedSegment.understanding!.ocr_frames.some(item => item.observations.some(observation => observation.text === text && observation.retrieval_eligible));
+                return <button key={text} type="button" onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = frame.timestamp_seconds; }}><time>{duration(frame.timestamp_seconds)}</time><span>{text}{!eligible ? " · 低置信度，未用于检索" : ""}</span></button>;
+              }) : <p>采样帧中未识别到文字。</p>
+              : <p>{selectedSegment.understanding.ocr_status === "failed" ? "本地文字识别失败，可重新分析。" : "本地文字识别尚未配置。"}</p>}
+          </section> : null}
           <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => setDescriptionDraft(event.target.value)} /></label>
           <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => setTranscriptDraft(event.target.value)} /></label>
           {selected.speech_analysis ? <section className="library-speech-evidence" aria-label="原片语音证据">
