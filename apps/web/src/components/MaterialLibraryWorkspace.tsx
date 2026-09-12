@@ -16,7 +16,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   analyzeProductionMaterial,
@@ -120,6 +120,9 @@ export function MaterialLibraryWorkspace({
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
   );
   const [newCollectionName, setNewCollectionName] = useState("");
+  const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
+  const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
+  const sourceVideo = useRef<HTMLVideoElement>(null);
 
   const selected =
     assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -175,6 +178,8 @@ export function MaterialLibraryWorkspace({
 
   function selectAsset(asset: MaterialAsset) {
     const first = asset.segments[0];
+    setDescriptionDraft(first?.description ?? "");
+    setTranscriptDraft(first?.transcript ?? "");
     setSelectedId(asset.id);
     setSelectedSegmentId(first?.id ?? "");
     setTagDraft(first?.user_tags.join(", ") ?? "");
@@ -183,6 +188,9 @@ export function MaterialLibraryWorkspace({
 
   function selectSegment(segment: MaterialSegment) {
     setSelectedSegmentId(segment.id);
+    setDescriptionDraft(segment.description);
+    setTranscriptDraft(segment.transcript);
+    if (sourceVideo.current) sourceVideo.current.currentTime = segment.start_seconds;
     setTagDraft(segment.user_tags.join(", "));
     setCollectionDraft(segment.collection_ids[0] ?? "");
   }
@@ -297,8 +305,8 @@ export function MaterialLibraryWorkspace({
         selected.id,
         selectedSegment.id,
         {
-          description: selectedSegment.description,
-          transcript: selectedSegment.transcript,
+          description: descriptionDraft,
+          transcript: transcriptDraft,
           review_status: selectedSegment.review_status,
           usage_role: selectedSegment.usage_role,
           user_tags: Array.from(new Set(tags)),
@@ -335,6 +343,9 @@ export function MaterialLibraryWorkspace({
     <div className="library-inspector">
       <div className="library-preview">
         <video
+          ref={sourceVideo}
+          aria-label="原素材预览"
+          onLoadedMetadata={event => { event.currentTarget.currentTime = selectedSegment?.start_seconds ?? 0; }}
           controls
           key={selected.id}
           preload="metadata"
@@ -444,6 +455,16 @@ export function MaterialLibraryWorkspace({
                 : ""}
             </span>
           </div>
+          <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => setDescriptionDraft(event.target.value)} /></label>
+          <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => setTranscriptDraft(event.target.value)} /></label>
+          {selected.speech_analysis ? <section className="library-speech-evidence" aria-label="原片语音证据">
+            <strong>原片语音</strong>
+            {selected.speech_analysis.status !== "ready" || !selected.speech_analysis.observations.length ? <p>{selected.speech_analysis.message}</p> : null}
+            {selected.speech_analysis.observations.filter(item => item.end_ms > selectedSegment.start_seconds * 1000 && item.start_ms < selectedSegment.end_seconds * 1000).map((item, index) =>
+              <button key={index} type="button" onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = item.start_ms / 1000; }}>
+                <time>{duration(item.start_ms / 1000)}</time><span>{item.text}</span>
+              </button>)}
+          </section> : null}
           <div className="library-tag-list" aria-label="系统标签">
             {selectedSegment.system_tags.map((tag) => (
               <span key={tag}>{tagLabel(tag)}</span>
@@ -496,7 +517,7 @@ export function MaterialLibraryWorkspace({
             onClick={() => void saveSegmentOrganization()}
             type="button"
           >
-            {busy === "segment" ? "保存中…" : "保存片段分类"}
+            {busy === "segment" ? "保存中…" : "保存片段修改"}
           </button>
         </div>
       ) : null}

@@ -36,6 +36,7 @@ from app.auth import (
 )
 from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
+from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.cover_generation import (
     CoverGenerationRequest,
     CoverGenerationService,
@@ -385,6 +386,7 @@ production_repo = ProductionRepository(
     database_path=settings.database_path,
     video_library_path=settings.video_inbox_path,
     visual_provider=visual_semantic_provider,
+    speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
 )
 montage_repo = MontageRepository(settings.database_path)
 montage_planner = MontagePlanner(
@@ -8818,6 +8820,7 @@ def _reload_runtime_dependencies() -> None:
         database_path=settings.database_path,
         video_library_path=settings.video_inbox_path,
         visual_provider=visual_semantic_provider,
+        speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
     )
     video_job_runner = VideoJobRunner(production_repo)
     montage_repo = MontageRepository(settings.database_path)

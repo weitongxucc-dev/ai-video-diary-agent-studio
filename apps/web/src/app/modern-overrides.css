@@ -667,8 +667,15 @@ h4 {
 .library-tag-list small { color: var(--text-3); font-size: 12px; }
 .library-segment-organizer label { display: grid; gap: 4px; color: var(--text-2); font-size: 12px; }
 .library-segment-organizer input,
+.library-segment-organizer textarea,
 .library-segment-organizer select,
 .library-collection-create input { min-width: 0; min-height: 32px; padding: 6px 8px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; }
+.library-segment-organizer textarea { min-height: 64px; resize: vertical; }
+.library-speech-evidence { display: grid; gap: 5px; font-size: 12px; }
+.library-speech-evidence strong { font-weight: 500; }
+.library-speech-evidence button { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 5px 0; border: 0; background: transparent; color: var(--text-2); text-align: left; font: inherit; cursor: pointer; }
+.library-speech-evidence button:hover { color: var(--accent); }
+.library-speech-evidence time { color: var(--accent); font-variant-numeric: tabular-nums; }
 .library-collection-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .library-collection-create button,
 .library-segment-save { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-size: 12px; cursor: pointer; }

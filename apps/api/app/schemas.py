@@ -393,6 +393,20 @@ class MaterialSegmentResponse(BaseModel):
     updated_at: datetime
 
 
+class MaterialSpeechObservationResponse(BaseModel):
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+class MaterialSpeechAnalysisResponse(BaseModel):
+    status: Literal["ready", "blocked", "failed"]
+    source_fingerprint: str
+    model_id: str
+    observations: list[MaterialSpeechObservationResponse]
+    message: str
+
+
 class MaterialAssetResponse(BaseModel):
     id: str
     workspace_id: str
@@ -411,6 +425,7 @@ class MaterialAssetResponse(BaseModel):
     brand_safe: bool
     analysis_status: Literal["pending", "ready", "blocked", "failed"]
     analysis_message: str
+    speech_analysis: MaterialSpeechAnalysisResponse | None = None
     segments: list[MaterialSegmentResponse]
     created_at: datetime
     updated_at: datetime

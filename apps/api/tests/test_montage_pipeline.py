@@ -73,7 +73,7 @@ def test_matching_preserves_english_words_and_chinese_phrase_boundaries() -> Non
         id="cue-port", source_section_id="section-port", narration_segment_id="voice-port",
         text="Show the USB port", duration_seconds=4.0,
     )
-    asset = SimpleNamespace(file_name="001.mp4")
+    asset = SimpleNamespace(file_name="001.mp4", speech_analysis=None)
     relevant = MaterialSegment(
         id="port", asset_id="asset", start_seconds=0, end_seconds=4,
         description="A close-up of a USB port",

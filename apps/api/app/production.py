@@ -26,6 +26,8 @@ from app.avatar_lipsync import (
 )
 from app.database_migrations import apply_production_migrations
 from app.models import utc_now
+from app.asr import SubtitleSegment as SpeechObservation
+from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis, speech_text_for_range
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
     SegmentWindow,
@@ -124,6 +126,7 @@ class MaterialAsset:
     brand_safe: bool = False
     analysis_status: AnalysisStatus = "pending"
     analysis_message: str = "待分析镜头和画面内容。"
+    speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -835,12 +838,14 @@ class ProductionRepository:
         duration_reader: Callable[[Path], float] | None = None,
         scene_reader: Callable[[Path, float], list[float]] | None = None,
         visual_provider: VisualSemanticProvider | None = None,
+        speech_analyzer: LocalMaterialSpeechAnalyzer | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser()
         self.video_library_path = Path(video_library_path).expanduser()
         self.duration_reader = duration_reader or self._probe_duration
         self.scene_reader = scene_reader or self._detect_scene_boundaries
         self.visual_provider = visual_provider or UnavailableVisualSemanticProvider()
+        self.speech_analyzer = speech_analyzer
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
@@ -2457,7 +2462,7 @@ class ProductionRepository:
                     reasons.append("标签匹配 " + "、".join(tags or []))
                 if normalized_query:
                     query_reasons = _material_query_reasons(
-                        normalized_query, segment
+                        normalized_query, segment, asset
                     )
                     if not query_reasons:
                         continue
@@ -2518,12 +2523,15 @@ class ProductionRepository:
             asset.duration_seconds = round(duration, 3)
             asset.segments = segments
             asset.analysis_status = "ready"
+            if self.speech_analyzer is not None:
+                asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis)
             visual_message = self._analyze_visual_semantics(asset, path)
             role_message = self._suggest_usage_roles(asset)
             for segment in asset.segments:
                 segment.system_tags = _infer_system_tags(asset, segment)
             asset.analysis_message = (
-                f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message}"
+                f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message} "
+                f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'}"
             ).strip()
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             asset.analysis_status = "failed"
@@ -6541,7 +6549,12 @@ class ProductionRepository:
             for segment in segment_payloads
             if isinstance(segment, dict)
         ]
-        asset = MaterialAsset(**data, segments=segments)
+        speech = data.pop("speech_analysis", None)
+        speech_analysis = MaterialSpeechAnalysis(
+            **{key: value for key, value in speech.items() if key != "observations"},
+            observations=[SpeechObservation(**item) for item in speech.get("observations", [])],
+        ) if isinstance(speech, dict) else None
+        asset = MaterialAsset(**data, segments=segments, speech_analysis=speech_analysis)
         for segment in asset.segments:
             if not segment.system_tags:
                 segment.system_tags = _infer_system_tags(asset, segment)
@@ -7814,12 +7827,12 @@ def _infer_system_tags(
 
 
 def _material_query_reasons(
-    normalized_query: str, segment: MaterialSegment
+    normalized_query: str, segment: MaterialSegment, asset: MaterialAsset
 ) -> list[str]:
     reasons: list[str] = []
     text_fields = (
         ("片段描述", segment.description),
-        ("片段转录", segment.transcript),
+        ("片段转录", segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds)),
     )
     query_terms = [
         value

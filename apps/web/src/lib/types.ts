@@ -1587,6 +1587,13 @@ export type MaterialAsset = {
   brand_safe: boolean;
   analysis_status: "pending" | "ready" | "blocked" | "failed";
   analysis_message: string;
+  speech_analysis?: {
+    status: "ready" | "blocked" | "failed";
+    source_fingerprint: string;
+    model_id: string;
+    observations: { start_ms: number; end_ms: number; text: string }[];
+    message: string;
+  } | null;
   segments: MaterialSegment[];
   created_at: string;
   updated_at: string;

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
     CreationTaskScript,
@@ -920,7 +921,8 @@ def _score_candidate(
     visual_score: float | None = None,
 ):
     metadata = " ".join(
-        item for item in (segment.description, segment.transcript, Path(asset.file_name).stem) if item
+        item for item in (segment.description, segment.transcript or speech_text_for_range(
+            asset.speech_analysis, segment.start_seconds, segment.end_seconds), Path(asset.file_name).stem) if item
     )
     cue_tokens = _tokens(cue.text)
     metadata_tokens = _tokens(metadata)
@@ -929,6 +931,8 @@ def _score_candidate(
         if metadata_tokens
         else 0.0
     )
+    reviewed_tokens = _tokens(" ".join((segment.description, segment.transcript, Path(asset.file_name).stem)))
+    reviewed_lexical_score = len(cue_tokens & reviewed_tokens) / max(1, len(cue_tokens))
     available = segment.end_seconds - segment.start_seconds
     duration_score = max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
     if visual_score is None:
@@ -943,6 +947,8 @@ def _score_candidate(
         f"语义词重合 {round(lexical_score * 100)}%",
         f"镜头时长适配 {round(duration_score * 100)}%",
     ]
+    if lexical_score > reviewed_lexical_score:
+        reasons.append("原片语音提及相关内容；语音证据不能确认画面匹配")
     if visual_score is not None:
         reasons.insert(1, f"画面向量相似度 {round(visual_score * 100)}%")
     if segment_usage == 0:
@@ -951,7 +957,7 @@ def _score_candidate(
         reasons.append("素材不足，存在重复使用")
     if segment.usage_count:
         reasons.append(f"历史成片已使用 {segment.usage_count} 次，降低重复优先级")
-    return score, lexical_score, visual_score, asset, segment, reasons
+    return score, reviewed_lexical_score, visual_score, asset, segment, reasons
 
 
 def _cosine_similarity(
