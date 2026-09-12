@@ -90,6 +90,7 @@ from app.product_hunt import ProductHuntClient
 from app.production import (
     ArtifactRecord,
     CreationPlan,
+    VideoTemplate,
     CreationPlanBlocker,
     CreationPlanKnowledgeReference,
     CreationPlanPronunciationReference,
@@ -154,6 +155,7 @@ from app.schemas import (
     ContentTemplatesResponse,
     CreationPlanConfirmRequest,
     CreationPlanPreviewRequest,
+    SaveVideoTemplateRequest,
     CreationPlanPreviewResponse,
     CreationPlanResponse,
     CreationTaskTopicConfirmRequest,
@@ -640,6 +642,77 @@ def get_content_templates() -> ContentTemplatesResponse:
         {"templates": list_content_templates()},
         from_attributes=True,
     )
+
+
+def _builtin_video_templates(workspace_id: str) -> list[VideoTemplate]:
+    return [VideoTemplate(
+        id=f"builtin_{item.template_id}", workspace_id=workspace_id, version=1,
+        name=item.name, origin="built_in",
+        settings={"language": "zh-CN", "aspect_ratio": "9:16", "duration_target_seconds": 60,
+                  "script_structure": item.script_structure, "style_instruction": item.scenario,
+                  "fit_mode": "fill", "subtitle_style": _default_subtitle_style(), "voice": None},
+    ) for item in list_content_templates()]
+
+
+def _video_template_or_404(workspace_id: str, template_id: str, version: int) -> VideoTemplate:
+    for item in _builtin_video_templates(workspace_id):
+        if (item.id, item.version) == (template_id, version):
+            return item
+    try:
+        return production_repo.get_video_template(workspace_id, template_id, version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="当前工作区找不到这个模板版本。") from exc
+
+
+@app.get("/api/video-templates")
+def list_video_templates(request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    return {"items": [asdict(item) for item in [*_builtin_video_templates(workspace_id), *production_repo.list_video_templates(workspace_id)]]}
+
+
+@app.post("/api/creation-tasks/{task_id}/templates")
+def save_creation_task_template(task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    try:
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail="先生成并检查一条成片，再保存模板。") from exc
+    if montage.status != "rendered" or not montage.output_path or not task.current_timeline_version_id:
+        raise HTTPException(status_code=409, detail="先生成并检查一条成片，再保存模板。")
+    try:
+        output = _creation_task_output_path(workspace_id, task_id, subtitle=False)
+        if output.stat().st_size == 0:
+            raise OSError("empty output")
+    except (HTTPException, OSError) as exc:
+        raise HTTPException(status_code=409, detail="当前成片文件不可用，请恢复文件或重新渲染后再保存模板。") from exc
+    if (payload.template_id is None) != (payload.expected_version is None):
+        raise HTTPException(status_code=422, detail="更新模板时需要同时指定模板和当前版本。")
+    if payload.template_id:
+        previous = _video_template_or_404(workspace_id, payload.template_id, payload.expected_version)
+        if previous.origin != "user":
+            raise HTTPException(status_code=409, detail="内置模板不可覆盖，请另存为我的模板。")
+    tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
+    source_track = next((item for item in tracks if item.language == "zh-CN"), None)
+    scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
+    script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
+    template = VideoTemplate(
+        id=payload.template_id or f"template_{uuid4().hex[:12]}", workspace_id=workspace_id,
+        version=(payload.expected_version or 0) + 1, name=payload.name.strip(), origin="user",
+        source_task_id=task_id, source_timeline_version_id=task.current_timeline_version_id,
+        settings={"language": plan.language, "aspect_ratio": plan.aspect_ratio,
+                  "duration_target_seconds": plan.duration_target_seconds,
+                  "voice": {"profile_id": plan.selected_voice.profile_id, "version": plan.selected_voice.version} if plan.selected_voice else None,
+                  "script_section_count": len(script.sections) if script else None,
+                  "style_instruction": payload.style_instruction.strip(),
+                  "fit_mode": "fit" if all(clip.fit_mode == "fit" for clip in montage.clips) else "fill",
+                  "subtitle_style": dict(source_track.style) if source_track else _default_subtitle_style()},
+    )
+    try:
+        return asdict(production_repo.save_video_template(template))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get(
@@ -1875,6 +1948,14 @@ def _creation_plan_preflight(
     workspace_id: str,
     payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
 ) -> CreationPlan:
+    template = None
+    if payload.template_id is not None:
+        if payload.template_version is None:
+            raise HTTPException(status_code=422, detail="请选择明确的模板版本。")
+        template = _video_template_or_404(workspace_id, payload.template_id, payload.template_version)
+        payload = payload.model_copy(update={key: template.settings[key] for key in ("language", "aspect_ratio", "duration_target_seconds")})
+    elif payload.template_version is not None:
+        raise HTTPException(status_code=422, detail="模板版本缺少对应模板。")
     knowledge_references = [
         CreationPlanKnowledgeReference(
             id=item.id,
@@ -1919,7 +2000,7 @@ def _creation_plan_preflight(
         usage_roles=["a_roll", "b_roll"],
         limit=8,
     )
-    if not material_matches:
+    if not material_matches and template is None:
         material_matches = production_repo.search_material_segments(
             workspace_id,
             usage_roles=["a_roll", "b_roll"],
@@ -1932,7 +2013,12 @@ def _creation_plan_preflight(
     }
     requested_voice_language = language_to_voice_language[payload.language]
     active_voices = []
-    for voice in production_repo.list_versioned_voice_profiles(workspace_id):
+    required_voice = template.settings.get("voice") if template else None
+    voices = (
+        production_repo.list_versioned_voice_profile_versions(workspace_id, required_voice["profile_id"])
+        if required_voice else production_repo.list_versioned_voice_profiles(workspace_id)
+    )
+    for voice in voices:
         authorization = production_repo.get_authorization(
             workspace_id,
             voice.authorization.id,
@@ -1944,6 +2030,8 @@ def _creation_plan_preflight(
             (voice, authorization)
             for voice, authorization in active_voices
             if voice.language in {requested_voice_language, "zh-en"}
+            and (template is None or not template.settings.get("voice") or
+                 (voice.id, voice.version) == (template.settings["voice"]["profile_id"], template.settings["voice"]["version"]))
         ),
         None,
     )
@@ -2028,7 +2116,15 @@ def _creation_plan_preflight(
                 blocks_confirmation=True,
             )
         )
-    if selected_voice is None:
+    required_template_voice = template.settings.get("voice") if template else None
+    if selected_voice is None and required_template_voice:
+        blockers.append(CreationPlanBlocker(
+            reason="template_voice_unavailable",
+            impact=f"模板指定声音 {required_template_voice['profile_id']} · {required_template_voice['version']} 不可用，未替换为其他声音。",
+            repair_action="在人物与声音中恢复这个声音版本及授权，或返回选择其他模板版本。",
+            stage="narration", blocks_confirmation=True,
+        ))
+    elif selected_voice is None:
         reason = (
             "voice_language_unavailable"
             if active_voices
@@ -2085,8 +2181,18 @@ def _creation_plan_preflight(
                 blocks_confirmation=False,
             )
         )
+    if template is not None and not material_matches:
+        blockers.append(CreationPlanBlocker(
+            reason="template_material_matches_missing",
+            impact="已有素材没有匹配本次新主题，未沿用原任务镜头。",
+            repair_action="前往素材库补充或审核与新主题相关的镜头，再重新检查。",
+            stage="video_editing", blocks_confirmation=True,
+        ))
     name = payload.name or f"创作任务：{payload.goal[:48]}"
     fingerprint_payload = {
+        "template_id": template.id if template else None,
+        "template_version": template.version if template else None,
+        "template_settings": template.settings if template else {},
         "goal": payload.goal,
         "name": name,
         "target_count": payload.target_count,
@@ -2136,12 +2242,18 @@ def _creation_plan_preflight(
         confirmation_points=list(fingerprint_payload["confirmation_points"]),
         blockers=blockers,
         preflight_fingerprint=fingerprint,
+        template_id=template.id if template else None,
+        template_version=template.version if template else None,
+        template_settings=template.settings if template else {},
     )
 
 
 def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewResponse:
     return CreationPlanPreviewResponse.model_validate(
         {
+            "template_id": plan.template_id,
+            "template_version": plan.template_version,
+            "template_settings": plan.template_settings,
             "goal": plan.goal,
             "name": plan.name,
             "target_count": plan.target_count,
@@ -2849,7 +2961,7 @@ def _subtitle_track_from_montage(
         timeline_version_id=version.id,
         language="zh-CN",
         source_language=None,
-        style=_default_subtitle_style(),
+        style=dict(montage.cues[0].subtitle_style) if montage.cues and montage.cues[0].subtitle_style else _default_subtitle_style(),
         cues=cues,
         generation_method="timeline",
         model_id=None,
@@ -2976,6 +3088,7 @@ def _creation_task_workspace_response(
                 **task.__dict__,
                 "timeline_sequence": current_version.sequence if current_version else 0,
                 "can_undo": can_undo,
+                "can_redo": _redo_target_versions(workspace_id, task)[0] is not None,
             },
             "plan": _creation_plan_preview_response(plan).model_dump(),
             "selected_topic": (
@@ -3346,6 +3459,8 @@ def generate_creation_task_topics(
                 goal=plan.goal,
                 language=plan.language,
                 sources=provider_sources,
+                style_instruction=str(plan.template_settings.get("style_instruction", "")),
+                script_structure=tuple(plan.template_settings.get("script_structure", [])),
             )
         )
     except CreationTaskTopicGenerationError as exc:
@@ -3594,6 +3709,9 @@ def generate_creation_task_script(
                     topic_audience=selected_topic.audience,
                     topic_outline=tuple(selected_topic.outline),
                     sources=provider_sources,
+                    style_instruction=str(plan.template_settings.get("style_instruction", "")),
+                    script_structure=tuple(plan.template_settings.get("script_structure", [])),
+                    script_section_count=plan.template_settings.get("script_section_count"),
                 )
             )
         )
@@ -4316,7 +4434,7 @@ def create_creation_task_montage_plan(
 ) -> CreationTaskMontagePlanResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    _creation_plan_for_task_or_404(workspace_id, task)
+    creation_plan = _creation_plan_for_task_or_404(workspace_id, task)
     if task.confirmed_script_id is None or task.narration_cache_key is None:
         raise HTTPException(status_code=409, detail="confirmed script or narration missing")
     try:
@@ -4371,6 +4489,10 @@ def create_creation_task_montage_plan(
                 for segment in narration_segments
             },
         )
+        for clip in montage.clips:
+            clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
+        for cue in montage.cues:
+            cue.subtitle_style = dict(creation_plan.template_settings.get("subtitle_style", {}))
         task, _ = production_repo.save_creation_task_montage_plan(
             workspace_id,
             task.id,
@@ -4992,9 +5114,31 @@ def _undo_target_versions(
     return changed, target
 
 
+def _redo_target_versions(workspace_id: str, task: CreationTask) -> tuple[TimelineVersion | None, TimelineVersion | None]:
+    if task.current_timeline_version_id is None:
+        return None, None
+    current = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+    while current.created_by_operation_id is None and current.parent_version_id:
+        current = production_repo.get_timeline_version(workspace_id, current.parent_version_id)
+    if current.created_by_operation_id is None:
+        return None, None
+    operation = production_repo.get_edit_operation(workspace_id, current.created_by_operation_id)
+    if operation.operation_type != "UndoTimelineVersion":
+        return None, None
+    target_id = operation.payload.get("base_version_id")
+    if not isinstance(target_id, str):
+        return None, None
+    target = production_repo.get_timeline_version(workspace_id, target_id)
+    return current, target
+
+
 def _edit_material_constraint(command: str) -> str:
     value = command.casefold()
     for phrase in (
+        "保留当前配音",
+        "保留原配音",
+        "保留配音",
+        "配音不变",
         "把这个镜头",
         "把当前镜头",
         "换成另一个镜头",
@@ -5867,7 +6011,7 @@ def preview_creation_task_edit(
                 "after": {
                     "ref": f"segment:{replacement.segment_id}",
                     "label": replacement.file_name,
-                    "detail": replacement.description,
+                    "detail": f"{replacement.start_seconds:.1f}–{replacement.start_seconds + clip.timeline_end_seconds - clip.timeline_start_seconds:.1f} 秒 · {replacement.description}",
                 },
             },
             external_effects=["确认后只更新任务版本，不会立即调用模型或渲染。"],
@@ -6504,14 +6648,12 @@ def confirm_creation_task_edit(
             operation_payload=dict(operation_payload),
             narration_segments=segments, narration_artifact=narration_record,
         )
-    if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop"} or not isinstance(operation_payload, dict):
+    if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop", "TrimClip", "ReorderClip", "SetClipLock", "ConfirmClip"} or not isinstance(operation_payload, dict):
         raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
     required_strings = {
         key: operation_payload.get(key)
         for key in (
             "clip_id",
-            "asset_id",
-            "segment_id",
             "expected_asset_id",
             "expected_segment_id",
             "base_version_id",
@@ -6538,17 +6680,17 @@ def confirm_creation_task_edit(
         required_strings["expected_segment_id"],
     ):
         raise HTTPException(status_code=409, detail="creation task edit target has changed")
-    source_start = operation_payload.get("source_start_seconds")
-    if not isinstance(source_start, (int, float)):
-        raise HTTPException(status_code=409, detail="invalid creation task edit trim")
-    crop_edit = operation_draft["operation_type"] == "ChangeCrop"
+    operation_type = operation_draft["operation_type"]
     update = CreationTaskMontageClipUpdateRequest(
-        fit_mode=operation_payload.get("fit_mode"),
-        crop_x=operation_payload.get("crop_x"),
-        crop_y=operation_payload.get("crop_y"),
-    ) if crop_edit else CreationTaskMontageClipUpdateRequest(
-        asset_id=required_strings["asset_id"], segment_id=required_strings["segment_id"],
-        source_start_seconds=float(source_start), confirmed=True,
+        fit_mode=operation_payload.get("fit_mode") if operation_type == "ChangeCrop" else None,
+        crop_x=operation_payload.get("crop_x") if operation_type == "ChangeCrop" else None,
+        crop_y=operation_payload.get("crop_y") if operation_type == "ChangeCrop" else None,
+        asset_id=operation_payload.get("asset_id") if operation_type == "ReplaceClip" else None,
+        segment_id=operation_payload.get("segment_id") if operation_type == "ReplaceClip" else None,
+        source_start_seconds=operation_payload.get("source_start_seconds") if operation_type in {"ReplaceClip", "TrimClip"} else None,
+        position=operation_payload.get("position") if operation_type == "ReorderClip" else None,
+        locked=operation_payload.get("locked") if operation_type == "SetClipLock" else None,
+        confirmed=True if operation_type in {"ReplaceClip", "ConfirmClip"} else None,
     )
     updated_plan = _apply_creation_task_montage_clip_update(
         workspace_id,
@@ -6581,7 +6723,7 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
-    if payload.operation_type in {"ReplaceClip", "ChangeCrop"}:
+    if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "ReorderClip", "SetClipLock", "ConfirmClip"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
@@ -6955,6 +7097,18 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     if payload.operation_type == "ChangeCrop":
         operation_payload.update(asset_id=before_clip.asset_id, segment_id=before_clip.segment_id,
                                  source_start_seconds=before_clip.source_start_seconds)
+    def describe_clip(clip, clips):
+        if payload.operation_type == "ReorderClip":
+            return f"第 {clips.index(clip) + 1} 个镜头"
+        if payload.operation_type == "SetClipLock":
+            return "已锁定" if clip.locked else "未锁定"
+        if payload.operation_type == "ConfirmClip":
+            return "已确认" if clip.confirmed else "待确认"
+        if payload.operation_type == "ChangeCrop":
+            framing = "完整显示" if clip.fit_mode == "fit" else "填满画面"
+            return f"{framing} · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
+        return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
+
     before_asset = production_repo.get_asset(workspace_id, before_clip.asset_id)
     after_asset = production_repo.get_asset(workspace_id, after_clip.asset_id)
     now = utc_now()
@@ -6992,12 +7146,12 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                 "before": {
                     "ref": f"clip:{before_clip.id}",
                     "label": before_asset.file_name,
-                    "detail": (f"{'完整显示' if before_clip.fit_mode == 'fit' else '填满画面'} · 水平 {before_clip.crop_x:.0%} · 垂直 {before_clip.crop_y:.0%}" if payload.operation_type == "ChangeCrop" else f"{before_clip.source_start_seconds:.1f}–{before_clip.source_end_seconds:.1f} 秒"),
+                    "detail": describe_clip(before_clip, persisted_plan.clips),
                 },
                 "after": {
                     "ref": f"clip:{after_clip.id}",
                     "label": after_asset.file_name,
-                    "detail": (f"{'完整显示' if after_clip.fit_mode == 'fit' else '填满画面'} · 水平 {after_clip.crop_x:.0%} · 垂直 {after_clip.crop_y:.0%}" if payload.operation_type == "ChangeCrop" else f"{after_clip.source_start_seconds:.1f}–{after_clip.source_end_seconds:.1f} 秒"),
+                    "detail": describe_clip(after_clip, plan.clips),
                 },
             },
             external_effects=["只更新任务版本；重新渲染前不会执行媒体进程。"],
@@ -7017,16 +7171,27 @@ def undo_creation_task_timeline(
     request: Request,
     _payload: CreationTaskTimelineUndoRequest,
 ) -> CreationTaskEditConfirmResponse:
+    return _restore_creation_task_timeline(task_id, request, redo=False)
+
+
+@app.post("/api/creation-tasks/{task_id}/timeline/redo", response_model=CreationTaskEditConfirmResponse)
+def redo_creation_task_timeline(task_id: str, request: Request, _payload: CreationTaskTimelineUndoRequest) -> CreationTaskEditConfirmResponse:
+    return _restore_creation_task_timeline(task_id, request, redo=True)
+
+
+def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: bool) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    changed_version, target_version = _undo_target_versions(workspace_id, task)
+    changed_version, target_version = (_redo_target_versions if redo else _undo_target_versions)(workspace_id, task)
+    operation_type = "RedoTimelineVersion" if redo else "UndoTimelineVersion"
+    action_label = "重做" if redo else "撤销"
     if changed_version is None or target_version is None:
         raise _topic_failure_response(
             status_code=409,
-            error="timeline_undo_unavailable",
-            reason="当前没有可撤销的内容修改。",
+            error="timeline_redo_unavailable" if redo else "timeline_undo_unavailable",
+            reason=f"当前没有可{action_label}的内容修改。",
             impact="任务和时间线保持不变。",
-            repair_action="先完成一次镜头、配音或字幕修改，再使用撤销。",
+            repair_action="先撤销一次修改，再使用重做。" if redo else "先完成一次镜头、配音或字幕修改，再使用撤销。",
             retryable=False,
         )
     try:
@@ -7035,7 +7200,8 @@ def undo_creation_task_timeline(
         )
     except KeyError as exc:
         raise HTTPException(status_code=409, detail="timeline undo operation is unavailable") from exc
-    subtitle_cover_undo = changed_operation.operation_type in {
+    subtitle_cover_undo = redo or changed_operation.operation_type in {
+        "RedoTimelineVersion",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "UpdateSubtitleCue",
@@ -7113,11 +7279,11 @@ def undo_creation_task_timeline(
             id=f"intent_{uuid4().hex}",
             workspace_id=workspace_id,
             task_id=task_id,
-            raw_command="撤销上一次内容修改",
+            raw_command=f"{action_label}上一次内容修改",
             context_stage="subtitle_cover" if subtitle_cover_undo else "montage",
             selected_object_refs=[],
             playhead_ms=None,
-            intent_type="undo_timeline",
+            intent_type="redo_timeline" if redo else "undo_timeline",
             scope={"kind": "timeline", "version_id": changed_version.id},
             constraints={},
             confidence=1.0,
@@ -7131,10 +7297,10 @@ def undo_creation_task_timeline(
             workspace_id=workspace_id,
             task_id=task_id,
             intent_id=intent.id,
-            summary="恢复到上一次内容修改之前的版本。",
+            summary="重新应用刚才撤销的修改。" if redo else "恢复到上一次内容修改之前的版本。",
             target_refs=[f"timeline:{changed_version.id}"],
             operation={
-                "operation_type": "UndoTimelineVersion",
+                "operation_type": operation_type,
                 "payload": {
                     "changed_version_id": changed_version.id,
                     "restore_version_id": target_version.id,
@@ -7154,7 +7320,7 @@ def undo_creation_task_timeline(
                     "detail": f"来源版本 {target_version.sequence}",
                 },
             },
-            external_effects=["撤销会创建新的历史版本，不会删除原版本。"],
+            external_effects=[f"{action_label}会创建新的历史版本，不会删除原版本。"],
             created_at=now,
             updated_at=now,
         )
@@ -7166,7 +7332,7 @@ def undo_creation_task_timeline(
             proposal=proposal,
             base_version=current_version,
             result_version_id=result_version_id,
-            operation_type="UndoTimelineVersion",
+            operation_type=operation_type,
             operation_payload=dict(proposal.operation["payload"]),
             subtitle_tracks=restored_tracks,
             cover_asset=restored_cover,
@@ -7179,7 +7345,7 @@ def undo_creation_task_timeline(
         proposal=proposal,
         base_version=current_version,
         updated_plan=restored_plan,
-        operation_type="UndoTimelineVersion",
+        operation_type=operation_type,
         operation_payload=dict(proposal.operation["payload"]),
         narration_segments=restored_segments,
         narration_artifact=restored_narration,

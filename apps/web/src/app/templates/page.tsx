@@ -1,13 +1,13 @@
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
-import { getContentTemplates } from "@/lib/api.server";
-import type { ContentTemplate } from "@/lib/types";
+import { listVideoTemplates } from "@/lib/api.server";
+import type { VideoTemplate } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-async function loadTemplates(): Promise<{ templates: ContentTemplate[]; offline: boolean }> {
+async function loadTemplates(): Promise<{ templates: VideoTemplate[]; offline: boolean }> {
   try {
-    const response = await getContentTemplates();
-    return { templates: response.templates, offline: false };
+    const response = await listVideoTemplates();
+    return { templates: response.items, offline: false };
   } catch {
     return { templates: [], offline: true };
   }

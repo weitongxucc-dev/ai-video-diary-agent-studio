@@ -59,7 +59,7 @@ export function PublishingWorkspace() {
     if (filter === "failed") return task.stage_status === "failed";
     return true;
   }), [filter, tasks]);
-  const selected = tasks.find((task) => task.id === selectedId) ?? filtered[0] ?? tasks[0] ?? null;
+  const selected = filtered.find((task) => task.id === selectedId) ?? filtered[0] ?? null;
   const attentionCount = tasks.filter((task) => task.stage_status === "waiting_for_user").length;
   const readyCount = tasks.filter((task) => task.output_ready).length;
 
@@ -72,7 +72,7 @@ export function PublishingWorkspace() {
       <Link className={styles.primaryButton} href={`/tasks/${encodeURIComponent(selected.id)}`}>打开创作任务 <ArrowRight size={15} /></Link>
       <section className={styles.inspectorMuted}><strong>平台能力</strong><p>平台发布、定时发布和发布后监控尚未接入；本页不会把本地成片计为已发布。</p></section>
     </div>
-  ) : <div className={styles.inspectorEmpty}><Film size={20} /><strong>还没有可检查的记录</strong><p>创建任务后，当前阶段、阻断和本地成片状态会显示在这里。</p></div>;
+  ) : undefined;
 
   return (
     <AppShell creationTasks={tasks} inspector={inspector} inspectorTitle="记录详情">

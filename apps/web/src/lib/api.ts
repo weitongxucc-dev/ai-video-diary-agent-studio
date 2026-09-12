@@ -1,3 +1,4 @@
+import type { VideoTemplate } from "./types";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -522,6 +523,10 @@ export function undoCreationTaskTimeline(
   );
 }
 
+export function redoCreationTaskTimeline(taskId: string): Promise<CreationTaskEditConfirmResponse> {
+  return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify({}) });
+}
+
 export function getRuntimeSettings(): Promise<RuntimeSettings> {
   return request<RuntimeSettings>("/api/settings/runtime");
 }
@@ -647,5 +652,17 @@ export function restorePreferenceCard(
   return request<Preferences>("/api/preferences/restore", {
     method: "PATCH",
     body: JSON.stringify({ signal: preferenceId }),
+  });
+}
+
+export function listVideoTemplates(): Promise<{ items: VideoTemplate[] }> {
+  return creationPlanRequest("/api/video-templates");
+}
+
+export function saveVideoTemplate(taskId: string, input: {
+  name: string; style_instruction: string; template_id?: string; expected_version?: number;
+}): Promise<VideoTemplate> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/templates`, {
+    method: "POST", body: JSON.stringify(input),
   });
 }

@@ -1,115 +1,45 @@
 "use client";
 
 import Link from "next/link";
-import {
-  ArrowRight, BookOpenCheck, Clock3, GraduationCap, History, Layers3,
-  Library, ListChecks, Video, Wrench,
-} from "lucide-react";
-import { type ComponentType, useMemo, useState } from "react";
+import { ArrowRight, History, Layers3, Library } from "lucide-react";
+import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { ContentTemplate } from "@/lib/types";
+import type { VideoTemplate } from "@/lib/types";
 import styles from "./ProductWorkspace.module.css";
 
-type TemplateView = "built-in" | "mine" | "versions";
-type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
-
-const viewLabels: Array<{ id: TemplateView; label: string; icon: Icon }> = [
-  { id: "built-in", label: "内置模板", icon: Library },
+type TemplateView = "mine" | "built-in" | "versions";
+const views = [
   { id: "mine", label: "我的模板", icon: Layers3 },
+  { id: "built-in", label: "内置模板", icon: Library },
   { id: "versions", label: "版本记录", icon: History },
-];
+] as const;
 
-function templateIcon(templateId: string): Icon {
-  if (templateId === "tool_review") return Wrench;
-  if (templateId === "tutorial_demo") return GraduationCap;
-  return Video;
-}
+export function TemplateLibraryWorkspace({ offline, templates }: { offline: boolean; templates: VideoTemplate[] }) {
+  const [view, setView] = useState<TemplateView>("mine");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const candidates = templates.filter((item) => view === "built-in" ? item.origin === "built_in" : item.origin === "user");
+  const visible = view === "versions" ? candidates : candidates.filter((item) => !candidates.some((other) => other.id === item.id && other.version > item.version));
+  const selected = visible.find((item) => `${item.id}:${item.version}` === selectedKey) ?? visible[0];
+  const settings = selected?.settings;
+  const inspector = selected && settings ? <div className={styles.inspector}>
+    <h3>{selected.name} · v{selected.version}</h3>
+    <dl>
+      <div><dt>来源</dt><dd>{selected.source_task_id ? <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看来源任务</Link> : "内置制作结构"}</dd></div>
+      <div><dt>文案风格</dt><dd>{settings.style_instruction || "未指定额外风格"}</dd></div>
+      <div><dt>文案结构</dt><dd>{settings.script_structure?.join(" → ") || (settings.script_section_count ? `${settings.script_section_count} 段，按新主题重新撰写` : "按新主题生成")}</dd></div>
+      <div><dt>声音</dt><dd>{settings.voice ? `${settings.voice.profile_id} · ${settings.voice.version}` : "预检时选择当前可用声音"}</dd></div>
+      <div><dt>画幅与时长</dt><dd>{settings.aspect_ratio} · {settings.duration_target_seconds} 秒 · {settings.language === "zh-CN" ? "中文" : settings.language}</dd></div>
+      <div><dt>画面适配</dt><dd>{settings.fit_mode === "fit" ? "完整显示（可能留边）" : "填满画面（居中裁切）"}</dd></div>
+      <div><dt>字幕</dt><dd>复用中文样式；正文与时轴重新生成</dd></div>
+      <div><dt>素材与审核</dt><dd>按新主题检索；选题、文案和生成仍需确认</dd></div>
+    </dl>
+    <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
+  </div> : null;
 
-function templateTone(templateId: string): string {
-  if (templateId === "tool_review") return styles.toneAmber;
-  if (templateId === "tutorial_demo") return styles.toneGreen;
-  return styles.toneBlue;
-}
-
-function join(items: string[], limit = items.length): string {
-  return items.slice(0, limit).join(" · ");
-}
-
-function templateGoal(template: ContentTemplate): string {
-  return `按照“${template.name}”的表达方向，制作一条${template.recommended_duration}的中文视频。目标：${template.scenario}`;
-}
-
-function UnavailableLibrary({ view }: { view: Exclude<TemplateView, "built-in"> }) {
-  const mine = view === "mine";
-  return (
-    <section className={styles.emptyStage}>
-      <span className={styles.emptyIcon}>{mine ? <Layers3 size={22} /> : <History size={22} />}</span>
-      <div>
-        <h2>{mine ? "还没有可复用的视频模板" : "模板版本记录尚未建立"}</h2>
-        <p>{mine ? "当前可以查看内置制作结构，但只有真实创作任务跑通并保存后，才会出现在这里。" : "模板保存与版本事实源尚未接入；这里不会用内置模板假装历史版本。"}</p>
-      </div>
-      <Link className={styles.secondaryButton} href={mine ? "/production" : "/templates"}>{mine ? "查看创作任务" : "返回内置模板"}</Link>
-    </section>
-  );
-}
-
-export function TemplateLibraryWorkspace({ offline, templates }: { offline: boolean; templates: ContentTemplate[] }) {
-  const [view, setView] = useState<TemplateView>("built-in");
-  const [selectedId, setSelectedId] = useState(templates[0]?.template_id ?? null);
-  const selected = useMemo(() => templates.find((template) => template.template_id === selectedId) ?? templates[0] ?? null, [selectedId, templates]);
-
-  const inspector = selected ? (
-    <div className={styles.inspector}>
-      <span className={styles.objectEyebrow}>当前模板</span>
-      <h3>{selected.name}</h3>
-      <p>{selected.scenario}</p>
-      <dl>
-        <div><dt>推荐时长</dt><dd>{selected.recommended_duration}</dd></div>
-        <div><dt>选题结构</dt><dd>{join(selected.topic_structure)}</dd></div>
-        <div><dt>文案结构</dt><dd>{join(selected.script_structure)}</dd></div>
-        <div><dt>素材需要</dt><dd>{join(selected.material_requirements)}</dd></div>
-        <div><dt>字幕方式</dt><dd>{selected.subtitle_style}</dd></div>
-      </dl>
-      <section className={styles.inspectorNotice}><strong>当前能力边界</strong><p>此操作会把模板方向带入新任务目标；固定模板保存、版本记录和自动任务尚未接入。</p></section>
+  return <AppShell inspector={inspector} inspectorTitle="模板详情"><div className={styles.page}>
+    <div className={styles.viewBar}><nav className={styles.tabs} aria-label="模板视图">{views.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-pressed={view === id} className={view === id ? styles.activeTab : undefined} onClick={() => { setView(id); setSelectedKey(null); }}><Icon size={15} />{label}</button>)}</nav>
+      {selected ? <Link className={styles.primaryButton} href={`/production?new=1&template_id=${encodeURIComponent(selected.id)}&template_version=${selected.version}`}>使用模板创作 <ArrowRight size={15} /></Link> : null}
     </div>
-  ) : (
-    <div className={styles.inspectorEmpty}><BookOpenCheck size={20} /><strong>没有可检查的模板</strong><p>连接本地服务后，模板的结构与素材要求会显示在这里。</p></div>
-  );
-
-  return (
-    <AppShell inspector={inspector} inspectorTitle="模板详情">
-      <div className={styles.page}>
-        <div className={styles.viewBar}><nav aria-label="模板视图" className={styles.tabs}>
-          {viewLabels.map((item) => { const ItemIcon = item.icon; return <button aria-pressed={view === item.id} className={view === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setView(item.id)} type="button"><ItemIcon size={15} /> {item.label}</button>; })}
-        </nav>{view === "built-in" && selected ? <Link className={styles.primaryButton} href={`/production?new=1&goal=${encodeURIComponent(templateGoal(selected))}`}>用“{selected.name}”开始 <ArrowRight size={15} /></Link> : null}</div>
-
-        {view === "built-in" ? (
-          offline || templates.length === 0 ? (
-            <section className={styles.emptyStage}>
-              <span className={styles.emptyIcon}><BookOpenCheck size={22} /></span>
-              <div><h2>{offline ? "暂时无法读取模板" : "还没有内置模板"}</h2><p>{offline ? "本地 API 恢复后会显示真实模板定义；页面没有替换成演示数据。" : "当前服务没有返回可用的制作结构。"}</p></div>
-              <Link className={styles.secondaryButton} href="/health">检查运行情况</Link>
-            </section>
-          ) : (
-            <div className={styles.templateCatalog}>
-              <div className={styles.sectionHeading}><h2>选择制作结构</h2><p>{templates.length} 种 · 选择后查看详情</p></div>
-              <div className={styles.templateGrid}>
-                {templates.map((template) => {
-                  const TemplateIcon = templateIcon(template.template_id);
-                  const selectedTemplate = selected?.template_id === template.template_id;
-                  return (
-                    <button aria-pressed={selectedTemplate} className={`${styles.templateCard} ${templateTone(template.template_id)}${selectedTemplate ? ` ${styles.selectedCard}` : ""}`} key={template.template_id} onClick={() => setSelectedId(template.template_id)} type="button">
-                      <span className={styles.templateVisual} aria-hidden="true"><span className={styles.templateGlyph}><TemplateIcon size={22} strokeWidth={1.7} /></span><i /><i /><i /></span>
-                      <span className={styles.templateCopy}><span className={styles.templateMeta}><Clock3 size={13} /> {template.recommended_duration}</span><strong>{template.name}</strong><small>{template.scenario}</small><span className={styles.structureLine}><ListChecks size={14} /> {join(template.script_structure, 3)}</span></span>
-                      <ArrowRight className={styles.cardArrow} size={16} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )
-        ) : <UnavailableLibrary view={view} />}
-      </div>
-    </AppShell>
-  );
+    {offline ? <section className={styles.emptyStage}><p>暂时无法读取模板，请检查本地服务后刷新。</p><Link href="/health">检查运行情况</Link></section> : !visible.length ? <section className={styles.emptyStage}><p>还没有保存的模板。从满意成片的“检查与输出”中保存后，即可在这里选择版本复用。</p><Link href="/production">查看创作任务</Link></section> : <div className={styles.templateGrid}>{visible.map((item) => <button type="button" key={`${item.id}:${item.version}`} aria-pressed={selected === item} onClick={() => setSelectedKey(`${item.id}:${item.version}`)} className={`${styles.templateCard}${selected === item ? ` ${styles.selectedCard}` : ""}`}><span className={styles.templateCopy}><strong>{item.name} · v{item.version}</strong><small>{item.settings.style_instruction || "复用制作设置，用新主题创作"}</small><span>{item.settings.duration_target_seconds} 秒 · {item.settings.fit_mode === "fit" ? "完整显示" : "填满画面"}</span></span></button>)}</div>}
+  </div></AppShell>;
 }

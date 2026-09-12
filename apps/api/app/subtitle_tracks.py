@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import httpx
 
+from app.config import structured_completion_options
+
 if TYPE_CHECKING:
     from app.config import Settings
 
@@ -256,6 +258,7 @@ class OpenAICompatibleSubtitleTranslationProvider:
             "response_format": {"type": "json_object"},
             "temperature": 0.1,
             "max_tokens": min(8_000, max(1_000, sum(len(cue.text) for cue in cues) * 3)),
+            **structured_completion_options(self.model_id),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:

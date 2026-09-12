@@ -608,6 +608,8 @@ class CreationPlanDefaultsRequest(BaseModel):
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16"] = "9:16"
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    template_id: str | None = Field(default=None, min_length=1, max_length=120)
+    template_version: int | None = Field(default=None, ge=1)
 
     @field_validator("goal")
     @classmethod
@@ -709,6 +711,7 @@ class CreationTaskResponse(BaseModel):
     current_timeline_version_id: str | None = None
     timeline_sequence: int = Field(default=0, ge=0)
     can_undo: bool = False
+    can_redo: bool = False
     output_ready: bool
     stage_reason: str | None
     stage_impact: str | None
@@ -1103,6 +1106,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
+    "RedoTimelineVersion",
     ]
     payload: dict[str, object]
 
@@ -1158,6 +1162,7 @@ class EditOperationResponse(BaseModel):
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
+    "RedoTimelineVersion",
     ]
     payload: dict[str, object]
     base_version_id: str | None
@@ -1175,6 +1180,9 @@ class CreationTaskEditConfirmResponse(BaseModel):
 
 
 class CreationPlanPreviewResponse(BaseModel):
+    template_id: str | None = None
+    template_version: int | None = None
+    template_settings: dict[str, object] = Field(default_factory=dict)
     goal: str
     name: str
     target_count: int = Field(ge=1)
@@ -1204,6 +1212,14 @@ class CreationPlanResponse(CreationPlanPreviewResponse):
     created_at: datetime
     confirmed_at: datetime
     updated_at: datetime
+
+
+class SaveVideoTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    style_instruction: str = Field(default="", max_length=500)
+    template_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class PersonRenderCapabilityResponse(BaseModel):

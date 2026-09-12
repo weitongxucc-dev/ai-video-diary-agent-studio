@@ -276,6 +276,29 @@ export type SystemStatus = {
   };
 };
 
+export type VideoTemplateSettings = {
+  language: CreationPlanInput["language"];
+  aspect_ratio: "9:16";
+  duration_target_seconds: number;
+  voice: { profile_id: string; version: string } | null;
+  script_structure?: string[];
+  script_section_count?: number | null;
+  style_instruction: string;
+  fit_mode: "fill" | "fit";
+  subtitle_style: Record<string, unknown>;
+};
+
+export type VideoTemplate = {
+  id: string;
+  version: number;
+  name: string;
+  origin: "built_in" | "user";
+  settings: VideoTemplateSettings;
+  source_task_id: string | null;
+  source_timeline_version_id: string | null;
+  created_at: string;
+};
+
 export type ContentTemplate = {
   template_id: string;
   name: string;
@@ -922,6 +945,8 @@ export type ProductionFoundation = {
 };
 
 export type CreationPlanInput = {
+  template_id?: string | null;
+  template_version?: number | null;
   goal: string;
   name?: string;
   target_count: number;
@@ -1008,6 +1033,7 @@ export type CreationTask = {
   current_timeline_version_id: string | null;
   timeline_sequence: number;
   can_undo: boolean;
+  can_redo?: boolean;
   output_ready: boolean;
   stage_reason: string | null;
   stage_impact: string | null;
@@ -1432,6 +1458,7 @@ export type CreationTaskEditConfirmResponse = {
 };
 
 export type CreationPlanPreview = CreationPlanInput & {
+  template_settings?: VideoTemplateSettings;
   name: string;
   knowledge_references: CreationPlanKnowledgeReference[];
   source_references: CreationPlanSourceReference[];

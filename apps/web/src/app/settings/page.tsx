@@ -479,23 +479,7 @@ export default async function SettingsPage({
           </nav>
         </aside>
         <section className="workspace-main ui-panel">
-          <div className="workspace-header">
-            <div>
-              <h1>
-                {
-                  SETTINGS_CATEGORIES.find((item) => item.id === activeCategory)
-                    ?.label
-                }
-              </h1>
-              <p>
-                {offline
-                  ? "暂时无法连接本地 API。"
-                  : SETTINGS_CATEGORIES.find(
-                      (item) => item.id === activeCategory,
-                    )?.description}
-              </p>
-            </div>
-          </div>
+          {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
 
           {activeCategory === "model" ? (
             <FormErrorBanner

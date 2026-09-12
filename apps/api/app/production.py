@@ -424,12 +424,28 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    template_id: str | None = None
+    template_version: int | None = None
+    template_settings: dict[str, object] = field(default_factory=dict)
     material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class VideoTemplate:
+    id: str
+    workspace_id: str
+    version: int
+    name: str
+    origin: Literal["built_in", "user"]
+    settings: dict[str, object]
+    source_task_id: str | None = None
+    source_timeline_version_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass
@@ -763,6 +779,7 @@ EditOperationType = Literal[
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
+    "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
     "ConfigureSubtitleTrack",
@@ -778,6 +795,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
+    "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
     "ConfigureSubtitleTrack",
@@ -1060,6 +1078,13 @@ class ProductionRepository:
                     workspace_id TEXT NOT NULL,
                     payload TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS video_templates (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
                 );
                 CREATE INDEX IF NOT EXISTS idx_creation_plans_workspace
                     ON creation_plans(workspace_id, updated_at DESC);
@@ -2703,6 +2728,29 @@ class ProductionRepository:
             raise KeyError(batch_id)
         return self._batch_from_payload(json.loads(str(row["payload"])))
 
+    def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
+        return [VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at")) for row in rows]
+
+    def get_video_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
+        if row is None:
+            raise KeyError(template_id)
+        return VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at"))
+
+    def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
+        if template.origin != "user" or template.version < 1 or not template.name.strip():
+            raise ValueError("用户模板必须有名称和有效版本。")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
+            if template.version != row["version"] + 1:
+                raise ValueError("模板版本已变化，请刷新后重新保存。")
+            conn.execute("INSERT INTO video_templates (workspace_id, id, version, payload) VALUES (?, ?, ?, ?)", (template.workspace_id, template.id, template.version, _json_payload(template)))
+        return template
+
     def confirm_creation_plan(
         self,
         plan: CreationPlan,
@@ -4239,7 +4287,7 @@ class ProductionRepository:
         if montage_payload is not None:
             allowed_montage_statuses = (
                 {"ready", "rendered"}
-                if operation.operation_type == "UndoTimelineVersion"
+                if operation.operation_type in {"UndoTimelineVersion", "RedoTimelineVersion"}
                 else {"ready"}
             )
             if (
@@ -4427,7 +4475,7 @@ class ProductionRepository:
                 )
                 task.montage_plan_id = montage_plan_id
                 restored_rendered_output = bool(
-                    operation.operation_type == "UndoTimelineVersion"
+                    operation.operation_type in {"UndoTimelineVersion", "RedoTimelineVersion"}
                     and montage_payload.get("status") == "rendered"
                     and montage_payload.get("output_path")
                 )

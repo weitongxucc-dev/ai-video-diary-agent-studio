@@ -23,7 +23,7 @@
 .serviceEmpty strong { display: block; color: var(--text-1); font-size: 15px; font-weight: 500; }
 .serviceEmpty p { margin: 4px 0 0; font-size: 13px; }
 
-.workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 520px; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 0; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .singleStage { width: min(100%, 900px); min-height: 0; grid-template-columns: minmax(0, 1fr); margin-right: auto; margin-left: auto; }
 .objectRail { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
 .objectRail > header { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
@@ -42,11 +42,11 @@
 .objectList button > svg { color: var(--text-3); }
 
 .stage { min-width: 0; background: var(--surface-1); }
-.preview { display: grid; min-height: 520px; align-content: center; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
+.preview { display: grid; align-content: start; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
 .previewIcon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); color: var(--accent); }
 .preview > strong { font-size: 19px; font-weight: 500; }
 .preview > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: 13px; }
-.mediaPlaceholder { display: grid; width: min(100%, 520px); min-height: 240px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
+.mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
 .preview video { width: min(100%, 520px); max-height: 320px; margin: 16px 0 8px; border-radius: 10px; background: #111; }
 .preview audio { width: min(100%, 520px); margin: 20px 0 12px; }
 .waveform { display: flex; width: min(100%, 520px); height: 126px; align-items: center; justify-content: center; gap: 5px; margin: 20px 0 12px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-2); }
@@ -54,8 +54,8 @@
 .waveform i:nth-child(3n) { height: 58px; }
 .waveform i:nth-child(4n) { height: 76px; }
 .waveform i:nth-child(5n) { height: 44px; }
-.previewActions { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.previewActions small { max-width: 300px; color: var(--text-3); font-size: 11px; text-align: left; }
+.previewActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
+.previewActions small { max-width: 300px; color: var(--text-2); font-size: 12px; text-align: left; }
 .previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size: 11px; }
 .previewHistory { width: min(100%, 520px); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-1); text-align: left; }
 .previewHistory h4 { margin: 0; font-size: 12px; font-weight: 500; }

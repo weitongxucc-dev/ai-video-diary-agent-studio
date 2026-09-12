@@ -17,6 +17,11 @@ from typing import Any
 _ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
 
 
+def structured_completion_options(model_id: str) -> dict[str, object]:
+    """Keep MiniMax reasoning outside the JSON content parsed by production."""
+    return {"reasoning_split": True} if model_id.startswith("MiniMax-") else {}
+
+
 def _resolve_dotenv_path() -> Path:
     """Return the primary .env path, honouring the override env var."""
     override = os.getenv(_ENV_FILE_OVERRIDE_VAR)

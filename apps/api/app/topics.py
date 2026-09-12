@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, structured_completion_options
 from app.content_templates import ContentTemplate
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
@@ -45,6 +45,8 @@ class CreationTaskTopicInput:
     goal: str
     language: str
     sources: tuple[CreationTaskTopicSource, ...]
+    style_instruction: str = ""
+    script_structure: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,8 @@ class OpenAICompatibleCreationTaskTopicGenerator:
                     "content": json.dumps(
                         {
                             "goal": input.goal.strip(),
+                            "style_instruction": input.style_instruction,
+                            "script_structure": list(input.script_structure),
                             "language": input.language.strip(),
                             "sources": [
                                 {
@@ -159,6 +163,7 @@ class OpenAICompatibleCreationTaskTopicGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
             "max_tokens": 3200,
+            **structured_completion_options(self._model),
         }
         headers = (
             {"Authorization": f"Bearer {self._api_key}"}
@@ -505,6 +510,9 @@ class CreationTaskScriptInput:
     topic_audience: str
     topic_outline: tuple[str, ...]
     sources: tuple[CreationTaskTopicSource, ...]
+    style_instruction: str = ""
+    script_structure: tuple[str, ...] = ()
+    script_section_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -668,6 +676,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "content": json.dumps(
                         {
                             "goal": input.goal.strip(),
+                            "style_instruction": input.style_instruction,
+                            "script_structure": list(input.script_structure),
                             "duration_target_seconds": input.duration_target_seconds,
                             "confirmed_topic": {
                                 "title": input.topic_title.strip(),
@@ -678,7 +688,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             "sources": serialized_sources,
                             "requirements": {
                                 "spoken_chinese": True,
-                                "section_count": "1-20",
+                                "section_count": input.script_section_count or "1-20",
                                 "every_section_requires_evidence": True,
                             },
                         },
@@ -689,6 +699,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.4,
             "max_tokens": 4800,
+            **structured_completion_options(self._model),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
@@ -724,7 +735,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="检查 OpenAI-compatible JSON 响应格式后重试。",
                 retryable=True,
             ) from exc
-        return self._validated_script(document, source_aliases)
+        script = self._validated_script(document, source_aliases)
+        if input.script_section_count and len(script.sections) != input.script_section_count:
+            raise self._schema_failure("文字模型返回的段落数量不符合所选模板，请重新生成。")
+        return script
 
     def _validated_script(
         self, document: object, allowed_reference_aliases: dict[str, str]
@@ -977,6 +991,7 @@ class DeepSeekTopicGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
             "max_tokens": 3200,
+            **structured_completion_options(self._settings.effective_llm_model),
         }
         url = f"{self._settings.effective_llm_base_url}/chat/completions"
         headers = {}

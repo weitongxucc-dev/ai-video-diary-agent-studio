@@ -911,13 +911,13 @@ function configureAutoUpdater() {
 }
 
 function checkForUpdates(silent = true) {
-  if (!app.isPackaged) {
+  if (!app.isPackaged || !fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'))) {
     if (!silent) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: '未打包环境',
-        message: '当前为未打包环境，不检查更新。',
-        detail: '更新检查仅在打包版本中生效。',
+        title: '本地测试版本',
+        message: '此版本没有配置自动更新。',
+        detail: '请使用新的测试包手动更新应用。',
       });
     }
     return;

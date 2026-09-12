@@ -1726,6 +1726,20 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert output_response.content == b"playable-video"
     assert "字幕内容" in subtitle_response.text
 
+    original_task = asdict(production.get_creation_task(workspace_id, task.id))
+    saved_template = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "成片设置", "style_instruction": "简洁说明"})
+    assert saved_template.status_code == 200, saved_template.text
+    template = saved_template.json()
+    assert template["source_timeline_version_id"] == original_task["current_timeline_version_id"]
+    assert template["settings"]["fit_mode"] == "fill"
+    assert "字幕内容" not in json.dumps(template, ensure_ascii=False)
+    new_version = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "成片设置", "template_id": template["id"], "expected_version": 1})
+    assert new_version.status_code == 200 and new_version.json()["version"] == 2
+    conflict = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "冲突", "template_id": template["id"], "expected_version": 1})
+    assert conflict.status_code == 409
+    assert asdict(production.get_creation_task(workspace_id, task.id)) == original_task
+    assert client.get(f"/api/creation-tasks/{task.id}/output").content == output_response.content
+
     rendered_narration_reference = saved_plan.narration_audio_path
     saved_plan.output_path = str(tmp_path / "legacy-preview.mp4")
     saved_plan.subtitle_path = str(tmp_path / "legacy-subtitles.srt")
@@ -1738,7 +1752,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     legacy_base_response = client.post(
         f"/api/creation-tasks/{task.id}/edits/preview",
         json={
-            "raw_command": "把这个镜头换成另一个镜头",
+            "raw_command": "把这个镜头换成另一个镜头，保留当前配音",
             "context_stage": "review",
             "selected_object_refs": ["clip:clip-route"],
             "playhead_ms": 500,
@@ -1899,14 +1913,18 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
 
-    exact_trim = client.post(
-        f"/api/creation-tasks/{task.id}/edits/exact",
+    before_trim_version = production.get_creation_task(workspace_id, task.id).current_timeline_version_id
+    trim_preview = client.post(
+        f"/api/creation-tasks/{task.id}/edits/exact/preview",
         json={
             "operation_type": "TrimClip",
             "clip_id": "clip-route",
             "source_start_seconds": before_trim_start + 0.5,
         },
     )
+    assert trim_preview.status_code == 200, trim_preview.text
+    assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
+    exact_trim = client.post(f"/api/creation-tasks/{task.id}/edits/{trim_preview.json()['proposal']['id']}/confirm")
     assert exact_trim.status_code == 200, exact_trim.text
     assert exact_trim.json()["operation"]["operation_type"] == "TrimClip"
     trimmed_plan = creation_task_montage_plan_from_payload(
@@ -1972,10 +1990,34 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
     restored = client.get(f"/api/creation-tasks/{task.id}").json()
     assert restored["montage"]["clips"] == before_crop["montage"]["clips"]
+    assert restored["task"]["can_redo"] is True
+    redo = client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={})
+    assert redo.status_code == 200, redo.text
+    assert redo.json()["operation"]["operation_type"] == "RedoTimelineVersion"
+    redone = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert redone["montage"]["clips"] == cropped["montage"]["clips"]
+    assert redone["task"]["can_redo"] is False
+    assert redone["task"]["can_undo"] is True
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+
+    for change in ({"operation_type": "ReorderClip", "position": 1}, {"operation_type": "SetClipLock", "locked": True}):
+        before_change = client.get(f"/api/creation-tasks/{task.id}").json()
+        preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**change, "clip_id": "clip-route"})
+        assert preview.status_code == 200, preview.text
+        proposal = preview.json()["proposal"]
+        assert proposal["preview"]["before"]["detail"] != proposal["preview"]["after"]["detail"]
+        assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
+        assert client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm").status_code == 200
+        assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+        assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
+
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**crop_payload, "crop_x": 2}).status_code == 422
     assert client.patch(f"/api/creation-tasks/{task.id}/montage/clips/clip-route", json={"fit_mode": "fit", "confirmed": True}).status_code == 409
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={"operation_type": "SetClipLock", "clip_id": "clip-route", "locked": True}).status_code == 200
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload).status_code == 409
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
 
 
 @pytest.mark.parametrize("visual_only", [False, True])
@@ -2568,3 +2610,26 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
     assert state.production.list_timeline_versions(
         state.workspace_id, state.task.id
     ) == []
+
+
+def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state):
+    state = person_render_edit_state
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task.stage = "montage"
+    task.stage_status = "not_started"
+    task.current_timeline_version_id = None
+    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.template_settings = {"fit_mode": "fit", "subtitle_style": {"position": "top", "font_size": 48}}
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
+    assert response.status_code == 200, response.text
+    montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
+    assert montage.clips and all(clip.fit_mode == "fit" for clip in montage.clips)
+    assert all(cue.subtitle_style == plan.template_settings["subtitle_style"] for cue in montage.cues)
+    montage.status = "rendered"
+    montage.subtitle_path = "test/subtitle.srt"
+    version = SimpleNamespace(id="test-version", snapshot={"transform_run_id": "test-transform"})
+    track = main_module._subtitle_track_from_montage(state.workspace_id, task, version, montage)
+    assert track.style == plan.template_settings["subtitle_style"]

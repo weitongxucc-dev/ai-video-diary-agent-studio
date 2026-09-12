@@ -239,7 +239,8 @@ def test_execution_carries_model_and_input_output_evidence():
     assert result.input_evidence.sha256 != result.output_evidence.sha256
 
 
-def test_openai_compatible_provider_uses_structured_cues_without_timing_rewrite():
+@pytest.mark.parametrize("model_id", ["real-text-model", "MiniMax-M3"])
+def test_openai_compatible_provider_uses_structured_cues_without_timing_rewrite(model_id):
     captured = {}
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -286,7 +287,7 @@ def test_openai_compatible_provider_uses_structured_cues_without_timing_rewrite(
     provider = OpenAICompatibleSubtitleTranslationProvider(
         provider_name="custom",
         base_url="https://llm.example/v1",
-        model_id="real-text-model",
+        model_id=model_id,
         api_key="secret",
         transport=httpx.MockTransport(respond),
     )
@@ -298,9 +299,10 @@ def test_openai_compatible_provider_uses_structured_cues_without_timing_rewrite(
     )
 
     assert result.status == "succeeded"
-    assert result.model_id == "real-text-model"
+    assert result.model_id == model_id
     assert result.provider_execution_id == "chatcmpl_provider_1"
     assert captured["response_format"] == {"type": "json_object"}
+    assert captured.get("reasoning_split") is (True if model_id == "MiniMax-M3" else None)
 
 
 def test_provider_mapping_failure_never_creates_partial_translation_track():

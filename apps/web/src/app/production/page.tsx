@@ -9,11 +9,10 @@ import {
   LoaderCircle,
   Plus,
   Settings2,
-  Sparkles,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
-import { getProductionFoundation, listCreationTasks } from "@/lib/api.server";
+import { getProductionFoundation, listCreationTasks, listVideoTemplates } from "@/lib/api.server";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import type { CreationTask, ProductionFoundation } from "@/lib/types";
 
@@ -85,7 +84,7 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const [foundation, persistedTasks] = await Promise.all([
@@ -113,33 +112,21 @@ export default async function ProductionPage({
 
   if (params.new === "1") {
     const initialGoal = params.goal ?? "";
+    let template = null;
+    if (params.template_id || params.template_version) {
+      const templates = await listVideoTemplates().catch(() => null);
+      template = templates?.items.find((item) => item.id === params.template_id && item.version === Number(params.template_version)) ?? null;
+      if (!template) return <AppShell creationTasks={creationTasks}><section role="alert"><p>无法读取所选模板版本，请返回模板页重新选择。</p><Link href="/templates">返回视频模板</Link></section></AppShell>;
+    }
     return (
       <AppShell creationTasks={creationTasks}>
         <div className="modern-queue">
-          <header className="modern-queue__header">
-            <div>
-              <h1>检查并创建创作任务</h1>
-              <p>
-                先检查当前可用内容，再由你确认创建。检查不会生成选题、文案或成片。
-              </p>
-            </div>
-            <Link href="/production">返回任务列表</Link>
-          </header>
-          <section className="queue-create-panel--preflight">
-            <div>
-              <span>
-                <Sparkles size={17} />
-              </span>
-              <div>
-                <h2>从制作目标开始</h2>
-                <p>
-                  检查会读取当前工作区的真实资料、信息源、素材、声音、授权和模型状态。
-                </p>
-              </div>
-            </div>
+          <div className="creation-plan-form__actions"><Link href="/production">返回任务列表</Link></div>
+          <section>
             <CreateProductionTaskForm
               autoFocus={!initialGoal}
               initialGoal={initialGoal}
+              template={template}
             />
           </section>
         </div>

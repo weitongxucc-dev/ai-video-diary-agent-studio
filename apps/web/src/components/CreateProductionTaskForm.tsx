@@ -7,9 +7,10 @@ import {
   CreationPlanApiError,
   previewCreationPlan,
 } from "@/lib/api";
-import type { CreationPlanInput, CreationPlanPreview } from "@/lib/types";
+import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/lib/types";
 
 type CreateProductionTaskFormProps = {
+  template?: VideoTemplate | null;
   autoFocus?: boolean;
   initialGoal?: string;
   assignLocation?: (url: string) => void;
@@ -69,7 +70,7 @@ function PreflightFacts({ preview }: { preview: CreationPlanPreview }) {
       <section>
         <header><ShieldCheck size={16} /><div><span>素材匹配</span><strong>{preview.material_matches.length} 个片段匹配当前目标</strong></div></header>
         <p>{materialSummary(preview.material_rule_summary)}</p>
-        {preview.material_matches.length ? <ul>{preview.material_matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`} title={`${item.asset_ref} · ${item.segment_ref}`}><strong>匹配 {Math.round(item.score * 100)}%</strong><span>{item.reasons.join("；")}</span></li>)}</ul> : <p>当前目标没有命中可用片段。</p>}
+        {preview.material_matches.length ? <ul>{preview.material_matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`} title={`${item.asset_ref} · ${item.segment_ref}`}><strong>匹配 {Math.round(item.score * 100)}%</strong><span>{item.reasons.join("；")}</span></li>)}</ul> : <p>当前目标没有命中可用片段。<a href="/library">前往素材库补充或审核</a></p>}
         <p>已审核 {preview.approved_asset_count} 个素材 · {preview.approved_clip_count} 个可用片段</p>
         {preview.selected_voice ? <p>已核验声音及人物授权，适用语言：{preview.selected_voice.language}。</p> : <p>当前没有可用于本次目标的已授权声音。</p>}
         {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {item.language}</span></li>)}</ul> : null}
@@ -89,6 +90,7 @@ function Blockers({ preview }: { preview: CreationPlanPreview }) {
 }
 
 export function CreateProductionTaskForm({
+  template = null,
   autoFocus = false,
   initialGoal = "",
   assignLocation = assignDocumentLocation,
@@ -96,8 +98,8 @@ export function CreateProductionTaskForm({
   const [goal, setGoal] = useState(initialGoal);
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
-  const language: CreationPlanInput["language"] = "zh-CN";
-  const [duration, setDuration] = useState("60");
+  const language: CreationPlanInput["language"] = template?.settings.language ?? "zh-CN";
+  const [duration, setDuration] = useState(String(template?.settings.duration_target_seconds ?? 60));
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [pending, setPending] = useState<"preview" | "confirm" | null>(null);
   const [error, setError] = useState<FormError | null>(null);
@@ -105,6 +107,7 @@ export function CreateProductionTaskForm({
 
   function input(): CreationPlanInput {
     return {
+      ...(template ? { template_id: template.id, template_version: template.version } : {}),
       goal: goal.trim(),
       ...(name.trim() ? { name: name.trim() } : {}),
       target_count: Number(targetCount),
@@ -160,13 +163,14 @@ export function CreateProductionTaskForm({
   const isPending = pending !== null;
   return (
     <div className="creation-plan-form">
+      {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><a href="/templates">重新选择模板</a></section> : null}
       <form onSubmit={handlePreview} aria-busy={isPending}>
         <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周已审核素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
         <div className="creation-plan-form__settings">
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max="50" min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
           <label><span>语言</span><select disabled name="language" value={language}><option value="zh-CN">中文（当前版本）</option></select></label>
-          <label><span>目标时长（秒）</span><input disabled={isPending} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} /></label>
+          <label><span>目标时长（秒）</span><input disabled={isPending || !!template} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} /></label>
         </div>
         <p className="creation-plan-form__ratio">画幅：9:16（当前本地服务支持的画幅）</p>
         <div className="creation-plan-form__actions"><button className="modern-primary-button" disabled={isPending || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button>{preview ? <span className={preview.confirmable ? "is-ready" : "is-blocking"}>{preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有阻断需要处理。"}</span> : <span>检查不会创建任务，也不会生成选题、文案或成片。</span>}</div>

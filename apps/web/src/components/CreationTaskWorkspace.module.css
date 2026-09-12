@@ -4,12 +4,6 @@
   color: var(--text-1);
 }
 
-.framingControls { display: grid; gap: 8px; padding: 8px 0; }
-.framingControls label { display: grid; gap: 4px; }
-.framingPosition { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.framingPosition input { min-width: 0; width: 100%; }
-.framingControls select { min-height: 36px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-2); border-radius: 8px; }
-
 .taskHeader,
 .sectionHeading,
 .primaryAction,
@@ -36,7 +30,6 @@
 .sectionHeading p,
 .emptyAction p,
 .scriptSections p,
-.storyboard p,
 .videoReview p,
 .inspector p {
   margin: 0;
@@ -243,8 +236,7 @@
 .secondaryButton:hover:not(:disabled) { background: var(--surface-2); }
 
 .topicList,
-.scriptSections,
-.storyboard {
+.scriptSections {
   display: grid;
   gap: 12px;
 }
@@ -345,8 +337,7 @@
   .voiceMissing a { grid-column: 1 / -1; justify-self: stretch; text-align: center; }
 }
 
-.scriptSections article,
-.storyboard article {
+.scriptSections article {
   border: 1px solid var(--border-1);
   border-radius: 10px;
   background: var(--surface-2);
@@ -358,21 +349,6 @@
 .scriptSections header strong { font-weight: 500; }
 .scriptSections p { margin-top: 8px; font-size: 12px; }
 
-.storyboard article {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  background: var(--surface-1);
-}
-.storyboard article.needsReview { border-color: color-mix(in srgb, var(--warning) 52%, var(--border-1)); }
-.storyboardTools {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 .versionBadge {
   padding: 6px 9px;
   border: 1px solid var(--border-1);
@@ -382,32 +358,7 @@
   font-size: 12px;
   white-space: nowrap;
 }
-.storyboard article.selectedClip {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.clipSelector {
-  display: grid;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-}
-.clipSelector:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.clipSelector[aria-pressed="true"] .clipIndex { background: var(--accent); color: var(--accent-contrast); }
-.clipIndex { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--surface-3); color: var(--text-2); font-size: 12px; }
-.storyboard strong { font-weight: 500; }
-.storyboard p { margin: 4px 0; }
-.storyboard .matchReasons { color: var(--text-2); font-size: 12px; }
-.storyboard small { color: var(--text-3); }
-.trimControl { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
-.trimControl input { width: 92px; min-height: 34px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 5px 8px; font: inherit; }
-.replacement { display: grid; gap: 5px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
-.replacement select { min-height: 36px; max-width: 100%; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 6px 8px; }
-.clipActions { display: flex; align-items: center; gap: 6px; }
-.clipActions button { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 6px 8px; }
-.clipActions span { display: inline-flex; align-items: center; gap: 5px; color: var(--success); font-size: 12px; }
+
 .contextCommandBar {
   position: sticky;
   z-index: 3;
@@ -477,9 +428,6 @@
 .previewActions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .videoReview { display: grid; gap: 16px; }
-.editVideoPreview { display: grid; justify-items: center; gap: 8px; margin-bottom: 16px; }
-.editVideoPreview video { display: block; width: 100%; height: 240px; object-fit: contain; background: var(--surface-2); border-radius: 8px; }
-.editVideoPreview span { font-size: 12px; color: var(--text-2); }
 .videoReview video { width: min(100%, 420px); max-height: clamp(220px, calc(100dvh - 440px), 440px); margin: 0 auto; border-radius: 10px; background: #111; box-shadow: var(--shadow-float); }
 .videoReview a { color: var(--accent); }
 
@@ -707,8 +655,6 @@
 
 @media (max-width: 1279px) {
   .workspace { padding: 20px 24px 32px; }
-  .storyboard article { grid-template-columns: 32px minmax(0, 1fr); }
-  .clipActions { grid-column: 2; flex-wrap: wrap; }
 }
 
 @media (max-width: 1080px) {
@@ -717,7 +663,6 @@
   .sectionHeading { align-items: stretch; flex-direction: column; }
   .progress { justify-items: start; }
   .sectionHeading > button { align-self: flex-start; }
-  .storyboardTools { justify-content: flex-start; }
   .artifactGrid { grid-template-columns: 1fr; }
   .narrationSegments article { grid-template-columns: 1fr; }
   .commandRow { grid-template-columns: 1fr auto; }

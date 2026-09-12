@@ -39,5 +39,7 @@ describe("PublishingWorkspace", () => {
     await screen.findAllByText("新品讲解视频");
     fireEvent.click(screen.getByRole("button", { name: "成片就绪" }));
     expect(screen.getByText("当前筛选下没有记录")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /打开创作任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument();
   });
 });

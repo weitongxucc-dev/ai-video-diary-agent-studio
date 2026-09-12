@@ -16,6 +16,7 @@ import {
   Menu,
   Moon,
   PanelRight,
+  PanelLeft,
   Plus,
   Search,
   Settings,
@@ -32,6 +33,7 @@ import {
   Suspense,
   type ComponentType,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
@@ -40,6 +42,9 @@ import { listCreationTasks } from "@/lib/api";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { toggleHelpPanel } from "@/lib/helpPanel";
 import type { CreationTask } from "@/lib/types";
+
+import { useEditorPanels } from "./useEditorPanels";
+import editorShell from "./EditorShell.module.css";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
 type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
@@ -76,7 +81,7 @@ const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   { href: "/tasks", label: "创作任务" },
   { href: "/sources", label: "内容资料" },
   { href: "/history", label: "发布反馈" },
-  { href: "/health", label: "运行健康" },
+  { href: "/health", label: "运行情况" },
   { href: "/settings", label: "设置" },
   { href: "/onboarding", label: "启动检查" },
   { href: "/profile", label: "创作者画像" },
@@ -94,6 +99,11 @@ export type AppShellProps = {
   inspector?: ReactNode;
   inspectorTitle?: string;
   workspaceStatus?: AppShellWorkspaceStatus;
+  editorLayout?: boolean;
+  toolbar?: ReactNode;
+  toolbarActions?: ReactNode;
+  inspectorSelectionKey?: string | null;
+  inspectorDismissKey?: string;
 };
 
 function creationTaskState(task: CreationTask) {
@@ -137,6 +147,7 @@ function NavigationRowsContent({ pathname, searchParams }: { pathname: string; s
       const active = isActive(pathname, item.href, item.activePath, searchParams);
       return (
         <Link
+          aria-label={item.label}
           aria-current={active ? "page" : undefined}
           className={`desktop-nav-row${active ? " is-active" : ""}`}
           href={item.href}
@@ -180,7 +191,14 @@ export function AppShell({
   inspector,
   inspectorTitle = "当前任务详情",
   workspaceStatus,
+  editorLayout = false,
+  toolbar,
+  toolbarActions,
+  inspectorSelectionKey,
+  inspectorDismissKey,
 }: AppShellProps) {
+  const panels = useEditorPanels(true);
+  const hasInspector = Boolean(inspector);
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
   const router = useRouter();
@@ -221,7 +239,7 @@ export function AppShell({
   }, [creationTasks]);
 
   useEffect(() => {
-    if (!inspector) {
+    if (!hasInspector) {
       setInspectorOpen(false);
       return;
     }
@@ -230,7 +248,11 @@ export function AppShell({
     syncInspector();
     desktopQuery.addEventListener("change", syncInspector);
     return () => desktopQuery.removeEventListener("change", syncInspector);
-  }, [inspector]);
+  }, [hasInspector, inspectorSelectionKey]);
+
+  useEffect(() => {
+    if (inspectorDismissKey && window.innerWidth < 1280) setInspectorOpen(false);
+  }, [inspectorDismissKey]);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -277,7 +299,7 @@ export function AppShell({
   ], [recentTasks]);
 
   return (
-    <div className="desktop-shell">
+    <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
       {sidebarOpen ? (
         <button
           aria-label="关闭侧栏"
@@ -302,9 +324,9 @@ export function AppShell({
         </div>
 
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
-          <Link className="new-production-button" href="/production?new=1">
+          <Link aria-label="开始制作新视频" className="new-production-button" href="/production?new=1">
             <Plus size={16} />
-            <span>开始制作新视频</span>
+            <span>新建视频</span>
             <kbd>⌘N</kbd>
           </Link>
 
@@ -319,7 +341,7 @@ export function AppShell({
             {recentTasks.length ? recentTasks.map((task) => {
               const taskState = creationTaskState(task);
               return (
-                <Link className="desktop-creation-task" href={creationTaskHref(task)} key={task.id}>
+                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className="desktop-creation-task" href={creationTaskHref(task)} key={task.id}>
                   <span className={`creation-task-dot status-${taskState.tone}`} aria-hidden="true" />
                   <span className="desktop-creation-task__copy">
                     <strong>{displayTaskName(task.name)}</strong>
@@ -334,12 +356,12 @@ export function AppShell({
         </nav>
 
         <div className="desktop-sidebar__footer">
-          <Link className={`desktop-nav-row${pathname.startsWith("/health") ? " is-active" : ""}`} href="/health">
+          <Link className={`desktop-nav-row${pathname.startsWith("/health") ? " is-active" : ""}`} href="/health" aria-label="运行情况">
             <Activity size={16} />
             <span>运行情况</span>
             {workspaceStatus ? <i className={`health-dot health-dot--${workspaceStatus.kind}`} title={workspaceStatus.label} /> : null}
           </Link>
-          <Link className={`desktop-nav-row${pathname.startsWith("/settings") ? " is-active" : ""}`} href="/settings">
+          <Link className={`desktop-nav-row${pathname.startsWith("/settings") ? " is-active" : ""}`} href="/settings" aria-label="设置">
             <Settings size={16} />
             <span>设置</span>
           </Link>
@@ -351,22 +373,25 @@ export function AppShell({
             </button>
           </div>
         </div>
+        {!panels.collapsed ? <div className={`${editorShell.separator} ${editorShell.leftSeparator}`} {...panels.separator("left")} /> : null}
       </aside>
 
-      <section className="desktop-workspace">
+      <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
         <header className="desktop-toolbar">
           <div className="desktop-toolbar__leading">
             <button aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">
               <Menu size={17} />
             </button>
-            <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
+            {<button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={17} /></button>}
+            {!editorLayout ? <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
-            </button>
-            <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
+            </button> : null}
+            {toolbar ?? <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
               <ToolbarLocation pathname={pathname} />
-            </Suspense>
+            </Suspense>}
           </div>
           <div className="desktop-toolbar__actions">
+            {toolbarActions}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
               <kbd>⌘K</kbd>
@@ -402,6 +427,7 @@ export function AppShell({
             <>
               {inspectorOpen ? <button aria-label="关闭详情" className="inspector-backdrop" onClick={() => setInspectorOpen(false)} type="button" /> : null}
               <aside aria-label={inspectorTitle} className="desktop-inspector" hidden={!inspectorOpen} id="agent-inspector">
+                <div className={`${editorShell.separator} ${editorShell.rightSeparator}`} {...panels.separator("right")} />
                 <header className="desktop-inspector__header">
                   <h2>{inspectorTitle}</h2>
                   <button aria-label="关闭详情" className="shell-icon-button" onClick={() => setInspectorOpen(false)} type="button"><X size={16} /></button>

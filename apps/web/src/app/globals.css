@@ -4258,30 +4258,6 @@ textarea {
   box-shadow: none;
 }
 
-.health-row p {
-  margin: 0;
-}
-
-.health-table-head,
-.health-status-chip {
-  font-family: var(--font-pixel);
-}
-
-.health-status-chip {
-  border: 2px solid var(--border-strong);
-  background: var(--panel);
-  color: var(--blue);
-  padding: 3px 6px;
-  font-size: 10px;
-  font-style: normal;
-  box-shadow: var(--shadow-hard-small);
-}
-
-.health-row p {
-  color: var(--muted);
-  line-height: 1.55;
-}
-
 .help-panel {
   position: fixed;
   inset: 0;
@@ -4565,82 +4541,6 @@ textarea {
 .welcome-consent a {
   color: var(--blue);
   text-decoration: underline;
-}
-
-.health-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.health-summary-card {
-  display: grid;
-  border: 2px solid var(--border-strong);
-  background: #fffdf0;
-  padding: 10px;
-  box-shadow: var(--shadow-hard-small);
-}
-
-.health-summary-card strong {
-  color: var(--blue);
-  font-family: var(--font-pixel);
-  font-size: 24px;
-}
-
-.health-summary-card span {
-  color: var(--muted);
-}
-
-.health-table {
-  display: grid;
-  border: 2px solid var(--border-strong);
-  background: var(--panel);
-  box-shadow: var(--shadow-hard-small);
-}
-
-.health-table-head,
-.health-row {
-  display: grid;
-  grid-template-columns: 132px 132px minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: 0;
-  align-items: stretch;
-}
-
-.health-table-head {
-  background: var(--blue);
-  color: #fff;
-}
-
-.health-table-head span,
-.health-row > * {
-  min-width: 0;
-  border-right: 1px solid var(--border-strong);
-  border-bottom: 1px solid var(--line-subtle);
-  padding: 8px;
-}
-
-.health-table-head span:last-child,
-.health-row > *:last-child {
-  border-right: 0;
-}
-
-.health-row > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.health-row.missing,
-.health-row.invalid {
-  background: #fff5ef;
-}
-
-.health-row.degraded {
-  background: #fff8dd;
-}
-
-.health-row.ready {
-  background: #f5fff6;
 }
 
 .source-counts,

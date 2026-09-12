@@ -75,6 +75,23 @@ beforeEach(() => {
 });
 
 describe("AppShell", () => {
+  it("retains editor panel widths and collapse state after remount, within bounds", () => {
+    localStorage.clear();
+    const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
+    const divider = screen.getByRole("separator", { name: "调整导航栏宽度" });
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    expect(divider).toHaveAttribute("aria-valuenow", "240");
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
+    expect(divider).toHaveAttribute("aria-valuenow", "192");
+    fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
+    first.unmount();
+    render(<AppShell editorLayout><p>剪辑</p></AppShell>);
+    expect(screen.queryByRole("separator", { name: "调整导航栏宽度" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
+    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "192");
+    localStorage.clear();
+  });
+
   it("keeps the seven product entries and CreationTask links in the left rail", () => {
     render(
       <AppShell
