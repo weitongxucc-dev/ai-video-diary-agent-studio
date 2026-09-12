@@ -1191,7 +1191,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
         task_id="task_1",
         script=script,
         profile=ProductionProfile(workspace_id="workspace_a"),
-        assets=[asset],
+        assets=[asset, _a_roll_asset(tmp_path)],
         media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
         narration_audio_path="narration://artifact/cache_1",
         narration_duration_seconds=6.0,
@@ -1200,6 +1200,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     assert plan.task_id == "task_1"
     assert plan.script_id == script.id
     assert plan.clips
+    assert all(clip.asset_id == asset.id and clip.role == "b_roll" for clip in plan.clips)
     assert all(clip.source_path.startswith("workspace://") for clip in plan.clips)
     restored = creation_task_montage_plan_from_payload(
         creation_task_montage_plan_to_payload(plan)

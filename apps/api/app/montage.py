@@ -413,18 +413,6 @@ class MontagePlanner:
         ]
         if not b_roll_candidates:
             raise ValueError("可用素材库中没有已审核的 B-roll 镜头")
-        a_roll_candidates = [
-            (asset, segment)
-            for asset in assets
-            if asset.workspace_id == workspace_id
-            and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
-            for segment in asset.segments
-            if segment.review_status == "approved"
-            and effective_segment_usage_role(asset, segment) == "a_roll"
-            and segment.end_seconds - segment.start_seconds >= 0.75
-        ]
         cues = _build_creation_task_cues(
             script,
             min_seconds=profile.target_duration_min_seconds,
@@ -440,58 +428,25 @@ class MontagePlanner:
         segment_usage: dict[str, int] = {}
         asset_usage: dict[str, int] = {}
         timeline_cursor = 0.0
-        for cue_index, cue in enumerate(cues):
-            use_a_roll = bool(a_roll_candidates) and (
-                cue_index == 0 or cue_index == len(cues) - 1
+        for cue in cues:
+            # Source talking-head footage is not aligned with this generated narration.
+            # Person renders are inserted explicitly with their narration dependency.
+            duration_candidates = [
+                item for item in b_roll_candidates
+                if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+            ]
+            if not duration_candidates:
+                raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
+            ranked = sorted(
+                (_score_candidate(
+                    cue, asset, segment,
+                    segment_usage.get(segment.id, 0), asset_usage.get(asset.id, 0),
+                    visual_score=_cosine_similarity(cue_vectors.get(cue.id), segment_vectors.get(segment.id)),
+                ) for asset, segment in duration_candidates),
+                key=lambda item: item[0], reverse=True,
             )
-            if use_a_roll:
-                duration_candidates = [
-                    item
-                    for item in a_roll_candidates
-                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
-                ]
-                if not duration_candidates:
-                    raise ValueError("A-roll 镜头时长不足，无法完整覆盖对应旁白")
-                asset, segment = min(
-                    duration_candidates,
-                    key=lambda item: (
-                        asset_usage.get(item[0].id, 0),
-                        segment_usage.get(item[1].id, 0),
-                        item[1].start_seconds,
-                    ),
-                )
-                score = 1.0
-                lexical_score = 1.0
-                visual_score = None
-                reasons = ["人物主镜头作为叙事锚点", "片头或片尾保留人物出镜"]
-                role: Literal["a_roll", "b_roll"] = "a_roll"
-            else:
-                duration_candidates = [
-                    item
-                    for item in b_roll_candidates
-                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
-                ]
-                if not duration_candidates:
-                    raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
-                ranked = sorted(
-                    (
-                        _score_candidate(
-                            cue,
-                            asset,
-                            segment,
-                            segment_usage.get(segment.id, 0),
-                            asset_usage.get(asset.id, 0),
-                            visual_score=_cosine_similarity(
-                                cue_vectors.get(cue.id), segment_vectors.get(segment.id)
-                            ),
-                        )
-                        for asset, segment in duration_candidates
-                    ),
-                    key=lambda item: item[0],
-                    reverse=True,
-                )
-                score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
-                role = "b_roll"
+            score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
+            role: Literal["a_roll", "b_roll"] = "b_roll"
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
