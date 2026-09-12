@@ -7687,8 +7687,21 @@ def _apply_creation_task_montage_clip_update(
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
     if plan.status == "rendering":
         raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
-    if clip.locked and any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y)):
-        raise HTTPException(status_code=409, detail="请先解锁镜头，再调整画面适配。")
+    if clip.locked and any(value is not None for value in (
+        payload.fit_mode, payload.crop_x, payload.crop_y, payload.asset_id,
+        payload.segment_id, payload.source_start_seconds, payload.position,
+    )):
+        raise HTTPException(status_code=409, detail="请先解锁镜头，再修改素材、裁剪或位置。")
+    if payload.position is not None:
+        proposed_order = list(plan.clips)
+        proposed_order.remove(clip)
+        proposed_order.insert(min(payload.position, len(proposed_order)), clip)
+        cursor = 0.0
+        for item in proposed_order:
+            duration = item.timeline_end_seconds - item.timeline_start_seconds
+            if item.locked and abs(round(cursor, 3) - item.timeline_start_seconds) > .001:
+                raise HTTPException(status_code=409, detail="本次排序会移动已锁定镜头，请先解锁受影响的镜头。")
+            cursor += duration
     asset_id = payload.asset_id or clip.asset_id
     segment_id = payload.segment_id or clip.segment_id
     try:

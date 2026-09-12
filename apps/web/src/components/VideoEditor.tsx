@@ -4,7 +4,7 @@ import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
 import { useState, type RefObject, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Replace, Volume2, VolumeX } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, listenCreationTaskAudio } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskWorkspace, MontageClipCandidate } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 import { NarrationWaveformTrack } from "./NarrationWaveformTrack";
@@ -56,29 +56,31 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
     <div className={ui.tracks} aria-label="配音与字幕时间范围">
       <div className={ui.ruler}><span>时间</span><div>{Array.from({ length: 5 }, (_, i) => <time key={i}>{editorTime(montage.duration_seconds * i / 4)}</time>)}</div></div>
       {audioTracks ?? <NarrationWaveformTrack workspace={workspace} selectedId={selectedId} onSelect={onSelect} />}
-      <div className={ui.track}><span>字幕</span><div>{workspace.subtitle_tracks.find(track => track.language === "zh-CN")?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ flex: cue.end_seconds - cue.start_seconds }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => onSelect(clip.id)}>{cue.text}</button> : null; })}</div></div>
+      <div className={ui.track}><span>字幕</span><div className={ui.subtitleLane}>{(workspace.subtitle_tracks.find(track => track.language === "zh-CN" && track.status === "valid") ?? workspace.subtitle_tracks.find(track => track.status === "valid"))?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ left: `${cue.start_seconds / montage.duration_seconds * 100}%`, width: `${(cue.end_seconds - cue.start_seconds) / montage.duration_seconds * 100}%` }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => { onSelect(clip.id); seek(cue.start_seconds); }}>{cue.text}</button> : null; })}</div></div>
     </div>
   </div>;
 }
 
-export function ClipNarrationPreview({ audioUrl, start, duration }: { audioUrl: string; start: number; duration: number }) {
-  const end = start + duration;
-  return <audio aria-label="当前镜头配音" controls preload="metadata"
-    src={`${apiUrl(audioUrl)}#t=${start.toFixed(3)},${end.toFixed(3)}`}
-    onLoadedMetadata={event => { event.currentTarget.currentTime = start; }}
-    onPlay={event => {
-      const audio = event.currentTarget;
-      if (audio.currentTime < start || audio.currentTime >= end) audio.currentTime = start;
-    }}
-    onSeeking={event => {
-      const audio = event.currentTarget;
-      if (audio.currentTime < start) audio.currentTime = start;
-      else if (audio.currentTime > end) audio.currentTime = end;
-    }}
-    onTimeUpdate={event => {
-      const audio = event.currentTarget;
-      if (audio.currentTime >= end) { audio.pause(); if (audio.currentTime > end) audio.currentTime = end; }
-    }} />;
+export function ClipTimelineAudioPreview({ taskId, versionId, start, end, busy }: {
+  taskId: string; versionId: string | null; start: number; end: number; busy: boolean;
+}) {
+  const [audio, setAudio] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function listen() {
+    setWorking(true); setError(null);
+    try {
+      const result = await listenCreationTaskAudio(taskId, { base_version_id: versionId,
+        start_seconds: start, end_seconds: end, solo_track_ids: [] });
+      setAudio(result.audio_url);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "镜头混音试听失败"); }
+    finally { setWorking(false); }
+  }
+  return <>
+    {audio ? <audio aria-label="当前镜头混音" controls preload="metadata" src={apiUrl(audio)} />
+      : <button className={ui.button} type="button" disabled={busy || working} onClick={() => void listen()}>{working ? "生成试听…" : "试听当前镜头混音"}</button>}
+    {error ? <p role="alert">{error}</p> : null}
+  </>;
 }
 
 export function VideoClipInspector({ clip, index, count, workspace, busy, onPreview, onDraftChange, onReplace, candidates, replacing, onPerson, onAddOriginal, onVisualPreview }: {
@@ -91,11 +93,9 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
   const [mode, setMode] = useState(clip.fit_mode ?? "fill");
   const [x, setX] = useState(clip.crop_x ?? .5);
   const [y, setY] = useState(clip.crop_y ?? .5);
-  const cue = workspace.montage?.cues.find(item => item.id === clip.cue_id);
-  const narration = workspace.narration?.segments.find(item => item.id === cue?.narration_segment_id);
-  const cues = workspace.montage?.cues ?? [];
-  const cueIndex = cues.findIndex(item => item.id === clip.cue_id);
-  const narrationStart = cues.slice(0, cueIndex).filter(item => item.narration_segment_id === cue?.narration_segment_id).reduce((sum, item) => sum + item.duration_seconds, 0);
+  const captionTrack = workspace.subtitle_tracks.find(item => item.language === "zh-CN" && item.status === "valid")
+    ?? workspace.subtitle_tracks.find(item => item.status === "valid");
+  const captions = captionTrack?.cues.filter(item => item.start_seconds < clip.timeline_end_seconds && item.end_seconds > clip.timeline_start_seconds) ?? [];
   const personRender = workspace.person_renders.find(item => item.id === clip.person_render_id);
   const framingChanged = mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5);
   return <div className={ui.inspector} aria-label="已选镜头详情">
@@ -110,7 +110,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
       {clip.needs_confirmation ? <button className={ui.button} disabled={busy} onClick={() => onPreview({ operation_type: "ConfirmClip", clip_id: clip.id })} type="button"><Check size={14} />确认镜头</button> : null}</section>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={workspace.portrait_available} clip={clip} allClipIds={workspace.montage!.clips.map(item=>item.id)} versionId={workspace.task.current_timeline_version_id} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}
       {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy} onClick={onAddOriginal}>添加此镜头原声</button> : null}
-      {narration?.audio_url ? <section className={ui.propertySection}><h3>配音</h3><p>{cue?.text}</p><ClipNarrationPreview key={`${clip.id}:${narration.audio_url}`} audioUrl={narration.audio_url} start={narrationStart} duration={cue?.duration_seconds ?? 0} /></section> : null}
+      <section className={ui.propertySection}><h3>当前时段音频</h3>{captions.length ? <p>{captions.map(cue => cue.text).join(" ")}</p> : null}<ClipTimelineAudioPreview key={`${workspace.task.current_timeline_version_id}:${clip.id}`} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} start={clip.timeline_start_seconds} end={clip.timeline_end_seconds} busy={busy} /></section>
       <details className={ui.propertySection}><summary>人物口型</summary>{personRender ? <dl className={ui.properties}><div><dt>人物版本</dt><dd>{personRender.person_profile_id} · {personRender.person_version}</dd></div><div><dt>声音版本</dt><dd>{personRender.voice_profile_id} · {personRender.voice_version}</dd></div><div><dt>当前模型</dt><dd>{personRender.model_id}</dd></div></dl> : null}{!workspace.person_render_capability.available ? <p aria-label="人物口型不可用原因">{workspace.person_render_capability.message} {workspace.person_render_capability.repair_action}</p> : null}<button className={ui.button} disabled={busy || clip.locked || !workspace.person_render_capability.available} onClick={() => onPerson(clip.person_render_id ? "这里只重做口型，其他都不要动" : "这一段换成当前人物出镜")} type="button">{clip.person_render_id ? "重新对口型" : "换成当前人物出镜"}</button></details>
     </>}
   </div>;

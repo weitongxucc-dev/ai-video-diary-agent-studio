@@ -2059,6 +2059,17 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.patch(f"/api/creation-tasks/{task.id}/montage/clips/clip-route", json={"fit_mode": "fit", "confirmed": True}).status_code == 409
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={"operation_type": "SetClipLock", "clip_id": "clip-route", "locked": True}).status_code == 200
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload).status_code == 409
+    locked_state = production.get_creation_task_montage_plan(workspace_id, task.id)
+    for edit in (
+        {"operation_type":"TrimClip", "clip_id":"clip-route", "source_start_seconds":0},
+        {"operation_type":"ReorderClip", "clip_id":"clip-route", "position":1},
+        {"operation_type":"ReorderClip", "clip_id":"clip-route-unchanged", "position":0},
+        {"operation_type":"ReplaceClip", "clip_id":"clip-route", "asset_id":asset.id,
+         "segment_id":asset.segments[0].id,"source_start_seconds":0},
+    ):
+        rejected = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=edit)
+        assert rejected.status_code == 409, rejected.text
+        assert production.get_creation_task_montage_plan(workspace_id, task.id) == locked_state
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
     assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
 
