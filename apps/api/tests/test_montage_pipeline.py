@@ -2633,3 +2633,132 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     version = SimpleNamespace(id="test-version", snapshot={"transform_run_id": "test-transform"})
     track = main_module._subtitle_track_from_montage(state.workspace_id, task, version, montage)
     assert track.style == plan.template_settings["subtitle_style"]
+
+
+def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, monkeypatch):
+    workspace_id = "workspace_a"
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    production._save_asset(asset)
+    creation_plan = CreationPlan(
+        id="plan-render-route",
+        workspace_id=workspace_id,
+        goal="渲染一条可追溯成片",
+        name="渲染迁移",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=30,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=None,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=1,
+        material_rule_summary="使用当前任务素材",
+        model_snapshot=[],
+        confirmation_points=[],
+        blockers=[],
+        preflight_fingerprint="f" * 64,
+        material_matches=[
+            MaterialSegmentMatch(
+                asset_ref=f"asset:{asset.id}",
+                segment_ref=f"segment:{asset.segments[0].id}",
+                score=1.0,
+                reasons=["测试夹具中的已审核镜头"],
+            )
+        ],
+    )
+    task = CreationTask(
+        id="task-render-route",
+        workspace_id=workspace_id,
+        plan_id=creation_plan.id,
+        name=creation_plan.name,
+        scenario=creation_plan.goal,
+        stage="montage",
+        stage_status="waiting_for_user",
+        status="waiting_for_user",
+        progress=70,
+        recovery_point="montage",
+    )
+    production.confirm_creation_plan(creation_plan, task)
+    plan = CreationTaskMontagePlan(
+        id="montage-render-route",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        script_id="script-render-route",
+        script_title="渲染迁移",
+        status="waiting_for_user",
+        cues=[NarrationCue("cue-route", "section-route", "字幕内容", 1.0)],
+        clips=[
+            MontageClip(
+                id="clip-route",
+                cue_id="cue-route",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path="workspace://source.mp4",
+                source_start_seconds=0,
+                source_end_seconds=1,
+                timeline_start_seconds=0,
+                timeline_end_seconds=1,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=True,
+            ),
+            MontageClip(
+                id="clip-route-unchanged",
+                cue_id="cue-route",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path="workspace://source.mp4",
+                source_start_seconds=1,
+                source_end_seconds=2,
+                timeline_start_seconds=1,
+                timeline_end_seconds=2,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=False,
+            ),
+        ],
+        duration_seconds=2,
+        low_confidence_clip_count=1,
+        narration_audio_path="narration://artifact/route",
+    )
+    production.save_creation_task_montage_plan(
+        workspace_id,
+        task.id,
+        plan.id,
+        creation_task_montage_plan_to_payload(plan),
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    client = TestClient(main_module.app)
+    changed, _ = main_module._prepare_changed_montage(plan, message="字幕已修改。")
+    assert changed.status == "waiting_for_user"
+    assert changed.low_confidence_clip_count == 1
+    # Old persisted versions may incorrectly say rendered; per-clip review remains authoritative.
+    inconsistent = creation_task_montage_plan_to_payload(plan)
+    inconsistent["status"] = "rendered"
+    production.save_creation_task_montage_plan(workspace_id, task.id, plan.id, inconsistent)
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 409
+    request = {"operation_type": "ConfirmClip", "clip_id": "clip-route"}
+    preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=request)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()["proposal"]
+    assert proposal["preview"]["before"]["detail"] == "待确认"
+    assert proposal["preview"]["after"]["detail"] == "已确认"
+    persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
+    assert persisted["clips"][0]["needs_confirmation"] is True
+    assert production.list_edit_operations(workspace_id, task.id) == []
+    confirmed = client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
+    assert persisted["clips"][0]["needs_confirmation"] is False
+    assert persisted["clips"][1] == creation_task_montage_plan_to_payload(plan)["clips"][1]
+    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
+    assert undo.status_code == 200, undo.text
+    assert production.get_creation_task_montage_plan(workspace_id, task.id)["clips"][0]["needs_confirmation"] is True

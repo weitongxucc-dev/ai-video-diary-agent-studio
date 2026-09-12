@@ -4700,10 +4700,8 @@ def _prepare_changed_montage(
     *,
     message: str,
 ) -> tuple[CreationTaskMontagePlan, dict[str, object]]:
-    plan.output_path = None
-    plan.subtitle_path = None
-    plan.status = "ready"
-    plan.message = message
+    _refresh_montage_review_state(plan)
+    plan.message = message if plan.status == "ready" else f"{message} 仍有 {plan.low_confidence_clip_count} 个镜头等待确认。"
     return plan, creation_task_montage_plan_to_payload(plan)
 
 
@@ -7103,7 +7101,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         if payload.operation_type == "SetClipLock":
             return "已锁定" if clip.locked else "未锁定"
         if payload.operation_type == "ConfirmClip":
-            return "已确认" if clip.confirmed else "待确认"
+            return "待确认" if clip.needs_confirmation else "已确认"
         if payload.operation_type == "ChangeCrop":
             framing = "完整显示" if clip.fit_mode == "fit" else "填满画面"
             return f"{framing} · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
@@ -7388,7 +7386,7 @@ def _apply_creation_task_montage_clip_update(
     )
     source_end = source_start + slot_duration
     if source_start < segment.start_seconds - 1e-6 or source_end > segment.end_seconds + 1e-6:
-        raise HTTPException(status_code=400, detail="trim range exceeds reviewed segment")
+        raise HTTPException(status_code=400, detail=f"当前镜头需保留 {slot_duration:.1f} 秒，裁剪起点须在 {segment.start_seconds:.1f}–{max(segment.start_seconds, segment.end_seconds - slot_duration):.1f} 秒之间。")
     if payload.asset_id is not None or payload.segment_id is not None:
         clip.asset_id = asset.id
         clip.segment_id = segment.id
@@ -7579,8 +7577,8 @@ def render_creation_task_montage(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
-    if plan.status not in {"ready", "rendering", "rendered"}:
-        raise HTTPException(status_code=409, detail="montage clips still require confirmation")
+    if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered"}:
+        raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
     active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)

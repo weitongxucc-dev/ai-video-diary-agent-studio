@@ -4286,9 +4286,9 @@ class ProductionRepository:
                 raise ValueError("整轨配音产物与当前任务不同源或音频无效")
         if montage_payload is not None:
             allowed_montage_statuses = (
-                {"ready", "rendered"}
+                {"waiting_for_user", "ready", "rendered"}
                 if operation.operation_type in {"UndoTimelineVersion", "RedoTimelineVersion"}
-                else {"ready"}
+                else {"waiting_for_user", "ready"}
             )
             if (
                 str(montage_payload.get("task_id", "")) != task_id

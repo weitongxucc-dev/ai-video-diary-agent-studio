@@ -58,6 +58,26 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   </div>;
 }
 
+export function ClipNarrationPreview({ audioUrl, start, duration }: { audioUrl: string; start: number; duration: number }) {
+  const end = start + duration;
+  return <audio aria-label="当前镜头配音" controls preload="metadata"
+    src={`${apiUrl(audioUrl)}#t=${start.toFixed(3)},${end.toFixed(3)}`}
+    onLoadedMetadata={event => { event.currentTarget.currentTime = start; }}
+    onPlay={event => {
+      const audio = event.currentTarget;
+      if (audio.currentTime < start || audio.currentTime >= end) audio.currentTime = start;
+    }}
+    onSeeking={event => {
+      const audio = event.currentTarget;
+      if (audio.currentTime < start) audio.currentTime = start;
+      else if (audio.currentTime > end) audio.currentTime = end;
+    }}
+    onTimeUpdate={event => {
+      const audio = event.currentTarget;
+      if (audio.currentTime >= end) { audio.pause(); if (audio.currentTime > end) audio.currentTime = end; }
+    }} />;
+}
+
 export function VideoClipInspector({ clip, index, count, workspace, busy, onPreview, onDraftChange, onReplace, candidates, replacing, onPerson }: {
   clip: CreationTaskMontageClip; index: number; count: number; workspace: CreationTaskWorkspace; busy: boolean;
   onPreview: (input: CreationTaskExactEditInput) => void; onDraftChange: (changed: boolean) => void; onReplace: () => void;
@@ -70,6 +90,9 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
   const [y, setY] = useState(clip.crop_y ?? .5);
   const cue = workspace.montage?.cues.find(item => item.id === clip.cue_id);
   const narration = workspace.narration?.segments.find(item => item.id === cue?.narration_segment_id);
+  const cues = workspace.montage?.cues ?? [];
+  const cueIndex = cues.findIndex(item => item.id === clip.cue_id);
+  const narrationStart = cues.slice(0, cueIndex).filter(item => item.narration_segment_id === cue?.narration_segment_id).reduce((sum, item) => sum + item.duration_seconds, 0);
   const personRender = workspace.person_renders.find(item => item.id === clip.person_render_id);
   const framingChanged = mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5);
   return <div className={ui.inspector} aria-label="已选镜头详情">
@@ -82,7 +105,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
       <section className={ui.propertySection}><div className={ui.actionRow}><span>锁定镜头</span><button className={ui.iconButton} aria-label={clip.locked ? "解锁镜头" : "锁定镜头"} aria-pressed={clip.locked} disabled={busy} onClick={() => onPreview({ operation_type: "SetClipLock", clip_id: clip.id, locked: !clip.locked })} type="button">{clip.locked ? <Lock size={16} /> : <Unlock size={16} />}</button></div><div className={ui.actions}><button className={ui.button} aria-label="向前移动" disabled={busy || clip.locked || index === 0} onClick={() => onPreview({ operation_type: "ReorderClip", clip_id: clip.id, position: index - 1 })} type="button"><ArrowLeft size={14} />前移</button><button className={ui.button} aria-label="向后移动" disabled={busy || clip.locked || index === count - 1} onClick={() => onPreview({ operation_type: "ReorderClip", clip_id: clip.id, position: index + 1 })} type="button">后移<ArrowRight size={14} /></button><button className={ui.button} disabled={busy || clip.locked} onClick={onReplace} type="button"><Replace size={14} />替换素材</button></div>
       {replacing ? candidates.length ? <label className={ui.field}>替换为已审核镜头<select aria-label="替换为已审核镜头" disabled={busy} value="" onChange={event => { const candidate = candidates.find(item => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) onPreview({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option value="" disabled>选择候选，预览后确认</option>{candidates.map(item => <option key={`${item.asset_id}:${item.segment_id}`} value={`${item.asset_id}:${item.segment_id}`}>{item.file_name} · {item.description}</option>)}</select></label> : <p role="status">没有满足时长的其他可用镜头，请补充素材。</p> : null}
       {clip.needs_confirmation ? <button className={ui.button} disabled={busy} onClick={() => onPreview({ operation_type: "ConfirmClip", clip_id: clip.id })} type="button"><Check size={14} />确认镜头</button> : null}</section>
-      {narration?.audio_url ? <section className={ui.propertySection}><h3>配音</h3><p>{cue?.text}</p><audio aria-label="当前镜头配音" controls preload="none" src={apiUrl(narration.audio_url)} /></section> : null}
+      {narration?.audio_url ? <section className={ui.propertySection}><h3>配音</h3><p>{cue?.text}</p><ClipNarrationPreview key={`${clip.id}:${narration.audio_url}`} audioUrl={narration.audio_url} start={narrationStart} duration={cue?.duration_seconds ?? 0} /></section> : null}
       <details className={ui.propertySection}><summary>人物口型</summary>{personRender ? <dl className={ui.properties}><div><dt>人物版本</dt><dd>{personRender.person_profile_id} · {personRender.person_version}</dd></div><div><dt>声音版本</dt><dd>{personRender.voice_profile_id} · {personRender.voice_version}</dd></div><div><dt>当前模型</dt><dd>{personRender.model_id}</dd></div></dl> : null}{!workspace.person_render_capability.available ? <p aria-label="人物口型不可用原因">{workspace.person_render_capability.message} {workspace.person_render_capability.repair_action}</p> : null}<button className={ui.button} disabled={busy || clip.locked || !workspace.person_render_capability.available} onClick={() => onPerson(clip.person_render_id ? "这里只重做口型，其他都不要动" : "这一段换成当前人物出镜")} type="button">{clip.person_render_id ? "重新对口型" : "换成当前人物出镜"}</button></details>
     </>}
   </div>;
