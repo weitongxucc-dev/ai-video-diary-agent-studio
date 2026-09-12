@@ -315,7 +315,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v7"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v8"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -3151,17 +3151,11 @@ def _subtitle_track_from_montage(
             transform_id = f"transform_{transform_id}"
     if not isinstance(transform_id, str) or not transform_id:
         return None
-    clip_by_cue = {clip.cue_id: clip for clip in montage.clips}
     cues: list[SubtitleCue] = []
     cursor = 0.0
     for cue in montage.cues:
-        clip = clip_by_cue.get(cue.id)
-        start = clip.timeline_start_seconds if clip is not None else cursor
-        end = (
-            clip.timeline_end_seconds
-            if clip is not None
-            else start + cue.duration_seconds
-        )
+        start = cursor
+        end = min(start + cue.duration_seconds, montage.duration_seconds)
         normalized_text, line_breaks = _normalize_subtitle_text_and_breaks(
             cue.text,
             None,
@@ -7795,71 +7789,6 @@ def update_creation_task_subtitle_cue(
     return result.montage
 
 
-def _apply_subtitle_tracks_to_render_plan(
-    plan: CreationTaskMontagePlan,
-    tracks: list[SubtitleTrack],
-) -> None:
-    chinese = next(
-        (track for track in tracks if track.language == "zh-CN" and track.status == "valid"),
-        None,
-    )
-    english = next(
-        (track for track in tracks if track.language == "en-US" and track.status == "valid"),
-        None,
-    )
-    if chinese is None:
-        return
-    chinese_by_id = {cue.id: cue for cue in chinese.cues}
-    english_by_source = {
-        cue.source_cue_id: cue for cue in english.cues if cue.source_cue_id
-    } if english is not None else {}
-    for cue in plan.cues:
-        source = chinese_by_id.get(cue.id)
-        if source is None:
-            continue
-        source_text, _ = _normalize_subtitle_text_and_breaks(
-            source.text,
-            list(source.line_breaks),
-        )
-        boundaries = (0, *source.line_breaks, len(source_text))
-        rendered_source = "\n".join(
-            source_text[start:end]
-            for start, end in zip(boundaries, boundaries[1:])
-        )
-        lines = [rendered_source]
-        translated = english_by_source.get(source.id)
-        if translated is not None:
-            translated_boundaries = (
-                0,
-                *translated.line_breaks,
-                len(translated.text),
-            )
-            lines.append(
-                "\n".join(
-                    translated.text[start:end]
-                    for start, end in zip(
-                        translated_boundaries,
-                        translated_boundaries[1:],
-                    )
-                )
-            )
-        cue.text = "\n".join(lines)
-        cue.subtitle_emphasis = list(source.emphasis)
-        cue.subtitle_emphasis_ranges = []
-        offset = 0
-        for language_cue in [source, *([translated] if translated is not None else [])]:
-            compact = re.sub(r"\s+", "", language_cue.text)
-            for term in language_cue.emphasis:
-                term = re.sub(r"\s+", "", term)
-                if term:
-                    cue.subtitle_emphasis_ranges.extend(
-                        (offset + match.start(), offset + match.end())
-                        for match in re.finditer(re.escape(term), compact)
-                    )
-            offset += len(compact)
-        cue.subtitle_style = dict(chinese.style)
-
-
 @app.post(
     "/api/creation-tasks/{task_id}/montage/render",
     response_model=CreationTaskMontagePlanResponse,
@@ -8095,14 +8024,12 @@ def render_creation_task_montage(
                     rendering_plan = creation_task_montage_plan_from_payload(
                         creation_task_montage_plan_to_payload(plan)
                     )
-                    _apply_subtitle_tracks_to_render_plan(
-                        rendering_plan, active_subtitle_tracks
-                    )
                     rendered_variant = _render_montage_with_resolved_clip_sources(
                         workspace_id,
                         rendering_plan,
                         narration_path,
                         job_staging_path=Path(staging),
+                        subtitle_tracks=active_subtitle_tracks or None,
                     )
                     rendered = plan
                     rendered.status = rendered_variant.status
@@ -8704,6 +8631,7 @@ def _render_montage_with_resolved_clip_sources(
     narration_audio_path: Path,
     *,
     job_staging_path: Path | None = None,
+    subtitle_tracks: list[SubtitleTrack] | None = None,
 ):
     original_references = [clip.source_path for clip in plan.clips]
     original_ranges = [
@@ -8765,7 +8693,7 @@ def _render_montage_with_resolved_clip_sources(
                 lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio)
             narration_audio_path = mixed_audio
         return montage_renderer.render(
-            plan, narration_audio_path, job_staging_path=job_staging_path
+            plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks
         )
     finally:
         for clip, reference, source_range in zip(

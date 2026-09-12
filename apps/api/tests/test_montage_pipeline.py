@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.subtitle_schedule import subtitle_schedule
+
 import hashlib
 import json
 import shutil
@@ -165,17 +167,18 @@ def test_render_plan_applies_track_line_breaks_and_emphasis_metadata() -> None:
         status="valid",
     )
 
-    main_module._apply_subtitle_tracks_to_render_plan(plan, [track])
+    captions = subtitle_schedule([track], plan.duration_seconds)
 
-    assert plan.cues[0].text == "本机页面记录来源，\n每一步都能追溯"
-    assert plan.cues[0].subtitle_emphasis == ["本机页面"]
-    assert plan.cues[0].subtitle_style["emphasis_color"] == "#FFD54F"
+    assert captions[0].text == "本机页面记录来源，\n每一步都能追溯"
+    assert captions[0].subtitle_emphasis_ranges == [(0, 4)]
+    assert plan.cues[0].text == "旧字幕"
+    assert captions[0].subtitle_style["emphasis_color"] == "#FFD54F"
     english = replace(track, id="english", language="en-US", source_language="zh-CN", cues=[
         replace(track.cues[0], id="english-cue", source_cue_id=track.cues[0].id,
                 text="本机页面 English", line_breaks=[], emphasis=["English"])
     ])
-    main_module._apply_subtitle_tracks_to_render_plan(plan, [track, english])
-    assert plan.cues[0].subtitle_emphasis_ranges == [(0, 4), (len(track.cues[0].text) + 4, len(track.cues[0].text) + 11)]
+    captions = subtitle_schedule([track, english], plan.duration_seconds)
+    assert captions[0].subtitle_emphasis_ranges == [(0, 4), (len(track.cues[0].text) + 4, len(track.cues[0].text) + 11)]
 
 
 @pytest.mark.parametrize("position", ["top", "middle", "bottom"])
@@ -1286,7 +1289,7 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
             timeline_version_id="fixture-version", language="zh-CN", source_language=None,
             style={"font_family": "PingFang SC" if sys.platform == "darwin" else _subtitle_font(40).getname()[0], "font_size": 40, "position": "bottom"},
             cues=[ProductionSubtitleCue(
-                id="cue_001", source_cue_id=None, text="人工测试字幕", start_seconds=0, end_seconds=1.2,
+                id="cue_001", source_cue_id=None, text="人工测试字幕", start_seconds=.3, end_seconds=.8,
                 line_breaks=[2], emphasis=[],
             )],
             generation_method="timeline", model_id=None, artifact_ref=None, transform_id=None, status="valid",
@@ -1296,11 +1299,11 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
             cues=[ProductionSubtitleCue(
                 id="fixture-en-cue", source_cue_id="cue_001",
                 text="MANUAL TEST SUBTITLESNot a model translation",
-                start_seconds=0, end_seconds=1.2, line_breaks=[21], emphasis=["MANUAL"],
+                start_seconds=.3, end_seconds=.8, line_breaks=[21], emphasis=["MANUAL"],
             )],
         )
-        main_module._apply_subtitle_tracks_to_render_plan(plan, [chinese, english])
-        assert plan.cues[0].text == "人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation"
+        captions = subtitle_schedule([chinese, english], plan.duration_seconds)
+        assert captions[0].text == "人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation"
     with pytest.raises(ValueError, match="job-scoped"):
         renderer.render(plan, audio_path)
 
@@ -1309,6 +1312,7 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
         plan,
         audio_path,
         job_staging_path=job_staging_path,
+        subtitle_tracks=[chinese, english] if bilingual else None,
     )
 
     staged_output = job_staging_path / "preview.mp4"
@@ -1350,6 +1354,14 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
         )
     assert white_pixels > 50
     if bilingual:
+        assert "00:00:00,300 --> 00:00:00,800" in srt
+        for moment in (0.1, 1.0):
+            outside = tmp_path / f"outside-{moment}.png"
+            subprocess.run(["ffmpeg", "-y", "-ss", str(moment), "-i", str(staged_output),
+                            "-frames:v", "1", str(outside)], check=True, capture_output=True)
+            with Image.open(outside) as frame:
+                region = frame.convert("RGB").crop((0, 1300, 1080, 1800))
+                assert sum(r > 220 and g > 220 and b > 220 for r,g,b in region.get_flattened_data()) == 0
         assert sum(red > 180 and green > 140 and blue < 130
                    for red, green, blue in subtitle_region.get_flattened_data()) > 50
 
@@ -1664,7 +1676,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     audio_path = tmp_path / "voice.wav"
     audio_path.write_bytes(b"audio")
 
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"playable-video")
         (job_staging_path / "subtitles.srt").write_text(
@@ -2338,7 +2350,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert restored_workspace["cover_asset"]["artifact_ref"] == cover.artifact_ref
 
     render_calls = []
-    def render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+    def render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         render_calls.append(rendered_plan)
         (job_staging_path / "preview.mp4").write_bytes(b"render-fixture")
         (job_staging_path / "subtitles.srt").write_text(_plan_to_srt(rendered_plan))
@@ -2513,7 +2525,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         state.workspace_id, state.task.id
     )} == {state.old_render.id, new_render_id}
 
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"rerendered-video")
         (job_staging_path / "subtitles.srt").write_text(

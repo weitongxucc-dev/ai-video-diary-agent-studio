@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.visual_effects import clip_video_filters
+from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
@@ -554,6 +555,7 @@ class MontageRenderer:
         audio_path: str | Path,
         *,
         job_staging_path: str | Path | None = None,
+        subtitle_tracks=None,
     ) -> MontagePlan | CreationTaskMontagePlan:
         if plan.status != "ready":
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
@@ -581,7 +583,10 @@ class MontageRenderer:
             self.output_path.mkdir(parents=True, exist_ok=True)
             output_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}_preview.mp4"
             subtitle_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}.srt"
-        subtitle_path.write_text(_plan_to_srt(plan), encoding="utf-8")
+        schedule = (subtitle_schedule(subtitle_tracks, plan.duration_seconds) if subtitle_tracks is not None
+                    else narration_schedule(plan.cues, plan.duration_seconds) if isinstance(plan, CreationTaskMontagePlan)
+                    else None)
+        subtitle_path.write_text(schedule_srt(schedule) if schedule is not None else _plan_to_srt(plan), encoding="utf-8")
 
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)
@@ -590,16 +595,21 @@ class MontageRenderer:
                 prefix=".subtitle-overlays-",
                 dir=output_path.parent,
             ) as overlay_dir:
-                subtitle_overlays = _write_subtitle_overlays(
-                    plan,
-                    Path(overlay_dir),
-                )
+                if schedule is None:
+                    subtitle_overlays = _write_subtitle_overlays(plan,Path(overlay_dir))
+                else:
+                    subtitle_overlays=[]
+                    for index,cue in enumerate(schedule):
+                        path=Path(overlay_dir)/f"subtitle-{index:03}.png"
+                        _write_subtitle_image(cue,path)
+                        subtitle_overlays.append(path)
                 self.runner(
                     self.build_command(
                         plan,
                         narration_path,
                         output_path,
                         subtitle_overlays,
+                        subtitle_intervals=[(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else None,
                     )
                 )
             _validate_rendered_media(output_path)
@@ -627,6 +637,7 @@ class MontageRenderer:
         audio_path: Path,
         output_path: Path,
         subtitle_overlays: list[Path],
+        subtitle_intervals: list[tuple[float,float]] | None = None,
     ) -> list[str]:
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
@@ -650,15 +661,13 @@ class MontageRenderer:
             filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
         for overlay_path in subtitle_overlays:
             command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
-        for index, (clip, _overlay_path) in enumerate(
-            zip(plan.clips, subtitle_overlays, strict=True)
-        ):
+        intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
+        for index, ((start,end), _overlay_path) in enumerate(zip(intervals,subtitle_overlays,strict=True)):
             overlay_input = audio_index + 1 + index
             next_label = f"[vsub{index}]"
             filters.append(
                 f"{output_label}[{overlay_input}:v]overlay=0:0:"
-                f"enable='between(t,{clip.timeline_start_seconds:.3f},"
-                f"{clip.timeline_end_seconds:.3f})'{next_label}"
+                f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
             )
             output_label = next_label
         command.extend(
@@ -960,73 +969,78 @@ def _write_subtitle_overlays(
     overlays: list[Path] = []
     for index, clip in enumerate(plan.clips, start=1):
         cue = cue_by_id[clip.cue_id]
-        overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style)
-        stroke_width = 3
-        spacing = 10
-        line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
-        line_heights = [box[3] - box[1] for box in line_boxes]
-        block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
-        widest = max(box[2] - box[0] for box in line_boxes)
-        left = (1080 - widest) / 2 - 26
-        panel_height = block_height + 40
-        position = cue.subtitle_style.get("position", "bottom")
-        if position == "top":
-            top = 250
-        elif position == "middle":
-            top = (1920 - panel_height) / 2
-        elif position == "bottom":
-            top = 1920 - 250 - panel_height
-        else:
-            raise OSError(f"不支持的字幕位置：{position}；请选择 top、middle 或 bottom")
-        right = (1080 + widest) / 2 + 26
-        bottom = top + block_height + 40
-        draw.rounded_rectangle(
-            (left, top, right, bottom),
-            radius=18,
-            fill=(0, 0, 0, 158),
-        )
-        compact_text = re.sub(r"\s+", "", "".join(lines))
-        terms = sorted({re.sub(r"\s+", "", term) for term in cue.subtitle_emphasis} - {""}, key=len, reverse=True)
-        emphasized_indices: set[int] = set()
-        if cue.subtitle_emphasis_ranges is not None:
-            for start, end in cue.subtitle_emphasis_ranges:
-                emphasized_indices.update(range(start, end))
-        elif terms:
-            for match in re.finditer("|".join(re.escape(term) for term in terms), compact_text):
-                emphasized_indices.update(range(match.start(), match.end()))
-        text_offset = 0
-        cursor_y = top + 20
-        for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
-            emphasis_mask = []
-            for character in line:
-                emphasis_mask.append(not character.isspace() and text_offset in emphasized_indices)
-                if not character.isspace():
-                    text_offset += 1
-            line_width = box[2] - box[0]
-            _draw_subtitle_line(
-                draw,
-                line=line,
-                x=(1080 - line_width) / 2 - box[0],
-                y=cursor_y - box[1],
-                font=font,
-                primary_color=_subtitle_color(
-                    cue.subtitle_style.get("primary_color"),
-                    fallback=(255, 255, 255, 255),
-                ),
-                emphasis_mask=emphasis_mask,
-                emphasis_color=_subtitle_color(
-                    cue.subtitle_style.get("emphasis_color"),
-                    fallback=(255, 213, 79, 255),
-                ),
-                stroke_width=stroke_width,
-            )
-            cursor_y += line_height + spacing
         path = output_dir / f"subtitle-{index:03}.png"
-        overlay.save(path)
+        _write_subtitle_image(cue,path)
         overlays.append(path)
     return overlays
+
+
+def _write_subtitle_image(cue, path: Path):
+    overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style)
+    stroke_width = 3
+    spacing = 10
+    line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
+    line_heights = [box[3] - box[1] for box in line_boxes]
+    block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
+    widest = max(box[2] - box[0] for box in line_boxes)
+    left = (1080 - widest) / 2 - 26
+    panel_height = block_height + 40
+    position = cue.subtitle_style.get("position", "bottom")
+    if position == "top":
+        top = 250
+    elif position == "middle":
+        top = (1920 - panel_height) / 2
+    elif position == "bottom":
+        top = 1920 - 250 - panel_height
+    else:
+        raise OSError(f"不支持的字幕位置：{position}；请选择 top、middle 或 bottom")
+    right = (1080 + widest) / 2 + 26
+    bottom = top + block_height + 40
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=18,
+        fill=(0, 0, 0, 158),
+    )
+    compact_text = re.sub(r"\s+", "", "".join(lines))
+    terms = sorted({re.sub(r"\s+", "", term) for term in cue.subtitle_emphasis} - {""}, key=len, reverse=True)
+    emphasized_indices: set[int] = set()
+    if cue.subtitle_emphasis_ranges is not None:
+        for start, end in cue.subtitle_emphasis_ranges:
+            emphasized_indices.update(range(start, end))
+    elif terms:
+        for match in re.finditer("|".join(re.escape(term) for term in terms), compact_text):
+            emphasized_indices.update(range(match.start(), match.end()))
+    text_offset = 0
+    cursor_y = top + 20
+    for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
+        emphasis_mask = []
+        for character in line:
+            emphasis_mask.append(not character.isspace() and text_offset in emphasized_indices)
+            if not character.isspace():
+                text_offset += 1
+        line_width = box[2] - box[0]
+        _draw_subtitle_line(
+            draw,
+            line=line,
+            x=(1080 - line_width) / 2 - box[0],
+            y=cursor_y - box[1],
+            font=font,
+            primary_color=_subtitle_color(
+                cue.subtitle_style.get("primary_color"),
+                fallback=(255, 255, 255, 255),
+            ),
+            emphasis_mask=emphasis_mask,
+            emphasis_color=_subtitle_color(
+                cue.subtitle_style.get("emphasis_color"),
+                fallback=(255, 213, 79, 255),
+            ),
+            stroke_width=stroke_width,
+        )
+        cursor_y += line_height + spacing
+    overlay.save(path)
+
 
 
 def _draw_subtitle_line(
