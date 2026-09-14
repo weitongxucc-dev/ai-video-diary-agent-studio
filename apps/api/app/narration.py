@@ -460,6 +460,7 @@ class NarrationGenerator:
             "task_id": task_id,
             "script_id": script_id,
             "text": narration_text,
+            "language": voice_identity.language,
             "voice": {
                 "id": voice_identity.id,
                 "version": voice_identity.version,

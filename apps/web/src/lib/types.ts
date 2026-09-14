@@ -1137,7 +1137,7 @@ export type CreationTaskScript = {
   run_id: string;
   topic_id: string;
   title: string;
-  language: "zh-CN";
+  language: "zh-CN" | "en-US" | "zh-CN/en-US";
   sections: CreationTaskScriptSection[];
   selection_status: "draft" | "confirmed";
   created_at: string;

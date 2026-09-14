@@ -910,7 +910,7 @@ class CreationTaskScriptResponse(BaseModel):
     run_id: str
     topic_id: str
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: list[CreationTaskScriptSectionResponse]
     selection_status: Literal["draft", "confirmed"]
     created_at: datetime

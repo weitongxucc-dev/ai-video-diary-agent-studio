@@ -574,7 +574,7 @@ class CreationTaskScript:
     run_id: str
     topic_id: str
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: list[CreationTaskScriptSection]
     selection_status: ScriptSelectionStatus = "draft"
     created_at: datetime = field(default_factory=utc_now)

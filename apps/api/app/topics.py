@@ -526,7 +526,7 @@ class CreationTaskGeneratedScriptSection:
 @dataclass(frozen=True)
 class CreationTaskGeneratedScript:
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: tuple[CreationTaskGeneratedScriptSection, ...]
 
 
@@ -580,12 +580,12 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             )
 
     def generate(self, input: CreationTaskScriptInput) -> CreationTaskGeneratedScript:
-        if input.language != "zh-CN":
+        if input.language not in {"zh-CN", "en-US", "zh-CN/en-US"}:
             raise self._failure(
                 code="language_unavailable",
-                reason="本地真成片 v0.1 只支持中文文案与中文声音克隆。",
+                reason="当前文案语言不在中文、英文或中英混合范围内。",
                 impact="未调用文字模型，未生成文案。",
-                repair_action="将创作方案语言改为简体中文后重试。",
+                repair_action="重新预检并选择中文、英文或中英混合。",
                 retryable=False,
             )
         if not 15 <= input.duration_target_seconds <= 600:
@@ -665,9 +665,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 {
                     "role": "system",
                     "content": (
-                        "你是短视频中文口播文案生成器。只返回单一 JSON object，不要 Markdown。"
+                        "你是短视频口播文案生成器。按指定语言写正文，只返回单一 JSON object，不要 Markdown。"
                         "顶层必须为 {\"script\": {title, language, sections}}。"
-                        "language 必须是 zh-CN。sections 每项必须包含 title、content、"
+                        f"language 必须是 {input.language}。sections 每项必须包含 title、content、"
                         "visual_prompt、evidence_reference_ids；证据只能引用输入 reference_id。"
                     ),
                 },
@@ -687,7 +687,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             },
                             "sources": serialized_sources,
                             "requirements": {
-                                "spoken_chinese": True,
+                                "spoken_language": input.language,
                                 "section_count": input.script_section_count or "1-20",
                                 "every_section_requires_evidence": True,
                             },
@@ -735,20 +735,20 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="检查 OpenAI-compatible JSON 响应格式后重试。",
                 retryable=True,
             ) from exc
-        script = self._validated_script(document, source_aliases)
+        script = self._validated_script(document, source_aliases, input.language)
         if input.script_section_count and len(script.sections) != input.script_section_count:
             raise self._schema_failure("文字模型返回的段落数量不符合所选模板，请重新生成。")
         return script
 
     def _validated_script(
-        self, document: object, allowed_reference_aliases: dict[str, str]
+        self, document: object, allowed_reference_aliases: dict[str, str], requested_language: str
     ) -> CreationTaskGeneratedScript:
         raw = document.get("script") if isinstance(document, dict) else None
         if not isinstance(raw, dict):
             raise self._schema_failure("文字模型内容缺少 script 对象。")
         title = self._text(raw.get("title"), "title", 160)
-        if raw.get("language") != "zh-CN":
-            raise self._schema_failure("文字模型返回了当前版本不支持的文案语言。")
+        if raw.get("language") != requested_language:
+            raise self._schema_failure("文字模型返回的文案语言与本次方案不一致。")
         raw_sections = raw.get("sections")
         if not isinstance(raw_sections, list) or not 1 <= len(raw_sections) <= 20:
             raise self._schema_failure("文字模型返回的文案段落数量无效。")
@@ -782,7 +782,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             )
         return CreationTaskGeneratedScript(
             title=title,
-            language="zh-CN",
+            language=requested_language,
             sections=tuple(sections),
         )
 
