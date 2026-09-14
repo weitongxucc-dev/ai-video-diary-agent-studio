@@ -251,6 +251,7 @@ class NarrationGenerator:
         segment_id: str | None = None,
         delivery_instruction: str | None = None,
         generation_identity: str | None = None,
+        language: str | None = None,
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
 
@@ -259,8 +260,11 @@ class NarrationGenerator:
             raise ValueError("已确认文案没有可配音正文")
         if voice_identity.workspace_id != workspace_id:
             raise ValueError("声音版本不属于当前工作区")
-        if voice_identity.language != "zh":
-            raise ValueError("本地真成片 v0.1 只支持中文声音克隆")
+        resolved_language = language or voice_identity.language
+        if resolved_language not in {"zh", "en", "zh-en"}:
+            raise ValueError("配音语言无效")
+        if voice_identity.language not in {resolved_language, "zh-en"}:
+            raise ValueError("所选声音版本未声明支持本次配音语言，请选择对应语言的声音版本")
         authorization_failure = voice_identity.authorization.failure_for(
             content_type="voice", usage_scope="narration"
         )
@@ -284,7 +288,7 @@ class NarrationGenerator:
         )
         preflight_failure = text_to_speech_preflight(
             self.provider,
-            language="zh",
+            language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
         )
         if preflight_failure is not None:
@@ -299,6 +303,7 @@ class NarrationGenerator:
             segment_id=segment_id,
             delivery_instruction=delivery_instruction,
             generation_identity=generation_identity,
+            language=resolved_language,
         )
         output_path = (
             self.output_root
@@ -316,7 +321,7 @@ class NarrationGenerator:
             reference_audio_path=reference_path,
             reference_text=reference_text,
             output_path=output_path,
-            language="zh",
+            language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
         )
         resolved_output = output_path.resolve()
@@ -368,7 +373,7 @@ class NarrationGenerator:
             model_id=self.provider.model_id,
             voice_profile_id=voice_identity.id,
             cache_key=cache_key,
-            language="zh",
+            language=resolved_language,
             pronunciation_version=_pronunciation_version(pronunciation_dictionary),
         )
 
@@ -383,6 +388,8 @@ class NarrationGenerator:
     ) -> NarrationArtifact:
         if not segments:
             raise ValueError("没有可拼合的配音片段")
+        if len({item.language for item in segments}) != 1:
+            raise ValueError("配音片段语言不一致，请按同一目标语言重新生成")
         if any(item.task_id != task_id or item.script_id != script_id for item in segments):
             raise ValueError("配音片段与当前任务文案不一致")
         cache_key = hashlib.sha256(
@@ -454,13 +461,14 @@ class NarrationGenerator:
         segment_id: str | None = None,
         delivery_instruction: str | None = None,
         generation_identity: str | None = None,
+        language: str | None = None,
     ) -> str:
         payload = {
             "workspace_id": workspace_id,
             "task_id": task_id,
             "script_id": script_id,
             "text": narration_text,
-            "language": voice_identity.language,
+            "language": language or voice_identity.language,
             "voice": {
                 "id": voice_identity.id,
                 "version": voice_identity.version,
@@ -628,7 +636,7 @@ class VoicePreviewService:
                 impact="声音预览被授权门禁阻断，不会生成或复用音频。",
                 repair_action="补充有效授权后以新的预览身份重试。",
             )
-        if resolved_language != voice.language:
+        if voice.language not in {resolved_language, "zh-en"}:
             return self._finish(
                 repository,
                 running,

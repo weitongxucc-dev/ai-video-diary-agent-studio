@@ -3172,12 +3172,14 @@ def _subtitle_track_from_montage(
             )
         )
         cursor = end
+    source_language = production_repo.get_creation_plan(workspace_id, task.plan_id).language
+    track_language = "en-US" if source_language == "en-US" else "zh-CN"
     return SubtitleTrack(
-        id=f"subtitle_{version.id}_zh",
+        id=f"subtitle_{version.id}_{'en' if track_language == 'en-US' else 'zh'}",
         workspace_id=workspace_id,
         task_id=task.id,
         timeline_version_id=version.id,
-        language="zh-CN",
+        language=track_language,
         source_language=None,
         style=dict(montage.cues[0].subtitle_style) if montage.cues and montage.cues[0].subtitle_style else _default_subtitle_style(),
         cues=cues,
@@ -4110,7 +4112,7 @@ def generate_creation_task_narration(
             raise MediaAuthorityError(
                 reason="voice_identity_missing",
                 impact="当前创作任务未生成配音，未调用声音模型。",
-                repair_action="重新预检并选择已授权的中文声音版本。",
+                repair_action="重新预检并选择已授权且支持目标语言的声音版本。",
             )
         inputs = production_repo.resolve_creation_task_narration_inputs(
             workspace_id=workspace_id,
@@ -4132,6 +4134,7 @@ def generate_creation_task_narration(
                 task_id=task.id,
                 script_id=script.id,
                 narration_text=section.content,
+                language={"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language],
                 max_duration_seconds=plan.duration_target_seconds,
                 voice_identity=inputs.voice,
                 pronunciation_entries=inputs.pronunciation_entries,
@@ -4171,7 +4174,7 @@ def generate_creation_task_narration(
                     model_id=segment_record.model_id,
                     voice_profile_id=inputs.voice.id,
                     voice_version=inputs.voice.version,
-                    language="zh",
+                    language=segment_artifact.language,
                     pronunciation_version=segment_record.pronunciation_version,
                     status="ready",
                 )
@@ -5521,6 +5524,7 @@ def _regenerate_creation_task_narration_segment(
         task_id=task.id,
         script_id=script.id,
         narration_text=target.text,
+        language=target.language,
         max_duration_seconds=plan.duration_target_seconds,
         voice_identity=inputs.voice,
         pronunciation_entries=inputs.pronunciation_entries,

@@ -148,7 +148,8 @@ def test_qwen_tts_declares_language_and_pronunciation_limits_before_worker(tmp_p
     assert text_to_speech_preflight(
         provider, language="zh", pronunciation_dictionary=()
     ) is None
-    for language in ("en", "zh-en"):
+    assert text_to_speech_preflight(provider, language="en", pronunciation_dictionary=()) is None
+    for language in ("zh-en",):
         failure = text_to_speech_preflight(
             provider, language=language, pronunciation_dictionary=()
         )
@@ -161,7 +162,6 @@ def test_qwen_tts_declares_language_and_pronunciation_limits_before_worker(tmp_p
     assert dictionary_failure.reason == "pronunciation_dictionary_unavailable"
 
     for language, entries, reason in (
-        ("en", (), "language_unavailable"),
         ("zh-en", (), "language_unavailable"),
         ("zh", dictionary, "pronunciation_dictionary_unavailable"),
     ):
@@ -516,3 +516,34 @@ def test_narration_rejects_expired_versioned_voice_authorization(tmp_path):
             profile=ProductionProfile(workspace_id="workspace_a"),
             voice_identity=voice,
         )
+
+
+def test_creation_task_english_uses_target_language_and_separate_cache(tmp_path):
+    calls=[]
+    class Provider:
+        model_id="voice-test"
+        ready=True
+        message="ready"
+        supported_languages=("zh","en")
+        supports_pronunciation_dictionary=False
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            _write_wav(Path(kwargs["output_path"]))
+            return VoiceCloneResult(str(kwargs["output_path"]),1,24000)
+    voice=VersionedVoiceProfile(id="voice",workspace_id="workspace_a",person_profile_id="person",person_version="v1",
+        version="v1",language="zh-en",reference_audio_path="workspace://ref.wav",reference_text="参考文字",
+        model_id="voice-test",authorization=_active_authorization(content_type="voice"))
+    reference=tmp_path/"ref.wav";_write_wav(reference)
+    generator=NarrationGenerator(output_root=tmp_path/"output",provider=Provider())
+    args=dict(workspace_id="workspace_a",task_id="task",script_id="script",narration_text="Preview the result.",
+        max_duration_seconds=30,voice_identity=voice,pronunciation_entries=(),resolved_reference_audio_path=reference)
+    en=generator.generate_for_creation_task(**args,language="en")
+    zh=generator.generate_for_creation_task(**args,language="zh")
+    assert en.language=="en" and calls[0]["language"]=="en"
+    assert zh.language=="zh" and en.cache_key!=zh.cache_key
+    with pytest.raises(ValueError,match="声音版本"):
+        generator.generate_for_creation_task(**{**args,"voice_identity":replace(voice,language="zh")},language="en")
+    assert len(calls)==2
+    with pytest.raises(ValueError,match="语言不一致"):
+        generator.combine_creation_task_segments(workspace_id="workspace_a",task_id="task",script_id="script",
+            segments=[en,zh],max_duration_seconds=30)

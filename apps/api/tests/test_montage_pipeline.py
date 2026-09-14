@@ -2737,13 +2737,15 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
     ) == []
 
 
-def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state):
+@pytest.mark.parametrize("language", ["zh-CN", "en-US"])
+def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state, language):
     state = person_render_edit_state
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     task.stage = "montage"
     task.stage_status = "not_started"
     task.current_timeline_version_id = None
     plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.language = language
     plan.template_settings = {"fit_mode": "fit", "subtitle_style": {"position": "top", "font_size": 48}}
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
@@ -2757,6 +2759,7 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     montage.subtitle_path = "test/subtitle.srt"
     version = SimpleNamespace(id="test-version", snapshot={"transform_run_id": "test-transform"})
     track = main_module._subtitle_track_from_montage(state.workspace_id, task, version, montage)
+    assert track.language == language
     assert track.style == plan.template_settings["subtitle_style"]
 
 
