@@ -1229,6 +1229,7 @@ export type CreationTaskCapability = {
 };
 
 export type CreationTaskSubtitleStyle = {
+  enabled?: boolean;
   name: string;
   font_family: string;
   font_size: number;
@@ -1416,7 +1417,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
-  | { operation_type: "ConfigureSubtitleTrack"; track_id: string; target_language?: "en-US"; style: CreationTaskSubtitleStyle }
+  | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: CreationTaskSubtitleStyle }
   | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };

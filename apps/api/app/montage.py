@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import replace, asdict, dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -586,7 +586,10 @@ class MontageRenderer:
         schedule = (subtitle_schedule(subtitle_tracks, plan.duration_seconds) if subtitle_tracks is not None
                     else narration_schedule(plan.cues, plan.duration_seconds) if isinstance(plan, CreationTaskMontagePlan)
                     else None)
-        subtitle_path.write_text(schedule_srt(schedule) if schedule is not None else _plan_to_srt(plan), encoding="utf-8")
+        sidecar_schedule = schedule
+        if subtitle_tracks and schedule == []:
+            sidecar_schedule = subtitle_schedule([replace(track, style={**track.style, "enabled": True}) for track in subtitle_tracks], plan.duration_seconds)
+        subtitle_path.write_text(schedule_srt(sidecar_schedule) if sidecar_schedule is not None else _plan_to_srt(plan), encoding="utf-8")
 
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)

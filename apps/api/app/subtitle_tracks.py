@@ -27,6 +27,7 @@ _MAX_TOTAL_TEXT = 100_000
 
 @dataclass(frozen=True)
 class SubtitleStyle:
+    enabled: bool = True
     name: str = "default"
     font_family: str = "PingFang SC"
     font_size: int = 40

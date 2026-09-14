@@ -567,7 +567,9 @@ function SubtitleCoverView({
   const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
   const [styleName, setStyleName] = useState(activeTrack.style.name);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const displayMode = translationTrack?.status === "valid" ? "zh-en" : "zh";
+  const chineseVisible = sourceTrack.language === "zh-CN" && sourceTrack.style.enabled !== false;
+  const englishVisible = translationTrack?.status === "valid" && translationTrack.style.enabled !== false;
+  const displayMode = chineseVisible ? englishVisible ? "zh-en" : "zh" : englishVisible ? "en" : "none";
   const duration = montage?.duration_seconds ?? 0;
   const translationCapability = workspace.subtitle_translation_capability;
   const frameCapability = workspace.cover_frame_capability;
@@ -601,8 +603,10 @@ function SubtitleCoverView({
     <section aria-label="字幕与封面工作区" className={styles.subtitleCoverWorkspace}>
       <div className={styles.subtitleCoverToolbar}>
         <div aria-label="字幕语言" className={styles.segmentedControl} role="group">
-          <button aria-pressed={displayMode === "zh"} disabled type="button">中文</button>
-          <button aria-pressed={displayMode === "zh-en"} disabled={busy || displayMode === "zh-en" || !translationCapability.available} onClick={enableBilingual} type="button"><Languages size={15} />中英双语</button>
+          {([['none', '无字幕'], ['zh', '中文'], ['en', '英文'], ['zh-en', '中英双语']] as const).map(([mode, label]) => <button key={mode} type="button" aria-pressed={displayMode === mode}
+            disabled={busy || displayMode === mode || ((mode === "en" || mode === "zh-en") && translationTrack?.status !== "valid")}
+            onClick={() => onPreviewExact({operation_type: "ConfigureSubtitleTrack", subtitle_display: mode})}>{label}</button>)}
+          {translationTrack?.status !== "valid" ? <button type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15} />生成英文字幕</button> : null}
         </div>
         <div aria-label="字幕样式" className={styles.segmentedControl} role="group">
           <button aria-pressed={styleName !== "emphasis"} disabled={busy || activeTrack.language !== "zh-CN" || styleName !== "emphasis"} onClick={() => { onDraftChange(); setStyleName("default"); }} type="button">清爽底栏</button>

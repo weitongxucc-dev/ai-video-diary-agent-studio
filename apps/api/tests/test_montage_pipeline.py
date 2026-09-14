@@ -1215,8 +1215,9 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
 )
-@pytest.mark.parametrize("bilingual", [False, True])
-def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingual):
+@pytest.mark.parametrize("subtitle_mode", ["source", "bilingual", "hidden"])
+def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, subtitle_mode):
+    bilingual = subtitle_mode != "source"
     video_path = tmp_path / "source-task.mp4"
     audio_path = tmp_path / "voice-task.wav"
     subprocess.run(
@@ -1307,6 +1308,9 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
     with pytest.raises(ValueError, match="job-scoped"):
         renderer.render(plan, audio_path)
 
+    if subtitle_mode == "hidden":
+        chinese = replace(chinese, style={**chinese.style, "enabled": False})
+        english = replace(english, style={**english.style, "enabled": False})
     job_staging_path = tmp_path / "temp" / "job_render_1"
     rendered = renderer.render(
         plan,
@@ -1352,7 +1356,7 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
             red > 220 and green > 220 and blue > 220
             for red, green, blue in subtitle_region.get_flattened_data()
         )
-    assert white_pixels > 50
+    assert white_pixels == 0 if subtitle_mode == "hidden" else white_pixels > 50
     if bilingual:
         assert "00:00:00,300 --> 00:00:00,800" in srt
         for moment in (0.1, 1.0):
@@ -1362,8 +1366,9 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, bilingu
             with Image.open(outside) as frame:
                 region = frame.convert("RGB").crop((0, 1300, 1080, 1800))
                 assert sum(r > 220 and g > 220 and b > 220 for r,g,b in region.get_flattened_data()) == 0
-        assert sum(red > 180 and green > 140 and blue < 130
-                   for red, green, blue in subtitle_region.get_flattened_data()) > 50
+        if subtitle_mode != "hidden":
+            assert sum(red > 180 and green > 140 and blue < 130
+                       for red, green, blue in subtitle_region.get_flattened_data()) > 50
 
 
 def test_creation_task_render_helper_restores_logical_media_references(
@@ -2294,9 +2299,23 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
         replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
     ]))
+    display_client = TestClient(main_module.app)
+    for mode, languages in [("en", {"en-US"}), ("zh", {"zh-CN"}), ("none", set())]:
+        preview = display_client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
+            "operation_type":"ConfigureSubtitleTrack", "subtitle_display":mode})
+        assert preview.status_code == 200, preview.text
+        result = display_client.post(f"/api/creation-tasks/{task.id}/edits/{preview.json()['proposal']['id']}/confirm")
+        assert result.status_code == 200, result.text
+        visible = display_client.get(f"/api/creation-tasks/{task.id}").json()
+        assert {track["language"] for track in visible["subtitle_tracks"] if track["style"].get("enabled",True)} == languages
+        assert display_client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    # Undo creates new versioned IDs; assertions below use the current tracks.
+    current = display_client.get(f"/api/creation-tasks/{task.id}").json()
+    current_zh = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="zh-CN")
+    current_en = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="en-US")
     rejected_style = TestClient(main_module.app).post(
         f"/api/creation-tasks/{task.id}/edits/exact", json={
-            "operation_type": "UpdateSubtitleCue", "track_id": "fixture-english",
+            "operation_type": "UpdateSubtitleCue", "track_id": current_en,
             "cue_id": "english-cue", "text": "MANUAL TEST", "style": {"name": "emphasis"},
         },
     )
@@ -2306,12 +2325,12 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
             "context_stage":"subtitle_cover", "selected_object_refs":["cue:english-cue"],
             "raw_command":"把这句字幕改成 Manual edited English"})
     assert english_preview.status_code == 200, english_preview.text
-    assert english_preview.json()["proposal"]["operation"]["payload"]["track_id"] == "fixture-english"
+    assert english_preview.json()["proposal"]["operation"]["payload"]["track_id"] == current_en
     response = TestClient(main_module.app).post(
         f"/api/creation-tasks/{task.id}/edits/exact",
         json={
             "operation_type": "UpdateSubtitleCue",
-            "track_id": "subtitle_timeline-subtitle-edit-base_zh",
+            "track_id": current_zh,
             "cue_id": montage.cues[0].id,
             "text": "原始\n字幕内容。" if visual_only else "修改后的字幕\n保留换行",
         },
@@ -2337,8 +2356,8 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert saved.narration_audio_path == montage.narration_audio_path
     assert saved.output_path is None and saved.subtitle_path is None
     assert production.get_creation_task(workspace_id, task.id).narration_cache_key == "whole-cache"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 2
-    assert production.list_edit_operations(workspace_id, task.id)[0].operation_type == "UpdateSubtitleCue"
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
+    assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.list_edit_operations(workspace_id, task.id))
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
 
@@ -2462,6 +2481,21 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         state=client.get(f"/api/creation-tasks/{task.id}").json()
         assert [track["cues"] for track in state["subtitle_tracks"]]==[track["cues"] for track in before_lock["subtitle_tracks"]]
         assert all(track["timeline_version_id"]==state["task"]["current_timeline_version_id"] for track in state["subtitle_tracks"])
+    visibility_before = client.get(f"/api/creation-tasks/{task.id}").json()
+    hidden_preview = client.post(f"/api/creation-tasks/{task.id}/edits/preview", json={
+        "context_stage":"subtitle_cover", "raw_command":"关闭字幕", "selected_object_refs":[]})
+    assert hidden_preview.status_code == 200, hidden_preview.text
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"] == visibility_before["subtitle_tracks"]
+    result = client.post(f"/api/creation-tasks/{task.id}/edits/{hidden_preview.json()['proposal']['id']}/confirm")
+    assert result.status_code == 200, result.text
+    hidden = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert all(track["style"]["enabled"] is False for track in hidden["subtitle_tracks"])
+    assert [track["cues"] for track in hidden["subtitle_tracks"]] == [track["cues"] for track in visibility_before["subtitle_tracks"]]
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={}).status_code == 200
+    restored = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert all(track["style"].get("enabled",True) for track in restored["subtitle_tracks"])
+    absent_english = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={"operation_type":"ConfigureSubtitleTrack","subtitle_display":"en"})
+    assert absent_english.status_code == 409
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(

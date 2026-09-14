@@ -316,7 +316,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v8"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v9"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -5048,6 +5048,16 @@ def _persist_typed_montage_edit(
     )
 
 
+def _subtitle_display_selection(tracks: list[SubtitleTrack], mode: str) -> dict[str, bool]:
+    languages = {"none": set(), "zh": {"zh-CN"}, "en": {"en-US"}, "zh-en": {"zh-CN", "en-US"}}
+    if mode not in languages:
+        raise HTTPException(status_code=422, detail="字幕显示模式无效")
+    wanted = languages[mode]
+    if not wanted.issubset({track.language for track in tracks if track.status == "valid"}):
+        raise HTTPException(status_code=409, detail="所选语言的字幕轨尚未生成；本次切换不会调用翻译模型。")
+    return {track.id: track.language in wanted for track in tracks}
+
+
 def _execution_subtitle_track(track: SubtitleTrack) -> SubtitleExecutionTrack:
     return SubtitleExecutionTrack(
         id=track.id,
@@ -5622,6 +5632,11 @@ def preview_creation_task_edit(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     command = payload.raw_command.strip()
+    display_commands = {"关闭字幕": "none", "不显示字幕": "none", "只显示中文字幕": "zh", "只显示英文字幕": "en", "显示中英双语字幕": "zh-en"}
+    if payload.context_stage in {"montage", "review", "subtitle_cover"} and command.rstrip("。！") in display_commands:
+        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
+            operation_type="ConfigureSubtitleTrack", subtitle_display=display_commands[command.rstrip("。！")]))
+
     if "/" in command or "\\" in command:
         raise _topic_failure_response(
             status_code=409,
@@ -6359,6 +6374,23 @@ def confirm_creation_task_edit(
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
             updated_plan=montage, operation_type="EditAudioTimeline", operation_payload=operation_payload)
+    if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict) and "subtitle_display" in operation_payload:
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        base_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
+        selection = _subtitle_display_selection(tracks, operation_payload["subtitle_display"])
+        version_id = f"timeline_{uuid4().hex}"
+        updated_tracks = [_clone_subtitle_track(track, timeline_version_id=version_id,
+            style={**track.style, "enabled": selection[track.id]}) for track in tracks]
+        cover = _cover_asset_for_version(workspace_id, task.id, base_version)
+        _prepare_changed_montage(montage, message="字幕显示已更新，请重新渲染成片。")
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base_version, result_version_id=version_id, operation_type=operation_type,
+            operation_payload=operation_payload, subtitle_tracks=updated_tracks,
+            cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
+            updated_plan=montage)
     if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict):
         source_track_id = operation_payload.get("source_track_id")
         base_version_id = operation_payload.get("base_version_id")
@@ -7073,7 +7105,18 @@ def preview_creation_task_exact_edit(
     )
     now = utc_now()
 
-    if payload.operation_type == "ConfigureSubtitleTrack":
+    if payload.operation_type == "ConfigureSubtitleTrack" and payload.subtitle_display is not None:
+        selection = _subtitle_display_selection(tracks, payload.subtitle_display)
+        if all(track.style.get("enabled", True) == selection[track.id] for track in tracks):
+            raise HTTPException(status_code=409, detail="字幕显示设置没有变化")
+        labels = {"none": "不显示字幕", "zh": "仅中文字幕", "en": "仅英文字幕", "zh-en": "中英双语字幕"}
+        summary = f"成片改为{labels[payload.subtitle_display]}，保留字幕文字与时轴。"
+        target_refs = [f"subtitle-track:{track.id}" for track in tracks]
+        operation_payload = {"subtitle_display": payload.subtitle_display, "base_version_id": base_version.id}
+        preview = {"before": {"ref": f"timeline:{base_version.id}", "label": "当前显示", "detail": "、".join(track.language for track in tracks if track.style.get("enabled", True)) or "无字幕"},
+                   "after": {"ref": f"subtitle-display:{payload.subtitle_display}", "label": "修改后", "detail": labels[payload.subtitle_display]}}
+        effects = ["只修改字幕显示；不调用模型。关闭全部字幕后仍保留可下载的字幕文件。"]
+    elif payload.operation_type == "ConfigureSubtitleTrack":
         source = next((track for track in tracks if track.language == "zh-CN"), None)
         if source is None:
             raise _topic_failure_response(
@@ -7868,6 +7911,7 @@ def render_creation_task_montage(
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
     active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+    subtitles_visible = any(track.status == "valid" and track.style.get("enabled", True) for track in active_subtitle_tracks) if active_subtitle_tracks else bool(plan.cues)
     active_version = (
         production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         if task.current_timeline_version_id
@@ -8149,7 +8193,7 @@ def render_creation_task_montage(
                         engine="ffmpeg+ffprobe",
                         parameters={
                             "aspect_ratio": "9:16",
-                            "subtitle_burned_in": True,
+                            "subtitle_burned_in": subtitles_visible,
                             "render_contract_version": CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION,
                         },
                         status="succeeded",
@@ -8298,7 +8342,7 @@ def render_creation_task_montage(
                     input_refs=input_refs,
                     output_refs=[],
                     engine="ffmpeg+ffprobe",
-                    parameters={"aspect_ratio": "9:16", "subtitle_burned_in": True},
+                    parameters={"aspect_ratio": "9:16", "subtitle_burned_in": subtitles_visible},
                     status="failed",
                     started_at=result.started_at or result.created_at,
                     finished_at=result.finished_at or utc_now(),

@@ -552,6 +552,20 @@ describe("CreationTaskWorkspace", () => {
     }));
   });
 
+  it("previews hiding subtitles without generating a translation", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "ConfigureSubtitleTrack"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "无字幕" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
+      operation_type: "ConfigureSubtitleTrack", subtitle_display: "none",
+    }));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "英文" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "中文" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("previews bilingual configuration and real-frame cover generation without exposing AI image success", async () => {
     const initial = subtitleCoverWorkspace();
     initial.subtitle_translation_capability = {
@@ -573,7 +587,7 @@ describe("CreationTaskWorkspace", () => {
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
-    fireEvent.click(screen.getByRole("button", { name: "中英双语" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成英文字幕" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenNthCalledWith(1, "task-1", {
       operation_type: "ConfigureSubtitleTrack",
       track_id: "subtitle-track-zh",
