@@ -2907,3 +2907,75 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
 ])
 def test_subtitle_command_preserves_authored_punctuation(command, expected):
     assert main_module._subtitle_text_from_command(command) == expected
+
+
+@pytest.mark.parametrize("visual_prompt,content", [
+    ("USB port closeup", "Save your time."),
+    ("接口特写", "提高工作效率。"),
+])
+def test_creation_task_retrieval_uses_visual_requirement_without_changing_narration(tmp_path, visual_prompt, content):
+    script = CreationTaskScript(id="script", workspace_id="workspace_a", task_id="task",
+        run_id="run", topic_id="topic", title="Visual requirement", language="en-US",
+        selection_status="confirmed", sections=[CreationTaskScriptSection(
+            id="section", title="Intro", content=content, visual_prompt=visual_prompt,
+            evidence_reference_ids=[])])
+    asset = _asset(tmp_path)
+    relevant = replace(asset.segments[0], id="relevant", description=visual_prompt,
+        end_seconds=20, transcript="")
+    spoken_only = replace(asset.segments[0], id="spoken-only", description="A sunny garden",
+        end_seconds=4, transcript=visual_prompt + " " + content)
+    observed_queries = []
+    provider = SimpleNamespace(ready=True, model_id="test-local",
+        embed_texts=lambda texts: observed_queries.extend(texts) or [[1.0, 0.0] for _ in texts])
+    planner = MontagePlanner(semantic_provider=provider,
+        visual_feature_loader=lambda _workspace, segment_id, _model: [1.0, 0.0] if segment_id == "relevant" else [0.0, 1.0])
+    plan = planner.build_for_creation_task(workspace_id="workspace_a", task_id="task", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"), assets=[replace(asset, segments=[spoken_only, relevant])],
+        media_reference_for_asset=lambda _: "workspace://source.mp4",
+        narration_audio_path="narration://artifact/test", narration_duration_seconds=4)
+    assert observed_queries == [visual_prompt]
+    assert plan.clips[0].segment_id == relevant.id
+    assert plan.cues[0].text == content
+    assert script.sections[0].content == content
+    assert "镜头时长适配 100%" in plan.clips[0].match_reasons
+    assert plan.clips[0].source_end_seconds == 4
+
+
+def test_creation_task_audio_claim_cannot_clear_missing_visual_evidence(tmp_path):
+    asset = _asset(tmp_path)
+    segment = replace(asset.segments[0], description="A sunny garden", transcript="USB port closeup", end_seconds=20)
+    cue = NarrationCue(id="cue", source_section_id="section", text="USB port closeup", duration_seconds=4)
+    result = _score_candidate(cue, asset, segment, 0, 0, visual_only=True)
+    assert result[1] == 0
+    assert "文字词重合 0%" in result[-1]
+    # Extra source duration does not reduce the ability to supply the requested shot.
+    exact = _score_candidate(cue, asset, replace(segment, end_seconds=4), 0, 0, visual_only=True)
+    assert result[0] == exact[0]
+
+
+@pytest.mark.parametrize("segmented", [False, True])
+def test_short_creation_subtitles_do_not_extend_real_narration(tmp_path, segmented):
+    from app.montage import _build_creation_task_cues
+    script = CreationTaskScript(id="s", workspace_id="w", task_id="t", run_id="r", topic_id="p",
+        title="Short cues", language="zh-CN", selection_status="confirmed", sections=[
+            CreationTaskScriptSection(id="a", title="A", content="好。开始。完成。", visual_prompt="", evidence_reference_ids=[]),
+            CreationTaskScriptSection(id="b", title="B", content="再见。", visual_prompt="", evidence_reference_ids=[])])
+    cues = _build_creation_task_cues(script, min_seconds=30, max_seconds=90,
+        narration_duration_seconds=1.321,
+        narration_segment_durations_by_section={"a":0.901,"b":0.420} if segmented else None)
+    assert sum(c.duration_seconds for c in cues) == pytest.approx(1.321, abs=0.000001)
+    assert all(c.duration_seconds > 0 for c in cues)
+    assert "".join(c.text for c in cues) == "好。开始。完成。再见。"
+    if segmented:
+        assert sum(c.duration_seconds for c in cues if c.source_section_id == "a") == pytest.approx(0.901)
+
+
+@pytest.mark.parametrize("durations", [{}, {"a":float("nan")}, {"a":3.0}])
+def test_creation_subtitles_reject_inconsistent_segment_clock(durations):
+    from app.montage import _build_creation_task_cues
+    script = CreationTaskScript(id="s", workspace_id="w", task_id="t", run_id="r", topic_id="p",
+        title="Invalid clock", language="zh-CN", selection_status="confirmed", sections=[
+            CreationTaskScriptSection(id="a", title="A", content="开始。", visual_prompt="", evidence_reference_ids=[])])
+    with pytest.raises(ValueError, match="配音时长"):
+        _build_creation_task_cues(script, min_seconds=30, max_seconds=90,
+            narration_duration_seconds=1.0, narration_segment_durations_by_section=durations)

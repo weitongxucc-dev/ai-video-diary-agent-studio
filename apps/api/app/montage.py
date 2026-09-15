@@ -426,8 +426,15 @@ class MontagePlanner:
             narration_segment_ids_by_section=narration_segment_ids_by_section,
             narration_segment_durations_by_section=narration_segment_durations_by_section,
         )
+        # Use the confirmed visual requirement for retrieval; narration remains
+        # unchanged for audio and subtitles. These projections are never persisted.
+        visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
+        retrieval_cues = {
+            cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
+            for cue in cues
+        }
         cue_vectors, segment_vectors = self._semantic_vectors(
-            workspace_id, cues, b_roll_candidates
+            workspace_id, list(retrieval_cues.values()), b_roll_candidates
         )
         clips: list[MontageClip] = []
         segment_usage: dict[str, int] = {}
@@ -444,13 +451,15 @@ class MontagePlanner:
                 raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
             ranked = sorted(
                 (_score_candidate(
-                    cue, asset, segment,
+                    retrieval_cues[cue.id], asset, segment,
                     segment_usage.get(segment.id, 0), asset_usage.get(asset.id, 0),
                     visual_score=_cosine_similarity(cue_vectors.get(cue.id), segment_vectors.get(segment.id)),
+                    visual_only=True,
                 ) for asset, segment in duration_candidates),
                 key=lambda item: item[0], reverse=True,
             )
             score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
+            reasons.insert(0, f"画面要求：{retrieval_cues[cue.id].text}")
             role: Literal["a_roll", "b_roll"] = "b_roll"
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
@@ -786,7 +795,7 @@ def _build_creation_task_cues(
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
         )
-    if narration_duration_seconds <= 0:
+    if not math.isfinite(narration_duration_seconds) or narration_duration_seconds <= 0:
         raise ValueError("旁白时长无效")
     entries: list[tuple[str, str, float]] = []
     for section in script.sections:
@@ -801,31 +810,42 @@ def _build_creation_task_cues(
     weights_by_section: dict[str, float] = {}
     for section_id, _text, weight in entries:
         weights_by_section[section_id] = weights_by_section.get(section_id, 0.0) + weight
+    if narration_segment_durations_by_section is not None:
+        durations = [narration_segment_durations_by_section.get(section_id) for section_id in weights_by_section]
+        if any(value is None or not math.isfinite(value) or value <= 0 for value in durations):
+            raise ValueError("每个文案段落必须有有效的真实配音时长")
+        if abs(sum(durations) - narration_duration_seconds) > 0.03:
+            raise ValueError("分段配音时长与完整旁白不一致，请重新生成配音")
     cues: list[NarrationCue] = []
+    cursor = 0.0
+    rounded_cursor = 0.0
     for section_id, text, weight in entries:
         section_duration = (
             narration_segment_durations_by_section.get(section_id)
             if narration_segment_durations_by_section
             else None
         )
-        scaled_duration = max(
-            0.75,
-            (
-                section_duration * weight / weights_by_section[section_id]
-                if section_duration is not None
-                else weight * scale
-            ),
+        scaled_duration = (
+            section_duration * weight / weights_by_section[section_id]
+            if section_duration is not None
+            else weight * scale
         )
         part_count = max(1, math.ceil(scaled_duration / 8.0))
         text_parts = _split_text_evenly(text, part_count)
         part_duration = scaled_duration / len(text_parts)
         for text_part in text_parts:
+            cursor += part_duration
+            rounded_end = round(cursor, 3)
+            cue_duration = round(rounded_end - rounded_cursor, 3)
+            if cue_duration <= 0:
+                raise ValueError("配音时长不足以为字幕分配有效时间区间")
+            rounded_cursor = rounded_end
             cues.append(
                 NarrationCue(
                     id=f"cue_{len(cues) + 1:03d}",
                     source_section_id=section_id,
                     text=text_part,
-                    duration_seconds=round(part_duration, 3),
+                    duration_seconds=cue_duration,
                     narration_segment_id=(
                         narration_segment_ids_by_section.get(section_id, "")
                         if narration_segment_ids_by_section
@@ -880,11 +900,13 @@ def _score_candidate(
     asset_usage: int,
     *,
     visual_score: float | None = None,
+    visual_only: bool = False,
 ):
     automatic_description = segment.understanding.summary if segment.understanding and segment.understanding.status == "ready" else ""
     metadata = " ".join(item for item in (
         segment.description or automatic_description or Path(asset.file_name).stem,
-        segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds),
+        (segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds))
+        if not visual_only else "",
     ) if item)
     cue_tokens = _tokens(cue.text)
     metadata_tokens = _tokens(metadata)
@@ -896,7 +918,12 @@ def _score_candidate(
     reviewed_tokens = _tokens(segment.description)
     reviewed_lexical_score = len(cue_tokens & reviewed_tokens) / max(1, len(cue_tokens))
     available = segment.end_seconds - segment.start_seconds
-    duration_score = max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
+    # A long source can be trimmed without degrading duration coverage.
+    duration_score = (
+        min(1.0, available / max(cue.duration_seconds, 0.001))
+        if visual_only else
+        max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
+    )
     if visual_score is None:
         score = lexical_score * 0.72 + duration_score * 0.2
     else:
@@ -910,7 +937,11 @@ def _score_candidate(
         f"镜头时长适配 {round(duration_score * 100)}%",
     ]
     if lexical_score > reviewed_lexical_score:
-        reasons.append("自动观察命中相关内容；仍需核对画面，语音证据不能确认画面匹配")
+        reasons.append(
+            "自动画面观察命中相关内容；仍需核对原片"
+            if visual_only else
+            "自动观察命中相关内容；仍需核对画面，语音证据不能确认画面匹配"
+        )
     if visual_score is not None:
         reasons.insert(1, f"画面向量相似度 {round(visual_score * 100)}%")
     if segment_usage == 0:
