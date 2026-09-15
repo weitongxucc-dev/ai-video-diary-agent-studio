@@ -145,3 +145,16 @@ def test_changed_source_during_analysis_cannot_publish_new_observations(tmp_path
     with pytest.raises(ValueError, match="原片发生变化"):
         repo.analyze_asset("workspace", asset.id)
     assert repo.get_asset("workspace", asset.id).segments[0].understanding is None
+
+
+@pytest.mark.parametrize("description,transcript,filename,expected", [
+    ("", "typing at a keyboard in an office", "office_laptop_typing.mp4", []),
+    ("A keyboard on a desk", "", "typing.mp4", ["场景:办公", "物体:电脑"]),
+    ("办公室里使用电脑打字", "", "clip.mp4", ["场景:办公", "物体:电脑", "动作:打字"]),
+])
+def test_system_visual_tags_do_not_promote_audio_or_filename_to_actions(description, transcript, filename, expected):
+    from app.production import _infer_system_tags
+    asset = SimpleNamespace(file_name=filename, usage_role="b_roll")
+    segment = MaterialSegment(id="s", asset_id="a", start_seconds=0, end_seconds=4,
+        description=description, transcript=transcript)
+    assert _infer_system_tags(asset, segment) == ["用途:b_roll", *expected]

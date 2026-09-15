@@ -460,6 +460,21 @@ class MontagePlanner:
             )
             score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
             reasons.insert(0, f"画面要求：{retrieval_cues[cue.id].text}")
+            observation = segment.understanding
+            if observation and observation.status == "ready":
+                actions = [fact for fact in observation.facts if fact["kind"] == "action"
+                    and len({time for time in fact["sample_times"]
+                        if segment.start_seconds <= time < segment.start_seconds + cue.duration_seconds}) >= 2]
+                reasons.extend(
+                    f"局部动作观察：{fact['text']}（原片 "
+                    + "、".join(f"{time:.2f}秒" for time in fact["sample_times"]
+                        if segment.start_seconds <= time < segment.start_seconds + cue.duration_seconds)
+                    + "）" for fact in actions)
+                if not actions:
+                    reasons.append("选取区间缺少多帧动作证据；物体相似不代表动作符合")
+                reasons.extend(f"画面未确认：{item}" for item in observation.unknowns)
+            else:
+                reasons.append("缺少本地多帧画面观察；尚未核验动作要求")
             role: Literal["a_roll", "b_roll"] = "b_roll"
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (

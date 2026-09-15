@@ -2913,7 +2913,9 @@ def test_subtitle_command_preserves_authored_punctuation(command, expected):
     ("USB port closeup", "Save your time."),
     ("接口特写", "提高工作效率。"),
 ])
-def test_creation_task_retrieval_uses_visual_requirement_without_changing_narration(tmp_path, visual_prompt, content):
+@pytest.mark.parametrize("action_times", [[0.2, 0.7], [3.0, 9.0]])
+def test_creation_task_retrieval_uses_visual_requirement_without_changing_narration(tmp_path, visual_prompt, content, action_times):
+    from app.visual_understanding import SegmentUnderstanding
     script = CreationTaskScript(id="script", workspace_id="workspace_a", task_id="task",
         run_id="run", topic_id="topic", title="Visual requirement", language="en-US",
         selection_status="confirmed", sections=[CreationTaskScriptSection(
@@ -2921,7 +2923,9 @@ def test_creation_task_retrieval_uses_visual_requirement_without_changing_narrat
             evidence_reference_ids=[])])
     asset = _asset(tmp_path)
     relevant = replace(asset.segments[0], id="relevant", description=visual_prompt,
-        end_seconds=20, transcript="")
+        end_seconds=20, transcript="", understanding=SegmentUnderstanding(status="ready",
+            facts=[{"kind":"action", "text":"手指移动", "sample_times":action_times}],
+            unknowns=["软件内容不可见"]))
     spoken_only = replace(asset.segments[0], id="spoken-only", description="A sunny garden",
         end_seconds=4, transcript=visual_prompt + " " + content)
     observed_queries = []
@@ -2939,6 +2943,11 @@ def test_creation_task_retrieval_uses_visual_requirement_without_changing_narrat
     assert script.sections[0].content == content
     assert "镜头时长适配 100%" in plan.clips[0].match_reasons
     assert plan.clips[0].source_end_seconds == 4
+    reasons = plan.clips[0].match_reasons
+    assert any("局部动作观察" in reason for reason in reasons) == (action_times == [0.2, 0.7])
+    assert "画面未确认：软件内容不可见" in reasons
+    if action_times == [3.0, 9.0]:
+        assert "选取区间缺少多帧动作证据；物体相似不代表动作符合" in reasons
 
 
 def test_creation_task_audio_claim_cannot_clear_missing_visual_evidence(tmp_path):

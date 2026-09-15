@@ -7879,7 +7879,8 @@ def _infer_system_tags(
     asset: MaterialAsset,
     segment: MaterialSegment,
 ) -> list[str]:
-    text = f"{asset.file_name} {segment.description} {segment.transcript}".lower()
+    # File names and spoken claims are search hints, not visible evidence.
+    text = segment.description.lower()
     role = effective_segment_usage_role(asset, segment)
     if role == "unassigned":
         role = segment.suggested_usage_role
@@ -7887,7 +7888,7 @@ def _infer_system_tags(
     rules = {
         "场景:办公": ("办公", "office", "workspace", "desk"),
         "物体:电脑": ("电脑", "笔记本", "laptop", "computer", "keyboard"),
-        "动作:打字": ("打字", "键盘", "typing", "keyboard"),
+        "动作:打字": ("打字", "typing"),
         "内容:软件界面": ("软件", "界面", "screen", "app", "website"),
         "场景:户外": ("户外", "街道", "风景", "outdoor", "street", "nature"),
         "主体:人物": ("人物", "人脸", "口播", "person", "face", "talking"),
