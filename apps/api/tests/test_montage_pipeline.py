@@ -1560,9 +1560,10 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
     assert production.list_edit_operations(workspace_id, task.id) == []
 
 
+@pytest.mark.parametrize("language", ["zh-CN", "en-US"])
 @pytest.mark.parametrize("exact_replacement", [False, True])
 def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
-    tmp_path, monkeypatch, exact_replacement
+    tmp_path, monkeypatch, exact_replacement, language
 ):
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -1593,7 +1594,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         goal="渲染一条可追溯成片",
         name="渲染迁移",
         target_count=1,
-        language="zh-CN",
+        language=language,
         aspect_ratio="9:16",
         duration_target_seconds=30,
         knowledge_references=[],
@@ -2018,6 +2019,11 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
+    current_task = production.get_creation_task(workspace_id, task.id)
+    current_tracks = production.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_task.current_timeline_version_id)
+    assert len(current_tracks) == 1 and current_tracks[0].language == language
+    assert current_tracks[0].artifact_ref == production.get_creation_task_montage_plan(workspace_id, task.id)["subtitle_path"]
+    assert current_tracks[0].transform_id is not None
 
     before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
     crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
@@ -2890,3 +2896,14 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
     assert production.get_creation_task_montage_plan(workspace_id, task.id)["clips"][0]["needs_confirmation"] is True
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("把这句字幕改成：Keep your files on this computer.", "Keep your files on this computer."),
+    ('Replace with "Ready?"', "Ready?"),
+    ("把字幕改成：‘Hello!’", "Hello!"),
+    ("把字幕改成：保留标点。", "保留标点。"),
+    ("把字幕改成：It's ready.", "It's ready."),
+])
+def test_subtitle_command_preserves_authored_punctuation(command, expected):
+    assert main_module._subtitle_text_from_command(command) == expected

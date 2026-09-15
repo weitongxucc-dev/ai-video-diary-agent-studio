@@ -1173,7 +1173,7 @@ export type CreationTaskNarrationSegment = {
   model_id: string;
   voice_profile_id: string;
   voice_version: string;
-  language: "zh";
+  language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   status: "pending" | "ready" | "generating" | "failed";
 };
@@ -1186,7 +1186,7 @@ export type CreationTaskNarration = {
   sample_rate: number;
   model_id: string;
   voice_profile_id: string;
-  language: "zh";
+  language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   segments: CreationTaskNarrationSegment[];
 };

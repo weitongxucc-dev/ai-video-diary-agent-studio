@@ -4221,7 +4221,7 @@ def generate_creation_task_narration(
         else:
             reason, impact, repair_action, retryable = (
                 "narration_generation_failed",
-                "未生成可用的中文声音克隆 WAV。",
+                "未生成可用的声音克隆 WAV。",
                 str(exc),
                 True,
             )
@@ -5423,7 +5423,12 @@ def _subtitle_text_from_command(command: str) -> str | None:
     for marker in ("改成", "改为", "换成", "replace with"):
         if marker in command.casefold():
             value = command[command.casefold().index(marker) + len(marker) :].strip()
-            return value.strip(" ：:，,。.!！?？\"'“”‘’") or None
+            value = value.lstrip(" ：:").strip()
+            for opening, closing in (("“", "”"), ("‘", "’"), ('"', '"'), ("'", "'")):
+                if len(value) >= 2 and value.startswith(opening) and value.endswith(closing):
+                    value = value[1:-1].strip()
+                    break
+            return value or None
     return None
 
 
@@ -6753,7 +6758,7 @@ def confirm_creation_task_edit(
                 track.language == "zh-CN" and item.language == "en-US" and str(text) != expected_text
             )
         ]
-        if track.language == "zh-CN":
+        if track.source_language is None:
             montage_cue = next((item for item in montage.cues if item.id == cue.id), None)
             if montage_cue is not None:
                 montage_cue.text = str(text)
@@ -8051,12 +8056,12 @@ def render_creation_task_montage(
                                     timeline_version_id=version.id,
                                     artifact_ref=(
                                         reusable_subtitles.logical_ref
-                                        if active_track.language == "zh-CN"
+                                        if active_track.source_language is None
                                         else active_track.artifact_ref
                                     ),
                                     transform_id=(
                                         f"transform_{latest_matching_job.id}"
-                                        if active_track.language == "zh-CN"
+                                        if active_track.source_language is None
                                         else active_track.transform_id
                                     ),
                                 )
@@ -8300,12 +8305,12 @@ def render_creation_task_montage(
                                 timeline_version_id=version.id,
                                 artifact_ref=(
                                     subtitle_ref
-                                    if active_track.language == "zh-CN"
+                                    if active_track.source_language is None
                                     else active_track.artifact_ref
                                 ),
                                 transform_id=(
                                     transform.id
-                                    if active_track.language == "zh-CN"
+                                    if active_track.source_language is None
                                     else active_track.transform_id
                                 ),
                             )

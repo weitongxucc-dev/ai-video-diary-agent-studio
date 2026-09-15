@@ -936,7 +936,7 @@ class CreationTaskNarrationSegmentResponse(BaseModel):
     model_id: str
     voice_profile_id: str
     voice_version: str
-    language: Literal["zh"]
+    language: Literal["zh", "en", "zh-en"]
     status: Literal["pending", "ready", "generating", "failed"]
 
 
@@ -948,7 +948,7 @@ class CreationTaskNarrationResponse(BaseModel):
     sample_rate: int = Field(gt=0)
     model_id: str
     voice_profile_id: str
-    language: Literal["zh"]
+    language: Literal["zh", "en", "zh-en"]
     pronunciation_version: str
     segments: list[CreationTaskNarrationSegmentResponse]
 

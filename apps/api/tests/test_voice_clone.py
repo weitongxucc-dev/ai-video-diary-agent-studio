@@ -547,3 +547,29 @@ def test_creation_task_english_uses_target_language_and_separate_cache(tmp_path)
     with pytest.raises(ValueError,match="语言不一致"):
         generator.combine_creation_task_segments(workspace_id="workspace_a",task_id="task",script_id="script",
             segments=[en,zh],max_duration_seconds=30)
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "zh-en"])
+def test_creation_task_narration_response_preserves_artifact_and_segment_language(monkeypatch, language):
+    from types import SimpleNamespace
+    from app import main
+    from app.production import CreationTask, NarrationArtifactRecord, NarrationSegment
+
+    task = CreationTask(id="task-language", workspace_id="local", plan_id="plan-language",
+        name="Language response", scenario="test")
+    artifact = NarrationArtifactRecord(id="audio-language", workspace_id="local",
+        task_id=task.id, script_id="script-language", voice_profile_id="voice-language",
+        cache_key="language-cache", audio_path="narration://artifact/language-cache",
+        duration_seconds=2, sample_rate=24000, model_id="local", language=language)
+    segment = NarrationSegment(id="segment-language", workspace_id="local", task_id=task.id,
+        script_id=artifact.script_id, source_section_id="section-language", text="Preview the result.",
+        audio_reference=artifact.audio_path, duration_seconds=2, sample_rate=24000,
+        model_id="local", voice_profile_id="voice-language", voice_version="v1",
+        language=language, pronunciation_version="", status="ready")
+    monkeypatch.setattr(main, "production_repo", SimpleNamespace(
+        list_narration_segments=lambda *_: [segment],
+        narration_artifact_reference=lambda _: artifact.audio_path))
+    response = main._creation_task_narration_response(task, artifact).model_dump(mode="json")
+    assert response["language"] == language
+    assert response["segments"][0]["language"] == language
+    assert response["segments"][0]["audio_url"].endswith("/segment-language/audio")
