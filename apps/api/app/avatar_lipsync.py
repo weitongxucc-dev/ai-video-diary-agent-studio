@@ -367,7 +367,9 @@ class SubprocessAvatarAndLipSyncProvider:
                     impact="人物与口型步骤失败，当前视频不能进入后续剪辑。",
                     action=f"检查人物口型服务响应格式后重试：{exc}",
                 )
-        return _parse_avatar_result(payload, expected_output=output, cache_key=cache_key)
+        return _parse_avatar_result(
+            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key
+        )
 
     def _run_command(self, command: list[str]) -> None:
         completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
@@ -754,7 +756,7 @@ def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
 
 
 def _parse_avatar_result(
-    payload: object, *, expected_output: Path, cache_key: str
+    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str
 ) -> AvatarAndLipSyncResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         return _failure(
@@ -806,14 +808,14 @@ def _parse_avatar_result(
             impact="人物口型服务没有生成视频，当前视频不能进入后续剪辑。",
             action="检查输出目录权限和供应商任务结果后重试。",
         )
-    media = _probe_avatar_output(expected_output)
+    media = _probe_avatar_output(expected_output, audio_path=audio_path)
     if media is None:
         return _failure(
             status="failed",
             cache_key=cache_key,
             code="output_invalid",
-            impact="人物口型服务输出不是有效 MP4，当前视频不能进入后续剪辑。",
-            action="检查供应商输出编码后重试。",
+            impact="人物口型视频不可用或与配音时长不一致，当前视频不能进入后续剪辑。",
+            action="检查人物口型服务输出编码及完整配音时长后重试。",
         )
     duration = payload.get("duration_seconds")
     alignment_evidence = payload.get("alignment_evidence")

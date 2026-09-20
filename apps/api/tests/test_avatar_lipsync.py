@@ -1,5 +1,6 @@
 import json
 import subprocess
+import wave
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,11 @@ def _authorization(content_type: str, *, status: str = "active") -> Authorizatio
 
 def _request(tmp_path: Path) -> AvatarAndLipSyncRequest:
     audio = tmp_path / "narration.wav"
-    audio.write_bytes(b"audio")
+    with wave.open(str(audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
+        stream.writeframes(b"\0\0" * (16000 * 8))
     visual = tmp_path / "person.mp4"
     visual.write_bytes(b"visual")
     person = PersonProfile(
@@ -334,7 +339,7 @@ def test_avatar_result_rejects_invalid_or_incorrect_duration(avatar_video, durat
     result = _parse_avatar_result({
         "schema_version": 1, "status": "succeeded", "artifact_path": str(avatar_video),
         "duration_seconds": duration, "alignment_evidence": "worker evidence",
-    }, expected_output=avatar_video, cache_key="test")
+    }, expected_output=avatar_video, audio_path=avatar_video, cache_key="test")
     assert result.status == "failed"
     assert result.failure_code == "provider_evidence_invalid"
     assert result.artifact_path is None
@@ -352,7 +357,7 @@ def test_avatar_result_rejects_unusable_media(tmp_path, avatar_video, kind):
     result = _parse_avatar_result({
         "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
         "duration_seconds": 8.0, "alignment_evidence": "worker evidence",
-    }, expected_output=output, cache_key="test")
+    }, expected_output=output, audio_path=avatar_video, cache_key="test")
     assert result.status == "failed"
     assert result.failure_code == "output_invalid"
 
@@ -377,6 +382,40 @@ def test_failed_avatar_output_cannot_be_reused_on_retry(tmp_path, avatar_video):
     assert len(calls) == 2
     assert not calls[-1].exists()
     assert avatar_video.is_file()
+
+
+def test_fresh_short_avatar_is_rejected_then_full_length_retry_succeeds(tmp_path, avatar_video):
+    request = _request(tmp_path)
+    short = tmp_path / "short.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-i", str(avatar_video), "-t", "1",
+        "-c:v", "libx264", "-c:a", "aac", str(short),
+    ], check=True)
+    calls = []
+
+    def runner(command):
+        payload = json.loads(Path(command[command.index("--request") + 1]).read_text())
+        output = Path(payload["output_path"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        source = short if not calls else avatar_video
+        output.write_bytes(source.read_bytes())
+        calls.append(output)
+        Path(command[command.index("--response") + 1]).write_text(json.dumps({
+            "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
+            "duration_seconds": 1.0 if len(calls) == 1 else 8.0,
+            "alignment_evidence": "worker evidence",
+        }))
+
+    service = AvatarAndLipSyncService(tmp_path / "outputs", _configured_provider(tmp_path, runner))
+    rejected = service.render(request)
+    assert rejected.failure_code == "output_invalid"
+    assert rejected.artifact_path is None
+    assert not calls[0].exists()
+    retried = service.render(request)
+    assert retried.status == "succeeded"
+    assert retried.duration_seconds == 8.0
+    assert len(calls) == 2
+    assert short.is_file() and avatar_video.is_file()
 
 
 @pytest.mark.parametrize("duration", ["nan", "inf"])
