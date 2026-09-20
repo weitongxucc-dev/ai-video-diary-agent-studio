@@ -3726,3 +3726,35 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     assert [track['style'] for track in restored['subtitle_tracks']]==[track['style'] for track in before['subtitle_tracks']]
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['subtitle_tracks'][0]['style']['font_size']==64
+
+
+def test_compound_caption_text_time_and_translation_boundary(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    zh=SubtitleTrack(id='compound-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},cues=[ProductionSubtitleCue(id='compound-source',source_cue_id=None,text='本地视频',start_seconds=0,end_seconds=4)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id='compound-en',language='en-US',source_language='zh-CN',
+        cues=[replace(zh.cues[0],id='compound-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='text-preview',logical_ref='artifacts/text-preview.mp4'))
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert preview('当前镜头亮一点，同时字幕1改成“歧义字幕”').status_code==422
+    assert preview('当前镜头亮一点，同时英文字幕1显示0到99秒').status_code==422
+    response=preview('当前镜头亮一点，同时英文字幕1改成“Local, 然后更清楚”，英文字幕1显示0.2到3.5秒')
+    assert response.status_code==200,response.text
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json();track=next(t for t in after['subtitle_tracks'] if t['language']=='en-US')
+    assert track['cues'][0]['text']=='Local, 然后更清楚'
+    assert track['cues'][0]['start_seconds']==.2 and track['cues'][0]['end_seconds']==3.5
+    assert track['artifact_ref']!='artifacts/source.srt'
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert [t['cues'] for t in state.client.get(base).json()['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
+    response=preview('当前镜头亮一点，同时中文字幕1改成“真实修改”')
+    assert response.status_code==200,response.text
+    assert any('英文翻译' in effect for effect in response.json()['proposal']['external_effects'])
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    assert [t['language'] for t in state.client.get(base).json()['subtitle_tracks']]==['zh-CN']

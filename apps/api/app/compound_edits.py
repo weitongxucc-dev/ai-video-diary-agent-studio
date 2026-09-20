@@ -1,6 +1,8 @@
 """Compile cross-object picture/audio requests against one existing montage."""
 from copy import deepcopy
 from dataclasses import replace
+from app.subtitle_edits import update_subtitle_cue
+from app.subtitle_schedule import subtitle_schedule
 from app.subtitle_style import compile_subtitle_style_command, validate_style_patch
 import re
 from app.audio_timeline import apply_audio_edit, compile_audio_command
@@ -8,7 +10,8 @@ from app.visual_effects import compile_visual_command, with_visual_effects
 
 
 def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, playhead_ms, included_step_indices=None):
-    clauses=[part.strip() for part in re.split(r'[，,；;]|(?:同时|并且|然后)',command.rstrip('。！')) if part.strip()]
+    clauses=split_compound_clauses(command)
+
     constraints={'配音不变','声音不变','画面不变','不改画面','字幕不变','其他不要动','其他别动','不要改变脸型','保留口型'}
     active=[part for part in clauses if part not in constraints]
     # Single-domain requests continue through their existing exact-edit consumer.
@@ -29,7 +32,18 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
             normalized=part if subtitle_subject(part) else '字幕'+part
             last_audio_prefix=None;last_subtitle=True
             descriptor={'index':step_index,'enabled':step_index in included,'operation_type':'ConfigureSubtitleTrack','target_ref':'subtitle:all','command':part}
-            if step_index not in included:steps.append(descriptor);continue
+            if step_index not in included:
+                if re.match(r'(?:把)?(?:中文|英文)?字幕\d+',normalized):descriptor['operation_type']='UpdateSubtitleCue'
+                steps.append(descriptor);continue
+            cue_match=re.fullmatch(r'(?:把)?(中文|英文)?字幕(\d+)(?:改成|改为)[“「"](.+)[”」"]',normalized,re.S)
+            time_match=re.fullmatch(r'(?:把)?(中文|英文)?字幕(\d+)(?:显示|时间改为)(\d+(?:\.\d+)?)到(\d+(?:\.\d+)?)秒',normalized)
+            match=cue_match or time_match
+            if match:
+                language={'中文':'zh-CN','英文':'en-US'}.get(match[1])
+                values={'language':language,'cue_number':int(match[2])}
+                if cue_match:values['text']=match[3]
+                else:values.update(start_seconds=float(match[3]),end_seconds=float(match[4]))
+                steps.append({**descriptor,'operation_type':'UpdateSubtitleCue','target_ref':f"subtitle:{language or 'selected'}:{match[2]}",'values':values});continue
             patch=compile_subtitle_style_command(normalized)
             if patch is None:raise ValueError('不能完整执行这项字幕修改：'+part)
             steps.append({**descriptor,'values':validate_style_patch(patch)});continue
@@ -98,7 +112,7 @@ def compile_compound_selection(command,steps):
         match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(画面|声音|音频|字幕)(?:修改|调整)?',text)
         if match:
             action=match[1];kind={'画面':'AdjustVisualEffects','字幕':'ConfigureSubtitleTrack'}.get(match[2],'EditAudioTimeline')
-            targets={step['index'] for step in steps if step['operation_type']==kind}
+            targets={step['index'] for step in steps if step['operation_type']==kind or (match[2]=='字幕' and step['operation_type']=='UpdateSubtitleCue')}
         else:
             number=r'(?:\d+|[一二三四五六七八九十]+)'
             match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(第?'+number+r'项?(?:(?:、|和|及|，)第?'+number+r'项?)*)(?:修改)?',text)
@@ -120,10 +134,41 @@ def compile_compound_selection(command,steps):
     return sorted(chosen)
 
 
-def apply_compound_subtitles(tracks,steps):
-    patches=[step['values'] for step in steps if step['operation_type']=='ConfigureSubtitleTrack' and step['enabled']]
-    if not patches:return tracks
-    if not any(track.status=='valid' for track in tracks):raise ValueError('当前没有可编辑字幕，请先生成字幕')
-    style={}
-    for patch in patches:style.update(validate_style_patch(patch))
-    return [replace(track,style={**track.style,**style}) if track.status=='valid' else track for track in tracks]
+def apply_compound_subtitles(tracks,steps,duration_seconds):
+    result=list(tracks)
+    for step in steps:
+        if step['operation_type'] not in {'ConfigureSubtitleTrack','UpdateSubtitleCue'} or not step['enabled']:continue
+        if not any(track.status=='valid' for track in result):raise ValueError('当前没有可编辑字幕，请先生成字幕')
+        values=step['values']
+        if step['operation_type']=='ConfigureSubtitleTrack':
+            patch=validate_style_patch(values)
+            result=[replace(track,style={**track.style,**patch}) if track.status=='valid' else track for track in result]
+            continue
+        candidates=[track for track in result if track.status=='valid' and (values['language'] is None or track.language==values['language'])]
+        if len(candidates)!=1:raise ValueError('请明确中文或英文字幕；指定字幕轨必须存在')
+        track=candidates[0];cues=sorted(track.cues,key=lambda cue:cue.start_seconds);index=values['cue_number']-1
+        if not 0<=index<len(cues):raise ValueError('指定字幕序号不存在')
+        cue=cues[index]
+        updated=update_subtitle_cue(track,cue.id,**{key:values[key] for key in ('text','start_seconds','end_seconds') if key in values})
+        subtitle_schedule([replace(updated,style={**updated.style,'enabled':True})],duration_seconds)
+        invalidate_translation=track.language=='zh-CN' and 'text' in values and values['text']!=cue.text
+        result=[updated if item.id==track.id else item for item in result if not(invalidate_translation and item.language=='en-US' and item.source_language=='zh-CN')]
+    return result
+
+
+def split_compound_clauses(command):
+    pairs={'“':'”','「':'」','"':'"'};stack=[];parts=[];buffer='';index=0
+    while index<len(command):
+        char=command[index]
+        if stack and char==stack[-1]:stack.pop();buffer+=char;index+=1;continue
+        if char in pairs:stack.append(pairs[char]);buffer+=char;index+=1;continue
+        separator=None
+        if not stack:
+            separator=next((word for word in ('，',',','；',';','同时','并且','然后') if command.startswith(word,index)),None)
+        if separator:
+            if buffer.strip():parts.append(buffer.strip())
+            buffer='';index+=len(separator)
+        else:buffer+=char;index+=1
+    if stack:raise ValueError('引用文字的引号未闭合，请补齐后预览')
+    if buffer.strip().rstrip('。！'):parts.append(buffer.strip().rstrip('。！'))
+    return parts

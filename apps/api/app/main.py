@@ -27,7 +27,7 @@ from app.linked_timeline import splice_clip, retime_clip
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
-from app.subtitle_edits import replace_subtitle_text, restructure_subtitle
+from app.subtitle_edits import replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
     Authorization,
@@ -3166,24 +3166,8 @@ def _normalize_subtitle_text_and_breaks(
     text: str,
     line_breaks: list[int] | None,
 ) -> tuple[str, list[int]]:
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    if "\n" not in normalized:
-        return normalized, list(line_breaks or [])
-    lines = normalized.split("\n")
-    if any(not line.strip() for line in lines):
-        raise HTTPException(status_code=422, detail="subtitle lines cannot be empty")
-    compact = "".join(lines)
-    inferred: list[int] = []
-    cursor = 0
-    for line in lines[:-1]:
-        cursor += len(line)
-        inferred.append(cursor)
-    if line_breaks is not None and list(line_breaks) != inferred:
-        raise HTTPException(
-            status_code=422,
-            detail="subtitle text line breaks conflict with line_breaks",
-        )
-    return compact, inferred
+    try:return normalize_subtitle_text_and_breaks(text,line_breaks)
+    except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
 
 
 def _subtitle_track_from_montage(
@@ -5039,7 +5023,7 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
             _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -5048,10 +5032,10 @@ def _persist_typed_montage_edit(
                     continue
                 artifact_ref, transform_id = _publish_subtitle_text(
                     workspace_id=workspace_id, task_id=task.id, proposal_id=proposal.id,
-                    kind="subtitle_retime",
+                    kind="subtitle_compound" if operation_type=="EditCompoundTimeline" else "subtitle_retime",
                     input_refs=[f"timeline:{source_version.id}", updated_plan.narration_audio_path],
                     content=render_srt(_execution_subtitle_track(track)),
-                    engine="timeline-clock-v1",
+                    engine="subtitle-srt/v1" if operation_type=="EditCompoundTimeline" else "timeline-clock-v1",
                     parameters={"language": track.language, "operation": operation_type},
                 )
                 carried_tracks[index] = _clone_subtitle_track(track,
@@ -6558,7 +6542,7 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409,detail="音频来源已变化，请重新预览") from exc
         base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
         tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=montage)
-        changed_tracks=apply_compound_subtitles(tracks,operation_payload["steps"])
+        changed_tracks=apply_compound_subtitles(tracks,operation_payload["steps"],montage.duration_seconds)
         _prepare_changed_montage(candidate,message="复合修改已应用，可重新渲染；一次撤销恢复全部修改。")
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=candidate,
@@ -7012,15 +6996,9 @@ def confirm_creation_task_edit(
         cue = next((item for item in track.cues if item.id == cue_id), None)
         if cue is None or cue.text != expected_text:
             raise HTTPException(status_code=409, detail="subtitle cue has changed")
-        updated_cue = replace(
-            cue,
-            text=str(text),
-            start_seconds=operation_payload.get("start_seconds", cue.start_seconds),
-            end_seconds=operation_payload.get("end_seconds", cue.end_seconds),
-            line_breaks=list(operation_payload.get("line_breaks") or []),
-            emphasis=list(operation_payload.get("emphasis") or []),
-        )
-        updated_cues = [updated_cue if item.id == cue.id else item for item in track.cues]
+        updated_track=update_subtitle_cue(track,cue.id,text=str(text),start_seconds=operation_payload.get("start_seconds"),
+            end_seconds=operation_payload.get("end_seconds"),line_breaks=list(operation_payload.get("line_breaks") or []),emphasis=list(operation_payload.get("emphasis") or []))
+        updated_cues=updated_track.cues
         updated_style = operation_payload.get("style")
         if not isinstance(updated_style, dict):
             raise HTTPException(status_code=409, detail="invalid subtitle style")
@@ -7793,21 +7771,24 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
         _task_audio().validate(workspace_id,task.id,candidate.audio_timeline,candidate.duration_seconds)
         base=_ensure_montage_base_version(workspace_id,task,plan)
         tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
-        changed_tracks=apply_compound_subtitles(tracks,steps)
+        changed_tracks=apply_compound_subtitles(tracks,steps,plan.duration_seconds)
         if '字幕不变' in payload.raw_command and changed_tracks!=tracks:raise ValueError("字幕不变与字幕修改冲突，请明确要保留的内容")
         records=[_publish_task_picture_preview(workspace_id,task,base,item,render_tracks,kind="compound_preview",parameters={"steps":steps,"side":side}) for side,item,render_tracks in (("before",plan,tracks),("after",candidate,changed_tracks))]
     except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
     if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id!=base.id:
         raise HTTPException(status_code=409,detail="预览期间版本已变化，请重新预览")
+    effects=["中文字幕内容已改变，旧英文翻译将失效；需要重新翻译后输出双语字幕。"] if any(track.language=='en-US' and track.source_language=='zh-CN' for track in tracks) and not any(track.language=='en-US' and track.source_language=='zh-CN' for track in changed_tracks) else []
+    if any(step['enabled'] and step['operation_type']=='UpdateSubtitleCue' for step in steps):
+        effects.append("字幕文字和显示时间的修改不会重新生成配音。")
     refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
         raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
-        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_timing":True,"preserve_subtitle_text":True},confidence=1,status="interpreted"))
+        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_video_duration":True},confidence=1,status="interpreted"))
     detail="；".join(step['command'] for step in steps if step['enabled'])
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,intent_id=intent.id,
         summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,"selection_enabled":True,
-            "clips":[asdict(clip) for clip in candidate.clips],"audio_timeline":candidate.audio_timeline.model_dump()}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
+            "clips":[asdict(clip) for clip in candidate.clips],"audio_timeline":candidate.audio_timeline.model_dump()}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=effects,
         preview={side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else detail,
             "detail":"整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
             "video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}))

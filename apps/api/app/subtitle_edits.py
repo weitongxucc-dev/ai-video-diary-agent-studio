@@ -78,3 +78,26 @@ def restructure_subtitle(track, operation: str, cue_id: str, *, split_offset=Non
         return " / ".join(f"{item.start_seconds:.3f}–{item.end_seconds:.3f} 秒：{item.text}" for item in items)
     return replace(track, cues=cues, artifact_ref=None, transform_id=None), [{"cue_id":cue.id,
         "before":describe(before), "after":describe(pieces) or "删除此条字幕，保留该时段配音与画面", "occurrences":1}]
+
+
+def normalize_subtitle_text_and_breaks(text, line_breaks):
+    normalized=text.replace('\r\n','\n').replace('\r','\n')
+    if '\n' not in normalized:return normalized,list(line_breaks or [])
+    lines=normalized.split('\n')
+    if any(not line.strip() for line in lines):raise ValueError('subtitle lines cannot be empty')
+    inferred=[];cursor=0
+    for line in lines[:-1]:cursor+=len(line);inferred.append(cursor)
+    if line_breaks is not None and list(line_breaks)!=inferred:raise ValueError('subtitle text line breaks conflict with line_breaks')
+    return ''.join(lines),inferred
+
+
+def update_subtitle_cue(track,cue_id,*,text=None,start_seconds=None,end_seconds=None,line_breaks=None,emphasis=None):
+    cue=next((cue for cue in track.cues if cue.id==cue_id),None)
+    if cue is None:raise ValueError('所选字幕不存在')
+    normalized,breaks=normalize_subtitle_text_and_breaks(text if text is not None else cue.text,
+        line_breaks if line_breaks is not None else cue.line_breaks if text is None or text==cue.text else None)
+    if not normalized.strip() or len(normalized)>4000:raise ValueError('字幕文字不能为空且不能超过4000字')
+    updated=replace(cue,text=normalized,line_breaks=breaks,emphasis=cue.emphasis if emphasis is None else emphasis,
+        start_seconds=cue.start_seconds if start_seconds is None else start_seconds,
+        end_seconds=cue.end_seconds if end_seconds is None else end_seconds)
+    return replace(track,cues=[updated if item.id==cue_id else item for item in track.cues],artifact_ref=None,transform_id=None)
