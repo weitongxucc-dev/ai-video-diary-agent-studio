@@ -772,6 +772,7 @@ class CreationTaskResponse(BaseModel):
     timeline_sequence: int = Field(default=0, ge=0)
     can_undo: bool = False
     can_redo: bool = False
+    can_revise_script: bool = False
     output_ready: bool
     stage_reason: str | None
     stage_impact: str | None

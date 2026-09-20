@@ -1040,6 +1040,7 @@ export type CreationTask = {
   timeline_sequence: number;
   can_undo: boolean;
   can_redo?: boolean;
+  can_revise_script?: boolean;
   output_ready: boolean;
   stage_reason: string | null;
   stage_impact: string | null;

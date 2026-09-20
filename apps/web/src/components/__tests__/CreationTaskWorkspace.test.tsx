@@ -386,10 +386,12 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/不需要重做选题或文案/)).toBeInTheDocument();
   });
 
-  it("lets the user revise and reconfirm the persisted script after regeneration fails", async () => {
+  it.each(["script", "narration"] as const)("lets the user revise and reconfirm after %s fails", async (stage) => {
     const failedTask = {
       ...baseTask,
-      stage: "script" as const,
+      stage,
+      confirmed_script_id: "script-1",
+      can_revise_script: true,
       stage_reason: "文字模型服务拒绝了文案请求。",
       stage_impact: "未生成压缩后的文案。",
       stage_repair_action: "手动修订并重新确认文案。",
@@ -415,6 +417,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(repaired);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    if (stage === "narration") fireEvent.click(screen.getByRole("button", { name: "修改文案" }));
     expect(screen.getByRole("heading", { name: "压缩并重新确认文案" })).toBeInTheDocument();
     fireEvent.change(screen.getByDisplayValue("原来的正文过长。"), { target: { value: "压缩后的三十秒正文。" } });
     fireEvent.click(screen.getByRole("button", { name: "确认修订文案" }));
@@ -422,6 +425,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.confirmScript).toHaveBeenCalledWith("task-1", "script-1", expect.objectContaining({
       sections: [expect.objectContaining({ content: "压缩后的三十秒正文。" })],
     })));
+    expect(mocks.generateNarration).not.toHaveBeenCalled();
   });
 
   it("explicitly binds a later authorized voice before enabling generation", async () => {

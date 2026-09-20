@@ -480,6 +480,24 @@ class CreationTask:
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
+    @property
+    def needs_script_duration_repair(self) -> bool:
+        return (
+            self.stage == "narration" and self.stage_status == "failed"
+            and self.stage_reason == "narration_generation_failed"
+            and "压缩" in (self.stage_repair_action or "")
+            and "文案" in (self.stage_repair_action or "")
+        )
+
+    @property
+    def can_revise_script(self) -> bool:
+        return bool(
+            self.confirmed_script_id and not self.narration_cache_key
+            and not self.montage_plan_id and not self.current_timeline_version_id
+            and ((self.stage == "script" and self.stage_status == "failed")
+                 or self.needs_script_duration_repair)
+        )
+
 
 TopicGenerationRunStatus = Literal["running", "succeeded", "failed"]
 TopicSelectionStatus = Literal["unselected", "confirmed"]
@@ -5376,13 +5394,7 @@ class ProductionRepository:
             task = self._creation_task_from_payload(json.loads(str(row["payload"])))
             if task.plan_id != run.plan_id or task.selected_topic_id != run.topic_id:
                 raise ValueError("文案运行与已确认选题不一致")
-            duration_repair = (
-                task.stage == "narration"
-                and task.stage_status == "failed"
-                and task.stage_reason == "narration_generation_failed"
-                and "压缩" in (task.stage_repair_action or "")
-                and "文案" in (task.stage_repair_action or "")
-            )
+            duration_repair = task.needs_script_duration_repair and task.can_revise_script
             if not duration_repair and (
                 task.stage != "script"
                 or task.stage_status not in {"not_started", "failed"}
@@ -5699,8 +5711,7 @@ class ProductionRepository:
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
-                and task.stage == "script"
-                and task.stage_status == "failed"
+                and task.can_revise_script
             )
             if (
                 task.confirmed_script_id == script_id

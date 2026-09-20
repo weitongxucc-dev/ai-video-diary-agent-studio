@@ -4,6 +4,7 @@ from app.subtitle_schedule import subtitle_schedule
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,8 @@ from app.montage import (
     NarrationCue,
     _plan_to_srt,
     _score_candidate,
+    _split_narration,
+    _split_text_evenly,
     _subtitle_font,
     _subtitle_font_and_lines,
     _tokens,
@@ -67,6 +70,21 @@ from app.production import (
     VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
+
+
+@pytest.mark.parametrize("text", [
+    "Check subtitle text and timing. Listen to the audio mix. Preview changes before confirming, then export your video.",
+    "Don't split English words or version 0.11 when creating captions for a video.",
+    "检查 English subtitles 的显示时间，再 preview changes，然后导出 video。" * 3,
+])
+def test_automatic_narration_cues_keep_words_and_text(text):
+    expected_words = re.findall(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", text)
+    for parts in (_split_narration(text), _split_text_evenly(text, 7)):
+        assert re.sub(r"\s", "", "".join(parts)) == re.sub(r"\s", "", text)
+        assert [word for part in parts for word in re.findall(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", part)] == expected_words
+    assert _split_text_evenly("Extraordinary", 3) == ["Extraordinary"]
+    assert _split_text_evenly("Hello, world", 1) == ["Hello, world"]
+    assert _split_text_evenly("First, second, third", 2) == ["First, second,", "third"]
 
 
 def test_matching_preserves_english_words_and_chinese_phrase_boundaries() -> None:
@@ -2904,6 +2922,9 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
     assert persisted["clips"][0]["needs_confirmation"] is False
     assert persisted["clips"][1] == creation_task_montage_plan_to_payload(plan)["clips"][1]
+    confirmed_task = production.get_creation_task(workspace_id, task.id)
+    confirmed_version = production.get_timeline_version(workspace_id, confirmed_task.current_timeline_version_id)
+    assert "subtitle_track_ids" not in confirmed_version.snapshot
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
     assert production.get_creation_task_montage_plan(workspace_id, task.id)["clips"][0]["needs_confirmation"] is True

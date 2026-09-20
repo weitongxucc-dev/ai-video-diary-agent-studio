@@ -900,31 +900,51 @@ def _build_creation_task_cues(
 
 
 def _split_narration(text: str) -> list[str]:
-    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])\s*", text) if item.strip()]
+    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])\s*|(?<=\.)\s+(?=[A-Z])", text) if item.strip()]
     chunks: list[str] = []
     for sentence in sentences or [text.strip()]:
         while len(sentence) > 48:
-            split_at = max(sentence.rfind("，", 0, 49), sentence.rfind(",", 0, 49), 24)
-            chunks.append(sentence[: split_at + 1].strip())
-            sentence = sentence[split_at + 1 :].strip()
+            boundaries = _narration_text_boundaries(sentence)
+            if not boundaries:
+                break
+            before_limit = [position for position in boundaries if position <= 48]
+            comma_ends = [position for position in before_limit if sentence[position - 1] in "，,"]
+            split_at = max(comma_ends or before_limit) if before_limit else min(boundaries)
+            chunks.append(sentence[:split_at].strip())
+            sentence = sentence[split_at:].strip()
         if sentence:
             chunks.append(sentence)
     return chunks
 
 
+def _narration_text_boundaries(text: str) -> list[int]:
+    # Chinese can wrap between characters; English words, contractions and
+    # decimal/version numbers must remain intact across generated cues.
+    protected = set()
+    for word in re.finditer(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", text):
+        protected.update(range(word.start() + 1, word.end()))
+    return [position for position in range(1, len(text))
+            if position not in protected and text[:position].strip() and text[position:].strip()
+            and text[position] not in "，,。.!?！？；;：:"]
+
+
 def _split_text_evenly(text: str, part_count: int) -> list[str]:
     if part_count <= 1 or len(text) <= 1:
         return [text]
-    parts = [part.strip() for part in re.findall(r"[^，,]+[，,]?", text) if part.strip()]
+    # Retain whitespace until all joins are finished, so merging does not
+    # concatenate neighbouring English words.
+    parts = [part for part in re.findall(r"[^，,]*[，,]|[^，,]+$", text) if part]
     while len(parts) < part_count:
-        index = max(range(len(parts)), key=lambda item: len(parts[item]))
-        value = parts[index]
-        if len(value) <= 2:
+        candidates = [(index, _narration_text_boundaries(value)) for index, value in enumerate(parts)]
+        candidates = [(index, boundaries) for index, boundaries in candidates if boundaries]
+        if not candidates:
             break
-        split_at = max(1, len(value) // 2)
+        index, boundaries = max(candidates, key=lambda item: len(parts[item[0]]))
+        value = parts[index]
+        split_at = min(boundaries, key=lambda position: abs(position - len(value) / 2))
         parts[index : index + 1] = [
-            value[:split_at].strip(),
-            value[split_at:].strip(),
+            value[:split_at],
+            value[split_at:],
         ]
     while len(parts) > part_count:
         index = min(
@@ -932,7 +952,7 @@ def _split_text_evenly(text: str, part_count: int) -> list[str]:
             key=lambda item: len(parts[item]) + len(parts[item + 1]),
         )
         parts[index : index + 2] = [f"{parts[index]}{parts[index + 1]}"]
-    return [part for part in parts if part]
+    return [part.strip() for part in parts if part.strip()]
 
 
 def _score_candidate(

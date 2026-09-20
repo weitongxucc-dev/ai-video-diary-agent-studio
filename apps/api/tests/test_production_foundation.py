@@ -3,7 +3,7 @@ import io
 import json
 import sqlite3
 import wave
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -2858,6 +2858,42 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         impact="未生成配音。",
         repair_action="文案预计时长超过创作方案上限，请先压缩并重新确认文案",
         retryable=True,
+    )
+    failed_workspace = client.get(f"/api/creation-tasks/{task_id}").json()
+    assert failed_workspace["task"]["can_revise_script"] is True
+    failed_task = reloaded.get_creation_task("workspace_a", task_id)
+    for protected in (
+        replace(failed_task, narration_cache_key="completed-audio"),
+        replace(failed_task, current_timeline_version_id="existing-timeline"),
+        replace(failed_task, montage_plan_id="existing-montage"),
+        replace(failed_task, stage_status="running"),
+        replace(failed_task, stage_reason="voice_authorization_missing"),
+    ):
+        assert protected.can_revise_script is False
+    too_long = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
+        json={"title": "仍然过长", "sections": [
+            {**asdict(section), "content": "字" * 2000} for section in saved_script.sections
+        ]},
+    )
+    assert too_long.status_code == 422
+    assert reloaded.get_creation_task("workspace_a", task_id).stage_status == "failed"
+    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
+    direct_repair = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
+        json={"title": "直接修订", "sections": [
+            {**asdict(section), "content": "直接压缩正文，无需再次调用文字模型。"} for section in saved_script.sections
+        ]},
+    )
+    assert direct_repair.status_code == 200, direct_repair.text
+    assert direct_repair.json()["task"]["stage_status"] == "not_started"
+    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
+    assert len(script_calls) == 1
+    assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
+    reloaded.start_creation_task_narration("workspace_a", task_id)
+    reloaded.fail_creation_task_stage(
+        "workspace_a", task_id, stage="narration", reason="narration_generation_failed",
+        impact="配音超时。", repair_action="请压缩并重新确认文案", retryable=True,
     )
     repair_run = ScriptGenerationRun(
         id="script-run-repair",

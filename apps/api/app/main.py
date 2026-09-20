@@ -23,6 +23,7 @@ from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, c
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
+from app.speech_timing import estimate_speech_seconds
 from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
@@ -3394,6 +3395,7 @@ def _creation_task_workspace_response(
                 "timeline_sequence": current_version.sequence if current_version else 0,
                 "can_undo": can_undo,
                 "can_redo": _redo_target_versions(workspace_id, task)[0] is not None,
+                "can_revise_script": task.can_revise_script,
             },
             "plan": _creation_plan_preview_response(plan).model_dump(),
             "selected_topic": (
@@ -4090,6 +4092,14 @@ def confirm_creation_task_script(
     payload: CreationTaskScriptConfirmRequest,
 ) -> CreationTaskScriptsResponse:
     workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in payload.sections))
+    if estimated_seconds > plan.duration_target_seconds:
+        raise HTTPException(status_code=422, detail=(
+            f"文案预计约 {estimated_seconds:.1f} 秒，超过方案 {plan.duration_target_seconds} 秒上限；"
+            "请压缩正文后再确认。"
+        ))
     try:
         task, _ = production_repo.confirm_creation_task_script(
             workspace_id,
@@ -5143,7 +5153,8 @@ def _persist_typed_montage_edit(
         sequence=base_version.sequence + 1,
         snapshot={
             **source_version.snapshot,
-            "subtitle_track_ids": [track.id for track in carried_tracks],
+            **({"subtitle_track_ids": [track.id for track in carried_tracks]}
+               if carried_tracks or "subtitle_track_ids" in source_version.snapshot else {}),
             "cover_asset_id": carried_cover.id if carried_cover is not None else None,
             "montage": montage_payload,
             **(
@@ -9006,6 +9017,7 @@ def render_creation_task_montage(
     ):
         plan_input.pop(transient_key, None)
     plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    plan_input["subtitles_visible"] = subtitles_visible
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure") for clip in plan.clips):
         try:
             plan_input["portrait_runtime_fingerprint"]=_portrait_processor(workspace_id).fingerprint()
