@@ -5755,7 +5755,7 @@ def preview_creation_task_edit(
     if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识")):
         try:
             overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            edit=compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else ())
+            edit=compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else (),payload.selected_object_refs)
         except (ValueError,KeyError) as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from exc
         if edit:

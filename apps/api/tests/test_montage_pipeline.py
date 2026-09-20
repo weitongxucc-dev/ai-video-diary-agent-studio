@@ -3551,6 +3551,9 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
     assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
     result=state.client.get(base).json()['montage']['graphic_overlays'][0]
     assert result['kind']=='image' and result['source_ref']==source['source_ref']
+    contextual=state.client.post(base+'/edits/preview',json={'raw_command':'当前图片不透明度改为50%','context_stage':'montage','selected_object_refs':[f"overlay:{result['id']}"]})
+    assert contextual.status_code==200,contextual.text
+    assert contextual.json()['proposal']['target_refs']==[f"overlay:{result['id']}"]
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
     invalid=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',

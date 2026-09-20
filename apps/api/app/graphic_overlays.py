@@ -119,8 +119,16 @@ def splice_overlays(values, intervals):
     return result
 
 
-def compile_overlay_command(command, values, sources=()):
+def compile_overlay_command(command, values, sources=(), selected_refs=()):
     text=command.strip().rstrip('。！')
+    contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识)',text)
+    if contextual:
+        refs=[ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]
+        matches=[(index,value) for index,value in enumerate(values) if value['id'] in refs]
+        if len(refs)!=1 or len(matches)!=1:raise ValueError('请先选择一个当前版本的标题或图片')
+        index,value=matches[0]
+        if (contextual[1]=='标题') == (value.get('kind')=='image'):raise ValueError('当前选中对象与指令类型不符，请重新选择')
+        text=f'{contextual[1]}{index+1}'+text[contextual.end():]
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)(?:图片|标识)[“「](.+)[”」]',text)
     if match:
         candidates=[item for item in sources if item['name']==match[2]]

@@ -73,6 +73,9 @@
 .cropFields { display: grid; gap: 8px; }
 .cropFields label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px; font-size: 12px; color: var(--text-2); }
 .cropFields input { width: 100%; }
+.overlayList { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }
+.overlayList > button { flex: 0 0 auto; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
 .actionRow, .actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .actions { flex-wrap: wrap; justify-content: flex-start; }
 .actionRow > span { font-size: 13px; color: var(--text-2); }

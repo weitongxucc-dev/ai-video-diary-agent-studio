@@ -27,7 +27,8 @@ function CanvasControls({ ratio, busy, onPreview, onDraftChange }: {ratio:"9:16"
   </details>;
 }
 
-export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {} }:  {
+export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay }:  {
+  selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   workspace: CreationTaskWorkspace; selectedId: string | null; onSelect: (id: string) => void;
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
   initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>void;
@@ -61,6 +62,7 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
       <time>{editorTime(time)} / {editorTime(montage.duration_seconds)}</time>
       <button className={ui.iconButton} aria-label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></button>
     </div> : null}
+    {onSelectOverlay && montage.graphic_overlays?.length ? <div className={ui.overlayList} aria-label="图文叠加层">{montage.graphic_overlays.map((item,index)=><button className={ui.button} type="button" key={item.id} disabled={busy} aria-pressed={selectedOverlayId===item.id} onClick={()=>onSelectOverlay(item.id)}>{item.kind==="image"?"图片":"标题"}{index+1} · {item.kind==="image"?item.name:item.text}</button>)}</div> : null}
     <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
       <span className={ui.shotImage}><ClipThumbnail clip={clip} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
@@ -95,9 +97,10 @@ export function ClipTimelineAudioPreview({ taskId, versionId, start, end, busy }
   </>;
 }
 
-export function VideoClipInspector({ clip, index, count, workspace, busy, onPreview, onDraftChange, onReplace, candidates, replacing, onPerson, onAddOriginal, onVisualPreview, getPlayhead }: {
+export function VideoClipInspector({ clip, index, count, workspace, busy, onPreview, onDraftChange, onReplace, candidates, replacing, onPerson, onAddOriginal, onVisualPreview, getPlayhead, onSelectOverlay }: {
   clip: CreationTaskMontageClip; index: number; count: number; workspace: CreationTaskWorkspace; busy: boolean;
   getPlayhead?: () => number | null;
+  onSelectOverlay?: (id:string|null)=>void;
   onPreview: (input: CreationTaskExactEditInput) => void; onDraftChange: (changed: boolean) => void; onReplace: () => void;
   candidates: MontageClipCandidate[]; replacing: boolean; onPerson: (command: string) => void; onAddOriginal?: () => void; onVisualPreview?: (input: import("@/lib/types").VisualEditInput) => void;
 }) {
@@ -134,7 +137,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
         <p>0 为硬切；从切点开始混合两段画面，需要前镜头的结尾素材余量。声音与字幕不移动。</p>
         <button className={ui.button} type="button" disabled={busy||clip.locked||transitionSeconds===(clip.transition_in_seconds ?? 0)} onClick={()=>onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds})}>预览转场</button>
       </details>:null}
-      <GraphicOverlayEditor taskId={workspace.task.id} items={workspace.montage!.graphic_overlays ?? []} duration={workspace.montage!.duration_seconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
+      <GraphicOverlayEditor onSelect={onSelectOverlay} taskId={workspace.task.id} items={workspace.montage!.graphic_overlays ?? []} duration={workspace.montage!.duration_seconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={workspace.portrait_available} clip={clip} allClipIds={workspace.montage!.clips.map(item=>item.id)} versionId={workspace.task.current_timeline_version_id} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}
       {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy} onClick={onAddOriginal}>添加此镜头原声</button> : null}
       <section className={ui.propertySection}><h3>当前时段音频</h3>{captions.length ? <p>{captions.map(cue => cue.text).join(" ")}</p> : null}<ClipTimelineAudioPreview key={`${workspace.task.current_timeline_version_id}:${clip.id}`} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} start={clip.timeline_start_seconds} end={clip.timeline_end_seconds} busy={busy} /></section>

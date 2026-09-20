@@ -88,3 +88,20 @@ def test_graphic_import_rejects_oversize_empty_and_animation_before_publication(
     with pytest.raises(ValueError,match='尺寸过大'):attempt(large.getvalue())
     animated=io.BytesIO();Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
     with pytest.raises(ValueError,match='静态'):attempt(animated.getvalue())
+
+
+def test_overlay_context_is_bound_to_identity_and_type():
+    from app.graphic_overlays import ImageOverlay
+    title=TextOverlay(text='本地',start_seconds=0,end_seconds=2).model_dump()
+    image=ImageOverlay(source_ref='artifacts/source.png',name='logo.png',start_seconds=0,end_seconds=2).model_dump()
+    ref=f"overlay:{image['id']}"
+    # A reordered list must still address the selected image, not its previous index.
+    for values in ([title,image],[image,title]):
+        action,value,identity=compile_overlay_command('把当前图片不透明度改为50%',values,selected_refs=[ref])
+        assert action=='update' and identity==image['id'] and value['opacity']==.5
+    assert compile_overlay_command('这个标题字号改为96',[title],selected_refs=[f"overlay:{title['id']}"])[1]['font_size']==96
+    for refs in ([],['overlay:missing'],[ref,f"overlay:{title['id']}"]):
+        with pytest.raises(ValueError,match='选择'):
+            compile_overlay_command('当前图片删除',[image,title],selected_refs=refs)
+    with pytest.raises(ValueError,match='类型不符'):
+        compile_overlay_command('当前标题删除',[image],selected_refs=[ref])

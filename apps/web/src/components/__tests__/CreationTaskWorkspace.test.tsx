@@ -40,6 +40,7 @@ vi.mock("@/components/AppShell", () => ({
 
 vi.mock("@/lib/api", () => ({
   apiUrl: (path: string) => path,
+  getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
   applyCreationTaskExactEdit: mocks.exactEdit,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
   confirmCreationTaskEdit: mocks.confirmEdit,
@@ -189,7 +190,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "EditGraphicOverlay" | "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -566,6 +567,30 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:"预览转场"}));
     await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"SetClipTransition",clip_id:"clip-2",transition_seconds:.4}));
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
+
+  it("keeps selected image, inspector, playhead and natural language scope synchronized",async()=>{
+    const initial=subtitleCoverWorkspace();
+    initial.montage!.clips=[{id:"clip-1",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",source_start_seconds:0,source_end_seconds:3,timeline_start_seconds:0,timeline_end_seconds:3,match_score:.9,match_reasons:[],needs_confirmation:false,role:"b_roll",locked:false,manually_selected:false}];
+    vi.spyOn(HTMLMediaElement.prototype,"pause").mockImplementation(()=>{});
+    initial.montage!.graphic_overlays=[{kind:"image",id:"overlay-logo",source_ref:"artifacts/logo.png",name:"logo.png",start_seconds:1,end_seconds:3,x:.5,y:.5,width:.3,opacity:1}];
+    mocks.previewEdit.mockResolvedValue(exactPreview(initial.task,"EditGraphicOverlay"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    fireEvent.click(screen.getByRole("button",{name:/^视频剪辑：/}));
+    fireEvent.click(screen.getByRole("button",{name:"图片1 · logo.png"}));
+    expect(screen.getByRole("complementary",{name:"图片1"})).toBeInTheDocument();
+    expect(screen.getByLabelText("图片不透明度")).toHaveValue(1);
+    const player=screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    expect(player.currentTime).toBe(2);
+    player.currentTime=4;fireEvent.timeUpdate(player);
+    expect(screen.getByRole("complementary",{name:"图片1"})).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("局部修改要求"),{target:{value:"当前图片不透明度改为50%"}});
+    fireEvent.click(screen.getByRole("button",{name:"预览修改"}));
+    await waitFor(()=>expect(mocks.previewEdit).toHaveBeenCalledWith("task-1",expect.objectContaining({selected_object_refs:["overlay:overlay-logo"],raw_command:"当前图片不透明度改为50%"})));
+    expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"选择镜头 1"}));
+    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary",{name:"图片1"})).not.toBeInTheDocument();
   });
 
   it("previews whole-video canvas changes and invalidates the proposal when the draft changes", async () => {
