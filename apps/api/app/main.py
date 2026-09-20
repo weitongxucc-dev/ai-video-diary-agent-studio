@@ -6132,6 +6132,26 @@ def preview_creation_task_edit(
                 repair_action="进入视频剪辑或检查成片后选择一条字幕。",
                 retryable=True,
             )
+        shift = re.fullmatch(r"(?:把)?(?:这条|这句|当前)?字幕(?:整体)?(?:向前|往前|提前|向后|往后|延后|推迟)\s*(\d+(?:\.\d+)?)\s*(毫秒|秒)[。！]?", command)
+        if shift:
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+            tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
+            track_ref = next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None)
+            candidates = [(track, cue) for track in tracks if track_ref is None or track.id == track_ref
+                for cue in track.cues if selected_ref == f"cue:{cue.id}"]
+            if len(candidates) != 1:
+                raise HTTPException(status_code=409, detail="请明确选择一条字幕及其语言轨。")
+            track, cue = candidates[0]
+            offset = float(shift.group(1)) / (1000 if shift.group(2) == "毫秒" else 1)
+            if any(word in command for word in ("向前", "往前", "提前")):
+                offset = -offset
+            try:
+                edit = CreationTaskExactEditRequest(
+                    operation_type="UpdateSubtitleCue", cue_id=cue.id, track_id=track.id,
+                    start_seconds=round(cue.start_seconds + offset, 3), end_seconds=round(cue.end_seconds + offset, 3))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="字幕移动后的时间必须有效，且不能早于成片开始。") from exc
+            return preview_creation_task_exact_edit(task_id, request, edit)
         timing = re.fullmatch(r"(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\s*(\d+(?:\.\d+)?)\s*秒?\s*(?:到|至|–|-)\s*(\d+(?:\.\d+)?)\s*秒[。！]?", command)
         if timing:
             return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
