@@ -1009,6 +1009,9 @@ class CreationTaskVoiceOptionResponse(BaseModel):
 
 
 class CreationTaskMontageClipResponse(BaseModel):
+    fade_envelope_rate: float = 1
+    fade_envelope_offset_frames: float = 0
+    fade_envelope_duration_frames: float | None = None
     visual_effects: VisualEffects = Field(default_factory=VisualEffects)
     fit_mode: Literal["fill", "fit"] = "fill"
     crop_x: float = Field(default=0.5, ge=0, le=1)

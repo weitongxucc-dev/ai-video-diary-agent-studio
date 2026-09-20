@@ -68,11 +68,15 @@ def test_linked_speed_moves_subtitles_audio_and_envelopes_together():
             source_path="workspace://a.mp4",source_start_seconds=i*2,source_end_seconds=i*2+2,
             timeline_start_seconds=i*2,timeline_end_seconds=i*2+2,match_score=1,match_reasons=[],needs_confirmation=False)
             for i in range(3)],duration_seconds=6,low_confidence_clip_count=0)
+    plan.clips[1].visual_effects={"fade_in_seconds":.4,"fade_out_seconds":.4}
     calls = []
     def stretch(clip, rate, duration):
         calls.append((clip.source_start_ms,clip.source_end_ms,rate,duration))
         return "artifacts/stretched.wav"
     changed, captions = retime_clip(plan, subtitles(), audio(), "1", 2, stretch)
+    assert changed.clips[1].fade_envelope_duration_frames==60
+    assert changed.clips[1].fade_envelope_rate==2
+    assert changed.clips[1].visual_effects==plan.clips[1].visual_effects
     assert changed.duration_seconds == 5
     assert [(c.timeline_start_seconds,c.timeline_end_seconds) for c in changed.clips] == [(0,2),(2,3),(3,5)]
     assert changed.clips[1].source_end_seconds == 4

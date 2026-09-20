@@ -3459,17 +3459,15 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
 
 
-def test_split_faded_shot_keeps_only_outer_edges(person_render_edit_state):
+def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
     state=person_render_edit_state
     clip=state.montage.clips[0]
     clip.visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
-    from fastapi import HTTPException
+    frames=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
     from app.schemas import CreationTaskMontageClipUpdateRequest
-    with pytest.raises(HTTPException) as failure:
-        main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
-            CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
-    assert failure.value.status_code==422
     plan=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
-        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+1))
-    assert plan.clips[0].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':0,'exposure':.5}
-    assert plan.clips[1].visual_effects=={'fade_in_seconds':0,'fade_out_seconds':.4,'exposure':.5}
+        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
+    assert plan.clips[0].visual_effects==plan.clips[1].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
+    assert plan.clips[0].fade_envelope_duration_frames==plan.clips[1].fade_envelope_duration_frames==frames
+    assert plan.clips[0].fade_envelope_offset_frames==0
+    assert plan.clips[1].fade_envelope_offset_frames==6

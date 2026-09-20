@@ -202,3 +202,53 @@ def test_fade_preview_includes_tail_and_matches_export(tmp_path):
         assert pixels[3][0]<pixels[8][0]<pixels[90][0]
         assert pixels[170][0]>pixels[175][0]>pixels[-1][0]
     assert max(abs(x-y) for p,q in zip(before,after) for x,y in zip(p,q))<8
+
+
+def test_split_inside_fades_has_same_visible_frames_as_unsplit(tmp_path):
+    from dataclasses import replace
+    from app.montage import MontageClip
+    from app.visual_effects import with_visual_effects
+    source=tmp_path/'red.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=red:s=180x320:r=30:d=1','-c:v','libx264',str(source)],check=True)
+    original=MontageClip(id='a',cue_id='cue',asset_id='asset',segment_id='seg',source_path=str(source),
+        source_start_seconds=0,source_end_seconds=1,timeline_start_seconds=0,timeline_end_seconds=1,
+        match_score=1,match_reasons=[],needs_confirmation=False,visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4})
+    whole=render_color_preview(original,source,tmp_path/'whole.mp4',max_seconds=None)
+    # Cuts inside both incoming and outgoing fades, not just a flat middle.
+    paths=[]
+    for i,(start,end) in enumerate([(0,.2),(.2,.8),(.8,1)]):
+        piece=replace(original,source_start_seconds=start,source_end_seconds=end,timeline_start_seconds=start,timeline_end_seconds=end,
+            fade_envelope_offset_frames=round(start*30),fade_envelope_duration_frames=30)
+        paths.append(render_color_preview(piece,source,tmp_path/f'piece{i}.mp4',max_seconds=None))
+        if i==1:
+            recolored=with_visual_effects(piece,{**piece.visual_effects,'exposure':.5})
+            assert recolored.fade_envelope_offset_frames==6
+            newfade=with_visual_effects(piece,{**piece.visual_effects,'fade_in_seconds':.1})
+            assert newfade.fade_envelope_duration_frames is None and newfade.fade_envelope_offset_frames==0
+    def pixels(path):
+        return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+    a=pixels(whole);b=b''.join(pixels(path) for path in paths)
+    assert len(a)==len(b)==90
+    assert max(abs(x-y) for x,y in zip(a,b))<=4
+
+
+def test_fade_clock_scales_with_linked_speed_without_changing_output_frame_count(tmp_path):
+    source=tmp_path/'red.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=red:s=180x320:r=30:d=1','-c:v','libx264',str(source)],check=True)
+    clip=SimpleNamespace(visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4},fit_mode='fill',crop_x=.5,crop_y=.5,
+        source_start_seconds=0,source_end_seconds=1,timeline_start_seconds=0,timeline_end_seconds=.5,
+        fade_envelope_duration_frames=30,fade_envelope_offset_frames=0,fade_envelope_rate=2)
+    output=render_color_preview(clip,source,tmp_path/'fast.mp4',max_seconds=None)
+    raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(output),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+    red=raw[::3]
+    assert len(red)==15
+    assert red[0]<8 and red[7]>245
+    assert red[1]<red[3]<red[5] and red[10]>red[12]>red[14]
+
+
+@pytest.mark.parametrize('value',[{'fade_envelope_offset_frames':-1},{'fade_envelope_duration_frames':float('inf')},{'fade_envelope_rate':0}])
+def test_invalid_persisted_fade_clock_is_explicitly_rejected(value):
+    from app.visual_effects import fade_filters
+    clip=SimpleNamespace(visual_effects={'fade_in_seconds':.2},timeline_start_seconds=0,timeline_end_seconds=1,**value)
+    with pytest.raises(ValueError,match='效果时钟无效'):
+        fade_filters(clip)

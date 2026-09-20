@@ -45,7 +45,7 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
 from app.task_audio import TaskAudio
-from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command, fade_filters
+from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
@@ -322,7 +322,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v16"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v17"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2856,7 +2856,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         raise HTTPException(status_code=422,detail="画面参数没有变化")
     try:
         for target in clips:
-            fade_filters(replace(target, visual_effects=payload.effects.model_dump()))
+            fade_filters(with_visual_effects(target, payload.effects.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=422,detail=str(exc)) from exc
     # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
@@ -2882,7 +2882,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
                     payload.effects.beauty_strength,payload.effects.skin_exposure)
         records=[]
         for effects in (clip.visual_effects,payload.effects.model_dump()):
-            preview_clip.visual_effects=effects
+            preview_clip=with_visual_effects(preview_clip,effects)
             records.append(publish_color_preview(production_repo,artifact_store,settings.effective_temporary_root_path,
                 workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id),aspect_ratio=plan.aspect_ratio,max_seconds=preview_limit))
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
@@ -6501,7 +6501,11 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409,detail="所选镜头已变化，请重新预览")
         effects=VisualEffects.model_validate(operation_payload["effects"]).model_dump()
         for clip in targets:
-            clip.visual_effects=dict(effects)
+            updated=with_visual_effects(clip,dict(effects))
+            clip.visual_effects=updated.visual_effects
+            clip.fade_envelope_rate=updated.fade_envelope_rate
+            clip.fade_envelope_offset_frames=updated.fade_envelope_offset_frames
+            clip.fade_envelope_duration_frames=updated.fade_envelope_duration_frames
         _prepare_changed_montage(montage,message="画面效果已更新，可以重新渲染。")
         base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,base_version=base,
@@ -8345,15 +8349,15 @@ def _apply_creation_task_montage_clip_update(
         if min(at - clip.timeline_start_seconds, clip.timeline_end_seconds - at) < 0.04:
             raise HTTPException(status_code=422, detail="分割点须在镜头内，两侧至少保留0.04秒。")
         effects = VisualEffects.model_validate(clip.visual_effects)
-        if (at < clip.timeline_start_seconds + effects.fade_in_seconds or
-                at > clip.timeline_end_seconds - effects.fade_out_seconds):
-            raise HTTPException(status_code=422, detail="分割点位于淡入淡出效果内，请先关闭效果或选择效果之外的分割点。")
         source_at = round(clip.source_start_seconds + (at - clip.timeline_start_seconds) * clip_playback_rate(clip), 3)
         second = replace(clip, id=f"clip_{uuid4().hex[:12]}", source_start_seconds=source_at,
             timeline_start_seconds=at)
         if effects.fade_in_seconds or effects.fade_out_seconds:
-            second.visual_effects = {**clip.visual_effects, "fade_in_seconds":0}
-            clip.visual_effects = {**clip.visual_effects, "fade_out_seconds":0}
+            envelope=clip.fade_envelope_duration_frames
+            if envelope is None:
+                envelope=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
+            second.fade_envelope_duration_frames=clip.fade_envelope_duration_frames=envelope
+            second.fade_envelope_offset_frames=clip.fade_envelope_offset_frames+(round(at*30)-round(clip.timeline_start_seconds*30))*clip.fade_envelope_rate
         clip.source_end_seconds = source_at
         clip.timeline_end_seconds = at
         plan.clips.insert(plan.clips.index(clip) + 1, second)

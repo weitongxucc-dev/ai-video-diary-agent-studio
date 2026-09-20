@@ -148,6 +148,12 @@ def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
                 raise ValueError("关联变速会改变已锁定音轨或音频片段，请先解锁")
     result = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
     for clip in result.clips:
+        if clip.id == clip_id:
+            scale = new_length / (end - start)
+            if clip.visual_effects.get("fade_in_seconds") or clip.visual_effects.get("fade_out_seconds"):
+                if clip.fade_envelope_duration_frames is None:
+                    clip.fade_envelope_duration_frames = round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
+                clip.fade_envelope_rate /= scale
         clip.timeline_start_seconds = move(round(clip.timeline_start_seconds * 1000)) / 1000
         clip.timeline_end_seconds = move(round(clip.timeline_end_seconds * 1000)) / 1000
     result.duration_seconds = (round(plan.duration_seconds * 1000) + delta) / 1000

@@ -88,6 +88,9 @@ class MontageClip:
     crop_x: float = 0.5
     crop_y: float = 0.5
     visual_effects: dict[str, float] = field(default_factory=dict)
+    fade_envelope_rate: float = 1
+    fade_envelope_offset_frames: float = 0
+    fade_envelope_duration_frames: float | None = None
 
 
 @dataclass

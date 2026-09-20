@@ -28,6 +28,7 @@ export function VisualEffectsInspector({clip,allClipIds,versionId,busy,portraitA
     <form onSubmit={event=>{event.preventDefault();onPreview({base_version_id:versionId,clip_ids:all?allClipIds:[clip.id],effects});}}>
       {controls.map(control=><label className={ui.field} key={control.key}>{control.label}<input aria-label={control.label} type="number" min={control.min} max={control.max} step={control.step} disabled={busy||clip.locked} value={effects[control.key]} onChange={event=>{onDraftChange();setEffects({...effects,[control.key]:Number(event.target.value)});}} /></label>)}
       <p>淡入淡出仅影响画面，0 表示关闭；声音与字幕保持原时轴。</p>
+      {clip.fade_envelope_duration_frames != null ? <p>沿用原镜头的渐变进度；修改淡入或淡出数值后，按当前片段重新计算。</p>:null}
       <p>基于当前裁切/适配结果绕画幅中心变换，正数向右或向下；超出部分裁切，空白为黑色。字幕保持原位置。</p>
       {portraitAvailable ? <p>自然磨皮，不调整脸型；先对比眼口和皮肤细节。</p>:<p>本地人像组件未就绪，当前可调整整体颜色。</p>}
       <label className={ui.actionRow}>应用同一组参数到全部镜头<input type="checkbox" checked={all} disabled={busy||clip.locked} onChange={event=>{onDraftChange();setAll(event.target.checked);}} /></label>

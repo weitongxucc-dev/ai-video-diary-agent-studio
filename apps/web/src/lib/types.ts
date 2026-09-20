@@ -1323,6 +1323,9 @@ export type VisualEffects = { fade_in_seconds?: number; fade_out_seconds?: numbe
 export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
 
 export type CreationTaskMontageClip = {
+  fade_envelope_offset_frames?: number;
+  fade_envelope_duration_frames?: number | null;
+  fade_envelope_rate?: number;
   visual_effects?: VisualEffects;
   fit_mode?: "fill" | "fit";
   crop_x?: number;

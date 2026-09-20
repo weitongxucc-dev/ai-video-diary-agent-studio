@@ -108,6 +108,12 @@ def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> st
 def fade_filters(clip) -> list[str]:
     effects = VisualEffects.model_validate(clip.visual_effects)
     frames = round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+    envelope = getattr(clip, "fade_envelope_duration_frames", None)
+    frames = frames if envelope is None else envelope
+    offset = getattr(clip, "fade_envelope_offset_frames", 0)
+    rate = getattr(clip, "fade_envelope_rate", 1)
+    if not math.isfinite(frames) or not math.isfinite(offset) or not math.isfinite(rate) or rate <= 0 or frames <= 0 or offset < 0:
+        raise ValueError("淡入淡出效果时钟无效")
     incoming = round(effects.fade_in_seconds * 30)
     outgoing = round(effects.fade_out_seconds * 30)
     if ((effects.fade_in_seconds and incoming < 2) or
@@ -115,12 +121,24 @@ def fade_filters(clip) -> list[str]:
         raise ValueError("淡入或淡出至少需要两帧，请设置为 0.07 秒以上或设为 0 关闭")
     if incoming + outgoing > frames:
         raise ValueError("淡入淡出总时长超过镜头区间，请缩短效果或延长镜头")
-    filters = []
+    filters = ["settb=1/90000", f"setpts=PTS*{rate:.10f}+{offset/30:.10f}/TB"] if offset or rate != 1 else []
     if incoming:
-        filters.append(f"fade=t=in:start_frame=0:nb_frames={incoming-1}")
+        filters.append(f"fade=t=in:st=0:d={(incoming-1)/30:.10f}")
     if outgoing:
-        filters.append(f"fade=t=out:start_frame={frames-outgoing}:nb_frames={outgoing-1}")
+        filters.append(f"fade=t=out:st={(frames-outgoing)/30:.10f}:d={(outgoing-1)/30:.10f}")
+    if offset or rate != 1:
+        filters.append("setpts=N/(30*TB)")
     return filters
+
+
+def with_visual_effects(clip, effects: dict):
+    """Color/geometry preserve a cut envelope; new fades target this piece."""
+    from dataclasses import replace
+    before = VisualEffects.model_validate(clip.visual_effects)
+    after = VisualEffects.model_validate(effects)
+    changed = (before.fade_in_seconds, before.fade_out_seconds) != (after.fade_in_seconds, after.fade_out_seconds)
+    return replace(clip, visual_effects=effects, **({"fade_envelope_offset_frames":0,"fade_envelope_rate":1,
+        "fade_envelope_duration_frames":None} if changed else {}))
 
 
 def render_color_preview(clip, source: Path, output: Path, portrait=None, *, aspect_ratio="9:16", max_seconds=5) -> Path:
