@@ -31,6 +31,13 @@ class VisualEditRequest(BaseModel):
     raw_command: str = Field(default="调整画面颜色", max_length=500)
 
 
+def reusable_color_settings(value: dict) -> dict[str, float]:
+    """Extract color only; framing, fades and face treatment belong to the shot."""
+    return VisualEffects.model_validate(value).model_dump(
+        include={"exposure", "contrast", "saturation", "temperature"}
+    )
+
+
 def color_filters(value: dict | VisualEffects) -> list[str]:
     effect = value if isinstance(value, VisualEffects) else VisualEffects.model_validate(value)
     filters = []

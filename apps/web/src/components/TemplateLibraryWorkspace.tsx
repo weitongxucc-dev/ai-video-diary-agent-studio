@@ -30,10 +30,11 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
       <div><dt>声音</dt><dd>{settings.voice ? `${settings.voice.profile_id} · ${settings.voice.version}` : "预检时选择当前可用声音"}</dd></div>
       <div><dt>画幅与时长</dt><dd>{settings.aspect_ratio} · {settings.duration_target_seconds} 秒 · {settings.language === "zh-CN" ? "中文" : settings.language}</dd></div>
       <div><dt>画面适配</dt><dd>{settings.fit_mode === "fit" ? "完整显示（可能留边）" : "填满画面（居中裁切）"}</dd></div>
-      <div><dt>字幕</dt><dd>复用中文样式；正文与时轴重新生成</dd></div>
+      <div><dt>调色</dt><dd>{settings.color_style ? `曝光 ${settings.color_style.exposure} EV · 对比度 ${settings.color_style.contrast} · 饱和度 ${settings.color_style.saturation} · 冷暖 ${settings.color_style.temperature}` : settings.color_style === null ? "原镜头调色不同，不统一复用" : "未保存调色，使用新素材原色"}</dd></div>
+      <div><dt>字幕</dt><dd>复用字幕样式；正文与时轴重新生成</dd></div>
       <div><dt>素材与审核</dt><dd>按新主题检索；选题、文案和生成仍需确认</dd></div>
     </dl>
-    <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
+    <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、音轨编排、转场、图文叠加、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
   </div> : null;
 
   return <AppShell inspector={inspector} inspectorTitle="模板详情"><div className={styles.page}>

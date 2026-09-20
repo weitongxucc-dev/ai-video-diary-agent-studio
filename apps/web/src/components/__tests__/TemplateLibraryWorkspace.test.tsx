@@ -8,6 +8,16 @@ const template: VideoTemplate = {
   settings: { language: "zh-CN", aspect_ratio: "9:16", duration_target_seconds: 30, voice: null, style_instruction: "先讲结论", script_section_count: 3, fit_mode: "fit", subtitle_style: {} },
 };
 describe("TemplateLibraryWorkspace", () => {
+  it("shows saved color parameters and distinguishes mixed and legacy templates", () => {
+    const { rerender } = render(<TemplateLibraryWorkspace offline={false} templates={[{
+      ...template, settings: { ...template.settings, aspect_ratio: "16:9", color_style: { exposure: .5, contrast: 1.1, saturation: .8, temperature: .2 } },
+    }]} />);
+    expect(screen.getByText("曝光 0.5 EV · 对比度 1.1 · 饱和度 0.8 · 冷暖 0.2")).toBeInTheDocument();
+    rerender(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, settings: { ...template.settings, color_style: null } }]} />);
+    expect(screen.getByText("原镜头调色不同，不统一复用")).toBeInTheDocument();
+    rerender(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
+    expect(screen.getByText("未保存调色，使用新素材原色")).toBeInTheDocument();
+  });
   it("selects immutable versions and routes with identity instead of copied goals", () => {
     render(<TemplateLibraryWorkspace offline={false} templates={[template, { ...template, version: 2 }]} />);
     expect(screen.getByRole("link", { name: /使用模板创作/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2");

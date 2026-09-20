@@ -29,7 +29,8 @@ def state(tmp_path, monkeypatch):
         id="template_test", workspace_id="workspace_a", version=1, name="测试设置", origin="user",
         settings={"language": "zh-CN", "aspect_ratio": "9:16", "duration_target_seconds": 30,
                   "voice": {"profile_id": "voice-workspace_a", "version": "v1"},
-                  "script_section_count": 2, "style_instruction": "先结论后步骤", "fit_mode": "fit", "subtitle_style": {"position": "top"}},
+                  "script_section_count": 2, "style_instruction": "先结论后步骤", "fit_mode": "fit", "subtitle_style": {"position": "top"},
+                  "color_style": {"exposure": 0.5, "contrast": 1, "saturation": 0.8, "temperature": 0.15}},
     )
     production.save_video_template(template)
     return production, template, TestClient(main.app)

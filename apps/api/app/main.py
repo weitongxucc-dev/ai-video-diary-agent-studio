@@ -22,7 +22,7 @@ from app.compound_edits import compile_compound_edit, compile_compound_selection
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
-from app.visual_effects import clip_playback_rate
+from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
@@ -721,6 +721,10 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
     source_track = next((item for item in tracks if item.source_language is None), None)
     scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
     script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
+    color_settings = [reusable_color_settings(clip.visual_effects) for clip in montage.clips]
+    common_color = color_settings[0] if color_settings and all(
+        item == color_settings[0] for item in color_settings
+    ) else None
     template = VideoTemplate(
         id=payload.template_id or f"template_{uuid4().hex[:12]}", workspace_id=workspace_id,
         version=(payload.expected_version or 0) + 1, name=payload.name.strip(), origin="user",
@@ -731,6 +735,7 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
                   "script_section_count": len(script.sections) if script else None,
                   "style_instruction": payload.style_instruction.strip(),
                   "fit_mode": "fit" if all(clip.fit_mode == "fit" for clip in montage.clips) else "fill",
+                  "color_style": common_color,
                   "subtitle_style": dict(source_track.style) if source_track else _default_subtitle_style()},
     )
     try:
@@ -4850,6 +4855,8 @@ def create_creation_task_montage_plan(
         montage.aspect_ratio = creation_plan.aspect_ratio
         for clip in montage.clips:
             clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
+            if creation_plan.template_settings.get("color_style") is not None:
+                clip.visual_effects.update(reusable_color_settings(creation_plan.template_settings["color_style"]))
         for cue in montage.cues:
             cue.subtitle_style = dict(creation_plan.template_settings.get("subtitle_style", {}))
         task, _ = production_repo.save_creation_task_montage_plan(

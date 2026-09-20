@@ -4,7 +4,7 @@ import subprocess
 from PIL import Image
 import pytest
 from app.montage import MontageRenderer
-from app.visual_effects import VisualEffects, clip_video_filters, compile_visual_command, render_color_preview
+from app.visual_effects import VisualEffects, clip_video_filters, compile_visual_command, render_color_preview, reusable_color_settings
 
 
 def frame(path):
@@ -18,7 +18,9 @@ def test_local_color_preview_and_export_apply_same_effects(tmp_path):
     clip=SimpleNamespace(visual_effects={},fit_mode="fill",crop_x=.5,crop_y=.5,source_start_seconds=0,source_end_seconds=1,
         source_path=str(source),timeline_start_seconds=0,timeline_end_seconds=1)
     before=render_color_preview(clip,source,tmp_path/"before.mp4")
-    clip.visual_effects=VisualEffects(exposure=1,saturation=0).model_dump()
+    saved_style = reusable_color_settings(VisualEffects(exposure=1,saturation=0,zoom=2,beauty_strength=.5,fade_in_seconds=1).model_dump())
+    assert saved_style == {"exposure": 1, "contrast": 1, "saturation": 0, "temperature": 0}
+    clip.visual_effects=saved_style
     after=render_color_preview(clip,source,tmp_path/"after.mp4")
     a,b=frame(before),frame(after)
     assert sum(sum(p) for p in b) > sum(sum(p) for p in a)*1.25

@@ -278,7 +278,7 @@ export type SystemStatus = {
 
 export type VideoTemplateSettings = {
   language: CreationPlanInput["language"];
-  aspect_ratio: "9:16";
+  aspect_ratio: "9:16" | "16:9" | "1:1";
   duration_target_seconds: number;
   voice: { profile_id: string; version: string } | null;
   script_structure?: string[];
@@ -286,6 +286,7 @@ export type VideoTemplateSettings = {
   style_instruction: string;
   fit_mode: "fill" | "fit";
   subtitle_style: Record<string, unknown>;
+  color_style?: { exposure: number; contrast: number; saturation: number; temperature: number } | null;
 };
 
 export type VideoTemplate = {

@@ -1562,8 +1562,9 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
 
 @pytest.mark.parametrize("language", ["zh-CN", "en-US"])
 @pytest.mark.parametrize("exact_replacement", [False, True])
+@pytest.mark.parametrize("mixed_color", [False, True])
 def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
-    tmp_path, monkeypatch, exact_replacement, language
+    tmp_path, monkeypatch, exact_replacement, language, mixed_color
 ):
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -1672,6 +1673,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/route",
     )
+    plan.clips[0].visual_effects = {"exposure": 0.5, "saturation": 0.8}
+    plan.clips[1].visual_effects = {"exposure": 1 if mixed_color else 0.5, "saturation": 0.8}
     production.save_creation_task_montage_plan(
         workspace_id,
         task.id,
@@ -1781,6 +1784,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     template = saved_template.json()
     assert template["source_timeline_version_id"] == original_task["current_timeline_version_id"]
     assert template["settings"]["fit_mode"] == "fill"
+    assert template["settings"]["color_style"] == (None if mixed_color else {
+        "exposure": 0.5, "saturation": 0.8, "contrast": 1, "temperature": 0,
+    })
     assert "字幕内容" not in json.dumps(template, ensure_ascii=False)
     new_version = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "成片设置", "template_id": template["id"], "expected_version": 1})
     assert new_version.status_code == 200 and new_version.json()["version"] == 2
@@ -2744,7 +2750,8 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
 
 
 @pytest.mark.parametrize("language", ["zh-CN", "en-US"])
-def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state, language):
+@pytest.mark.parametrize("color_mode", ["legacy", "mixed", "uniform"])
+def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state, language, color_mode):
     state = person_render_edit_state
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     task.stage = "montage"
@@ -2753,6 +2760,9 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
     plan.language = language
     plan.template_settings = {"fit_mode": "fit", "subtitle_style": {"position": "top", "font_size": 48}}
+    if color_mode != "legacy":
+        plan.template_settings["color_style"] = ({"exposure": 0.5, "contrast": 1.1, "saturation": 0.8, "temperature": 0.2}
+                                                  if color_mode == "uniform" else None)
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
@@ -2760,6 +2770,7 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     assert response.status_code == 200, response.text
     montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
     assert montage.clips and all(clip.fit_mode == "fit" for clip in montage.clips)
+    assert all(clip.visual_effects == (plan.template_settings.get("color_style") or {}) for clip in montage.clips)
     assert all(cue.subtitle_style == plan.template_settings["subtitle_style"] for cue in montage.cues)
     montage.status = "rendered"
     montage.subtitle_path = "test/subtitle.srt"
