@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 from collections.abc import Callable
@@ -456,6 +457,11 @@ class AvatarAndLipSyncService:
                 remediation_action=None,
             )
         result = self.provider.render(request=request, output_path=output)
+        if result.status != "succeeded":
+            # A failed attempt is not a reusable cache entry, even when it left
+            # behind a playable but incomplete file. This path is generated
+            # scratch output; published immutable artifacts live elsewhere.
+            output.unlink(missing_ok=True)
         return replace(result, cache_key=cache_key)
 
     def render_from_repository(
@@ -799,7 +805,8 @@ def _parse_avatar_result(
             impact="人物口型服务没有生成视频，当前视频不能进入后续剪辑。",
             action="检查输出目录权限和供应商任务结果后重试。",
         )
-    if b"ftyp" not in expected_output.read_bytes()[:64]:
+    media = _probe_avatar_output(expected_output)
+    if media is None:
         return _failure(
             status="failed",
             cache_key=cache_key,
@@ -809,7 +816,14 @@ def _parse_avatar_result(
         )
     duration = payload.get("duration_seconds")
     alignment_evidence = payload.get("alignment_evidence")
-    if not isinstance(duration, (int, float)) or duration <= 0 or not isinstance(alignment_evidence, str) or not alignment_evidence.strip():
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(duration)
+        or duration <= 0
+        or not isinstance(alignment_evidence, str)
+        or not alignment_evidence.strip()
+    ):
         return _failure(
             status="failed",
             cache_key=cache_key,
@@ -817,11 +831,22 @@ def _parse_avatar_result(
             impact="人物口型输出缺少时长或对齐证据，不能作为完成视频使用。",
             action="要求人物口型服务返回有效时长和对齐证据后重试。",
         )
+    actual_duration, _ = media
+    # Allow container/encoder rounding, but never publish a materially shorter
+    # output using only the worker's claimed duration.
+    if abs(actual_duration - duration) > 0.1:
+        return _failure(
+            status="failed",
+            cache_key=cache_key,
+            code="provider_evidence_invalid",
+            impact="人物口型输出的实际时长与服务返回值不一致，不能进入后续剪辑。",
+            action="检查人物口型输出是否被截断后重新生成。",
+        )
     return AvatarAndLipSyncResult(
         status="succeeded",
         cache_key=cache_key,
         artifact_path=str(expected_output),
-        duration_seconds=round(float(duration), 3),
+        duration_seconds=actual_duration,
         alignment_evidence=alignment_evidence.strip(),
         failure_code=None,
         failure_impact=None,
@@ -939,7 +964,8 @@ def _probe_avatar_output(path: Path) -> tuple[float, str] | None:
     video = next((item for item in streams if item.get("codec_type") == "video"), None)
     audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
     if (
-        duration <= 0
+        not math.isfinite(duration)
+        or duration <= 0
         or video is None
         or audio is None
         or video.get("codec_name") != "h264"

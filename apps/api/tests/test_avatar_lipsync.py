@@ -4,6 +4,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncRequest,
@@ -13,7 +15,20 @@ from app.avatar_lipsync import (
     UnavailableAvatarAndLipSyncProvider,
     VoiceProfile,
     avatar_lipsync_cache_key,
+    _parse_avatar_result,
+    _probe_avatar_output,
 )
+
+
+@pytest.fixture(scope="module")
+def avatar_video(tmp_path_factory):
+    output = tmp_path_factory.mktemp("avatar-media") / "valid.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=s=64x64:r=25",
+        "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "8",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(output),
+    ], check=True)
+    return output
 
 
 def _authorization(content_type: str, *, status: str = "active") -> Authorization:
@@ -213,16 +228,18 @@ def test_avatar_lipsync_reports_provider_process_and_invalid_response_failures(t
     assert invalid.failure_code == "provider_response_invalid"
 
 
-def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path):
+def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path, avatar_video):
     request = _request(tmp_path)
+    calls = []
 
     def success_runner(command):
+        calls.append(command)
         request_path = Path(command[command.index("--request") + 1])
         response_path = Path(command[command.index("--response") + 1])
         payload = json.loads(request_path.read_text(encoding="utf-8"))
         output = Path(payload["output_path"])
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"valid media")
+        output.write_bytes(avatar_video.read_bytes())
         response_path.write_text(
             json.dumps(
                 {
@@ -236,15 +253,21 @@ def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path):
             encoding="utf-8",
         )
 
-    result = AvatarAndLipSyncService(
+    service = AvatarAndLipSyncService(
         tmp_path / "outputs", _configured_provider(tmp_path, success_runner)
-    ).render(request)
+    )
+    result = service.render(request)
 
     assert result.status == "succeeded"
     assert Path(result.artifact_path or "").is_file()
+    cached = service.render(request)
+    assert cached.status == "succeeded"
+    assert cached.artifact_path == result.artifact_path
+    assert cached.duration_seconds == result.duration_seconds == 8.0
+    assert len(calls) == 1
 
 
-def test_avatar_lipsync_can_create_an_immutable_regeneration_output(tmp_path):
+def test_avatar_lipsync_can_create_an_immutable_regeneration_output(tmp_path, avatar_video):
     request = _request(tmp_path)
     calls: list[Path] = []
 
@@ -254,7 +277,7 @@ def test_avatar_lipsync_can_create_an_immutable_regeneration_output(tmp_path):
         payload = json.loads(request_path.read_text(encoding="utf-8"))
         output = Path(payload["output_path"])
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"regenerated media")
+        output.write_bytes(avatar_video.read_bytes())
         calls.append(output)
         response_path.write_text(
             json.dumps(
@@ -301,3 +324,67 @@ def test_person_command_preserves_constraints_and_rejects_partial_execution():
     for command in ("不要重做口型", "人物更自然", "重做口型，同时字幕变黄", "重做口型并且换成当前人物出镜", "保留配音", "口型不同步"):
         with pytest.raises(ValueError):
             compile_person_edit_command(command)
+
+
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), True, 0, 1.0])
+def test_avatar_result_rejects_invalid_or_incorrect_duration(avatar_video, duration):
+    result = _parse_avatar_result({
+        "schema_version": 1, "status": "succeeded", "artifact_path": str(avatar_video),
+        "duration_seconds": duration, "alignment_evidence": "worker evidence",
+    }, expected_output=avatar_video, cache_key="test")
+    assert result.status == "failed"
+    assert result.failure_code == "provider_evidence_invalid"
+    assert result.artifact_path is None
+
+
+@pytest.mark.parametrize("kind", ["header_only", "no_audio"])
+def test_avatar_result_rejects_unusable_media(tmp_path, avatar_video, kind):
+    output = tmp_path / "invalid.mp4"
+    if kind == "header_only":
+        output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"not a real video")
+    else:
+        subprocess.run([
+            "ffmpeg", "-v", "error", "-i", str(avatar_video), "-an", "-c:v", "copy", str(output),
+        ], check=True)
+    result = _parse_avatar_result({
+        "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
+        "duration_seconds": 8.0, "alignment_evidence": "worker evidence",
+    }, expected_output=output, cache_key="test")
+    assert result.status == "failed"
+    assert result.failure_code == "output_invalid"
+
+
+def test_failed_avatar_output_cannot_be_reused_on_retry(tmp_path, avatar_video):
+    request = _request(tmp_path)
+    calls = []
+    def runner(command):
+        payload = json.loads(Path(command[command.index("--request") + 1]).read_text())
+        output = Path(payload["output_path"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(avatar_video.read_bytes())
+        calls.append(output)
+        Path(command[command.index("--response") + 1]).write_text(json.dumps({
+            "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
+            "duration_seconds": 20.0, "alignment_evidence": "worker evidence",
+        }))
+    service = AvatarAndLipSyncService(tmp_path / "outputs", _configured_provider(tmp_path, runner))
+    first = service.render(request)
+    second = service.render(request)
+    assert first.failure_code == second.failure_code == "provider_evidence_invalid"
+    assert len(calls) == 2
+    assert not calls[-1].exists()
+    assert avatar_video.is_file()
+
+
+@pytest.mark.parametrize("duration", ["nan", "inf"])
+def test_avatar_cache_rejects_nonfinite_probe_duration(monkeypatch, avatar_video, duration):
+    def probe(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout=json.dumps({
+            "format": {"duration": duration},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 64, "height": 64},
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+        }))
+    monkeypatch.setattr("app.avatar_lipsync.subprocess.run", probe)
+    assert _probe_avatar_output(avatar_video) is None
