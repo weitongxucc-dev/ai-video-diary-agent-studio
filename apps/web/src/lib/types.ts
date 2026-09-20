@@ -1319,7 +1319,7 @@ export type CreationTaskVoiceOption = {
   runnable_reason: string | null;
 };
 
-export type VisualEffects = { zoom?: number; rotation?: number; offset_x?: number; offset_y?: number; beauty_strength?: number; skin_exposure?: number; exposure: number; contrast: number; saturation: number; temperature: number };
+export type VisualEffects = { fade_in_seconds?: number; fade_out_seconds?: number; zoom?: number; rotation?: number; offset_x?: number; offset_y?: number; beauty_strength?: number; skin_exposure?: number; exposure: number; contrast: number; saturation: number; temperature: number };
 export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
 
 export type CreationTaskMontageClip = {

@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class VisualEffects(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    fade_in_seconds: float = Field(default=0, ge=0, le=5, allow_inf_nan=False)
+    fade_out_seconds: float = Field(default=0, ge=0, le=5, allow_inf_nan=False)
     zoom: float = Field(default=1, ge=.1, le=4, allow_inf_nan=False)
     offset_x: float = Field(default=0, ge=-1, le=1, allow_inf_nan=False)
     offset_y: float = Field(default=0, ge=-1, le=1, allow_inf_nan=False)
@@ -99,10 +101,29 @@ def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> st
     return ",".join([*color_filters(clip.visual_effects),framing_filter(clip.fit_mode,clip.crop_x,clip.crop_y,width,height),
                      *geometry_filters(clip.visual_effects,width,height),
                      "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30",
-                     "tpad=stop_mode=clone:stop_duration=0.1",f"trim=end_frame={frame_count}"])
+                     "tpad=stop_mode=clone:stop_duration=0.1",f"trim=end_frame={frame_count}",
+                     *fade_filters(clip)])
 
 
-def render_color_preview(clip, source: Path, output: Path, portrait=None, *, aspect_ratio="9:16") -> Path:
+def fade_filters(clip) -> list[str]:
+    effects = VisualEffects.model_validate(clip.visual_effects)
+    frames = round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+    incoming = round(effects.fade_in_seconds * 30)
+    outgoing = round(effects.fade_out_seconds * 30)
+    if ((effects.fade_in_seconds and incoming < 2) or
+            (effects.fade_out_seconds and outgoing < 2)):
+        raise ValueError("淡入或淡出至少需要两帧，请设置为 0.07 秒以上或设为 0 关闭")
+    if incoming + outgoing > frames:
+        raise ValueError("淡入淡出总时长超过镜头区间，请缩短效果或延长镜头")
+    filters = []
+    if incoming:
+        filters.append(f"fade=t=in:start_frame=0:nb_frames={incoming-1}")
+    if outgoing:
+        filters.append(f"fade=t=out:start_frame={frames-outgoing}:nb_frames={outgoing-1}")
+    return filters
+
+
+def render_color_preview(clip, source: Path, output: Path, portrait=None, *, aspect_ratio="9:16", max_seconds=5) -> Path:
     from dataclasses import replace
     width,height=preview_size(aspect_ratio)
     effects=VisualEffects.model_validate(clip.visual_effects)
@@ -111,17 +132,19 @@ def render_color_preview(clip, source: Path, output: Path, portrait=None, *, asp
             raise ValueError("本地人像组件未就绪")
         source,metadata=portrait.process(source,clip.source_start_seconds,clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
         clip=replace(clip,source_start_seconds=0,source_end_seconds=metadata["duration_seconds"])
-    duration=min(5 * clip_playback_rate(clip),clip.source_end_seconds-clip.source_start_seconds)
+    duration=clip.source_end_seconds-clip.source_start_seconds
+    if max_seconds is not None:
+        duration=min(max_seconds * clip_playback_rate(clip),duration)
     subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe",
         "-ss",str(clip.source_start_seconds),"-t",str(duration),"-i",str(source),
-        "-vf",clip_video_filters(clip,width=width,height=height,max_seconds=5),"-an","-c:v","libx264","-preset","veryfast",
+        "-vf",clip_video_filters(clip,width=width,height=height,max_seconds=max_seconds),"-an","-c:v","libx264","-preset","veryfast",
         "-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",str(output)],
         capture_output=True,check=True,timeout=120)
     return output
 
 
 def publish_color_preview(repository, artifact_store, temporary_root: Path, workspace_id: str,
-                          task_id: str, clip, source: Path, portrait=None, *, kind: Literal["color_preview", "speed_preview", "canvas_preview"]="color_preview", aspect_ratio="9:16"):
+                          task_id: str, clip, source: Path, portrait=None, *, kind: Literal["color_preview", "speed_preview", "canvas_preview"]="color_preview", aspect_ratio="9:16", max_seconds=5):
     import hashlib
     import json
     from dataclasses import asdict
@@ -130,7 +153,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     from app.models import utc_now
     from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     width,height=preview_size(aspect_ratio)
-    parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":5}
+    parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":max_seconds}
     effects=VisualEffects.model_validate(clip.visual_effects)
     if effects.beauty_strength or effects.skin_exposure:
         if portrait is None: raise ValueError("本地人像组件未就绪")
@@ -143,7 +166,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix="color-preview-",dir=temporary_root) as directory:
-            output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait,aspect_ratio=aspect_ratio)
+            output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait,aspect_ratio=aspect_ratio,max_seconds=max_seconds)
             publication=artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/preview.mp4",output)
         record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind=kind,logical_ref=publication.logical_ref,sha256=publication.sha256,
@@ -167,6 +190,12 @@ def compile_visual_command(command: str, current: dict) -> VisualEffects | None:
     text=command.strip().casefold().rstrip("。！")
     text=re.sub(r"^(?:把)?(?:(?:当前|这个)?镜头|画面)", "", text)
     base=VisualEffects.model_validate(current)
+    if text in {"取消淡入淡出", "关闭淡入淡出"}:
+        return base.model_copy(update={"fade_in_seconds":0,"fade_out_seconds":0})
+    match=re.fullmatch(r"(?:添加|加上)?(?:画面)?(淡入|淡出)(?:到|为|设为)?\s*(\d+(?:\.\d+)?)\s*秒",text)
+    if match:
+        key="fade_in_seconds" if match[1]=="淡入" else "fade_out_seconds"
+        return VisualEffects.model_validate({**base.model_dump(),key:float(match[2])})
     relative={"放大一点":("zoom",.1),"缩小一点":("zoom",-.1),"向右一点":("offset_x",.05),"向左一点":("offset_x",-.05),"向上一点":("offset_y",-.05),"向下一点":("offset_y",.05)}
     if text.removeprefix("再") in relative:
         key,delta=relative[text.removeprefix("再")]

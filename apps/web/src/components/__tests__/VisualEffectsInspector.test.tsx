@@ -10,7 +10,7 @@ it("previews explicit color values and an explicit multi-clip scope",()=>{
  fireEvent.change(screen.getByLabelText("曝光（EV）"),{target:{value:"0.5"}});
  fireEvent.click(screen.getByLabelText("应用同一组参数到全部镜头"));
  fireEvent.click(screen.getByRole("button",{name:"预览画面修改",hidden:true}));
- expect(preview).toHaveBeenCalledWith({base_version_id:"version",clip_ids:["clip-a","clip-b"],effects:{zoom:1,rotation:0,offset_x:0,offset_y:0,beauty_strength:0,skin_exposure:0,exposure:.5,contrast:1,saturation:1,temperature:0}});
+ expect(preview).toHaveBeenCalledWith({base_version_id:"version",clip_ids:["clip-a","clip-b"],effects:{fade_in_seconds:0,fade_out_seconds:0,zoom:1,rotation:0,offset_x:0,offset_y:0,beauty_strength:0,skin_exposure:0,exposure:.5,contrast:1,saturation:1,temperature:0}});
  expect(clip.visual_effects).toBeUndefined();
 });
 
@@ -26,4 +26,13 @@ it("previews geometry with existing color and marks draft changes",()=>{
  expect(preview).toHaveBeenCalledWith(expect.objectContaining({clip_ids:["clip-a"],effects:expect.objectContaining({zoom:.8,rotation:30,offset_x:.1,exposure:.5})}));
  expect(draft).toHaveBeenCalledTimes(3);
  expect(clip.visual_effects?.zoom).toBeUndefined();
+});
+
+it("previews black fades through the same versioned visual action",()=>{
+ const preview=vi.fn();
+ const clip={id:"clip-a",locked:false} as CreationTaskMontageClip;
+ render(<VisualEffectsInspector clip={clip} allClipIds={["clip-a"]} versionId="version" busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
+ fireEvent.change(screen.getByLabelText("淡出至黑场（秒）"),{target:{value:"0.4"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览画面修改",hidden:true}));
+ expect(preview).toHaveBeenCalledWith(expect.objectContaining({base_version_id:"version",clip_ids:["clip-a"],effects:expect.objectContaining({fade_in_seconds:0,fade_out_seconds:.4})}));
 });

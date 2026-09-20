@@ -45,7 +45,7 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
 from app.task_audio import TaskAudio
-from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command
+from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command, fade_filters
 from app.local_portrait import LocalPortrait
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
@@ -322,7 +322,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v15"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v16"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2854,8 +2854,14 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         raise HTTPException(status_code=409,detail="所选范围包含锁定镜头，请先解锁或缩小范围")
     if all(VisualEffects.model_validate(clip.visual_effects)==payload.effects for clip in clips):
         raise HTTPException(status_code=422,detail="画面参数没有变化")
+    try:
+        for target in clips:
+            fade_filters(replace(target, visual_effects=payload.effects.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
     # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
     clip=clips[0]
+    preview_limit = None if (payload.effects.fade_out_seconds or clip.visual_effects.get("fade_out_seconds")) else 5
     def resolve_target(target):
         preview_target=replace(target)
         if target.person_render_id:
@@ -2878,7 +2884,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         for effects in (clip.visual_effects,payload.effects.model_dump()):
             preview_clip.visual_effects=effects
             records.append(publish_color_preview(production_repo,artifact_store,settings.effective_temporary_root_path,
-                workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id),aspect_ratio=plan.aspect_ratio))
+                workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id),aspect_ratio=plan.aspect_ratio,max_seconds=preview_limit))
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
@@ -2892,14 +2898,15 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f} · "
             f"磨皮 {payload.effects.beauty_strength:.0%} · 肤色曝光 {payload.effects.skin_exposure:+.2f} EV · "
             f"缩放 {payload.effects.zoom:g} 倍 · 旋转 {payload.effects.rotation:g}° · "
-            f"位置 {payload.effects.offset_x:+.0%} / {payload.effects.offset_y:+.0%}")
+            f"位置 {payload.effects.offset_x:+.0%} / {payload.effects.offset_y:+.0%} · "
+            f"黑场淡入 {payload.effects.fade_in_seconds:g} 秒 / 淡出 {payload.effects.fade_out_seconds:g} 秒")
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
         operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
             "effects":payload.effects.model_dump(),"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
         invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
         preview={side:{"ref":record.logical_ref,"label":"当前画面" if side=="before" else detail,
-            "detail":f"预览镜头 {plan.clips.index(clip)+1} 的开头（最多 5 秒）；确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
+            "detail":f"预览镜头 {plan.clips.index(clip)+1} 的{'完整区间（包含结尾淡出）' if preview_limit is None else '开头（最多 5 秒）'}；确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
             "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
             for side,record in zip(("before","after"),records)}))
     return _edit_preview_response(intent,proposal)
@@ -4970,6 +4977,11 @@ def _persist_typed_montage_edit(
     subtitle_source_version: TimelineVersion | None = None,
     edited_subtitle_tracks: list[SubtitleTrack] | None = None,
 ) -> CreationTaskEditConfirmResponse:
+    try:
+        for clip in updated_plan.clips:
+            fade_filters(clip)
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
     montage_payload = creation_task_montage_plan_to_payload(updated_plan)
     applied_at = utc_now()
     operation = EditOperation(
@@ -8332,9 +8344,16 @@ def _apply_creation_task_montage_clip_update(
         at = round(payload.split_time_seconds, 3)
         if min(at - clip.timeline_start_seconds, clip.timeline_end_seconds - at) < 0.04:
             raise HTTPException(status_code=422, detail="分割点须在镜头内，两侧至少保留0.04秒。")
+        effects = VisualEffects.model_validate(clip.visual_effects)
+        if (at < clip.timeline_start_seconds + effects.fade_in_seconds or
+                at > clip.timeline_end_seconds - effects.fade_out_seconds):
+            raise HTTPException(status_code=422, detail="分割点位于淡入淡出效果内，请先关闭效果或选择效果之外的分割点。")
         source_at = round(clip.source_start_seconds + (at - clip.timeline_start_seconds) * clip_playback_rate(clip), 3)
         second = replace(clip, id=f"clip_{uuid4().hex[:12]}", source_start_seconds=source_at,
             timeline_start_seconds=at)
+        if effects.fade_in_seconds or effects.fade_out_seconds:
+            second.visual_effects = {**clip.visual_effects, "fade_in_seconds":0}
+            clip.visual_effects = {**clip.visual_effects, "fade_out_seconds":0}
         clip.source_end_seconds = source_at
         clip.timeline_end_seconds = at
         plan.clips.insert(plan.clips.index(clip) + 1, second)

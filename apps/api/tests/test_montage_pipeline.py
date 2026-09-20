@@ -3427,3 +3427,49 @@ def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_
         'base_version_id':version.id,'clip_ids':[plan['clips'][0]['id']],'effects':{'zoom':.8}})
     assert response.status_code==200,response.text
     assert ranges==[(1,3),(1,3)]
+
+
+def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    limits=[]
+    def publish(*args,**kwargs):
+        limits.append(kwargs['max_seconds'])
+        return SimpleNamespace(id='fade',logical_ref='artifacts/fade.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    invalid=state.client.post(base+'/visual/preview',json={'base_version_id':before['task']['current_timeline_version_id'],
+        'clip_ids':[c['id'] for c in before['montage']['clips']],'effects':{'fade_in_seconds':5,'fade_out_seconds':5}})
+    assert invalid.status_code==422 and not limits
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert preview.status_code==200,preview.text
+    assert limits==[None,None]
+    assert '完整区间' in preview.json()['proposal']['preview']['after']['detail']
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][0]['visual_effects']['fade_out_seconds']==.4
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+
+
+def test_split_faded_shot_keeps_only_outer_edges(person_render_edit_state):
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
+    from fastapi import HTTPException
+    from app.schemas import CreationTaskMontageClipUpdateRequest
+    with pytest.raises(HTTPException) as failure:
+        main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
+            CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
+    assert failure.value.status_code==422
+    plan=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
+        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+1))
+    assert plan.clips[0].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':0,'exposure':.5}
+    assert plan.clips[1].visual_effects=={'fade_in_seconds':0,'fade_out_seconds':.4,'exposure':.5}

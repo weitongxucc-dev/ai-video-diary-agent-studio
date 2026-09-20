@@ -167,3 +167,38 @@ def test_subframe_shot_is_rejected_instead_of_silently_disappearing():
     clip = SimpleNamespace(timeline_start_seconds=1, timeline_end_seconds=1.001)
     with pytest.raises(ValueError, match="不足一个输出帧"):
         clip_video_filters(clip)
+
+
+def test_fade_commands_preserve_other_effects_and_validate_frame_intervals():
+    from app.visual_effects import fade_filters
+    effect=compile_visual_command('当前镜头淡出0.4秒',{'exposure':.5,'fade_in_seconds':.2})
+    assert effect.fade_out_seconds==.4 and effect.exposure==.5 and effect.fade_in_seconds==.2
+    restored=compile_visual_command('取消淡入淡出',effect.model_dump())
+    assert restored.fade_in_seconds==restored.fade_out_seconds==0 and restored.exposure==.5
+    for values, message in [({'fade_out_seconds':.01},'至少需要两帧'),
+                            ({'fade_in_seconds':.7,'fade_out_seconds':.7},'总时长超过')]:
+        with pytest.raises(ValueError,match=message):
+            fade_filters(SimpleNamespace(visual_effects=values,timeline_start_seconds=2,timeline_end_seconds=3))
+
+
+def test_fade_preview_includes_tail_and_matches_export(tmp_path):
+    source=tmp_path/'red.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=red:s=180x320:d=6:r=30','-c:v','libx264',str(source)],check=True)
+    clip=SimpleNamespace(visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4},fit_mode='fill',crop_x=.5,crop_y=.5,
+        source_path=str(source),source_start_seconds=0,source_end_seconds=6,timeline_start_seconds=2,timeline_end_seconds=8)
+    preview=render_color_preview(clip,source,tmp_path/'preview.mp4',max_seconds=None)
+    voice=tmp_path/'voice.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','6',str(voice)],check=True)
+    output=tmp_path/'export.mp4'
+    subprocess.run(MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=[clip]),voice,output,[],subtitle_intervals=[]),capture_output=True,check=True,timeout=60)
+    def samples(path):
+        raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+        return list(zip(raw[0::3],raw[1::3],raw[2::3]))
+    before=samples(preview);after=samples(output)
+    assert len(before)==len(after)==180
+    for pixels in (before,after):
+        assert max(pixels[0])<8 and max(pixels[-1])<8
+        assert pixels[90][0]>245 and pixels[90][1]<10
+        assert pixels[3][0]<pixels[8][0]<pixels[90][0]
+        assert pixels[170][0]>pixels[175][0]>pixels[-1][0]
+    assert max(abs(x-y) for p,q in zip(before,after) for x,y in zip(p,q))<8
