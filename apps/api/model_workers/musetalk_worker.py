@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -45,14 +47,14 @@ def _validate_runtime(runtime_root: Path) -> None:
         raise WorkerFailure(f"MuseTalk model files are missing: {', '.join(missing)}")
 
 
-def _probe_output(path: Path) -> tuple[float, str]:
+def _probe_output(path: Path, *, expected_duration: float) -> tuple[float, str]:
     completed = subprocess.run(
         [
             "ffprobe",
             "-v",
             "error",
             "-show_entries",
-            "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
+            "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels,duration,avg_frame_rate",
             "-of",
             "json",
             str(path),
@@ -74,10 +76,35 @@ def _probe_output(path: Path) -> tuple[float, str]:
     audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
     if duration <= 0 or video is None or audio is None:
         raise WorkerFailure("rendered output must contain non-empty video and audio streams")
+    try:
+        video_duration = float(video["duration"])
+        audio_duration = float(audio["duration"])
+        frame_rate = float(Fraction(video["avg_frame_rate"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise WorkerFailure("rendered output is missing valid stream timing") from exc
+    if not all(math.isfinite(value) and value > 0 for value in (
+        duration, video_duration, audio_duration, frame_rate, expected_duration,
+    )):
+        raise WorkerFailure("rendered output has invalid stream timing")
+    # Container duration can be supplied entirely by the audio even when face
+    # detection/inference has dropped video frames. Check each actual stream.
+    frame_seconds = 1 / frame_rate
+    for name, stream_duration in (("video", video_duration), ("audio", audio_duration)):
+        if abs(stream_duration - expected_duration) > frame_seconds + 0.001:
+            raise WorkerFailure(
+                f"rendered {name} duration {stream_duration:.3f}s does not match "
+                f"narration {expected_duration:.3f}s within one output frame; "
+                "check face detection and inference output before retrying"
+            )
     evidence = json.dumps(
         {
             "engine": "musetalk-v1.5",
             "duration_seconds": round(duration, 3),
+            "video_duration_seconds": video_duration,
+            "audio_duration_seconds": audio_duration,
+            "expected_duration_seconds": expected_duration,
+            "frame_rate": frame_rate,
+            "validation_scope": "media_timing_only_not_lip_sync_quality",
             "video_codec": video.get("codec_name"),
             "width": video.get("width"),
             "height": video.get("height"),
@@ -215,9 +242,13 @@ def _render(payload: dict[str, object], runtime_root: Path) -> dict[str, object]
         )
         rendered = result_root / "v15" / "render.mp4"
         if completed.returncode != 0 or not rendered.is_file():
-            detail = completed.stderr.strip() or completed.stdout.strip()
-            raise WorkerFailure((detail[-4000:] if detail else "MuseTalk did not produce output"))
-        duration, evidence = _probe_output(rendered)
+            # The inference entrypoint reports some failures on stdout while
+            # native libraries emit unrelated warnings on stderr.
+            detail = "\n".join(part[-1800:] for part in (
+                completed.stderr.strip(), completed.stdout.strip(),
+            ) if part)
+            raise WorkerFailure(detail or "MuseTalk did not produce output")
+        duration, evidence = _probe_output(rendered, expected_duration=audio_duration)
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_suffix(output.suffix + ".partial")
         shutil.copy2(rendered, partial)
