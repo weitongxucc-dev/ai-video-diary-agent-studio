@@ -274,7 +274,7 @@ class MontagePlanner:
             max_seconds=profile.target_duration_max_seconds,
             narration_duration_seconds=narration_duration_seconds,
         )
-        cue_vectors, segment_vectors = self._semantic_vectors(
+        cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
             workspace_id,
             cues,
             b_roll_candidates,
@@ -340,6 +340,8 @@ class MontagePlanner:
                 )
                 score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
                 role = "b_roll"
+            if role == "b_roll" and visual_score is None:
+                reasons.append(semantic_note or "该片段缺少可用的当前模型视觉向量，仅按素材文字与时长推荐")
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
@@ -442,7 +444,7 @@ class MontagePlanner:
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
             for cue in cues
         }
-        cue_vectors, segment_vectors = self._semantic_vectors(
+        cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
             workspace_id, list(retrieval_cues.values()), b_roll_candidates
         )
         clips: list[MontageClip] = []
@@ -485,6 +487,8 @@ class MontagePlanner:
             else:
                 reasons.append("缺少本地多帧画面观察；尚未核验动作要求")
             role: Literal["a_roll", "b_roll"] = "b_roll"
+            if role == "b_roll" and visual_score is None:
+                reasons.append(semantic_note or "该片段缺少可用的当前模型视觉向量，仅按素材文字与时长推荐")
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
@@ -542,17 +546,17 @@ class MontagePlanner:
         workspace_id: str,
         cues: list[NarrationCue],
         candidates: list[tuple[MaterialAsset, MaterialSegment]],
-    ) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
+    ) -> tuple[dict[str, list[float]], dict[str, list[float]], str]:
         provider = self.semantic_provider
         loader = self.visual_feature_loader
         if provider is None or loader is None or not provider.ready:
-            return {}, {}
+            return {}, {}, "本地视觉语义未就绪，本次仅按素材文字与时长推荐"
         try:
             text_vectors = provider.embed_texts([cue.text for cue in cues])
         except (OSError, ValueError, VisualSemanticError):
-            return {}, {}
+            return {}, {}, "本地视觉语义计算失败，本次仅按素材文字与时长推荐"
         if len(text_vectors) != len(cues):
-            return {}, {}
+            return {}, {}, "本地视觉语义结果数量不符，本次仅按素材文字与时长推荐"
         cue_vectors = {
             cue.id: vector for cue, vector in zip(cues, text_vectors, strict=True)
         }
@@ -561,7 +565,7 @@ class MontagePlanner:
             vector = loader(workspace_id, segment.id, provider.model_id)
             if vector:
                 segment_vectors[segment.id] = vector
-        return cue_vectors, segment_vectors
+        return cue_vectors, segment_vectors, ""
 
 
 class MontageRenderer:

@@ -4231,3 +4231,25 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
     restored=state.client.get(base).json()
     assert [t['cues'] for t in restored['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
     assert restored['montage']['clips']==before['montage']['clips']
+
+
+@pytest.mark.parametrize('mode,notice',[('unavailable','未就绪'),('failed','计算失败'),('invalid_count','数量不符'),('missing_index','该片段缺少'),('ready',None)])
+def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notice):
+    from app.visual_semantics import VisualSemanticError
+    script=CreationTaskScript(id='diagnostic-script',workspace_id='workspace_a',task_id='diagnostic-task',run_id='run',topic_id='topic',
+        title='Retrieval diagnostic',language='en-US',selection_status='confirmed',sections=[CreationTaskScriptSection(
+            id='section',title='Intro',content='This is a narration.',visual_prompt='An underwater coral reef',evidence_reference_ids=[])])
+    asset=_asset(tmp_path)
+    segment=replace(asset.segments[0],description='A computer keyboard',transcript='',end_seconds=20)
+    def embed(texts):
+        if mode=='failed':raise VisualSemanticError('worker failed')
+        return [] if mode=='invalid_count' else [[1.0,0.0] for _ in texts]
+    provider=SimpleNamespace(ready=mode!='unavailable',model_id='test-local',embed_texts=embed)
+    planner=MontagePlanner(semantic_provider=provider,visual_feature_loader=lambda *_:None if mode=='missing_index' else [1.0,0.0])
+    plan=planner.build_for_creation_task(workspace_id='workspace_a',task_id='diagnostic-task',script=script,
+        profile=ProductionProfile(workspace_id='workspace_a'),assets=[replace(asset,segments=[segment])],
+        media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+    assert plan.clips[0].needs_confirmation is True
+    reasons=plan.clips[0].match_reasons
+    if notice:assert any(notice in reason and '仅按素材文字与时长推荐' in reason for reason in reasons)
+    else:assert not any('仅按素材文字与时长推荐' in reason for reason in reasons)
