@@ -59,3 +59,31 @@ def test_initial_subtitles_use_narration_clock_even_without_shots():
         subtitle_emphasis=[],subtitle_emphasis_ranges=None) for text,duration in [("first",2),("second",3)]]
     schedule=narration_schedule(cues,5)
     assert [(c.start_seconds,c.end_seconds,c.text) for c in schedule]==[(0,2,"first"),(2,5,"second")]
+
+
+def test_narration_retime_preserves_manual_offsets_languages_and_clears_old_files():
+    from app.subtitle_schedule import retime_subtitle_tracks
+    before=[SimpleNamespace(id="a",duration_seconds=2),SimpleNamespace(id="b",duration_seconds=3)]
+    after=[SimpleNamespace(id="a",duration_seconds=4),SimpleNamespace(id="b",duration_seconds=3)]
+    source=track(start=.5,end=1.5,text="用户修改",enabled=False)
+    english=track("en-US",start=2.5,end=4.5,text="Manual text",font_size=40)
+    source=replace(source,artifact_ref="old.srt",transform_id="old")
+    moved=retime_subtitle_tracks([source,english],before,after)
+    assert [(t.cues[0].start_seconds,t.cues[0].end_seconds) for t in moved]==[(1,3),(4.5,6.5)]
+    assert [t.cues[0].text for t in moved]==["用户修改","Manual text"]
+    assert moved[0].style["enabled"] is False
+    assert moved[1].style["font_size"]==40
+    assert all(t.artifact_ref is None and t.transform_id is None for t in moved)
+    assert source.cues[0].start_seconds==.5 and source.artifact_ref=="old.srt"
+    restored=retime_subtitle_tracks(moved,after,before)
+    assert [t.cues for t in restored]==[source.cues,english.cues]
+
+
+def test_retime_rejects_missing_cue_or_outside_old_clock():
+    from app.subtitle_schedule import retime_subtitle_tracks
+    before=[SimpleNamespace(id="a",duration_seconds=2)]
+    after=[SimpleNamespace(id="a",duration_seconds=3)]
+    with pytest.raises(ValueError,match="超出"):
+        retime_subtitle_tracks([track(start=1,end=4)],before,after)
+    with pytest.raises(ValueError,match="一致"):
+        retime_subtitle_tracks([track()],before,[])

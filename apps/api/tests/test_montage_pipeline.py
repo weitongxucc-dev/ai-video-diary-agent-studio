@@ -3077,3 +3077,46 @@ def test_regenerated_narration_is_not_duplicated_by_split_clips(person_render_ed
     plan.clips[0].locked=True
     with pytest.raises(ValueError,match="锁定"):
         main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")
+
+
+def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    segment_id = state.montage.cues[0].narration_segment_id
+    preview = state.client.post(base + "/edits/preview", json={
+        "raw_command": "这句重新配音", "context_stage": "narration",
+        "selected_object_refs": [f"narration:{segment_id}"],
+    })
+    assert preview.status_code == 200, preview.text
+    state.production.create_subtitle_track(SubtitleTrack(
+        id="retime-source", workspace_id=state.workspace_id, task_id=state.task.id,
+        timeline_version_id=preview.json()["proposal"]["operation"]["payload"]["base_version_id"],
+        language="zh-CN", source_language=None, style={"font_size": 40},
+        cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="手动改过的字幕", start_seconds=0, end_seconds=4)],
+        generation_method="timeline", model_id=None, artifact_ref="artifacts/original.srt",
+        transform_id="original-transform", status="valid"))
+    before = state.client.get(base).json()["subtitle_tracks"]
+    changed = main_module._retime_montage_for_narration_segments(state.workspace_id, state.montage,
+        [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/new")
+    # Model execution is covered separately; exercise the real confirmation transaction and file publication.
+    regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
+        for segment in state.production.list_narration_segments(
+            state.workspace_id, state.task.id, state.task.confirmed_script_id)]
+    monkeypatch.setattr(main_module, "_regenerate_creation_task_narration_segment",
+        lambda **kwargs: (regenerated, None, changed))
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    after = state.client.get(base).json()["subtitle_tracks"]
+    assert after[0]["cues"][0]["end_seconds"] == 6
+    assert after[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
+    assert after[0]["artifact_ref"] != before[0]["artifact_ref"]
+    path = main_module.artifact_store.resolve_file(after[0]["artifact_ref"])
+    assert "00:00:06,000" in path.read_text()
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    restored = state.client.get(base).json()["subtitle_tracks"]
+    assert restored[0]["cues"] == before[0]["cues"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == after[0]["cues"]
+    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4

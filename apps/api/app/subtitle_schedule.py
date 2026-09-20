@@ -1,5 +1,5 @@
 """Read-only render schedule derived from versioned subtitle tracks, never shots."""
-from dataclasses import dataclass,field
+from dataclasses import dataclass,field,replace
 import math
 import re
 
@@ -90,3 +90,39 @@ def schedule_srt(schedule: list[TimedCaption]) -> str:
         else:
             intervals.append((start,end,text))
     return "\n\n".join(f"{index}\n{timestamp(start)} --> {timestamp(end)}\n{text}" for index,(start,end,text) in enumerate(intervals,1)) + ("\n" if intervals else "")
+
+
+def retime_subtitle_tracks(tracks, before_cues, after_cues):
+    """Move existing caption boundaries with the narration clock, not shot order.
+
+    This preserves manual offsets proportionally; it is not acoustic alignment.
+    """
+    if [cue.id for cue in before_cues] != [cue.id for cue in after_cues]:
+        raise ValueError("配音重定时缺少一致的字幕区间")
+    spans = []
+    before_end = after_end = 0.0
+    for before, after in zip(before_cues, after_cues, strict=True):
+        if any(not math.isfinite(cue.duration_seconds) or cue.duration_seconds <= 0 for cue in (before, after)):
+            raise ValueError("配音字幕区间时长无效")
+        spans.append((before_end, before_end + before.duration_seconds, after_end, after_end + after.duration_seconds))
+        before_end += before.duration_seconds
+        after_end += after.duration_seconds
+    if all(before.duration_seconds == after.duration_seconds for before, after in zip(before_cues, after_cues, strict=True)):
+        return tracks
+
+    def move(time):
+        if not math.isfinite(time) or not 0 <= time <= before_end + .03:
+            raise ValueError("原字幕超出配音时间轴，无法自动重定时")
+        time = min(time, before_end)
+        for old_start, old_end, new_start, new_end in spans:
+            if time <= old_end:
+                return round(new_start + (time - old_start) / (old_end - old_start) * (new_end - new_start), 3)
+        raise ValueError("缺少字幕对应的配音区间")
+
+    result = []
+    for track in tracks:
+        cues = [replace(cue, start_seconds=move(cue.start_seconds), end_seconds=move(cue.end_seconds)) for cue in track.cues]
+        # Validate hidden tracks too, so re-enabling them cannot revive invalid times.
+        subtitle_schedule([replace(track, status="valid", style={**track.style, "enabled": True}, cues=cues)], after_end)
+        result.append(replace(track, cues=cues, artifact_ref=None, transform_id=None))
+    return result

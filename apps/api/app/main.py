@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.subtitle_schedule import subtitle_schedule
+from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncService,
@@ -4979,6 +4979,25 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in _current_subtitle_tracks(workspace_id, task,
             current_version=source_version, montage=source_plan)]
+    if operation_type == "RegenerateNarrationSegment":
+        try:
+            carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
+            for index, track in enumerate(carried_tracks):
+                if track.artifact_ref is not None:
+                    continue
+                artifact_ref, transform_id = _publish_subtitle_text(
+                    workspace_id=workspace_id, task_id=task.id, proposal_id=proposal.id,
+                    kind="subtitle_retime",
+                    input_refs=[f"timeline:{source_version.id}", updated_plan.narration_audio_path],
+                    content=render_srt(_execution_subtitle_track(track)),
+                    engine="narration-clock-v1",
+                    parameters={"language": track.language, "method": "proportional_cue_clock"},
+                )
+                carried_tracks[index] = _clone_subtitle_track(track,
+                    timeline_version_id=operation.result_version_id,
+                    artifact_ref=artifact_ref, transform_id=transform_id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"字幕重定时未保存，当前版本保持不变：{exc}") from exc
     source_cover = _cover_asset_for_version(workspace_id, task.id, source_version)
     carried_cover = (_clone_cover_asset(source_cover, timeline_version_id=operation.result_version_id)
         if source_cover is not None else None)
@@ -5261,6 +5280,8 @@ def _persist_subtitle_cover_edit(
     cover_asset: CoverAsset | None = None,
     updated_plan: CreationTaskMontagePlan | None = None,
     snapshot_source: dict[str, object] | None = None,
+    narration_segments: list[NarrationSegment] | None = None,
+    narration_artifact: NarrationArtifactRecord | None = None,
 ) -> CreationTaskEditConfirmResponse:
     now = utc_now()
     operation = EditOperation(
@@ -5287,6 +5308,8 @@ def _persist_subtitle_cover_edit(
         "subtitle_track_ids": [track.id for track in subtitle_tracks],
         "invalidated_refs": proposal.invalidated_refs,
         "edit_operation_id": operation.id,
+        **({"narration_segments": [asdict(segment) for segment in narration_segments]}
+           if narration_segments is not None else {}),
     }
     if cover_asset is not None:
         snapshot["cover_asset_id"] = cover_asset.id
@@ -5313,6 +5336,8 @@ def _persist_subtitle_cover_edit(
             montage_payload=montage_payload,
             subtitle_tracks=subtitle_tracks,
             cover_asset=cover_asset,
+            narration_segments=narration_segments,
+            narration_artifact=narration_artifact,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -5453,11 +5478,13 @@ def _retime_montage_for_narration_segments(
         segment_duration = duration_by_segment.get(segment_id)
         if segment_duration is None or segment_duration <= 0:
             raise ValueError("时间线引用了不可用的配音片段")
-        total_weight = sum(max(1, len(cue.text)) for cue in cues)
+        old_total = sum(cue.duration_seconds for cue in cues)
+        cursor = allocated = 0.0
         for cue in cues:
-            cue.duration_seconds = round(
-                segment_duration * max(1, len(cue.text)) / total_weight, 3
-            )
+            cursor += cue.duration_seconds
+            end = round(segment_duration * cursor / old_total, 3)
+            cue.duration_seconds = round(end - allocated, 3)
+            allocated = end
     cue_by_id = {cue.id: cue for cue in updated.cues}
     old_duration_by_cue: dict[str, float] = {}
     for clip in plan.clips:
@@ -5503,7 +5530,7 @@ def _retime_montage_for_narration_segments(
     updated.output_path = None
     updated.subtitle_path = None
     updated.status = "ready"
-    updated.message = "所选配音片段已更新；字幕时间和镜头范围已同步，可以重新渲染。"
+    updated.message = "所选配音片段已更新；字幕按原相对位置重定时，镜头范围已同步；请预览并重新渲染。"
     return updated
 
 
@@ -7638,6 +7665,9 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         )
         restored_plan = creation_task_montage_plan_from_payload(montage_snapshot)
         restored_segments = _narration_segments_from_snapshot(target_version.snapshot)
+        if restored_segments is not None:
+            restored_at = utc_now()
+            restored_segments = [replace(segment, updated_at=restored_at) for segment in restored_segments]
         restored_narration = None
         restored_cache_key = target_version.snapshot.get("narration_cache_key")
         if isinstance(restored_cache_key, str) and restored_cache_key:
@@ -7761,6 +7791,8 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
             cover_asset=restored_cover,
             updated_plan=restored_plan,
             snapshot_source=target_version.snapshot,
+            narration_segments=restored_segments,
+            narration_artifact=restored_narration,
         )
     return _persist_typed_montage_edit(
         workspace_id=workspace_id,
