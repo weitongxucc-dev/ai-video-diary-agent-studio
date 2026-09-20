@@ -3471,3 +3471,36 @@ def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
     assert plan.clips[0].fade_envelope_duration_frames==plan.clips[1].fade_envelope_duration_frames==frames
     assert plan.clips[0].fade_envelope_offset_frames==0
     assert plan.clips[1].fade_envelope_offset_frames==6
+
+
+def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();target=before['montage']['clips'][1]
+    calls=[]
+    def publish(*args,**kwargs):
+        calls.append(kwargs['parameters'])
+        return SimpleNamespace(id='transition',logical_ref='artifacts/transition.mp4')
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(publish=publish))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头叠化0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{target['id']}"]})
+    assert result.status_code==200,result.text
+    assert len(calls)==2
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    result=state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm')
+    assert result.status_code==200,result.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][1]['transition_in_seconds']==.4
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+    result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':0})
+    assert result.status_code==200,result.text
+    assert state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    state.client.post(base+'/edits/exact',json={'operation_type':'SetClipLock','clip_id':before['montage']['clips'][0]['id'],'locked':True})
+    count=len(calls)
+    result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':.4})
+    assert result.status_code==409 and len(calls)==count

@@ -189,7 +189,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -549,6 +549,23 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  it("previews the selected cut dissolve without immediately applying it", async () => {
+    const initial=subtitleCoverWorkspace();
+    const clip={id:"clip-1",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",
+      source_start_seconds:0,source_end_seconds:3,timeline_start_seconds:0,timeline_end_seconds:3,match_score:.9,
+      match_reasons:[],needs_confirmation:false,role:"b_roll" as const,locked:false,manually_selected:false};
+    initial.montage!.clips=[clip,{...clip,id:"clip-2",timeline_start_seconds:3,timeline_end_seconds:6}];
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task,"SetClipTransition"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button",{name:/^视频剪辑：/}));
+    fireEvent.click(screen.getByRole("button",{name:"选择镜头 2"}));
+    fireEvent.click(screen.getByText("与前镜头的转场"));
+    fireEvent.change(screen.getByLabelText("叠化时长（秒）"),{target:{value:"0.4"}});
+    fireEvent.click(screen.getByRole("button",{name:"预览转场"}));
+    await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"SetClipTransition",clip_id:"clip-2",transition_seconds:.4}));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("previews whole-video canvas changes and invalidates the proposal when the draft changes", async () => {

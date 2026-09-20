@@ -42,7 +42,7 @@ class TaskAudio:
                     raise ValueError("音频片段超出成片范围")
 
     def publish(self, workspace_id: str, task_id: str, *, kind: str, parameters: dict,
-                input_refs: list[str], produce, suffix: str = ".wav") -> ArtifactRecord:
+                input_refs: list[str], produce, suffix: str = ".wav", engine: str = "local-audio-v1") -> ArtifactRecord:
         identity = uuid4().hex
         digest = hashlib.sha256(json.dumps({"inputs": input_refs, "parameters": parameters}, sort_keys=True).encode()).hexdigest()
         job = self.repository.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
@@ -60,7 +60,7 @@ class TaskAudio:
                 sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs))
             transform = self.repository.create_transform_run(TransformRun(id=f"transform_{identity}", workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, transform_type=kind, input_digest=digest, input_refs=input_refs,
-                output_refs=[artifact.logical_ref], engine="local-audio-v1", parameters=parameters,
+                output_refs=[artifact.logical_ref], engine=engine, parameters=parameters,
                 status="succeeded", started_at=running.started_at, finished_at=utc_now()))
             for index, reference in enumerate(input_refs):
                 self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,

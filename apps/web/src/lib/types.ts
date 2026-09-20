@@ -1323,6 +1323,7 @@ export type VisualEffects = { fade_in_seconds?: number; fade_out_seconds?: numbe
 export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
 
 export type CreationTaskMontageClip = {
+  transition_in_seconds?: number;
   fade_envelope_offset_frames?: number;
   fade_envelope_duration_frames?: number | null;
   fade_envelope_rate?: number;
@@ -1429,6 +1430,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
+  | { operation_type: "SetClipTransition"; clip_id: string; transition_seconds: number }
   | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }

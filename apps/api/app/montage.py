@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
+from app.transitions import extend_dissolve_sources, join_picture_filters
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
@@ -88,6 +89,7 @@ class MontageClip:
     crop_x: float = 0.5
     crop_y: float = 0.5
     visual_effects: dict[str, float] = field(default_factory=dict)
+    transition_in_seconds: float = 0
     fade_envelope_rate: float = 1
     fade_envelope_offset_frames: float = 0
     fade_envelope_duration_frames: float | None = None
@@ -675,7 +677,8 @@ class MontageRenderer:
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
         labels: list[str] = []
-        for index, clip in enumerate(plan.clips):
+        render_clips, transitions = extend_dissolve_sources(plan.clips)
+        for index, clip in enumerate(render_clips):
             source = Path(clip.source_path).expanduser().resolve()
             if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
                 raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
@@ -689,7 +692,10 @@ class MontageRenderer:
         audio_index = len(plan.clips)
         command.extend(["-i", str(audio_path)])
         output_label = "[v0]"
-        if len(labels) > 1:
+        if any(transitions):
+            output_label = "[vbase]"
+            filters.extend(join_picture_filters(plan.clips, transitions))
+        elif len(labels) > 1:
             output_label = "[vbase]"
             filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
         for overlay_path in subtitle_overlays:
@@ -711,7 +717,10 @@ class MontageRenderer:
                 output_label,
                 "-map",
                 f"{audio_index}:a:0",
-                *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["-af", f"loudnorm,{FINITE_LOUDNESS_FILTER}"]),
+                "-af", ",".join([
+                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["loudnorm", FINITE_LOUDNESS_FILTER]),
+                    f"apad=whole_dur={sum(round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30) for clip in plan.clips)/30:.10f}",
+                ]),
                 "-c:v",
                 "libx264",
                 "-preset",

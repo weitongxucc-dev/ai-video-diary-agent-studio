@@ -1009,6 +1009,7 @@ class CreationTaskVoiceOptionResponse(BaseModel):
 
 
 class CreationTaskMontageClipResponse(BaseModel):
+    transition_in_seconds: float = 0
     fade_envelope_rate: float = 1
     fade_envelope_offset_frames: float = 0
     fade_envelope_duration_frames: float | None = None
@@ -1100,6 +1101,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 
 class CreationTaskExactEditRequest(BaseModel):
+    transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
     fit_mode: Literal["fill", "fit"] | None = None
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
@@ -1110,6 +1112,7 @@ class CreationTaskExactEditRequest(BaseModel):
     operation_type: Literal[
         "ReplaceClip",
         "ChangeCanvas",
+        "SetClipTransition",
     "ChangeCrop",
         "TrimClip",
         "SplitClip",
@@ -1199,6 +1202,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "EditAudioTimeline",
         "AdjustVisualEffects",
         "ChangeCanvas",
+        "SetClipTransition",
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
@@ -1278,6 +1282,7 @@ class EditOperationResponse(BaseModel):
         "EditAudioTimeline",
         "AdjustVisualEffects",
         "ChangeCanvas",
+        "SetClipTransition",
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",

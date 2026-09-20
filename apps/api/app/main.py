@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate
 from app.linked_timeline import splice_clip, retime_clip
 from app.audio_timeline import render_stretched_audio
@@ -322,7 +323,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v17"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v18"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2832,7 +2833,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -4978,6 +4979,7 @@ def _persist_typed_montage_edit(
     edited_subtitle_tracks: list[SubtitleTrack] | None = None,
 ) -> CreationTaskEditConfirmResponse:
     try:
+        dissolve_frames(updated_plan.clips)
         for clip in updated_plan.clips:
             fade_filters(clip)
     except ValueError as exc:
@@ -5737,6 +5739,11 @@ def preview_creation_task_edit(
         if len(cues) == len(tracks) == 1:
             selected_ref = cues[0]
     if selected_ref.startswith("clip:"):
+        transition=re.fullmatch(r"(?:(?:当前|这个)?镜头)?(?:与前一个镜头)?(?:添加|改为|设置)?叠化(?:转场)?\s*(\d+(?:\.\d+)?)\s*秒[。！]?",command)
+        remove_transition=command.rstrip("。！") in {"取消叠化","改为硬切"}
+        if transition or remove_transition:
+            return _preview_transition(task_id,request,CreationTaskExactEditRequest(operation_type="SetClipTransition",
+                clip_id=selected_ref.removeprefix("clip:"),transition_seconds=0 if remove_transition else float(transition[1])))
         try:
             visual_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
             selected_clip=next(clip for clip in visual_plan.clips if clip.id==selected_ref.removeprefix("clip:"))
@@ -6491,6 +6498,18 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "SetClipTransition" and isinstance(operation_payload,dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409,detail="时间线已变化，请重新预览转场")
+        montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+        targets=[clip for clip in montage.clips if clip.id in operation_payload["expected_clips"]]
+        if len(targets)!=2 or any(clip.locked or asdict(clip)!=operation_payload["expected_clips"][clip.id] for clip in targets):
+            raise HTTPException(status_code=409,detail="转场相邻镜头已变化，请重新预览")
+        next(clip for clip in targets if clip.id==operation_payload["clip_id"]).transition_in_seconds=operation_payload["transition_seconds"]
+        _prepare_changed_montage(montage,message="转场已更新，配音与字幕时轴不变。")
+        return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
+            base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),
+            updated_plan=montage,operation_type="SetClipTransition",operation_payload=operation_payload)
     if operation_type == "AdjustVisualEffects" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已经变化，不能确认旧的画面提案")
@@ -7336,6 +7355,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "SetClipTransition":
+        return _preview_transition(task_id, request, payload)
     if payload.operation_type == "ChangeCanvas":
         return _preview_canvas(task_id, request, payload)
     if payload.operation_type == "ConfigureSubtitleTrack" and payload.style is not None and payload.target_language is None:
@@ -7577,7 +7598,7 @@ def apply_creation_task_exact_edit(
 ) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if payload.operation_type in {"ConfigureSubtitleTrack", "GenerateCoverFromFrame"} or (
+    if payload.operation_type in {"ConfigureSubtitleTrack", "GenerateCoverFromFrame", "SetClipTransition"} or (
         payload.operation_type == "UpdateSubtitleCue" and payload.track_id is not None
     ):
         preview = preview_creation_task_exact_edit(task_id, request, payload)
@@ -7640,6 +7661,61 @@ def apply_creation_task_exact_edit(
         operation_payload=dict(proposal.operation["payload"]),
     )
 
+
+
+def _preview_transition(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    from copy import deepcopy
+    if not payload.clip_id or payload.transition_seconds is None or payload.model_fields_set - {"operation_type","clip_id","transition_seconds"}:
+        raise HTTPException(status_code=422,detail="转场需要后一个镜头和叠化秒数，不能混入其他操作")
+    workspace_id=current_workspace_id(request)
+    task=_creation_task_or_404(workspace_id,task_id)
+    plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+    index=next((i for i,clip in enumerate(plan.clips) if clip.id==payload.clip_id),-1)
+    if index<=0:
+        raise HTTPException(status_code=422,detail="请选择第二个或之后的镜头，修改它与前一个镜头之间的转场")
+    targets=plan.clips[index-1:index+1]
+    if plan.status=="rendering" or any(clip.locked for clip in targets):
+        raise HTTPException(status_code=409,detail="正在渲染或转场镜头已锁定，请先解锁或等待完成")
+    if targets[1].transition_in_seconds==payload.transition_seconds:
+        raise HTTPException(status_code=422,detail="转场没有变化")
+    base=_ensure_montage_base_version(workspace_id,task,plan)
+    edited=deepcopy(plan);edited.clips[index].transition_in_seconds=payload.transition_seconds
+    service=_task_audio()
+    tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
+    try:
+        dissolve_frames(edited.clips)
+        records=[]
+        for candidate in (plan,edited):
+            preview_plan=deepcopy(candidate)
+            preview_plan.status="ready"
+            preview_plan.audio_timeline=_effective_audio_timeline(candidate)
+            def produce(output):
+                _render_montage_with_resolved_clip_sources(workspace_id,preview_plan,output.parent/"timeline-mix.wav",
+                    job_staging_path=output.parent,subtitle_tracks=tracks)
+                (output.parent/"preview.mp4").replace(output)
+            records.append(service.publish(workspace_id,task_id,kind="transition_preview",suffix=".mp4",engine="local-montage-v18",
+                parameters={"transition_seconds":candidate.clips[index].transition_in_seconds,"base_version_id":base.id,"clip_id":payload.clip_id},
+                input_refs=[f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
+                    *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
+                    *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce))
+    except (ValueError,OSError,subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地转场预览失败，请检查源素材和FFmpeg") from exc
+    if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
+        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览转场")
+    refs=[f"clip:{clip.id}" for clip in targets]
+    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        raw_command=f"叠化{payload.transition_seconds:g}秒",context_stage="montage",selected_object_refs=refs,
+        playhead_ms=round(targets[1].timeline_start_seconds*1000),intent_type="transition",scope={"kind":"clips","clip_ids":[clip.id for clip in targets]},
+        constraints={"preserve_timing":True,"preserve_audio":True},confidence=1,status="interpreted"))
+    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
+        summary=f"镜头 {index} → {index+1}："+(f"叠化 {payload.transition_seconds:g} 秒" if payload.transition_seconds else "硬切"),target_refs=refs,
+        operation={"operation_type":"SetClipTransition","payload":{"base_version_id":base.id,"clip_id":payload.clip_id,
+            "transition_seconds":payload.transition_seconds,"expected_clips":{clip.id:asdict(clip) for clip in targets}}},
+        invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
+        preview={side:{"ref":record.logical_ref,"label":"当前转场" if side=="before" else "修改后转场",
+            "detail":f"完整成片视听预览；转场从 {targets[1].timeline_start_seconds:.2f} 秒开始，读取前镜头结尾的真实素材余量，声音与字幕时轴不变。",
+            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}))
+    return _edit_preview_response(intent,proposal)
 
 
 def _preview_canvas(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
@@ -8176,6 +8252,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "MergeSubtitleCue",
         "DeleteSubtitleCue",
         "ChangeCanvas",
+        "SetClipTransition",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):
@@ -8351,7 +8428,7 @@ def _apply_creation_task_montage_clip_update(
         effects = VisualEffects.model_validate(clip.visual_effects)
         source_at = round(clip.source_start_seconds + (at - clip.timeline_start_seconds) * clip_playback_rate(clip), 3)
         second = replace(clip, id=f"clip_{uuid4().hex[:12]}", source_start_seconds=source_at,
-            timeline_start_seconds=at)
+            timeline_start_seconds=at, transition_in_seconds=0)
         if effects.fade_in_seconds or effects.fade_out_seconds:
             envelope=clip.fade_envelope_duration_frames
             if envelope is None:
@@ -9400,14 +9477,16 @@ def _render_montage_with_resolved_clip_sources(
                     repair_action="重新扫描当前工作区素材并更新剪辑计划。",
                 )
             clip.source_path = str(resolved_source_path)
-        for clip in plan.clips:
+        extended,_transitions=extend_dissolve_sources(plan.clips)
+        for clip,handle_clip in zip(plan.clips,extended,strict=True):
             effects=VisualEffects.model_validate(clip.visual_effects)
             if effects.beauty_strength or effects.skin_exposure:
                 processed,metadata=_portrait_processor(workspace_id).process(Path(clip.source_path),clip.source_start_seconds,
-                    clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
+                    handle_clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
                 clip.source_path=str(processed)
+                original_duration=clip.source_end_seconds-clip.source_start_seconds
                 clip.source_start_seconds=0
-                clip.source_end_seconds=metadata["duration_seconds"]
+                clip.source_end_seconds=original_duration if handle_clip is not clip else metadata["duration_seconds"]
         if job_staging_path is None:
             return montage_renderer.render(plan, narration_audio_path)
         if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:
