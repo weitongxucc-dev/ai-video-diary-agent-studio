@@ -4334,6 +4334,20 @@ def get_creation_task_narration_segment_audio(
     return FileResponse(path, media_type="audio/wav", filename=f"{segment.id}.wav")
 
 
+def _person_render_matches_narration(
+    render: PersonRender, segment: NarrationSegment, transforms: list[TransformRun]
+) -> bool:
+    return bool(render.artifact_ref and segment.audio_reference and any(
+        item.transform_type == "person_render"
+        and item.status == "succeeded"
+        and item.input_digest == render.cache_key
+        and render.artifact_ref in item.output_refs
+        and segment.audio_reference in item.input_refs
+        and item.parameters.get("language") == segment.language
+        for item in transforms
+    ))
+
+
 def _person_render_media_path(render: PersonRender) -> Path | None:
     if render.status != "ready":
         return None
@@ -4579,7 +4593,7 @@ def _generate_creation_task_person_render_record(
                             parameters={
                                 "motion": payload.motion,
                                 "expression": payload.expression,
-                                "language": "zh",
+                                "language": segment.language,
                             },
                             status="succeeded",
                             started_at=running_job.started_at or utc_now(),
@@ -6252,6 +6266,7 @@ def preview_creation_task_edit(
                 repair_action="选择已声明支持该配音语言的本地人物模型。",
                 retryable=False,
             )
+        person_transforms = production_repo.list_transform_runs(workspace_id, task.id)
         existing_render = next(
             (
                 item
@@ -6267,6 +6282,7 @@ def preview_creation_task_edit(
                 and item.motion == "natural"
                 and item.expression == "neutral"
                 and item.status == "ready"
+                and _person_render_matches_narration(item, segment, person_transforms)
                 and _person_render_media_path(item) is not None
             ),
             None,
@@ -6325,6 +6341,7 @@ def preview_creation_task_edit(
                         "clip_id": clip.id,
                         "cue_id": cue.id,
                         "narration_segment_id": segment.id,
+                        "expected_audio_reference": segment.audio_reference,
                         "person_profile_id": person.id,
                         "person_version": person.version,
                         "expected_asset_id": clip.asset_id,
@@ -7138,6 +7155,8 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409, detail="person segment edit target has changed")
         if operation_type == "RegeneratePersonRender" and clip.person_render_id is None:
             raise HTTPException(status_code=409, detail="person render no longer exists")
+        if segment.audio_reference != operation_payload.get("expected_audio_reference"):
+            raise HTTPException(status_code=409, detail="配音已改变，请重新预览人物口型修改。")
         reuse_person_render_id = operation_payload.get("reuse_person_render_id")
         if reuse_person_render_id is not None:
             if (
@@ -7169,6 +7188,9 @@ def confirm_creation_task_edit(
                 or render.voice_profile_id != segment.voice_profile_id
                 or render.voice_version != segment.voice_version
                 or render.model_id != avatar_lipsync_provider.model_id
+                or not _person_render_matches_narration(
+                    render, segment, production_repo.list_transform_runs(workspace_id, task.id)
+                )
                 or render.motion != required_strings["motion"]
                 or render.expression != required_strings["expression"]
                 or _person_render_media_path(render) is None

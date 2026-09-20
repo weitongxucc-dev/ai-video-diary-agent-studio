@@ -3828,3 +3828,53 @@ def test_person_preview_rejects_unsupported_narration_language(person_render_edi
     assert response.json()['detail']['error'] == 'language_unavailable'
     assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert state.provider.output_cache_keys == []
+
+
+def test_person_reuse_requires_current_audio_lineage(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f'/api/creation-tasks/{state.task.id}'
+    command = {'raw_command': '这一段换成当前人物出镜', 'context_stage': 'review',
+               'selected_object_refs': ['clip:clip-person-target']}
+    # A legacy output without generation lineage is not proof of current audio.
+    legacy = state.client.post(base + '/edits/preview', json=command)
+    assert legacy.status_code == 200, legacy.text
+    assert 'reuse_person_render_id' not in legacy.json()['proposal']['operation']['payload']
+    generated = main_module._generate_creation_task_person_render_record(
+        state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+            narration_segment_id=state.montage.cues[0].narration_segment_id,
+            person_profile_id=state.old_render.person_profile_id,
+            person_version=state.old_render.person_version, motion='natural', expression='neutral'),
+        regeneration_token='lineage-test')
+    preview = state.client.post(base + '/edits/preview', json=command)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()['proposal']
+    assert proposal['operation']['payload']['reuse_person_render_id'] == generated.id
+    original_get = state.production.get_narration_segment
+    before = state.client.get(base).json()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(state.production, 'get_narration_segment', lambda *args:
+                       replace(original_get(*args), audio_reference='narration://artifact/replacement'))
+        changed = state.client.post(base + '/edits/preview', json=command)
+        assert changed.status_code == 200, changed.text
+        assert 'reuse_person_render_id' not in changed.json()['proposal']['operation']['payload']
+        rejected = state.client.post(base + f"/edits/{proposal['id']}/confirm")
+        assert rejected.status_code == 409, rejected.text
+        assert '配音已改变' in rejected.text
+    assert state.client.get(base).json()['montage'] == before['montage']
+    assert len(state.provider.output_cache_keys) == 1
+
+
+def test_person_lineage_requires_matching_language_and_success(person_render_edit_state):
+    state = person_render_edit_state
+    segment = state.production.get_narration_segment(state.workspace_id, state.task.id,
+                                                      state.montage.cues[0].narration_segment_id)
+    render = replace(state.old_render, artifact_ref='artifacts/test/person.mp4')
+    transform = SimpleNamespace(transform_type='person_render', status='succeeded',
+        input_digest=render.cache_key, output_refs=[render.artifact_ref],
+        input_refs=[segment.audio_reference], parameters={'language': segment.language})
+    assert main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': 'en'}
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': segment.language}
+    transform.status = 'failed'
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
