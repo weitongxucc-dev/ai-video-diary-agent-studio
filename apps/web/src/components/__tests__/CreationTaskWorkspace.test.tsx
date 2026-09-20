@@ -192,7 +192,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "EditCompoundTimeline" | "EditGraphicOverlay" | "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "EditAudioTimeline" | "EditCompoundTimeline" | "EditGraphicOverlay" | "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -1278,4 +1278,28 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByRole("button", { name: "重新对口型" })).toBeDisabled();
     expect(mocks.previewEdit).not.toHaveBeenCalled();
   });
+  it("previews original audio from the selected saved clip without immediately confirming", async () => {
+    const initial=subtitleCoverWorkspace();
+    initial.montage!.clips=[{id:"clip-original",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",
+      source_reference:"workspace://video.mp4",source_start_seconds:2,source_end_seconds:8,
+      timeline_start_seconds:0,timeline_end_seconds:3,match_score:1,match_reasons:[],needs_confirmation:false,
+      role:"b_roll",locked:false,manually_selected:false}];
+    const preview=exactPreview(initial.task,"EditAudioTimeline");
+    preview.proposal.summary="添加原声，与现有音轨混合";
+    mocks.previewEdit.mockResolvedValue(preview);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    fireEvent.click(screen.getByRole("button",{name:/^视频剪辑：/}));
+    fireEvent.click(screen.getByRole("button",{name:"选择镜头 1"}));
+    fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"),{target:{value:"3"}});
+    expect(screen.getByRole("button",{name:"提取原声并试听"})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"),{target:{value:"2"}});
+    fireEvent.click(screen.getByRole("button",{name:"提取原声并试听"}));
+    await waitFor(()=>expect(mocks.previewEdit).toHaveBeenCalledWith("task-1",{
+      raw_command:"提取当前镜头原声",context_stage:"montage",selected_object_refs:["clip:clip-original"],playhead_ms:1500}));
+    expect(screen.getByLabelText("局部修改要求")).toHaveValue("提取当前镜头原声");
+    expect(await screen.findByLabelText("变更预览")).toHaveTextContent("与现有音轨混合");
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+  });
+
 });

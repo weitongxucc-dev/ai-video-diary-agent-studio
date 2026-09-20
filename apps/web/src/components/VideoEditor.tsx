@@ -117,6 +117,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
     ?? workspace.subtitle_tracks.find(item => item.status === "valid");
   const captions = captionTrack?.cues.filter(item => item.start_seconds < clip.timeline_end_seconds && item.end_seconds > clip.timeline_start_seconds) ?? [];
   const personRender = workspace.person_renders.find(item => item.id === clip.person_render_id);
+  const audioTimingDirty = start !== clip.source_start_seconds || linkedRate !== 1 || rate !== Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3));
   const framingChanged = mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5);
   return <div className={ui.inspector} aria-label="已选镜头详情">
     <ClipThumbnail clip={clip} className={ui.inspectorImage} />
@@ -139,7 +140,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
       </details>:null}
       <GraphicOverlayEditor onSelect={onSelectOverlay} taskId={workspace.task.id} items={workspace.montage!.graphic_overlays ?? []} duration={workspace.montage!.duration_seconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={workspace.portrait_available} clip={clip} allClipIds={workspace.montage!.clips.map(item=>item.id)} versionId={workspace.task.current_timeline_version_id} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}
-      {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy} onClick={onAddOriginal}>添加此镜头原声</button> : null}
+      {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy || clip.locked || audioTimingDirty} title={audioTimingDirty ? "请先确认裁切或变速修改" : undefined} onClick={onAddOriginal}>提取原声并试听</button> : null}
       <section className={ui.propertySection}><h3>当前时段音频</h3>{captions.length ? <p>{captions.map(cue => cue.text).join(" ")}</p> : null}<ClipTimelineAudioPreview key={`${workspace.task.current_timeline_version_id}:${clip.id}`} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} start={clip.timeline_start_seconds} end={clip.timeline_end_seconds} busy={busy} /></section>
       <details className={ui.propertySection}><summary>人物口型</summary>{personRender ? <dl className={ui.properties}><div><dt>人物版本</dt><dd>{personRender.person_profile_id} · {personRender.person_version}</dd></div><div><dt>声音版本</dt><dd>{personRender.voice_profile_id} · {personRender.voice_version}</dd></div><div><dt>当前模型</dt><dd>{personRender.model_id}</dd></div></dl> : null}{!workspace.person_render_capability.available ? <p aria-label="人物口型不可用原因">{workspace.person_render_capability.message} {workspace.person_render_capability.repair_action}</p> : null}<button className={ui.button} disabled={busy || clip.locked || !workspace.person_render_capability.available} onClick={() => onPerson(clip.person_render_id ? "这里只重做口型，其他都不要动" : "这一段换成当前人物出镜")} type="button">{clip.person_render_id ? "重新对口型" : "换成当前人物出镜"}</button></details>
     </>}

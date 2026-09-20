@@ -1005,12 +1005,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     invalidateEditPreview();
   }
 
-  async function previewEdit() {
-    const rawCommand = editCommand.trim();
+  async function previewEdit(commandOverride?: string) {
+    const rawCommand = (commandOverride ?? editCommand).trim();
     if (!selectedEditContext || !rawCommand) return;
-    if(editPreview?.proposal.operation.operation_type==="EditCompoundTimeline" && editPreview.proposal.operation.payload.selection_enabled){
+    if(commandOverride === undefined && editPreview?.proposal.operation.operation_type==="EditCompoundTimeline" && editPreview.proposal.operation.payload.selection_enabled){
       await reviseCompoundSelection(rawCommand);return;
     }
+    if (commandOverride !== undefined) setEditCommand(rawCommand);
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -1160,7 +1161,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const inspector = isEditor
     ? selectedOverlay ? <GraphicOverlayEditor key={`${task.current_timeline_version_id}:${selectedOverlay.id}`} taskId={task.id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
     : selectedAudioTrack ? <AudioTimelineInspector key={`${task.current_timeline_version_id}:${selectedAudioId}`} track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewAudio({base_version_id:task.current_timeline_version_id,action:"add",target_id:"audio-original",values:{source_ref:selectedClip.source_reference,name:`镜头 ${selectedClipIndex+1} 原声`,source_start_ms:Math.round(selectedClip.source_start_seconds*1000),source_end_ms:Math.round(selectedClip.source_end_seconds*1000),timeline_start_ms:Math.round(selectedClip.timeline_start_seconds*1000)}})} /> : undefined
+    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} workspace={workspace} />
