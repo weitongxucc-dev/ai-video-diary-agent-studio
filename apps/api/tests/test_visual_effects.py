@@ -99,3 +99,39 @@ def test_speed_preview_obeys_output_clock_and_five_second_limit(tmp_path, timeli
     metadata = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "json", str(output)], capture_output=True, text=True, check=True).stdout)
     assert float(metadata["format"]["duration"]) == pytest.approx(expected, abs=.005)
+
+
+def test_transform_commands_keep_color_and_color_reset_keeps_geometry():
+    original=VisualEffects(exposure=.5,zoom=1.3,rotation=15).model_dump()
+    assert compile_visual_command('当前镜头放大到1.5倍',original).zoom==1.5
+    assert compile_visual_command('再放大一点',original).zoom==1.4
+    assert compile_visual_command('逆时针旋转90度',original).rotation==-90
+    moved=compile_visual_command('向右移动10%',original)
+    assert moved.offset_x==.1 and moved.zoom==1.3 and moved.exposure==.5
+    restored=compile_visual_command('恢复原色',moved.model_dump())
+    assert restored.exposure==0 and restored.zoom==1.3 and restored.offset_x==.1
+    reset=compile_visual_command('重置画面变换',moved.model_dump())
+    assert reset.zoom==1 and reset.rotation==0 and reset.exposure==.5
+    with pytest.raises(ValueError):compile_visual_command('放大到9倍',{})
+
+
+def test_geometry_preview_and_export_match_without_stretching_or_clock_change(tmp_path):
+    source=tmp_path/'pattern.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=white:s=180x320:d=1:r=30',
+        '-vf','drawbox=x=10:y=20:w=50:h=50:color=red:t=fill,drawbox=x=100:y=230:w=40:h=60:color=blue:t=fill',
+        '-c:v','libx264',str(source)],check=True)
+    clip=SimpleNamespace(visual_effects=VisualEffects(zoom=.7,rotation=30,offset_x=.1,offset_y=-.1).model_dump(),
+        fit_mode='fill',crop_x=.5,crop_y=.5,source_start_seconds=0,source_end_seconds=1,source_path=str(source),
+        timeline_start_seconds=0,timeline_end_seconds=1)
+    preview=render_color_preview(clip,source,tmp_path/'transformed.mp4')
+    voice=tmp_path/'voice.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','1',str(voice)],check=True)
+    output=tmp_path/'output.mp4'
+    command=MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=[clip]),voice,output,[],subtitle_intervals=[])
+    subprocess.run(command,capture_output=True,check=True,timeout=60)
+    a,b=frame(preview),frame(output)
+    assert sum(abs(x-y) for p,q in zip(a,b) for x,y in zip(p,q))/(len(a)*3)<4
+    assert sum(max(pixel)<10 for pixel in b)>len(b)*.35
+    assert any(r>180 and b<50 for r,g,b in b)
+    metadata=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json',str(output)]))
+    assert float(metadata['format']['duration'])==pytest.approx(1,abs=.034)

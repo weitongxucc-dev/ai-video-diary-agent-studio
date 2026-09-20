@@ -3386,3 +3386,44 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
+
+
+def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    selected=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(id='geometry',logical_ref='artifacts/geometry.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'context_stage':'montage','raw_command':'当前镜头缩小到0.8倍','selected_object_refs':[f"clip:{selected['id']}"]})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['proposal']['operation']['payload']['effects']['zoom']==.8
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    confirm=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirm.status_code==200,confirm.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][0]['visual_effects']['zoom']==.8
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+
+
+def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_state,monkeypatch):
+    from copy import deepcopy
+    state=person_render_edit_state
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    plan=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    plan['clips'][0]['source_start_seconds']=1
+    plan['clips'][0]['source_end_seconds']=3
+    monkeypatch.setattr(state.production,'get_creation_task_montage_plan',lambda *args:plan)
+    ranges=[]
+    def capture(*args,**kwargs):
+        target=args[5];ranges.append((target.source_start_seconds,target.source_end_seconds))
+        return SimpleNamespace(id='geometry-person',logical_ref='artifacts/geometry-person.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',capture)
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/visual/preview',json={
+        'base_version_id':version.id,'clip_ids':[plan['clips'][0]['id']],'effects':{'zoom':.8}})
+    assert response.status_code==200,response.text
+    assert ranges==[(1,3),(1,3)]

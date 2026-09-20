@@ -322,7 +322,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v13"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v14"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2864,8 +2864,6 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             cue=next(cue for cue in plan.cues if cue.id==target.cue_id)
             if source is None or person.narration_segment_id != cue.narration_segment_id:
                 raise ValueError("当前人物口型产物已失效，请先重新生成")
-            preview_target.source_start_seconds=0
-            preview_target.source_end_seconds=target.timeline_end_seconds-target.timeline_start_seconds
         else:
             source=production_repo.resolve_clip_media_reference(workspace_id,target.asset_id,target.source_path)
         return preview_target,source
@@ -2888,11 +2886,13 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
     base=_ensure_montage_base_version(workspace_id,task,plan)
     refs=[f"clip:{clip.id}" for clip in clips]
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
-        raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="color_adjustment",
+        raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="visual_adjustment",
         scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True,"preserve_audio":True,"preserve_face_geometry":True},confidence=1,status="interpreted"))
     detail=(f"曝光 {payload.effects.exposure:+.1f} EV · 对比度 {payload.effects.contrast:.2f} · "
             f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f} · "
-            f"磨皮 {payload.effects.beauty_strength:.0%} · 肤色曝光 {payload.effects.skin_exposure:+.2f} EV")
+            f"磨皮 {payload.effects.beauty_strength:.0%} · 肤色曝光 {payload.effects.skin_exposure:+.2f} EV · "
+            f"缩放 {payload.effects.zoom:g} 倍 · 旋转 {payload.effects.rotation:g}° · "
+            f"位置 {payload.effects.offset_x:+.0%} / {payload.effects.offset_y:+.0%}")
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
         operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,

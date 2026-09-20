@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class VisualEffects(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    zoom: float = Field(default=1, ge=.1, le=4, allow_inf_nan=False)
+    offset_x: float = Field(default=0, ge=-1, le=1, allow_inf_nan=False)
+    offset_y: float = Field(default=0, ge=-1, le=1, allow_inf_nan=False)
+    rotation: float = Field(default=0, ge=-180, le=180, allow_inf_nan=False)
     beauty_strength: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
     skin_exposure: float = Field(default=0, ge=-.5, le=.5, allow_inf_nan=False)
     exposure: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
@@ -51,6 +55,27 @@ def framing_filter(fit_mode: str, crop_x: float, crop_y: float, width=1080, heig
             f"crop={width}:{height}:(iw-ow)*{crop_x}:(ih-oh)*{crop_y}")
 
 
+def geometry_filters(value: dict | VisualEffects, width: int, height: int) -> list[str]:
+    effects = value if isinstance(value, VisualEffects) else VisualEffects.model_validate(value)
+    if effects.zoom == 1 and effects.rotation == 0 and effects.offset_x == effects.offset_y == 0:
+        return []
+    filters = []
+    if effects.rotation in {90,-90}:
+        filters.append("transpose=clock" if effects.rotation == 90 else "transpose=cclock")
+    elif abs(effects.rotation) == 180:
+        filters.extend(["hflip","vflip"])
+    elif effects.rotation:
+        angle = effects.rotation * math.pi / 180
+        filters.append(f"rotate={angle:.10f}:ow='ceil(rotw({angle:.10f})/2)*2':oh='ceil(roth({angle:.10f})/2)*2':c=black")
+    if effects.zoom != 1:
+        filters.append(f"scale=trunc(iw*{effects.zoom}/2)*2:trunc(ih*{effects.zoom}/2)*2")
+    dx = round(width * effects.offset_x / 2) * 2
+    dy = round(height * effects.offset_y / 2) * 2
+    filters.extend([f"pad=w='max(iw,{width})+{2*abs(dx)}':h='max(ih,{height})+{2*abs(dy)}':x='(ow-iw)/2':y='(oh-ih)/2':color=black",
+        f"crop={width}:{height}:(iw-ow)/2-({dx}):(ih-oh)/2-({dy})"])
+    return filters
+
+
 def clip_playback_rate(clip) -> float:
     source_duration = clip.source_end_seconds - clip.source_start_seconds
     timeline_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
@@ -65,6 +90,7 @@ def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> st
         duration = min(duration, max_seconds)
     # Color before framing keeps letterbox black and avoids tinting padding.
     return ",".join([*color_filters(clip.visual_effects),framing_filter(clip.fit_mode,clip.crop_x,clip.crop_y,width,height),
+                     *geometry_filters(clip.visual_effects,width,height),
                      "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30",
                      "tpad=stop_mode=clone:stop_duration=0.1",f"trim=duration={duration:.6f}"])
 
@@ -117,7 +143,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=[clip.source_path]))
         transform=repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
             task_id=task_id,job_id=job.id,transform_type=kind,input_digest=digest,input_refs=[clip.source_path],
-            output_refs=[record.logical_ref],engine="local-visual-v2",parameters=parameters,status="succeeded",
+            output_refs=[record.logical_ref],engine="local-visual-v3",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
         repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
             upstream_ref=clip.source_path,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
@@ -130,17 +156,37 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
 
 
 def compile_visual_command(command: str, current: dict) -> VisualEffects | None:
-    text=command.strip().casefold()
+    import re
+    text=command.strip().casefold().rstrip("。！")
+    text=re.sub(r"^(?:把)?(?:(?:当前|这个)?镜头|画面)", "", text)
+    base=VisualEffects.model_validate(current)
+    relative={"放大一点":("zoom",.1),"缩小一点":("zoom",-.1),"向右一点":("offset_x",.05),"向左一点":("offset_x",-.05),"向上一点":("offset_y",-.05),"向下一点":("offset_y",.05)}
+    if text.removeprefix("再") in relative:
+        key,delta=relative[text.removeprefix("再")]
+        return VisualEffects.model_validate({**base.model_dump(),key:round(getattr(base,key)+delta,6)})
+    if text in {"重置位置和缩放", "重置画面变换"}:
+        return base.model_copy(update={"zoom":1,"rotation":0,"offset_x":0,"offset_y":0})
+    match=re.fullmatch(r"(?:放大|缩小|缩放)(?:到|至|为|设为)?\s*(\d+(?:\.\d+)?)\s*倍",text)
+    if match:
+        return VisualEffects.model_validate({**base.model_dump(),"zoom":float(match[1])})
+    match=re.fullmatch(r"(顺时针|逆时针)?旋转\s*([+-]?\d+(?:\.\d+)?)\s*度",text)
+    if match:
+        return VisualEffects.model_validate({**base.model_dump(),"rotation":float(match[2])*(-1 if match[1]=="逆时针" else 1)})
+    match=re.fullmatch(r"(?:向|往)(左|右|上|下)(?:移动|移)(?:画面)?\s*(\d+(?:\.\d+)?)\s*[%％]",text)
+    if match:
+        direction,amount=match.groups(); key="offset_x" if direction in {"左","右"} else "offset_y"
+        value=getattr(base,key)+float(amount)/100*(-1 if direction in {"左","上"} else 1)
+        return VisualEffects.model_validate({**base.model_dump(),key:value})
     tokens=("亮一点","暗一点","曝光","对比度","饱和度","暖一点","冷一点","重置调色","恢复原色","美颜","磨皮","皮肤亮一点","肤色亮一点")
     if not any(token in text for token in tokens):
         return None
     for constraint in ("其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变"):
         text=text.replace(constraint, "")
-    if any(token in text for token in ("不要", "别", "裁剪", "替换", "配音", "字幕", "音乐", "音量", "降噪", "放大", "缩小", "旋转", "删除", "复制", "logo")):
+    if any(token in text for token in ("不要", "别", "裁剪", "替换", "配音", "字幕", "音乐", "音量", "降噪", "放大", "缩小", "缩放", "旋转", "移动", "删除", "复制", "logo")):
         raise ValueError("这条指令包含调色之外的限制或操作，当前请分别预览，以免漏改")
     if "重置调色" in text or "恢复原色" in text:
         current=VisualEffects.model_validate(current)
-        return VisualEffects(beauty_strength=current.beauty_strength,skin_exposure=current.skin_exposure)
+        return current.model_copy(update={"exposure":0,"contrast":1,"saturation":1,"temperature":0})
     import re
     values=VisualEffects.model_validate(current).model_dump()
     if "美颜" in text or "磨皮" in text:
