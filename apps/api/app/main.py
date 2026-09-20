@@ -5459,12 +5459,30 @@ def _retime_montage_for_narration_segments(
                 segment_duration * max(1, len(cue.text)) / total_weight, 3
             )
     cue_by_id = {cue.id: cue for cue in updated.cues}
+    old_duration_by_cue: dict[str, float] = {}
+    for clip in plan.clips:
+        old_duration_by_cue[clip.cue_id] = old_duration_by_cue.get(clip.cue_id, 0.0) + clip.timeline_end_seconds - clip.timeline_start_seconds
+    allocated_by_cue: dict[str, float] = {}
+    used_by_cue: dict[str, float] = {}
     cursor = 0.0
-    for clip in updated.clips:
+    for index, clip in enumerate(updated.clips):
         cue = cue_by_id.get(clip.cue_id)
         if cue is None:
             raise ValueError("镜头缺少对应的字幕与配音时间段")
-        duration = cue.duration_seconds
+        old_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+        used_by_cue[cue.id] = used_by_cue.get(cue.id, 0.0) + old_duration
+        allocated_end = round(cue.duration_seconds * used_by_cue[cue.id] / old_duration_by_cue[cue.id], 3)
+        duration = round(allocated_end - allocated_by_cue.get(cue.id, 0.0), 3)
+        allocated_by_cue[cue.id] = allocated_end
+        if clip.locked and (abs(cursor - clip.timeline_start_seconds) > .001 or abs(duration - old_duration) > .001):
+            raise ValueError("配音时长变化会修改已锁定镜头，请先解锁受影响镜头")
+        if index:
+            previous = plan.clips[index - 1]
+            original = plan.clips[index]
+            if ((previous.asset_id, previous.segment_id, previous.cue_id, previous.person_render_id)
+                == (original.asset_id, original.segment_id, original.cue_id, original.person_render_id)
+                and abs(previous.source_end_seconds - original.source_start_seconds) < .001):
+                clip.source_start_seconds = updated.clips[index - 1].source_end_seconds
         asset = production_repo.get_asset(workspace_id, clip.asset_id)
         source_segment = next(
             (item for item in asset.segments if item.id == clip.segment_id), None
@@ -5834,6 +5852,15 @@ def preview_creation_task_edit(
                 title=title,
             ),
         )
+    if selected_ref.startswith("clip:") and payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        split_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:在|从)\s*(\d+(?:\.\d+)?)\s*秒(?:处)?(?:分割|切开)[。！]?", command)
+        split_here = command.rstrip("。！") in {"从这里分割镜头", "在播放位置分割镜头", "从这里切开", "分割当前镜头"}
+        if split_match or split_here:
+            if split_here and payload.playhead_ms is None:
+                raise HTTPException(status_code=422, detail="请先在播放器定位分割位置，或指定成片秒数。")
+            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
+                operation_type="SplitClip", clip_id=selected_ref.removeprefix("clip:"),
+                split_time_seconds=float(split_match.group(1)) if split_match else payload.playhead_ms / 1000))
     if selected_ref.startswith("cue:"):
         if payload.context_stage not in {"montage", "review", "subtitle_cover"}:
             raise _topic_failure_response(
@@ -7012,7 +7039,7 @@ def confirm_creation_task_edit(
             operation_payload=dict(operation_payload),
             narration_segments=segments, narration_artifact=narration_record,
         )
-    if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop", "TrimClip", "ReorderClip", "SetClipLock", "ConfirmClip"} or not isinstance(operation_payload, dict):
+    if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ReorderClip", "SetClipLock", "ConfirmClip"} or not isinstance(operation_payload, dict):
         raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
     required_strings = {
         key: operation_payload.get(key)
@@ -7046,6 +7073,7 @@ def confirm_creation_task_edit(
         raise HTTPException(status_code=409, detail="creation task edit target has changed")
     operation_type = operation_draft["operation_type"]
     update = CreationTaskMontageClipUpdateRequest(
+        split_time_seconds=operation_payload.get("split_time_seconds") if operation_type == "SplitClip" else None,
         fit_mode=operation_payload.get("fit_mode") if operation_type == "ChangeCrop" else None,
         crop_x=operation_payload.get("crop_x") if operation_type == "ChangeCrop" else None,
         crop_y=operation_payload.get("crop_y") if operation_type == "ChangeCrop" else None,
@@ -7087,7 +7115,7 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
-    if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "ReorderClip", "SetClipLock", "ConfirmClip"}:
+    if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ReorderClip", "SetClipLock", "ConfirmClip"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
@@ -7415,6 +7443,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         "asset_id": payload.asset_id,
         "segment_id": payload.segment_id,
         "source_start_seconds": payload.source_start_seconds,
+        "split_time_seconds": payload.split_time_seconds,
         "position": payload.position,
         "locked": payload.locked,
     }
@@ -7422,6 +7451,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         "ChangeCrop": {"fit_mode", "crop_x", "crop_y"},
         "ReplaceClip": {"asset_id", "segment_id"},
         "TrimClip": {"source_start_seconds"},
+        "SplitClip": {"split_time_seconds"},
         "ReorderClip": {"position"},
         "SetClipLock": {"locked"},
         "ConfirmClip": set(),
@@ -7435,6 +7465,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     if any(value is not None and key not in permitted for key, value in supplied.items()):
         raise HTTPException(status_code=422, detail="exact edit mixes multiple operations")
     update = CreationTaskMontageClipUpdateRequest(
+        split_time_seconds=payload.split_time_seconds if payload.operation_type == "SplitClip" else None,
         fit_mode=payload.fit_mode if payload.operation_type == "ChangeCrop" else None,
         crop_x=payload.crop_x if payload.operation_type == "ChangeCrop" else None,
         crop_y=payload.crop_y if payload.operation_type == "ChangeCrop" else None,
@@ -7466,6 +7497,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         "ChangeCrop": "调整画面适配",
         "ReplaceClip": "替换镜头",
         "TrimClip": "调整镜头起点",
+        "SplitClip": "分割镜头，保留配音与字幕时轴",
         "ReorderClip": "调整镜头顺序",
         "SetClipLock": "更改镜头锁定状态",
         "ConfirmClip": "确认当前镜头",
@@ -7485,6 +7517,10 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         operation_payload.update(asset_id=before_clip.asset_id, segment_id=before_clip.segment_id,
                                  source_start_seconds=before_clip.source_start_seconds)
     def describe_clip(clip, clips):
+        if payload.operation_type == "SplitClip":
+            count = len(clips) - len(persisted_plan.clips) + 1
+            return f"{count} 个片段 · 成片 {before_clip.timeline_start_seconds:.3f}–{before_clip.timeline_end_seconds:.3f} 秒" + (
+                f" · 分割点 {payload.split_time_seconds:.3f} 秒" if count == 2 else "")
         if payload.operation_type == "ReorderClip":
             return f"第 {clips.index(clip) + 1} 个镜头"
         if payload.operation_type == "SetClipLock":
@@ -7753,6 +7789,20 @@ def _apply_creation_task_montage_clip_update(
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
     if plan.status == "rendering":
         raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
+    if payload.split_time_seconds is not None:
+        if clip.locked:
+            raise HTTPException(status_code=409, detail="请先解锁镜头，再分割。")
+        at = round(payload.split_time_seconds, 3)
+        if min(at - clip.timeline_start_seconds, clip.timeline_end_seconds - at) < 0.04:
+            raise HTTPException(status_code=422, detail="分割点须在镜头内，两侧至少保留0.04秒。")
+        source_at = round(clip.source_start_seconds + at - clip.timeline_start_seconds, 3)
+        second = replace(clip, id=f"clip_{uuid4().hex[:12]}", source_start_seconds=source_at,
+            timeline_start_seconds=at)
+        clip.source_end_seconds = source_at
+        clip.timeline_end_seconds = at
+        plan.clips.insert(plan.clips.index(clip) + 1, second)
+        _refresh_montage_review_state(plan)
+        return plan
     if clip.locked and any(value is not None for value in (
         payload.fit_mode, payload.crop_x, payload.crop_y, payload.asset_id,
         payload.segment_id, payload.source_start_seconds, payload.position,
@@ -7842,8 +7892,8 @@ def update_creation_task_montage_clip(
     request: Request,
     payload: CreationTaskMontageClipUpdateRequest,
 ) -> CreationTaskMontagePlanResponse:
-    if any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y)):
-        raise HTTPException(status_code=409, detail="请通过画面适配预览确认修改。")
+    if any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y, payload.split_time_seconds)):
+        raise HTTPException(status_code=409, detail="请通过精确编辑预览确认修改。")
     categories = [
         name
         for name, active in (
@@ -8768,11 +8818,9 @@ def _render_montage_with_resolved_clip_sources(
                         repair_action="重新生成所选人物口型片段后再渲染。",
                     )
                 clip.source_path = str(output)
-                clip.source_start_seconds = 0.0
-                clip.source_end_seconds = min(
-                    render.duration_seconds or 0.0,
-                    clip.timeline_end_seconds - clip.timeline_start_seconds,
-                )
+                clip.source_end_seconds = clip.source_start_seconds + clip.timeline_end_seconds - clip.timeline_start_seconds
+                if clip.source_end_seconds > (render.duration_seconds or 0.0) + .001:
+                    raise ValueError("人物口型源片段不足以覆盖当前镜头")
                 continue
             resolved_source_path = production_repo.resolve_clip_media_reference(
                 workspace_id,

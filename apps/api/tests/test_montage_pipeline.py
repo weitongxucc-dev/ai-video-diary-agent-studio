@@ -2988,3 +2988,92 @@ def test_creation_subtitles_reject_inconsistent_segment_clock(durations):
     with pytest.raises(ValueError, match="配音时长"):
         _build_creation_task_cues(script, min_seconds=30, max_seconds=90,
             narration_duration_seconds=1.0, narration_segment_durations_by_section=durations)
+
+
+@pytest.mark.parametrize("natural", [False, True])
+def test_split_clip_preserves_clock_narration_and_roundtrips_undo(person_render_edit_state, natural):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    target = before["montage"]["clips"][0]
+    split_at = target["timeline_start_seconds"] + 1.25
+    if natural:
+        response = state.client.post(base + "/edits/preview", json={
+            "raw_command":"从这里分割镜头", "context_stage":"montage",
+            "selected_object_refs":[f"clip:{target['id']}"], "playhead_ms":round(split_at * 1000)})
+    else:
+        response = state.client.post(base + "/edits/exact/preview", json={
+            "operation_type":"SplitClip", "clip_id":target["id"], "split_time_seconds":split_at})
+    assert response.status_code == 200, response.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    proposal = response.json()["proposal"]
+    confirmed = state.client.post(base + f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    clips = after["montage"]["clips"]
+    assert len(clips) == len(before["montage"]["clips"]) + 1
+    assert clips[0]["timeline_end_seconds"] == clips[1]["timeline_start_seconds"] == split_at
+    assert clips[0]["source_end_seconds"] == clips[1]["source_start_seconds"] == target["source_start_seconds"] + 1.25
+    assert clips[1]["source_end_seconds"] == target["source_end_seconds"]
+    assert clips[1]["person_render_id"] == target["person_render_id"]
+    assert clips[2:] == before["montage"]["clips"][1:]
+    assert after["montage"]["duration_seconds"] == before["montage"]["duration_seconds"]
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    assert after["montage"]["cues"] == before["montage"]["cues"]
+    assert state.client.post(base + f"/edits/{proposal['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == clips
+
+
+def test_split_clip_rejects_endpoints_and_locked_source(person_render_edit_state):
+    state=person_render_edit_state
+    base=f"/api/creation-tasks/{state.task.id}"
+    clip=state.montage.clips[0]
+    mixed=state.client.patch(base+f"/montage/clips/{clip.id}",json={"split_time_seconds":1,"confirmed":True})
+    assert mixed.status_code == 409
+    for at in (clip.timeline_start_seconds, clip.timeline_end_seconds, clip.timeline_start_seconds + .01):
+        r=state.client.post(base+"/edits/exact/preview", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":at})
+        assert r.status_code == 422, r.text
+    r=state.client.post(base+"/edits/exact", json={"operation_type":"SetClipLock", "clip_id":clip.id, "locked":True})
+    assert r.status_code == 200, r.text
+    r=state.client.post(base+"/edits/exact/preview", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":1})
+    assert r.status_code == 409, r.text
+
+
+def test_split_person_render_keeps_source_offset_in_render_helper(person_render_edit_state, monkeypatch, tmp_path):
+    state=person_render_edit_state
+    montage=creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    first=montage.clips[0]
+    second=replace(first,id="split-second",source_start_seconds=1.25,timeline_start_seconds=1.25)
+    first.source_end_seconds=1.25
+    first.timeline_end_seconds=1.25
+    montage.clips=[first,second]
+    observed=[]
+    def render(plan,*args,**kwargs):
+        observed.extend((c.source_start_seconds,c.source_end_seconds) for c in plan.clips)
+        return plan
+    monkeypatch.setattr(main_module,"montage_renderer",SimpleNamespace(render=render))
+    main_module._render_montage_with_resolved_clip_sources(state.workspace_id,montage,tmp_path/"voice.wav")
+    assert observed == [(0,1.25),(1.25,4)]
+
+
+def test_regenerated_narration_is_not_duplicated_by_split_clips(person_render_edit_state):
+    state=person_render_edit_state
+    plan=creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    # Two adjacent portions of one cue must share its replacement duration.
+    plan.clips=plan.clips[:1]
+    first=plan.clips[0]
+    second=replace(first,id="split-second",source_start_seconds=1,timeline_start_seconds=1)
+    first.source_end_seconds=1;first.timeline_end_seconds=1
+    plan.clips.append(second);plan.duration_seconds=4
+    segment=SimpleNamespace(id=plan.cues[0].narration_segment_id,duration_seconds=6,status="ready")
+    result=main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")
+    assert result.duration_seconds == 6
+    assert [(c.timeline_start_seconds,c.timeline_end_seconds) for c in result.clips] == [(0,1.5),(1.5,6)]
+    assert [(c.source_start_seconds,c.source_end_seconds) for c in result.clips] == [(0,1.5),(1.5,6)]
+    assert plan.duration_seconds == 4
+    plan.clips[0].locked=True
+    with pytest.raises(ValueError,match="锁定"):
+        main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")

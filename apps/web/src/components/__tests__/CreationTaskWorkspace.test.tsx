@@ -673,6 +673,15 @@ describe("CreationTaskWorkspace", () => {
     expect(await screen.findByText(/版本 3$/)).toBeInTheDocument();
     expect(screen.getByLabelText("源素材预览")).toBeInTheDocument();
     expect(screen.queryByText("不直接采用编辑响应")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("镜头分割位置"), { target: { value: "0" } });
+    expect(screen.getByRole("button", { name: "预览分割" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("镜头分割位置"), { target: { value: "1.2" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览分割" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
+      operation_type: "SplitClip", clip_id: "clip-1", split_time_seconds: 1.2,
+    }));
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+
 
   });
 

@@ -1083,6 +1083,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     fit_mode: Literal["fill", "fit"] | None = None
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
+    split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1097,12 +1098,14 @@ class CreationTaskExactEditRequest(BaseModel):
     fit_mode: Literal["fill", "fit"] | None = None
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
+    split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     operation_type: Literal[
         "ReplaceClip",
     "ChangeCrop",
         "TrimClip",
+        "SplitClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
@@ -1179,6 +1182,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
+        "SplitClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
@@ -1239,6 +1243,7 @@ class EditOperationResponse(BaseModel):
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
+        "SplitClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
