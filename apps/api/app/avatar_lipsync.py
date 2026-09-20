@@ -976,7 +976,8 @@ def _probe_avatar_output(path: Path) -> tuple[float, str] | None:
         return None
     evidence = json.dumps(
         {
-            "engine": "musetalk-v1.5",
+            "engine": "ffprobe",
+            "validation_scope": "media_metadata_only_not_lip_sync_quality",
             "duration_seconds": round(duration, 3),
             "video_codec": video.get("codec_name"),
             "width": video.get("width"),

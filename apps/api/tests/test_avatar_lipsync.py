@@ -264,6 +264,9 @@ def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path, avat
     assert cached.status == "succeeded"
     assert cached.artifact_path == result.artifact_path
     assert cached.duration_seconds == result.duration_seconds == 8.0
+    evidence = json.loads(cached.alignment_evidence)
+    assert evidence["engine"] == "ffprobe"
+    assert evidence["validation_scope"] == "media_metadata_only_not_lip_sync_quality"
     assert len(calls) == 1
 
 
