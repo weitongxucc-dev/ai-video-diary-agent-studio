@@ -37,11 +37,15 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
                 steps.append(descriptor);continue
             cue_match=re.fullmatch(r'(?:把)?(中文|英文)?字幕(\d+)(?:改成|改为)[“「"](.+)[”」"]',normalized,re.S)
             time_match=re.fullmatch(r'(?:把)?(中文|英文)?字幕(\d+)(?:显示|时间改为)(\d+(?:\.\d+)?)到(\d+(?:\.\d+)?)秒',normalized)
-            match=cue_match or time_match
+            shift_match=re.fullmatch(r'(?:把)?(中文|英文)?字幕(\d+)(?:整体)?(向前|往前|提前|向后|往后|延后|推迟)\s*(\d+(?:\.\d+)?)\s*(毫秒|秒)',normalized)
+            match=cue_match or time_match or shift_match
             if match:
                 language={'中文':'zh-CN','英文':'en-US'}.get(match[1])
                 values={'language':language,'cue_number':int(match[2])}
                 if cue_match:values['text']=match[3]
+                elif shift_match:
+                    offset=float(match[4])/(1000 if match[5]=='毫秒' else 1)
+                    values['offset_seconds']=-offset if match[3] in {'向前','往前','提前'} else offset
                 else:values.update(start_seconds=float(match[3]),end_seconds=float(match[4]))
                 steps.append({**descriptor,'operation_type':'UpdateSubtitleCue','target_ref':f"subtitle:{language or 'selected'}:{match[2]}",'values':values});continue
             patch=compile_subtitle_style_command(normalized)
@@ -149,7 +153,11 @@ def apply_compound_subtitles(tracks,steps,duration_seconds):
         track=candidates[0];cues=sorted(track.cues,key=lambda cue:cue.start_seconds);index=values['cue_number']-1
         if not 0<=index<len(cues):raise ValueError('指定字幕序号不存在')
         cue=cues[index]
-        updated=update_subtitle_cue(track,cue.id,**{key:values[key] for key in ('text','start_seconds','end_seconds') if key in values})
+        changes={key:values[key] for key in ('text','start_seconds','end_seconds') if key in values}
+        if 'offset_seconds' in values:
+            changes.update(start_seconds=round(cue.start_seconds+values['offset_seconds'],3),
+                end_seconds=round(cue.end_seconds+values['offset_seconds'],3))
+        updated=update_subtitle_cue(track,cue.id,**changes)
         subtitle_schedule([replace(updated,style={**updated.style,'enabled':True})],duration_seconds)
         invalidate_translation=track.language=='zh-CN' and 'text' in values and values['text']!=cue.text
         result=[updated if item.id==track.id else item for item in result if not(invalidate_translation and item.language=='en-US' and item.source_language=='zh-CN')]
