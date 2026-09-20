@@ -20,6 +20,7 @@ from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.transitions import extend_dissolve_sources, join_picture_filters
+from app.graphic_overlays import validate_overlays, write_text_overlay
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
@@ -132,6 +133,7 @@ class CreationTaskMontagePlan:
     output_path: str | None = None
     subtitle_path: str | None = None
     message: str = ""
+    graphic_overlays: list[dict] = field(default_factory=list)
     audio_timeline: AudioTimeline | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -637,13 +639,24 @@ class MontageRenderer:
                         path=Path(overlay_dir)/f"subtitle-{index:03}.png"
                         _write_subtitle_image(cue,path, size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
                         subtitle_overlays.append(path)
+                intervals=([(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else
+                    [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips])
+                if isinstance(plan, CreationTaskMontagePlan):
+                    graphics=validate_overlays(plan.graphic_overlays,plan.duration_seconds)
+                    graphic_paths=[]
+                    for index,graphic in enumerate(graphics):
+                        path=Path(overlay_dir)/f"graphic-{index}.png"
+                        write_text_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
+                        graphic_paths.append(path)
+                    subtitle_overlays=graphic_paths+subtitle_overlays
+                    intervals=[(item.start_seconds,item.end_seconds) for item in graphics]+intervals
                 self.runner(
                     self.build_command(
                         plan,
                         narration_path,
                         output_path,
                         subtitle_overlays,
-                        subtitle_intervals=[(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else None,
+                        subtitle_intervals=intervals,
                     )
                 )
             _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))

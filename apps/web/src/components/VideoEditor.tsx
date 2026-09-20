@@ -1,5 +1,6 @@
 "use client";
 
+import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
 import { useState, type RefObject, type ReactNode } from "react";
@@ -133,6 +134,7 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, onPrev
         <p>0 为硬切；从切点开始混合两段画面，需要前镜头的结尾素材余量。声音与字幕不移动。</p>
         <button className={ui.button} type="button" disabled={busy||clip.locked||transitionSeconds===(clip.transition_in_seconds ?? 0)} onClick={()=>onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds})}>预览转场</button>
       </details>:null}
+      <GraphicOverlayEditor items={workspace.montage!.graphic_overlays ?? []} duration={workspace.montage!.duration_seconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={workspace.portrait_available} clip={clip} allClipIds={workspace.montage!.clips.map(item=>item.id)} versionId={workspace.task.current_timeline_version_id} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}
       {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy} onClick={onAddOriginal}>添加此镜头原声</button> : null}
       <section className={ui.propertySection}><h3>当前时段音频</h3>{captions.length ? <p>{captions.map(cue => cue.text).join(" ")}</p> : null}<ClipTimelineAudioPreview key={`${workspace.task.current_timeline_version_id}:${clip.id}`} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} start={clip.timeline_start_seconds} end={clip.timeline_end_seconds} busy={busy} /></section>

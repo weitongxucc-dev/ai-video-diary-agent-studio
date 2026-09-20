@@ -3504,3 +3504,27 @@ def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_re
     count=len(calls)
     result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':.4})
     assert result.status_code==409 and len(calls)==count
+
+
+def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='title',logical_ref='artifacts/title.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加标题“本地 / Local”','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['montage']['graphic_overlays'][0]['text']=='本地 / Local'
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips']==before['montage']['clips']
+    assert [t['cues'] for t in after['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==after['montage']['graphic_overlays']
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'标题1删除','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]

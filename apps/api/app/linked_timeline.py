@@ -6,6 +6,7 @@ from app.audio_timeline import AudioTimeline, TimelineAudioClip
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.subtitle_schedule import subtitle_schedule
 from app.visual_effects import clip_playback_rate
+from app.graphic_overlays import splice_overlays
 
 
 def splice_intervals(duration_ms: int, start_ms: int, end_ms: int, action: str):
@@ -104,6 +105,7 @@ def splice_clip(plan, tracks, audio, clip_id: str, action: str):
                 timeline_end_seconds=(at + right - left) / 1000))
     result.clips = sorted(clips, key=lambda clip: clip.timeline_start_seconds)
     result.duration_seconds = (duration + (end - start) * (1 if action == "duplicate" else -1)) / 1000
+    result.graphic_overlays = splice_overlays(plan.graphic_overlays,intervals)
     result.audio_timeline = splice_audio(audio, intervals)
     result.output_path = result.subtitle_path = None
     result.status = "ready"
@@ -156,6 +158,8 @@ def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
                 clip.fade_envelope_rate /= scale
         clip.timeline_start_seconds = move(round(clip.timeline_start_seconds * 1000)) / 1000
         clip.timeline_end_seconds = move(round(clip.timeline_end_seconds * 1000)) / 1000
+    result.graphic_overlays = [{**item,"start_seconds":move(round(item["start_seconds"]*1000))/1000,
+        "end_seconds":move(round(item["end_seconds"]*1000))/1000} for item in result.graphic_overlays]
     result.duration_seconds = (round(plan.duration_seconds * 1000) + delta) / 1000
     result.audio_timeline = audio.model_copy(deep=True)
     spans = [(0, start, 0), (start, end, start), (end, round(plan.duration_seconds * 1000), end)]

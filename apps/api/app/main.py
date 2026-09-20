@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.graphic_overlays import TextOverlay, validate_overlays, compile_overlay_command
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate
 from app.linked_timeline import splice_clip, retime_clip
@@ -323,7 +324,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v18"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v19"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2833,7 +2834,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -2935,6 +2936,7 @@ def _creation_task_montage_response(
             "duration_seconds": plan.duration_seconds,
             "low_confidence_clip_count": plan.low_confidence_clip_count,
             "narration_reference": plan.narration_audio_path,
+            "graphic_overlays": plan.graphic_overlays,
             "audio_timeline": _effective_audio_timeline(plan).model_dump(),
             "output_url": (
                 f"/api/creation-tasks/{plan.task_id}/output"
@@ -4980,6 +4982,7 @@ def _persist_typed_montage_edit(
 ) -> CreationTaskEditConfirmResponse:
     try:
         dissolve_frames(updated_plan.clips)
+        validate_overlays(updated_plan.graphic_overlays,updated_plan.duration_seconds)
         for clip in updated_plan.clips:
             fade_filters(clip)
     except ValueError as exc:
@@ -5719,6 +5722,16 @@ def preview_creation_task_edit(
             return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(
                 operation_type="ConfigureSubtitleTrack", style=style_patch))
 
+    if payload.context_stage in {"montage","review"} and ("标题" in command):
+        try:
+            overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+            edit=compile_overlay_command(command,overlay_plan.graphic_overlays)
+        except (ValueError,KeyError) as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        if edit:
+            action,value,identity=edit
+            return _preview_graphic_overlay(task_id,request,CreationTaskExactEditRequest(operation_type="EditGraphicOverlay",
+                overlay_action=action,graphic_overlay=value,overlay_id=identity))
     if "/" in command or "\\" in command:
         raise _topic_failure_response(
             status_code=409,
@@ -6498,6 +6511,15 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "EditGraphicOverlay" and isinstance(operation_payload,dict):
+        if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409,detail="时间线已变化，请重新预览标题修改")
+        montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+        montage.graphic_overlays=operation_payload["graphic_overlays"]
+        _prepare_changed_montage(montage,message="标题已更新，可以重新渲染。")
+        return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
+            base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=montage,
+            operation_type="EditGraphicOverlay",operation_payload=operation_payload)
     if operation_type == "SetClipTransition" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已变化，请重新预览转场")
@@ -7355,6 +7377,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "EditGraphicOverlay":
+        return _preview_graphic_overlay(task_id,request,payload)
     if payload.operation_type == "SetClipTransition":
         return _preview_transition(task_id, request, payload)
     if payload.operation_type == "ChangeCanvas":
@@ -7598,7 +7622,7 @@ def apply_creation_task_exact_edit(
 ) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if payload.operation_type in {"ConfigureSubtitleTrack", "GenerateCoverFromFrame", "SetClipTransition"} or (
+    if payload.operation_type in {"ConfigureSubtitleTrack", "GenerateCoverFromFrame", "SetClipTransition", "EditGraphicOverlay"} or (
         payload.operation_type == "UpdateSubtitleCue" and payload.track_id is not None
     ):
         preview = preview_creation_task_exact_edit(task_id, request, payload)
@@ -7663,6 +7687,65 @@ def apply_creation_task_exact_edit(
 
 
 
+def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind,parameters):
+    from copy import deepcopy
+    preview_plan=deepcopy(candidate)
+    preview_plan.status="ready"
+    preview_plan.audio_timeline=_effective_audio_timeline(candidate)
+    def produce(output):
+        _render_montage_with_resolved_clip_sources(workspace_id,preview_plan,output.parent/"timeline-mix.wav",
+            job_staging_path=output.parent,subtitle_tracks=tracks)
+        (output.parent/"preview.mp4").replace(output)
+    return _task_audio().publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-montage-v19",
+        parameters={"base_version_id":base.id,**parameters},
+        input_refs=[f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
+            *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
+            *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce)
+
+
+def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    from copy import deepcopy
+    if payload.model_fields_set-{"operation_type","overlay_action","graphic_overlay","overlay_id"}:
+        raise HTTPException(status_code=422,detail="标题编辑不能混入其他操作")
+    workspace_id=current_workspace_id(request)
+    task=_creation_task_or_404(workspace_id,task_id)
+    plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+    if plan.status=="rendering":raise HTTPException(status_code=409,detail="正在渲染，请完成后修改标题")
+    edited=deepcopy(plan);action=payload.overlay_action;value=payload.graphic_overlay
+    if action=='add' and value is not None and payload.overlay_id is None:
+        edited.graphic_overlays.append(value.model_dump());identity=value.id
+    elif action in {'update','delete'} and payload.overlay_id:
+        index=next((i for i,item in enumerate(edited.graphic_overlays) if item['id']==payload.overlay_id),-1)
+        if index<0:raise HTTPException(status_code=404,detail="标题不存在，请刷新列表")
+        identity=payload.overlay_id
+        if action=='delete' and value is None:edited.graphic_overlays.pop(index)
+        elif action=='update' and value is not None and value.id==identity:edited.graphic_overlays[index]=value.model_dump()
+        else:raise HTTPException(status_code=422,detail="标题操作的对象或参数不匹配")
+    else:raise HTTPException(status_code=422,detail="请选择添加、修改或删除标题，并提供对应参数")
+    if edited.graphic_overlays==plan.graphic_overlays:raise HTTPException(status_code=422,detail="标题没有变化")
+    base=_ensure_montage_base_version(workspace_id,task,plan)
+    tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
+    try:
+        validate_overlays(edited.graphic_overlays,edited.duration_seconds)
+        records=[_publish_task_picture_preview(workspace_id,task,base,candidate,tracks,kind="graphic_preview",
+            parameters={"graphic_overlays":candidate.graphic_overlays}) for candidate in (plan,edited)]
+    except (ValueError,OSError,subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,(ValueError,OSError)) else "标题预览失败，请检查本机渲染器") from exc
+    if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
+        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览标题")
+    summary={"add":"添加标题","update":"修改标题","delete":"删除标题"}[action]
+    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        raw_command=summary,context_stage="montage",selected_object_refs=[f"overlay:{identity}"],playhead_ms=None,
+        intent_type="graphic_overlay",scope={"kind":"overlay","id":identity},constraints={"preserve_narration":True},confidence=1,status="interpreted"))
+    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
+        summary=summary,target_refs=[f"overlay:{identity}"],operation={"operation_type":"EditGraphicOverlay","payload":{
+            "base_version_id":base.id,"graphic_overlays":edited.graphic_overlays}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
+        preview={side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else summary,
+            "detail":"完整成片视听预览；标题在指定区间显示，字幕、声音和镜头保持不变。",
+            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}))
+    return _edit_preview_response(intent,proposal)
+
+
 def _preview_transition(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     from copy import deepcopy
     if not payload.clip_id or payload.transition_seconds is None or payload.model_fields_set - {"operation_type","clip_id","transition_seconds"}:
@@ -7680,24 +7763,11 @@ def _preview_transition(task_id: str, request: Request, payload: CreationTaskExa
         raise HTTPException(status_code=422,detail="转场没有变化")
     base=_ensure_montage_base_version(workspace_id,task,plan)
     edited=deepcopy(plan);edited.clips[index].transition_in_seconds=payload.transition_seconds
-    service=_task_audio()
     tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
     try:
         dissolve_frames(edited.clips)
-        records=[]
-        for candidate in (plan,edited):
-            preview_plan=deepcopy(candidate)
-            preview_plan.status="ready"
-            preview_plan.audio_timeline=_effective_audio_timeline(candidate)
-            def produce(output):
-                _render_montage_with_resolved_clip_sources(workspace_id,preview_plan,output.parent/"timeline-mix.wav",
-                    job_staging_path=output.parent,subtitle_tracks=tracks)
-                (output.parent/"preview.mp4").replace(output)
-            records.append(service.publish(workspace_id,task_id,kind="transition_preview",suffix=".mp4",engine="local-montage-v18",
-                parameters={"transition_seconds":candidate.clips[index].transition_in_seconds,"base_version_id":base.id,"clip_id":payload.clip_id},
-                input_refs=[f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
-                    *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
-                    *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce))
+        records=[_publish_task_picture_preview(workspace_id,task,base,candidate,tracks,kind="transition_preview",
+            parameters={"transition_seconds":candidate.clips[index].transition_in_seconds,"clip_id":payload.clip_id}) for candidate in (plan,edited)]
     except (ValueError,OSError,subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地转场预览失败，请检查源素材和FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
@@ -8253,6 +8323,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "DeleteSubtitleCue",
         "ChangeCanvas",
         "SetClipTransition",
+        "EditGraphicOverlay",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):
