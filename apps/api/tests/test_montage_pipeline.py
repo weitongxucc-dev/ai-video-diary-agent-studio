@@ -2010,7 +2010,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert creation_task_montage_plan_from_payload(
         reloaded.get_creation_task_montage_plan(workspace_id, task.id)
     ).clips[0].source_start_seconds == before_trim_start
-    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is False
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
 
     final_render = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
     assert final_render.status_code == 200, final_render.text
@@ -3243,6 +3243,10 @@ def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person
     state.production.create_subtitle_track(replace(zh,id="batch-en",language="en-US",source_language="zh-CN",
         cues=[replace(zh.cues[0],text="AI tools and AI notes")],generation_method="translation"))
     before = state.client.get(base).json()
+    single = state.client.post(base + "/edits/preview", json={"raw_command":"把这句字幕改成Local tools", "context_stage":"subtitle_cover",
+        "selected_object_refs":["cue:shared","subtitle-track:batch-en"]})
+    assert single.status_code == 200, single.text
+    assert single.json()["proposal"]["operation"]["payload"]["track_id"] == "batch-en"
     preview = state.client.post(base + "/edits/preview", json={"raw_command":"全文把“AI”替换成“Local AI”", "context_stage":"subtitle_cover",
         "selected_object_refs":["cue:shared","subtitle-track:batch-en"]})
     assert preview.status_code == 200, preview.text
@@ -3267,3 +3271,52 @@ def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person
     assert [t["language"] for t in state.client.get(base).json()["subtitle_tracks"]] == ["zh-CN"]
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     assert len(state.client.get(base).json()["subtitle_tracks"]) == 2
+
+
+def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    track = SubtitleTrack(id="structure-en", workspace_id=state.workspace_id, task_id=state.task.id, timeline_version_id=version.id,
+        language="en-US", source_language=None, style={},
+        cues=[ProductionSubtitleCue(id="structure-cue", source_cue_id=None, text="Local video. Good sound.", start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/structure.srt",transform_id="structure-transform",status="valid")
+    state.production.create_subtitle_track(track)
+    before = state.client.get(base).json()
+    def preview_confirm(command, current):
+        selected = current["subtitle_tracks"][0]
+        preview = state.client.post(base + "/edits/preview", json={"raw_command":command, "context_stage":"subtitle_cover",
+            "selected_object_refs":[f"cue:{selected['cues'][0]['id']}", f"subtitle-track:{selected['id']}"]})
+        assert preview.status_code == 200, preview.text
+        assert state.client.get(base).json()["subtitle_tracks"] == current["subtitle_tracks"]
+        confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+        assert confirmed.status_code == 200, confirmed.text
+        assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+        result = state.client.get(base).json()
+        assert result["montage"]["clips"] == before["montage"]["clips"]
+        assert result["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+        assert result["narration"]["audio_reference"] == before["narration"]["audio_reference"]
+        return result
+    split = preview_confirm("当前字幕在第13字后2秒拆分", before)
+    assert [cue["text"] for cue in split["subtitle_tracks"][0]["cues"]] == ["Local video. ", "Good sound."]
+    merged = preview_confirm("当前字幕与下一条合并", split)
+    assert merged["subtitle_tracks"][0]["cues"][0]["text"] == track.cues[0].text
+    deleted = preview_confirm("删除当前字幕", merged)
+    assert deleted["subtitle_tracks"] == []
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == merged["subtitle_tracks"][0]["cues"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"] == []
+
+    # Repeated undo/redo follows restored snapshots, including after a render.
+    for expected in (1, 2, 1):
+        response = state.client.post(base + "/timeline/undo", json={})
+        assert response.status_code == 200, response.text
+        assert len(state.client.get(base).json()["subtitle_tracks"][0]["cues"]) == expected
+    assert state.client.get(base).json()["task"]["can_undo"] is False
+    for expected in (2, 1, 0):
+        response = state.client.post(base + "/timeline/redo", json={})
+        assert response.status_code == 200, response.text
+        tracks = state.client.get(base).json()["subtitle_tracks"]
+        assert (len(tracks[0]["cues"]) if tracks else 0) == expected
+    assert state.client.get(base).json()["task"]["can_redo"] is False

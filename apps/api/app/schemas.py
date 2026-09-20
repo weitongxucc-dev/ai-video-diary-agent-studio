@@ -1118,11 +1118,15 @@ class CreationTaskExactEditRequest(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
     ]
+    split_offset: int | None = Field(default=None, ge=1)
     find_text: str | None = Field(default=None, min_length=1, max_length=96)
     replacement_text: str | None = Field(default=None, max_length=96)
     track_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1202,6 +1206,9 @@ class TypedEditOperationDraftResponse(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",
@@ -1276,6 +1283,9 @@ class EditOperationResponse(BaseModel):
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
         "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",

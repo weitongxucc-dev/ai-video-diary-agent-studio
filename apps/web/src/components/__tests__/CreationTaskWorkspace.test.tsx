@@ -189,7 +189,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -520,6 +520,7 @@ describe("CreationTaskWorkspace", () => {
 
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
       operation_type: "UpdateSubtitleCue",
+      track_id: "subtitle-track-zh",
       cue_id: "subtitle-cue-1",
       text: "真实运行\n不是口号",
       start_seconds: 0.4,
@@ -550,6 +551,23 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  it("previews subtitle structure changes without confirming automatically", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "SplitSubtitleCue"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+    fireEvent.click(screen.getByText("拆分、合并与删除"));
+    fireEvent.change(screen.getByLabelText("字幕拆分文字位置"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("字幕拆分时间"), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览拆分" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
+      operation_type: "SplitSubtitleCue", track_id: "subtitle-track-zh", cue_id: "subtitle-cue-1", split_offset: 3, split_time_seconds: 1,
+    }));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "未保存草稿" } });
+    expect(screen.getByRole("button", { name: "预览删除字幕" })).toBeDisabled();
   });
 
   it("previews full-track literal replacement with each changed caption", async () => {

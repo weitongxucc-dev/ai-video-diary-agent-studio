@@ -32,3 +32,49 @@ def replace_subtitle_text(track, find_text: str, replacement: str):
     if not changes:
         raise ValueError("当前字幕轨没有找到该文字")
     return replace(track, cues=cues, artifact_ref=None, transform_id=None), changes
+
+
+def restructure_subtitle(track, operation: str, cue_id: str, *, split_offset=None, split_time_seconds=None):
+    """Change caption structure on one language track, never the narration clock."""
+    cues = sorted(track.cues, key=lambda cue: cue.start_seconds)
+    index = next((index for index, cue in enumerate(cues) if cue.id == cue_id), None)
+    if index is None:
+        raise ValueError("所选字幕已变化，请重新选择")
+    cue = cues[index]
+    before = [cue]
+    if operation == "SplitSubtitleCue":
+        if type(split_offset) is not int or not 0 < split_offset < len(cue.text):
+            raise ValueError("请选择字幕文字内部的拆分位置")
+        left, right = cue.text[:split_offset], cue.text[split_offset:]
+        if not left.strip() or not right.strip():
+            raise ValueError("拆分后的两条字幕都必须包含文字")
+        if split_time_seconds is None or not cue.start_seconds + .04 <= split_time_seconds <= cue.end_seconds - .04:
+            raise ValueError("拆分时间必须在字幕内部，两侧至少保留0.04秒")
+        from uuid import uuid4
+        pieces = [replace(cue, text=left, end_seconds=split_time_seconds,
+            line_breaks=[p for p in cue.line_breaks if p < split_offset], emphasis=[term for term in cue.emphasis if term in left]),
+            replace(cue, id=f"cue_{uuid4().hex}", text=right, start_seconds=split_time_seconds,
+                line_breaks=[p-split_offset for p in cue.line_breaks if p > split_offset], emphasis=[term for term in cue.emphasis if term in right])]
+        cues[index:index+1] = pieces
+    elif operation == "MergeSubtitleCue":
+        if index + 1 >= len(cues):
+            raise ValueError("当前字幕后面没有可合并的条目")
+        following = cues[index+1]
+        if following.start_seconds < cue.end_seconds - .001:
+            raise ValueError("字幕存在重叠，请先调整时间后合并")
+        separator = " " if track.language == "en-US" and not cue.text[-1].isspace() and not following.text[0].isspace() else ""
+        offset = len(cue.text) + len(separator)
+        pieces = [replace(cue, text=cue.text + separator + following.text, end_seconds=following.end_seconds,
+            line_breaks=[*cue.line_breaks, *[offset+p for p in following.line_breaks]],
+            emphasis=list(dict.fromkeys([*cue.emphasis, *following.emphasis])))]
+        before.append(following)
+        cues[index:index+2] = pieces
+    elif operation == "DeleteSubtitleCue":
+        pieces = []
+        cues.pop(index)
+    else:
+        raise ValueError("不支持的字幕结构操作")
+    def describe(items):
+        return " / ".join(f"{item.start_seconds:.3f}–{item.end_seconds:.3f} 秒：{item.text}" for item in items)
+    return replace(track, cues=cues, artifact_ref=None, transform_id=None), [{"cue_id":cue.id,
+        "before":describe(before), "after":describe(pieces) or "删除此条字幕，保留该时段配音与画面", "occurrences":1}]

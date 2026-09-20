@@ -497,6 +497,8 @@ function SubtitleCueEditor({
   const [terms, setTerms] = useState(cueEmphasisTerms(cue));
   const [start, setStart] = useState(String(cue.start_seconds));
   const [end, setEnd] = useState(String(cue.end_seconds));
+  const [splitOffset, setSplitOffset] = useState(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
+  const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
   const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
   const changed = Number(start) !== cue.start_seconds || Number(end) !== cue.end_seconds || text !== storedText || terms !== cueEmphasisTerms(cue) || style.name !== track.style.name;
 
@@ -517,10 +519,22 @@ function SubtitleCueEditor({
           <input aria-label={`字幕 ${index + 1} 强调词`} disabled={busy} onChange={(event) => { onDraftChange(); setTerms(event.target.value); }} value={terms} />
         </label>
       </div>
+      <details className={editorUi.propertySection}>
+        <summary>拆分、合并与删除</summary>
+        <label className={editorUi.field}>第几个字后拆分<input aria-label="字幕拆分文字位置" type="number" min="1" max={Array.from(cue.text).length - 1} disabled={busy || changed} value={splitOffset} onChange={event => { onDraftChange(); setSplitOffset(Number(event.target.value)); }} /></label>
+        <label className={editorUi.field}>拆分时间（秒）<input aria-label="字幕拆分时间" type="number" step="0.001" min={cue.start_seconds + .04} max={cue.end_seconds - .04} disabled={busy || changed} value={splitTime} onChange={event => { onDraftChange(); setSplitTime(Number(event.target.value)); }} /></label>
+        <div className={styles.cueAction}>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed || splitOffset < 1 || splitOffset >= Array.from(cue.text).length || splitTime < cue.start_seconds + .04 || splitTime > cue.end_seconds - .04} onClick={() => onPreview({operation_type:"SplitSubtitleCue", track_id:track.id, cue_id:cue.id, split_offset:splitOffset, split_time_seconds:splitTime})}>预览拆分</button>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed || index >= track.cues.length - 1} onClick={() => onPreview({operation_type:"MergeSubtitleCue", track_id:track.id, cue_id:cue.id})}>预览与下一条合并</button>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed} onClick={() => onPreview({operation_type:"DeleteSubtitleCue", track_id:track.id, cue_id:cue.id})}>预览删除字幕</button>
+        </div>
+        {changed ? <small>先保存或还原上方文字与时间修改，再调整结构。</small> : null}
+      </details>
       <div className={styles.cueAction}>
         {changed ? <small>待预览</small> : <small>已保存</small>}
         <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime} onClick={() => onPreview({
           operation_type: "UpdateSubtitleCue",
+          track_id: track.id,
           cue_id: cue.id,
           start_seconds: Number(start),
           end_seconds: Number(end),
