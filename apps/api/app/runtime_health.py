@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import shutil
+import socket
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.models import utc_now
@@ -120,16 +122,34 @@ def _health_item(
 
 def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
     if settings.llm_configured:
+        endpoint = urlsplit(settings.effective_llm_base_url)
+        connection_note = "连接与实际生成尚未验证。"
+        if endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
+            try:
+                port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+                with socket.create_connection((endpoint.hostname, port), timeout=0.5):
+                    pass
+            except (OSError, ValueError):
+                return _health_item(
+                    item_id="deepseek",
+                    label="AI 文案模型",
+                    status="degraded",
+                    reason="已配置本地模型，但无法连接本机模型服务。",
+                    impact="当前不能通过该模型生成选题或文案。",
+                    repair_action="启动本地模型服务，并核对设置中的服务地址与端口。",
+                    checked_at=checked_at,
+                )
+            connection_note = "本机服务端口可连接；模型加载与实际生成尚未验证。"
         return _health_item(
             item_id="deepseek",
             label="AI 文案模型",
             status="ready",
             reason=(
                 f"已配置 {settings.effective_llm_provider} / "
-                f"{settings.effective_llm_model}"
+                f"{settings.effective_llm_model}。{connection_note}"
             ),
-            impact="可生成选题、脚本和语音指令草案。",
-            repair_action="无需处理。",
+            impact="用于生成选题、脚本和语音指令草案；配置检查不代表生成成功。",
+            repair_action="如生成失败，请检查模型服务及返回的具体错误。",
             checked_at=checked_at,
         )
     return _health_item(
