@@ -318,7 +318,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v10"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v11"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2828,7 +2828,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind != "color_preview":
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -7640,6 +7640,20 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             return f"{framing} · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
         return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
 
+    speed_previews = {}
+    if payload.operation_type == "ChangeClipSpeed":
+        try:
+            for side, target in (("before", before_clip), ("after", after_clip)):
+                source = production_repo.resolve_clip_media_reference(workspace_id, target.asset_id, target.source_path)
+                record = publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
+                    workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind="speed_preview")
+                speed_previews[side] = {"ref": record.logical_ref,
+                    "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError)
+                else "变速预览失败，请检查源素材、FFmpeg和外接盘") from exc
+        if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
+            raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     before_asset = production_repo.get_asset(workspace_id, before_clip.asset_id)
     after_asset = production_repo.get_asset(workspace_id, after_clip.asset_id)
     now = utc_now()
@@ -7678,14 +7692,17 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                     "ref": f"clip:{before_clip.id}",
                     "label": before_asset.file_name,
                     "detail": describe_clip(before_clip, persisted_plan.clips),
+                    **speed_previews.get("before", {}),
                 },
                 "after": {
                     "ref": f"clip:{after_clip.id}",
                     "label": after_asset.file_name,
                     "detail": describe_clip(after_clip, plan.clips),
+                    **speed_previews.get("after", {}),
                 },
             },
-            external_effects=["只更新任务版本；重新渲染前不会执行媒体进程。"],
+            external_effects=(["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"]
+                if speed_previews else ["只更新任务版本；重新渲染前不会执行媒体进程。"]),
             created_at=now,
             updated_at=now,
         )

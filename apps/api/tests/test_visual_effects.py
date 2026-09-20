@@ -86,3 +86,16 @@ def test_picture_speed_changes_actual_frame_time_without_changing_output_length(
     metadata = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "json", str(output)], capture_output=True, text=True, check=True).stdout)
     assert float(metadata["format"]["duration"]) == pytest.approx(1, abs=.05)
+
+
+@pytest.mark.parametrize("timeline_end, expected", [(12, 5), (1.597, 1.6)])
+def test_speed_preview_obeys_output_clock_and_five_second_limit(tmp_path, timeline_end, expected):
+    source = tmp_path / "long-source.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=red:s=180x320:r=30:d=6",
+        "-c:v", "libx264", str(source)], check=True)
+    clip = SimpleNamespace(visual_effects={}, fit_mode="fill", crop_x=.5, crop_y=.5,
+        source_start_seconds=0, source_end_seconds=6, timeline_start_seconds=0, timeline_end_seconds=timeline_end)
+    output = render_color_preview(clip, source, tmp_path / "slow-preview.mp4")
+    metadata = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "json", str(output)], capture_output=True, text=True, check=True).stdout)
+    assert float(metadata["format"]["duration"]) == pytest.approx(expected, abs=.005)

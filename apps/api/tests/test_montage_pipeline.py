@@ -3168,13 +3168,20 @@ def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_sta
     assert result.status_code == 409 and "锁定" in result.text
 
 
-def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_render_edit_state):
+def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     clip = state.montage.clips[1]
+    seen_rates = []
+    def publish(*args, **kwargs):
+        seen_rates.append(main_module.clip_playback_rate(args[5]))
+        return SimpleNamespace(id=f"preview-{len(seen_rates)}", logical_ref=f"artifacts/preview-{len(seen_rates)}.mp4")
+    monkeypatch.setattr(main_module, "publish_color_preview", publish)
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为0.5倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert preview.status_code == 200, preview.text
+    assert seen_rates == [1, .5]
+    assert preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("preview-2")
     response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert response.status_code == 200, response.text
     after = state.client.get(base).json()

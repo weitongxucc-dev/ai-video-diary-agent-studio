@@ -1,5 +1,6 @@
 """Bounded color controls shared by local previews and montage rendering."""
 from pathlib import Path
+from typing import Literal
 import subprocess
 import math
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,10 +58,14 @@ def clip_playback_rate(clip) -> float:
     return source_duration / timeline_duration
 
 
-def clip_video_filters(clip, *, width=1080, height=1920) -> str:
+def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> str:
+    duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    if max_seconds is not None:
+        duration = min(duration, max_seconds)
     # Color before framing keeps letterbox black and avoids tinting padding.
     return ",".join([*color_filters(clip.visual_effects),framing_filter(clip.fit_mode,clip.crop_x,clip.crop_y,width,height),
-                     "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30"])
+                     "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30",
+                     "tpad=stop_mode=clone:stop_duration=0.1",f"trim=duration={duration:.6f}"])
 
 
 def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Path:
@@ -71,17 +76,17 @@ def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Pat
             raise ValueError("本地人像组件未就绪")
         source,metadata=portrait.process(source,clip.source_start_seconds,clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
         clip=replace(clip,source_start_seconds=0,source_end_seconds=metadata["duration_seconds"])
-    duration=min(5,clip.source_end_seconds-clip.source_start_seconds)
+    duration=min(5 * clip_playback_rate(clip),clip.source_end_seconds-clip.source_start_seconds)
     subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe",
         "-ss",str(clip.source_start_seconds),"-t",str(duration),"-i",str(source),
-        "-vf",clip_video_filters(clip,width=360,height=640),"-an","-c:v","libx264","-preset","veryfast",
+        "-vf",clip_video_filters(clip,width=360,height=640,max_seconds=5),"-an","-c:v","libx264","-preset","veryfast",
         "-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",str(output)],
         capture_output=True,check=True,timeout=120)
     return output
 
 
 def publish_color_preview(repository, artifact_store, temporary_root: Path, workspace_id: str,
-                          task_id: str, clip, source: Path, portrait=None):
+                          task_id: str, clip, source: Path, portrait=None, *, kind: Literal["color_preview", "speed_preview"]="color_preview"):
     import hashlib
     import json
     from dataclasses import asdict
@@ -97,7 +102,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     digest=hashlib.sha256(json.dumps(parameters,sort_keys=True).encode()).hexdigest()
     identity=uuid4().hex
     job=repository.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
-        kind="color_preview",idempotency_key=f"color-preview:{identity}",input_digest=digest))
+        kind=kind,idempotency_key=f"{kind}:{identity}",input_digest=digest))
     running=repository.claim_job_run(workspace_id,job.id)
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
@@ -105,11 +110,11 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
             output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait)
             publication=artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/preview.mp4",output)
         record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
-            task_id=task_id,kind="color_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,
+            task_id=task_id,kind=kind,logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=[clip.source_path]))
         transform=repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
-            task_id=task_id,job_id=job.id,transform_type="color_preview",input_digest=digest,input_refs=[clip.source_path],
-            output_refs=[record.logical_ref],engine="local-color-v1",parameters=parameters,status="succeeded",
+            task_id=task_id,job_id=job.id,transform_type=kind,input_digest=digest,input_refs=[clip.source_path],
+            output_refs=[record.logical_ref],engine="local-visual-v2",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
         repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
             upstream_ref=clip.source_path,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
