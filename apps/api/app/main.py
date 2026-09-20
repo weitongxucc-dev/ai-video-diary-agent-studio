@@ -322,7 +322,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v14"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v15"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(

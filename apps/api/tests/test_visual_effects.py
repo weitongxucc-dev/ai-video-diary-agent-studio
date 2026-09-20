@@ -4,7 +4,7 @@ import subprocess
 from PIL import Image
 import pytest
 from app.montage import MontageRenderer
-from app.visual_effects import VisualEffects, compile_visual_command, render_color_preview
+from app.visual_effects import VisualEffects, clip_video_filters, compile_visual_command, render_color_preview
 
 
 def frame(path):
@@ -135,3 +135,35 @@ def test_geometry_preview_and_export_match_without_stretching_or_clock_change(tm
     assert any(r>180 and b<50 for r,g,b in b)
     metadata=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json',str(output)]))
     assert float(metadata['format']['duration'])==pytest.approx(1,abs=.034)
+
+
+def test_many_fractional_shots_do_not_accumulate_frames_or_drop_the_last_shot(tmp_path):
+    sources=[]
+    for color in ('red','lime'):
+        source=tmp_path/f'{color}.mp4'
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',f'color={color}:s=180x320:d=1:r=30','-c:v','libx264',str(source)],check=True)
+        sources.append(source)
+    duration=.137*12
+    clips=[SimpleNamespace(source_path=str(sources[1 if i==11 else 0]),visual_effects={},fit_mode='fill',crop_x=.5,crop_y=.5,
+        source_start_seconds=0,source_end_seconds=.137,timeline_start_seconds=i*.137,timeline_end_seconds=(i+1)*.137) for i in range(12)]
+    voice=tmp_path/'voice.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t',str(duration),str(voice)],check=True)
+    overlay=tmp_path/'overlay.png';Image.new('RGBA',(1080,1920),(0,0,0,0)).save(overlay)
+    output=tmp_path/'fractional.mp4'
+    command=MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=clips),voice,output,[overlay],subtitle_intervals=[(0,duration)])
+    subprocess.run(command,capture_output=True,check=True,timeout=60)
+    streams=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(output)]))['streams']
+    video=next(stream for stream in streams if stream['codec_type']=='video')
+    assert int(video['nb_frames'])==round(duration*30)
+    assert abs(float(video['duration'])-duration)<=1/30
+    # The green twelfth shot must survive. A total-duration-only test misses a
+    # renderer that pads earlier shots and truncates the final content.
+    raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(output),'-vf',f"select=eq(n\\,{round(duration*30)-1}),scale=1:1",
+        '-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+    assert raw[1]>200 and raw[0]<30 and raw[2]<30
+
+
+def test_subframe_shot_is_rejected_instead_of_silently_disappearing():
+    clip = SimpleNamespace(timeline_start_seconds=1, timeline_end_seconds=1.001)
+    with pytest.raises(ValueError, match="不足一个输出帧"):
+        clip_video_filters(clip)

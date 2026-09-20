@@ -85,14 +85,21 @@ def clip_playback_rate(clip) -> float:
 
 
 def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> str:
-    duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    end_seconds = clip.timeline_end_seconds
     if max_seconds is not None:
-        duration = min(duration, max_seconds)
+        end_seconds = min(end_seconds, clip.timeline_start_seconds + max_seconds)
+    # Quantize absolute boundaries once: independently rounding each clip length
+    # accumulates frames and eventually cuts off later shots when audio ends.
+    first_frame = round(clip.timeline_start_seconds * 30)
+    last_frame = round(end_seconds * 30)
+    frame_count = last_frame - first_frame
+    if frame_count < 1:
+        raise ValueError("镜头区间不足一个输出帧，请延长镜头")
     # Color before framing keeps letterbox black and avoids tinting padding.
     return ",".join([*color_filters(clip.visual_effects),framing_filter(clip.fit_mode,clip.crop_x,clip.crop_y,width,height),
                      *geometry_filters(clip.visual_effects,width,height),
                      "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30",
-                     "tpad=stop_mode=clone:stop_duration=0.1",f"trim=duration={duration:.6f}"])
+                     "tpad=stop_mode=clone:stop_duration=0.1",f"trim=end_frame={frame_count}"])
 
 
 def render_color_preview(clip, source: Path, output: Path, portrait=None, *, aspect_ratio="9:16") -> Path:

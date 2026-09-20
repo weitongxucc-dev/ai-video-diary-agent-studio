@@ -696,7 +696,7 @@ class MontageRenderer:
             overlay_input = audio_index + 1 + index
             next_label = f"[vsub{index}]"
             filters.append(
-                f"{output_label}[{overlay_input}:v]overlay=0:0:"
+                f"{output_label}[{overlay_input}:v]overlay=0:0:shortest=1:"
                 f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
             )
             output_label = next_label
