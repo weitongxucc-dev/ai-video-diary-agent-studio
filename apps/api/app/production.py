@@ -38,6 +38,7 @@ from app.visual_semantics import (
 )
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
+ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -124,14 +125,17 @@ class MaterialAsset:
     usage_role_confidence: float = 0.0
     usage_role_reason: str = ""
     review_status: AssetReviewStatus = "raw"
-    rights_confirmed: bool = False
-    brand_safe: bool = False
+    use_state: ContentUseState = "available"
     analysis_status: AnalysisStatus = "pending"
     analysis_message: str = "待分析镜头和画面内容。"
     speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+def material_allows_footage(asset: MaterialAsset) -> bool:
+    return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
 
 
 @dataclass
@@ -1077,6 +1081,11 @@ class ProductionRepository:
         asset_id: str,
         reference: str,
     ) -> Path:
+        asset = self.get_asset(workspace_id, asset_id)
+        if not material_allows_footage(asset):
+            raise MediaAuthorityError(reason="material_use_restricted",
+                impact="素材已设为仅参考或不使用，未传给渲染器。",
+                repair_action="替换这个镜头，或在素材详情明确修改使用状态。")
         expected_reference = self.workspace_media_reference_for_asset(
             workspace_id,
             asset_id,
@@ -2506,7 +2515,7 @@ class ProductionRepository:
         normalized_query = query.strip().casefold()
         matches: list[MaterialSegmentMatch] = []
         for asset in self.list_assets(workspace_id):
-            if asset.review_status != "approved":
+            if asset.review_status != "approved" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:
                 if segment.review_status != "approved":
@@ -2579,6 +2588,8 @@ class ProductionRepository:
 
     def analyze_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
+        if asset.use_state == "excluded":
+            raise ValueError("素材已设为不使用，请先修改使用状态再分析")
         path = self._validated_library_file(asset.path)
         source_stat = path.stat()
         try:
@@ -2680,14 +2691,19 @@ class ProductionRepository:
             return None
         return [float(value) for value in payload]
 
+    def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
+        if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
+            raise ValueError("素材使用状态无效")
+        asset = self.get_asset(workspace_id, asset_id)
+        asset.use_state = use_state
+        return self._save_asset(asset)
+
     def update_asset_review(
         self,
         workspace_id: str,
         asset_id: str,
         *,
         review_status: AssetReviewStatus,
-        rights_confirmed: bool,
-        brand_safe: bool,
         usage_role: AssetUsageRole = "unassigned",
     ) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
@@ -2700,8 +2716,8 @@ class ProductionRepository:
                 raise ValueError("请先完成镜头分析再审核素材")
         asset.review_status = review_status
         asset.usage_role = usage_role
-        asset.rights_confirmed = rights_confirmed
-        asset.brand_safe = brand_safe
+        if review_status == "rejected":
+            asset.use_state = "excluded"
         if review_status == "approved":
             for segment in asset.segments:
                 if segment.usage_role == "unassigned":
@@ -2926,6 +2942,7 @@ class ProductionRepository:
                 if (
                     segment is None
                     or asset.review_status != "approved"
+                    or not material_allows_footage(asset)
                     or segment.review_status != "approved"
                 ):
                     raise ValueError("创作方案引用的素材片段不可用")
@@ -6138,6 +6155,7 @@ class ProductionRepository:
             asset
             for asset in assets
             if asset.review_status == "approved"
+            and material_allows_footage(asset)
             and asset.usage_role in {"a_roll", "b_roll"}
         ]
         approved_segments = [
@@ -6676,6 +6694,12 @@ class ProductionRepository:
 
     @staticmethod
     def _asset_from_payload(data: dict[str, object]) -> MaterialAsset:
+        # Read-only legacy boundary: old proof flags never regain mutation authority.
+        data = dict(data)
+        data.pop("rights_confirmed", None)
+        data.pop("brand_safe", None)
+        if "use_state" not in data:
+            data["use_state"] = "excluded" if data.get("review_status") == "rejected" or data.get("usage_role") == "exclude" else "available"
         segment_payloads = data.pop("segments", [])
         data = _with_datetime(data, "modified_at", "created_at", "updated_at")
         segments = [

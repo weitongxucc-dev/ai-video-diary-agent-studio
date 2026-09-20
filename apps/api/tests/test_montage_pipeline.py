@@ -339,8 +339,6 @@ def _asset(
         duration_seconds=24,
         usage_role="b_roll",
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         analysis_status="ready",
         segments=[
             MaterialSegment(
@@ -380,8 +378,6 @@ def _a_roll_asset(tmp_path: Path) -> MaterialAsset:
         duration_seconds=24,
         usage_role="a_roll",
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         analysis_status="ready",
         segments=[
             MaterialSegment(
@@ -4131,6 +4127,7 @@ def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
     expected=8-(cuts[0][1]-cuts[0][0])/1000
     assert after['montage']['duration_seconds']==expected
     assert len(after['montage']['clips'])==3
+    assert after['subtitle_tracks']==before['subtitle_tracks']==[]
     rendered=state.client.post(base+'/montage/render',json={})
     assert rendered.status_code==200,rendered.text
     media=state.client.get(base+'/output')
@@ -4309,8 +4306,8 @@ def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,r
         title='User material',language='zh-CN',selection_status='confirmed',sections=[CreationTaskScriptSection(
             id='section',title='演示',content='演示电脑操作。',visual_prompt='电脑打字画面',evidence_reference_ids=[])])
     asset=_asset(tmp_path)
-    asset=replace(asset,rights_confirmed=rights,brand_safe=brand,
-        segments=[replace(asset.segments[0],end_seconds=20)])
+    asset=replace(asset,segments=[replace(asset.segments[0],end_seconds=20)])
+    asset=ProductionRepository._asset_from_payload({**asdict(asset),"rights_confirmed":rights,"brand_safe":brand})
     plan=MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
         profile=ProductionProfile(workspace_id='workspace_a'),assets=[asset],
         media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
@@ -4321,3 +4318,24 @@ def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,r
             MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
                 profile=ProductionProfile(workspace_id='workspace_a'),assets=[excluded],
                 media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+
+
+def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    monkeypatch.setattr(main_module.settings,'video_inbox_path',str(state.production.video_library_path),raising=False)
+    asset=state.production.list_assets(state.workspace_id)[0]
+    base=f'/api/production/materials/{asset.id}'
+    response=state.client.put(base+'/use-state',json={'use_state':'reference_only'})
+    assert response.status_code==200,response.text
+    assert response.json()['use_state']=='reference_only'
+    assert 'rights_confirmed' not in response.json() and 'brand_safe' not in response.json()
+    assert state.production.get_asset(state.workspace_id,asset.id).use_state=='reference_only'
+    state.montage.clips[0].person_render_id=None
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    blocked=state.client.post(f'/api/creation-tasks/{state.task.id}/montage/render',json={})
+    assert blocked.status_code==409,blocked.text
+    assert '使用状态' in blocked.text
+    assert state.client.put(base+'/use-state',json={'use_state':'unknown'}).status_code==422
+    assert state.client.put(base+'/review',json={'review_status':'approved','usage_role':'b_roll','rights_confirmed':True}).status_code==422
+    assert state.client.put(base+'/use-state',json={'use_state':'available'}).status_code==200

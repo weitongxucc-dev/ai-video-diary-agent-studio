@@ -10,6 +10,7 @@ from app.graphic_overlays import TextOverlay, ImageOverlay
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
+from app.production import ContentUseState
 
 from app.models import (
     EpisodeIntakeMode,
@@ -466,8 +467,7 @@ class MaterialAssetResponse(BaseModel):
     usage_role_confidence: float = Field(ge=0, le=1)
     usage_role_reason: str
     review_status: Literal["raw", "approved", "rejected"]
-    rights_confirmed: bool
-    brand_safe: bool
+    use_state: ContentUseState
     analysis_status: Literal["pending", "ready", "blocked", "failed"]
     analysis_message: str
     speech_analysis: MaterialSpeechAnalysisResponse | None = None
@@ -518,10 +518,14 @@ class MaterialLibraryInsightsResponse(BaseModel):
 
 
 class MaterialReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     review_status: Literal["raw", "approved", "rejected"]
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] = "unassigned"
-    rights_confirmed: bool = False
-    brand_safe: bool = False
+
+
+class MaterialUseStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    use_state: ContentUseState
 
 
 class MaterialSegmentUpdateRequest(BaseModel):

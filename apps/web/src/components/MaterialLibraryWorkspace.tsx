@@ -14,7 +14,6 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -26,6 +25,7 @@ import {
   reviewProductionMaterial,
   scanProductionMaterials,
   updateProductionMaterialSegment,
+  updateMaterialUseState,
 } from "@/lib/api";
 import type {
   MaterialAsset,
@@ -67,8 +67,10 @@ function roleLabel(asset: MaterialAsset) {
 }
 
 function reviewLabel(asset: MaterialAsset) {
+  if (asset.use_state === "excluded") return "不使用";
+  if (asset.use_state === "reference_only") return "仅参考";
   if (asset.review_status === "approved") return "已审核";
-  if (asset.review_status === "rejected") return "已排除";
+  if (asset.review_status === "rejected") return "用途待确认";
   if (asset.analysis_status === "ready") return "等待审核";
   if (asset.analysis_status === "failed" || asset.analysis_status === "blocked")
     return "分析受阻";
@@ -269,6 +271,20 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function changeUseState(useState: MaterialAsset["use_state"]) {
+    if (!selected) return;
+    setBusy("review");
+    setError("");
+    try {
+      replaceAsset(await updateMaterialUseState(selected.id, useState));
+      await refreshInsights();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "使用状态保存失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function review(
     status: "approved" | "rejected",
     role: "b_roll" | "exclude",
@@ -281,8 +297,6 @@ export function MaterialLibraryWorkspace({
         await reviewProductionMaterial(selected.id, {
           review_status: status,
           usage_role: role,
-          rights_confirmed: status === "approved",
-          brand_safe: status === "approved",
         }),
       );
     } catch (cause) {
@@ -372,12 +386,17 @@ export function MaterialLibraryWorkspace({
           </dd>
         </div>
         <div>
-          <dt>版权确认</dt>
-          <dd>{selected.rights_confirmed ? "已确认" : "未确认"}</dd>
-        </div>
-        <div>
-          <dt>品牌安全</dt>
-          <dd>{selected.brand_safe ? "已确认" : "未确认"}</dd>
+          <dt>使用状态</dt>
+          <dd>
+            <select aria-label="素材使用状态" value={selected.use_state} disabled={busy !== null}
+              onChange={(event) => void changeUseState(event.target.value as MaterialAsset["use_state"])}>
+              <option value="available">可用于创作</option>
+              <option value="reference_only">仅参考</option>
+              <option value="excluded">不使用</option>
+              <option value="not_for_automation">不用于自动任务</option>
+              <option value="not_for_publish">不用于发布</option>
+            </select>
+          </dd>
         </div>
         <div>
           <dt>识别片段</dt>
@@ -407,15 +426,6 @@ export function MaterialLibraryWorkspace({
         >
           <Check size={14} />
           批准为补充画面
-        </button>
-        <button
-          className="is-danger"
-          disabled={busy !== null}
-          onClick={() => void review("rejected", "exclude")}
-          type="button"
-        >
-          <X size={14} />
-          排除素材
         </button>
       </div>
       {selected.segments.length ? (

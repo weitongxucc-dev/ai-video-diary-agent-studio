@@ -77,7 +77,7 @@ def test_analysis_commit_preserves_corrections_made_during_processing(tmp_path):
     asset = repo.scan_library("workspace")[0]
     analyzed = repo.analyze_asset("workspace", asset.id)
     segment_id = analyzed.segments[0].id
-    repo.update_asset_review("workspace", asset.id, review_status="approved", rights_confirmed=True, brand_safe=True, usage_role="b_roll")
+    repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
 
     def analyze(path, segments, fingerprint):
         repo.update_segment("workspace", asset.id, segment_id, description="用户纠正：这是打印机", transcript="HDMI",
@@ -113,7 +113,7 @@ def test_low_confidence_ocr_is_retained_but_not_searchable(tmp_path):
     (library / "source.mp4").write_bytes(b"fixture")
     repo = ProductionRepository(tmp_path / "db.sqlite", library, duration_reader=lambda path: 2, scene_reader=lambda path, duration: [])
     asset = repo.analyze_asset("workspace", repo.scan_library("workspace")[0].id)
-    repo.update_asset_review("workspace", asset.id, review_status="approved", rights_confirmed=True, brand_safe=True, usage_role="b_roll")
+    repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
     repo.update_segment("workspace", asset.id, asset.segments[0].id, description="", transcript="", review_status="approved", usage_role="b_roll")
     asset = repo.get_asset("workspace", asset.id)
     asset.segments[0].understanding = SegmentUnderstanding("ready", ocr_status="ready", ocr_frames=[{

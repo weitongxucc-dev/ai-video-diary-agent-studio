@@ -333,8 +333,6 @@ def _seed_creation_plan_facts(
         workspace_id,
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="b_roll",
     )
     voice_reference = production.video_library_path / "approved" / f"{workspace_id}.wav"
@@ -375,8 +373,6 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
             "workspace_a",
             assets[0].id,
             review_status="approved",
-            rights_confirmed=True,
-            brand_safe=True,
             usage_role="b_roll",
         )
 
@@ -393,22 +389,53 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
             "workspace_a",
             assets[0].id,
             review_status="approved",
-            rights_confirmed=True,
-            brand_safe=True,
         )
 
     approved = production.update_asset_review(
         "workspace_a",
         assets[0].id,
         review_status="approved",
-        rights_confirmed=False,
-        brand_safe=False,
         usage_role="b_roll",
     )
     assert approved.review_status == "approved"
-    assert approved.rights_confirmed is False
-    assert approved.brand_safe is False
+    assert approved.use_state == "available"
     assert all(segment.review_status == "approved" for segment in approved.segments)
+
+
+@pytest.mark.parametrize('use_state,usable',[
+    ('available',True),('reference_only',False),('excluded',False),('not_for_automation',True),('not_for_publish',True),
+])
+def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use_state,usable):
+    production=_repository(tmp_path)
+    (production.video_library_path/'state.mp4').write_bytes(b'local fixture')
+    asset=production.scan_library('workspace_a')[0]
+    assert asset.use_state=='available'
+    asset=production.analyze_asset('workspace_a',asset.id)
+    asset=production.update_asset_review('workspace_a',asset.id,review_status='approved',usage_role='b_roll')
+    reference=production.workspace_media_reference_for_asset('workspace_a',asset.id)
+    stale=production.get_asset('workspace_a',asset.id)
+    changed=production.update_asset_use_state('workspace_a',asset.id,use_state)
+    assert changed.use_state==use_state
+    assert changed.segments==stale.segments
+    production._save_asset(stale,analysis_only=True)
+    restarted=ProductionRepository(database_path=production.database_path,video_library_path=production.video_library_path)
+    assert restarted.get_asset('workspace_a',asset.id).use_state==use_state
+    assert bool(restarted.search_material_segments('workspace_a',usage_roles=['b_roll']))==usable
+    if usable:
+        assert restarted.resolve_clip_media_reference('workspace_a',asset.id,reference).is_file()
+    else:
+        with pytest.raises(MediaAuthorityError):restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
+    with pytest.raises(KeyError):restarted.update_asset_use_state('workspace_b',asset.id,'available')
+    with pytest.raises(ValueError,match='使用状态'):restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
+    if use_state=='excluded':
+        with pytest.raises(ValueError,match='不使用'):production.analyze_asset('workspace_a',asset.id)
+    legacy=asdict(asset);legacy.pop('use_state');legacy.update(rights_confirmed=False,brand_safe=False)
+    assert ProductionRepository._asset_from_payload(legacy).use_state=='available'
+    for key,value in [('review_status','rejected'),('usage_role','exclude')]:
+        assert ProductionRepository._asset_from_payload({**legacy,key:value}).use_state=='excluded'
+    with restarted._connect() as conn:
+        stored=json.loads(conn.execute('select payload from material_assets where id=?',(asset.id,)).fetchone()[0])
+    assert 'rights_confirmed' not in stored and 'brand_safe' not in stored
 
 
 def test_production_data_is_workspace_scoped_and_persistent(tmp_path):
@@ -442,8 +469,6 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         "workspace_a",
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="b_roll",
     )
     segment = asset.segments[0]
@@ -1923,8 +1948,6 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
         "workspace_a",
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="a_roll",
     )
 

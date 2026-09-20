@@ -255,13 +255,17 @@ export function reviewProductionMaterial(
   input: {
     review_status: "raw" | "approved" | "rejected";
     usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
-    rights_confirmed: boolean;
-    brand_safe: boolean;
   },
 ): Promise<MaterialAsset> {
   return request<MaterialAsset>(`/api/production/materials/${assetId}/review`, {
     method: "PUT",
     body: JSON.stringify(input),
+  });
+}
+
+export function updateMaterialUseState(assetId: string, useState: MaterialAsset["use_state"]): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/use-state`, {
+    method: "PUT", body: JSON.stringify({ use_state: useState }),
   });
 }
 

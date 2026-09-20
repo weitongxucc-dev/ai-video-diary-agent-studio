@@ -144,6 +144,7 @@ from app.production import (
     SubtitleTrack,
     TransformRun,
     effective_segment_usage_role,
+    material_allows_footage,
 )
 from app.task_runtime import JobFailure, JobResult
 from app.subtitle_tracks import (
@@ -229,6 +230,7 @@ from app.schemas import (
     MaterialLibraryInsightsResponse,
     MaterialLibraryResponse,
     MaterialReviewRequest,
+    MaterialUseStateRequest,
     MaterialSegmentMatchResponse,
     MaterialSegmentUpdateRequest,
     MediaCapabilityResponse,
@@ -2012,6 +2014,7 @@ def _creation_plan_preflight(
         asset
         for asset in production_repo.list_assets(workspace_id)
         if asset.review_status == "approved"
+        and material_allows_footage(asset)
         and any(
             segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) in {"a_roll", "b_roll"}
@@ -4906,7 +4909,7 @@ def _creation_task_montage_candidates(
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
     for asset in production_repo.list_assets(workspace_id):
-        if asset.review_status != "approved":
+        if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         for segment in asset.segments:
             if (
@@ -5156,7 +5159,7 @@ def _persist_typed_montage_edit(
         snapshot={
             **source_version.snapshot,
             **({"subtitle_track_ids": [track.id for track in carried_tracks]}
-               if carried_tracks or "subtitle_track_ids" in source_version.snapshot else {}),
+               if edited_subtitle_tracks is not None or carried_tracks or "subtitle_track_ids" in source_version.snapshot else {}),
             "cover_asset_id": carried_cover.id if carried_cover is not None else None,
             "montage": montage_payload,
             **(
@@ -7920,8 +7923,21 @@ def apply_creation_task_exact_edit(
 
 
 
+def _validate_montage_material_use(workspace_id, plan):
+    # Validate before cache reuse as well as inside the actual renderer.
+    for clip in plan.clips:
+        if not clip.person_render_id:
+            try:
+                asset = production_repo.get_asset(workspace_id, clip.asset_id)
+            except KeyError as exc:
+                raise ValueError("镜头素材已不存在，请替换后重试") from exc
+            if not material_allows_footage(asset):
+                raise ValueError("素材使用状态不允许用于画面，请替换镜头或在素材详情修改使用状态")
+
+
 def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind,parameters):
     from copy import deepcopy
+    _validate_montage_material_use(workspace_id,candidate)
     preview_plan=deepcopy(candidate)
     preview_plan.status="ready"
     preview_plan.audio_timeline=_effective_audio_timeline(candidate)
@@ -8953,6 +8969,7 @@ def _apply_creation_task_montage_clip_update(
         raise HTTPException(status_code=404, detail="material segment not found") from exc
     if (
         asset.review_status != "approved"
+        or not material_allows_footage(asset)
         or segment.review_status != "approved"
         or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
     ):
@@ -9098,6 +9115,10 @@ def render_creation_task_montage(
         raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
+    try:
+        _validate_montage_material_use(workspace_id,plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
     active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
     active_version = (
         production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
@@ -9808,6 +9829,15 @@ def analyze_production_material(
     return _material_asset_response(asset)
 
 
+@app.put("/api/production/materials/{asset_id}/use-state", response_model=MaterialAssetResponse)
+def update_material_use_state(asset_id: str, request: Request, payload: MaterialUseStateRequest) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.update_asset_use_state(current_workspace_id(request), asset_id, payload.use_state)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    return _material_asset_response(asset)
+
+
 @app.put(
     "/api/production/materials/{asset_id}/review",
     response_model=MaterialAssetResponse,
@@ -9822,8 +9852,6 @@ def review_production_material(
             current_workspace_id(request),
             asset_id,
             review_status=payload.review_status,
-            rights_confirmed=payload.rights_confirmed,
-            brand_safe=payload.brand_safe,
             usage_role=payload.usage_role,
         )
     except KeyError as exc:
@@ -10119,7 +10147,7 @@ def list_production_montage_clip_candidates(
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
     for asset in production_repo.list_assets(workspace_id):
-        if asset.review_status != "approved":
+        if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         for segment in asset.segments:
             if segment.review_status != "approved" or segment.usage_role not in {"a_roll", "b_roll"}:

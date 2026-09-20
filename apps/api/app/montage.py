@@ -31,6 +31,7 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     effective_segment_usage_role,
+    material_allows_footage,
 )
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
@@ -246,6 +247,7 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"
@@ -258,6 +260,7 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "a_roll"
@@ -416,6 +419,7 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"

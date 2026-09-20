@@ -1646,8 +1646,7 @@ export type MaterialAsset = {
   usage_role_confidence: number;
   usage_role_reason: string;
   review_status: "raw" | "approved" | "rejected";
-  rights_confirmed: boolean;
-  brand_safe: boolean;
+  use_state: "available" | "reference_only" | "excluded" | "not_for_automation" | "not_for_publish";
   analysis_status: "pending" | "ready" | "blocked" | "failed";
   analysis_message: string;
   speech_analysis?: {
