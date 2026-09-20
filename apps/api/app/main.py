@@ -10119,7 +10119,7 @@ def list_production_montage_clip_candidates(
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
     for asset in production_repo.list_assets(workspace_id):
-        if asset.review_status != "approved" or not asset.rights_confirmed or not asset.brand_safe:
+        if asset.review_status != "approved":
             continue
         for segment in asset.segments:
             if segment.review_status != "approved" or segment.usage_role not in {"a_roll", "b_roll"}:

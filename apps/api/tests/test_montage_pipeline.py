@@ -4301,3 +4301,23 @@ def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notic
     reasons=plan.clips[0].match_reasons
     if notice:assert any(notice in reason and '仅按素材文字与时长推荐' in reason for reason in reasons)
     else:assert not any('仅按素材文字与时长推荐' in reason for reason in reasons)
+
+
+@pytest.mark.parametrize('rights,brand',[(False,False),(False,True),(True,False)])
+def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,rights,brand):
+    script=CreationTaskScript(id='user-material-script',workspace_id='workspace_a',task_id='user-material-task',run_id='run',topic_id='topic',
+        title='User material',language='zh-CN',selection_status='confirmed',sections=[CreationTaskScriptSection(
+            id='section',title='演示',content='演示电脑操作。',visual_prompt='电脑打字画面',evidence_reference_ids=[])])
+    asset=_asset(tmp_path)
+    asset=replace(asset,rights_confirmed=rights,brand_safe=brand,
+        segments=[replace(asset.segments[0],end_seconds=20)])
+    plan=MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+        profile=ProductionProfile(workspace_id='workspace_a'),assets=[asset],
+        media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+    assert plan.clips[0].asset_id==asset.id
+    # Removing obsolete proof flags must not remove explicit exclusion or review.
+    for excluded in [replace(asset,review_status='rejected'),replace(asset,usage_role='exclude',segments=[replace(asset.segments[0],usage_role='exclude')])]:
+        with pytest.raises(ValueError,match='可用素材库'):
+            MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+                profile=ProductionProfile(workspace_id='workspace_a'),assets=[excluded],
+                media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)

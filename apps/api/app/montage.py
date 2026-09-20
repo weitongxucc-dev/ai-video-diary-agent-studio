@@ -246,8 +246,6 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"
@@ -260,8 +258,6 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "a_roll"
@@ -420,8 +416,6 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"
