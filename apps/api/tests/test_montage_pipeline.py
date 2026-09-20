@@ -3614,3 +3614,55 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+
+
+def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0];calls=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    def publish(*args,**kwargs):
+        calls.append(True);return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    bad=preview('当前镜头亮一点，同时配音小一点，然后增加闪电特效')
+    assert bad.status_code==422,bad.text
+    assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    result=preview('当前镜头亮一点，同时配音小一点')
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert proposal['operation']['operation_type']=='EditCompoundTimeline'
+    assert len(proposal['target_refs'])==2
+    stale=preview('当前镜头暗一点，同时配音大一点').json()['proposal']
+    assert state.client.post(base+'/edits/'+proposal['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['task']['timeline_sequence']==before['task']['timeline_sequence']+1
+    assert after['montage']['clips'][0]['visual_effects']['exposure']==.25
+    assert after['montage']['audio_timeline']['tracks'][0]['gain_db']==-3
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert state.client.post(base+'/edits/'+stale['id']+'/confirm').status_code==409
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert restored['montage']['clips']==before['montage']['clips']
+    assert restored['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['audio_timeline']==after['montage']['audio_timeline']
+
+
+def test_cross_object_compiler_keeps_context_and_lock_boundaries(person_render_edit_state):
+    from copy import deepcopy
+    from app.compound_edits import compile_compound_edit
+    state=person_render_edit_state;plan=deepcopy(state.montage)
+    audio=main_module._effective_audio_timeline(plan);refs=[f'clip:{plan.clips[0].id}']
+    changed,steps=compile_compound_edit('当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒',plan,audio,refs,None,None)
+    assert changed.audio_timeline.tracks[0].clips[0].fade_out_ms==400
+    assert changed.clips[0].visual_effects.get('fade_out_seconds',0)==0
+    assert len(steps)==3 and steps[-1]['target_ref'].startswith('audio:')
+    assert compile_compound_edit('当前配音音量降低3分贝，然后淡出0.4秒',plan,audio,['audio:'+audio.tracks[0].clips[0].id],None,None) is None
+    with pytest.raises(ValueError,match='冲突'):
+        compile_compound_edit('当前镜头亮一点，同时配音小一点，配音不变',plan,audio,refs,None,None)
+    with pytest.raises(ValueError,match='没有音频'):
+        compile_compound_edit('当前镜头亮一点，同时音乐小一点',plan,audio,refs,None,None)
+    plan.clips[0].locked=True
+    with pytest.raises(ValueError,match='锁定'):
+        compile_compound_edit('配音小一点，同时当前镜头亮一点',plan,audio,refs,None,None)
+    assert audio.tracks[0].gain_db==0

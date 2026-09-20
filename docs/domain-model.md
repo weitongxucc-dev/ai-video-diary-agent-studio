@@ -283,6 +283,8 @@ EditIntent 编译出的待确认提案，必须说明：
 
 确认后的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
 
+跨对象复合修改先在同一基础版本上完整编译与预览，确认时原子写入一个新版本；任一子操作失败不得保留部分修改，撤销恢复整组变更。
+
 文字模型只能产生或修正 EditIntent 和 EditProposal，不得直接写文件路径、执行任意 FFmpeg 命令或绕过领域校验修改时间线。
 
 ### 7.4 编辑状态机

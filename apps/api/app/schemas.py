@@ -1206,6 +1206,7 @@ class EditIntentResponse(BaseModel):
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
+    "EditCompoundTimeline",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",
@@ -1287,6 +1288,7 @@ class EditOperationResponse(BaseModel):
     proposal_id: str
     operation_type: Literal[
         "EditAudioTimeline",
+    "EditCompoundTimeline",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",
