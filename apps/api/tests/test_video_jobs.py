@@ -252,3 +252,46 @@ def test_artifact_store_rejects_escape_and_logical_ref_overwrite(tmp_path):
         store.publish_bytes("outputs/final.mp4", b"version two")
 
     assert (tmp_path / "workspace-files" / "outputs/final.mp4").read_bytes() == b"version one"
+
+
+def test_artifact_store_does_not_recreate_disconnected_root_and_recovers(tmp_path):
+    root = tmp_path / "workspace-files"
+    disconnected = tmp_path / "disconnected"
+    store = ArtifactStore(root)
+    store.publish_bytes("outputs/existing.mp4", b"original")
+    root.rename(disconnected)
+
+    with pytest.raises(OSError, match="断开或被替换"):
+        store.publish_bytes("outputs/new.mp4", b"new")
+    assert not root.exists()
+    assert (disconnected / "outputs/existing.mp4").read_bytes() == b"original"
+
+    root.mkdir()
+    (root / "outputs").mkdir()
+    (root / "outputs/existing.mp4").write_bytes(b"different storage")
+    with pytest.raises(OSError, match="断开或被替换"):
+        store.resolve_file("outputs/existing.mp4")
+    with pytest.raises(OSError, match="断开或被替换"):
+        store.publish_bytes("outputs/new.mp4", b"new")
+    root.rename(tmp_path / "replacement")
+    disconnected.rename(root)
+    store.publish_bytes("outputs/new.mp4", b"new")
+    assert store.resolve_file("outputs/existing.mp4").read_bytes() == b"original"
+
+
+def test_artifact_store_refuses_root_swapped_during_render_and_preserves_replacement(tmp_path):
+    root = tmp_path / "workspace-files"
+    store = ArtifactStore(root)
+
+    def write_then_swap(target):
+        target.write(b"rendered")
+        relative = next(root.rglob("*.tmp")).relative_to(root)
+        root.rename(tmp_path / "detached")
+        replacement = root / relative
+        replacement.parent.mkdir(parents=True)
+        replacement.write_bytes(b"belongs to replacement storage")
+
+    with pytest.raises(OSError, match="断开或被替换"):
+        store.publish("outputs/new.mp4", write_then_swap)
+    assert not (root / "outputs/new.mp4").exists()
+    assert next(root.rglob("*.tmp")).read_bytes() == b"belongs to replacement storage"

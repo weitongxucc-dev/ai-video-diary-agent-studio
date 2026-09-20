@@ -23,6 +23,8 @@ class ArtifactStore:
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
+        root_stat = self._root.stat()
+        self._root_identity = (root_stat.st_dev, root_stat.st_ino)
 
     def publish_bytes(self, logical_ref: str, content: bytes) -> PublishedArtifact:
         return self.publish(logical_ref, lambda target: target.write(content))
@@ -62,6 +64,7 @@ class ArtifactStore:
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
 
+            self._require_storage_root()
             publication = self._describe(logical_ref, temporary)
             try:
                 os.link(temporary, target)
@@ -74,7 +77,9 @@ class ArtifactStore:
                 return existing
             return publication
         finally:
-            temporary.unlink(missing_ok=True)
+            # A replacement disk/directory must not receive even cleanup writes.
+            if self._storage_root_matches():
+                temporary.unlink(missing_ok=True)
 
     def resolve_file(self, logical_ref: str) -> Path:
         """Resolve a published logical reference inside the controlled root."""
@@ -88,6 +93,7 @@ class ArtifactStore:
         return self._describe(logical_ref, self.resolve_file(logical_ref))
 
     def _target(self, logical_ref: str) -> Path:
+        self._require_storage_root()
         if not logical_ref or "\\" in logical_ref:
             raise ValueError("产物逻辑引用必须是非空 POSIX 相对路径")
         relative = PurePosixPath(logical_ref)
@@ -101,6 +107,17 @@ class ArtifactStore:
         if not target.resolve(strict=False).is_relative_to(self._root):
             raise ValueError("产物逻辑引用必须位于受控目录内")
         return target
+
+    def _storage_root_matches(self) -> bool:
+        try:
+            current = self._root.stat()
+        except FileNotFoundError:
+            return False
+        return (current.st_dev, current.st_ino) == self._root_identity
+
+    def _require_storage_root(self) -> None:
+        if not self._storage_root_matches():
+            raise OSError("产物存储目录已断开或被替换，请恢复原存储位置后重试；更换磁盘后需重新启动应用。")
 
     @staticmethod
     def _describe(logical_ref: str, path: Path) -> PublishedArtifact:
