@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing
+from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
@@ -5818,7 +5818,7 @@ def preview_creation_task_edit(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     command = payload.raw_command.strip()
-    alignment_command = re.fullmatch(r"(?:按配音|根据配音)(?:校准|对齐)(中文|英文)?字幕[。！]?", command)
+    alignment_command = re.fullmatch(r"(?:按配音|根据配音)(?:校准|对齐)(中文|英文|双语|中英双语|中英)?字幕[。！]?", command)
     if alignment_command and payload.context_stage in {"montage", "review", "subtitle_cover"}:
         return _preview_subtitle_alignment(task, request, payload, alignment_command[1])
     if payload.context_stage in {"montage", "review"} and re.fullmatch(
@@ -6677,10 +6677,12 @@ def confirm_creation_task_edit(
         if track is None:
             raise HTTPException(status_code=409, detail="字幕轨已变化，请重新校准")
         changed = apply_aligned_timings(track, operation_payload["timings"], montage.duration_seconds)
+        changed_tracks = (synchronize_translated_subtitles(tracks, changed, montage.duration_seconds)
+            if operation_payload.get("include_translation") else [changed if item.id == track.id else item for item in tracks])
         _prepare_changed_montage(montage, message="字幕时间已校准，可重新渲染；撤销恢复原时间。")
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=montage, operation_type="AlignSubtitleTiming", operation_payload=operation_payload,
-            edited_subtitle_tracks=[changed if item.id == track.id else item for item in tracks])
+            edited_subtitle_tracks=changed_tracks)
     if operation_type == "EditCompoundTimeline" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已变化，请重新预览全部修改")
@@ -8108,11 +8110,18 @@ def _preview_subtitle_alignment(task, request, payload, language_label):
         raise HTTPException(status_code=409, detail="正在渲染，请完成后再校准字幕")
     base = _ensure_montage_base_version(workspace_id, task, plan)
     tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    bilingual = language_label in {"双语", "中英双语", "中英"}
     language = {"中文":"zh-CN", "英文":"en-US"}.get(language_label)
-    candidates = [track for track in tracks if track.status == "valid" and (language is None or track.language == language)]
+    candidates = [track for track in tracks if track.status == "valid" and (language is None or track.language == language)
+                  and (not bilingual or track.source_language is None)]
     if len(candidates) != 1 or candidates[0].source_language is not None:
         raise HTTPException(status_code=422, detail="请明确要校准的原语言字幕；翻译字幕不能直接与另一语言的配音对齐")
     track = candidates[0]
+    if bilingual:
+        try:
+            synchronize_translated_subtitles(tracks, track, plan.duration_seconds)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     graph = _effective_audio_timeline(plan)
     voice_ids = {item.id for item in graph.tracks if item.role in {"narration", "original"}
                  and not item.muted and any(not clip.muted for clip in item.clips)}
@@ -8130,26 +8139,27 @@ def _preview_subtitle_alignment(task, request, payload, language_label):
         changed = align_subtitle_track(track, recognition, plan.duration_seconds)
         timings = [{"id":cue.id,"start_seconds":cue.start_seconds,"end_seconds":cue.end_seconds} for cue in changed.cues]
         changed = apply_aligned_timings(track, timings, plan.duration_seconds)
-        if changed.cues == track.cues:
+        changed_tracks = (synchronize_translated_subtitles(tracks, changed, plan.duration_seconds) if bilingual
+            else [changed if item.id == track.id else item for item in tracks])
+        if all(after.cues == before.cues for after, before in zip(changed_tracks, tracks, strict=True)):
             raise ValueError("识别时间与现有字幕一致，无需修改")
-        changed_tracks = [changed if item.id == track.id else item for item in tracks]
         records = [_publish_task_picture_preview(workspace_id, task, base, plan, items, kind="compound_preview",
-            parameters={"action":"subtitle_alignment", "side":side, "audio_ref":analysis.logical_ref, "timings":timings})
+            parameters={"action":"subtitle_alignment", "side":side, "audio_ref":analysis.logical_ref, "timings":timings, "include_translation":bilingual})
             for side, items in (("before", tracks), ("after", changed_tracks))]
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "本地字幕校准失败，当前版本未改变") from exc
     if production_repo.get_creation_task(workspace_id, task.id).current_timeline_version_id != base.id:
         raise HTTPException(status_code=409, detail="预览期间版本已变化，请重新校准")
-    refs = [f"subtitle-track:{track.id}"]
+    refs = [f"subtitle-track:{item.id}" for item in tracks if item.id == track.id or (bilingual and item.status == "valid" and item.source_language == track.language and item.language != track.language)]
     intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
         raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
         intent_type="subtitle_timing",scope={"track_id":track.id},constraints={"preserve_text":True,"preserve_audio":True},confidence=1,status="interpreted"))
     proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
-        intent_id=intent.id,summary="按当前配音校准字幕时间；正文、声音和镜头保持不变。",target_refs=refs,
+        intent_id=intent.id,summary="按当前配音校准双语字幕；译文跟随对应原句，正文、声音和镜头保持不变。" if bilingual else "按当前配音校准字幕时间；正文、声音和镜头保持不变。",target_refs=refs,
         operation={"operation_type":"AlignSubtitleTiming","payload":{"base_version_id":base.id,"track_id":track.id,
-            "timings":timings,"source_audio_ref":analysis.logical_ref,"recognition_sha256":hashlib.sha256(json.dumps(recognition,sort_keys=True).encode()).hexdigest(),
+            "timings":timings,"include_translation":bilingual,"source_audio_ref":analysis.logical_ref,"recognition_sha256":hashlib.sha256(json.dumps(recognition,sort_keys=True).encode()).hexdigest(),
             "engine":"local-whisper-cpp-token-timing"}},invalidated_refs=_logical_montage_output_refs(plan),
-        external_effects=["时间来自本地语音识别，不保证逐帧精确；请试听后确认。", "确认后创建新版本，可撤销；其他语言字幕保持不变。"],
+        external_effects=["时间来自本地语音识别，不保证逐帧精确；请试听后确认。", "两种语言的对应条目同步改时间，保留译文与语言开关，可一次撤销。" if bilingual else "确认后创建新版本，可撤销；其他语言字幕保持不变。"],
         preview={side:{"ref":record.logical_ref,"label":"当前字幕" if side=="before" else "按配音校准后",
             "detail":"整片视听预览，字幕正文保留。","video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
             for side,record in zip(("before","after"),records)}))

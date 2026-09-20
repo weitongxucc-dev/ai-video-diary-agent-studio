@@ -68,6 +68,24 @@ def apply_aligned_timings(track, timings, duration_seconds):
     return changed
 
 
+def synchronize_translated_subtitles(tracks, source, duration_seconds):
+    translations = [track for track in tracks if track.status == "valid" and track.source_language == source.language
+                    and track.language != source.language]
+    if len(translations) != 1:
+        raise ValueError("双语校准需要与原字幕关联的有效译文，请先生成双语字幕")
+    translation = translations[0]
+    source_cues = {cue.id: cue for cue in source.cues}
+    references = [cue.source_cue_id for cue in translation.cues]
+    if not references or len(set(references)) != len(references) or any(ref not in source_cues for ref in references):
+        raise ValueError("译文与原字幕的对应关系已变化，请先检查或重新生成翻译；两轨时间未改动")
+    changed = replace(translation, cues=sorted([replace(cue,
+        start_seconds=source_cues[cue.source_cue_id].start_seconds,
+        end_seconds=source_cues[cue.source_cue_id].end_seconds) for cue in translation.cues], key=lambda cue: cue.start_seconds),
+        artifact_ref=None, transform_id=None)
+    subtitle_schedule([replace(changed, style={**changed.style, "enabled":True})], duration_seconds)
+    return [source if item.id == source.id else changed if item.id == translation.id else item for item in tracks]
+
+
 def recognize_subtitle_timing(settings, audio_path, language, output_root):
     # This path intentionally never dispatches to the cloud ASR provider.
     if settings.local_whisper_backend != "whisper_cpp" or not settings.local_whisper_configured:

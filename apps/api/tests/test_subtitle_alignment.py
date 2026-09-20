@@ -2,9 +2,10 @@ import pytest
 import json
 from types import SimpleNamespace
 from pathlib import Path
+from dataclasses import replace
 
 from app.production import SubtitleCue
-from app.subtitle_alignment import align_subtitle_track, recognize_subtitle_timing
+from app.subtitle_alignment import align_subtitle_track, recognize_subtitle_timing, synchronize_translated_subtitles
 
 
 def token(text, start, end, p=.9):
@@ -66,3 +67,29 @@ def test_recognition_uses_local_cli_even_when_global_asr_is_cloud(tmp_path, monk
     with pytest.raises(ValueError,match="本地"):
         recognize_subtitle_timing(settings,tmp_path/'voice.wav','en-US',tmp_path)
     assert len(calls)==2
+
+
+def test_bilingual_alignment_preserves_translation_text_and_visibility():
+    source=track("First.", "Second.")
+    source=replace(source,cues=[replace(source.cues[0],start_seconds=.2,end_seconds=.7),replace(source.cues[1],start_seconds=1.5,end_seconds=2.2)])
+    translation=replace(track("第二句", "第一句"),id="translated",language="zh-CN",source_language="en-US",style={"enabled":False},
+        cues=[SubtitleCue(id="second",source_cue_id="1",text="第二句",start_seconds=0,end_seconds=1),
+              SubtitleCue(id="first",source_cue_id="0",text="第一句",start_seconds=1,end_seconds=2)])
+    result=synchronize_translated_subtitles([source,translation],source,3)
+    assert result[1].style==translation.style
+    assert [(cue.text,cue.start_seconds,cue.end_seconds) for cue in result[1].cues]==[("第一句",.2,.7),("第二句",1.5,2.2)]
+    assert result[1].artifact_ref is None
+    assert translation.cues[0].start_seconds==0
+
+
+@pytest.mark.parametrize("refs", [[],[None],["missing"],["0","0"]])
+def test_bilingual_alignment_rejects_broken_correspondence(refs):
+    source=track("First.")
+    translation=replace(source,id="translation",source_language="en-US",language="zh-CN",cues=[
+        SubtitleCue(id=f"t{i}",source_cue_id=ref,text="译文",start_seconds=i,end_seconds=i+1) for i,ref in enumerate(refs)])
+    with pytest.raises(ValueError,match="对应"):
+        synchronize_translated_subtitles([source,translation],source,3)
+    with pytest.raises(ValueError,match="双语"):
+        synchronize_translated_subtitles([source],source,3)
+    with pytest.raises(ValueError,match="双语"):
+        synchronize_translated_subtitles([source,replace(translation,language=source.language)],source,3)
