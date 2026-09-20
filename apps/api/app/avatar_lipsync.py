@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -15,6 +16,28 @@ from app.voice_clone import MediaRuntimeFailure
 if TYPE_CHECKING:
     from app.config import Settings
     from app.production import ProductionRepository
+
+
+def compile_person_edit_command(command: str) -> str:
+    """Require a complete executable request before offering person generation."""
+    operations = set()
+    for clause in re.split(r"[,，;；。.!！]|同时|并且|然后|\band\b|\bthen\b", command.casefold()):
+        value = clause.strip()
+        if not value:
+            continue
+        if re.fullmatch(r"其他(?:都)?(?:不要动|不变)|(?:保留|保持)(?:当前|原有)?(?:配音|字幕|原声|表情)(?:不变)?|(?:配音|字幕|原声|表情)不变", value):
+            continue
+        value = re.sub(r"^(?:请|麻烦)(?:你)?\s*", "", value)
+        value = re.sub(r"^(?:这里|这一段|这段|当前镜头|所选镜头)\s*", "", value)
+        if re.fullmatch(r"(?:只)?(?:重做|重新生成|重新对齐|再对齐)(?:人物)?口型|(?:regenerate|redo) (?:the )?(?:lip sync|lipsync)", value):
+            operations.add("RegeneratePersonRender")
+        elif re.fullmatch(r"(?:换成|改成|替换为)(?:当前|所选)人物(?:出镜)?|(?:使用|让)(?:当前|所选)人物出镜", value):
+            operations.add("ChangePersonSegment")
+        else:
+            raise ValueError("人物要求尚不支持或含有歧义；可以使用“这一段换成当前人物出镜”或“这里只重做口型，其他都不要动”。")
+    if len(operations) != 1:
+        raise ValueError("请明确选择换成人物出镜或重做现有口型，不能混合两种操作。")
+    return operations.pop()
 
 
 AuthorizationStatus = Literal["active", "pending", "expired", "revoked"]
@@ -402,6 +425,15 @@ class AvatarAndLipSyncService:
                 code="model_mismatch",
                 impact="人物与口型步骤未使用请求指定的模型，不能生成视频。",
                 action="选择已配置的人物口型模型版本后重试。",
+                retryable=False,
+            )
+        if self.provider.ready and request.language not in self.provider.supported_languages:
+            return _failure(
+                status="unavailable",
+                cache_key=cache_key,
+                code="language_unavailable",
+                impact="当前人物口型运行时未声明支持该配音语言，未生成或复用视频。",
+                action="选择已声明支持该语言的本地模型。",
                 retryable=False,
             )
         output = (

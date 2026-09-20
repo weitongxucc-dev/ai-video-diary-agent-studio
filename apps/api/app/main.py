@@ -30,6 +30,7 @@ from app.subtitle_style import validate_style_patch, compile_subtitle_style_comm
 from app.subtitle_edits import replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
+    compile_person_edit_command,
     Authorization,
     AvatarAndLipSyncService,
     AvatarPreviewService,
@@ -4419,7 +4420,7 @@ def _generate_creation_task_person_render_record(
             voice_version=segment.voice_version,
             audio_path=str(audio_path),
             audio_cache_key=segment.audio_reference,
-            language="zh",
+            language=segment.language,
             motion=payload.motion,
             expression=payload.expression,
             authorization_id=person.authorization.id,
@@ -6188,7 +6189,7 @@ def preview_creation_task_edit(
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if any(token in command.casefold() for token in ("表情", "expression")):
+        if re.fullmatch(r"(?:表情|expression).*(?:自然|开心|微笑|natural|happy|smile)", command.casefold()):
             raise _topic_failure_response(
                 status_code=409,
                 error="person_expression_control_unavailable",
@@ -6197,10 +6198,16 @@ def preview_creation_task_edit(
                 repair_action="可以输入“这里只重做口型，其他都不要动”。",
                 retryable=False,
             )
-        regenerate_requested = any(
-            token in command.casefold()
-            for token in ("重做", "重新", "再对", "regenerate", "redo")
-        )
+        try:
+            person_operation = compile_person_edit_command(command)
+        except ValueError as exc:
+            raise _topic_failure_response(
+                status_code=409, error="edit_intent_unsupported", reason=str(exc),
+                impact="人物片段、时间线和成片保持不变。",
+                repair_action="请明确指定换成人物出镜或重做所选镜头口型。",
+                retryable=True,
+            ) from exc
+        regenerate_requested = person_operation == "RegeneratePersonRender"
         if regenerate_requested and current_render is None:
             raise _topic_failure_response(
                 status_code=409,
@@ -6236,6 +6243,14 @@ def preview_creation_task_edit(
                 impact="当前镜头和成片保持不变。",
                 repair_action="先完成对应配音分段，再重新提交人物出镜要求。",
                 retryable=True,
+            )
+        if segment.language not in avatar_lipsync_provider.supported_languages:
+            raise _topic_failure_response(
+                status_code=503, error="language_unavailable",
+                reason="当前本地人物模型未声明支持所选配音的语言。",
+                impact="人物片段、时间线和成片保持不变。",
+                repair_action="选择已声明支持该配音语言的本地人物模型。",
+                retryable=False,
             )
         existing_render = next(
             (

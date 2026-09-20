@@ -3781,3 +3781,50 @@ def test_narration_preview_explains_actual_tempo(person_render_edit_state):
     })
     assert response.status_code == 200, response.text
     assert '0.9 倍速' in response.json()['proposal']['summary']
+
+
+@pytest.mark.parametrize('command', ['不要重做口型', '人物更自然', '重做口型，同时字幕变黄'])
+def test_person_preview_rejects_partial_or_negated_request(person_render_edit_state, command):
+    state = person_render_edit_state
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': command, 'context_stage': 'review',
+        'selected_object_refs': ['clip:clip-person-target'],
+    })
+    assert response.status_code in (409, 422), response.text
+    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.provider.output_cache_keys == []
+
+
+def test_person_generation_reads_narration_language(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    original_get = state.production.get_narration_segment
+    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
+    captured = []
+    class RequestCaptured(Exception):
+        pass
+    def capture(**kwargs):
+        captured.append(kwargs['language'])
+        raise RequestCaptured()
+    monkeypatch.setattr(state.production, 'resolve_avatar_lipsync_request', capture)
+    with pytest.raises(RequestCaptured):
+        main_module._generate_creation_task_person_render_record(state.workspace_id, state.task.id,
+            main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id,
+                person_version=state.old_render.person_version, motion='natural', expression='neutral'))
+    assert captured == ['en']
+    assert state.provider.output_cache_keys == []
+
+
+def test_person_preview_rejects_unsupported_narration_language(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    original_get = state.production.get_narration_segment
+    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': '这里只重做口型', 'context_stage': 'review',
+        'selected_object_refs': ['clip:clip-person-target'],
+    })
+    assert response.status_code == 503, response.text
+    assert response.json()['detail']['error'] == 'language_unavailable'
+    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.provider.output_cache_keys == []

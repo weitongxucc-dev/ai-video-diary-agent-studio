@@ -158,6 +158,7 @@ def test_avatar_lipsync_reports_missing_provider_output(tmp_path):
         worker_path=worker,
         runtime_root=runtime_root,
         model_id="avatar-model-v1",
+        supported_languages=("zh", "en", "zh-en"),
         runner=runner,
     )
     result = AvatarAndLipSyncService(tmp_path / "outputs", provider).render(request)
@@ -183,6 +184,7 @@ def _configured_provider(tmp_path, runner):
         worker_path=worker,
         runtime_root=runtime_root,
         model_id="avatar-model-v1",
+        supported_languages=("zh", "en", "zh-en"),
         runner=runner,
     )
 
@@ -277,3 +279,25 @@ def test_avatar_lipsync_can_create_an_immutable_regeneration_output(tmp_path):
     assert original.artifact_path != regenerated.artifact_path
     assert regenerated.cache_key == "regeneration-version-2"
     assert calls == [Path(original.artifact_path or ""), Path(regenerated.artifact_path or "")]
+
+
+def test_render_rejects_unsupported_language_before_provider_or_cache(tmp_path, monkeypatch):
+    provider = _configured_provider(tmp_path, lambda _: (_ for _ in ()).throw(AssertionError("provider called")))
+    provider.supported_languages = ("zh",)
+    request = _request(tmp_path)
+    request = replace(request, language="en", voice=replace(request.voice, language="en"))
+    monkeypatch.setattr("app.avatar_lipsync._probe_avatar_output", lambda _: (_ for _ in ()).throw(AssertionError("cache reused")))
+    result = AvatarAndLipSyncService(tmp_path / "outputs", provider).render(request)
+    assert result.status == "unavailable"
+    assert result.failure_code == "language_unavailable"
+
+
+def test_person_command_preserves_constraints_and_rejects_partial_execution():
+    import pytest
+    from app.avatar_lipsync import compile_person_edit_command
+    assert compile_person_edit_command("这里只重做口型，其他都不要动") == "RegeneratePersonRender"
+    assert compile_person_edit_command("这一段换成当前人物出镜") == "ChangePersonSegment"
+    assert compile_person_edit_command("重新对齐口型，保留原声，表情不变") == "RegeneratePersonRender"
+    for command in ("不要重做口型", "人物更自然", "重做口型，同时字幕变黄", "重做口型并且换成当前人物出镜", "保留配音", "口型不同步"):
+        with pytest.raises(ValueError):
+            compile_person_edit_command(command)
