@@ -429,3 +429,38 @@ def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: in
         "-af", ",".join(chain), "-c:a", "pcm_s16le", "-ar", "48000", str(output)],
         capture_output=True, check=True, timeout=180)
     return output
+
+
+def narration_source_range(timeline: AudioTimeline, start_ms: int, end_ms: int,
+                           source_offsets: dict[str, int], segment_duration_ms: int) -> tuple[float, float]:
+    """Map an audible timeline interval to a contiguous narration segment interval."""
+    pieces = []
+    for track in timeline.tracks:
+        if track.role != "narration" or track.muted:
+            continue
+        for clip in track.clips:
+            if clip.muted:
+                continue
+            left = max(start_ms, clip.timeline_start_ms)
+            right = min(end_ms, clip.timeline_start_ms + clip.duration_ms)
+            if right <= left:
+                continue
+            if clip.source_ref not in source_offsets:
+                raise ValueError("所选范围的配音已替换或变速，当前无法映射到原口型分段；请先生成对应配音的口型。")
+            source = clip.source_start_ms + left - clip.timeline_start_ms - source_offsets[clip.source_ref]
+            pieces.append((left, right, source, source + right-left))
+    pieces.sort()
+    cursor = start_ms
+    source_start = source_end = None
+    for left, right, source, end in pieces:
+        if left != cursor or (source_end is not None and source != source_end):
+            raise ValueError("所选范围的配音存在空白、重叠或不连续剪辑，不能直接复用整段口型。")
+        if source < 0 or end > segment_duration_ms:
+            raise ValueError("所选镜头超出对应配音分段，请按配音范围分割镜头后再换成人物。")
+        if source_start is None:
+            source_start = source
+        source_end = end
+        cursor = right
+    if cursor != end_ms or source_start is None:
+        raise ValueError("所选镜头没有完整对应的配音，请先对齐配音范围。")
+    return source_start / 1000, source_end / 1000

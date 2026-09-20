@@ -4334,6 +4334,29 @@ def get_creation_task_narration_segment_audio(
     return FileResponse(path, media_type="audio/wav", filename=f"{segment.id}.wav")
 
 
+def _person_source_range(workspace_id, task, montage, clip, segment):
+    from app.audio_timeline import narration_source_range
+    if clip.locked:
+        raise ValueError("所选镜头已锁定，请先解锁。")
+    segments = production_repo.list_narration_segments(workspace_id, task.id, segment.script_id)
+    script = production_repo.get_creation_task_script(workspace_id, segment.script_id)
+    by_section = {item.source_section_id: item for item in segments}
+    offset = 0
+    for section in script.sections:
+        item = by_section.get(section.id)
+        if item is None or not item.duration_seconds:
+            raise ValueError("配音分段不完整，无法定位人物片段。")
+        if item.id == segment.id:
+            break
+        offset += round(item.duration_seconds * 1000)
+    else:
+        raise ValueError("所选配音不属于当前文案。")
+    refs = {montage.narration_audio_path: offset, segment.audio_reference: 0}
+    return narration_source_range(_effective_audio_timeline(montage),
+        round(clip.timeline_start_seconds * 1000), round(clip.timeline_end_seconds * 1000),
+        refs, round((segment.duration_seconds or 0) * 1000))
+
+
 def _person_render_matches_narration(
     render: PersonRender, segment: NarrationSegment, transforms: list[TransformRun]
 ) -> bool:
@@ -6266,6 +6289,10 @@ def preview_creation_task_edit(
                 repair_action="选择已声明支持该配音语言的本地人物模型。",
                 retryable=False,
             )
+        try:
+            person_source_start, person_source_end = _person_source_range(workspace_id, task, montage, clip, segment)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         person_transforms = production_repo.list_transform_runs(workspace_id, task.id)
         existing_render = next(
             (
@@ -6342,6 +6369,8 @@ def preview_creation_task_edit(
                         "cue_id": cue.id,
                         "narration_segment_id": segment.id,
                         "expected_audio_reference": segment.audio_reference,
+                        "source_start_seconds": person_source_start,
+                        "source_end_seconds": person_source_end,
                         "person_profile_id": person.id,
                         "person_version": person.version,
                         "expected_asset_id": clip.asset_id,
@@ -6376,9 +6405,8 @@ def preview_creation_task_edit(
                             else f"{person.display_name} 出镜"
                         ),
                         "detail": (
-                            "沿用当前人物画面、配音和字幕，只重新执行口型模型"
-                            if regenerate_requested
-                            else "自然动作 · 中性表情 · 沿用当前配音和字幕"
+                            f"使用配音分段第 {person_source_start:.2f}–{person_source_end:.2f} 秒；"
+                            "沿用人物原视频动作与表情，配音和字幕不变。"
                         ),
                     },
                 },
@@ -7157,6 +7185,12 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409, detail="person render no longer exists")
         if segment.audio_reference != operation_payload.get("expected_audio_reference"):
             raise HTTPException(status_code=409, detail="配音已改变，请重新预览人物口型修改。")
+        try:
+            source_start, source_end = _person_source_range(workspace_id, task, montage, clip, segment)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if (source_start, source_end) != (operation_payload.get("source_start_seconds"), operation_payload.get("source_end_seconds")):
+            raise HTTPException(status_code=409, detail="配音时轴已改变，请重新预览人物修改。")
         reuse_person_render_id = operation_payload.get("reuse_person_render_id")
         if reuse_person_render_id is not None:
             if (
@@ -7225,6 +7259,10 @@ def confirm_creation_task_edit(
                 repair_action=render.repair_action or "检查人物口型运行环境后重试。",
                 retryable=True,
             )
+        if source_end > (render.duration_seconds or 0) + 1 / 30:
+            raise HTTPException(status_code=409, detail="人物口型输出不足以覆盖所选配音范围。")
+        clip.source_start_seconds = source_start
+        clip.source_end_seconds = min(source_end, render.duration_seconds)
         clip.person_render_id = render.id
         clip.match_reasons = [
             f"人物 {render.person_profile_id} · {render.person_version}",

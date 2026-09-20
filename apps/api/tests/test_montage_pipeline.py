@@ -3878,3 +3878,55 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
     transform.parameters = {'language': segment.language}
     transform.status = 'failed'
     assert not main_module._person_render_matches_narration(render, segment, [transform])
+
+
+@pytest.mark.parametrize('start', [0,1])
+def test_person_replacement_maps_narration_instead_of_broll_source(person_render_edit_state, start):
+    state=person_render_edit_state
+    target=state.montage.clips[0]
+    target.person_render_id=None
+    target.role='b_roll'
+    target.source_start_seconds=4+start
+    target.source_end_seconds=8
+    target.timeline_start_seconds=start
+    if start:
+        state.montage.clips.insert(0,replace(target,id='earlier-split',
+            source_start_seconds=4,source_end_seconds=5,timeline_start_seconds=0,timeline_end_seconds=1))
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    before=state.client.get(base).json()
+    preview=state.client.post(base+'/edits/preview',json={
+        'raw_command':'这一段换成当前人物出镜','context_stage':'review',
+        'selected_object_refs':['clip:clip-person-target']})
+    assert preview.status_code==200,preview.text
+    proposal=preview.json()['proposal']
+    assert proposal['operation']['payload']['source_start_seconds']==start
+    assert proposal['operation']['payload']['source_end_seconds']==4
+    confirmed=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    clip=next(c for c in after['montage']['clips'] if c['id']==target.id)
+    assert (clip['source_start_seconds'],clip['source_end_seconds'])==(start,4)
+    assert (clip['timeline_start_seconds'],clip['timeline_end_seconds'])==(start,4)
+    stored=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
+    assert creation_task_montage_plan_from_payload(stored).narration_audio_path==state.montage.narration_audio_path
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    clip=next(c for c in restored['montage']['clips'] if c['id']==target.id)
+    assert (clip['source_start_seconds'],clip['source_end_seconds'])==(4+start,8)
+    assert clip['person_render_id'] is None
+
+
+def test_person_preview_respects_locked_clip_before_generation(person_render_edit_state):
+    state=person_render_edit_state
+    state.montage.clips[0].locked=True
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
+        'raw_command':'这里只重做口型','context_stage':'review',
+        'selected_object_refs':['clip:clip-person-target']})
+    assert response.status_code==409,response.text
+    assert '锁定' in response.text
+    assert state.provider.output_cache_keys==[]
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
