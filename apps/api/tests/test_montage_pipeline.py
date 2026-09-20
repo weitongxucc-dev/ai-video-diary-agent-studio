@@ -3666,3 +3666,32 @@ def test_cross_object_compiler_keeps_context_and_lock_boundaries(person_render_e
     with pytest.raises(ValueError,match='锁定'):
         compile_compound_edit('配音小一点，同时当前镜头亮一点',plan,audio,refs,None,None)
     assert audio.tracks[0].gain_db==0
+
+
+def test_compound_partial_selection_recompiles_from_base_and_preserves_context(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='partial',logical_ref='artifacts/partial.mp4'))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert result.status_code==200,result.text
+    first=result.json()['proposal'];route=base+'/edits/'+first['id']+'/selection/preview'
+    for invalid in ([],[99],[-1]):
+        assert state.client.post(route,json={'included_step_indices':invalid}).status_code==422
+    partial=state.client.post(route,json={'included_step_indices':[0,2]})
+    assert partial.status_code==200,partial.text
+    proposal=partial.json()['proposal'];data=proposal['operation']['payload']
+    assert [s['enabled'] for s in data['steps']]==[True,False,True]
+    assert data['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
+    assert data['audio_timeline']['tracks'][0]['clips'][0]['fade_out_ms']==400
+    assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    restored=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'included_step_indices':[0,1,2]})
+    assert restored.status_code==200
+    assert restored.json()['proposal']['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==-3
+    assert state.client.post(base+'/edits/'+proposal['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['montage']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
+    assert state.client.post(route,json={'included_step_indices':[0]}).status_code==409
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['audio_timeline']==before['montage']['audio_timeline']

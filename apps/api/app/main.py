@@ -192,6 +192,7 @@ from app.schemas import (
     CreationTaskMontageRenderRequest,
     CreationTaskEditConfirmResponse,
     CreationTaskEditPreviewRequest,
+    CompoundEditSelectionRequest,
     CreationTaskEditPreviewResponse,
     CreationTaskExactEditRequest,
     CreationTaskSubtitleCueUpdateRequest,
@@ -7752,7 +7753,23 @@ def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind
             *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce)
 
 
-def _preview_compound_edit(task,request,payload):
+@app.post("/api/creation-tasks/{task_id}/edits/{proposal_id}/selection/preview")
+def preview_compound_selection(task_id:str,proposal_id:str,request:Request,payload:CompoundEditSelectionRequest):
+    workspace_id=current_workspace_id(request);task=_creation_task_or_404(workspace_id,task_id)
+    try:proposal=production_repo.get_edit_proposal(workspace_id,proposal_id)
+    except KeyError as exc:raise HTTPException(status_code=404,detail="修改提案不存在") from exc
+    if proposal.task_id!=task_id:raise HTTPException(status_code=404,detail="修改提案不属于当前任务")
+    data=proposal.operation.get("payload",{})
+    if proposal.status!="proposed" or proposal.operation.get("operation_type")!="EditCompoundTimeline" or not data.get("selection_enabled"):
+        raise HTTPException(status_code=409,detail="当前提案不能重新选择，请重新预览原始要求")
+    if task.current_timeline_version_id!=data.get("base_version_id"):
+        raise HTTPException(status_code=409,detail="时间线已变化，请重新预览原始要求")
+    intent=production_repo.get_edit_intent(workspace_id,proposal.intent_id)
+    return _preview_compound_edit(task,request,CreationTaskEditPreviewRequest(raw_command=intent.raw_command,
+        context_stage=intent.context_stage,selected_object_refs=intent.scope["context_refs"],playhead_ms=intent.playhead_ms),payload.included_step_indices)
+
+
+def _preview_compound_edit(task,request,payload,included_step_indices=None):
     workspace_id=current_workspace_id(request)
     # Narrow candidate commands before loading the montage.
     if not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):return None
@@ -7760,7 +7777,7 @@ def _preview_compound_edit(task,request,payload):
     try:
         plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task.id))
         audio=_effective_audio_timeline(plan)
-        compiled=compile_compound_edit(payload.raw_command,plan,audio,payload.selected_object_refs,task.current_timeline_version_id,payload.playhead_ms)
+        compiled=compile_compound_edit(payload.raw_command,plan,audio,payload.selected_object_refs,task.current_timeline_version_id,payload.playhead_ms,included_step_indices)
         if compiled is None:return None
         if plan.status=="rendering":raise ValueError("正在渲染，请完成后重新预览")
         candidate,steps=compiled
@@ -7774,13 +7791,13 @@ def _preview_compound_edit(task,request,payload):
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
     if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id!=base.id:
         raise HTTPException(status_code=409,detail="预览期间版本已变化，请重新预览")
-    refs=list(dict.fromkeys(step['target_ref'] for step in steps))
+    refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
         raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
-        intent_type="compound_edit",scope={"target_refs":refs},constraints={"preserve_timing":True,"preserve_subtitles":True},confidence=1,status="interpreted"))
-    detail="；".join(step['command'] for step in steps)
+        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs},constraints={"preserve_timing":True,"preserve_subtitles":True},confidence=1,status="interpreted"))
+    detail="；".join(step['command'] for step in steps if step['enabled'])
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,intent_id=intent.id,
-        summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,
+        summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,"selection_enabled":True,
             "clips":[asdict(clip) for clip in candidate.clips],"audio_timeline":candidate.audio_timeline.model_dump()}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
         preview={side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else detail,
             "detail":"整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",

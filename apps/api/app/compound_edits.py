@@ -5,7 +5,7 @@ from app.audio_timeline import apply_audio_edit, compile_audio_command
 from app.visual_effects import compile_visual_command, with_visual_effects
 
 
-def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, playhead_ms):
+def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, playhead_ms, included_step_indices=None):
     clauses=[part.strip() for part in re.split(r'[，,；;]|(?:同时|并且|然后)',command.rstrip('。！')) if part.strip()]
     constraints={'配音不变','声音不变','画面不变','不改画面','字幕不变','其他不要动','其他别动','不要改变脸型','保留口型'}
     active=[part for part in clauses if part not in constraints]
@@ -13,9 +13,12 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
     def audio_subject(part):return re.match(r'(?:把)?(?:当前|这个)?(音乐|配音|原声|音效)(?:片段(\d+))?',part)
     has_picture=any(re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part) for part in active) or any(ref.startswith('clip:') for ref in selected_refs)
     if len(active)<2 or not has_picture or not any(audio_subject(part) for part in active) or all(audio_subject(part) for part in active):return None
+    included=set(range(len(active))) if included_step_indices is None else set(included_step_indices)
+    if not included or any(type(index) is not int or index<0 or index>=len(active) for index in included):
+        raise ValueError('请保留至少一项有效修改；取消全部请使用取消提案')
     result=deepcopy(plan);result.audio_timeline=audio.model_copy(deep=True)
     steps=[];last_audio_prefix=None
-    for part in active:
+    for step_index,part in enumerate(active):
         routed=part
         if last_audio_prefix and not audio_subject(part) and not re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part):
             routed=last_audio_prefix+part
@@ -36,10 +39,13 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
                 if selected:target=selected[0]
             normalized=subject[1]+routed[subject.end():]
             last_audio_prefix=subject[0]
+            descriptor={'index':step_index,'enabled':step_index in included,'operation_type':'EditAudioTimeline','target_ref':f'audio:{target}','command':part}
+            if step_index not in included:
+                steps.append(descriptor);continue
             edit=compile_audio_command(normalized,target,result.audio_timeline,base_version_id,playhead_ms)
             if edit.action not in {'update','track'}:raise ValueError('跨对象修改暂不包含音频分割、删除或复制，请分别预览')
             result.audio_timeline=apply_audio_edit(result.audio_timeline,edit,round(result.duration_seconds*1000))
-            steps.append({'operation_type':'EditAudioTimeline','target_ref':f'audio:{target}','command':part,'values':edit.values})
+            steps.append({**descriptor,'values':edit.values})
         else:
             last_audio_prefix=None
             subject=re.match(r'(?:把)?镜头\s*(\d+)',part)
@@ -51,11 +57,14 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
                 candidates=[clip for clip in result.clips if f'clip:{clip.id}' in selected_refs]
                 if len(candidates)!=1:raise ValueError('请明确画面镜头，例如“镜头2亮一点”')
                 target=candidates[0];normalized=part
+            descriptor={'index':step_index,'enabled':step_index in included,'operation_type':'AdjustVisualEffects','target_ref':f'clip:{target.id}','command':part}
+            if step_index not in included:
+                steps.append(descriptor);continue
             if target.locked:raise ValueError('所选镜头已锁定，请先解锁')
             effects=compile_visual_command(normalized,target.visual_effects)
             if effects is None:raise ValueError('不能完整执行这项修改：'+part)
             result.clips[result.clips.index(target)]=with_visual_effects(target,effects.model_dump())
-            steps.append({'operation_type':'AdjustVisualEffects','target_ref':f'clip:{target.id}','command':part,'values':effects.model_dump()})
+            steps.append({**descriptor,'values':effects.model_dump()})
     voice_changed=[track for track in result.audio_timeline.tracks if track.role=='narration']!=[track for track in audio.tracks if track.role=='narration']
     if ('声音不变' in clauses and result.audio_timeline!=audio) or ('配音不变' in clauses and voice_changed):
         raise ValueError('声音不变与音频修改冲突，请明确要保留或修改的内容')
