@@ -16,10 +16,20 @@ export function ClipThumbnail({ clip, className }: { clip: CreationTaskMontageCl
   return <video className={className} aria-hidden muted playsInline preload="metadata" src={sourceUrl(clip)} onLoadedMetadata={event => { event.currentTarget.currentTime = clip.source_start_seconds; }} />;
 }
 
-export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks }: {
+function CanvasControls({ ratio, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
+  const [draft,setDraft]=useState(ratio);
+  const [fit,setFit]=useState<""|"fill"|"fit">("");
+  return <details className={ui.propertySection}><summary>画幅与适配</summary>
+    <label className={ui.field}>画幅<select aria-label="成片画幅" disabled={busy} value={draft} onChange={event=>{onDraftChange();setDraft(event.target.value as typeof draft);}}><option value="9:16">9:16 竖屏</option><option value="16:9">16:9 横屏</option><option value="1:1">1:1 方形</option></select></label>
+    <label className={ui.field}>适配<select aria-label="整片画面适配" disabled={busy} value={fit} onChange={event=>{onDraftChange();setFit(event.target.value as typeof fit);}}><option value="">保留每个镜头的设置</option><option value="fit">完整画面，允许黑边</option><option value="fill">填满画面，允许裁切</option></select></label>
+    <button className={ui.button} disabled={busy || (draft===ratio && !fit)} onClick={()=>onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(fit?{fit_mode:fit}:{})})} type="button">预览画幅修改</button>
+  </details>;
+}
+
+export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {} }:  {
   workspace: CreationTaskWorkspace; selectedId: string | null; onSelect: (id: string) => void;
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
-  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode;
+  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>void;
 }) {
   const montage = workspace.montage!;
   const [time, setTime] = useState(initialTime);
@@ -30,7 +40,8 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
   return <div className={ui.stage}>
-    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "待渲染"}</strong><span>{workspace.plan.aspect_ratio} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 个镜头待确认</span> : null}<div>{renderAction}</div></div>
+    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "待渲染"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 个镜头待确认</span> : null}<div>{renderAction}</div></div>
+    {onPreview ? <CanvasControls key={workspace.task.current_timeline_version_id} ratio={montage.aspect_ratio ?? "9:16"} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}
     <div className={ui.player}>
       {montage.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
         onLoadedMetadata={event => { event.currentTarget.currentTime = initialTime; setPlaybackError(false); }}

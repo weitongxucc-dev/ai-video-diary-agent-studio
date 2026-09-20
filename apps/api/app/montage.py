@@ -17,6 +17,7 @@ from uuid import uuid4
 from PIL import Image, ImageDraw, ImageFont
 
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
+from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
@@ -121,6 +122,7 @@ class CreationTaskMontagePlan:
     clips: list[MontageClip]
     duration_seconds: float
     low_confidence_clip_count: int
+    aspect_ratio: AspectRatio = "9:16"
     narration_audio_path: str | None = None
     output_path: str | None = None
     subtitle_path: str | None = None
@@ -628,7 +630,7 @@ class MontageRenderer:
                     subtitle_overlays=[]
                     for index,cue in enumerate(schedule):
                         path=Path(overlay_dir)/f"subtitle-{index:03}.png"
-                        _write_subtitle_image(cue,path)
+                        _write_subtitle_image(cue,path, size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
                         subtitle_overlays.append(path)
                 self.runner(
                     self.build_command(
@@ -639,7 +641,7 @@ class MontageRenderer:
                         subtitle_intervals=[(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else None,
                     )
                 )
-            _validate_rendered_media(output_path)
+            _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
         except subprocess.CalledProcessError as exc:
             render_error = _render_error_from_process(exc)
             plan.status = "failed"
@@ -666,6 +668,7 @@ class MontageRenderer:
         subtitle_overlays: list[Path],
         subtitle_intervals: list[tuple[float,float]] | None = None,
     ) -> list[str]:
+        width,height = canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920)
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
         labels: list[str] = []
@@ -677,7 +680,7 @@ class MontageRenderer:
             command.extend(
                 ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
             )
-            filters.append(f"[{index}:v]{clip_video_filters(clip)}[v{index}]")
+            filters.append(f"[{index}:v]{clip_video_filters(clip, width=width, height=height)}[v{index}]")
             labels.append(f"[v{index}]")
 
         audio_index = len(plan.clips)
@@ -1024,28 +1027,30 @@ def _write_subtitle_overlays(
     return overlays
 
 
-def _write_subtitle_image(cue, path: Path):
-    overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+def _write_subtitle_image(cue, path: Path, *, size=(1080,1920)):
+    width,height = size
+    margin_y = round(height * 250 / 1920)
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style)
+    font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style, size=size)
     stroke_width = cue.subtitle_style.get("stroke_width", 3)
     spacing = 10
     line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
     line_heights = [box[3] - box[1] for box in line_boxes]
     block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
     widest = max(box[2] - box[0] for box in line_boxes)
-    left = (1080 - widest) / 2 - 26
+    left = (width - widest) / 2 - 26
     panel_height = block_height + 40
     position = cue.subtitle_style.get("position", "bottom")
     if position == "top":
-        top = 250
+        top = margin_y
     elif position == "middle":
-        top = (1920 - panel_height) / 2
+        top = (height - panel_height) / 2
     elif position == "bottom":
-        top = 1920 - 250 - panel_height
+        top = height - margin_y - panel_height
     else:
         raise OSError(f"不支持的字幕位置：{position}；请选择 top、middle 或 bottom")
-    right = (1080 + widest) / 2 + 26
+    right = (width + widest) / 2 + 26
     bottom = top + block_height + 40
     draw.rounded_rectangle(
         (left, top, right, bottom),
@@ -1074,7 +1079,7 @@ def _write_subtitle_image(cue, path: Path):
         _draw_subtitle_line(
             draw,
             line=line,
-            x=(1080 - line_width) / 2 - box[0],
+            x=(width - line_width) / 2 - box[0],
             y=cursor_y - box[1],
             font=font,
             primary_color=_subtitle_color(
@@ -1138,7 +1143,11 @@ def _subtitle_color(
 def _subtitle_font_and_lines(
     text: str,
     style: dict[str, object],
+    *, size=(1080,1920),
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
+    canvas_width, canvas_height = size
+    safe_width = canvas_width - 200
+    safe_height = canvas_height - 2 * round(canvas_height * 250 / 1920) - 40
     size = style.get("font_size", 40)
     if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 1920:
         raise OSError("字幕字号必须是 1–1920 的整数；请调整字号后重试")
@@ -1154,7 +1163,7 @@ def _subtitle_font_and_lines(
                 while low < high:
                     end = (low + high + 1) // 2
                     box = draw.textbbox((0, 0), remaining[:end], font=font, stroke_width=style.get("stroke_width", 3))
-                    if box[2] - box[0] <= 880:
+                    if box[2] - box[0] <= safe_width:
                         low = end
                     else:
                         high = end - 1
@@ -1167,7 +1176,7 @@ def _subtitle_font_and_lines(
                 lines.append("")
         boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=style.get("stroke_width", 3)) for line in lines]
         height = sum(box[3] - box[1] for box in boxes) + 10 * max(0, len(lines) - 1)
-        if height <= 1380 and all(box[2] - box[0] <= 880 for box in boxes):
+        if height <= safe_height and all(box[2] - box[0] <= safe_width for box in boxes):
             return font, lines
         size -= 1
         font = _subtitle_font(size, family=family) if size else font
@@ -1292,7 +1301,7 @@ def _probe_duration(path: Path) -> float:
     return float(completed.stdout.strip())
 
 
-def _validate_rendered_media(output_path: Path) -> None:
+def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920)) -> None:
     if not output_path.is_file() or output_path.stat().st_size <= 0:
         raise OSError("FFmpeg 未生成有效输出文件")
     completed = subprocess.run(
@@ -1331,8 +1340,8 @@ def _validate_rendered_media(output_path: Path) -> None:
         raise OSError("渲染输出缺少 H.264 视频轨")
     if audio_stream is None or audio_stream.get("codec_name") != "aac":
         raise OSError("渲染输出缺少 AAC 音频轨")
-    if video_stream.get("width") != 1080 or video_stream.get("height") != 1920:
-        raise OSError("渲染输出不是 1080×1920 竖版画幅")
+    if (video_stream.get("width"), video_stream.get("height")) != expected_size:
+        raise OSError(f"渲染输出画幅不符合 {expected_size[0]}×{expected_size[1]}")
 
 
 def _render_error_from_process(exc: subprocess.CalledProcessError) -> MontageRenderError:

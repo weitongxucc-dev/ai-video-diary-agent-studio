@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.visual_effects import clip_playback_rate
 from app.linked_timeline import splice_clip, retime_clip
 from app.audio_timeline import render_stretched_audio
+from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
 from app.subtitle_edits import replace_subtitle_text, restructure_subtitle
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
@@ -321,7 +322,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v12"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v13"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -711,14 +712,14 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
         if previous.origin != "user":
             raise HTTPException(status_code=409, detail="内置模板不可覆盖，请另存为我的模板。")
     tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-    source_track = next((item for item in tracks if item.language == "zh-CN"), None)
+    source_track = next((item for item in tracks if item.source_language is None), None)
     scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
     script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
     template = VideoTemplate(
         id=payload.template_id or f"template_{uuid4().hex[:12]}", workspace_id=workspace_id,
         version=(payload.expected_version or 0) + 1, name=payload.name.strip(), origin="user",
         source_task_id=task_id, source_timeline_version_id=task.current_timeline_version_id,
-        settings={"language": plan.language, "aspect_ratio": plan.aspect_ratio,
+        settings={"language": plan.language, "aspect_ratio": montage.aspect_ratio,
                   "duration_target_seconds": plan.duration_target_seconds,
                   "voice": {"profile_id": plan.selected_voice.profile_id, "version": plan.selected_voice.version} if plan.selected_voice else None,
                   "script_section_count": len(script.sections) if script else None,
@@ -2831,7 +2832,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "subtitle_style_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -2879,7 +2880,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         for effects in (clip.visual_effects,payload.effects.model_dump()):
             preview_clip.visual_effects=effects
             records.append(publish_color_preview(production_repo,artifact_store,settings.effective_temporary_root_path,
-                workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id)))
+                workspace_id,task_id,preview_clip,source,_portrait_processor(workspace_id),aspect_ratio=plan.aspect_ratio))
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
@@ -2910,6 +2911,7 @@ def _creation_task_montage_response(
     return CreationTaskMontagePlanResponse.model_validate(
         {
             "id": plan.id,
+            "aspect_ratio": plan.aspect_ratio,
             "task_id": plan.task_id,
             "script_id": plan.script_id,
             "script_title": plan.script_title,
@@ -4737,6 +4739,7 @@ def create_creation_task_montage_plan(
                 for segment in narration_segments
             },
         )
+        montage.aspect_ratio = creation_plan.aspect_ratio
         for clip in montage.clips:
             clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
         for cue in montage.cues:
@@ -5680,6 +5683,14 @@ def preview_creation_task_edit(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     command = payload.raw_command.strip()
+    canvas_commands = {"改横版":"16:9", "改成横版":"16:9", "改成16:9":"16:9", "改成竖版":"9:16", "改竖版":"9:16", "改成9:16":"9:16", "改成方形":"1:1", "改成1:1":"1:1"}
+    canvas_command = command.rstrip("。！")
+    keep_picture = canvas_command.endswith("，别裁掉人物") or canvas_command.endswith("，保留完整画面")
+    if keep_picture:
+        canvas_command = canvas_command.split("，")[0]
+    if payload.context_stage in {"montage", "review"} and canvas_command in canvas_commands:
+        return _preview_canvas(task_id, request, CreationTaskExactEditRequest(operation_type="ChangeCanvas",
+            aspect_ratio=canvas_commands[canvas_command], **({"fit_mode":"fit"} if keep_picture else {})))
     display_commands = {"关闭字幕": "none", "不显示字幕": "none", "只显示中文字幕": "zh", "只显示英文字幕": "en", "显示中英双语字幕": "zh-en"}
     if payload.context_stage in {"montage", "review", "subtitle_cover"} and command.rstrip("。！") in display_commands:
         return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
@@ -6499,6 +6510,21 @@ def confirm_creation_task_edit(
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
             updated_plan=montage, operation_type="EditAudioTimeline", operation_payload=operation_payload)
+    if operation_type == "ChangeCanvas" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="版本已变化，请重新预览画幅")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+        montage.aspect_ratio = operation_payload["aspect_ratio"]
+        if operation_payload.get("fit_mode"):
+            for clip in montage.clips:
+                clip.fit_mode = operation_payload["fit_mode"]
+        version_id = f"timeline_{uuid4().hex}"
+        tracks = [_clone_subtitle_track(track, timeline_version_id=version_id) for track in _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)]
+        _prepare_changed_montage(montage, message="画幅已修改，请重新渲染；封面需从新成片重新生成。")
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
+            result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload,
+            subtitle_tracks=tracks, cover_asset=None, updated_plan=montage)
     if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict) and "subtitle_display" in operation_payload:
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
@@ -6712,6 +6738,7 @@ def confirm_creation_task_edit(
                     frame_time_seconds=float(frame_time_seconds),
                     title=title,
                     safe_area=CoverSafeArea(),
+                    aspect_ratio=operation_payload.get("aspect_ratio", "9:16"),
                 )
             )
             evidence = generated.evidence
@@ -7293,6 +7320,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "ChangeCanvas":
+        return _preview_canvas(task_id, request, payload)
     if payload.operation_type == "ConfigureSubtitleTrack" and payload.style is not None and payload.target_language is None:
         return _preview_subtitle_style(task_id, request, payload)
     if payload.operation_type == "ReplaceSubtitleText":
@@ -7466,6 +7495,7 @@ def preview_creation_task_exact_edit(
         target_refs = [montage.output_path]
         operation_payload = {
             "source_video_ref": montage.output_path,
+            "aspect_ratio": montage.aspect_ratio,
             "frame_time_seconds": payload.frame_time_seconds,
             "title": payload.title,
             "base_version_id": base_version.id,
@@ -7596,6 +7626,44 @@ def apply_creation_task_exact_edit(
 
 
 
+def _preview_canvas(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if payload.aspect_ratio is None or payload.model_fields_set - {"operation_type", "aspect_ratio", "fit_mode"}:
+        raise HTTPException(status_code=422, detail="画幅修改需要9:16、16:9或1:1，可同时指定填充或适应")
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    base = _ensure_montage_base_version(workspace_id, task, montage)
+    if any(clip.locked for clip in montage.clips):
+        raise HTTPException(status_code=422, detail="改变画幅会影响所有镜头，请先解锁镜头")
+    if montage.aspect_ratio == payload.aspect_ratio and (payload.fit_mode is None or all(clip.fit_mode == payload.fit_mode for clip in montage.clips)):
+        raise HTTPException(status_code=409, detail="画幅与适配方式没有变化")
+    clip = montage.clips[0]
+    try:
+        source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        records = [publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
+            workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind="canvas_preview", aspect_ratio=ratio)
+            for target,ratio in ((clip,montage.aspect_ratio),(replace(clip,fit_mode=payload.fit_mode or clip.fit_mode),payload.aspect_ratio))]
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc,ValueError) else "画幅预览失败，请检查素材与本机FFmpeg") from exc
+    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        raise HTTPException(status_code=409, detail="预览期间版本变化，请重新预览")
+    now = utc_now()
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        raw_command=f"画幅改为{payload.aspect_ratio}",context_stage="montage",selected_object_refs=[],playhead_ms=None,
+        intent_type="canvas",scope={"kind":"timeline"},constraints={"preserve_narration":True},confidence=1,status="interpreted",created_at=now))
+    cover = _cover_asset_for_version(workspace_id,task_id,base)
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
+        summary=f"整片改为{payload.aspect_ratio}；配音、字幕文字和时轴不变。",target_refs=[f"timeline:{base.id}"],
+        operation={"operation_type":"ChangeCanvas","payload":{"base_version_id":base.id,"aspect_ratio":payload.aspect_ratio,"fit_mode":payload.fit_mode}},
+        invalidated_refs=[*_logical_montage_output_refs(montage), *([cover.artifact_ref] if cover and cover.artifact_ref else [])],
+        preview={side:{"ref":record.logical_ref,"label":ratio,"detail":"第一镜头最多5秒的静音画面预览；字幕将按新画幅重新排版。",
+            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
+            for side,ratio,record in zip(("before","after"),(montage.aspect_ratio,payload.aspect_ratio),records)},
+        external_effects=["影响所有镜头，封面需重新生成；撤销可恢复。", "适应模式完整保留画面，可能留黑边；填充模式按裁切位置裁掉超出部分。"],
+        status="proposed",created_at=now,updated_at=now))
+    return _edit_preview_response(intent,proposal)
+
+
 def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     if payload.model_fields_set - {"operation_type", "style"}:
         raise HTTPException(status_code=422, detail="样式应用于全部字幕轨，不能同时翻译或切换显示")
@@ -7622,9 +7690,9 @@ def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTas
         # Validate every cue's layout before accepting the style, not just the preview sample.
         from app.montage import _subtitle_font_and_lines
         for caption in after:
-            _subtitle_font_and_lines(caption.text, caption.subtitle_style)
+            _subtitle_font_and_lines(caption.text, caption.subtitle_style, size=canvas_size(montage.aspect_ratio))
         records = [publish_subtitle_style_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
-            workspace_id, task_id, caption, refs) for caption in (sample, updated_sample)]
+            workspace_id, task_id, caption, refs, size=canvas_size(montage.aspect_ratio)) for caption in (sample, updated_sample)]
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
@@ -7774,7 +7842,7 @@ def _preview_linked_speed(task_id: str, request: Request, payload: CreationTaskE
             else:
                 source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             video = publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
-                workspace_id, task_id, clip, source, _portrait_processor(workspace_id), kind="speed_preview")
+                workspace_id, task_id, clip, source, _portrait_processor(workspace_id), kind="speed_preview", aspect_ratio=plan.aspect_ratio)
             timeline = _effective_audio_timeline(candidate)
             audio = service.publish(workspace_id, task_id, kind="audio_preview",
                 parameters={"action":"linked_speed_preview", "side":side, "timeline":timeline.model_dump(),
@@ -7980,7 +8048,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             for side, target in (("before", before_clip), ("after", after_clip)):
                 source = production_repo.resolve_clip_media_reference(workspace_id, target.asset_id, target.source_path)
                 record = publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
-                    workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind="speed_preview")
+                    workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind="speed_preview", aspect_ratio=plan.aspect_ratio)
                 speed_previews[side] = {"ref": record.logical_ref,
                     "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
@@ -8091,6 +8159,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "SplitSubtitleCue",
         "MergeSubtitleCue",
         "DeleteSubtitleCue",
+        "ChangeCanvas",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):
@@ -8725,7 +8794,7 @@ def render_creation_task_montage(
                         output_refs=output_refs,
                         engine="ffmpeg+ffprobe",
                         parameters={
-                            "aspect_ratio": "9:16",
+                            "aspect_ratio": plan.aspect_ratio,
                             "subtitle_burned_in": subtitles_visible,
                             "render_contract_version": CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION,
                         },
@@ -8876,7 +8945,7 @@ def render_creation_task_montage(
                     input_refs=input_refs,
                     output_refs=[],
                     engine="ffmpeg+ffprobe",
-                    parameters={"aspect_ratio": "9:16", "subtitle_burned_in": subtitles_visible},
+                    parameters={"aspect_ratio": plan.aspect_ratio, "subtitle_burned_in": subtitles_visible},
                     status="failed",
                     started_at=result.started_at or result.created_at,
                     finished_at=result.finished_at or utc_now(),

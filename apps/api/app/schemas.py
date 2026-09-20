@@ -665,7 +665,7 @@ class CreationPlanDefaultsRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     target_count: int = Field(default=1, ge=1, le=50)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
-    aspect_ratio: Literal["9:16"] = "9:16"
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
     template_id: str | None = Field(default=None, min_length=1, max_length=120)
     template_version: int | None = Field(default=None, ge=1)
@@ -1057,6 +1057,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskMontagePlanResponse(BaseModel):
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     id: str
     task_id: str
     script_id: str
@@ -1105,6 +1106,7 @@ class CreationTaskExactEditRequest(BaseModel):
 
     operation_type: Literal[
         "ReplaceClip",
+        "ChangeCanvas",
     "ChangeCrop",
         "TrimClip",
         "SplitClip",
@@ -1126,6 +1128,7 @@ class CreationTaskExactEditRequest(BaseModel):
         "ChangePersonSegment",
         "RegeneratePersonRender",
     ]
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] | None = None
     split_offset: int | None = Field(default=None, ge=1)
     find_text: str | None = Field(default=None, min_length=1, max_length=96)
     replacement_text: str | None = Field(default=None, max_length=96)
@@ -1192,6 +1195,7 @@ class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
         "AdjustVisualEffects",
+        "ChangeCanvas",
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
@@ -1270,6 +1274,7 @@ class EditOperationResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
         "AdjustVisualEffects",
+        "ChangeCanvas",
         "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
@@ -1317,7 +1322,7 @@ class CreationPlanPreviewResponse(BaseModel):
     name: str
     target_count: int = Field(ge=1)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
-    aspect_ratio: Literal["9:16"]
+    aspect_ratio: Literal["9:16", "16:9", "1:1"]
     duration_target_seconds: int = Field(ge=15)
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]

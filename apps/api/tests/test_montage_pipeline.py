@@ -3350,3 +3350,39 @@ def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibili
     assert after['montage']['clips']==before['montage']['clips']
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['subtitle_tracks'][0]['style']==track.style
+
+
+@pytest.mark.parametrize('ratio', ['16:9','1:1'])
+def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_edit_state,monkeypatch,ratio):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    seen=[]
+    def local_preview(*args,**kwargs):
+        seen.append(kwargs['aspect_ratio'])
+        return SimpleNamespace(id='canvas-preview',logical_ref='artifacts/canvas.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',local_preview)
+    from copy import deepcopy
+    locked=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    locked['clips'][0]['locked']=True
+    with monkeypatch.context() as local:
+        local.setattr(state.production,'get_creation_task_montage_plan',lambda *args:locked)
+        rejected=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio})
+        assert rejected.status_code==422 and '解锁' in rejected.text
+        assert seen==[]
+    preview=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio,'fit_mode':'fit'})
+    assert preview.status_code==200,preview.text
+    assert seen==['9:16',ratio]
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['montage']['aspect_ratio']==ratio
+    assert all(clip['fit_mode']=='fit' for clip in after['montage']['clips'])
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']==ratio

@@ -1,4 +1,5 @@
 """Bounded color controls shared by local previews and montage rendering."""
+from app.canvas import preview_size
 from pathlib import Path
 from typing import Literal
 import subprocess
@@ -68,8 +69,9 @@ def clip_video_filters(clip, *, width=1080, height=1920, max_seconds=None) -> st
                      "tpad=stop_mode=clone:stop_duration=0.1",f"trim=duration={duration:.6f}"])
 
 
-def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Path:
+def render_color_preview(clip, source: Path, output: Path, portrait=None, *, aspect_ratio="9:16") -> Path:
     from dataclasses import replace
+    width,height=preview_size(aspect_ratio)
     effects=VisualEffects.model_validate(clip.visual_effects)
     if effects.beauty_strength or effects.skin_exposure:
         if portrait is None:
@@ -79,14 +81,14 @@ def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Pat
     duration=min(5 * clip_playback_rate(clip),clip.source_end_seconds-clip.source_start_seconds)
     subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe",
         "-ss",str(clip.source_start_seconds),"-t",str(duration),"-i",str(source),
-        "-vf",clip_video_filters(clip,width=360,height=640,max_seconds=5),"-an","-c:v","libx264","-preset","veryfast",
+        "-vf",clip_video_filters(clip,width=width,height=height,max_seconds=5),"-an","-c:v","libx264","-preset","veryfast",
         "-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",str(output)],
         capture_output=True,check=True,timeout=120)
     return output
 
 
 def publish_color_preview(repository, artifact_store, temporary_root: Path, workspace_id: str,
-                          task_id: str, clip, source: Path, portrait=None, *, kind: Literal["color_preview", "speed_preview"]="color_preview"):
+                          task_id: str, clip, source: Path, portrait=None, *, kind: Literal["color_preview", "speed_preview", "canvas_preview"]="color_preview", aspect_ratio="9:16"):
     import hashlib
     import json
     from dataclasses import asdict
@@ -94,7 +96,8 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     from uuid import uuid4
     from app.models import utc_now
     from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
-    parameters={"clip":asdict(clip),"width":360,"height":640,"max_seconds":5}
+    width,height=preview_size(aspect_ratio)
+    parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":5}
     effects=VisualEffects.model_validate(clip.visual_effects)
     if effects.beauty_strength or effects.skin_exposure:
         if portrait is None: raise ValueError("本地人像组件未就绪")
@@ -107,7 +110,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix="color-preview-",dir=temporary_root) as directory:
-            output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait)
+            output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait,aspect_ratio=aspect_ratio)
             publication=artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/preview.mp4",output)
         record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind=kind,logical_ref=publication.logical_ref,sha256=publication.sha256,

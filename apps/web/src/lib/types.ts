@@ -956,7 +956,7 @@ export type CreationPlanInput = {
   name?: string;
   target_count: number;
   language: "zh-CN" | "en-US" | "zh-CN/en-US";
-  aspect_ratio: "9:16";
+  aspect_ratio: "9:16" | "16:9" | "1:1";
   duration_target_seconds: number;
 };
 
@@ -1359,6 +1359,7 @@ export type AudioEditInput = { base_version_id: string | null; action: "add" | "
   target_id: string; values: Record<string, unknown>; raw_command?: string };
 
 export type CreationTaskMontage = {
+  aspect_ratio?: "9:16" | "16:9" | "1:1";
   audio_timeline?: AudioTimeline | null;
   id: string;
   task_id: string;
@@ -1425,6 +1426,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
+  | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
   | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: Partial<CreationTaskSubtitleStyle> }

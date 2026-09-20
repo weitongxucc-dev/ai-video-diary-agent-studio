@@ -14,6 +14,7 @@ import PIL
 from PIL import Image, ImageDraw, ImageFont
 
 from app.artifact_store import ArtifactStore
+from app.canvas import AspectRatio, canvas_size
 from app.montage import _subtitle_font
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
@@ -42,13 +43,13 @@ class CoverSafeArea:
     right: int = 72
     bottom: int = 180
 
-    def validate(self) -> None:
+    def validate(self, size=(COVER_WIDTH,COVER_HEIGHT)) -> None:
         values = (self.left, self.top, self.right, self.bottom)
         if any(type(value) is not int or value < 0 for value in values):
             raise ValueError("封面安全区边距必须是非负整数")
-        if self.left + self.right > COVER_WIDTH - 320:
+        if self.left + self.right > size[0] - 320:
             raise ValueError("封面安全区宽度不足")
-        if self.top + self.bottom > COVER_HEIGHT - 320:
+        if self.top + self.bottom > size[1] - 320:
             raise ValueError("封面安全区高度不足")
 
 
@@ -59,6 +60,7 @@ class CoverGenerationRequest:
     frame_time_seconds: float
     title: str
     safe_area: CoverSafeArea = field(default_factory=CoverSafeArea)
+    aspect_ratio: AspectRatio = "9:16"
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,8 @@ class CoverGenerationService:
         source = self._validated_source(request.source_video_path)
         output_format = self._validated_request(request)
         title = _normalized_title(request.title)
-        request.safe_area.validate()
+        size = canvas_size(request.aspect_ratio)
+        request.safe_area.validate(size)
         source_summary = self._probe_source(source)
         timestamp = float(request.frame_time_seconds)
         if timestamp >= source_summary[0]:
@@ -138,15 +141,16 @@ class CoverGenerationService:
             temporary_root = Path(temporary_directory)
             selected_frame = temporary_root / "selected-frame.png"
             composed_cover = temporary_root / f"cover.{output_format}"
-            self._extract_frame(source, timestamp, selected_frame)
+            self._extract_frame(source, timestamp, selected_frame, size=size)
             font, font_path = _layout_cover(
                 selected_frame,
                 composed_cover,
                 title=title,
                 safe_area=request.safe_area,
                 output_format=output_format,
+                size=size,
             )
-            _validate_cover_image(composed_cover, output_format)
+            _validate_cover_image(composed_cover, output_format, size=size)
             if _sha256(source) != input_sha256:
                 raise OSError("封面生成期间源成片发生变化，未发布产物")
             publication = self.artifact_store.publish_file(
@@ -174,15 +178,15 @@ class CoverGenerationService:
                 "frame_time_seconds": timestamp,
                 "title": title,
                 "safe_area": asdict(request.safe_area),
-                "canvas": {"width": COVER_WIDTH, "height": COVER_HEIGHT},
+                "canvas": {"width": size[0], "height": size[1]},
                 "scale_mode": "cover_center_crop",
                 "title_layout": "bottom_center_dark_panel",
             },
             output_ref=publication.logical_ref,
             output_sha256=publication.sha256,
             output_size_bytes=publication.size_bytes,
-            output_width=COVER_WIDTH,
-            output_height=COVER_HEIGHT,
+            output_width=size[0],
+            output_height=size[1],
             output_format=output_format,
         )
         return GeneratedCover(output_path=str(output_path), evidence=evidence)
@@ -259,7 +263,7 @@ class CoverGenerationService:
         return duration, width, height
 
     @staticmethod
-    def _extract_frame(source: Path, timestamp: float, output_path: Path) -> None:
+    def _extract_frame(source: Path, timestamp: float, output_path: Path, *, size=(COVER_WIDTH,COVER_HEIGHT)) -> None:
         command = [
             "ffmpeg",
             "-hide_banner",
@@ -273,9 +277,9 @@ class CoverGenerationService:
             "1",
             "-vf",
             (
-                f"scale={COVER_WIDTH}:{COVER_HEIGHT}:"
+                f"scale={size[0]}:{size[1]}:"
                 "force_original_aspect_ratio=increase,"
-                f"crop={COVER_WIDTH}:{COVER_HEIGHT},setsar=1"
+                f"crop={size[0]}:{size[1]},setsar=1"
             ),
             str(output_path),
         ]
@@ -297,18 +301,19 @@ def _layout_cover(
     title: str,
     safe_area: CoverSafeArea,
     output_format: CoverImageFormat,
+    size=(COVER_WIDTH,COVER_HEIGHT),
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, str]:
     with Image.open(selected_frame) as frame:
         canvas = frame.convert("RGBA")
-    if canvas.size != (COVER_WIDTH, COVER_HEIGHT):
-        raise ValueError("ffmpeg 选帧尺寸不符合竖屏封面契约")
+    if canvas.size != size:
+        raise ValueError("ffmpeg 选帧尺寸不符合当前画幅")
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     safe_left = safe_area.left
     safe_top = safe_area.top
-    safe_right = COVER_WIDTH - safe_area.right
-    safe_bottom = COVER_HEIGHT - safe_area.bottom
+    safe_right = size[0] - safe_area.right
+    safe_bottom = size[1] - safe_area.bottom
     horizontal_padding = 44
     vertical_padding = 32
     max_text_width = safe_right - safe_left - 2 * horizontal_padding
@@ -346,7 +351,7 @@ def _layout_cover(
         strict=True,
     ):
         draw.text(
-            ((COVER_WIDTH - line_width) / 2 - box[0], cursor_y - box[1]),
+            ((size[0] - line_width) / 2 - box[0], cursor_y - box[1]),
             line,
             font=font,
             fill=(255, 255, 255, 255),
@@ -424,14 +429,14 @@ def _normalized_title(raw_title: str) -> str:
     return title
 
 
-def _validate_cover_image(path: Path, expected_format: CoverImageFormat) -> None:
+def _validate_cover_image(path: Path, expected_format: CoverImageFormat, *, size=(COVER_WIDTH,COVER_HEIGHT)) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise OSError("封面图片为空")
     with Image.open(path) as image:
         image.verify()
     with Image.open(path) as image:
         actual_format = (image.format or "").lower()
-        if image.size != (COVER_WIDTH, COVER_HEIGHT):
+        if image.size != size:
             raise OSError("封面图片尺寸校验失败")
         if actual_format != expected_format:
             raise OSError("封面图片格式校验失败")

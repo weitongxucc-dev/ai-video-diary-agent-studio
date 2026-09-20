@@ -113,3 +113,17 @@ def test_template_preflight_does_not_substitute_unrelated_materials(state, monke
     assert result["material_matches"] == []
     assert not result["confirmable"]
     assert any(item["reason"] == "template_material_matches_missing" for item in result["blockers"])
+
+
+@pytest.mark.parametrize('ratio',['16:9','1:1'])
+def test_template_canvas_survives_new_theme_preflight_and_plan_confirmation(state,ratio):
+    production,template,client=state
+    production.save_video_template(replace(template,version=2,settings={**template.settings,'aspect_ratio':ratio}))
+    payload={'goal':'完全不同的新主题','template_id':template.id,'template_version':2}
+    preview=client.post('/api/creation-plans/preview',json=payload)
+    assert preview.status_code==200,preview.text
+    assert preview.json()['aspect_ratio']==ratio
+    confirmed=client.post('/api/creation-plans/confirm',json={**payload,'preflight_fingerprint':preview.json()['preflight_fingerprint']})
+    assert confirmed.status_code==201,confirmed.text
+    assert confirmed.json()['aspect_ratio']==ratio
+    assert not confirmed.json()['creation_task']['output_ready']

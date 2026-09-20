@@ -56,7 +56,7 @@ def compile_subtitle_style_command(command: str) -> dict | None:
     return None
 
 
-def publish_subtitle_style_preview(repository, store, temporary_root, workspace_id, task_id, caption, input_refs):
+def publish_subtitle_style_preview(repository, store, temporary_root, workspace_id, task_id, caption, input_refs, *, size=(1080,1920)):
     import hashlib
     import json
     from pathlib import Path
@@ -65,7 +65,7 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
     from app.montage import _write_subtitle_image
     from app.models import utc_now
     from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
-    parameters = asdict(caption)
+    parameters = {**asdict(caption),"canvas":size}
     identity = uuid4().hex
     digest = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()
     job = repository.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
@@ -75,7 +75,7 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
         temporary_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="subtitle-style-", dir=temporary_root) as folder:
             image = Path(folder) / "preview.png"
-            _write_subtitle_image(caption, image)
+            _write_subtitle_image(caption, image, size=size)
             publication = store.publish_file(f"artifacts/{task_id}/{job.id}/preview.png", image)
         record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind="subtitle_style_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,

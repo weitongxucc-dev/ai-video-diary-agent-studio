@@ -189,7 +189,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -549,6 +549,22 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  it("previews whole-video canvas changes and invalidates the proposal when the draft changes", async () => {
+    const initial=subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task,"ChangeCanvas"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", {name:/^视频剪辑：/}));
+    fireEvent.click(screen.getByText("画幅与适配"));
+    fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"16:9"}});
+    fireEvent.change(screen.getByLabelText("整片画面适配"),{target:{value:"fit"}});
+    fireEvent.click(screen.getByRole("button",{name:"预览画幅修改"}));
+    await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9",fit_mode:"fit"}));
+    expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"1:1"}});
+    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("previews real subtitle style images before confirmation in English-only tasks", async () => {
