@@ -101,7 +101,7 @@ from app.montage import (
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
 )
-from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService
+from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService, compile_narration_command
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
 from app.product_hunt import ProductHuntClient
@@ -5803,11 +5803,13 @@ def preview_creation_task_edit(
                 repair_action="进入配音、视频剪辑或检查成片后选择一段配音。",
                 retryable=True,
             )
-        if not any(token in command.casefold() for token in ("重读", "重新配音", "慢", "快", "regenerate", "slower", "faster")):
+        try:
+            delivery_tempo = compile_narration_command(command)
+        except ValueError as exc:
             raise _topic_failure_response(
                 status_code=409,
                 error="edit_intent_unsupported",
-                reason="当前配音片段支持重新配音或调整语速。",
+                reason=str(exc),
                 impact="任务内容没有发生变化。",
                 repair_action="输入“这句重新配音”或“这句读慢一点”。",
                 retryable=True,
@@ -5865,7 +5867,9 @@ def preview_creation_task_edit(
                 workspace_id=workspace_id,
                 task_id=task.id,
                 intent_id=intent.id,
-                summary="只重新生成所选配音片段，并同步它对应的字幕时间与镜头范围。",
+                summary=("只重新生成所选配音片段"
+                         + (f"，按 {delivery_tempo:g} 倍速处理" if delivery_tempo != 1.0 else "")
+                         + "，并同步它对应的字幕时间与镜头范围。"),
                 target_refs=[selected_ref],
                 operation={
                     "operation_type": "RegenerateNarrationSegment",

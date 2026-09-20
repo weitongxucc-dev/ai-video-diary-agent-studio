@@ -255,6 +255,7 @@ class NarrationGenerator:
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
 
+        tempo = _delivery_tempo(delivery_instruction)
         text = narration_text.strip()
         if not text:
             raise ValueError("已确认文案没有可配音正文")
@@ -331,7 +332,6 @@ class NarrationGenerator:
             or resolved_output.stat().st_size == 0
         ):
             raise ValueError("声音克隆没有生成当前创作任务的 WAV")
-        tempo = _delivery_tempo(delivery_instruction)
         if tempo != 1.0:
             adjusted_path = output_path.with_name(f"{output_path.stem}_adjusted.wav")
             completed = subprocess.run(
@@ -794,15 +794,35 @@ def _estimated_text_seconds(text: str) -> float:
     return chinese_chars / 4.0 + latin_words / 2.5
 
 
+def compile_narration_command(instruction: str) -> float:
+    """Compile only delivery changes the local generation pipeline can execute."""
+    clauses = re.split(r"[,，;；。.!！]|同时|并且|然后|\band\b|\bthen\b", instruction.casefold())
+    tempos: set[float] = set()
+    matched = False
+    for clause in clauses:
+        value = clause.strip()
+        if not value:
+            continue
+        value = re.sub(r"^(?:请|麻烦)(?:你)?\s*", "", value)
+        value = re.sub(r"^(?:这句|这一句|这段|当前配音|所选配音|配音)\s*", "", value)
+        value = re.sub(r"^please\s+", "", value)
+        if re.fullmatch(r"重新配音|重新读(?:一遍)?|重读(?:一遍)?|regenerate(?: (?:this |the )?(?:narration|sentence|segment))?", value):
+            matched = True
+            continue
+        if re.fullmatch(r"(?:读|说|语速)?慢(?:一点|一些|些)|(?:read |speak )?(?:a little )?slower", value):
+            tempos.add(0.9)
+        elif re.fullmatch(r"(?:读|说|语速)?快(?:一点|一些|些)|(?:read |speak )?(?:a little )?faster", value):
+            tempos.add(1.1)
+        else:
+            raise ValueError("配音要求尚不支持或含有歧义，请使用“这句重新配音”“这句读慢一点”或“这句读快一点”；其他修改请单独预览。")
+        matched = True
+    if not matched or len(tempos) > 1:
+        raise ValueError("请指定一种配音操作，不能同时要求读快和读慢。")
+    return next(iter(tempos), 1.0)
+
+
 def _delivery_tempo(instruction: str | None) -> float:
-    if not instruction:
-        return 1.0
-    value = instruction.casefold()
-    if any(token in value for token in ("慢一点", "慢些", "slower")):
-        return 0.9
-    if any(token in value for token in ("快一点", "快些", "faster")):
-        return 1.1
-    return 1.0
+    return 1.0 if instruction is None else compile_narration_command(instruction)
 
 
 def _probe_audio_duration(path: Path) -> float:

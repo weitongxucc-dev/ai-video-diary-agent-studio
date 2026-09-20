@@ -3758,3 +3758,26 @@ def test_compound_caption_text_time_and_translation_boundary(person_render_edit_
     assert any('英文翻译' in effect for effect in response.json()['proposal']['external_effects'])
     assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
     assert [t['language'] for t in state.client.get(base).json()['subtitle_tracks']]==['zh-CN']
+
+
+@pytest.mark.parametrize('command', ['不要重新配音', '读慢一点，同时字幕变黄', '重新配音，开心一点', '读快一点，同时读慢一点'])
+def test_narration_preview_rejects_unexecutable_whole_request(person_render_edit_state, command):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    response = state.client.post(base + '/edits/preview', json={
+        'raw_command': command, 'context_stage': 'narration',
+        'selected_object_refs': [f'narration:{state.montage.cues[0].narration_segment_id}'],
+    })
+    assert response.status_code in (409, 422), response.text
+    assert state.client.get(base).json() == before
+
+
+def test_narration_preview_explains_actual_tempo(person_render_edit_state):
+    state = person_render_edit_state
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': '这句重新配音，同时读慢一点', 'context_stage': 'narration',
+        'selected_object_refs': [f'narration:{state.montage.cues[0].narration_segment_id}'],
+    })
+    assert response.status_code == 200, response.text
+    assert '0.9 倍速' in response.json()['proposal']['summary']
