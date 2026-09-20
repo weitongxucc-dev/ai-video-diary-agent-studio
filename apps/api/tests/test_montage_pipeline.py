@@ -3528,3 +3528,62 @@ def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice
     assert preview.status_code==200,preview.text
     assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+
+
+def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_state,monkeypatch,tmp_path):
+    import io
+    from PIL import Image
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    content=io.BytesIO();Image.new('RGBA',(80,40),(255,0,0,128)).save(content,format='PNG')
+    imported=state.client.post(base+'/graphics/import',files={'image':('logo.png',content.getvalue(),'image/png')})
+    assert imported.status_code==200,imported.text
+    source=imported.json()
+    assert source['width']==80 and source['height']==40
+    records=state.client.get(base+'/graphics/sources').json()
+    assert records[0]['source_ref']==source['source_ref']
+    read=state.client.get(base+'/graphics/source/'+source['artifact_id'])
+    assert read.status_code==200
+    assert Image.open(io.BytesIO(read.content)).getpixel((0,0))==(255,0,0,128)
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='image',logical_ref='artifacts/image.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加图片“logo.png”','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    result=state.client.get(base).json()['montage']['graphic_overlays'][0]
+    assert result['kind']=='image' and result['source_ref']==source['source_ref']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    invalid=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':'/etc/passwd'}})
+    assert invalid.status_code==422 and '当前任务' in invalid.text
+    foreign=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':'artifacts/other-task/private.png'}})
+    assert foreign.status_code==422
+    from app.production import CreationTask
+    from dataclasses import replace
+    other_plan=replace(state.production.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
+    other=CreationTask(id='other-image-task',workspace_id=state.workspace_id,
+        plan_id=other_plan.id,name='Other task',scenario=state.task.scenario)
+    state.production.confirm_creation_plan(other_plan,other)
+    other_import=state.client.post(f'/api/creation-tasks/{other.id}/graphics/import',files={'image':('other.png',content.getvalue(),'image/png')})
+    assert other_import.status_code==200,other_import.text
+    other_source=other_import.json()
+    assert state.client.get(base+'/graphics/source/'+other_source['artifact_id']).status_code==404
+    foreign=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':other_source['source_ref']}})
+    assert foreign.status_code==422
+    assert state.client.post(base+'/graphics/import',files={'image':('bad.svg',b'<svg/>','image/svg+xml')}).status_code==422
+
+
+def test_graphic_import_corrects_photo_orientation_and_drops_metadata(person_render_edit_state,monkeypatch,tmp_path):
+    import io
+    from PIL import Image
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    image=Image.new('RGB',(20,10),(0,120,200));exif=Image.Exif();exif[274]=6
+    data=io.BytesIO();image.save(data,format='JPEG',exif=exif)
+    response=state.client.post(base+'/graphics/import',files={'image':('portrait.jpg',data.getvalue(),'image/jpeg')})
+    assert response.status_code==200,response.text
+    source=response.json();assert (source['width'],source['height'])==(10,20)
+    loaded=Image.open(io.BytesIO(state.client.get(base+'/graphics/source/'+source['artifact_id']).content))
+    assert loaded.size==(10,20) and not loaded.getexif()

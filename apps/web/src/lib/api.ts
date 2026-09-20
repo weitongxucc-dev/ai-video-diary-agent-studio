@@ -684,3 +684,15 @@ export async function importCreationTaskAudio(taskId: string, file: File): Promi
 export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview`, { method: "POST", body: JSON.stringify(input) });
 }
+
+
+export async function importCreationTaskGraphic(taskId:string,file:File):Promise<import("./types").GraphicSource> {
+  const body=new FormData();body.append("image",file);
+  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body});
+  const payload=await response.json();
+  if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:"图片导入失败");
+  return payload;
+}
+export function getCreationTaskGraphicSources(taskId:string):Promise<import("./types").GraphicSource[]> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`);
+}

@@ -20,7 +20,7 @@ from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.transitions import extend_dissolve_sources, join_picture_filters
-from app.graphic_overlays import validate_overlays, write_text_overlay
+from app.graphic_overlays import validate_overlays, write_graphic_overlay
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
@@ -646,7 +646,7 @@ class MontageRenderer:
                     graphic_paths=[]
                     for index,graphic in enumerate(graphics):
                         path=Path(overlay_dir)/f"graphic-{index}.png"
-                        write_text_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
+                        write_graphic_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
                         graphic_paths.append(path)
                     subtitle_overlays=graphic_paths+subtitle_overlays
                     intervals=[(item.start_seconds,item.end_seconds) for item in graphics]+intervals

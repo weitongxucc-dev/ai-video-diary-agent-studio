@@ -18,7 +18,8 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.graphic_overlays import TextOverlay, validate_overlays, compile_overlay_command
+from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
+from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate
 from app.linked_timeline import splice_clip, retime_clip
@@ -324,7 +325,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v19"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v20"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2826,6 +2827,35 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
             "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
             for side, record in zip(("before", "after"), previews)}, external_effects=[]))
     return _edit_preview_response(intent, proposal)
+
+
+@app.post("/api/creation-tasks/{task_id}/graphics/import")
+def import_creation_task_graphic(task_id: str, request: Request, image: UploadFile = File(...)):
+    from PIL import Image
+    workspace_id=current_workspace_id(request)
+    _creation_task_or_404(workspace_id,task_id)
+    try:
+        return import_graphic_source(production_repo,artifact_store,settings.effective_temporary_root_path,workspace_id,task_id,image)
+    except (ValueError,OSError,Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "图片导入失败，请检查格式、尺寸和外接盘") from exc
+
+
+@app.get("/api/creation-tasks/{task_id}/graphics/sources")
+def get_creation_task_graphic_sources(task_id: str, request: Request):
+    workspace_id=current_workspace_id(request);_creation_task_or_404(workspace_id,task_id)
+    return graphic_sources(production_repo,workspace_id,task_id)
+
+
+@app.get("/api/creation-tasks/{task_id}/graphics/source/{artifact_id}")
+def get_creation_task_graphic_source(task_id: str,artifact_id: str,request: Request):
+    workspace_id=current_workspace_id(request);_creation_task_or_404(workspace_id,task_id)
+    try:
+        record=production_repo.get_artifact_record(workspace_id,artifact_id)
+        if record.task_id!=task_id or record.kind!='graphic_source':raise KeyError(artifact_id)
+        path=resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,record.logical_ref)
+    except (KeyError,ValueError,FileNotFoundError) as exc:
+        raise HTTPException(status_code=404,detail="当前任务图片不存在") from exc
+    return FileResponse(path,media_type="image/png")
 
 
 @app.get("/api/creation-tasks/{task_id}/visual/artifacts/{artifact_id}")
@@ -5722,10 +5752,10 @@ def preview_creation_task_edit(
             return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(
                 operation_type="ConfigureSubtitleTrack", style=style_patch))
 
-    if payload.context_stage in {"montage","review"} and ("标题" in command):
+    if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识")):
         try:
             overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            edit=compile_overlay_command(command,overlay_plan.graphic_overlays)
+            edit=compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else ())
         except (ValueError,KeyError) as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from exc
         if edit:
@@ -6513,10 +6543,10 @@ def confirm_creation_task_edit(
     operation_type = operation_draft.get("operation_type")
     if operation_type == "EditGraphicOverlay" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409,detail="时间线已变化，请重新预览标题修改")
+            raise HTTPException(status_code=409,detail="时间线已变化，请重新预览图文修改")
         montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
         montage.graphic_overlays=operation_payload["graphic_overlays"]
-        _prepare_changed_montage(montage,message="标题已更新，可以重新渲染。")
+        _prepare_changed_montage(montage,message="图文已更新，可以重新渲染。")
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=montage,
             operation_type="EditGraphicOverlay",operation_payload=operation_payload)
@@ -7696,44 +7726,47 @@ def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind
         _render_montage_with_resolved_clip_sources(workspace_id,preview_plan,output.parent/"timeline-mix.wav",
             job_staging_path=output.parent,subtitle_tracks=tracks)
         (output.parent/"preview.mp4").replace(output)
-    return _task_audio().publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-montage-v19",
+    return _task_audio().publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-montage-v20",
         parameters={"base_version_id":base.id,**parameters},
         input_refs=[f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
             *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
+            *[item['source_ref'] for item in candidate.graphic_overlays if item.get('kind')=='image'],
             *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce)
 
 
 def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     from copy import deepcopy
     if payload.model_fields_set-{"operation_type","overlay_action","graphic_overlay","overlay_id"}:
-        raise HTTPException(status_code=422,detail="标题编辑不能混入其他操作")
+        raise HTTPException(status_code=422,detail="图文叠加层编辑不能混入其他操作")
     workspace_id=current_workspace_id(request)
     task=_creation_task_or_404(workspace_id,task_id)
     plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-    if plan.status=="rendering":raise HTTPException(status_code=409,detail="正在渲染，请完成后修改标题")
+    if plan.status=="rendering":raise HTTPException(status_code=409,detail="正在渲染，请完成后修改图文叠加层")
     edited=deepcopy(plan);action=payload.overlay_action;value=payload.graphic_overlay
     if action=='add' and value is not None and payload.overlay_id is None:
         edited.graphic_overlays.append(value.model_dump());identity=value.id
     elif action in {'update','delete'} and payload.overlay_id:
         index=next((i for i,item in enumerate(edited.graphic_overlays) if item['id']==payload.overlay_id),-1)
-        if index<0:raise HTTPException(status_code=404,detail="标题不存在，请刷新列表")
+        if index<0:raise HTTPException(status_code=404,detail="图文叠加层不存在，请刷新列表")
         identity=payload.overlay_id
         if action=='delete' and value is None:edited.graphic_overlays.pop(index)
         elif action=='update' and value is not None and value.id==identity:edited.graphic_overlays[index]=value.model_dump()
-        else:raise HTTPException(status_code=422,detail="标题操作的对象或参数不匹配")
-    else:raise HTTPException(status_code=422,detail="请选择添加、修改或删除标题，并提供对应参数")
-    if edited.graphic_overlays==plan.graphic_overlays:raise HTTPException(status_code=422,detail="标题没有变化")
+        else:raise HTTPException(status_code=422,detail="图文叠加层操作的对象或参数不匹配")
+    else:raise HTTPException(status_code=422,detail="请选择添加、修改或删除图文叠加层，并提供对应参数")
+    if edited.graphic_overlays==plan.graphic_overlays:raise HTTPException(status_code=422,detail="图文叠加层没有变化")
     base=_ensure_montage_base_version(workspace_id,task,plan)
     tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
     try:
         validate_overlays(edited.graphic_overlays,edited.duration_seconds)
+        for item in edited.graphic_overlays:
+            if item.get('kind')=='image':resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,item['source_ref'])
         records=[_publish_task_picture_preview(workspace_id,task,base,candidate,tracks,kind="graphic_preview",
             parameters={"graphic_overlays":candidate.graphic_overlays}) for candidate in (plan,edited)]
     except (ValueError,OSError,subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,(ValueError,OSError)) else "标题预览失败，请检查本机渲染器") from exc
+        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,(ValueError,OSError)) else "图文叠加层预览失败，请检查本机渲染器") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
-        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览标题")
-    summary={"add":"添加标题","update":"修改标题","delete":"删除标题"}[action]
+        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览图文叠加层")
+    summary={"add":"添加图文叠加层","update":"修改图文叠加层","delete":"删除图文叠加层"}[action]
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         raw_command=summary,context_stage="montage",selected_object_refs=[f"overlay:{identity}"],playhead_ms=None,
         intent_type="graphic_overlay",scope={"kind":"overlay","id":identity},constraints={"preserve_narration":True},confidence=1,status="interpreted"))
@@ -7741,7 +7774,7 @@ def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTa
         summary=summary,target_refs=[f"overlay:{identity}"],operation={"operation_type":"EditGraphicOverlay","payload":{
             "base_version_id":base.id,"graphic_overlays":edited.graphic_overlays}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
         preview={side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else summary,
-            "detail":"完整成片视听预览；标题在指定区间显示，字幕、声音和镜头保持不变。",
+            "detail":"完整成片视听预览；图文叠加层在指定区间显示，字幕、声音和镜头保持不变。",
             "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}))
     return _edit_preview_response(intent,proposal)
 
@@ -9513,8 +9546,12 @@ def _render_montage_with_resolved_clip_sources(
         (clip.source_start_seconds, clip.source_end_seconds) for clip in plan.clips
     ]
     original_narration_reference = plan.narration_audio_path
+    original_graphics = getattr(plan,'graphic_overlays',None)
     cues_by_id = {cue.id: cue for cue in plan.cues}
     try:
+        if original_graphics is not None:
+            plan.graphic_overlays=[{**item,'source_ref':str(resolve_graphic_source(production_repo,artifact_store,workspace_id,plan.task_id,item['source_ref']))}
+                if item.get('kind')=='image' else item for item in original_graphics]
         for clip in plan.clips:
             if clip.person_render_id:
                 render = production_repo.get_person_render(
@@ -9576,6 +9613,7 @@ def _render_montage_with_resolved_clip_sources(
             clip.source_path = reference
             clip.source_start_seconds, clip.source_end_seconds = source_range
         plan.narration_audio_path = original_narration_reference
+        if original_graphics is not None:plan.graphic_overlays=original_graphics
 
 
 

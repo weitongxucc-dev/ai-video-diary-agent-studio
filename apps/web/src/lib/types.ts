@@ -1322,7 +1322,11 @@ export type CreationTaskVoiceOption = {
 export type VisualEffects = { fade_in_seconds?: number; fade_out_seconds?: number; zoom?: number; rotation?: number; offset_x?: number; offset_y?: number; beauty_strength?: number; skin_exposure?: number; exposure: number; contrast: number; saturation: number; temperature: number };
 export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
 
-export type TextOverlay = {id:string;text:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;font_size:number;font_family:string;color:string};
+export type TextOverlay = {kind?:"text";id:string;text:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;font_size:number;font_family:string;color:string};
+
+export type ImageOverlay = {kind:"image";id:string;source_ref:string;name:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;opacity:number};
+export type GraphicOverlay = TextOverlay | ImageOverlay;
+export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number};
 
 export type CreationTaskMontageClip = {
   transition_in_seconds?: number;
@@ -1365,7 +1369,7 @@ export type AudioEditInput = { base_version_id: string | null; action: "add" | "
   target_id: string; values: Record<string, unknown>; raw_command?: string };
 
 export type CreationTaskMontage = {
-  graphic_overlays?:TextOverlay[];
+  graphic_overlays?:GraphicOverlay[];
   aspect_ratio?: "9:16" | "16:9" | "1:1";
   audio_timeline?: AudioTimeline | null;
   id: string;
@@ -1433,7 +1437,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
-  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: Omit<TextOverlay,"id"> & {id?:string}; overlay_id?:string }
+  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id">) & {id?:string}; overlay_id?:string }
   | { operation_type: "SetClipTransition"; clip_id: string; transition_seconds: number }
   | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }

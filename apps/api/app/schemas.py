@@ -6,7 +6,7 @@ from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
-from app.graphic_overlays import TextOverlay
+from app.graphic_overlays import TextOverlay, ImageOverlay
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -1062,7 +1062,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskMontagePlanResponse(BaseModel):
-    graphic_overlays: list[TextOverlay] = Field(default_factory=list)
+    graphic_overlays: list[TextOverlay | ImageOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     id: str
     task_id: str
@@ -1104,7 +1104,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 class CreationTaskExactEditRequest(BaseModel):
     overlay_action: Literal["add","update","delete"] | None = None
-    graphic_overlay: TextOverlay | None = None
+    graphic_overlay: TextOverlay | ImageOverlay | None = None
     overlay_id: str | None = None
     transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
     fit_mode: Literal["fill", "fit"] | None = None

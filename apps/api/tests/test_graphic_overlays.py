@@ -48,3 +48,43 @@ def test_real_title_only_appears_in_its_interval(tmp_path):
     before,during,after=raw(.1),raw(.3),raw(.8)
     assert max(before[::3])<15 and max(after[::3])<15
     assert sum(v>150 for v in during[::3])>50
+
+
+def test_image_overlay_preserves_alpha_aspect_and_natural_parameters(tmp_path):
+    from PIL import Image,ImageDraw
+    from app.graphic_overlays import ImageOverlay,write_graphic_overlay
+    source=tmp_path/'logo.png';image=Image.new('RGBA',(200,100),(0,0,0,0))
+    ImageDraw.Draw(image).rectangle((50,0,149,99),fill=(255,0,0,255));image.save(source)
+    value=ImageOverlay(source_ref=str(source),name='logo.png',start_seconds=0,end_seconds=1,width=.4,opacity=.5)
+    output=tmp_path/'layer.png';write_graphic_overlay(value.model_dump(),output,(1000,1000))
+    rendered=Image.open(output)
+    left,top,right,bottom=rendered.getbbox()
+    assert (left+right)/2==500 and (top,bottom)==(400,600)
+    assert abs((right-left)-200)<=12  # Antialiased resize edges may extend a few pixels.
+    assert rendered.getpixel((500,500))==(255,0,0,128)
+    assert rendered.getpixel((350,500))[3]==0
+    action,changed,_=compile_overlay_command('图片1宽度改为20%',[value.model_dump()])
+    assert action=='update' and changed['width']==.2
+    assert compile_overlay_command('图片1不透明度改为50%',[value.model_dump()])[1]['opacity']==.5
+    assert compile_overlay_command('图片1显示1到3秒',[value.model_dump()])[1]['end_seconds']==3
+    sources=[{'name':'logo.png','source_ref':'artifacts/current.png'}]
+    assert compile_overlay_command('前3秒加图片“logo.png”',[],sources)[1]['source_ref']=='artifacts/current.png'
+    with pytest.raises(ValueError,match='同名'):
+        compile_overlay_command('前3秒加图片“logo.png”',[],sources+sources)
+    with pytest.raises(ValueError,match='超出画幅'):
+        write_graphic_overlay(value.model_copy(update={'y':0}).model_dump(),output,(1000,1000))
+
+
+def test_graphic_import_rejects_oversize_empty_and_animation_before_publication(tmp_path):
+    import io
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.graphic_sources import import_graphic_source
+    def attempt(data):
+        return import_graphic_source(None,None,tmp_path,'w','t',SimpleNamespace(filename='test.png',file=io.BytesIO(data)))
+    with pytest.raises(ValueError,match='为空'):attempt(b'')
+    with pytest.raises(ValueError,match='20MB'):attempt(b'x'*(20*1024*1024+1))
+    large=io.BytesIO();Image.new('RGB',(8193,1)).save(large,format='PNG')
+    with pytest.raises(ValueError,match='尺寸过大'):attempt(large.getvalue())
+    animated=io.BytesIO();Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
+    with pytest.raises(ValueError,match='静态'):attempt(animated.getvalue())
