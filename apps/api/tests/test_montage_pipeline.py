@@ -4233,6 +4233,54 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
     assert restored['montage']['clips']==before['montage']['clips']
 
 
+@pytest.mark.parametrize('stage,command,expected',[
+    ('montage','英文字幕2延后300毫秒',(4.3,5.3,'Second cue')),
+    ('subtitle_cover','英文字幕 2 延后 300 毫秒',(4.3,5.3,'Second cue')),
+    ('review','英文字幕2改成“Keep spaces, and punctuation.”',(4,5,'Keep spaces, and punctuation.')),
+])
+def test_indexed_subtitle_without_selection_previews_confirms_and_undoes(person_render_edit_state,monkeypatch,stage,command,expected):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    zh=SubtitleTrack(id='indexed-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},
+        cues=[ProductionSubtitleCue(id='indexed-first',source_cue_id=None,text='第一句',start_seconds=1,end_seconds=3),
+              ProductionSubtitleCue(id='indexed-second',source_cue_id=None,text='第二句',start_seconds=4,end_seconds=5)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id='indexed-en',language='en-US',source_language='zh-CN',
+        cues=[replace(cue,id='en-'+cue.id,source_cue_id=cue.id,text=text) for cue,text in zip(zh.cues,['First cue','Second cue'])],generation_method='translation'))
+    before=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    previews=[]
+    def publish(*args,**kwargs):
+        previews.append(args[4])
+        return SimpleNamespace(id='indexed-preview',logical_ref='artifacts/indexed-preview.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    def preview(raw):return state.client.post(base+'/edits/preview',json={'raw_command':raw,'context_stage':stage,'selected_object_refs':[]})
+    for invalid in ['字幕2延后300毫秒','英文字幕99延后300毫秒','英文字幕2提前9秒','英文字幕2提前2秒','英文字幕2延后300毫秒，字幕不变']:
+        rejected=preview(invalid)
+        assert rejected.status_code==422,rejected.text
+        assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    response=preview(command)
+    assert response.status_code==200,response.text
+    assert len(previews)==2
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    preview_cue=next(t for t in previews[-1] if t.language=='en-US').cues[1]
+    assert (preview_cue.start_seconds,preview_cue.end_seconds,preview_cue.text)==expected
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    english=next(t for t in after['subtitle_tracks'] if t['language']=='en-US')
+    cue=english['cues'][1]
+    assert (cue['start_seconds'],cue['end_seconds'],cue['text'])==expected
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['narration']['audio_reference']==before['narration']['audio_reference']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    for language in ['zh-CN','en-US']:
+        assert next(t['cues'] for t in restored['subtitle_tracks'] if t['language']==language)==next(t['cues'] for t in before['subtitle_tracks'] if t['language']==language)
+
+
 @pytest.mark.parametrize('mode,notice',[('unavailable','未就绪'),('failed','计算失败'),('invalid_count','数量不符'),('missing_index','该片段缺少'),('ready',None)])
 def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notice):
     from app.visual_semantics import VisualSemanticError

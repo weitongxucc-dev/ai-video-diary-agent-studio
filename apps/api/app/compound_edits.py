@@ -9,17 +9,22 @@ from app.audio_timeline import apply_audio_edit, compile_audio_command
 from app.visual_effects import compile_visual_command, with_visual_effects
 
 
+def is_indexed_subtitle_command(command):
+    return bool(re.match(r'(?:把)?(?:中文|英文)?字幕\s*\d+', command.strip()))
+
+
 def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, playhead_ms, included_step_indices=None):
     clauses=split_compound_clauses(command)
 
     constraints={'配音不变','声音不变','画面不变','不改画面','字幕不变','其他不要动','其他别动','不要改变脸型','保留口型'}
     active=[part for part in clauses if part not in constraints]
-    # Single-domain requests continue through their existing exact-edit consumer.
+    # Explicit cue numbers share the same resolver for single and compound edits.
     def audio_subject(part):return re.match(r'(?:把)?(?:当前|这个)?(音乐|配音|原声|音效)(?:片段(\d+))?',part)
     def subtitle_subject(part):return '字幕' in part or part.startswith('英文放在中文')
     has_picture=any(re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part) for part in active) or any(ref.startswith('clip:') for ref in selected_refs)
     has_subtitle=any(subtitle_subject(part) for part in active)
-    if len(active)<2 or (not has_subtitle and (not has_picture or not any(audio_subject(part) for part in active) or all(audio_subject(part) for part in active))):return None
+    if len(active)<2 and not (len(active)==1 and is_indexed_subtitle_command(active[0])):return None
+    if not has_subtitle and (not has_picture or not any(audio_subject(part) for part in active) or all(audio_subject(part) for part in active)):return None
     included=set(range(len(active))) if included_step_indices is None else set(included_step_indices)
     if not included or any(type(index) is not int or index<0 or index>=len(active) for index in included):
         raise ValueError('请保留至少一项有效修改；取消全部请使用取消提案')
@@ -30,6 +35,7 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
         explicit_picture=bool(re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part))
         if subtitle_subject(part) or (last_subtitle and not audio_subject(part) and not explicit_picture):
             normalized=part if subtitle_subject(part) else '字幕'+part
+            normalized=re.sub(r'^((?:把)?(?:中文|英文)?字幕)\s*(\d+)\s*',r'\1\2',normalized)
             last_audio_prefix=None;last_subtitle=True
             descriptor={'index':step_index,'enabled':step_index in included,'operation_type':'ConfigureSubtitleTrack','target_ref':'subtitle:all','command':part}
             if step_index not in included:

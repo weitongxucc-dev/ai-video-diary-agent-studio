@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
-from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles
+from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
@@ -5827,7 +5827,7 @@ def preview_creation_task_edit(
         return _preview_clip_original_audio(task_id, request, payload)
     if payload.context_stage in {"montage", "review"} and re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", command):
         return _preview_remove_silence(task, request, payload)
-    if payload.context_stage in {"montage","review"}:
+    if payload.context_stage in {"montage","review"} or (payload.context_stage == "subtitle_cover" and is_indexed_subtitle_command(command)):
         combined=_preview_compound_edit(task,request,payload)
         if combined is not None:return combined
     canvas_commands = {"改横版":"16:9", "改成横版":"16:9", "改成16:9":"16:9", "改成竖版":"9:16", "改竖版":"9:16", "改成9:16":"9:16", "改成方形":"1:1", "改成1:1":"1:1"}
@@ -7960,7 +7960,7 @@ def preview_compound_selection(task_id:str,proposal_id:str,request:Request,paylo
 def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
     workspace_id=current_workspace_id(request)
     # Narrow candidate commands before loading the montage.
-    if not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):return None
+    if not is_indexed_subtitle_command(payload.raw_command) and not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):return None
     if not re.search(r'音乐|配音|原声|音效|字幕|英文放在中文',payload.raw_command):return None
     try:
         plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task.id))
