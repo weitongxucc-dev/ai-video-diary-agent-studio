@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
@@ -5122,7 +5123,7 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
             _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -5132,9 +5133,10 @@ def _persist_typed_montage_edit(
                 artifact_ref, transform_id = _publish_subtitle_text(
                     workspace_id=workspace_id, task_id=task.id, proposal_id=proposal.id,
                     kind="subtitle_compound" if operation_type=="EditCompoundTimeline" else "subtitle_retime",
-                    input_refs=[f"timeline:{source_version.id}", updated_plan.narration_audio_path],
+                    input_refs=[f"timeline:{source_version.id}", updated_plan.narration_audio_path,
+                        *([operation_payload["source_audio_ref"]] if operation_type == "AlignSubtitleTiming" else [])],
                     content=render_srt(_execution_subtitle_track(track)),
-                    engine="subtitle-srt/v1" if operation_type=="EditCompoundTimeline" else "timeline-clock-v1",
+                    engine="subtitle-srt/v1" if operation_type in {"EditCompoundTimeline", "AlignSubtitleTiming"} else "timeline-clock-v1",
                     parameters={"language": track.language, "operation": operation_type},
                 )
                 carried_tracks[index] = _clone_subtitle_track(track,
@@ -5816,6 +5818,9 @@ def preview_creation_task_edit(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     command = payload.raw_command.strip()
+    alignment_command = re.fullmatch(r"(?:按配音|根据配音)(?:校准|对齐)(中文|英文)?字幕[。！]?", command)
+    if alignment_command and payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        return _preview_subtitle_alignment(task, request, payload, alignment_command[1])
     if payload.context_stage in {"montage", "review"} and re.fullmatch(
         r"(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?", command
     ):
@@ -6662,6 +6667,20 @@ def confirm_creation_task_edit(
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
+    if operation_type == "AlignSubtitleTiming" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload["base_version_id"]:
+            raise HTTPException(status_code=409, detail="时间线已变化，请重新校准字幕")
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
+        track = next((item for item in tracks if item.id == operation_payload["track_id"]), None)
+        if track is None:
+            raise HTTPException(status_code=409, detail="字幕轨已变化，请重新校准")
+        changed = apply_aligned_timings(track, operation_payload["timings"], montage.duration_seconds)
+        _prepare_changed_montage(montage, message="字幕时间已校准，可重新渲染；撤销恢复原时间。")
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base, updated_plan=montage, operation_type="AlignSubtitleTiming", operation_payload=operation_payload,
+            edited_subtitle_tracks=[changed if item.id == track.id else item for item in tracks])
     if operation_type == "EditCompoundTimeline" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已变化，请重新预览全部修改")
@@ -8082,6 +8101,61 @@ def _preview_canvas(task_id: str, request: Request, payload: CreationTaskExactEd
     return _edit_preview_response(intent,proposal)
 
 
+def _preview_subtitle_alignment(task, request, payload, language_label):
+    workspace_id = current_workspace_id(request)
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+    if plan.status == "rendering":
+        raise HTTPException(status_code=409, detail="正在渲染，请完成后再校准字幕")
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    language = {"中文":"zh-CN", "英文":"en-US"}.get(language_label)
+    candidates = [track for track in tracks if track.status == "valid" and (language is None or track.language == language)]
+    if len(candidates) != 1 or candidates[0].source_language is not None:
+        raise HTTPException(status_code=422, detail="请明确要校准的原语言字幕；翻译字幕不能直接与另一语言的配音对齐")
+    track = candidates[0]
+    graph = _effective_audio_timeline(plan)
+    voice_ids = {item.id for item in graph.tracks if item.role in {"narration", "original"}
+                 and not item.muted and any(not clip.muted for clip in item.clips)}
+    if not voice_ids:
+        raise HTTPException(status_code=409, detail="当前没有可用于校准的配音或原声")
+    service = _task_audio()
+    try:
+        analysis = service.publish(workspace_id, task.id, kind="audio_preview",
+            parameters={"action":"subtitle_alignment", "base_version_id":base.id},
+            input_refs=sorted({clip.source_ref for item in graph.tracks if item.id in voice_ids for clip in item.clips}),
+            produce=lambda output: render_audio_mix(graph, plan.duration_seconds,
+                lambda ref: service.source(workspace_id, task.id, ref), output, solo_track_ids=voice_ids))
+        with TemporaryDirectory(prefix="subtitle-alignment-", dir=settings.effective_temporary_root_path) as directory:
+            recognition = recognize_subtitle_timing(settings, artifact_store.resolve_file(analysis.logical_ref), track.language, directory)
+        changed = align_subtitle_track(track, recognition, plan.duration_seconds)
+        timings = [{"id":cue.id,"start_seconds":cue.start_seconds,"end_seconds":cue.end_seconds} for cue in changed.cues]
+        changed = apply_aligned_timings(track, timings, plan.duration_seconds)
+        if changed.cues == track.cues:
+            raise ValueError("识别时间与现有字幕一致，无需修改")
+        changed_tracks = [changed if item.id == track.id else item for item in tracks]
+        records = [_publish_task_picture_preview(workspace_id, task, base, plan, items, kind="compound_preview",
+            parameters={"action":"subtitle_alignment", "side":side, "audio_ref":analysis.logical_ref, "timings":timings})
+            for side, items in (("before", tracks), ("after", changed_tracks))]
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "本地字幕校准失败，当前版本未改变") from exc
+    if production_repo.get_creation_task(workspace_id, task.id).current_timeline_version_id != base.id:
+        raise HTTPException(status_code=409, detail="预览期间版本已变化，请重新校准")
+    refs = [f"subtitle-track:{track.id}"]
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
+        raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
+        intent_type="subtitle_timing",scope={"track_id":track.id},constraints={"preserve_text":True,"preserve_audio":True},confidence=1,status="interpreted"))
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
+        intent_id=intent.id,summary="按当前配音校准字幕时间；正文、声音和镜头保持不变。",target_refs=refs,
+        operation={"operation_type":"AlignSubtitleTiming","payload":{"base_version_id":base.id,"track_id":track.id,
+            "timings":timings,"source_audio_ref":analysis.logical_ref,"recognition_sha256":hashlib.sha256(json.dumps(recognition,sort_keys=True).encode()).hexdigest(),
+            "engine":"local-whisper-cpp-token-timing"}},invalidated_refs=_logical_montage_output_refs(plan),
+        external_effects=["时间来自本地语音识别，不保证逐帧精确；请试听后确认。", "确认后创建新版本，可撤销；其他语言字幕保持不变。"],
+        preview={side:{"ref":record.logical_ref,"label":"当前字幕" if side=="before" else "按配音校准后",
+            "detail":"整片视听预览，字幕正文保留。","video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
+            for side,record in zip(("before","after"),records)}))
+    return _edit_preview_response(intent, proposal)
+
+
 def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     if payload.model_fields_set - {"operation_type", "style"}:
         raise HTTPException(status_code=422, detail="样式应用于全部字幕轨，不能同时翻译或切换显示")
@@ -8637,6 +8711,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "EditGraphicOverlay",
         "EditCompoundTimeline",
         "RemoveSilence",
+        "AlignSubtitleTiming",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):

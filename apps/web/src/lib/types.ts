@@ -1472,7 +1472,7 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects";
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
@@ -1497,7 +1497,7 @@ export type CreationTaskEditOperation = {
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects";
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;

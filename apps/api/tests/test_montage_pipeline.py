@@ -3729,6 +3729,47 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     assert state.client.get(base).json()['montage']['audio_timeline']==before['montage']['audio_timeline']
 
 
+def test_local_subtitle_alignment_preview_confirm_undo(person_render_edit_state, monkeypatch):
+    state=person_render_edit_state; base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="alignment-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="alignment-cue",source_cue_id=None,text="Local video.",start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/old.srt",transform_id="old",status="valid"))
+    before=state.client.get(base).json();captured=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(publish=lambda *a,**k:SimpleNamespace(logical_ref='artifacts/analysis.wav')))
+    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[{"tokens":[
+        {"text":"Local", "offsets":{"from":400,"to":900},"p":.9},
+        {"text":" video", "offsets":{"from":1000,"to":2000},"p":.9}]}]})
+    def publish(workspace,task,version,plan,tracks,**kwargs):
+        captured.append(tracks);return SimpleNamespace(id='alignment-preview',logical_ref='artifacts/preview.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    main_module.settings.effective_temporary_root_path.mkdir(exist_ok=True)
+    monkeypatch.setattr(main_module.artifact_store, 'resolve_file', lambda ref: Path('/unused-analysis.wav'))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'按配音校准英文字幕','context_stage':'montage','selected_object_refs':[]})
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert proposal['operation']['operation_type']=='AlignSubtitleTiming'
+    assert captured[-1][0].cues[0].start_seconds==.4
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    stale=state.client.post(base+'/edits/preview',json={'raw_command':'按配音校准英文字幕','context_stage':'montage','selected_object_refs':[]}).json()['proposal']
+    confirm=state.client.post(base+'/edits/'+proposal['id']+'/confirm',json={})
+    assert confirm.status_code==200,confirm.text
+    assert state.client.post(base+'/edits/'+stale['id']+'/confirm',json={}).status_code==409
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
+    assert after['subtitle_tracks'][0]['cues'][0]['text']=='Local video.'
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['cues'][0]['start_seconds']==0
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
+    current=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[]})
+    failed=state.client.post(base+'/edits/preview',json={'raw_command':'按配音校准英文字幕','context_stage':'montage','selected_object_refs':[]})
+    assert failed.status_code==422
+    assert state.client.get(base).json()['task']['current_timeline_version_id']==current['task']['current_timeline_version_id']
+
+
 def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_edit_state,monkeypatch):
     state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
     version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
