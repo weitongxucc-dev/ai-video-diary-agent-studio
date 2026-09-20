@@ -41,6 +41,12 @@ def runtime_env_file_path() -> Path:
 def configure_process_temporary_directory(settings: Settings) -> Path:
     """Route Python and child-process scratch files to the configured data disk."""
     root = settings.effective_temporary_root_path.resolve()
+    # On macOS a leftover /Volumes/<name> directory can exist on the internal
+    # disk even though the external volume is absent. Existence is not enough.
+    if len(root.parts) >= 3 and root.parts[1] == "Volumes":
+        volume = Path(*root.parts[:3])
+        if not volume.is_mount():
+            raise FileNotFoundError(f"外接存储未挂载：{volume}。请连接原数据盘后重新启动应用。")
     if root.parent.is_dir():
         root.mkdir(parents=False, exist_ok=True)
         os.environ["TMPDIR"] = str(root)
