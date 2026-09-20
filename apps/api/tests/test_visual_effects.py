@@ -69,3 +69,20 @@ def test_missing_portrait_runtime_rejects_processing_before_touching_source(tmp_
     with pytest.raises(ValueError,match="未就绪"):
         processor.process(tmp_path/"missing.mp4",0,1,.3,0)
     assert not (tmp_path/"cache").exists()
+
+
+def test_picture_speed_changes_actual_frame_time_without_changing_output_length(tmp_path):
+    source = tmp_path / "timed-colors.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=red:s=180x320:r=30:d=0.3",
+        "-f", "lavfi", "-i", "color=blue:s=180x320:r=30:d=1.7",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0", "-c:v", "libx264", str(source)], check=True)
+    clip = SimpleNamespace(visual_effects={}, fit_mode="fill", crop_x=.5, crop_y=.5,
+        source_start_seconds=0, source_end_seconds=2, timeline_start_seconds=0, timeline_end_seconds=1)
+    output = render_color_preview(clip, source, tmp_path / "double-speed.mp4")
+    # At 0.2 output seconds, 2x playback has reached the blue source frame at 0.4.
+    original, sped = frame(source), frame(output)
+    assert original[0][0] > 200 and original[0][2] < 20
+    assert sped[0][2] > 200 and sped[0][0] < 20
+    metadata = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "json", str(output)], capture_output=True, text=True, check=True).stdout)
+    assert float(metadata["format"]["duration"]) == pytest.approx(1, abs=.05)

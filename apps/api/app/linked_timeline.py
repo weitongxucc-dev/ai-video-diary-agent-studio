@@ -5,6 +5,7 @@ from uuid import uuid4
 from app.audio_timeline import AudioTimeline, TimelineAudioClip
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.subtitle_schedule import subtitle_schedule
+from app.visual_effects import clip_playback_rate
 
 
 def splice_intervals(duration_ms: int, start_ms: int, end_ms: int, action: str):
@@ -97,8 +98,8 @@ def splice_clip(plan, tracks, audio, clip_id: str, action: str):
         for index, (left, right, at) in enumerate(parts):
             clips.append(replace(clip,
                 id=clip.id if index == 0 else f"clip_{uuid4().hex[:12]}",
-                source_start_seconds=round(clip.source_start_seconds + (left - clip_start) / 1000, 3),
-                source_end_seconds=round(clip.source_start_seconds + (right - clip_start) / 1000, 3),
+                source_start_seconds=round(clip.source_start_seconds + (left - clip_start) / 1000 * clip_playback_rate(clip), 3),
+                source_end_seconds=round(clip.source_start_seconds + (right - clip_start) / 1000 * clip_playback_rate(clip), 3),
                 timeline_start_seconds=at / 1000,
                 timeline_end_seconds=(at + right - left) / 1000))
     result.clips = sorted(clips, key=lambda clip: clip.timeline_start_seconds)

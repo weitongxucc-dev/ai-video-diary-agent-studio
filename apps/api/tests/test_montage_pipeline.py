@@ -3166,3 +3166,32 @@ def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_sta
     assert result.status_code == 200, result.text
     result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
     assert result.status_code == 409 and "锁定" in result.text
+
+
+def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    clip = state.montage.clips[1]
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为0.5倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
+    assert preview.status_code == 200, preview.text
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    after = state.client.get(base).json()
+    slowed = after["montage"]["clips"][1]
+    assert slowed["source_end_seconds"] - slowed["source_start_seconds"] == 2
+    assert after["montage"]["duration_seconds"] == 8
+    assert after["montage"]["cues"] == before["montage"]["cues"]
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    # A later non-speed edit must not silently restore 1x.
+    response = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCrop", "clip_id":clip.id, "fit_mode":"fit", "crop_x":.5,"crop_y":.5})
+    assert response.status_code == 200, response.text
+    assert state.client.get(base).json()["montage"]["clips"][1]["source_end_seconds"] == slowed["source_end_seconds"]
+    response = state.client.post(base + "/edits/exact", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":6})
+    assert response.status_code == 200, response.text
+    pieces = state.client.get(base).json()["montage"]["clips"][1:]
+    assert [(c["source_start_seconds"], c["source_end_seconds"]) for c in pieces] == [(slowed["source_start_seconds"],slowed["source_start_seconds"]+1),(slowed["source_start_seconds"]+1,slowed["source_end_seconds"])]
+    response = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeClipSpeed", "clip_id":state.montage.clips[0].id,"playback_rate":.5})
+    assert response.status_code == 409 and "口型" in response.text
+    response = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为9倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
+    assert response.status_code == 422

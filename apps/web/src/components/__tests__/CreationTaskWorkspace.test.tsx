@@ -687,6 +687,11 @@ describe("CreationTaskWorkspace", () => {
       operation_type: "DuplicateClip", clip_id: "clip-1",
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("画面倍速"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览画面变速" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
+      operation_type: "ChangeClipSpeed", clip_id: "clip-1", playback_rate: 1.5,
+    }));
   });
 
   it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {

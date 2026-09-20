@@ -1084,6 +1084,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
     split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1099,6 +1100,7 @@ class CreationTaskExactEditRequest(BaseModel):
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
     split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     operation_type: Literal[
@@ -1106,6 +1108,7 @@ class CreationTaskExactEditRequest(BaseModel):
     "ChangeCrop",
         "TrimClip",
         "SplitClip",
+        "ChangeClipSpeed",
         "DeleteClip",
         "DuplicateClip",
         "ReorderClip",
@@ -1185,6 +1188,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ReplaceClip",
         "TrimClip",
         "SplitClip",
+        "ChangeClipSpeed",
         "DeleteClip",
         "DuplicateClip",
         "ReorderClip",
@@ -1248,6 +1252,7 @@ class EditOperationResponse(BaseModel):
         "ReplaceClip",
         "TrimClip",
         "SplitClip",
+        "ChangeClipSpeed",
         "DeleteClip",
         "DuplicateClip",
         "ReorderClip",

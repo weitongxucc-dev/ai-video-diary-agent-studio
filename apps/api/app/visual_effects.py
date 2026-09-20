@@ -1,6 +1,7 @@
 """Bounded color controls shared by local previews and montage rendering."""
 from pathlib import Path
 import subprocess
+import math
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -48,10 +49,18 @@ def framing_filter(fit_mode: str, crop_x: float, crop_y: float, width=1080, heig
             f"crop={width}:{height}:(iw-ow)*{crop_x}:(ih-oh)*{crop_y}")
 
 
+def clip_playback_rate(clip) -> float:
+    source_duration = clip.source_end_seconds - clip.source_start_seconds
+    timeline_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    if not all(math.isfinite(value) and value > 0 for value in (source_duration, timeline_duration)):
+        raise ValueError("镜头源区间和时间线时长必须有效")
+    return source_duration / timeline_duration
+
+
 def clip_video_filters(clip, *, width=1080, height=1920) -> str:
     # Color before framing keeps letterbox black and avoids tinting padding.
     return ",".join([*color_filters(clip.visual_effects),framing_filter(clip.fit_mode,clip.crop_x,clip.crop_y,width,height),
-                     "setsar=1","fps=30","setpts=PTS-STARTPTS"])
+                     "setsar=1",f"setpts=(PTS-STARTPTS)/{clip_playback_rate(clip):.9f}","fps=30"])
 
 
 def render_color_preview(clip, source: Path, output: Path, portrait=None) -> Path:
