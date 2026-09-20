@@ -3640,3 +3640,29 @@ def test_material_library_endpoint_is_paginated(tmp_path, monkeypatch):
     assert second.status_code == 200
     assert len(second.json()["assets"]) == 1
     assert second.json()["has_more"] is False
+
+
+@pytest.mark.parametrize('change',['replace_file','remove_file','remove_segment','change_interval'])
+def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,change):
+    provider=_FakeVisualProvider()
+    production=ProductionRepository(database_path=tmp_path/'studio.sqlite3',video_library_path=tmp_path,
+        duration_reader=lambda _:8.0,scene_reader=lambda *_:[4.0],visual_provider=provider)
+    video=tmp_path/'source.mp4';video.write_bytes(b'original source')
+    asset=production.scan_library('workspace_a')[0]
+    analyzed=production.analyze_asset('workspace_a',asset.id)
+    segment=analyzed.segments[0]
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
+    # A human text correction does not invalidate unchanged pixel embeddings.
+    segment.description='人工修正画面描述'
+    production._save_asset(analyzed)
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
+    if change=='replace_file':video.write_bytes(b'replacement source with different length')
+    elif change=='remove_file':video.unlink()
+    elif change=='change_interval':
+        segment.end_seconds-=1
+        production._save_asset(analyzed)
+    else:
+        analyzed.segments=[]
+        production._save_asset(analyzed)
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id) is None
+    assert production.get_visual_feature('workspace_b',segment.id,provider.model_id) is None

@@ -2640,10 +2640,38 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT vector_json FROM material_segment_features
-                WHERE workspace_id = ? AND segment_id = ? AND model_id = ?
+                SELECT a.payload FROM material_assets a
+                JOIN material_segment_features f
+                    ON a.workspace_id = f.workspace_id AND a.id = f.asset_id
+                WHERE f.workspace_id = ? AND f.segment_id = ? AND f.model_id = ?
                 """,
                 (workspace_id, segment_id, model_id),
+            ).fetchone()
+        if row is None:
+            return None
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        segment = next((item for item in asset.segments if item.id == segment_id), None)
+        if segment is None:
+            return None
+        return self._visual_feature_for_segment(asset, segment, model_id)
+
+    def _visual_feature_for_segment(
+        self, asset: MaterialAsset, segment: MaterialSegment, model_id: str
+    ) -> list[float] | None:
+        # Analysis also calls this before newly detected segments are persisted.
+        try:
+            path = self._validated_library_file(asset.path)
+            fingerprint = _visual_fingerprint(path, segment, model_id)
+        except (OSError, ValueError):
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT vector_json FROM material_segment_features
+                WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
+                    AND model_id = ? AND fingerprint = ?
+                """,
+                (asset.workspace_id, asset.id, segment.id, model_id, fingerprint),
             ).fetchone()
         if row is None:
             return None
@@ -6377,11 +6405,7 @@ class ProductionRepository:
 
             scored_segments: list[MaterialSegment] = []
             for segment in asset.segments:
-                vector = self.get_visual_feature(
-                    asset.workspace_id,
-                    segment.id,
-                    provider.model_id,
-                )
+                vector = self._visual_feature_for_segment(asset, segment, provider.model_id)
                 if not vector:
                     continue
                 scores = [
