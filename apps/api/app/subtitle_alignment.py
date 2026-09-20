@@ -76,6 +76,10 @@ def recognize_subtitle_timing(settings, audio_path, language, output_root):
     command = [str(settings.local_whisper_cli_path), "-m", str(settings.local_whisper_model_path),
                "-f", str(audio_path), "-l", "en" if language == "en-US" else "zh",
                "-ojf", "-of", str(target)]
+    if language == "zh-CN":
+        # Specify orthography only, never feed the expected subtitle text back
+        # into recognition as evidence that it was actually spoken.
+        command.extend(["--prompt", "以下使用简体中文。"])
     try:
         subprocess.run(command, check=True, capture_output=True, timeout=1800)
         result = json.loads(target.with_suffix(".json").read_text())
