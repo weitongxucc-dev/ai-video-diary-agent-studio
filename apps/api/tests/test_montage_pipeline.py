@@ -3930,3 +3930,82 @@ def test_person_preview_respects_locked_clip_before_generation(person_render_edi
     assert '锁定' in response.text
     assert state.provider.output_cache_keys==[]
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+@pytest.mark.parametrize("source_end", [4, 6])
+def test_extract_original_audio_real_media_preview_confirm_undo(person_render_edit_state, source_end):
+    import subprocess, io, wave, array
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    clip.role='b_roll'
+    clip.source_start_seconds=2
+    clip.source_end_seconds=source_end
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
+        '-f','lavfi','-i','aevalsrc=if(lt(t\\,2)\\,0\\,0.2*sin(2*PI*660*t)):s=48000:d=8',
+        '-c:v','libx264','-c:a','aac','-shortest',str(source)],check=True)
+    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    command={'raw_command':'提取当前镜头原声','context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']}
+    preview=state.client.post(base+'/edits/preview',json=command)
+    assert preview.status_code==200,preview.text
+    proposal=preview.json()['proposal']
+    assert '混合' in proposal['summary']
+    response=state.client.get(proposal['preview']['after']['audio_url'])
+    assert response.status_code==200
+    with wave.open(io.BytesIO(response.content)) as audio:
+        audio.setpos(round(.25*audio.getframerate()))
+        values=array.array('h',audio.readframes(round(.5*audio.getframerate())))
+        assert max(abs(v) for v in values)>1000  # cropped first 2 seconds of silence away
+    before=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
+    assert creation_task_montage_plan_from_payload(before).audio_timeline is None
+    confirmed=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code==200,confirmed.text
+    updated=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    original=next(t for t in updated.audio_timeline.tracks if t.role=='original')
+    assert len(original.clips)==1
+    assert (original.clips[0].timeline_start_ms,original.clips[0].source_end_ms)==(0,4000)
+    assert updated.narration_audio_path==state.montage.narration_audio_path
+    duplicate=state.client.post(base+'/edits/preview',json=command)
+    assert duplicate.status_code==409 and '已有原声' in duplicate.text
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    assert not any(t.clips for t in main_module._effective_audio_timeline(restored).tracks if t.role=='original')
+
+
+def test_extract_original_audio_rejects_silent_video_without_timeline_change(person_render_edit_state):
+    import subprocess
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
+        '-an','-c:v','libx264',str(source)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    before=state.client.get(base).json()
+    response=state.client.post(base+'/edits/preview',json={'raw_command':'提取原声',
+        'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==422 and '没有可用音轨' in response.text
+    assert state.client.get(base).json()['montage']==before['montage']
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+@pytest.mark.parametrize('person,locked', [(True,False),(False,True)])
+def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_edit_state,person,locked):
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    if not person: clip.person_render_id=None
+    clip.locked=locked
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
+        'raw_command':'保留这个镜头的原声','context_stage':'review','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==409,response.text
+    assert ('生成口型' if person else '锁定') in response.text
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]

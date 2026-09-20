@@ -2705,7 +2705,7 @@ def _portrait_processor(workspace_id: str) -> LocalPortrait:
 
 
 def _task_audio() -> TaskAudio:
-    return TaskAudio(production_repo, artifact_store, Path(settings.temporary_root_path).expanduser())
+    return TaskAudio(production_repo, artifact_store, settings.effective_temporary_root_path)
 
 
 def _effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
@@ -2787,6 +2787,48 @@ def listen_creation_task_audio(task_id: str, request: Request, payload: AudioLis
     return {"audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
 
 
+def _preview_clip_original_audio(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    refs = payload.selected_object_refs
+    if len(refs) != 1 or not refs[0].startswith("clip:"):
+        raise HTTPException(status_code=422, detail="请先选择一个镜头，再提取原声。")
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    clip = next((item for item in plan.clips if item.id == refs[0][5:]), None)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="所选镜头不存在。")
+    if clip.person_render_id:
+        raise HTTPException(status_code=409, detail="生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。")
+    graph = _effective_audio_timeline(plan)
+    tracks = [track for track in graph.tracks if track.role == "original"]
+    if len(tracks) != 1:
+        raise HTTPException(status_code=409, detail="需要唯一的原声音轨才能添加镜头原声。")
+    track = tracks[0]
+    if clip.locked or track.locked:
+        raise HTTPException(status_code=409, detail="镜头或原声音轨已锁定，请先解锁。")
+    if track.muted:
+        raise HTTPException(status_code=409, detail="原声音轨已静音，请先取消静音再预览。")
+    start, end = round(clip.timeline_start_seconds * 1000), round(clip.timeline_end_seconds * 1000)
+    if any(item.timeline_start_ms < end and item.timeline_start_ms + item.duration_ms > start for item in track.clips):
+        raise HTTPException(status_code=409, detail="该范围已有原声，请编辑现有音频片段，避免重复叠加。")
+    service = _task_audio()
+    try:
+        source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        reference = production_repo.workspace_media_reference_for_asset(workspace_id, clip.asset_id)
+        source_start, source_end = round(clip.source_start_seconds * 1000), round(clip.source_end_seconds * 1000)
+        rate = (source_end-source_start)/(end-start)
+        record = service.publish(workspace_id, task_id, kind="audio_source",
+            parameters={"action":"extract_clip_original", "clip_id":clip.id, "source_start_ms":source_start,
+                "source_end_ms":source_end, "rate":rate, "duration_ms":end-start}, input_refs=[reference],
+            produce=lambda output: render_stretched_audio(source, source_start, source_end, rate, end-start, output))
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "无法提取原声，请检查素材是否包含音轨、FFmpeg和外接盘。") from exc
+    return preview_creation_task_audio(task_id, request, AudioEditRequest(
+        base_version_id=task.current_timeline_version_id, action="add", target_id=track.id,
+        raw_command=payload.raw_command, values={"source_ref":record.logical_ref, "name":"镜头原声",
+            "source_start_ms":0, "source_end_ms":end-start, "timeline_start_ms":start}))
+
+
 @app.post("/api/creation-tasks/{task_id}/audio/preview", response_model=CreationTaskEditPreviewResponse)
 def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEditRequest):
     workspace_id = current_workspace_id(request)
@@ -2820,6 +2862,8 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
         constraints={"preserve_video": True}, confidence=1, status="interpreted"))
     labels = {"add": "添加音频片段", "update": "修改音频片段", "delete": "删除音频片段（保留时间空隙）", "split": "分割音频片段", "duplicate": "复制音频片段", "track": "修改音轨设置"}
     summary = labels[payload.action]
+    if payload.action == "add" and any(track.id == payload.target_id and track.role == "original" for track in before.tracks):
+        summary = "添加原声，与现有音轨混合；画面和配音不变"
     proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
         task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
         operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
@@ -5754,6 +5798,10 @@ def preview_creation_task_edit(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     command = payload.raw_command.strip()
+    if payload.context_stage in {"montage", "review"} and re.fullmatch(
+        r"(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?", command
+    ):
+        return _preview_clip_original_audio(task_id, request, payload)
     if payload.context_stage in {"montage","review"}:
         combined=_preview_compound_edit(task,request,payload)
         if combined is not None:return combined
