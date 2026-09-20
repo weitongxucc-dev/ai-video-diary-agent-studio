@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.voice_clone import MediaRuntimeFailure
+from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -443,7 +444,7 @@ class AvatarAndLipSyncService:
             / _safe_component(request.workspace_id)
             / f"{cache_key}.mp4"
         )
-        reusable = _probe_avatar_output(output)
+        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path))
         if reusable is not None:
             duration_seconds, alignment_evidence = reusable
             return AvatarAndLipSyncResult(
@@ -934,59 +935,11 @@ def avatar_lipsync_provider_from_settings(
     )
 
 
-def _probe_avatar_output(path: Path) -> tuple[float, str] | None:
+def _probe_avatar_output(path: Path, *, audio_path: Path | None = None) -> tuple[float, str] | None:
     if not path.is_file() or path.stat().st_size == 0:
         return None
-    completed = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
-            "-of",
-            "json",
-            str(path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if completed.returncode != 0:
-        return None
     try:
-        payload = json.loads(completed.stdout)
-        duration = float(payload["format"]["duration"])
-        streams = payload["streams"]
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        expected_duration = probe_media_duration(audio_path) if audio_path is not None else None
+        return probe_avatar_media(path, expected_duration=expected_duration)
+    except MediaTimingError:
         return None
-    video = next((item for item in streams if item.get("codec_type") == "video"), None)
-    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
-    if (
-        not math.isfinite(duration)
-        or duration <= 0
-        or video is None
-        or audio is None
-        or video.get("codec_name") != "h264"
-        or audio.get("codec_name") != "aac"
-        or not video.get("width")
-        or not video.get("height")
-    ):
-        return None
-    evidence = json.dumps(
-        {
-            "engine": "ffprobe",
-            "validation_scope": "media_metadata_only_not_lip_sync_quality",
-            "duration_seconds": round(duration, 3),
-            "video_codec": video.get("codec_name"),
-            "width": video.get("width"),
-            "height": video.get("height"),
-            "audio_codec": audio.get("codec_name"),
-            "sample_rate": audio.get("sample_rate"),
-            "channels": audio.get("channels"),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return round(duration, 3), evidence

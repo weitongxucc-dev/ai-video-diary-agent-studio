@@ -229,7 +229,7 @@ def test_avatar_lipsync_reports_provider_process_and_invalid_response_failures(t
 
 
 def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path, avatar_video):
-    request = _request(tmp_path)
+    request = replace(_request(tmp_path), audio_path=str(avatar_video))
     calls = []
 
     def success_runner(command):
@@ -266,7 +266,7 @@ def test_avatar_lipsync_succeeds_only_after_valid_provider_output(tmp_path, avat
     assert cached.duration_seconds == result.duration_seconds == 8.0
     evidence = json.loads(cached.alignment_evidence)
     assert evidence["engine"] == "ffprobe"
-    assert evidence["validation_scope"] == "media_metadata_only_not_lip_sync_quality"
+    assert evidence["validation_scope"] == "media_timing_only_not_lip_sync_quality"
     assert len(calls) == 1
 
 
@@ -391,3 +391,38 @@ def test_avatar_cache_rejects_nonfinite_probe_duration(monkeypatch, avatar_video
         }))
     monkeypatch.setattr("app.avatar_lipsync.subprocess.run", probe)
     assert _probe_avatar_output(avatar_video) is None
+
+
+@pytest.mark.parametrize("picture_seconds,audio_seconds", [(0.3, 8), (8, 0.3), (1, 1)])
+def test_truncated_avatar_cache_is_regenerated_against_input_audio(
+    tmp_path, avatar_video, picture_seconds, audio_seconds,
+):
+    request = replace(_request(tmp_path), audio_path=str(avatar_video))
+    calls = []
+    def runner(command):
+        payload = json.loads(Path(command[command.index("--request") + 1]).read_text())
+        output = Path(payload["output_path"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(avatar_video.read_bytes())
+        calls.append(output)
+        Path(command[command.index("--response") + 1]).write_text(json.dumps({
+            "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
+            "duration_seconds": 8.0, "alignment_evidence": "worker evidence",
+        }))
+    service = AvatarAndLipSyncService(tmp_path / "outputs", _configured_provider(tmp_path, runner))
+    original = service.render(request)
+    assert original.status == "succeeded"
+    cache = Path(original.artifact_path)
+    # Simulate an interrupted/partial file left at the disposable cache path.
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+        f"color=s=64x64:r=25:d={picture_seconds}", "-f", "lavfi", "-i",
+        f"anullsrc=r=16000:cl=mono:d={audio_seconds}", "-c:v", "libx264",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", str(cache),
+    ], check=True)
+    restored = service.render(request)
+    assert restored.status == "succeeded"
+    assert restored.duration_seconds == 8.0
+    assert len(calls) == 2
+    assert restored.artifact_path == original.artifact_path
+    assert _probe_avatar_output(cache, audio_path=avatar_video)[0] == 8.0

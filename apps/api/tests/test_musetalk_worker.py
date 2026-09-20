@@ -94,3 +94,11 @@ def test_inference_stdout_error_is_not_hidden_by_stderr_warnings(tmp_path, monke
         }, tmp_path / "runtime")
     assert "Native library initialization warning" in str(failure.value)
     assert not (tmp_path / "result.mp4").exists()
+
+
+@pytest.mark.parametrize("duration", ["nan", "inf", "0", "-1"])
+def test_input_media_duration_must_be_finite_and_positive(tmp_path, monkeypatch, duration):
+    monkeypatch.setattr(worker.subprocess, "run", lambda command, **kwargs:
+        subprocess.CompletedProcess(command, 0, stdout=duration, stderr=""))
+    with pytest.raises(worker.WorkerFailure, match="finite and positive"):
+        worker._probe_duration(tmp_path / "audio.wav")
