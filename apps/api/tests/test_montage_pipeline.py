@@ -3686,7 +3686,7 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     assert data['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
     assert data['audio_timeline']['tracks'][0]['clips'][0]['fade_out_ms']==400
     assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
-    restored=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'included_step_indices':[0,1,2]})
+    restored=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'raw_command':'恢复第2项'})
     assert restored.status_code==200
     assert restored.json()['proposal']['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==-3
     assert state.client.post(base+'/edits/'+proposal['id']+'/confirm').status_code==200

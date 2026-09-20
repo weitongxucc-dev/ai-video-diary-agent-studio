@@ -600,7 +600,7 @@ describe("CreationTaskWorkspace", () => {
     initial.montage!.clips=[{id:"clip-1",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",source_start_seconds:0,source_end_seconds:3,timeline_start_seconds:0,timeline_end_seconds:3,match_score:.9,match_reasons:[],needs_confirmation:false,role:"b_roll",locked:false,manually_selected:false}];
     const base=exactPreview(initial.task,"EditCompoundTimeline");
     const steps=[{index:0,command:"当前镜头亮一点",enabled:true},{index:1,command:"配音小一点",enabled:true}];
-    const original={...base,proposal:{...base.proposal,operation:{operation_type:"EditCompoundTimeline",payload:{selection_enabled:true,steps}},preview:{before:{ref:"before",label:"修改前",detail:"",video_url:"/before.mp4"},after:{ref:"after",label:"修改后",detail:"",video_url:"/after.mp4"}}}};
+    const original={...base,intent:{...base.intent,raw_command:"当前镜头亮一点，同时配音小一点"},proposal:{...base.proposal,operation:{operation_type:"EditCompoundTimeline",payload:{selection_enabled:true,steps}},preview:{before:{ref:"before",label:"修改前",detail:"",video_url:"/before.mp4"},after:{ref:"after",label:"修改后",detail:"",video_url:"/after.mp4"}}}};
     mocks.previewEdit.mockResolvedValue(original);
     mocks.previewSelection.mockResolvedValue({...original,proposal:{...original.proposal,id:"selected-proposal",operation:{operation_type:"EditCompoundTimeline",payload:{selection_enabled:true,steps:[steps[0],{...steps[1],enabled:false}]}},preview:{...original.proposal.preview,after:{...original.proposal.preview.after,video_url:"/selected.mp4"}}}});
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
@@ -610,6 +610,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:"预览修改"}));
     const checkbox=await screen.findByLabelText("保留修改2：配音小一点");
     fireEvent.click(checkbox);
+    expect(screen.getByLabelText("局部修改要求")).toBeDisabled();
     expect(screen.getByRole("button",{name:"确认修改"})).toBeDisabled();
     expect(screen.queryByLabelText("修改后画面")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button",{name:"重新预览所选修改"}));
@@ -617,6 +618,15 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(()=>expect(screen.getByLabelText("修改后画面")).toHaveAttribute("src","/selected.mp4"));
     expect(screen.getByRole("button",{name:"确认修改"})).toBeEnabled();
     expect(screen.getByLabelText("保留修改2：配音小一点")).not.toBeChecked();
+    mocks.previewSelection.mockResolvedValue({...original,proposal:{...original.proposal,id:"restored-proposal"}});
+    fireEvent.change(screen.getByLabelText("局部修改要求"),{target:{value:"恢复第2项"}});
+    expect(screen.getByLabelText("保留修改2：配音小一点")).toBeDisabled();
+    expect(screen.getByRole("button",{name:"确认修改"})).toBeDisabled();
+    expect(screen.queryByLabelText("修改后画面")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"预览修改"}));
+    await waitFor(()=>expect(mocks.previewSelection).toHaveBeenLastCalledWith("task-1","selected-proposal","恢复第2项"));
+    await waitFor(()=>expect(screen.getByLabelText("保留修改2：配音小一点")).toBeChecked());
+    expect(screen.getByRole("button",{name:"确认修改"})).toBeEnabled();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 

@@ -504,9 +504,9 @@ export function previewCreationTaskEdit(
   );
 }
 
-export function previewCompoundSelection(taskId:string,proposalId:string,includedStepIndices:number[]):Promise<CreationTaskEditPreviewResponse>{
+export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse>{
   return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview`,
-    {method:"POST",body:JSON.stringify({included_step_indices:includedStepIndices})});
+    {method:"POST",body:JSON.stringify(typeof selection==="string"?{raw_command:selection}:{included_step_indices:selection})});
 }
 
 export function confirmCreationTaskEdit(

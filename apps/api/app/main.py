@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.compound_edits import compile_compound_edit
+from app.compound_edits import compile_compound_edit, compile_compound_selection
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
@@ -7764,12 +7764,16 @@ def preview_compound_selection(task_id:str,proposal_id:str,request:Request,paylo
         raise HTTPException(status_code=409,detail="当前提案不能重新选择，请重新预览原始要求")
     if task.current_timeline_version_id!=data.get("base_version_id"):
         raise HTTPException(status_code=409,detail="时间线已变化，请重新预览原始要求")
+    if (payload.included_step_indices is None)==(payload.raw_command is None):
+        raise HTTPException(status_code=422,detail="请提供保留项或调整要求，不能同时提供两种")
+    try:included=payload.included_step_indices if payload.raw_command is None else compile_compound_selection(payload.raw_command,data["steps"])
+    except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
     intent=production_repo.get_edit_intent(workspace_id,proposal.intent_id)
     return _preview_compound_edit(task,request,CreationTaskEditPreviewRequest(raw_command=intent.raw_command,
-        context_stage=intent.context_stage,selected_object_refs=intent.scope["context_refs"],playhead_ms=intent.playhead_ms),payload.included_step_indices)
+        context_stage=intent.context_stage,selected_object_refs=intent.scope["context_refs"],playhead_ms=intent.playhead_ms),included,selection_command=payload.raw_command)
 
 
-def _preview_compound_edit(task,request,payload,included_step_indices=None):
+def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
     workspace_id=current_workspace_id(request)
     # Narrow candidate commands before loading the montage.
     if not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):return None
@@ -7794,7 +7798,7 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None):
     refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
         raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
-        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs},constraints={"preserve_timing":True,"preserve_subtitles":True},confidence=1,status="interpreted"))
+        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_timing":True,"preserve_subtitles":True},confidence=1,status="interpreted"))
     detail="；".join(step['command'] for step in steps if step['enabled'])
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,intent_id=intent.id,
         summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,"selection_enabled":True,

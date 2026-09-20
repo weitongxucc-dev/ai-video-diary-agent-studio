@@ -71,3 +71,36 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
     if any(part in clauses for part in ('画面不变','不改画面')) and result.clips!=plan.clips:
         raise ValueError('画面不变与镜头修改冲突，请明确要保留或修改的内容')
     return result,steps
+
+
+def compile_compound_selection(command,steps):
+    """Resolve a follow-up against this proposal's stable step numbers."""
+    text=command.strip().rstrip('。！')
+    enabled={step['index'] for step in steps if step['enabled']}
+    available={step['index'] for step in steps}
+    if text in {'恢复全部修改','全部恢复','保留全部修改'}:
+        chosen=available
+    else:
+        match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(画面|声音|音频)(?:修改|调整)?',text)
+        if match:
+            action=match[1];kind='AdjustVisualEffects' if match[2]=='画面' else 'EditAudioTimeline'
+            targets={step['index'] for step in steps if step['operation_type']==kind}
+        else:
+            number=r'(?:\d+|[一二三四五六七八九十]+)'
+            match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(第?'+number+r'项?(?:(?:、|和|及|，)第?'+number+r'项?)*)(?:修改)?',text)
+            if not match:raise ValueError('请明确要保留或取消的项目，例如“取消第2项”或“只保留画面修改”')
+            action=match[1]
+            def integer(value):
+                if value.isdecimal():return int(value)
+                digits={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9}
+                if value=='十':return 10
+                if value in digits:return digits[value]
+                tens=re.fullmatch(r'([一二三四五六七八九]?)十([一二三四五六七八九]?)',value)
+                if not tens:raise ValueError('修改序号无法识别，请使用阿拉伯数字')
+                return digits.get(tens[1],1)*10+digits.get(tens[2],0)
+            targets={integer(value)-1 for value in re.findall(number,match[2])}
+        if not targets or not targets<=available:raise ValueError('指定修改项不存在，请查看当前提案编号')
+        chosen=enabled-targets if action in {'取消','去掉'} else enabled|targets if action=='恢复' else targets
+    if not chosen:raise ValueError('没有剩余修改；取消整份提案请使用取消按钮')
+    if chosen==enabled:raise ValueError('保留项没有变化，请指定其他修改')
+    return sorted(chosen)

@@ -1178,7 +1178,8 @@ class CreationTaskSubtitleCueUpdateRequest(BaseModel):
 
 class CompoundEditSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    included_step_indices: list[int] = Field(min_length=1,max_length=100)
+    included_step_indices: list[int] | None = Field(default=None,min_length=1,max_length=100)
+    raw_command: str | None = Field(default=None,min_length=2,max_length=200)
 
 
 class CreationTaskEditPreviewRequest(BaseModel):
