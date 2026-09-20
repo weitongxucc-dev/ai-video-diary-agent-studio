@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.linked_timeline import splice_clip
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
     Authorization,
@@ -3212,6 +3213,8 @@ def _current_subtitle_tracks(
     )
     if tracks:
         return tracks
+    if current_version.snapshot.get("subtitle_track_ids") == []:
+        return []
     if montage is None:
         try:
             montage = creation_task_montage_plan_from_payload(
@@ -4958,6 +4961,7 @@ def _persist_typed_montage_edit(
     narration_segments: list[NarrationSegment] | None = None,
     narration_artifact: NarrationArtifactRecord | None = None,
     subtitle_source_version: TimelineVersion | None = None,
+    edited_subtitle_tracks: list[SubtitleTrack] | None = None,
 ) -> CreationTaskEditConfirmResponse:
     montage_payload = creation_task_montage_plan_to_payload(updated_plan)
     applied_at = utc_now()
@@ -4977,11 +4981,12 @@ def _persist_typed_montage_edit(
     source_version = subtitle_source_version or base_version
     source_plan = creation_task_montage_plan_from_payload(source_version.snapshot["montage"])
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
-        for track in _current_subtitle_tracks(workspace_id, task,
-            current_version=source_version, montage=source_plan)]
-    if operation_type == "RegenerateNarrationSegment":
+        for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
+            _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip"}:
         try:
-            carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
+            if operation_type == "RegenerateNarrationSegment":
+                carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
             for index, track in enumerate(carried_tracks):
                 if track.artifact_ref is not None:
                     continue
@@ -4990,8 +4995,8 @@ def _persist_typed_montage_edit(
                     kind="subtitle_retime",
                     input_refs=[f"timeline:{source_version.id}", updated_plan.narration_audio_path],
                     content=render_srt(_execution_subtitle_track(track)),
-                    engine="narration-clock-v1",
-                    parameters={"language": track.language, "method": "proportional_cue_clock"},
+                    engine="timeline-clock-v1",
+                    parameters={"language": track.language, "operation": operation_type},
                 )
                 carried_tracks[index] = _clone_subtitle_track(track,
                     timeline_version_id=operation.result_version_id,
@@ -5880,6 +5885,12 @@ def preview_creation_task_edit(
             ),
         )
     if selected_ref.startswith("clip:") and payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        linked_commands = {"删除这个镜头": "DeleteClip", "删除当前镜头": "DeleteClip",
+            "删掉这个镜头，把后面接上": "DeleteClip", "复制这个镜头": "DuplicateClip", "复制当前镜头": "DuplicateClip"}
+        linked_type = linked_commands.get(command.rstrip("。！"))
+        if linked_type:
+            return _preview_linked_clip_edit(task_id, request,
+                CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix("clip:")))
         split_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:在|从)\s*(\d+(?:\.\d+)?)\s*秒(?:处)?(?:分割|切开)[。！]?", command)
         split_here = command.rstrip("。！") in {"从这里分割镜头", "在播放位置分割镜头", "从这里切开", "分割当前镜头"}
         if split_match or split_here:
@@ -7066,6 +7077,21 @@ def confirm_creation_task_edit(
             operation_payload=dict(operation_payload),
             narration_segments=segments, narration_artifact=narration_record,
         )
+    if operation_type in {"DeleteClip", "DuplicateClip"} and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联编辑")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        try:
+            updated, tracks = splice_clip(plan, tracks, _effective_audio_timeline(plan),
+                operation_payload["clip_id"], "delete" if operation_type == "DeleteClip" else "duplicate")
+            _prepare_changed_montage(updated, message="镜头及关联音轨、字幕已更新，请重新渲染。")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base, updated_plan=updated, operation_type=operation_type,
+            operation_payload=operation_payload, edited_subtitle_tracks=tracks)
     if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ReorderClip", "SetClipLock", "ConfirmClip"} or not isinstance(operation_payload, dict):
         raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
     required_strings = {
@@ -7142,6 +7168,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
+        return _preview_linked_clip_edit(task_id, request, payload)
     if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ReorderClip", "SetClipLock", "ConfirmClip"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
@@ -7433,6 +7461,43 @@ def apply_creation_task_exact_edit(
         operation_payload=dict(proposal.operation["payload"]),
     )
 
+
+
+def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id"}:
+        raise HTTPException(status_code=422, detail="关联删除或复制只接受一个镜头，不混入其他修改")
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    action = "delete" if payload.operation_type == "DeleteClip" else "duplicate"
+    try:
+        edited, _ = splice_clip(plan, tracks, _effective_audio_timeline(plan), payload.clip_id, action)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    clip = next(clip for clip in plan.clips if clip.id == payload.clip_id)
+    label = "删除" if action == "delete" else "复制"
+    direction = "前移" if action == "delete" else "后移"
+    duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+    summary = f"{label}当前镜头及同时段配音、音乐、音效和字幕，后续内容{direction} {duration:.3f} 秒。"
+    now = utc_now()
+    intent = production_repo.create_edit_intent(EditIntent(
+        id=f"intent_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
+        raw_command=f"{label}当前镜头", context_stage="montage", selected_object_refs=[f"clip:{clip.id}"],
+        playhead_ms=round(clip.timeline_start_seconds * 1000), intent_type="linked_timeline_edit",
+        scope={"kind": "time_range", "start_seconds": clip.timeline_start_seconds, "end_seconds": clip.timeline_end_seconds},
+        constraints={"linked_tracks": True}, confidence=1.0, status="interpreted", created_at=now))
+    proposal = production_repo.create_edit_proposal(EditProposal(
+        id=f"proposal_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id, intent_id=intent.id,
+        summary=summary, target_refs=[f"clip:{clip.id}"],
+        operation={"operation_type": payload.operation_type, "payload": {"clip_id": clip.id, "base_version_id": base.id}},
+        invalidated_refs=[*_logical_montage_output_refs(plan), *(t.artifact_ref for t in tracks if t.artifact_ref)],
+        preview={"before": {"ref": f"timeline:{base.id}", "label": "当前时间线", "detail": f"{len(plan.clips)} 个镜头 · {plan.duration_seconds:.3f} 秒"},
+                 "after": {"ref": f"clip:{clip.id}", "label": "关联编辑后", "detail": f"{len(edited.clips)} 个镜头 · {edited.duration_seconds:.3f} 秒；{summary}"}},
+        external_effects=["原始素材和声音文件保留；确认后可撤销，需要重新渲染。"],
+        status="proposed", created_at=now, updated_at=now))
+    return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
 
 
 def _preview_exact_montage_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
@@ -8002,12 +8067,14 @@ def render_creation_task_montage(
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
     active_subtitle_tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
-    subtitles_visible = any(track.status == "valid" and track.style.get("enabled", True) for track in active_subtitle_tracks) if active_subtitle_tracks else bool(plan.cues)
     active_version = (
         production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         if task.current_timeline_version_id
         else None
     )
+    explicit_subtitles = active_version is not None and "subtitle_track_ids" in active_version.snapshot
+    subtitles_visible = (any(track.status == "valid" and track.style.get("enabled", True) for track in active_subtitle_tracks)
+        if active_subtitle_tracks or explicit_subtitles else bool(plan.cues))
     active_cover = (
         _cover_asset_for_version(workspace_id, task.id, active_version)
         if active_version is not None
@@ -8115,6 +8182,7 @@ def render_creation_task_montage(
                         snapshot={
                             "montage": rendered_payload,
                             **_current_narration_snapshot(workspace_id, current_task),
+                        **({"subtitle_track_ids": []} if explicit_subtitles and not active_subtitle_tracks else {}),
                             "output_refs": [
                                 reusable_video.logical_ref,
                                 reusable_subtitles.logical_ref,
@@ -8148,7 +8216,7 @@ def render_creation_task_montage(
                                     ),
                                 )
                             )
-                    else:
+                    elif not explicit_subtitles:
                         initial_track = _subtitle_track_from_montage(
                             workspace_id, task, version, plan
                         )
@@ -8221,7 +8289,7 @@ def render_creation_task_montage(
                         rendering_plan,
                         narration_path,
                         job_staging_path=Path(staging),
-                        subtitle_tracks=active_subtitle_tracks or None,
+                        subtitle_tracks=active_subtitle_tracks if active_subtitle_tracks or explicit_subtitles else None,
                     )
                     rendered = plan
                     rendered.status = rendered_variant.status
@@ -8339,6 +8407,7 @@ def render_creation_task_montage(
                     snapshot={
                         "montage": rendered_payload,
                         **_current_narration_snapshot(workspace_id, current_task),
+                        **({"subtitle_track_ids": []} if explicit_subtitles and not active_subtitle_tracks else {}),
                         "output_refs": output_refs,
                         "transform_run_id": transform.id,
                         **({"cover_asset_id": f"cover_{version_id}"} if active_cover else {}),
@@ -8397,7 +8466,7 @@ def render_creation_task_montage(
                                 ),
                             )
                         )
-                else:
+                elif not explicit_subtitles:
                     initial_track = _subtitle_track_from_montage(
                         workspace_id, task, version, rendered
                     )

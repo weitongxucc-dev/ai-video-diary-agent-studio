@@ -681,8 +681,12 @@ describe("CreationTaskWorkspace", () => {
       operation_type: "SplitClip", clip_id: "clip-1", split_time_seconds: 1.2,
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
-
-
+    expect(screen.getByRole("button", { name: "预览删除" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "预览复制" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
+      operation_type: "DuplicateClip", clip_id: "clip-1",
+    }));
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
   });
 
   it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {

@@ -3120,3 +3120,49 @@ def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(pe
     assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
+
+
+@pytest.mark.parametrize("action,expected", [("DeleteClip", 4), ("DuplicateClip", 12)])
+def test_linked_clip_edits_preview_audio_and_undo(person_render_edit_state, action, expected):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type": action, "clip_id": state.montage.clips[0].id})
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    edited = state.client.get(base).json()
+    assert edited["montage"]["duration_seconds"] == expected
+    clips = edited["montage"]["audio_timeline"]["tracks"][0]["clips"]
+    assert sum(c["source_end_ms"] - c["source_start_ms"] for c in clips) == expected * 1000
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["audio_timeline"] == edited["montage"]["audio_timeline"]
+
+
+def test_linked_delete_removes_last_caption_without_reviving_projection(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="only-caption", workspace_id=state.workspace_id,
+        task_id=state.task.id, timeline_version_id=version.id, language="zh-CN", source_language=None,
+        style={}, cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="被删除的字幕", start_seconds=0, end_seconds=4)],
+        generation_method="timeline", model_id=None, artifact_ref="artifacts/old.srt", transform_id="old", status="valid"))
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
+    assert preview.status_code == 200, preview.text
+    result = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert result.status_code == 200, result.text
+    assert state.client.get(base).json()["subtitle_tracks"] == []
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"][0]["text"] == "被删除的字幕"
+
+
+def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    result = state.client.post(base + "/edits/exact", json={"operation_type":"SetClipLock", "clip_id":state.montage.clips[1].id, "locked":True})
+    assert result.status_code == 200, result.text
+    result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
+    assert result.status_code == 409 and "锁定" in result.text
