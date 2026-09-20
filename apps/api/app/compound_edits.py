@@ -1,5 +1,7 @@
 """Compile cross-object picture/audio requests against one existing montage."""
 from copy import deepcopy
+from dataclasses import replace
+from app.subtitle_style import compile_subtitle_style_command, validate_style_patch
 import re
 from app.audio_timeline import apply_audio_edit, compile_audio_command
 from app.visual_effects import compile_visual_command, with_visual_effects
@@ -11,15 +13,27 @@ def compile_compound_edit(command, plan, audio, selected_refs, base_version_id, 
     active=[part for part in clauses if part not in constraints]
     # Single-domain requests continue through their existing exact-edit consumer.
     def audio_subject(part):return re.match(r'(?:把)?(?:当前|这个)?(音乐|配音|原声|音效)(?:片段(\d+))?',part)
+    def subtitle_subject(part):return '字幕' in part or part.startswith('英文放在中文')
     has_picture=any(re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part) for part in active) or any(ref.startswith('clip:') for ref in selected_refs)
-    if len(active)<2 or not has_picture or not any(audio_subject(part) for part in active) or all(audio_subject(part) for part in active):return None
+    has_subtitle=any(subtitle_subject(part) for part in active)
+    if len(active)<2 or (not has_subtitle and (not has_picture or not any(audio_subject(part) for part in active) or all(audio_subject(part) for part in active))):return None
     included=set(range(len(active))) if included_step_indices is None else set(included_step_indices)
     if not included or any(type(index) is not int or index<0 or index>=len(active) for index in included):
         raise ValueError('请保留至少一项有效修改；取消全部请使用取消提案')
     result=deepcopy(plan);result.audio_timeline=audio.model_copy(deep=True)
-    steps=[];last_audio_prefix=None
+    steps=[];last_audio_prefix=None;last_subtitle=False
     for step_index,part in enumerate(active):
         routed=part
+        explicit_picture=bool(re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part))
+        if subtitle_subject(part) or (last_subtitle and not audio_subject(part) and not explicit_picture):
+            normalized=part if subtitle_subject(part) else '字幕'+part
+            last_audio_prefix=None;last_subtitle=True
+            descriptor={'index':step_index,'enabled':step_index in included,'operation_type':'ConfigureSubtitleTrack','target_ref':'subtitle:all','command':part}
+            if step_index not in included:steps.append(descriptor);continue
+            patch=compile_subtitle_style_command(normalized)
+            if patch is None:raise ValueError('不能完整执行这项字幕修改：'+part)
+            steps.append({**descriptor,'values':validate_style_patch(patch)});continue
+        last_subtitle=False
         if last_audio_prefix and not audio_subject(part) and not re.match(r'(?:把)?(?:当前|这个)?(?:镜头|画面)',part):
             routed=last_audio_prefix+part
         subject=audio_subject(routed)
@@ -81,9 +95,9 @@ def compile_compound_selection(command,steps):
     if text in {'恢复全部修改','全部恢复','保留全部修改'}:
         chosen=available
     else:
-        match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(画面|声音|音频)(?:修改|调整)?',text)
+        match=re.fullmatch(r'(只保留|保留|取消|去掉|恢复)(画面|声音|音频|字幕)(?:修改|调整)?',text)
         if match:
-            action=match[1];kind='AdjustVisualEffects' if match[2]=='画面' else 'EditAudioTimeline'
+            action=match[1];kind={'画面':'AdjustVisualEffects','字幕':'ConfigureSubtitleTrack'}.get(match[2],'EditAudioTimeline')
             targets={step['index'] for step in steps if step['operation_type']==kind}
         else:
             number=r'(?:\d+|[一二三四五六七八九十]+)'
@@ -104,3 +118,12 @@ def compile_compound_selection(command,steps):
     if not chosen:raise ValueError('没有剩余修改；取消整份提案请使用取消按钮')
     if chosen==enabled:raise ValueError('保留项没有变化，请指定其他修改')
     return sorted(chosen)
+
+
+def apply_compound_subtitles(tracks,steps):
+    patches=[step['values'] for step in steps if step['operation_type']=='ConfigureSubtitleTrack' and step['enabled']]
+    if not patches:return tracks
+    if not any(track.status=='valid' for track in tracks):raise ValueError('当前没有可编辑字幕，请先生成字幕')
+    style={}
+    for patch in patches:style.update(validate_style_patch(patch))
+    return [replace(track,style={**track.style,**style}) if track.status=='valid' else track for track in tracks]

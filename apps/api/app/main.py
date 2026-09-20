@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.compound_edits import compile_compound_edit, compile_compound_selection
+from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles
 from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
@@ -6556,10 +6556,13 @@ def confirm_creation_task_edit(
         try:_task_audio().validate(workspace_id,task_id,candidate.audio_timeline,candidate.duration_seconds)
         except (ValueError,OSError,subprocess.SubprocessError) as exc:
             raise HTTPException(status_code=409,detail="音频来源已变化，请重新预览") from exc
+        base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
+        tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=montage)
+        changed_tracks=apply_compound_subtitles(tracks,operation_payload["steps"])
         _prepare_changed_montage(candidate,message="复合修改已应用，可重新渲染；一次撤销恢复全部修改。")
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=candidate,
-            operation_type="EditCompoundTimeline",operation_payload=operation_payload)
+            operation_type="EditCompoundTimeline",operation_payload=operation_payload,edited_subtitle_tracks=changed_tracks)
     if operation_type == "EditGraphicOverlay" and isinstance(operation_payload,dict):
         if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已变化，请重新预览图文修改")
@@ -7777,7 +7780,7 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
     workspace_id=current_workspace_id(request)
     # Narrow candidate commands before loading the montage.
     if not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):return None
-    if not re.search(r'音乐|配音|原声|音效',payload.raw_command):return None
+    if not re.search(r'音乐|配音|原声|音效|字幕|英文放在中文',payload.raw_command):return None
     try:
         plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task.id))
         audio=_effective_audio_timeline(plan)
@@ -7790,7 +7793,9 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
         _task_audio().validate(workspace_id,task.id,candidate.audio_timeline,candidate.duration_seconds)
         base=_ensure_montage_base_version(workspace_id,task,plan)
         tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
-        records=[_publish_task_picture_preview(workspace_id,task,base,item,tracks,kind="compound_preview",parameters={"steps":steps,"side":side}) for side,item in (("before",plan),("after",candidate))]
+        changed_tracks=apply_compound_subtitles(tracks,steps)
+        if '字幕不变' in payload.raw_command and changed_tracks!=tracks:raise ValueError("字幕不变与字幕修改冲突，请明确要保留的内容")
+        records=[_publish_task_picture_preview(workspace_id,task,base,item,render_tracks,kind="compound_preview",parameters={"steps":steps,"side":side}) for side,item,render_tracks in (("before",plan,tracks),("after",candidate,changed_tracks))]
     except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
     if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id!=base.id:
@@ -7798,7 +7803,7 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
     refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
         raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
-        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_timing":True,"preserve_subtitles":True},confidence=1,status="interpreted"))
+        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_timing":True,"preserve_subtitle_text":True},confidence=1,status="interpreted"))
     detail="；".join(step['command'] for step in steps if step['enabled'])
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,intent_id=intent.id,
         summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,"selection_enabled":True,
@@ -8432,6 +8437,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "ChangeCanvas",
         "SetClipTransition",
         "EditGraphicOverlay",
+        "EditCompoundTimeline",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):

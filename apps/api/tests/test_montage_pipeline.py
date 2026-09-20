@@ -3695,3 +3695,34 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     assert state.client.post(route,json={'included_step_indices':[0]}).status_code==409
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['audio_timeline']==before['montage']['audio_timeline']
+
+
+def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="compound-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="compound-cue",source_cue_id=None,text="Local video",start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/compound.srt",transform_id="compound-transform",status="valid"))
+    before=state.client.get(base).json();clip=before['montage']['clips'][0];captured=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    def publish(workspace,task,version,plan,tracks,**kwargs):
+        captured.append([track.style for track in tracks]);return SimpleNamespace(id='subtitle-compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时字幕字号改为64，配音小一点','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert captured[-1][0]['font_size']==64
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    selected=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'raw_command':'只保留字幕修改'})
+    assert selected.status_code==200,selected.text
+    partial=selected.json()['proposal'];assert partial['target_refs']==['subtitle:all']
+    assert state.client.post(base+'/edits/'+partial['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['style']['font_size']==64
+    assert [track['cues'] for track in after['subtitle_tracks']]==[track['cues'] for track in before['subtitle_tracks']]
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert [track['style'] for track in restored['subtitle_tracks']]==[track['style'] for track in before['subtitle_tracks']]
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['style']['font_size']==64
