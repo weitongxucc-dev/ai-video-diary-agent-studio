@@ -100,6 +100,8 @@ def test_script_consumes_style_and_structure_and_rejects_wrong_section_count():
     assert prompt["style_instruction"] == source.style_instruction
     assert prompt["script_structure"] == ["结论", "步骤"]
     assert prompt["requirements"]["section_count"] == 2
+    assert "sections 必须恰好有 2 项" in requests[0]["messages"][0]["content"]
+    assert "同一段落可以包含多个短句" in requests[0]["messages"][0]["content"]
 
 
 def test_template_preflight_does_not_substitute_unrelated_materials(state, monkeypatch):
@@ -114,6 +116,25 @@ def test_template_preflight_does_not_substitute_unrelated_materials(state, monke
     assert result["material_matches"] == []
     assert not result["confirmable"]
     assert any(item["reason"] == "template_material_matches_missing" for item in result["blockers"])
+
+
+@pytest.mark.parametrize("language,text", [
+    ("zh-CN", "字" * 48),
+    ("en-US", "word " * 30),
+    ("zh-CN", "字" * 24 + " word" * 15),
+])
+def test_script_rejects_total_speech_duration_across_sections(language, text):
+    document = _script_document(evidence_ids=["evidence_1"])
+    document["script"]["language"] = language
+    section = document["script"]["sections"][0]
+    document["script"]["sections"] = [{**section, "content": text}, {**section, "content": text}]
+    generator = OpenAICompatibleCreationTaskScriptGenerator(
+        base_url="https://model.invalid/v1", model="test",
+        transport=httpx.MockTransport(lambda request: _response(document)),
+    )
+    # Each section is 12 seconds, but the shared total exceeds the 20-second plan.
+    with pytest.raises(CreationTaskScriptGenerationError, match="24.0 秒"):
+        generator.generate(replace(_script_input(), language=language, duration_target_seconds=20))
 
 
 @pytest.mark.parametrize('ratio',['16:9','1:1'])

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.models import Episode, EpisodeStatus, utc_now
+from app.speech_timing import estimate_speech_seconds
 from app.avatar_lipsync import PronunciationEntry, VoiceProfile as VersionedVoiceProfile
 from app.production import ProductionProfile, VoiceProfile
 from app.voice_clone import (
@@ -279,7 +280,7 @@ class NarrationGenerator:
             raise ValueError("声音参考文件必须是当前工作区已授权的 WAV")
         if reference_path.stat().st_size == 0:
             raise ValueError("声音参考 WAV 为空")
-        if _estimated_text_seconds(text) > max_duration_seconds:
+        if estimate_speech_seconds(text) > max_duration_seconds:
             raise ValueError("文案预计时长超过创作方案上限，请先压缩并重新确认文案")
         pronunciation_dictionary = _pronunciation_dictionary(
             entries=pronunciation_entries,
@@ -363,7 +364,10 @@ class NarrationGenerator:
             )
         if result.duration_seconds > max_duration_seconds:
             resolved_output.unlink(missing_ok=True)
-            raise ValueError("实际配音时长超过创作方案上限，请先压缩并重新确认文案")
+            raise ValueError(
+                "实际配音时长超过创作方案上限，请先压缩并重新确认文案；"
+                f"实际 {result.duration_seconds:.2f} 秒，上限 {max_duration_seconds:g} 秒。"
+            )
         return NarrationArtifact(
             task_id=task_id,
             script_id=script_id,
@@ -786,12 +790,6 @@ def _estimated_narration_seconds(episode: Episode) -> float:
         for section in episode.script.sections
         if section.content.strip()
     )
-
-
-def _estimated_text_seconds(text: str) -> float:
-    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_words = len(re.findall(r"[A-Za-z0-9]+", text))
-    return chinese_chars / 4.0 + latin_words / 2.5
 
 
 def compile_narration_command(instruction: str) -> float:

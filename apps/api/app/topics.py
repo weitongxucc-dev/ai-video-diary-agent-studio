@@ -22,6 +22,7 @@ from app.product_hunt import (
     ProductHuntResponseError,
 )
 from app.sources import ObsidianVault, TopicSourceItem
+from app.speech_timing import estimate_speech_seconds, CHINESE_CHARACTERS_PER_SECOND, LATIN_WORDS_PER_SECOND
 
 
 class TopicGenerationConfigurationError(RuntimeError):
@@ -669,6 +670,17 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "顶层必须为 {\"script\": {title, language, sections}}。"
                         f"language 必须是 {input.language}。sections 每项必须包含 title、content、"
                         "visual_prompt、evidence_reference_ids；证据只能引用输入 reference_id。"
+                        + (
+                            f"所选模板要求 sections 必须恰好有 {input.script_section_count} 项。"
+                            "选题提纲是内容要点，不是一项对应一个段落；须将要点整合进指定段数。"
+                            "同一段落可以包含多个短句，不要把每个句子单独拆成 sections 项。"
+                            if input.script_section_count is not None else ""
+                        )
+                        + f"全部口播正文总时长不能超过 {input.duration_target_seconds} 秒。"
+                        f"按中文每秒 {CHINESE_CHARACTERS_PER_SECOND:g} 字、英文每秒 {LATIN_WORDS_PER_SECOND:g} 词估算，混合时两部分相加。"
+                        f"为停顿留出余量：纯英文正文尽量不超过 {int(input.duration_target_seconds * LATIN_WORDS_PER_SECOND * .8)} 词，"
+                        f"纯中文尽量不超过 {int(input.duration_target_seconds * CHINESE_CHARACTERS_PER_SECOND * .8)} 字。"
+                        "只保留最重要的要点，不必逐项复述完整提纲；这些限制针对全部段落合计。"
                     ),
                 },
                 {
@@ -737,7 +749,16 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             ) from exc
         script = self._validated_script(document, source_aliases, input.language)
         if input.script_section_count and len(script.sections) != input.script_section_count:
-            raise self._schema_failure("文字模型返回的段落数量不符合所选模板，请重新生成。")
+            raise self._schema_failure(
+                f"文字模型返回 {len(script.sections)} 段，模板要求 {input.script_section_count} 段；"
+                "段落数量不符合所选模板，请重新生成。"
+            )
+        estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in script.sections))
+        if estimated_seconds > input.duration_target_seconds:
+            raise self._schema_failure(
+                f"文案预计约 {estimated_seconds:.1f} 秒，超过方案 {input.duration_target_seconds} 秒上限；"
+                "请压缩文案后重新生成。"
+            )
         return script
 
     def _validated_script(
