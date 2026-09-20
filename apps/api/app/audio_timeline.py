@@ -405,3 +405,27 @@ def probe_audio_source(path: Path) -> float:
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("源音频时长无效")
     return duration
+
+
+def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: int,
+                           rate: float, duration_ms: int, output: Path) -> Path:
+    """Local pitch-preserving tempo transform; pad/trim only encoder tail rounding."""
+    if not math.isfinite(rate) or not .25 <= rate <= 4 or duration_ms < 10:
+        raise ValueError("音频变速参数无效")
+    if not 0 <= source_start_ms < source_end_ms <= round(probe_audio_source(source) * 1000) + 20:
+        raise ValueError("变速音频源区间无效")
+    tempos = []
+    remaining = rate
+    while remaining > 2:
+        tempos.append("atempo=2")
+        remaining /= 2
+    while remaining < .5:
+        tempos.append("atempo=0.5")
+        remaining /= .5
+    tempos.append(f"atempo={remaining:.9f}")
+    chain = [f"atrim=start={source_start_ms / 1000}:end={source_end_ms / 1000}", "asetpts=PTS-STARTPTS",
+        *tempos, "aresample=48000", f"apad=whole_dur={duration_ms / 1000}", f"atrim=duration={duration_ms / 1000}"]
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", str(source),
+        "-af", ",".join(chain), "-c:a", "pcm_s16le", "-ar", "48000", str(output)],
+        capture_output=True, check=True, timeout=180)
+    return output

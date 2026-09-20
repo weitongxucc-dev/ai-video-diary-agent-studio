@@ -3202,3 +3202,30 @@ def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_rende
     assert response.status_code == 409 and "口型" in response.text
     response = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为9倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert response.status_code == 422
+
+
+def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    published = []
+    def publish(*args, **kwargs):
+        published.append(kwargs["kind"])
+        return SimpleNamespace(id=f"preview-{len(published)}", logical_ref=f"artifacts/audio-{len(published)}.wav")
+    service = SimpleNamespace(source=lambda *args: main_module.Path("fixture.wav"), publish=publish, validate=lambda *args: None)
+    monkeypatch.setattr(main_module, "_task_audio", lambda: service)
+    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs: SimpleNamespace(id="visual-preview", logical_ref="artifacts/preview.mp4"))
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeLinkedSpeed", "clip_id":state.montage.clips[1].id,"playback_rate":2})
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert published == ["audio_source", "audio_preview", "audio_preview"]
+    count = len(published)
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    assert len(published) == count  # Confirmation uses the audio the user previewed.
+    after = state.client.get(base).json()
+    assert after["montage"]["duration_seconds"] == 6
+    assert after["montage"]["audio_timeline"]["tracks"][0]["clips"][-1]["source_ref"] == "artifacts/audio-1.wav"
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]

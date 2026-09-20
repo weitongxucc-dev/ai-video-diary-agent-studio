@@ -692,6 +692,12 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeClipSpeed", clip_id: "clip-1", playback_rate: 1.5,
     }));
+    expect(screen.getByRole("button", { name: "预览关联变速" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("关联倍速"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览关联变速" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
+      operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
+    }));
   });
 
   it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {

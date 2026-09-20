@@ -19,7 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.visual_effects import clip_playback_rate
-from app.linked_timeline import splice_clip
+from app.linked_timeline import splice_clip, retime_clip
+from app.audio_timeline import render_stretched_audio
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
     Authorization,
@@ -4984,7 +4985,7 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
             _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -5887,6 +5888,13 @@ def preview_creation_task_edit(
             ),
         )
     if selected_ref.startswith("clip:") and payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        linked_speed = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:改成|改为|调到)\s*(\d+(?:\.\d+)?)\s*倍速[，, ]*(?:声音和字幕一起|同步声音和字幕|连同声音字幕)[。！]?", command)
+        if linked_speed:
+            value = float(linked_speed.group(1))
+            if not .25 <= value <= 4:
+                raise HTTPException(status_code=422, detail="关联倍速须在0.25–4之间")
+            return _preview_linked_speed(task_id, request, CreationTaskExactEditRequest(
+                operation_type="ChangeLinkedSpeed", clip_id=selected_ref.removeprefix("clip:"), playback_rate=value))
         speed_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:画面)?(?:改成|改为|调到|设为)\s*(\d+(?:\.\d+)?)\s*倍速[，, ]*(?:保留配音|声音不变|保持时长)[。！]?", command)
         if speed_match:
             if not .25 <= float(speed_match.group(1)) <= 4:
@@ -7086,6 +7094,29 @@ def confirm_creation_task_edit(
             operation_payload=dict(operation_payload),
             narration_segments=segments, narration_artifact=narration_record,
         )
+    if operation_type == "ChangeLinkedSpeed" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联变速")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        service = _task_audio()
+        def existing_audio(clip, rate, duration):
+            ref = operation_payload["stretched_audio"].get(_stretch_key(clip, rate, duration))
+            if not isinstance(ref, str):
+                raise ValueError("变速预览音频已失效，请重新预览")
+            service.source(workspace_id, task_id, ref)
+            return ref
+        try:
+            updated, tracks = retime_clip(plan, tracks, _effective_audio_timeline(plan),
+                operation_payload["clip_id"], operation_payload["playback_rate"], existing_audio)
+            service.validate(workspace_id, task_id, updated.audio_timeline, updated.duration_seconds)
+            _prepare_changed_montage(updated, message="关联变速已应用，声音、字幕与后续内容同步；请重新渲染。")
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base, updated_plan=updated, operation_type=operation_type,
+            operation_payload=operation_payload, edited_subtitle_tracks=tracks)
     if operation_type in {"DeleteClip", "DuplicateClip"} and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联编辑")
@@ -7178,6 +7209,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "ChangeLinkedSpeed":
+        return _preview_linked_speed(task_id, request, payload)
     if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
         return _preview_linked_clip_edit(task_id, request, payload)
     if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ChangeClipSpeed", "ReorderClip", "SetClipLock", "ConfirmClip"}:
@@ -7471,6 +7504,78 @@ def apply_creation_task_exact_edit(
         operation_payload=dict(proposal.operation["payload"]),
     )
 
+
+
+def _stretch_key(clip, rate, duration):
+    return hashlib.sha256(json.dumps([clip.source_ref, clip.source_start_ms, clip.source_end_ms,
+        rate, duration]).encode()).hexdigest()
+
+
+def _preview_linked_speed(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if not payload.clip_id or payload.playback_rate is None or payload.model_fields_set - {"operation_type", "clip_id", "playback_rate"}:
+        raise HTTPException(status_code=422, detail="关联变速需要镜头和倍速，不混入其他操作")
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    service = _task_audio()
+    stretched = {}
+    def stretch(clip, rate, duration):
+        key = _stretch_key(clip, rate, duration)
+        if key not in stretched:
+            source = service.source(workspace_id, task_id, clip.source_ref)
+            record = service.publish(workspace_id, task_id, kind="audio_source",
+                parameters={"action":"pitch_preserving_tempo", "rate":rate, "source_start_ms":clip.source_start_ms,
+                    "source_end_ms":clip.source_end_ms, "duration_ms":duration}, input_refs=[clip.source_ref],
+                produce=lambda output: render_stretched_audio(source, clip.source_start_ms, clip.source_end_ms, rate, duration, output))
+            stretched[key] = record.logical_ref
+        return stretched[key]
+    try:
+        edited, _ = retime_clip(plan, tracks, _effective_audio_timeline(plan), payload.clip_id, payload.playback_rate, stretch)
+        service.validate(workspace_id, task_id, edited.audio_timeline, edited.duration_seconds)
+        previews = {}
+        for side, candidate in (("before", plan), ("after", edited)):
+            clip = next(clip for clip in candidate.clips if clip.id == payload.clip_id)
+            if clip.person_render_id:
+                person = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
+                source = _person_render_media_path(person)
+                if source is None or clip.source_end_seconds > (person.duration_seconds or 0) + .001:
+                    raise ValueError("人物口型源片段不可用，请先重新生成")
+            else:
+                source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            video = publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
+                workspace_id, task_id, clip, source, _portrait_processor(workspace_id), kind="speed_preview")
+            timeline = _effective_audio_timeline(candidate)
+            audio = service.publish(workspace_id, task_id, kind="audio_preview",
+                parameters={"action":"linked_speed_preview", "side":side, "timeline":timeline.model_dump(),
+                    "start_seconds":clip.timeline_start_seconds, "end_seconds":clip.timeline_end_seconds},
+                input_refs=sorted({item.source_ref for track in timeline.tracks for item in track.clips}),
+                produce=lambda output: render_audio_mix(timeline, candidate.duration_seconds,
+                    lambda ref: service.source(workspace_id, task_id, ref), output,
+                    start_seconds=clip.timeline_start_seconds, end_seconds=clip.timeline_end_seconds))
+            previews[side] = {"ref": video.logical_ref, "label":"修改前" if side == "before" else "关联变速后",
+                "detail":f"所选段 {clip.timeline_end_seconds-clip.timeline_start_seconds:.3f} 秒 · 整片 {candidate.duration_seconds:.3f} 秒；画面预览最多5秒，音频为整段混音。",
+                "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{video.id}",
+                "audio_url":f"/api/creation-tasks/{task_id}/audio/artifacts/{audio.id}"}
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "关联变速预览失败，请检查本地素材和FFmpeg") from exc
+    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
+    now = utc_now()
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}", workspace_id=workspace_id,
+        task_id=task_id, raw_command=f"关联变速 {payload.playback_rate} 倍", context_stage="montage",
+        selected_object_refs=[f"clip:{payload.clip_id}"], playhead_ms=None, intent_type="linked_timeline_edit",
+        scope={"kind":"clip", "clip_id":payload.clip_id}, constraints={"linked_tracks":True}, confidence=1,
+        status="interpreted", created_at=now))
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
+        task_id=task_id, intent_id=intent.id, summary=f"所选镜头连同声音、字幕按当前速度再变速 {payload.playback_rate} 倍，后续内容同步移动。",
+        target_refs=[f"clip:{payload.clip_id}"], operation={"operation_type":"ChangeLinkedSpeed", "payload":{
+            "base_version_id":base.id, "clip_id":payload.clip_id, "playback_rate":payload.playback_rate, "stretched_audio":stretched}},
+        invalidated_refs=[*_logical_montage_output_refs(plan), *(track.artifact_ref for track in tracks if track.artifact_ref)],
+        preview=previews, external_effects=["本地保持音高变速；请试听音色与节奏。确认后才改变时间线，可撤销。"],
+        status="proposed", created_at=now, updated_at=now))
+    return _edit_preview_response(intent, proposal)
 
 
 def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
@@ -8955,7 +9060,6 @@ def _render_montage_with_resolved_clip_sources(
                         repair_action="重新生成所选人物口型片段后再渲染。",
                     )
                 clip.source_path = str(output)
-                clip.source_end_seconds = clip.source_start_seconds + clip.timeline_end_seconds - clip.timeline_start_seconds
                 if clip.source_end_seconds > (render.duration_seconds or 0.0) + .001:
                     raise ValueError("人物口型源片段不足以覆盖当前镜头")
                 continue
