@@ -23,7 +23,7 @@ from app.graphic_overlays import TextOverlay, ImageOverlay, validate_overlays, c
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate
-from app.linked_timeline import splice_clip, retime_clip
+from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
@@ -2911,7 +2911,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview", "silence_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -5105,7 +5105,7 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
             _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -5802,6 +5802,8 @@ def preview_creation_task_edit(
         r"(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?", command
     ):
         return _preview_clip_original_audio(task_id, request, payload)
+    if payload.context_stage in {"montage", "review"} and re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", command):
+        return _preview_remove_silence(task, request, payload)
     if payload.context_stage in {"montage","review"}:
         combined=_preview_compound_edit(task,request,payload)
         if combined is not None:return combined
@@ -7442,6 +7444,21 @@ def confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=updated, operation_type=operation_type,
             operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+    if operation_type == "RemoveSilence" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览停顿剪辑。")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        try:
+            updated, tracks = remove_time_ranges(plan, tracks, _effective_audio_timeline(plan), operation_payload["removed_ranges_ms"])
+            _task_audio().validate(workspace_id, task.id, updated.audio_timeline, updated.duration_seconds)
+            _prepare_changed_montage(updated, message="停顿剪辑已应用；声音、字幕与画面同步缩短，请重新渲染。")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base, updated_plan=updated, operation_type=operation_type,
+            operation_payload=operation_payload, edited_subtitle_tracks=tracks)
     if operation_type in {"DeleteClip", "DuplicateClip"} and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联编辑")
@@ -7855,10 +7872,10 @@ def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind
         (output.parent/"preview.mp4").replace(output)
     return _task_audio().publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-montage-v20",
         parameters={"base_version_id":base.id,**parameters},
-        input_refs=[f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
+        input_refs=list(dict.fromkeys([f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
             *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
             *[item['source_ref'] for item in candidate.graphic_overlays if item.get('kind')=='image'],
-            *[track.artifact_ref for track in tracks if track.artifact_ref]],produce=produce)
+            *[track.artifact_ref for track in tracks if track.artifact_ref]])),produce=produce)
 
 
 @app.post("/api/creation-tasks/{task_id}/edits/{proposal_id}/selection/preview")
@@ -8258,6 +8275,61 @@ def _preview_linked_speed(task_id: str, request: Request, payload: CreationTaskE
     return _edit_preview_response(intent, proposal)
 
 
+def _preview_remove_silence(task, request, payload):
+    from app.silence_edits import detect_silence_cuts
+    workspace_id = current_workspace_id(request)
+    if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith("clip:"):
+        raise HTTPException(status_code=422, detail="请先选择要剪掉停顿的镜头。")
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+    clip = next((c for c in plan.clips if f"clip:{c.id}" == payload.selected_object_refs[0]), None)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="所选镜头不存在。")
+    if clip.locked:
+        raise HTTPException(status_code=409, detail="所选镜头已锁定，请先解锁。")
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    graph = _effective_audio_timeline(plan)
+    voice_ids = {t.id for t in graph.tracks if t.role in {"narration", "original"} and not t.muted and any(not c.muted for c in t.clips)}
+    if not voice_ids:
+        raise HTTPException(status_code=409, detail="所选任务没有可检测的配音或原声，请先加入讲话音轨。")
+    service = _task_audio()
+    try:
+        analysis = service.publish(workspace_id, task.id, kind="audio_preview",
+            parameters={"action":"silence_analysis", "clip_id":clip.id},
+            input_refs=sorted({c.source_ref for t in graph.tracks if t.id in voice_ids for c in t.clips}),
+            produce=lambda output: render_audio_mix(graph, plan.duration_seconds,
+                lambda ref: service.source(workspace_id, task.id, ref), output,
+                start_seconds=clip.timeline_start_seconds, end_seconds=clip.timeline_end_seconds, solo_track_ids=voice_ids))
+        cuts = detect_silence_cuts(artifact_store.resolve_file(analysis.logical_ref),
+            clip.timeline_end_seconds-clip.timeline_start_seconds, clip.timeline_start_seconds)
+        edited, changed_tracks = remove_time_ranges(plan, tracks, graph, cuts)
+        service.validate(workspace_id, task.id, edited.audio_timeline, edited.duration_seconds)
+        for c in edited.clips: fade_filters(c)
+        previews = {}
+        for side, candidate, captions in (("before",plan,tracks),("after",edited,changed_tracks)):
+            record = _publish_task_picture_preview(workspace_id,task,base,candidate,captions,
+                kind="silence_preview",parameters={"side":side,"removed_ranges_ms":cuts})
+            previews[side] = {"ref":record.logical_ref,"label":"修改前" if side=="before" else "缩短停顿后",
+                "detail":f"{candidate.duration_seconds:.3f} 秒", "video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc,ValueError) else "本地停顿预览失败，请检查音轨、素材和外接盘。") from exc
+    if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id != base.id:
+        raise HTTPException(status_code=409,detail="预览期间时间线已变化，请重新预览。")
+    removed = sum(b-a for a,b in cuts)/1000
+    detail = "、".join(f"{a/1000:.3f}–{b/1000:.3f}秒" for a,b in cuts)
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
+        raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=payload.selected_object_refs,
+        playhead_ms=payload.playhead_ms,intent_type="remove_silence",scope={"clip_id":clip.id},
+        constraints={"linked_tracks":True},confidence=1,status="interpreted"))
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
+        intent_id=intent.id,summary=f"缩短 {len(cuts)} 处静音候选，共 {removed:.3f} 秒；画面、声音、字幕与叠加同步前移。",
+        target_refs=payload.selected_object_refs,operation={"operation_type":"RemoveSilence","payload":{
+            "base_version_id":base.id,"clip_id":clip.id,"removed_ranges_ms":cuts,"analysis_ref":analysis.logical_ref}},
+        invalidated_refs=_logical_montage_output_refs(plan),preview=previews,
+        external_effects=[f"删除范围：{detail}","按低于-40dB且持续0.45秒检测，两端至少保留0.12秒。低声讲话也可能被识别为静音，请试听后确认；不改变保留部分的语速。" ]))
+    return _edit_preview_response(intent,proposal)
+
+
 def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id"}:
         raise HTTPException(status_code=422, detail="关联删除或复制只接受一个镜头，不混入其他修改")
@@ -8546,6 +8618,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "SetClipTransition",
         "EditGraphicOverlay",
         "EditCompoundTimeline",
+        "RemoveSilence",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):

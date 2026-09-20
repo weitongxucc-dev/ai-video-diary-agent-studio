@@ -4009,3 +4009,62 @@ def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_e
     assert response.status_code==409,response.text
     assert ('生成口型' if person else '锁定') in response.text
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
+    import subprocess
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    clip.role='b_roll'
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=blue:size=64x64:rate=30:duration=8',
+        '-an','-c:v','libx264',str(source)],check=True)
+    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+        'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    response=state.client.post(base+'/edits/preview',json={'raw_command':'剪掉当前镜头停顿',
+        'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==200,response.text
+    proposal=response.json()['proposal']
+    assert proposal['operation']['operation_type']=='RemoveSilence'
+    cuts=proposal['operation']['payload']['removed_ranges_ms']
+    assert len(cuts)==1
+    for side in ('before','after'):
+        media=state.client.get(proposal['preview'][side]['video_url'])
+        assert media.status_code==200 and len(media.content)>1000
+        if side=='after':
+            preview_after=source.parent/'silence-preview.mp4'
+            preview_after.write_bytes(media.content)
+    before=state.client.get(base).json()
+    assert before['montage']['duration_seconds']==8
+    result=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert result.status_code==200,result.text
+    after=state.client.get(base).json()
+    expected=8-(cuts[0][1]-cuts[0][0])/1000
+    assert after['montage']['duration_seconds']==expected
+    assert len(after['montage']['clips'])==3
+    rendered=state.client.post(base+'/montage/render',json={})
+    assert rendered.status_code==200,rendered.text
+    media=state.client.get(base+'/output')
+    assert media.status_code==200 and len(media.content)>1000
+    output=source.parent/'silence-result.mp4'
+    output.write_bytes(media.content)
+    import json
+    probe=json.loads(subprocess.run(['ffprobe','-v','error','-count_frames','-select_streams','v:0',
+        '-show_entries','stream=nb_read_frames','-of','json',str(output)],capture_output=True,text=True,check=True).stdout)
+    assert int(probe['streams'][0]['nb_read_frames'])==round(expected*30)
+    def pixels(path):
+        return subprocess.run(['ffmpeg','-v','error','-i',str(path),'-vf','scale=12:20:flags=area',
+            '-pix_fmt','rgb24','-f','rawvideo','-'],capture_output=True,check=True).stdout
+    assert pixels(preview_after)==pixels(output)
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert restored['montage']['duration_seconds']==8
+    assert restored['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['duration_seconds']==expected
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200

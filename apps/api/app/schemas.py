@@ -1213,6 +1213,7 @@ class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
     "EditCompoundTimeline",
+        "RemoveSilence",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",
@@ -1295,6 +1296,7 @@ class EditOperationResponse(BaseModel):
     operation_type: Literal[
         "EditAudioTimeline",
     "EditCompoundTimeline",
+        "RemoveSilence",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",

@@ -89,6 +89,32 @@ def splice_clip(plan, tracks, audio, clip_id: str, action: str):
     start, end = round(selected.timeline_start_seconds * 1000), round(selected.timeline_end_seconds * 1000)
     duration = round(plan.duration_seconds * 1000)
     intervals = splice_intervals(duration, start, end, action)
+    return _splice_plan(plan, tracks, audio, intervals,
+        duration + (end-start)*(1 if action == "duplicate" else -1))
+
+
+def remove_time_ranges(plan, tracks, audio, ranges):
+    if plan.status == "rendering":
+        raise ValueError("正在渲染，不能修改时间线")
+    duration = round(plan.duration_seconds*1000)
+    cursor = at = 0
+    intervals = []
+    for start, end in ranges:
+        if not (type(start) is int and type(end) is int and cursor <= start < end <= duration):
+            raise ValueError("删除区间必须按时间排序、不重叠且位于成片内")
+        if start > cursor:
+            intervals.append((cursor, start, at))
+            at += start-cursor
+        cursor = end
+    if cursor < duration:
+        intervals.append((cursor, duration, at))
+        at += duration-cursor
+    if not ranges or at <= 0:
+        raise ValueError("没有可删除的停顿，或删除后没有剩余内容")
+    return _splice_plan(plan, tracks, audio, intervals, at)
+
+
+def _splice_plan(plan, tracks, audio, intervals, new_duration_ms):
     result = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
     clips = []
     for clip in result.clips:
@@ -101,10 +127,14 @@ def splice_clip(plan, tracks, audio, clip_id: str, action: str):
                 id=clip.id if index == 0 else f"clip_{uuid4().hex[:12]}",
                 source_start_seconds=round(clip.source_start_seconds + (left - clip_start) / 1000 * clip_playback_rate(clip), 3),
                 source_end_seconds=round(clip.source_start_seconds + (right - clip_start) / 1000 * clip_playback_rate(clip), 3),
+                transition_in_seconds=clip.transition_in_seconds if left == clip_start else 0,
+                fade_envelope_offset_frames=clip.fade_envelope_offset_frames + (left-clip_start)/1000*30*clip.fade_envelope_rate,
+                fade_envelope_duration_frames=(clip.fade_envelope_duration_frames or round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30))
+                    if clip.visual_effects.get("fade_in_seconds") or clip.visual_effects.get("fade_out_seconds") else clip.fade_envelope_duration_frames,
                 timeline_start_seconds=at / 1000,
                 timeline_end_seconds=(at + right - left) / 1000))
     result.clips = sorted(clips, key=lambda clip: clip.timeline_start_seconds)
-    result.duration_seconds = (duration + (end - start) * (1 if action == "duplicate" else -1)) / 1000
+    result.duration_seconds = new_duration_ms / 1000
     result.graphic_overlays = splice_overlays(plan.graphic_overlays,intervals)
     result.audio_timeline = splice_audio(audio, intervals)
     result.output_path = result.subtitle_path = None

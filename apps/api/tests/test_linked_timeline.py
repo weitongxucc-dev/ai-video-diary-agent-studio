@@ -97,3 +97,26 @@ def test_linked_speed_moves_subtitles_audio_and_envelopes_together():
     plan.clips[1].timeline_start_seconds=3.96
     with pytest.raises(ValueError, match="0.04"):
         retime_clip(plan,subtitles(),audio(),"1",4,lambda *_: pytest.fail("invalid frame duration must not execute media"))
+
+
+def test_remove_multiple_ranges_keeps_one_clock_and_fade_offsets():
+    from app.linked_timeline import remove_time_ranges
+    from app.montage import CreationTaskMontagePlan, MontageClip
+    from app.graphic_overlays import TextOverlay
+    plan=CreationTaskMontagePlan(id='p',workspace_id='w',task_id='t',script_id='s',script_title='s',
+        status='ready',cues=[],clips=[MontageClip(id='c',cue_id='cue',asset_id='a',segment_id='s',
+        source_path='workspace://a.mp4',source_start_seconds=10,source_end_seconds=16,
+        timeline_start_seconds=0,timeline_end_seconds=6,match_score=1,match_reasons=[],needs_confirmation=False,
+        visual_effects={'fade_in_seconds':2})],duration_seconds=6,low_confidence_clip_count=0)
+    plan.graphic_overlays=[TextOverlay(text='保留标题',start_seconds=0,end_seconds=6).model_dump()]
+    result,tracks=remove_time_ranges(plan,subtitles(),audio(),[[1000,1500],[3000,3500]])
+    assert result.duration_seconds==5
+    assert [(c.source_start_seconds,c.source_end_seconds,c.timeline_start_seconds) for c in result.clips]==[(10,11,0),(11.5,13,1),(13.5,16,2.5)]
+    assert [c.fade_envelope_offset_frames for c in result.clips]==[0,45,105]
+    assert all(c.fade_envelope_duration_frames==180 for c in result.clips)
+    assert sum(c.duration_ms for c in result.audio_timeline.tracks[0].clips)==5000
+    assert all(c.text=='保留用户文字' for c in tracks[0].cues)
+    assert max(o['end_seconds'] for o in result.graphic_overlays)==5
+    plan.clips[0].locked=True
+    with pytest.raises(ValueError,match='锁定'):remove_time_ranges(plan,subtitles(),audio(),[[1000,1500]])
+    assert plan.duration_seconds==6
