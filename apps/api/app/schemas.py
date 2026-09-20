@@ -1117,11 +1117,14 @@ class CreationTaskExactEditRequest(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ReplaceSubtitleText",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
     ]
+    find_text: str | None = Field(default=None, min_length=1, max_length=96)
+    replacement_text: str | None = Field(default=None, max_length=96)
     track_id: str | None = Field(default=None, min_length=1, max_length=120)
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1198,6 +1201,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ReplaceSubtitleText",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",
@@ -1216,9 +1220,17 @@ class EditPreviewItemResponse(BaseModel):
     detail: str
 
 
+class SubtitleTextChangeResponse(BaseModel):
+    cue_id: str
+    before: str
+    after: str
+    occurrences: int
+
+
 class EditChangePreviewResponse(BaseModel):
     before: EditPreviewItemResponse
     after: EditPreviewItemResponse
+    text_changes: list[SubtitleTextChangeResponse] = Field(default_factory=list)
 
 
 class EditProposalResponse(BaseModel):
@@ -1263,6 +1275,7 @@ class EditOperationResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ReplaceSubtitleText",
         "ConfigureSubtitleTrack",
         "GenerateCoverFromFrame",
         "ChangePersonSegment",

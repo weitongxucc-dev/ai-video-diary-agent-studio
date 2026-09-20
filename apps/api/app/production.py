@@ -794,6 +794,7 @@ EditOperationType = Literal[
     "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "ReplaceSubtitleText",
     "ConfigureSubtitleTrack",
     "GenerateCoverFromFrame",
     "ChangePersonSegment",
@@ -817,6 +818,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
     "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "ReplaceSubtitleText",
     "ConfigureSubtitleTrack",
     "GenerateCoverFromFrame",
     "ChangePersonSegment",
@@ -4317,7 +4319,7 @@ class ProductionRepository:
             subtitle_tracks or (narration_segments is not None and montage_payload is not None)
         ):
             raise ValueError("字幕编辑确认必须保存完整字幕轨或迁移前 montage/cue 事实")
-        if operation.operation_type == "ConfigureSubtitleTrack" and not subtitle_tracks:
+        if operation.operation_type in {"ConfigureSubtitleTrack", "ReplaceSubtitleText"} and not subtitle_tracks:
             raise ValueError("字幕轨配置确认必须保存字幕轨事实")
         if operation.operation_type == "GenerateCoverFromFrame" and cover_asset is None:
             raise ValueError("封面确认必须保存封面事实")

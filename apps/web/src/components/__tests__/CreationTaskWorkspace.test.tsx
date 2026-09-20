@@ -189,7 +189,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -547,9 +547,39 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.previewEdit).toHaveBeenCalledWith("task-1", {
       raw_command: "这句再简洁一点",
       context_stage: "subtitle_cover",
-      selected_object_refs: ["cue:subtitle-cue-1"],
+      selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  it("previews full-track literal replacement with each changed caption", async () => {
+    const initial = subtitleCoverWorkspace();
+    const proposal = exactPreview(initial.task, "ReplaceSubtitleText");
+    mocks.exactPreview.mockResolvedValue({ ...proposal, proposal: { ...proposal.proposal,
+      preview: { ...proposal.proposal.preview, text_changes: [{ cue_id: "c", before: "旧名字", after: "新名字", occurrences: 1 }] } } });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+    fireEvent.click(screen.getByText("全文查找替换"));
+    fireEvent.change(screen.getByLabelText("字幕查找文字"), { target: { value: "旧名字" } });
+    fireEvent.change(screen.getByLabelText("字幕替换文字"), { target: { value: "新名字" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览全文替换" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
+      operation_type: "ReplaceSubtitleText", track_id: "subtitle-track-zh", find_text: "旧名字", replacement_text: "新名字",
+    }));
+    expect(await screen.findByText("查看 1 条字幕变化")).toBeInTheDocument();
+    expect(screen.getByText("修改前：旧名字")).toBeInTheDocument();
+    expect(screen.getByText("修改后：新名字")).toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
+
+  it("does not offer missing Chinese captions in an English-only task", () => {
+    const initial = subtitleCoverWorkspace();
+    initial.subtitle_tracks = [{ ...initial.subtitle_tracks[0], language: "en-US", source_language: null }];
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+    expect(screen.getByRole("button", { name: "中文" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "中英双语" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "英文" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("previews hiding subtitles without generating a translation", async () => {

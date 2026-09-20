@@ -128,3 +128,9 @@
 .audioPlayhead { position: absolute; inset-block: 0; width: 1px; background: var(--text-1); pointer-events: none; }
 
 .effectPreview { width: 100%; max-height: 220px; display: block; background: #000; border-radius: var(--radius-sm); }
+
+.textChanges { margin-top: 12px; font-size: 13px; }
+.textChanges summary { cursor: pointer; font-weight: 500; }
+.textChanges ol { max-height: 220px; overflow-y: auto; padding-left: 24px; }
+.textChanges li { padding: 6px 0; border-bottom: 1px solid var(--border-2); }
+.textChanges span { display: block; overflow-wrap: anywhere; color: var(--text-2); }

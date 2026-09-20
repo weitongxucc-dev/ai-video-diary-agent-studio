@@ -1419,6 +1419,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
+  | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
   | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: CreationTaskSubtitleStyle }
   | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
@@ -1454,6 +1455,7 @@ export type CreationTaskEditProposal = {
   preview: {
     before: EditPreviewItem;
     after: EditPreviewItem;
+    text_changes?: { cue_id: string; before: string; after: string; occurrences: number }[];
   };
   external_effects: string[];
   status: "proposed" | "confirmed" | "rejected" | "expired";

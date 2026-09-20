@@ -3229,3 +3229,41 @@ def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(
     assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+
+
+def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    zh = SubtitleTrack(id="batch-zh", workspace_id=state.workspace_id, task_id=state.task.id, timeline_version_id=version.id,
+        language="zh-CN", source_language=None, style={},
+        cues=[ProductionSubtitleCue(id="shared", source_cue_id=None, text="AI工具 AI记录", start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/zh.srt",transform_id="zh",status="valid")
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id="batch-en",language="en-US",source_language="zh-CN",
+        cues=[replace(zh.cues[0],text="AI tools and AI notes")],generation_method="translation"))
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/preview", json={"raw_command":"全文把“AI”替换成“Local AI”", "context_stage":"subtitle_cover",
+        "selected_object_refs":["cue:shared","subtitle-track:batch-en"]})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["proposal"]["preview"]["text_changes"][0]["occurrences"] == 2
+    assert state.client.get(base).json()["subtitle_tracks"] == before["subtitle_tracks"]
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    assert {t["language"]:t["cues"][0]["text"] for t in after["subtitle_tracks"]} == {"zh-CN":"AI工具 AI记录","en-US":"Local AI tools and Local AI notes"}
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    assert after["montage"]["clips"] == before["montage"]["clips"]
+    assert after["narration"]["audio_reference"] == before["narration"]["audio_reference"]
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    current = state.client.get(base).json()
+    assert [t["cues"] for t in current["subtitle_tracks"]] == [t["cues"] for t in before["subtitle_tracks"]]
+    zh = next(t for t in current["subtitle_tracks"] if t["language"] == "zh-CN")
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ReplaceSubtitleText","track_id":zh["id"],"find_text":"AI","replacement_text":"本地AI"})
+    assert preview.status_code == 200, preview.text
+    assert any("译文将失效" in x for x in preview.json()["proposal"]["external_effects"])
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
+    assert [t["language"] for t in state.client.get(base).json()["subtitle_tracks"]] == ["zh-CN"]
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert len(state.client.get(base).json()["subtitle_tracks"]) == 2
