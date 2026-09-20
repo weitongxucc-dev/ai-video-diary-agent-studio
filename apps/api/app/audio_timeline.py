@@ -198,51 +198,49 @@ def compile_audio_command(command: str, target_id: str, timeline: AudioTimeline,
     clip = next((item for item in track.clips if item.id == target_id), None)
     action = "update" if clip else "track"
     target = clip or track
-    values = {}
-    text = command.strip().casefold()
-    if any(word in text for word in ("同时", "顺便", "然后", "并且", "以及")):
-        raise ValueError("这条复合音频指令尚不能完整执行，请先分别预览各项修改")
-    if "解锁" in text:
-        values = {"locked": False}
-    elif "锁定" in text:
-        values = {"locked": True}
-    elif any(word in text for word in ("取消静音", "恢复声音")):
-        values = {"muted": False}
-    elif "静音" in text:
-        values = {"muted": True}
-    elif "说话" in text and any(word in text for word in ("音乐", "压低")) and not clip:
-        values = {"duck_under_voice": True}
-    elif "复制" in text and clip:
-        action, values = "duplicate", {"timeline_start_ms": clip.timeline_start_ms+clip.duration_ms}
-    elif "删除" in text and clip:
-        action = "delete"
-    elif "分割" in text and clip and playhead_ms is not None:
-        action, values = "split", {"at_ms": playhead_ms}
-    elif "淡入" in text or "淡出" in text:
-        match = re.search(r"(\d+(?:\.\d+)?)\s*秒", text)
-        if clip and match:
-            values = {"fade_in_ms" if "淡入" in text else "fade_out_ms": round(float(match[1])*1000)}
-    elif "降噪" in text and clip:
-        values = {"denoise_db": 0 if any(word in text for word in ("关闭", "取消")) else 6 if "轻" in text else 12}
-    elif "响度" in text and clip:
-        values = {"loudness_target_lufs": None if any(word in text for word in ("关闭", "取消")) else -16}
-    elif "移到" in text and clip:
-        match = re.search(r"移到(?:第)?\s*(\d+(?:\.\d+)?)\s*秒", text)
-        if match:
-            values = {"timeline_start_ms": round(float(match[1])*1000)}
-    else:
-        match = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:db|分贝)", text)
-        if match:
-            amount = float(match[1])
-            values = {"gain_db": target.gain_db - abs(amount) if any(word in text for word in ("降低", "减小")) else target.gain_db + abs(amount) if "提高" in text else amount}
-        elif "一半" in text:
-            values = {"gain_db": target.gain_db - 6.0206}
-        elif any(word in text for word in ("小一点", "低一点", "轻一点")):
-            values = {"gain_db": target.gain_db - 3}
-        elif any(word in text for word in ("大一点", "高一点")):
-            values = {"gain_db": target.gain_db + 3}
-    if not values and action != "delete":
-        raise ValueError("这条音频指令还不能执行；可指定音量、静音、锁定、淡入淡出秒数、降噪、移动位置或分割")
+    parts=[part.strip() for part in re.split(r"[，,；;]|(?:同时|顺便|然后|并且|以及|和)",command.strip().casefold().rstrip("。！")) if part.strip()]
+    values={};structural=None
+    for part in parts:
+        if part in {"画面不变","不改画面","字幕不变","其他不要动","其他别动"}:continue
+        # Object names refer to the explicitly selected track, never another implicit track.
+        named_roles=re.findall(r"音乐|配音|原声|音效",part)
+        if any(track.role!={"音乐":"music","配音":"narration","原声":"original","音效":"effect"}[name] for name in named_roles):
+            raise ValueError("指令中的音轨类型与当前选择不同，请先选择对应对象")
+        text=re.sub(r"^(?:把)?(?:当前|这个)?(?:音乐|配音|原声|音效|音频片段|音频|音轨)","",part)
+        text=re.sub(r"(?:当前|这个)?(?:音乐|配音|原声|音效|音频片段|音频|音轨)$","",text)
+        patch=None
+        if text in {"解锁","锁定","取消静音","恢复声音","静音"}:
+            patch={"locked":text=="锁定"} if text in {"解锁","锁定"} else {"muted":text=="静音"}
+        elif not clip and text in {"说话时压低","说话时压低音乐","有人说话时压低音乐"}:patch={"duck_under_voice":True}
+        elif not clip and text in {"取消自动压低","关闭自动压低"}:patch={"duck_under_voice":False}
+        elif clip and text in {"复制","删除","分割","在播放位置分割"}:
+            if structural or values or len(parts)>1:raise ValueError("分割、复制和删除暂不能与其他音频操作合并，请分别预览")
+            if text=="复制":structural=("duplicate",{"timeline_start_ms":clip.timeline_start_ms+clip.duration_ms})
+            elif text=="删除":structural=("delete",{})
+            elif playhead_ms is not None:structural=("split",{"at_ms":playhead_ms})
+            else:raise ValueError("请先定位音频分割位置")
+            continue
+        else:
+            match=re.fullmatch(r"(淡入|淡出)(?:设为|改为|为)?\s*(\d+(?:\.\d+)?)\s*秒",text)
+            if clip and match:patch={"fade_in_ms" if match[1]=="淡入" else "fade_out_ms":round(float(match[2])*1000)}
+            elif clip and text in {"轻降噪","轻微降噪","降噪","降噪一下","关闭降噪","取消降噪"}:
+                patch={"denoise_db":0 if text.startswith(("关闭","取消")) else 6 if "轻" in text else 12}
+            elif clip and text in {"统一响度","响度标准化","关闭响度","取消响度标准化"}:
+                patch={"loudness_target_lufs":None if text.startswith(("关闭","取消")) else -16}
+            else:
+                move=re.fullmatch(r"移到(?:第)?\s*(\d+(?:\.\d+)?)\s*秒",text)
+                gain=re.fullmatch(r"(?:音量)?(降低|减小|提高|设为|改为|到|为)?\s*([+-]?\d+(?:\.\d+)?)\s*(?:db|分贝)",text)
+                level=re.sub(r"^音量","",text)
+                current_gain=values.get("gain_db",target.gain_db)
+                if clip and move:patch={"timeline_start_ms":round(float(move[1])*1000)}
+                elif gain:
+                    amount=float(gain[2]);patch={"gain_db":current_gain-abs(amount) if gain[1] in {"降低","减小"} else current_gain+abs(amount) if gain[1]=="提高" else amount}
+                elif level in {"减半","降低一半","降到一半","一半","小一点","低一点","轻一点","大一点","高一点"}:
+                    patch={"gain_db":current_gain+(-6.0206 if "半" in level else 3 if level in {"大一点","高一点"} else -3)}
+        if patch is None:raise ValueError("无法完整执行音频要求："+part+"。没有应用任何修改，请明确参数后重新预览")
+        values.update(patch)
+    if structural:action,values=structural
+    elif not values:raise ValueError("请指定要修改的音频参数")
     return AudioEditRequest(base_version_id=base_version_id, action=action, target_id=target_id, values=values, raw_command=command)
 
 
@@ -257,6 +255,8 @@ def audio_edit_preview_range(before: AudioTimeline, after: AudioTimeline, edit: 
         track = next(track for track in after.tracks if track.id == edit.target_id)
         target = min(track.clips, key=lambda clip: clip.timeline_start_ms) if track.clips else None
     start = target.timeline_start_ms / 1000 if target else 0
+    if target and {"fade_in_ms","fade_out_ms"} <= edit.values.keys():
+        return start, min(duration_seconds,(target.timeline_start_ms+target.duration_ms)/1000)
     if target and "fade_out_ms" in edit.values:
         start = max(start, (target.timeline_start_ms + target.duration_ms - max(target.fade_out_ms, 2000)) / 1000 - 1)
     elif target and target.gain_points and "gain_points" in edit.values:

@@ -235,3 +235,19 @@ def test_loudness_preserves_silence_and_can_encode_aac(tmp_path):
     mixed=render_audio_mix(timeline,1,lambda ref:source,tmp_path/"normalized.wav")
     assert max(map(abs,samples(mixed,0,1))) == 0
     subprocess.run(["ffmpeg","-v","error","-i",str(mixed),"-c:a","aac",str(tmp_path/"audio.m4a")],check=True)
+
+
+def test_compound_audio_parameters_share_one_patch_and_cover_both_fades():
+    from app.audio_timeline import narration_audio_timeline,audio_edit_preview_range
+    timeline=narration_audio_timeline('artifacts/voice.wav',20)
+    edit=compile_audio_command('当前配音音量降低3分贝，然后淡入1秒，淡出2秒，画面不变','audio-narration-main',timeline,'version',None)
+    assert edit.values=={'gain_db':-3,'fade_in_ms':1000,'fade_out_ms':2000}
+    after=apply_audio_edit(timeline,edit,20000)
+    assert after.tracks[0].clips[0].gain_db==-3
+    assert audio_edit_preview_range(timeline,after,edit,20)==(0,20)
+    assert timeline.tracks[0].clips[0].gain_db==0
+    ordered=compile_audio_command('音量设为-6分贝，提高3分贝','audio-narration-main',timeline,'version',None)
+    assert ordered.values=={'gain_db':-3}
+    assert compile_audio_command('淡入1秒和淡出2秒','audio-narration-main',timeline,'version',None).values=={'fade_in_ms':1000,'fade_out_ms':2000}
+    for command in ('音量小一点，删除字幕','静音但保留原声','解锁音乐','音量降低3分贝，然后加混响'):
+        with pytest.raises(ValueError):compile_audio_command(command,'audio-narration-main',timeline,'version',None)
