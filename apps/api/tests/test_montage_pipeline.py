@@ -3590,3 +3590,27 @@ def test_graphic_import_corrects_photo_orientation_and_drops_metadata(person_ren
     source=response.json();assert (source['width'],source['height'])==(10,20)
     loaded=Image.open(io.BytesIO(state.client.get(base+'/graphics/source/'+source['artifact_id']).content))
     assert loaded.size==(10,20) and not loaded.getexif()
+
+
+def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip_id=before['montage']['clips'][0]['id'];calls=[]
+    def publish(*args,**kwargs):
+        calls.append(True);return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f'clip:{clip_id}']})
+    assert preview('亮一点，加上闪电特效').status_code==422
+    assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    result=preview('当前镜头缩小到0.8倍，向右移动5%，曝光改为0.5，配音不变')
+    assert result.status_code==200,result.text
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['task']['timeline_sequence']==before['task']['timeline_sequence']+1
+    effect=after['montage']['clips'][0]['visual_effects']
+    assert effect['zoom']==.8 and effect['offset_x']==.05 and effect['exposure']==.5
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']

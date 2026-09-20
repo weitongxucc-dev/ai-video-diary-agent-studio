@@ -252,3 +252,15 @@ def test_invalid_persisted_fade_clock_is_explicitly_rejected(value):
     clip=SimpleNamespace(visual_effects={'fade_in_seconds':.2},timeline_start_seconds=0,timeline_end_seconds=1,**value)
     with pytest.raises(ValueError,match='效果时钟无效'):
         fade_filters(clip)
+
+
+def test_compound_visual_edit_compiles_all_clauses_in_order_or_rejects_all():
+    original=VisualEffects(saturation=.8).model_dump()
+    result=compile_visual_command('当前镜头放大到1.2倍，向右移动5%，然后亮一点，同时淡出0.4秒，声音不变',original)
+    assert result.zoom==1.2 and result.offset_x==.05 and result.exposure==.25 and result.fade_out_seconds==.4
+    assert result.saturation==.8 and original==VisualEffects(saturation=.8).model_dump()
+    sequential=compile_visual_command('曝光改为0.5，恢复原色，然后暖一点',{})
+    assert sequential.exposure==0 and sequential.temperature==.15
+    for command in ('亮一点，加上闪电特效','恢复原色但不要改饱和度','替换第二个镜头，同时亮一点','淡出0.4秒，曝光改为99'):
+        with pytest.raises(ValueError):compile_visual_command(command,original)
+    assert compile_visual_command('美颜一下，轻一点，配音不变',{}).beauty_strength==.2
