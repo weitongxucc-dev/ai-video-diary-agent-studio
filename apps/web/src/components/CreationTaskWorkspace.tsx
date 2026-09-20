@@ -416,8 +416,8 @@ function ContextCommandBar({
         <div aria-label="变更预览" aria-live="polite" className={ui.changePreview}>
           <header><strong>{preview.proposal.summary}</strong><span>等待确认</span></header>
           <div className={ui.previewDiff}>
-            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.video_url ? <video className={editorUi.effectPreview} aria-label="修改前画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.before.video_url)} />:null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
-            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.video_url ? <video className={editorUi.effectPreview} aria-label="修改后画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.after.video_url)} />:null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
+            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <video className={editorUi.effectPreview} aria-label="修改前画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.before.video_url)} />:null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
+            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <video className={editorUi.effectPreview} aria-label="修改后画面" controls muted playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.after.video_url)} />:null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
           </div>
           {preview.proposal.preview.text_changes?.length ? <details className={editorUi.textChanges} open><summary>查看 {preview.proposal.preview.text_changes.length} 条字幕变化</summary><ol>{preview.proposal.preview.text_changes.map(change => <li key={change.cue_id}><span>修改前：{change.before}</span><span>修改后：{change.after}</span></li>)}</ol></details> : null}
           <div className={ui.previewEffects}>
@@ -548,6 +548,33 @@ function SubtitleCueEditor({
   );
 }
 
+function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
+  style: CreationTaskSubtitleTrack["style"]; busy: boolean; onDraftChange: () => void;
+  onPreview: (input: CreationTaskExactEditInput) => void;
+}) {
+  const initial = { ...style, stroke_width: style.stroke_width ?? 3, stroke_color: style.stroke_color ?? "#000000",
+    background_color: style.background_color ?? "#000000", background_opacity: style.background_opacity ?? 158 / 255 };
+  const [draft, setDraft] = useState(initial);
+  const changed = JSON.stringify(draft) !== JSON.stringify(initial);
+  const change = (patch: Partial<typeof draft>) => { onDraftChange(); setDraft({ ...draft, ...patch }); };
+  return <details className={editorUi.propertySection}>
+    <summary>全部字幕样式</summary>
+    <div className={styles.cueFields}>
+      <label><span>本机字体</span><input aria-label="字幕字体" disabled={busy} value={draft.font_family} onChange={event => change({font_family:event.target.value})} /></label>
+      <label><span>字号</span><input aria-label="字幕字号" type="number" min="1" max="1920" disabled={busy} value={draft.font_size} onChange={event => change({font_size:Number(event.target.value)})} /></label>
+      <label><span>位置</span><select aria-label="字幕位置" disabled={busy} value={draft.position} onChange={event => change({position:event.target.value as typeof draft.position})}><option value="top">顶部</option><option value="middle">居中</option><option value="bottom">底部</option></select></label>
+      <label><span>双语顺序</span><select aria-label="字幕双语顺序" disabled={busy} value={draft.bilingual_order} onChange={event => change({bilingual_order:event.target.value as typeof draft.bilingual_order})}><option value="source_then_translation">原文在上</option><option value="translation_then_source">译文在上</option></select></label>
+      {([["primary_color","文字颜色"],["emphasis_color","强调颜色"],["stroke_color","描边颜色"],["background_color","背景颜色"]] as const).map(([key,label]) => <label key={key}><span>{label}</span><input aria-label={`字幕${label}`} type="color" disabled={busy} value={draft[key]} onChange={event => change({[key]:event.target.value})} /></label>)}
+      <label><span>描边宽度</span><input aria-label="字幕描边宽度" type="number" min="0" max="12" disabled={busy} value={draft.stroke_width} onChange={event => change({stroke_width:Number(event.target.value)})} /></label>
+      <label><span>背景不透明度 {Math.round(draft.background_opacity*100)}%</span><input aria-label="字幕背景不透明度" type="range" min="0" max="100" disabled={busy} value={Math.round(draft.background_opacity*100)} onChange={event => change({background_opacity:Number(event.target.value)/100})} /></label>
+    </div>
+    <button className={styles.secondaryButton} type="button" disabled={busy || !changed || !draft.font_family.trim()} onClick={() => {
+      const patch = Object.fromEntries(Object.entries(draft).filter(([key,value]) => key !== "enabled" && initial[key as keyof typeof initial] !== value));
+      onPreview({operation_type:"ConfigureSubtitleTrack", style:patch});
+    }}>预览字幕样式</button>
+  </details>;
+}
+
 function SubtitleCoverView({
   activeTrack,
   busy,
@@ -580,7 +607,6 @@ function SubtitleCoverView({
   const translationTrack = tracks.find((track) => track.language === "en-US") ?? null;
   const [frameTime, setFrameTime] = useState(cover?.frame_time_seconds ?? 0);
   const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
-  const [styleName, setStyleName] = useState(activeTrack.style.name);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -594,7 +620,6 @@ function SubtitleCoverView({
   const currentCue = activeTrack.cues[currentCueIndex];
   const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0);
 
-  useEffect(() => setStyleName(activeTrack.style.name), [activeTrack.id, activeTrack.timeline_version_id, activeTrack.style.name]);
   useEffect(() => {
     setFrameTime(cover?.frame_time_seconds ?? 0);
     setCoverTitle(cover?.title ?? "");
@@ -612,7 +637,6 @@ function SubtitleCoverView({
       operation_type: "ConfigureSubtitleTrack",
       track_id: sourceTrack.id,
       target_language: "en-US",
-      style: sourceTrack.style,
     });
   }
 
@@ -625,16 +649,11 @@ function SubtitleCoverView({
             onClick={() => onPreviewExact({operation_type: "ConfigureSubtitleTrack", subtitle_display: mode})}>{label}</button>)}
           {translationTrack?.status !== "valid" ? <button type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15} />生成英文字幕</button> : null}
         </div>
-        <div aria-label="字幕样式" className={styles.segmentedControl} role="group">
-          <button aria-pressed={styleName !== "emphasis"} disabled={busy || activeTrack.language !== "zh-CN" || styleName !== "emphasis"} onClick={() => { onDraftChange(); setStyleName("default"); }} type="button">清爽底栏</button>
-          <button aria-pressed={styleName === "emphasis"} disabled={busy || activeTrack.language !== "zh-CN" || styleName === "emphasis"} onClick={() => { onDraftChange(); setStyleName("emphasis"); }} type="button">重点强调</button>
-        </div>
-        <small className={styles.styleScope}>{activeTrack.language !== "zh-CN" ? "双语共用样式，在中文轨调整" : styleName !== activeTrack.style.name ? "轨道样式待预览，随字幕修改确认" : "当前轨道样式"}</small>
         <button className={styles.secondaryButton} disabled={busy || !workspace.task.can_undo} onClick={onUndo} type="button">撤销</button>
       </div>
 
-      {!translationCapability.available ? <p className={styles.capabilityLine} role="status"><AlertCircle size={15} />中英双语暂不可用：{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p> : null}
-      {displayMode === "zh-en" ? <p className={styles.styleScope}>当前成片使用中英双语；暂不支持关闭英文轨。</p> : null}
+      {!translationCapability.available && !translationTrack ? <p className={styles.capabilityLine} role="status"><AlertCircle size={15} />中英双语暂不可用：{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p> : null}
+      <SubtitleStyleEditor key={sourceTrack.timeline_version_id} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact} />
 
       <div className={styles.previewGrid}>
         <section className={styles.mediaPanel}>
@@ -654,7 +673,7 @@ function SubtitleCoverView({
             }
           }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue, index) => <option key={cue.id} value={cue.id}>{index + 1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</option>)}</select></label>
           <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList} role="tabpanel">
-            {currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} key={JSON.stringify([activeTrack.id, activeTrack.timeline_version_id, activeTrack.style, currentCue])} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} style={{ ...activeTrack.style, name: styleName }} track={activeTrack} /> : null}
+            {currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} key={JSON.stringify([activeTrack.id, activeTrack.timeline_version_id, activeTrack.style, currentCue])} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} style={activeTrack.style} track={activeTrack} /> : null}
           </div>
         </div>
       </div>

@@ -1229,6 +1229,10 @@ export type CreationTaskCapability = {
 };
 
 export type CreationTaskSubtitleStyle = {
+  stroke_width?: number;
+  stroke_color?: string;
+  background_color?: string;
+  background_opacity?: number;
   enabled?: boolean;
   name: string;
   font_family: string;
@@ -1423,7 +1427,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
-  | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: CreationTaskSubtitleStyle }
+  | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: Partial<CreationTaskSubtitleStyle> }
   | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };
@@ -1435,6 +1439,7 @@ type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Inp
   : never;
 
 export type EditPreviewItem = {
+  image_url?: string | null;
   video_url?: string | null;
   audio_url?: string | null;
   ref: string;

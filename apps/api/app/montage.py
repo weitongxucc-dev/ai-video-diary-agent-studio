@@ -1028,7 +1028,7 @@ def _write_subtitle_image(cue, path: Path):
     overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style)
-    stroke_width = 3
+    stroke_width = cue.subtitle_style.get("stroke_width", 3)
     spacing = 10
     line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
     line_heights = [box[3] - box[1] for box in line_boxes]
@@ -1050,7 +1050,8 @@ def _write_subtitle_image(cue, path: Path):
     draw.rounded_rectangle(
         (left, top, right, bottom),
         radius=18,
-        fill=(0, 0, 0, 158),
+        fill=(*_subtitle_color(cue.subtitle_style.get("background_color"), fallback=(0, 0, 0, 255))[:3],
+              round(cue.subtitle_style.get("background_opacity", 158 / 255) * 255)),
     )
     compact_text = re.sub(r"\s+", "", "".join(lines))
     terms = sorted({re.sub(r"\s+", "", term) for term in cue.subtitle_emphasis} - {""}, key=len, reverse=True)
@@ -1086,6 +1087,7 @@ def _write_subtitle_image(cue, path: Path):
                 fallback=(255, 213, 79, 255),
             ),
             stroke_width=stroke_width,
+            stroke_color=_subtitle_color(cue.subtitle_style.get("stroke_color"), fallback=(0, 0, 0, 230)),
         )
         cursor_y += line_height + spacing
     overlay.save(path)
@@ -1103,6 +1105,7 @@ def _draw_subtitle_line(
     emphasis_mask: list[bool],
     emphasis_color: tuple[int, int, int, int],
     stroke_width: int,
+    stroke_color: tuple[int, int, int, int] = (0, 0, 0, 230),
 ) -> None:
     start = 0
     while start < len(line):
@@ -1112,7 +1115,7 @@ def _draw_subtitle_line(
         draw.text(
             (x + draw.textlength(line[:start], font=font), y), line[start:end], font=font,
             fill=emphasis_color if emphasis_mask[start] else primary_color,
-            stroke_width=stroke_width, stroke_fill=(0, 0, 0, 230),
+            stroke_width=stroke_width, stroke_fill=stroke_color,
         )
         start = end
 
@@ -1150,7 +1153,7 @@ def _subtitle_font_and_lines(
                 low, high = 1, len(remaining)
                 while low < high:
                     end = (low + high + 1) // 2
-                    box = draw.textbbox((0, 0), remaining[:end], font=font, stroke_width=3)
+                    box = draw.textbbox((0, 0), remaining[:end], font=font, stroke_width=style.get("stroke_width", 3))
                     if box[2] - box[0] <= 880:
                         low = end
                     else:
@@ -1162,7 +1165,7 @@ def _subtitle_font_and_lines(
                 remaining = remaining[len(line):].lstrip()
             if not explicit_line:
                 lines.append("")
-        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=3) for line in lines]
+        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=style.get("stroke_width", 3)) for line in lines]
         height = sum(box[3] - box[1] for box in boxes) + 10 * max(0, len(lines) - 1)
         if height <= 1380 and all(box[2] - box[0] <= 880 for box in boxes):
             return font, lines

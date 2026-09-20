@@ -299,9 +299,8 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "未保存" } });
     fireEvent.click(screen.getByRole("tab", { name: /英文轨/ }));
     expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("Real work");
-    expect(screen.getByRole("button", { name: "清爽底栏" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "重点强调" })).toBeDisabled();
-    expect(screen.getByText("双语共用样式，在中文轨调整")).toBeInTheDocument();
+    expect(screen.getByLabelText("字幕字号")).toBeEnabled();
+    expect(screen.getByText("全部字幕样式")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /中文轨/ }));
     expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("真实运行不是口号");
     fireEvent.change(screen.getByLabelText("选择字幕"), { target: { value: "subtitle-cue-2" } });
@@ -515,7 +514,6 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
     fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
     fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
-    fireEvent.click(screen.getByRole("button", { name: "重点强调" }));
     fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
 
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
@@ -528,7 +526,7 @@ describe("CreationTaskWorkspace", () => {
       line_breaks: [4],
       emphasis: ["真实运行"],
       style: {
-        name: "emphasis", font_family: "PingFang SC", font_size: 40,
+        name: "default", font_family: "PingFang SC", font_size: 40,
         primary_color: "#FFFFFF", emphasis_color: "#F0B35F", position: "bottom",
         bilingual_order: "source_then_translation",
       },
@@ -551,6 +549,23 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  it("previews real subtitle style images before confirmation in English-only tasks", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.subtitle_tracks = [{...initial.subtitle_tracks[0], language:"en-US", source_language:null}];
+    const preview = exactPreview(initial.task, "ConfigureSubtitleTrack");
+    mocks.exactPreview.mockResolvedValue({...preview, proposal:{...preview.proposal, preview:{...preview.proposal.preview,
+      after:{...preview.proposal.preview.after, image_url:"/api/style-preview.png"}}}});
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+    fireEvent.click(screen.getByText("全部字幕样式"));
+    fireEvent.change(screen.getByLabelText("字幕字号"), {target:{value:"64"}});
+    fireEvent.change(screen.getByLabelText("字幕背景不透明度"), {target:{value:"0"}});
+    fireEvent.click(screen.getByRole("button", {name:"预览字幕样式"}));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {operation_type:"ConfigureSubtitleTrack",style:{font_size:64,background_opacity:0}}));
+    expect(await screen.findByAltText("修改后字幕样式")).toHaveAttribute("src", expect.stringContaining("style-preview.png"));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("previews subtitle structure changes without confirming automatically", async () => {
@@ -640,11 +655,6 @@ describe("CreationTaskWorkspace", () => {
       operation_type: "ConfigureSubtitleTrack",
       track_id: "subtitle-track-zh",
       target_language: "en-US",
-      style: {
-        name: "default", font_family: "PingFang SC", font_size: 40,
-        primary_color: "#FFFFFF", emphasis_color: "#F0B35F", position: "bottom",
-        bilingual_order: "source_then_translation",
-      },
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "中文" })).toBeDisabled();

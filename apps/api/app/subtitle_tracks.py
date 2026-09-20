@@ -31,6 +31,10 @@ class SubtitleStyle:
     name: str = "default"
     font_family: str = "PingFang SC"
     font_size: int = 40
+    stroke_width: int = 3
+    stroke_color: str = "#000000"
+    background_color: str = "#000000"
+    background_opacity: float = 158 / 255
     primary_color: str = "#FFFFFF"
     emphasis_color: str = "#FFD54F"
     position: Literal["top", "middle", "bottom"] = "bottom"

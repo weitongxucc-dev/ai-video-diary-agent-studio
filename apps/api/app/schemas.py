@@ -1220,6 +1220,7 @@ class TypedEditOperationDraftResponse(BaseModel):
 
 
 class EditPreviewItemResponse(BaseModel):
+    image_url: str | None = None
     video_url: str | None = None
     audio_url: str | None = None
     ref: str

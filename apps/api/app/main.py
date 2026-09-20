@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.visual_effects import clip_playback_rate
 from app.linked_timeline import splice_clip, retime_clip
 from app.audio_timeline import render_stretched_audio
+from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
 from app.subtitle_edits import replace_subtitle_text, restructure_subtitle
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
 from app.avatar_lipsync import (
@@ -320,7 +321,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v11"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v12"
 logger = logging.getLogger(__name__)
 
 app.add_middleware(
@@ -2830,12 +2831,12 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "subtitle_style_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
         raise HTTPException(status_code=404,detail="当前任务的画面预览不存在") from exc
-    return FileResponse(path,media_type="video/mp4")
+    return FileResponse(path,media_type="image/png" if record.kind == "subtitle_style_preview" else "video/mp4")
 
 
 @app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
@@ -5684,6 +5685,15 @@ def preview_creation_task_edit(
         return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
             operation_type="ConfigureSubtitleTrack", subtitle_display=display_commands[command.rstrip("。！")]))
 
+    if payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        try:
+            style_patch = compile_subtitle_style_command(command)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if style_patch is not None:
+            return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(
+                operation_type="ConfigureSubtitleTrack", style=style_patch))
+
     if "/" in command or "\\" in command:
         raise _topic_failure_response(
             status_code=409,
@@ -6506,6 +6516,22 @@ def confirm_creation_task_edit(
             operation_payload=operation_payload, subtitle_tracks=updated_tracks,
             cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
             updated_plan=montage)
+    if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict) and "style" in operation_payload:
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="字幕版本已变化，请重新预览样式")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
+        patch = validate_style_patch(operation_payload["style"])
+        version_id = f"timeline_{uuid4().hex}"
+        changed = [_clone_subtitle_track(track, timeline_version_id=version_id,
+            style={**track.style, **patch} if track.status == "valid" else track.style) for track in tracks]
+        cover = _cover_asset_for_version(workspace_id, task.id, base)
+        _prepare_changed_montage(montage, message="字幕样式已保存；重新渲染后写入成片。")
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
+            result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload,
+            subtitle_tracks=changed, cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
+            updated_plan=montage)
     if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict):
         source_track_id = operation_payload.get("source_track_id")
         base_version_id = operation_payload.get("base_version_id")
@@ -7267,6 +7293,8 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type == "ConfigureSubtitleTrack" and payload.style is not None and payload.target_language is None:
+        return _preview_subtitle_style(task_id, request, payload)
     if payload.operation_type == "ReplaceSubtitleText":
         return _preview_subtitle_replace(task_id, request, payload)
     if payload.operation_type in {"SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue"}:
@@ -7566,6 +7594,56 @@ def apply_creation_task_exact_edit(
         operation_payload=dict(proposal.operation["payload"]),
     )
 
+
+
+def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if payload.model_fields_set - {"operation_type", "style"}:
+        raise HTTPException(status_code=422, detail="样式应用于全部字幕轨，不能同时翻译或切换显示")
+    try:
+        patch = validate_style_patch(payload.style)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    base = _ensure_montage_base_version(workspace_id, task, montage)
+    tracks = [track for track in _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage) if track.status == "valid"]
+    if not tracks:
+        raise HTTPException(status_code=409, detail="当前没有可编辑字幕，请先生成字幕")
+    defaults = asdict(SubtitleExecutionStyle())
+    if all(all(track.style.get(key, defaults[key]) == value for key, value in patch.items()) for track in tracks):
+        raise HTTPException(status_code=409, detail="字幕样式没有变化")
+    refs = [track.artifact_ref or f"subtitle-track:{track.id}" for track in tracks]
+    try:
+        before = subtitle_schedule([replace(track, style={**track.style, "enabled":True}) for track in tracks], montage.duration_seconds)
+        after = subtitle_schedule([replace(track, style={**track.style, **patch, "enabled":True}) for track in tracks], montage.duration_seconds)
+        sample = max(before, key=lambda item:len(item.text))
+        updated_sample = next(item for item in after if item.start_seconds <= sample.start_seconds < item.end_seconds)
+        # Validate every cue's layout before accepting the style, not just the preview sample.
+        from app.montage import _subtitle_font_and_lines
+        for caption in after:
+            _subtitle_font_and_lines(caption.text, caption.subtitle_style)
+        records = [publish_subtitle_style_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
+            workspace_id, task_id, caption, refs) for caption in (sample, updated_sample)]
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        raise HTTPException(status_code=409, detail="预览期间版本变化，请重新预览")
+    now = utc_now()
+    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        raw_command="调整全部字幕样式",context_stage="subtitle_cover",selected_object_refs=[f"subtitle-track:{track.id}" for track in tracks],
+        playhead_ms=None,intent_type="subtitle_style",scope={"kind":"subtitle_tracks"},constraints={"preserve_narration":True},
+        confidence=1,status="interpreted",created_at=now))
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        intent_id=intent.id,summary="调整全部字幕轨的样式；文字、时间、配音和语言开关保持不变。",
+        target_refs=intent.selected_object_refs,operation={"operation_type":"ConfigureSubtitleTrack", "payload":{"base_version_id":base.id,"style":patch}},
+        invalidated_refs=_logical_montage_output_refs(montage),preview={side:{"ref":record.logical_ref,"label":label,
+            "detail":f"使用真实字幕 {sample.start_seconds:.2f}–{sample.end_seconds:.2f} 秒；透明字幕图，不是成片画面。",
+            "image_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
+            for side,label,record in zip(("before","after"),("当前样式","修改后样式"),records)},
+        external_effects=["中英文共用样式；已关闭的语言仍保持关闭。图片预览为便于比较展示全部语言。", "SRT仅保存文本与时间，颜色等样式写入视频。"],
+        status="proposed",created_at=now,updated_at=now))
+    return _edit_preview_response(intent, proposal)
 
 
 def _apply_caption_edit(track, operation_type, payload):

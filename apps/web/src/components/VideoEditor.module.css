@@ -134,3 +134,5 @@
 .textChanges ol { max-height: 220px; overflow-y: auto; padding-left: 24px; }
 .textChanges li { padding: 6px 0; border-bottom: 1px solid var(--border-2); }
 .textChanges span { display: block; overflow-wrap: anywhere; color: var(--text-2); }
+
+.subtitleStylePreview { display: block; width: 100%; height: 300px; object-fit: contain; background: var(--text-2); border-radius: var(--radius-sm); }

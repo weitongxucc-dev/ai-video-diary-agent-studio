@@ -3320,3 +3320,33 @@ def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_
         tracks = state.client.get(base).json()["subtitle_tracks"]
         assert (len(tracks[0]["cues"]) if tracks else 0) == expected
     assert state.client.get(base).json()["task"]["can_redo"] is False
+
+
+def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(person_render_edit_state):
+    state=person_render_edit_state
+    base=f"/api/creation-tasks/{state.task.id}"
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    track=SubtitleTrack(id="style-english",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"enabled":False},cues=[ProductionSubtitleCue(id="caption",source_cue_id=None,
+        text="Real local subtitles",start_seconds=0,end_seconds=4)],generation_method="timeline",model_id=None,
+        artifact_ref="artifacts/style.srt",transform_id="style-transform",status="valid")
+    state.production.create_subtitle_track(track)
+    before=state.client.get(base).json()
+    missing=state.client.post(base+'/edits/exact/preview',json={"operation_type":"ConfigureSubtitleTrack","style":{"font_family":"Missing Subtitle Family 123456"}})
+    assert missing.status_code==422,missing.text
+    preview=state.client.post(base+'/edits/preview',json={"context_stage":"subtitle_cover","raw_command":"字幕字号改成64","selected_object_refs":[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    image_url=preview.json()['proposal']['preview']['after']['image_url']
+    image=state.client.get(image_url)
+    assert image.status_code==200 and image.headers['content-type']=='image/png'
+    assert image.content.startswith(b'\x89PNG')
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['style']=={"enabled":False,"font_size":64}
+    assert after['subtitle_tracks'][0]['cues']==before['subtitle_tracks'][0]['cues']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['style']==track.style
