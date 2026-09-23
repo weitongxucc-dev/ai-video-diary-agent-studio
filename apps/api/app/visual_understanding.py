@@ -166,7 +166,8 @@ class LocalVisualUnderstanding:
                                 image.save(small)
                             frames.append({"id": frame_id, "path": str(small), "timestamp_seconds": timestamp})
                             segment_ocr_requests.append({"id": frame_id, "path": str(large), "timestamp_seconds": timestamp})
-                        jobs.append({"id": segment.id, "frames": frames})
+                        jobs.append({"id": segment.id, "frames": frames,
+                                     "schema": understanding_schema(len(frames))})
                         ocr_requests.extend(segment_ocr_requests)
                     except (OSError, subprocess.SubprocessError):
                         result.status = "failed"

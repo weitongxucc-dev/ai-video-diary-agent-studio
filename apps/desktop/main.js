@@ -192,6 +192,7 @@ function localModelEnv() {
   return {
     VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
     VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
+    UNDERSTANDING_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_vl_worker.py'),
   };
 }
 

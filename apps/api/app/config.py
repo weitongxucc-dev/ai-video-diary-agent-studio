@@ -447,6 +447,8 @@ class Settings:
             voice_model_worker_path=os.getenv("VOICE_MODEL_WORKER_PATH")
             or _default_voice_model_worker_path(),
             understanding_runtime_python_path=os.getenv("UNDERSTANDING_RUNTIME_PYTHON_PATH") or str(Path(model_root_path).parent / "model-runtimes" / "qwen-vl" / ".venv" / "bin" / "python"),
+            understanding_worker_path=os.getenv("UNDERSTANDING_WORKER_PATH")
+            or cls.understanding_worker_path,
             native_ocr_worker_path=os.getenv("NATIVE_OCR_WORKER_PATH"),
             native_portrait_worker_path=os.getenv("NATIVE_PORTRAIT_WORKER_PATH"),
             avatar_model_runtime_python_path=os.getenv(

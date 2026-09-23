@@ -4,10 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.visual_understanding import understanding_schema
 
 
 def main():
@@ -47,7 +43,7 @@ def main():
             "观察不到的东西就不写；不要根据常识补全。输出指定JSON结构。"
         )
         prompt = apply_chat_template(processor, model.config, instruction, num_images=len(frames))
-        logits = build_json_schema_logits_processor(processor.tokenizer, understanding_schema(len(frames)))
+        logits = build_json_schema_logits_processor(processor.tokenizer, segment["schema"])
         result = generate(model, processor, prompt, image=[frame["path"] for frame in frames],
                           logits_processors=[logits], max_tokens=480, temperature=0, verbose=False)
         try:
