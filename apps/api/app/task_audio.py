@@ -18,6 +18,7 @@ class TaskAudio:
 
     def source(self, workspace_id: str, task_id: str, reference: str) -> Path:
         self.repository.get_creation_task(workspace_id, task_id)
+        self.validate_material_use(workspace_id, task_id, reference)
         if reference.startswith("narration://artifact/"):
             record = self.repository.get_narration_artifact(workspace_id, reference.removeprefix("narration://artifact/"))
             if record is None or record.task_id != task_id:
@@ -29,6 +30,19 @@ class TaskAudio:
         if not any(record.logical_ref == reference and record.kind in {"audio_source", "audio_preview"} for record in records):
             raise ValueError("音频产物不属于当前任务")
         return self.artifact_store.resolve_file(reference)
+
+    def validate_material_use(self, workspace_id: str, task_id: str, reference: str) -> None:
+        records = {item.logical_ref: item for item in self.repository.list_artifact_records(workspace_id, task_id)}
+        pending, visited = [reference], set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            if current.startswith("workspace://"):
+                self.repository.validate_material_reference_use(workspace_id, current)
+            elif current in records:
+                pending.extend(records[current].input_refs)
 
     def validate(self, workspace_id: str, task_id: str, timeline: AudioTimeline, duration_seconds: float):
         durations = {}

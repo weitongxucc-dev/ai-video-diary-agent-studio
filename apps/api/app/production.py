@@ -962,6 +962,17 @@ class ProductionRepository:
             self._require_workspace_media_reference(workspace_id, value)
         return resolved
 
+    def validate_material_reference_use(self, workspace_id: str, reference: str) -> None:
+        """Check current material restrictions for a source retained in artifact lineage."""
+        path = self.resolve_workspace_media_reference(workspace_id, reference)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id = ? AND file_path = ?",
+                (workspace_id, str(path)),
+            ).fetchone()
+        if row is not None and not material_allows_footage(self._asset_from_payload(json.loads(row["payload"]))):
+            raise ValueError("来源素材使用状态不允许进入成片，请移除对应音频或在素材详情修改使用状态")
+
     def import_voice_reference_wav(
         self,
         workspace_id: str,

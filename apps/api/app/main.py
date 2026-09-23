@@ -7933,6 +7933,12 @@ def _validate_montage_material_use(workspace_id, plan):
                 raise ValueError("镜头素材已不存在，请替换后重试") from exc
             if not material_allows_footage(asset):
                 raise ValueError("素材使用状态不允许用于画面，请替换镜头或在素材详情修改使用状态")
+    audio_service = _task_audio()
+    for track in _effective_audio_timeline(plan).tracks:
+        if not track.muted:
+            for clip in track.clips:
+                if not clip.muted:
+                    audio_service.validate_material_use(workspace_id, plan.task_id, clip.source_ref)
 
 
 def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind,parameters):

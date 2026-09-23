@@ -3509,7 +3509,8 @@ def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_re
     def publish(*args,**kwargs):
         calls.append(kwargs['parameters'])
         return SimpleNamespace(id='transition',logical_ref='artifacts/transition.mp4')
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(publish=publish))
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
+        publish=publish,validate_material_use=lambda *args:None))
     result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头叠化0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{target['id']}"]})
     assert result.status_code==200,result.text
     assert len(calls)==2

@@ -251,3 +251,49 @@ def test_compound_audio_parameters_share_one_patch_and_cover_both_fades():
     assert compile_audio_command('淡入1秒和淡出2秒','audio-narration-main',timeline,'version',None).values=={'fade_in_ms':1000,'fade_out_ms':2000}
     for command in ('音量小一点，删除字幕','静音但保留原声','解锁音乐','音量降低3分贝，然后加混响'):
         with pytest.raises(ValueError):compile_audio_command(command,'audio-narration-main',timeline,'version',None)
+
+@pytest.mark.parametrize('use_state', ['reference_only', 'excluded'])
+def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use_state, monkeypatch):
+    import json
+    from dataclasses import asdict
+    from app.artifact_store import ArtifactStore
+    from app.models import utc_now
+    from app.production import CreationTask, MaterialAsset, ProductionRepository
+    from app.task_audio import TaskAudio
+    repo = ProductionRepository(tmp_path/'db.sqlite', tmp_path/'library')
+    task = CreationTask(id='task', workspace_id='workspace', plan_id='plan', name='原声', scenario='test')
+    with repo._connect() as conn:
+        conn.execute('INSERT INTO creation_tasks VALUES (?,?,?,?,?)',
+            (task.id, task.workspace_id, task.plan_id, json.dumps(asdict(task), default=str), str(task.updated_at)))
+    source = repo.video_library_path/'source.wav'
+    source.parent.mkdir(parents=True)
+    tone(source, 440)
+    asset = MaterialAsset(id='asset', workspace_id=task.workspace_id, file_name=source.name,
+        path=str(source.resolve()), size_bytes=source.stat().st_size, modified_at=utc_now())
+    repo._save_asset(asset)
+    reference = repo.workspace_media_reference_for_asset(task.workspace_id, asset.id)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id=task.workspace_id, reference=reference)
+    service = TaskAudio(repo, ArtifactStore(tmp_path/'output'), tmp_path/'temp')
+    extracted = service.publish(task.workspace_id, task.id, kind='audio_source', parameters={},
+        input_refs=[reference], produce=lambda path: tone(path, 440))
+    processed = service.publish(task.workspace_id, task.id, kind='audio_source', parameters={},
+        input_refs=[extracted.logical_ref], produce=lambda path: tone(path, 440))
+    assert service.source(task.workspace_id, task.id, processed.logical_ref).is_file()
+    repo.update_asset_use_state(task.workspace_id, asset.id, use_state)
+    for ref in (reference, extracted.logical_ref, processed.logical_ref):
+        with pytest.raises(ValueError, match='使用状态'):
+            service.source(task.workspace_id, task.id, ref)
+    from types import SimpleNamespace
+    from app import main as main_module
+    monkeypatch.setattr(main_module, 'production_repo', repo)
+    monkeypatch.setattr(main_module, '_task_audio', lambda:service)
+    timeline = AudioTimeline(tracks=[TimelineAudioTrack(id='original', name='原声', role='original', clips=[TimelineAudioClip(
+        id='extracted', name='镜头原声', source_ref=processed.logical_ref,
+        source_start_ms=0, source_end_ms=4000, timeline_start_ms=0)])])
+    plan = SimpleNamespace(task_id=task.id, clips=[], audio_timeline=timeline)
+    with pytest.raises(ValueError, match='使用状态'):
+        main_module._validate_montage_material_use(task.workspace_id, plan)
+    repo.update_asset_use_state(task.workspace_id, asset.id, 'available')
+    main_module._validate_montage_material_use(task.workspace_id, plan)
+    assert service.source(task.workspace_id, task.id, processed.logical_ref).is_file()
