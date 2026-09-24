@@ -518,6 +518,7 @@ function ContextCommandBar({
         {assistantConfigured ? <details><summary>服务详情</summary><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></details> : <a href="/settings">去设置</a>}
         {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
       </div>
+      {scriptMode && assistantTurns.length ? <p className="assistant-reply">我：{assistantTurns.at(-1)?.command}</p> : null}
       {assistantReply ? <p className="assistant-reply" aria-live="polite">{assistantReply}</p> : null}
       {preview ? (
         <HomeCardDialog title="预览修改" onClose={onCancel}><div aria-label="变更预览" aria-live="polite" className={editorUi.dialogPreview}>
@@ -873,7 +874,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (!active) return;
       const turns = assistantHistoryTurns(history.items);
       setAssistantTurns(turns);
-      setAssistantReply(history.items.at(-1)?.role === "assistant" ? history.items.at(-1)!.message : null);
+      setAssistantReply(turns.at(-1)?.reply ?? null);
     }).catch((cause) => { if (active) setError(errorDetails(cause)); });
     return () => { active = false; };
   }, [task.id]);
@@ -1248,7 +1249,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
     } catch (cause) {
       setError(errorDetails(cause));
-      if (activeView === "script") await refresh().catch(() => undefined);
+      if (activeView === "script") {
+        await refresh().catch(() => undefined);
+        const history = await getCreationTaskAssistantHistory(task.id).catch(() => null);
+        if (history) {
+          const turns = assistantHistoryTurns(history.items);
+          setAssistantTurns(turns);
+          setAssistantReply(turns.at(-1)?.reply ?? null);
+        }
+      }
     } finally {
       setBusy(null);
     }

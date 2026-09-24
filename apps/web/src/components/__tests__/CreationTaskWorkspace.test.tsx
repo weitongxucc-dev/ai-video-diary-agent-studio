@@ -291,6 +291,16 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.getAssistantHistory).toHaveBeenCalledWith("task-1");
   });
 
+  it("shows a saved question whose model reply was interrupted", async () => {
+    const initial = workspace({ ...baseTask, stage: "script", confirmed_script_id: null });
+    mocks.getAssistantHistory.mockResolvedValue({ items: [
+      { role: "user", message: "把开头缩短", stage: "script", script_id: null, at: baseTask.created_at },
+    ] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByText("上次没有得到完整回复。")).toBeInTheDocument();
+    expect(screen.getByText("我：把开头缩短")).toBeInTheDocument();
+  });
+
   it("starts only after showing the confirmed script and making requirements", async () => {
     const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
     const preview = {
