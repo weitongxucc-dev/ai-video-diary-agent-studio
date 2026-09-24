@@ -6052,6 +6052,73 @@ class ProductionRepository:
             raise KeyError(script_id)
         return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
 
+    def update_assistant_script_draft(
+        self,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        *,
+        title: str,
+        sections: list[CreationTaskScriptSection],
+    ) -> CreationTaskScript:
+        """Revise only the current unconfirmed assistant draft in its existing run."""
+        if not title.strip() or not sections or any(
+            not section.id.strip()
+            or not section.title.strip()
+            or not section.content.strip()
+            or not section.visual_prompt.strip()
+            or not section.evidence_reference_ids
+            for section in sections
+        ):
+            raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
+                (workspace_id, task_id, script_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(script_id)
+            script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+            if (
+                task.stage != "script"
+                or task.stage_status != "waiting_for_user"
+                or task.confirmed_script_id is not None
+                or script.selection_status != "draft"
+                or script.topic_id != task.selected_topic_id
+            ):
+                raise ValueError("当前创作任务不允许修改这份待确认文案")
+            run_row = conn.execute(
+                "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
+                "AND json_extract(payload, '$.status')='succeeded' "
+                "ORDER BY started_at DESC, id DESC LIMIT 1",
+                (workspace_id, task_id),
+            ).fetchone()
+            if run_row is None:
+                raise ValueError("这份文案没有已完成的生成记录")
+            run = self._script_generation_run_from_payload(json.loads(str(run_row["payload"])))
+            if script.run_id != run.id or run.topic_id != task.selected_topic_id or run.plan_id != task.plan_id:
+                raise ValueError("这份文案不是当前任务的最新草稿")
+            allowed_references = {
+                str(item["reference_id"])
+                for item in run.input_references
+                if isinstance(item, dict) and item.get("reference_id")
+            }
+            used_references = {
+                reference_id for section in sections for reference_id in section.evidence_reference_ids
+            }
+            if not used_references.issubset(allowed_references):
+                raise ValueError("文案引用了本次模型输入之外的资料")
+            script.title = title.strip()
+            script.sections = sections
+            script.updated_at = utc_now()
+            conn.execute(
+                "UPDATE creation_task_scripts SET payload=?, updated_at=? WHERE workspace_id=? AND task_id=? AND id=?",
+                (_json_payload(script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
+            )
+        return script
+
     def _demote_other_confirmed_scripts(
         self,
         conn: sqlite3.Connection,

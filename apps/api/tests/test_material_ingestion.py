@@ -15,7 +15,10 @@ import time
 import pytest
 
 from app.material_ingestion import MaterialIngestionService
-from app.production import CreationPlan, CreationTask, JobRun, ProductionRepository, TaskEvent
+from app.production import (
+    CreationPlan, CreationTask, CreationTaskScript, CreationTaskScriptSection,
+    JobRun, ProductionRepository, ScriptGenerationRun, TaskEvent,
+)
 
 
 def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[ProductionRepository, Path]:
@@ -30,7 +33,7 @@ def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[
     return repo, library
 
 
-def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: str) -> None:
+def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: str, *, script_stage: bool = False) -> None:
     plan = CreationPlan(
         id=f"plan-{task_id}", workspace_id=workspace_id, goal="并发制作", name="测试任务",
         target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
@@ -39,7 +42,11 @@ def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: s
         material_rule_summary="测试", model_snapshot=[], confirmation_points=[], blockers=[],
         preflight_fingerprint=f"fingerprint-{task_id}",
     )
-    task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name, scenario="knowledge_explanation")
+    task = CreationTask(
+        id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name,
+        scenario="knowledge_explanation", stage="script" if script_stage else "topic",
+        selected_topic_id="topic-one" if script_stage else None,
+    )
     repo.confirm_creation_plan(plan, task)
 
 
@@ -346,3 +353,38 @@ def test_concurrent_identical_task_event_returns_one_record(tmp_path: Path) -> N
     seed_creation_task(repo, "two", "task-two")
     with pytest.raises(ValueError, match="领域字段不一致"):
         repo.append_task_event(replace(event, workspace_id="two", task_id="task-two", job_id=None))
+
+
+def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary(tmp_path: Path) -> None:
+    repo, _ = make_repo(tmp_path)
+    seed_creation_task(repo, "one", "task-one", script_stage=True)
+    run = ScriptGenerationRun(
+        id="run-one", workspace_id="one", task_id="task-one", plan_id="plan-task-one",
+        topic_id="topic-one", status="running", route_snapshot={"source": "pi"},
+        prompt_schema_version="assistant-v1", input_references=[{"reference_id": "ref-one"}],
+    )
+    repo.start_script_generation(run)
+    initial = CreationTaskScript(
+        id="draft-one", workspace_id="one", task_id="task-one", run_id=run.id,
+        topic_id="topic-one", title="初稿", language="zh-CN",
+        sections=[CreationTaskScriptSection("section-one", "开头", "初稿内容", "真实画面", ["ref-one"])],
+    )
+    repo.complete_script_generation(run.id, initial)
+    revised_sections = [CreationTaskScriptSection("section-one", "开头", "用户改过的内容", "产品画面", ["ref-one"])]
+    revised = repo.update_assistant_script_draft("one", "task-one", initial.id, title="新版草稿", sections=revised_sections)
+    assert (revised.id, revised.run_id, revised.topic_id, revised.selection_status) == (initial.id, run.id, "topic-one", "draft")
+    assert revised.sections == revised_sections
+    assert repo.get_creation_task("one", "task-one").confirmed_script_id is None
+    assert repo.get_creation_task("one", "task-one").stage_status == "waiting_for_user"
+    restarted = ProductionRepository(tmp_path / "production.sqlite", repo.video_library_path)
+    assert restarted.get_creation_task_script("one", initial.id).title == "新版草稿"
+    with pytest.raises(KeyError):
+        restarted.update_assistant_script_draft("other", "task-one", initial.id, title="越界", sections=revised_sections)
+    with pytest.raises(ValueError, match="模型输入之外"):
+        restarted.update_assistant_script_draft(
+            "one", "task-one", initial.id, title="伪来源",
+            sections=[replace(revised_sections[0], evidence_reference_ids=["unknown"])],
+        )
+    restarted.confirm_creation_task_script("one", "task-one", initial.id, title="用户确认", sections=revised_sections)
+    with pytest.raises(ValueError, match="不允许修改"):
+        restarted.update_assistant_script_draft("one", "task-one", initial.id, title="越过确认", sections=revised_sections)
