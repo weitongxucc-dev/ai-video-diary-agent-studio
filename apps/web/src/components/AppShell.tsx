@@ -25,7 +25,9 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   Suspense,
   type ComponentType,
@@ -96,6 +98,9 @@ export type AppShellProps = {
   children: ReactNode;
   creationTasks?: AppShellCreationTask[];
   inspector?: ReactNode;
+  quickInspector?: (openDetails: () => void) => ReactNode;
+  quickInspectorKey?: string;
+  quickInspectorLabel?: string;
   conversation?: ReactNode;
   autoFocus?: boolean;
   inspectorTitle?: string;
@@ -189,6 +194,9 @@ export function AppShell({
   children,
   creationTasks,
   inspector: providedInspector,
+  quickInspector,
+  quickInspectorKey,
+  quickInspectorLabel,
   conversation,
   autoFocus = false,
   inspectorDismissKey,
@@ -203,11 +211,52 @@ export function AppShell({
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(true);
+  const [quickSize, setQuickSize] = useState({ width: 278, height: 0 });
+  const editorMainRef = useRef<HTMLElement>(null);
+  const quickExpandRef = useRef<HTMLButtonElement>(null);
+  const quickPanelRef = useRef<HTMLElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
+  useEffect(() => { setQuickOpen(true); }, [quickInspectorKey]);
+  const quickAvailable = editorLayout && Boolean(quickInspector);
+
+  useLayoutEffect(() => {
+    const main = editorMainRef.current;
+    if (!quickAvailable || !main) return;
+    let frame = 0;
+    const measure = () => {
+      const anchor = main.querySelector<HTMLElement>("[data-editor-transport]")
+        ?? main.querySelector<HTMLElement>("[data-editor-player]");
+      const mainRect = main.getBoundingClientRect();
+      const anchorBottom = anchor?.getBoundingClientRect().bottom ?? mainRect.bottom;
+      const height = Math.max(0, Math.min(246, Math.floor(mainRect.bottom - anchorBottom - 16)));
+      const width = Math.min(304, Math.max(278, Math.round(mainRect.width * .5)));
+      setQuickSize((current) => current.height === height && current.width === width ? current : { width, height });
+    };
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measure);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
+    observer?.observe(main);
+    const player = main.querySelector<HTMLElement>("[data-editor-player]");
+    const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
+    if (player) observer?.observe(player);
+    if (transport) observer?.observe(transport);
+    main.addEventListener("scroll", scheduleMeasure, true);
+    window.addEventListener("resize", scheduleMeasure);
+    measure();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      main.removeEventListener("scroll", scheduleMeasure, true);
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [quickAvailable, quickInspectorKey]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("ai-video-diary-theme") as ThemeMode | null;
@@ -267,6 +316,18 @@ export function AppShell({
     { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
   ], [recentTasks]);
+
+  function collapseQuick() {
+    setQuickOpen(false);
+    window.requestAnimationFrame(() => quickExpandRef.current?.focus());
+  }
+
+  function expandQuick() {
+    setQuickOpen(true);
+    window.requestAnimationFrame(() => {
+      quickPanelRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
+    });
+  }
 
   return (
     <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
@@ -366,7 +427,7 @@ export function AppShell({
               <Search size={16} />
 
             </button>
-            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
+            {providedInspector && !quickAvailable ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
             <button aria-label="帮助" className="shell-icon-button" onClick={() => toggleHelpPanel()} type="button">
               <CircleHelp size={17} />
             </button>
@@ -386,7 +447,29 @@ export function AppShell({
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>{children}</main>
+          <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+            {children}
+            {quickAvailable && quickInspector ? (
+              quickOpen && quickSize.height >= 150 ? (
+                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height }}>
+                  <header className={editorShell.quickHeader}>
+                    <strong>{quickInspectorLabel ?? "镜头快速编辑"}</strong>
+                    <div>
+                      <button onClick={() => setDetailsOpen(true)} type="button">更多剪辑</button>
+                      <button aria-label="收起镜头编辑" onClick={collapseQuick} type="button">收起</button>
+                    </div>
+                  </header>
+                  {quickInspector(() => setDetailsOpen(true))}
+                </section>
+              ) : (
+                <div className={editorShell.quickCollapsed} style={{ width: quickSize.width }}>
+                  <span>{quickInspectorLabel ?? "镜头编辑"}{quickSize.height < 150 ? " · 空间不足" : ""}</span>
+                  {quickSize.height < 150 ? <button onClick={() => setDetailsOpen(true)} type="button">查看详情</button>
+                    : <button onClick={expandQuick} ref={quickExpandRef} type="button">展开</button>}
+                </div>
+              )
+            ) : null}
+          </main>
         </div>
 
       </section>

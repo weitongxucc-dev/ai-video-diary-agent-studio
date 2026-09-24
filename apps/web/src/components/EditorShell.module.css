@@ -6,6 +6,7 @@
 .shell :global(.desktop-toolbar__actions) { flex: 0 0 auto; gap: 4px; }
 .shell :global(.desktop-main-scroll) { overflow: auto; scrollbar-gutter: stable; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { overflow: hidden; scrollbar-gutter: auto; }
+.shell:global(.video-editor-shell) :global(.desktop-main-scroll) { position: relative; }
 .shell :global(.desktop-brand) { font-size: 14px; font-weight: 500; white-space: nowrap; }
 .shell :global(.new-production-button) { height: 36px; min-height: 36px; background: var(--accent); color: var(--accent-contrast); border: 1px solid var(--accent); font-weight: 500; }
 .shell :global(.new-production-button kbd) { display: none; }
@@ -49,6 +50,16 @@
 .conversationBody :global(.home-composer__meta) { font-size: 12px; }
 .chatSeparator { right: -13px; top: 0; }
 .detailsButton { min-height: 32px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-size: 13px; cursor: pointer; white-space: nowrap; }
+.quickPanel, .quickCollapsed { position: absolute; right: 8px; bottom: 8px; z-index: 20; border: 1px solid var(--border-2); border-radius: 10px; background: var(--surface-1); box-shadow: 0 10px 28px rgb(0 0 0 / 18%); }
+.quickPanel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.quickHeader { display: flex; flex: 0 0 38px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border-1); }
+.quickHeader strong { overflow: hidden; color: var(--text-1); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.quickHeader div { display: flex; flex: 0 0 auto; gap: 4px; }
+.quickHeader button, .quickCollapsed button { min-height: 28px; padding: 0 5px; border: 0; border-radius: 5px; background: transparent; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; }
+.quickHeader button:hover, .quickCollapsed button:hover { background: var(--surface-2); }
+.quickHeader button:focus-visible, .quickCollapsed button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.quickCollapsed { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; }
+.quickCollapsed span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1279px) { .contentGrid { padding: 12px; gap: 12px; } .conversationHeader { padding: 13px; } .conversationBody :global(.home-composer) { padding: 12px; } .chatSeparator { right: -10px; } }
 
 .shell :global(.desktop-sidebar__brand-row) { padding-inline: 10px; gap: 4px; }

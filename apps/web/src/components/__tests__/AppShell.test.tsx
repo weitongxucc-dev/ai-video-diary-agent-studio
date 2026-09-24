@@ -198,4 +198,24 @@ describe("AppShell", () => {
     expect(routerPush).toHaveBeenCalledWith("/tasks/task-search");
     expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
   });
+
+  it("places a collapsible quick editor below playback controls without opening the details card", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const bottom = this.hasAttribute("data-editor-transport") ? 560 : 768;
+      return { top:0, bottom, left:0, right:484, width:484, height:bottom, x:0, y:0, toJSON:() => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout inspector={<p>完整属性</p>} inspectorTitle="镜头详情" quickInspectorLabel="镜头 1 · 0:00–0:03" quickInspectorKey="task:version:clip" quickInspector={openDetails => <button onClick={openDetails} type="button">打开候选</button>}>
+        <div data-editor-player /><div data-editor-transport />
+      </AppShell>);
+      const panel = await screen.findByRole("region", { name:"镜头 1 · 0:00–0:03" });
+      expect(panel).toHaveStyle({ width:"278px", height:"192px" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name:"收起镜头编辑" }));
+      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name:"展开" }));
+      fireEvent.click(screen.getByRole("button", { name:"打开候选" }));
+      expect(screen.getByRole("dialog", { name:"镜头详情" })).toHaveTextContent("完整属性");
+    } finally { rect.mockRestore(); }
+  });
 });

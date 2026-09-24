@@ -1,0 +1,50 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
+import { useState } from "react";
+import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
+import { createVideoClipDraft, VideoClipInspector, VideoClipQuickEditor } from "@/components/VideoEditor";
+
+const clip = {
+  id: "clip-1", asset_id: "asset-1", source_reference: "workspace://clip.mp4",
+  source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3,
+  match_score: .9, role: "b_roll", locked: false, needs_confirmation: false,
+} as CreationTaskMontageClip;
+
+it("keeps a clip draft across categories and previews only typed changes", () => {
+  const onPreview = vi.fn();
+  const onOpenDetails = vi.fn();
+  const onDraftChange = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(createVideoClipDraft(clip));
+    return <VideoClipQuickEditor clip={clip} index={0} busy={false} draft={draft} onDraftStateChange={setDraft} onDraftChange={onDraftChange} onPreview={onPreview} onOpenDetails={onOpenDetails} />;
+  }
+  render(<Harness />);
+  const preview = screen.getByRole("button", { name:"预览修改" });
+  expect(preview).toBeDisabled();
+  fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" }), { target:{ value:"1.5" } });
+  expect(preview).not.toBeDisabled();
+  fireEvent.click(preview);
+  expect(onPreview).toHaveBeenCalledWith({ operation_type:"TrimClip", clip_id:"clip-1", source_start_seconds:1.5 });
+  fireEvent.click(screen.getByRole("button", { name:"画面" }));
+  fireEvent.change(screen.getByRole("combobox", { name:"镜头 1 快速画面方式" }), { target:{ value:"fit" } });
+  fireEvent.click(screen.getByRole("button", { name:"预览修改" }));
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.5, crop_y:.5 });
+  fireEvent.click(screen.getByRole("button", { name:"裁剪" }));
+  expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toHaveValue(1.5);
+  fireEvent.click(screen.getByRole("button", { name:"换素材" }));
+  fireEvent.click(screen.getByRole("button", { name:"查看候选" }));
+  expect(onOpenDetails).toHaveBeenCalledTimes(1);
+  expect(onPreview).toHaveBeenCalledTimes(2);
+  expect(onDraftChange).toHaveBeenCalledTimes(2);
+});
+
+it("opens the full editor with the same crop draft", () => {
+  const initialDraft = { ...createVideoClipDraft(clip), start: 1.5, mode:"fit" as const };
+  const onDraftStateChange = vi.fn();
+  const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
+  render(<VideoClipInspector clip={clip} index={0} count={1} workspace={workspace} busy={false} initialDraft={initialDraft} onDraftStateChange={onDraftStateChange} onPreview={vi.fn()} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing={false} onPerson={vi.fn()} />);
+  expect(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" })).toHaveValue(1.5);
+  expect(screen.getByRole("combobox", { name:"画面显示方式" })).toHaveValue("fit");
+  fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" }), { target:{ value:"2" } });
+  expect(onDraftStateChange).toHaveBeenLastCalledWith({ start:2, mode:"fit", x:.5, y:.5 });
+});
