@@ -38,7 +38,7 @@ PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当�
 人物口型默认选 high 高精度；只有用户明确要求速度优先或低精度时才选 fast。不要在高精度不可用时自行改为 fast。
 回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案等内部词；说清能否开始、缺什么和下一步。"""
 
-SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每轮先调用 read_current_task，读取已确认选题、本次时长和允许使用的资料；需要补充事实时调用 find_knowledge，需要镜头时调用 find_materials。
+SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每轮先调用 read_current_task，读取已确认选题、本次时长和允许使用的资料；需要补充事实时调用 find_knowledge。
 你只能使用工具列出的当前任务来源 ID 作为文案证据，不能编造引用、事实、素材或已完成的制作结果。资料不足就问一个具体问题。
 用户要起草或修改文案时，调用 preview_script_draft 保存待确认文案。修改已有草稿时沿用其段落 ID；先说明想怎么改，再根据用户本轮要求提交新的完整草稿。每轮最多保存一次。
 工具只保存待确认草稿，不会确认文案、生成配音或开始制作。请用户在工作台检查并明确确认文案；不要声称已开始制作。
@@ -126,7 +126,7 @@ def run_task_turn(
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
         authorization=authorization, cookie=cookie,
         prompt=SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
-        tool_names=("read_current_task,find_knowledge,find_materials,preview_script_draft"
+        tool_names=("read_current_task,find_knowledge,preview_script_draft"
                     if script_turn else "read_current_task,find_knowledge,find_materials,preview_edit"),
         preview_kind="script_draft" if script_turn else "edit_preview",
     )

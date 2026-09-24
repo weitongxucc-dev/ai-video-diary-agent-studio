@@ -67,7 +67,7 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
         assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one"})
     assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
     assert commands[0][commands[0].index("--session-id") + 1] != commands[2][commands[2].index("--session-id") + 1]
-    assert commands[0][commands[0].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_script_draft"
+    assert commands[0][commands[0].index("--tools") + 1] == "read_current_task,find_knowledge,preview_script_draft"
 
 
 def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatch, tmp_path):
