@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +72,7 @@ from app.config import (
     runtime_env_file_path,
 )
 from app.content_templates import list_content_templates
+from app.creation_execution import CreationExecution, ExecutionStartRequest, revision_digest
 from app.creator_profile import (
     get_or_create_profile,
     upsert_creator_profile,
@@ -4302,7 +4304,10 @@ def generate_creation_task_narration(
     task_id: str,
     request: Request,
 ) -> CreationTaskNarrationResponse:
-    workspace_id = current_workspace_id(request)
+    return _generate_creation_task_narration_for_workspace(current_workspace_id(request), task_id)
+
+
+def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: str) -> CreationTaskNarrationResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     if task.confirmed_script_id is None:
@@ -4929,7 +4934,10 @@ def create_creation_task_montage_plan(
     task_id: str,
     request: Request,
 ) -> CreationTaskMontagePlanResponse:
-    workspace_id = current_workspace_id(request)
+    return _create_creation_task_montage_plan_for_workspace(current_workspace_id(request), task_id)
+
+
+def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id: str) -> CreationTaskMontagePlanResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     creation_plan = _creation_plan_for_task_or_404(workspace_id, task)
     if task.confirmed_script_id is None or task.narration_cache_key is None:
@@ -9443,7 +9451,10 @@ def render_creation_task_montage(
     request: Request,
     _payload: CreationTaskMontageRenderRequest,
 ) -> CreationTaskMontagePlanResponse:
-    workspace_id = current_workspace_id(request)
+    return _render_creation_task_montage_for_workspace(current_workspace_id(request), task_id)
+
+
+def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str) -> CreationTaskMontagePlanResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     try:
         plan = creation_task_montage_plan_from_payload(
@@ -10689,7 +10700,9 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner
+    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker
+
+    execution_worker.shutdown(wait=True)
 
     settings = Settings.from_env()
     configure_process_temporary_directory(settings)
@@ -10748,6 +10761,10 @@ def _reload_runtime_dependencies() -> None:
         topic_generator=topic_generator_from_settings(settings, vault),
     )
     workflow = LangGraphEpisodeWorkflow(service)
+    video_job_runner.recover_after_restart()
+    creation_execution = _new_creation_execution()
+    execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+    _recover_creation_executions()
 
 
 @app.get("/api/knowledge/notes", response_model=list[KnowledgeNoteResponse])
@@ -12077,6 +12094,152 @@ def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
 
 
 _LEGACY_WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
+
+
+def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
+    try:
+        plan = production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        ref = plan.get("output_path")
+        if plan.get("status") != "rendered" or not isinstance(ref, str):
+            return False
+        artifact_store.describe(ref)
+        return True
+    except (KeyError, FileNotFoundError):
+        return False
+
+
+def _new_creation_execution() -> CreationExecution:
+    return CreationExecution(
+        production_repo,
+        run_narration=_generate_creation_task_narration_for_workspace,
+        run_montage_plan=_create_creation_task_montage_plan_for_workspace,
+        run_render=_render_creation_task_montage_for_workspace,
+        render_is_valid=_creation_render_is_valid,
+    )
+
+
+def _recover_creation_executions() -> None:
+    # The repository owns the cross-workspace pending-job query. A workspace is
+    # taken only from each persisted JobRun, never from the current login.
+    for job in production_repo.list_pending_creation_executions():
+        execution_worker.submit(creation_execution.execute, job.workspace_id, job.id)
+
+
+def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, object]:
+    task = _creation_task_or_404(workspace_id, task_id)
+    job = creation_execution.latest(workspace_id, task_id)
+    events = (
+        [
+            {"stage": event.payload.get("stage"), "status": event.payload.get("status"),
+             "reason": event.payload.get("reason"), "at": event.created_at.isoformat()}
+            for event in production_repo.list_task_events(workspace_id, task_id)
+            if job is not None and event.job_id == job.id
+            and event.event_type == "creation_execution_stage"
+        ]
+        if job else []
+    )
+    covers = (
+        production_repo.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
+        if task.current_timeline_version_id else []
+    )
+    return {
+        "task_id": task_id,
+        "job": asdict(job) if job else None,
+        "stages": events,
+        "video_ready": _creation_render_is_valid(workspace_id, task_id),
+        "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
+        "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
+    }
+
+
+@app.get("/api/creation-tasks/{task_id}/execution/preview")
+def preview_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if not task.confirmed_script_id:
+        raise HTTPException(status_code=409, detail="请先确认实际文案")
+    script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    digest = revision_digest(script, plan)
+    try:
+        creation_execution.validate_input(workspace_id, task, script.id, digest)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "task_id": task.id,
+        "script_id": script.id,
+        "script_title": script.title,
+        "script_sections": [{"title": section.title, "content": section.content} for section in script.sections],
+        "plan_id": plan.id,
+        "requirements": {
+            "aspect_ratio": plan.aspect_ratio,
+            "duration_target_seconds": plan.duration_target_seconds,
+            "presenter_share_target": plan.presenter_share_target,
+            "lipsync_quality": plan.lipsync_quality,
+            "selected_voice": plan.selected_voice.profile_id if plan.selected_voice else None,
+            "template_settings": plan.template_settings,
+        },
+        "input_digest": digest,
+    }
+
+
+@app.get("/api/creation-tasks/{task_id}/execution")
+def get_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+    return _creation_execution_status(current_workspace_id(request), task_id)
+
+
+@app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)
+def start_creation_execution(task_id: str, request: Request, payload: ExecutionStartRequest) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    if not payload.requirements_confirmed:
+        raise HTTPException(status_code=409, detail="请先确认实际文案与本次制作要求")
+    try:
+        job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="创作任务或确认对象不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job.status in {"queued", "interrupted"}:
+        execution_worker.submit(creation_execution.execute, workspace_id, job.id)
+    return _creation_execution_status(workspace_id, task_id)
+
+
+@app.post("/api/creation-tasks/{task_id}/execution/resume", status_code=202)
+def resume_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        job = creation_execution.retry(workspace_id, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job.status in {"queued", "interrupted"}:
+        execution_worker.submit(creation_execution.execute, workspace_id, job.id)
+    return _creation_execution_status(workspace_id, task_id)
+
+
+@app.post("/api/creation-tasks/{task_id}/execution/cancel")
+def cancel_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    try:
+        creation_execution.cancel(workspace_id, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _creation_execution_status(workspace_id, task_id)
+
+
+creation_execution = _new_creation_execution()
+execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+
+
+@app.on_event("startup")
+def resume_persisted_creation_executions() -> None:
+    _recover_creation_executions()
+
+
+@app.on_event("shutdown")
+def stop_creation_execution_worker() -> None:
+    execution_worker.shutdown(wait=True)
 
 
 @app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)
