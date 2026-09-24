@@ -140,8 +140,8 @@ export function MaterialLibraryWorkspace({
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
-  const [tagError, setTagError] = useState("");
-  const [tagDraft, setTagDraft] = useState("");
+  const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -151,6 +151,7 @@ export function MaterialLibraryWorkspace({
   const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const isComposingTag = useRef(false);
+  const selectionRevision = useRef(0);
 
   const selected =
     assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -158,6 +159,9 @@ export function MaterialLibraryWorkspace({
     selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
     selected?.segments[0] ??
     null;
+  const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
+  const tagDraft = tagDrafts[tagScope] ?? "";
+  const tagError = tagErrors[tagScope] ?? "";
   const visible = assets;
 
   useEffect(() => {
@@ -205,28 +209,26 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectAsset(asset: MaterialAsset) {
+    selectionRevision.current += 1;
     const first = asset.segments[0];
     setDescriptionDraft(first?.description ?? "");
     setTranscriptDraft(first?.transcript ?? "");
     setSelectedId(asset.id);
     setSelectedSegmentId(first?.id ?? "");
-    setTagDraft("");
     setCollectionDraft(first?.collection_ids[0] ?? "");
     setCollectionQuery("");
     setDetailError("");
-    setTagError("");
   }
 
   function selectSegment(segment: MaterialSegment) {
+    selectionRevision.current += 1;
     setSelectedSegmentId(segment.id);
     setDescriptionDraft(segment.description);
     setTranscriptDraft(segment.transcript);
     if (sourceVideo.current) sourceVideo.current.currentTime = segment.start_seconds;
-    setTagDraft("");
     setCollectionDraft(segment.collection_ids[0] ?? "");
     setCollectionQuery("");
     setDetailError("");
-    setTagError("");
   }
 
   async function refreshInsights() {
@@ -289,15 +291,16 @@ export function MaterialLibraryWorkspace({
 
   async function analyze() {
     if (!selected) return;
+    const revision = selectionRevision.current;
     setBusy("analyze");
     setDetailError("");
     try {
       const updated = await analyzeProductionMaterial(selected.id);
       replaceAsset(updated);
-      if (updated.segments[0]) selectSegment(updated.segments[0]);
+      if (revision === selectionRevision.current && updated.segments[0]) selectSegment(updated.segments[0]);
       await refreshInsights();
     } catch (cause) {
-      setDetailError(visibleError(cause, "素材分析失败，请重试"));
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "素材分析失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -305,13 +308,14 @@ export function MaterialLibraryWorkspace({
 
   async function changeUseState(useState: MaterialAsset["use_state"]) {
     if (!selected) return;
+    const revision = selectionRevision.current;
     setBusy("review");
     setDetailError("");
     try {
       replaceAsset(await updateMaterialUseState(selected.id, useState));
       await refreshInsights();
     } catch (cause) {
-      setDetailError(visibleError(cause, "使用状态保存失败，请重试"));
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "使用状态保存失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -322,6 +326,7 @@ export function MaterialLibraryWorkspace({
     role: "b_roll" | "exclude",
   ) {
     if (!selected) return;
+    const revision = selectionRevision.current;
     setBusy("review");
     setDetailError("");
     try {
@@ -332,7 +337,7 @@ export function MaterialLibraryWorkspace({
         }),
       );
     } catch (cause) {
-      setDetailError(visibleError(cause, "素材审核失败，请重试"));
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "素材审核失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -340,6 +345,7 @@ export function MaterialLibraryWorkspace({
 
   async function saveSegmentOrganization() {
     if (!selected || !selectedSegment) return;
+    const revision = selectionRevision.current;
     setBusy("segment");
     setDetailError("");
     try {
@@ -358,7 +364,7 @@ export function MaterialLibraryWorkspace({
       replaceAsset(updated);
       await refreshInsights();
     } catch (cause) {
-      setDetailError(visibleError(cause, "片段修改保存失败，请重试"));
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "片段修改保存失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -366,8 +372,9 @@ export function MaterialLibraryWorkspace({
 
   async function saveTags(nextTags: string[], clearInput = false) {
     if (!selected || !selectedSegment || busy !== null) return;
+    const scope = `${selected.id}:${selectedSegment.id}`;
     setBusy("segment");
-    setTagError("");
+    setTagErrors((current) => ({ ...current, [scope]: "" }));
     try {
       const updated = await updateProductionMaterialSegment(selected.id, selectedSegment.id, {
         description: selectedSegment.description,
@@ -378,10 +385,10 @@ export function MaterialLibraryWorkspace({
         collection_ids: selectedSegment.collection_ids,
       });
       replaceAsset(updated);
-      if (clearInput) setTagDraft("");
+      if (clearInput) setTagDrafts((current) => ({ ...current, [scope]: "" }));
       await refreshInsights();
     } catch (cause) {
-      setTagError(visibleError(cause, "标签保存失败，请重试"));
+      setTagErrors((current) => ({ ...current, [scope]: visibleError(cause, "标签保存失败，请重试") }));
     } finally {
       setBusy(null);
     }
@@ -392,7 +399,7 @@ export function MaterialLibraryWorkspace({
     const tag = value.trim();
     if (!tag) return;
     if (selectedSegment.user_tags.includes(tag)) {
-      if (value === tagDraft) setTagDraft("");
+      if (value === tagDraft) setTagDrafts((current) => ({ ...current, [tagScope]: "" }));
       return;
     }
     void saveTags([...selectedSegment.user_tags, tag], value === tagDraft);
@@ -401,15 +408,18 @@ export function MaterialLibraryWorkspace({
   async function addCollection() {
     const name = newCollectionName.trim();
     if (!name) return;
+    const revision = selectionRevision.current;
     setBusy("collection");
     setDetailError("");
     try {
       const created = await createMaterialCollection({ name });
       setCollections((current) => [...current, created]);
-      setCollectionDraft(created.id);
-      setNewCollectionName("");
+      if (revision === selectionRevision.current) {
+        setCollectionDraft(created.id);
+        setNewCollectionName("");
+      }
     } catch (cause) {
-      setDetailError(visibleError(cause, "新建标签夹失败，请重试"));
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "新建标签夹失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -591,7 +601,7 @@ export function MaterialLibraryWorkspace({
               autoComplete="off"
               disabled={busy !== null}
               id="material-tag-input"
-              onChange={(event) => setTagDraft(event.target.value)}
+              onChange={(event) => setTagDrafts((current) => ({ ...current, [tagScope]: event.target.value }))}
               onCompositionStart={() => { isComposingTag.current = true; }}
               onCompositionEnd={() => { isComposingTag.current = false; }}
               onKeyDown={(event) => {

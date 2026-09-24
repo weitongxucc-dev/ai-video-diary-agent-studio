@@ -13,6 +13,9 @@ const insights={ asset_count:1, segment_count:0, tags:[], recommended_gaps:[] };
 const segment: MaterialSegment = { id:"segment", asset_id:"asset", start_seconds:1, end_seconds:3, description:"画面说明", transcript:"", visual_status:"ready", visual_model_id:"", visual_sample_count:0, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0, usage_role_reason:"", review_status:"approved", system_tags:[], user_tags:["旧标签"], collection_ids:[], usage_count:0, last_used_at:null, created_at:"2026-09-20", updated_at:"2026-09-20" };
 const taggedAsset = { ...asset, segments: [segment] };
 const taggedLibrary = { ...library, assets: [taggedAsset] };
+const otherSegment = { ...segment, id:"segment-b", asset_id:"asset-b", user_tags:[] };
+const otherAsset = { ...taggedAsset, id:"asset-b", file_name:"自造素材B.mp4", segments:[otherSegment] };
+const twoAssetLibrary = { ...library, assets:[taggedAsset, otherAsset], total_count:2 };
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getProductionMaterials).mockResolvedValue(library);
@@ -60,6 +63,41 @@ it("keeps a saved tag when the separate insights refresh fails", async () => {
   await waitFor(() => expect(getMaterialLibraryInsights).toHaveBeenCalled());
   expect(input).toHaveValue("");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("keeps a failed tag save attached to its original asset after selecting another", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  let rejectSave!: (reason: Error) => void;
+  vi.mocked(updateProductionMaterialSegment).mockImplementation(() => new Promise((_, reject) => { rejectSave = reject; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const input = screen.getByLabelText("添加标签");
+  fireEvent.change(input, { target: { value:"A片段标签" } });
+  fireEvent.keyDown(input, { key:"Enter" });
+  fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+  rejectSave(new Error("A片段暂时无法保存"));
+  await waitFor(() => expect(screen.getByLabelText("添加标签")).not.toBeDisabled());
+  expect(screen.queryByText("A片段暂时无法保存")).not.toBeInTheDocument();
+  expect(screen.getByText(/当前片段：0:01–0:03/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  expect(screen.getByLabelText("添加标签")).toHaveValue("A片段标签");
+  expect(screen.getByText("A片段暂时无法保存")).toBeInTheDocument();
+});
+
+it("updates the original asset without clearing the newly selected asset after success", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  let resolveSave!: (value: MaterialAsset) => void;
+  vi.mocked(updateProductionMaterialSegment).mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const input = screen.getByLabelText("添加标签");
+  fireEvent.change(input, { target: { value:"A片段标签" } });
+  fireEvent.keyDown(input, { key:"Enter" });
+  fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+  resolveSave({ ...taggedAsset, segments:[{ ...segment, user_tags:["旧标签", "A片段标签"] }] });
+  await waitFor(() => expect(screen.getByLabelText("添加标签")).not.toBeDisabled());
+  expect(screen.queryByLabelText("移除标签 A片段标签")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("添加标签")).toHaveValue("");
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  expect(screen.getByLabelText("移除标签 A片段标签")).toBeInTheDocument();
 });
 
 it("does not submit while Chinese input is composing and preserves input on failure", async () => {
