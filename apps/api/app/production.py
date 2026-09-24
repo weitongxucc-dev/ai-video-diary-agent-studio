@@ -1148,6 +1148,8 @@ class ProductionRepository:
                     file_path TEXT NOT NULL,
                     size_bytes INTEGER NOT NULL,
                     mtime_ns INTEGER NOT NULL,
+                    ctime_ns INTEGER NOT NULL DEFAULT 0,
+                    inode INTEGER NOT NULL DEFAULT 0,
                     observed_at REAL NOT NULL,
                     completed_digest TEXT,
                     attempted_digest TEXT,
@@ -1406,6 +1408,14 @@ class ProductionRepository:
                 """
             )
             apply_production_migrations(conn)
+            ingestion_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(material_ingestion_files)")
+            }
+            if "ctime_ns" not in ingestion_columns:
+                conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
+            if "inode" not in ingestion_columns:
+                conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -2515,13 +2525,21 @@ class ProductionRepository:
                     "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
                     (workspace_id, str(resolved)),
                 ).fetchone()
-                changed = row is None or (row["size_bytes"], row["mtime_ns"]) != (stat.st_size, stat.st_mtime_ns)
+                changed = row is None or (
+                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
+                ) != (
+                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+                )
                 if changed:
                     conn.execute(
-                        "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, observed_at, state) VALUES (?, ?, ?, ?, ?, 'observing') "
-                        "ON CONFLICT(workspace_id, file_path) DO UPDATE SET size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns, observed_at=excluded.observed_at, state='observing'",
-                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns, now),
+                        "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode, observed_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'observing') "
+                        "ON CONFLICT(workspace_id, file_path) DO UPDATE SET size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns, ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at, state='observing'",
+                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, now),
                     )
+                elif row["state"] in {"ready", "failed"}:
+                    # Size, mtime, ctime and inode are the incremental boundary.
+                    # Full content is hashed only on change, recovery, or retry.
+                    continue
                 elif now - float(row["observed_at"]) < stable_seconds:
                     continue
             if changed:
@@ -2536,7 +2554,8 @@ class ProductionRepository:
             try:
                 with resolved.open("rb") as source:
                     digest = hashlib.file_digest(source, "sha256").hexdigest()
-                if (resolved.stat().st_size, resolved.stat().st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                final_stat = resolved.stat()
+                if (final_stat.st_size, final_stat.st_mtime_ns, final_stat.st_ctime_ns, final_stat.st_ino) != (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino):
                     continue
             except OSError:
                 continue
@@ -2546,7 +2565,11 @@ class ProductionRepository:
                     "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
                     (workspace_id, str(resolved)),
                 ).fetchone()
-                if row is None or (row["size_bytes"], row["mtime_ns"]) != (stat.st_size, stat.st_mtime_ns):
+                if row is None or (
+                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
+                ) != (
+                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+                ):
                     continue
                 if row["completed_digest"] == digest:
                     if row["state"] != "ready":
@@ -2653,6 +2676,10 @@ class ProductionRepository:
 
     def _mark_material_ingestion_disk_missing(self, workspace_id: str) -> None:
         with self._connect() as conn:
+            conn.execute(
+                "UPDATE material_ingestion_files SET state='blocked_disk' WHERE workspace_id=? AND state='ready'",
+                (workspace_id,),
+            )
             rows = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=?", (workspace_id,)).fetchall()
         for row in rows:
             asset = self._asset_from_payload(json.loads(str(row["payload"])))

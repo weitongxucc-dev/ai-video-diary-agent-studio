@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import os
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -51,9 +53,12 @@ def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> N
     assert MaterialIngestionService(restarted, stable_seconds=0).scan_once() == []
     assert duration.call_count == 1
     prior_stat = source.stat()
-    source.write_bytes(b"changed!")  # Same size, name and timestamp; content digest still changes.
+    time.sleep(0.01)
+    source.write_bytes(b"changed!")  # Same size/name/mtime, but ctime exposes the rewrite.
     os.utime(source, ns=(prior_stat.st_atime_ns, prior_stat.st_mtime_ns))
+    assert source.stat().st_ctime_ns != prior_stat.st_ctime_ns
     changed_service = MaterialIngestionService(restarted, stable_seconds=0)
+    assert changed_service.scan_once() == []
     assert len(changed_service.scan_once()) == 1
     assert duration.call_count == 2
     assert restarted.list_assets("other") == []
@@ -80,6 +85,47 @@ def test_failure_is_isolated_and_retry_is_explicit(tmp_path: Path) -> None:
     assert service.scan_once() == []
     repo.retry_material_ingestion("one", assets["bad.mp4"].id)
     assert service.scan_once()[0].analysis_status == "failed"
+
+
+def test_unchanged_ready_and_failed_files_do_not_rehash_each_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def duration(path: Path) -> float:
+        if path.name == "failed.mp4":
+            raise ValueError("broken")
+        return 1.0
+
+    repo, library = make_repo(tmp_path, duration)
+    (library / "ready.mp4").write_bytes(b"ready")
+    (library / "failed.mp4").write_bytes(b"failed")
+    repo.bind_material_ingestion("one")
+    service = MaterialIngestionService(repo, stable_seconds=0)
+    service.scan_once()
+    service.scan_once()
+    original_digest = hashlib.file_digest
+    digests = Mock(wraps=original_digest)
+    monkeypatch.setattr("app.production.hashlib.file_digest", digests)
+    for _ in range(4):
+        assert service.scan_once() == []
+    assert digests.call_count == 0
+
+
+def test_existing_ingestion_observations_gain_lightweight_stat_columns(tmp_path: Path) -> None:
+    library = tmp_path / "曜核AI IP一体机"
+    library.mkdir()
+    database = tmp_path / "production.sqlite"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "CREATE TABLE material_ingestion_files (workspace_id TEXT NOT NULL, file_path TEXT NOT NULL, "
+            "size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, observed_at REAL NOT NULL, "
+            "completed_digest TEXT, attempted_digest TEXT, state TEXT NOT NULL, "
+            "PRIMARY KEY (workspace_id, file_path))"
+        )
+        conn.execute(
+            "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, observed_at, state) VALUES ('one', 'clip.mp4', 5, 10, 20, 'ready')"
+        )
+    ProductionRepository(database, library)
+    with sqlite3.connect(database) as conn:
+        row = conn.execute("SELECT size_bytes, ctime_ns, inode FROM material_ingestion_files").fetchone()
+    assert row == (5, 0, 0)
 
 
 def test_copy_waits_for_stable_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
