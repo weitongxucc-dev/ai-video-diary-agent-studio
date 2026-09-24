@@ -5,7 +5,7 @@ vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { 
 vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn() }));
 import { getProductionMaterials, getMaterialLibraryInsights, updateMaterialUseState, updateProductionMaterialSegment } from "@/lib/api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
-const asset: MaterialAsset = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100,
+const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[],
   modified_at:"2026-09-20", duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
 const library={ assets:[asset], total_count:1, limit:24, offset:0, has_more:false };
