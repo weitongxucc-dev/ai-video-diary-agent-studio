@@ -126,6 +126,7 @@ class MaterialAsset:
     usage_role_reason: str = ""
     review_status: AssetReviewStatus = "raw"
     use_state: ContentUseState = "available"
+    user_tags: list[str] = field(default_factory=list)
     analysis_status: AnalysisStatus = "pending"
     analysis_message: str = "待分析镜头和画面内容。"
     speech_analysis: MaterialSpeechAnalysis | None = None
@@ -1137,6 +1138,30 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_material_assets_workspace
                     ON material_assets(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS material_ingestion_binding (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    workspace_id TEXT NOT NULL,
+                    library_path TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS material_ingestion_files (
+                    workspace_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    observed_at REAL NOT NULL,
+                    completed_digest TEXT,
+                    attempted_digest TEXT,
+                    state TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, file_path)
+                );
+                CREATE TABLE IF NOT EXISTS material_unmatched_corrections (
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    segment_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    preserved_at TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, asset_id, segment_id)
+                );
                 CREATE TABLE IF NOT EXISTS material_segment_features (
                     workspace_id TEXT NOT NULL,
                     asset_id TEXT NOT NULL,
@@ -2416,12 +2441,238 @@ class ProductionRepository:
         for path in sorted(self.video_library_path.rglob("*")):
             if (
                 not path.is_file()
+                or path.is_symlink()
                 or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
                 or "_已处理" in path.parts
             ):
                 continue
+            if not path.resolve().is_relative_to(self.video_library_path.resolve()):
+                continue
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
+
+    def bind_material_ingestion(self, workspace_id: str) -> None:
+        """Bind the configured inbox to one authenticated workspace, never to the current login."""
+        if not workspace_id.strip():
+            raise ValueError("必须先选择已验证的工作区")
+        root = self.video_library_path
+        if not root.is_dir() or root.is_symlink():
+            raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
+        root_path = str(root.resolve())
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+            if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
+                raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
+            conn.execute(
+                "INSERT OR REPLACE INTO material_ingestion_binding (id, workspace_id, library_path) VALUES (1, ?, ?)",
+                (workspace_id, root_path),
+            )
+
+    def get_material_ingestion_binding(self) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+        return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
+        """Persist observations and claim stable, changed files for one serial analyzer."""
+        import time
+
+        binding = self.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        workspace_id, bound_path = binding
+        root = self.video_library_path
+        if not root.is_dir() or root.is_symlink() or str(root.resolve()) != bound_path:
+            self._mark_material_ingestion_disk_missing(workspace_id)
+            return []
+        now = time.time()
+        claimed: list[tuple[str, str]] = []
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS or "_已处理" in path.parts:
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root.resolve()):
+                continue
+            try:
+                stat = resolved.stat()
+            except FileNotFoundError:
+                continue
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                changed = row is None or (row["size_bytes"], row["mtime_ns"]) != (stat.st_size, stat.st_mtime_ns)
+                if changed:
+                    conn.execute(
+                        "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, observed_at, state) VALUES (?, ?, ?, ?, ?, 'observing') "
+                        "ON CONFLICT(workspace_id, file_path) DO UPDATE SET size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns, observed_at=excluded.observed_at, state='observing'",
+                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns, now),
+                    )
+                elif now - float(row["observed_at"]) < stable_seconds:
+                    continue
+            if changed:
+                asset = self._upsert_discovered_asset(workspace_id, resolved)
+                asset.analysis_status = "blocked"
+                asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
+                self._save_asset(asset)
+                continue
+            try:
+                with resolved.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()
+                if (resolved.stat().st_size, resolved.stat().st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                    continue
+            except OSError:
+                continue
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                if row is None or (row["size_bytes"], row["mtime_ns"]) != (stat.st_size, stat.st_mtime_ns):
+                    continue
+                if row["completed_digest"] == digest:
+                    if row["state"] != "ready":
+                        conn.execute("UPDATE material_ingestion_files SET state='ready' WHERE workspace_id=? AND file_path=?", (workspace_id, str(resolved)))
+                    completed = True
+                    failed_before = False
+                elif row["state"] == "failed" and row["attempted_digest"] == digest:
+                    completed = False
+                    failed_before = True
+                else:
+                    completed = False
+                    failed_before = False
+                    # An interrupted process leaves 'running'; the next process can reclaim it.
+                    conn.execute(
+                        "UPDATE material_ingestion_files SET attempted_digest=?, state='running' WHERE workspace_id=? AND file_path=?",
+                        (digest, workspace_id, str(resolved)),
+                    )
+            if completed:
+                try:
+                    asset = self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
+                    continue
+                if asset.analysis_status == "blocked":
+                    asset.analysis_status = "ready"
+                    asset.analysis_message = "分析已完成；外接盘已恢复。"
+                    self._save_asset(asset)
+                continue
+            if failed_before:
+                continue
+            asset = self._upsert_discovered_asset(workspace_id, resolved)
+            if asset.segments or asset.analysis_status in {"ready", "failed"}:
+                self._reset_changed_material_asset(asset)
+            else:
+                asset.analysis_status = "pending"
+                asset.analysis_message = "文件已写入完成，正在分析。"
+                self._save_asset(asset)
+            claimed.append((asset.id, digest))
+        return claimed
+
+    def finish_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, *, failed: bool) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE material_ingestion_files SET state=?, completed_digest=CASE WHEN ? THEN completed_digest ELSE ? END "
+                "WHERE workspace_id=? AND file_path=? AND attempted_digest=?",
+                ("failed" if failed else "ready", int(failed), digest, workspace_id, asset.path, digest),
+            )
+
+    def fail_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, reason: str) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        asset.analysis_status = "failed"
+        asset.analysis_message = f"素材分析失败：{reason}。可检查文件或模型后手动重试。"
+        self._save_asset(asset)
+        self.finish_material_ingestion(workspace_id, asset_id, digest, failed=True)
+
+    def retry_material_ingestion(self, workspace_id: str, asset_id: str) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        binding = self.get_material_ingestion_binding()
+        if binding is None or binding[0] != workspace_id:
+            raise ValueError("当前工作区未绑定素材目录")
+        with self._connect() as conn:
+            conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
+        asset.analysis_status = "pending"
+        asset.analysis_message = "已请求重试，等待素材稳定后重新分析。"
+        self._save_asset(asset)
+
+    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+            if row is None:
+                raise KeyError(asset_id)
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset.user_tags = _normalized_labels(user_tags)
+            asset.updated_at = utc_now()
+            conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id))
+        return asset
+
+    def update_assets_tags_batch(
+        self, workspace_id: str, asset_ids: list[str], *, add: list[str], remove: list[str]
+    ) -> list[MaterialAsset]:
+        if not asset_ids:
+            raise ValueError("请选择至少一条素材")
+        normalized_add = _normalized_labels(add)
+        normalized_remove = {value.casefold() for value in _normalized_labels(remove)}
+        updated: list[MaterialAsset] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for asset_id in dict.fromkeys(asset_ids):
+                row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+                if row is None:
+                    raise KeyError(asset_id)
+                asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                kept = [tag for tag in asset.user_tags if tag.casefold() not in normalized_remove]
+                asset.user_tags = _normalized_labels([*kept, *normalized_add])
+                asset.updated_at = utc_now()
+                updated.append(asset)
+            for asset in updated:
+                conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id))
+        return updated
+
+    def _mark_material_ingestion_disk_missing(self, workspace_id: str) -> None:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=?", (workspace_id,)).fetchall()
+        for row in rows:
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            if asset.analysis_status != "failed":
+                asset.analysis_status = "blocked"
+                asset.analysis_message = "外接盘或素材目录不可用；连接原盘后会继续补扫。"
+                self._save_asset(asset)
+
+    def _reset_changed_material_asset(self, asset: MaterialAsset) -> None:
+        self._preserve_unmatched_corrections(asset, asset.segments)
+        asset.segments = []
+        asset.speech_analysis = None
+        asset.duration_seconds = None
+        asset.analysis_status = "pending"
+        asset.analysis_message = "源文件已变化，正在重新分析；原有人工纠正已保留待核对。"
+        self._save_asset(asset)
+
+    def _preserve_unmatched_corrections(self, asset: MaterialAsset, segments: list[MaterialSegment]) -> int:
+        corrected = self._corrected_material_segments(segments)
+        if not corrected:
+            return 0
+        with self._connect() as conn:
+            for segment in corrected:
+                conn.execute(
+                    "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
+                    (asset.workspace_id, asset.id, segment.id, _json_payload(segment), utc_now().isoformat()),
+                )
+        return len(corrected)
+
+    @staticmethod
+    def _corrected_material_segments(segments: list[MaterialSegment]) -> list[MaterialSegment]:
+        return [segment for segment in segments if segment.description or segment.transcript or segment.user_tags or segment.collection_ids or segment.usage_role != "unassigned" or segment.review_status != "raw"]
+
+    def list_unmatched_material_corrections(self, workspace_id: str, asset_id: str) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
+        return [json.loads(str(row["payload"])) for row in rows]
 
     def list_assets(self, workspace_id: str) -> list[MaterialAsset]:
         with self._connect() as conn:
@@ -2448,6 +2699,7 @@ class ProductionRepository:
         if query:
             clauses.append("""(
                 LOWER(json_extract(payload, '$.file_name')) LIKE ?
+                OR EXISTS (SELECT 1 FROM json_each(material_assets.payload, '$.user_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
                 OR EXISTS (
                     SELECT 1 FROM json_each(material_assets.payload, '$.segments') AS segment
                     WHERE LOWER(CASE WHEN trim(json_extract(segment.value, '$.description')) != ''
@@ -2471,7 +2723,7 @@ class ProductionRepository:
                         AND json_extract(observation.value, '$.confidence') >= ?))
                 )
             )""")
-            parameters.extend([*[f"%{query.strip().lower()}%"] * 6, OCR_RETRIEVAL_MIN_CONFIDENCE])
+            parameters.extend([*[f"%{query.strip().lower()}%"] * 7, OCR_RETRIEVAL_MIN_CONFIDENCE])
         if review_status:
             clauses.append("json_extract(payload, '$.review_status') = ?")
             parameters.append(review_status)
@@ -2530,10 +2782,10 @@ class ProductionRepository:
         normalized_query = query.strip().casefold()
         matches: list[MaterialSegmentMatch] = []
         for asset in self.list_assets(workspace_id):
-            if asset.review_status != "approved" or not material_allows_footage(asset):
+            if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:
-                if segment.review_status != "approved":
+                if segment.review_status == "rejected":
                     continue
                 duration = max(0.0, segment.end_seconds - segment.start_seconds)
                 if (
@@ -2546,18 +2798,18 @@ class ProductionRepository:
                     and duration > max_duration_seconds
                 ):
                     continue
-                role = effective_segment_usage_role(asset, segment)
+                role = selectable_segment_usage_role(asset, segment)
                 if roles and role not in roles:
                     continue
                 segment_tags = {
                     value.casefold()
-                    for value in (*segment.system_tags, *segment.user_tags)
+                    for value in (*segment.system_tags, *segment.user_tags, *asset.user_tags)
                 }
                 if requested_tags and not set(requested_tags) <= segment_tags:
                     continue
 
                 score = 0.1
-                reasons = ["已通过当前工作区素材审核"]
+                reasons = ["当前工作区已分析素材"]
                 if roles:
                     score += 0.25
                     reasons.append(f"用途匹配 {role}")
@@ -2601,7 +2853,14 @@ class ProductionRepository:
             raise KeyError(asset_id)
         return self._asset_from_payload(json.loads(str(row["payload"])))
 
-    def analyze_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
+    def _asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND file_path=?", (workspace_id, file_path)).fetchone()
+        if row is None:
+            raise KeyError(file_path)
+        return self._asset_from_payload(json.loads(str(row["payload"])))
+
+    def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
         if asset.use_state == "excluded":
             raise ValueError("素材已设为不使用，请先修改使用状态再分析")
@@ -2655,6 +2914,11 @@ class ProductionRepository:
         final_stat = path.stat()
         if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
+        if expected_source_digest is not None:
+            with path.open("rb") as source:
+                final_digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if final_digest != expected_source_digest:
+                raise ValueError("分析期间原片内容发生变化，未保存本次结果，请重新分析。")
         return self._save_asset(asset, analysis_only=True)
 
     def get_visual_feature(
@@ -2956,9 +3220,10 @@ class ProductionRepository:
                 )
                 if (
                     segment is None
-                    or asset.review_status != "approved"
+                    or asset.analysis_status != "ready"
+                    or asset.review_status == "rejected"
                     or not material_allows_footage(asset)
-                    or segment.review_status != "approved"
+                    or segment.review_status == "rejected"
                 ):
                     raise ValueError("创作方案引用的素材片段不可用")
             conn.execute(
@@ -3225,6 +3490,15 @@ class ProductionRepository:
                 WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
                 """,
                 (workspace_id, task_id),
+            ).fetchall()
+        return [self._job_run_from_row(row) for row in rows]
+
+    def list_pending_creation_executions(self) -> list[JobRun]:
+        """Recover only explicitly persisted execution jobs and their original workspace."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM job_runs WHERE kind = 'creation_task_execution' "
+                "AND status IN ('queued', 'interrupted') ORDER BY created_at ASC, id ASC"
             ).fetchall()
         return [self._job_run_from_row(row) for row in rows]
 
@@ -6166,19 +6440,19 @@ class ProductionRepository:
     ) -> dict[str, object]:
         profile = profile or self.get_profile(workspace_id)
         assets = self.list_assets(workspace_id)
-        approved_assets = [
+        usable_assets = [
             asset
             for asset in assets
-            if asset.review_status == "approved"
+            if asset.analysis_status == "ready"
+            and asset.review_status != "rejected"
             and material_allows_footage(asset)
-            and asset.usage_role in {"a_roll", "b_roll"}
         ]
-        approved_segments = [
+        usable_segments = [
             segment
-            for asset in approved_assets
+            for asset in usable_assets
             for segment in asset.segments
-            if segment.review_status == "approved"
-            and effective_segment_usage_role(asset, segment) == "b_roll"
+            if segment.review_status != "rejected"
+            and selectable_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
         versioned_voices = self.list_versioned_voice_profiles(workspace_id)
@@ -6229,19 +6503,19 @@ class ProductionRepository:
                     "message": "自动选题来源池为空。",
                 }
             )
-        if not approved_segments:
+        if not usable_segments:
             blockers.append(
                 {
                     "code": "approved_materials_empty",
-                    "message": "可用素材库中还没有已审核的 B-roll 镜头。",
+                    "message": "可用素材库中还没有明确可作补充画面的镜头。",
                 }
             )
         return {
             "ready": not blockers,
             "blockers": blockers,
             "asset_count": len(assets),
-            "approved_asset_count": len(approved_assets),
-            "approved_segment_count": len(approved_segments),
+            "approved_asset_count": len(usable_assets),
+            "approved_segment_count": len(usable_segments),
             "total_duration_seconds": round(
                 sum(asset.duration_seconds or 0 for asset in assets), 3
             ),
@@ -6273,7 +6547,7 @@ class ProductionRepository:
         )
         stat = resolved.stat()
         if existing is None:
-            digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+            digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
             existing = MaterialAsset(
                 id=f"asset_{digest}",
                 workspace_id=workspace_id,
@@ -6311,10 +6585,21 @@ class ProductionRepository:
                         merged_segments.append(latest)
                     else:
                         merged_segments.append(analyzed)
+                merged_ids = {segment.id for segment in merged_segments}
+                corrected = self._corrected_material_segments(
+                    [segment for segment in current.segments if segment.id not in merged_ids]
+                )
+                for segment in corrected:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
+                        (current.workspace_id, current.id, segment.id, _json_payload(segment), utc_now().isoformat()),
+                    )
                 for name in ("duration_seconds", "analysis_status", "analysis_message", "speech_analysis",
                              "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
                     setattr(current, name, getattr(asset, name))
                 current.segments = merged_segments
+                if corrected:
+                    current.analysis_message += f" {len(corrected)} 条旧片段的人工纠正因边界变化待核对。"
                 current.updated_at = asset.updated_at
                 asset = current
             conn.execute(
@@ -7954,6 +8239,15 @@ def effective_segment_usage_role(
     return segment.usage_role if segment.usage_role != "unassigned" else asset.usage_role
 
 
+def selectable_segment_usage_role(asset: MaterialAsset, segment: MaterialSegment) -> AssetUsageRole:
+    explicit = effective_segment_usage_role(asset, segment)
+    if explicit != "unassigned":
+        return explicit
+    if segment.usage_role_confidence >= 0.7:
+        return segment.suggested_usage_role
+    return "unassigned"
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -8037,6 +8331,7 @@ def _material_query_reasons(
     for source, values in (
         ("系统标签", segment.system_tags),
         ("用户标签", segment.user_tags),
+        ("整条素材标签", asset.user_tags if isinstance(asset, MaterialAsset) else []),
     ):
         matched = []
         for raw_value in values:
