@@ -2484,6 +2484,21 @@ class ProductionRepository:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
 
+    def material_ingestion_state_counts(self, workspace_id: str) -> dict[str, int]:
+        """Return intake totals for one workspace without exposing file paths."""
+        counts = {state: 0 for state in ("observing", "running", "ready", "failed", "blocked_disk")}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT state, COUNT(*) AS total FROM material_ingestion_files "
+                "WHERE workspace_id=? GROUP BY state",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            state = str(row["state"])
+            if state in counts:
+                counts[state] = int(row["total"])
+        return counts
+
     def _material_library_available(self) -> bool:
         root = self.video_library_path
         if not root.is_dir() or root.is_symlink():

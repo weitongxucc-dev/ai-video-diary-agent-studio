@@ -215,6 +215,32 @@ def test_missing_disk_and_symlink_escape(tmp_path: Path) -> None:
     assert repo.list_assets("one")[0].analysis_status == "ready"
 
 
+def test_ingestion_state_counts_are_workspace_scoped_and_path_free(tmp_path: Path) -> None:
+    def duration(path: Path) -> float:
+        if path.name == "failed.mp4":
+            raise ValueError("broken")
+        return 1.0
+
+    repo, library = make_repo(tmp_path, duration)
+    (library / "ready.mp4").write_bytes(b"ready")
+    (library / "failed.mp4").write_bytes(b"failed")
+    repo.bind_material_ingestion("one")
+    service = MaterialIngestionService(repo, stable_seconds=0)
+    service.scan_once()
+    service.scan_once()
+    (library / "copying.mp4").write_bytes(b"partial")
+    service.scan_once()
+    assert repo.material_ingestion_state_counts("one") == {
+        "observing": 1, "running": 0, "ready": 1, "failed": 1, "blocked_disk": 0,
+    }
+    assert all(value == 0 for value in repo.material_ingestion_state_counts("other").values())
+    library.rename(tmp_path / "disconnected")
+    service.scan_once()
+    assert repo.material_ingestion_state_counts("one") == {
+        "observing": 1, "running": 0, "ready": 0, "failed": 1, "blocked_disk": 1,
+    }
+
+
 def test_reanalysis_preserves_unmatched_manual_correction(tmp_path: Path) -> None:
     boundaries = [2.0]
     repo, library = make_repo(tmp_path, duration_reader=lambda path: 4.0, scene_reader=lambda path, duration: boundaries)
