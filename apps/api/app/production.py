@@ -2456,7 +2456,7 @@ class ProductionRepository:
         if not workspace_id.strip():
             raise ValueError("必须先选择已验证的工作区")
         root = self.video_library_path
-        if not root.is_dir() or root.is_symlink():
+        if not self._material_library_available():
             raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
         root_path = str(root.resolve())
         with self._connect() as conn:
@@ -2474,6 +2474,17 @@ class ProductionRepository:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
 
+    def _material_library_available(self) -> bool:
+        root = self.video_library_path
+        if not root.is_dir() or root.is_symlink():
+            return False
+        # A leftover /Volumes/<name> directory is not evidence that its disk is mounted.
+        if len(root.parts) >= 3 and root.parts[1] == "Volumes":
+            volume = Path(*root.parts[:3])
+            if not volume.is_mount():
+                return False
+        return True
+
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""
         import time
@@ -2483,7 +2494,7 @@ class ProductionRepository:
             return []
         workspace_id, bound_path = binding
         root = self.video_library_path
-        if not root.is_dir() or root.is_symlink() or str(root.resolve()) != bound_path:
+        if not self._material_library_available() or str(root.resolve()) != bound_path:
             self._mark_material_ingestion_disk_missing(workspace_id)
             return []
         now = time.time()
@@ -2514,7 +2525,10 @@ class ProductionRepository:
                 elif now - float(row["observed_at"]) < stable_seconds:
                     continue
             if changed:
-                asset = self._upsert_discovered_asset(workspace_id, resolved)
+                try:
+                    asset = self._upsert_discovered_asset(workspace_id, resolved)
+                except FileNotFoundError:
+                    continue
                 asset.analysis_status = "blocked"
                 asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
                 self._save_asset(asset)
@@ -2562,7 +2576,10 @@ class ProductionRepository:
                 continue
             if failed_before:
                 continue
-            asset = self._upsert_discovered_asset(workspace_id, resolved)
+            try:
+                asset = self._upsert_discovered_asset(workspace_id, resolved)
+            except FileNotFoundError:
+                continue
             if asset.segments or asset.analysis_status in {"ready", "failed"}:
                 self._reset_changed_material_asset(asset)
             else:
