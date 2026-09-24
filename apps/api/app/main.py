@@ -4129,6 +4129,8 @@ def creation_task_assistant_turn(
 ) -> CreationTaskAssistantTurnResponse:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
+    if payload.context_stage == "script":
+        _assistant_script_inputs(workspace_id, task_id)
     message = payload.message.strip()
     if _assistant_text_without_credentials(message) != message:
         raise HTTPException(status_code=422, detail="请勿在创作要求中粘贴密钥或口令。")

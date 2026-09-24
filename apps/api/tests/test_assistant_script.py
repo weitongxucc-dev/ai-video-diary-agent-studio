@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -36,6 +37,8 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
 
     def inputs(workspace_id, task_id):
         task = main_module._creation_task_or_404(workspace_id, task_id)
+        if task.stage != "script" or task.confirmed_script_id:
+            raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
         return task, repo.get_creation_plan(workspace_id, task.plan_id), topic, (source,), [
             {"reference_id": source.reference_id, "kind": "knowledge", "object_id": "one"},
         ]
@@ -96,4 +99,8 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     repo.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections)
     assert client.post(base + "/script-draft", json=body).status_code == 409
+    assert client.post(base + "/turn", json={
+        "message": "继续修改", "context_stage": "script", "selected_object_refs": [],
+    }).status_code == 409
+    assert len(repo.list_task_events("local", "task-one")) == 2
     assert repo.get_creation_task("local", "task-one").confirmed_script_id == script_id
