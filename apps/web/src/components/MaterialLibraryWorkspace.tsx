@@ -856,7 +856,7 @@ export function MaterialLibraryWorkspace({
               <div className={styles.intakeCounts} aria-label="自动接入进度">
                 <span>等待稳定 {intake.file_counts.observing}</span>
                 <span>分析中 {intake.file_counts.running}</span>
-                <span>已就绪 {intake.file_counts.ready}</span>
+                <span>已分析 {intake.file_counts.ready}</span>
                 <span>失败 {intake.file_counts.failed}</span>
                 <span>等待磁盘 {intake.file_counts.blocked_disk}</span>
               </div>
