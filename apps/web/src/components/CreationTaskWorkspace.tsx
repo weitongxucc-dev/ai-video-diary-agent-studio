@@ -38,6 +38,11 @@ import {
   getCreationTaskMontageClipCandidates,
   getCreationTaskTopics,
   getCreationTaskWorkspace,
+  getCreationExecution,
+  previewCreationExecution,
+  startCreationExecution,
+  resumeCreationExecution,
+  cancelCreationExecution,
   getRuntimeSettings,
   previewCreationTaskEdit,
   sendCreationTaskAssistantTurn,
@@ -58,6 +63,8 @@ import type {
   CreationTaskSubtitleTrack,
   CreationTaskTopicsResponse,
   CreationTaskWorkspace as WorkspaceState,
+  CreationExecutionPreview,
+  CreationExecutionStatus,
   MontageClipCandidate,
 } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
@@ -74,7 +81,7 @@ type Props = {
   initialTasks: CreationTask[];
 };
 
-type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "voice-select" | "narration" | "person-render" | "plan" | "clip" | "render" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
+type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "narration" | "person-render" | "plan" | "clip" | "render" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 
 type WorkspaceView = CreationTask["stage"] | "subtitle_cover";
 
@@ -358,6 +365,48 @@ function ScriptEditor({ script, busy, repairing, onConfirm }: { script: Creation
       <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}{repairing ? "确认修订文案" : "确认文案"}</button></div>
     </section>
   );
+}
+
+const executionStageLabels: Record<string, string> = {
+  narration: "生成配音",
+  montage_plan: "安排镜头与人物口型",
+  render: "生成成片和字幕",
+  cover: "准备封面",
+};
+
+function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, onCancel }: {
+  preview: CreationExecutionPreview | null;
+  execution: CreationExecutionStatus | null;
+  busy: boolean;
+  onStart: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+}) {
+  const job = execution?.job;
+  const active = job?.status === "queued" || job?.status === "running" || job?.status === "interrupted";
+  const resumable = job?.status === "failed" || job?.status === "cancelled" || job?.status === "interrupted";
+  const statusText = job?.status === "queued" ? "已排队" : job?.status === "running" ? "后台制作中"
+    : job?.status === "failed" ? "制作停在失败步骤" : job?.status === "cancelled" ? "已在安全边界停止"
+      : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
+  return <section aria-label="连续制作" className={styles.workSection}>
+    <div className={styles.sectionHeading}><div><span>连续制作</span><h2>{statusText}</h2><p>开始后会依次处理配音、镜头和成片；每一步的结果以后台任务为准。</p></div></div>
+    {!job && preview ? <>
+      <div className={styles.scriptSections}><article><header><strong>这次使用的文案：{preview.script_title}</strong></header>{preview.script_sections.map((section, index) => <p key={index}>第 {index + 1} 段 · {section.title}：{section.content}</p>)}</article></div>
+      <div className={styles.scriptSections}><article><header><strong>这次制作要求</strong></header>
+        <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · 露脸目标 {preview.requirements.presenter_share_target}%</p>
+        <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · 声音：{preview.requirements.selected_voice ?? "尚未选择"}</p>
+        {Object.entries(preview.requirements.template_settings).length ? <details><summary>查看模板中的具体设置</summary><dl>{Object.entries(preview.requirements.template_settings).map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
+      </article></div>
+      {!preview.requirements.selected_voice ? <p role="status">请先在下方选择已授权声音，再开始制作。</p> : null}
+      <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !preview.requirements.selected_voice} onClick={onStart} type="button">{preview.requirements.selected_voice ? "确认以上文案和要求，开始制作" : "请先选择授权声音"}</button></div>
+    </> : null}
+    {job ? <div role="status"><p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p>
+      <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
+      {execution?.video_ready ? <p>成片可检查；{execution.cover_status === "ready" ? "封面已准备好。" : execution.cover_message}</p> : null}
+      {active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">停止制作</button> : null}
+      {resumable ? <button className="modern-primary-button" disabled={busy} onClick={onResume} type="button">继续制作</button> : null}
+    </div> : null}
+  </section>;
 }
 
 function ContextCommandBar({
@@ -780,6 +829,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [assistantTurns, setAssistantTurns] = useState<{ command: string; reply: string; context: string }[]>([]);
   const [assistantModel, setAssistantModel] = useState("外部文字模型待连接");
   const [assistantConfigured, setAssistantConfigured] = useState(false);
+  const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
+  const [execution, setExecution] = useState<CreationExecutionStatus | null>(null);
+  const [executionError, setExecutionError] = useState<ReturnType<typeof errorDetails> | null>(null);
+  const executionSnapshot = useRef("");
+  const pollExecutionRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
       if (runtime.status.llm.configured) {
@@ -789,6 +843,43 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }).catch(() => undefined);
   }, []);
   const task = workspace.task;
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    executionSnapshot.current = "";
+    setExecution(null);
+    setExecutionPreview(null);
+    setExecutionError(null);
+    if (task.confirmed_script_id) {
+      void previewCreationExecution(task.id).then((preview) => {
+        if (active) setExecutionPreview(preview);
+      }).catch((cause) => { if (active) setExecutionError(errorDetails(cause)); });
+    }
+    async function poll() {
+      window.clearTimeout(timer);
+      let nextDelay = 15000;
+      try {
+        const current = await getCreationExecution(task.id);
+        if (!active) return;
+        setExecution(current);
+        if (current.job?.status === "queued" || current.job?.status === "running") nextDelay = 2500;
+        const snapshot = `${current.job?.id ?? "none"}:${current.job?.status ?? "none"}:${current.stages.length}`;
+        if (current.job && snapshot !== executionSnapshot.current) {
+          executionSnapshot.current = snapshot;
+          const next = await getCreationTaskWorkspace(task.id);
+          if (!active) return;
+          setWorkspace(next);
+          setTasks((items) => [next.task, ...items.filter((item) => item.id !== next.task.id)]);
+        }
+      } catch (cause) {
+        if (active) setExecutionError(errorDetails(cause));
+      }
+      if (active) timer = window.setTimeout(() => void poll(), nextDelay);
+    }
+    pollExecutionRef.current = () => void poll();
+    void poll();
+    return () => { active = false; pollExecutionRef.current = () => undefined; window.clearTimeout(timer); };
+  }, [task.id, task.confirmed_script_id, workspace.plan.selected_voice?.profile_id, workspace.plan.selected_voice?.version]);
   const latestScript = workspace.scripts[0] ?? null;
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
   const shellTasks = useMemo(() => [task, ...tasks.filter((item) => item.id !== task.id)], [task, tasks]);
@@ -893,6 +984,26 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     } catch (cause) {
       setError(errorDetails(cause));
       await refresh().catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function changeExecution(operation: () => Promise<CreationExecutionStatus>) {
+    setBusy("execution");
+    setExecutionError(null);
+    try {
+      const next = await operation();
+      setExecution(next);
+      pollExecutionRef.current();
+      const updated = await getCreationTaskWorkspace(task.id);
+      setWorkspace(updated);
+      setTasks((items) => [updated.task, ...items.filter((item) => item.id !== updated.task.id)]);
+    } catch (cause) {
+      setExecutionError(errorDetails(cause));
+      if (task.confirmed_script_id) {
+        void previewCreationExecution(task.id).then(setExecutionPreview).catch(() => undefined);
+      }
     } finally {
       setBusy(null);
     }
@@ -1260,6 +1371,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         })}</ol></nav>
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
         {error && (isEditor || activeView === "subtitle_cover") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span></div> : null}
+        {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span></div> : null}
+        {task.confirmed_script_id && (executionPreview || execution?.job) && (activeView === "script" || activeView === "narration") ? <CreationExecutionPanel preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} /> : null}
+        {execution?.job && activeView !== "script" && activeView !== "narration" ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? "成片已生成" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
 
         {activeView === "topic" && task.stage === "topic" ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>选题</span><h2>{topics?.candidates.length ? "选择一个要制作的方向" : "从授权资料生成选题"}</h2><p>模型只会看到预检中列出的文字摘录；确认后不会再次生成选题。</p></div>{!topics?.candidates.length ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。") } type="button">{busy === "topics" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成选题</button> : null}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => setSelectedTopicId(candidate.id)} type="radio" /><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId} onClick={() => selectedTopicId && run("topic-confirm", () => confirmCreationTaskTopic(task.id, selectedTopicId), "选题已确认，下一步生成文案。") } type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认选题</button></div> : null}</section> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView workspace={workspace} /> : null}
@@ -1268,11 +1382,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor busy={busy !== null} key={latestScript.updated_at} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ConfirmedScriptView script={latestScript} /> : null}
 
-        {activeView === "narration" && task.stage === "narration" && !workspace.narration ? <section className={styles.workSection}><div className={styles.emptyAction}><Volume2 size={30} /><h2>使用已授权声音生成配音</h2><p>使用你已授权的声音，为这份文案配音。</p>{task.can_revise_script ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : workspace.plan.selected_voice ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("narration", () => generateCreationTaskNarration(task.id), "真实配音已生成，可以制作故事板。") } type="button">{busy === "narration" ? <LoaderCircle className="is-spinning" size={16} /> : <Volume2 size={16} />}生成配音</button> : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于本任务的声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，可以生成配音。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用此声音</button></div> : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于中文配音的授权声音</strong><p>登记人物身份、导入已授权录音 并逐字填写参考文字后，可回到本任务继续，不需要重做选题或文案。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>}</div></section> : null}
+        {activeView === "narration" && task.stage === "narration" && !workspace.narration ? <section className={styles.workSection}><div className={styles.emptyAction}><Volume2 size={30} /><h2>使用已授权声音生成配音</h2><p>使用你已授权的声音，为这份文案配音。</p>{task.can_revise_script ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : workspace.plan.selected_voice ? <button className={executionPreview ? styles.secondaryButton : "modern-primary-button"} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running"} onClick={() => run("narration", () => generateCreationTaskNarration(task.id), "真实配音已生成，可以制作故事板。") } type="button">{busy === "narration" ? <LoaderCircle className="is-spinning" size={16} /> : <Volume2 size={16} />}{executionPreview ? "单步生成配音" : "生成配音"}</button> : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于本任务的声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，可以生成配音。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用此声音</button></div> : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于中文配音的授权声音</strong><p>登记人物身份、导入已授权录音 并逐字填写参考文字后，可回到本任务继续，不需要重做选题或文案。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>}</div></section> : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={(segmentId) => { const selectedVoice = workspace.plan.selected_voice; if (selectedVoice) void run("person-render", () => generateCreationTaskPersonRender(task.id, { narration_segment_id: segmentId, person_profile_id: selectedVoice.person_profile_id, person_version: selectedVoice.person_version, motion: "natural", expression: "neutral" }), "人物口型预览已生成；尚未写入成片时间线。"); }} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
-        {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>生成混剪故事板</h2><p>露脸目标 {workspace.plan.presenter_share_target ?? 0}%；只为露脸段制作口型，其余段落从已审核素材选镜头。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("plan", () => createCreationTaskMontagePlan(task.id), "故事板已生成。") } type="button">{busy === "plan" ? <LoaderCircle className="is-spinning" size={16} /> : <Clapperboard size={16} />}生成故事板</button></div></section> : null}
-        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={<button className={editPreview || editorDraft ? editorUi.button : editorUi.primary} disabled={busy !== null || workspace.montage.status === "waiting_for_user" || (workspace.montage.status === "rendered" && Boolean(task.current_timeline_version_id))} onClick={() => void run("render", () => renderCreationTaskMontage(task.id), "成片已生成。")} type="button">{busy === "render" ? "制作中" : "生成成片"}</button>} /> : null}
+        {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>生成混剪故事板</h2><p>露脸目标 {workspace.plan.presenter_share_target ?? 0}%；只为露脸段制作口型，其余段落从已审核素材选镜头。</p><button className={execution?.job ? styles.secondaryButton : "modern-primary-button"} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running"} onClick={() => run("plan", () => createCreationTaskMontagePlan(task.id), "故事板已生成。") } type="button">{busy === "plan" ? <LoaderCircle className="is-spinning" size={16} /> : <Clapperboard size={16} />}{execution?.job ? "单步生成故事板" : "生成故事板"}</button></div></section> : null}
+        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={<button className={editPreview || editorDraft ? editorUi.button : editorUi.primary} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running" || workspace.montage.status === "waiting_for_user" || (workspace.montage.status === "rendered" && Boolean(task.current_timeline_version_id))} onClick={() => void run("render", () => renderCreationTaskMontage(task.id), "成片已生成。")} type="button">{busy === "render" ? "制作中" : "生成成片"}</button>} /> : null}
 
         {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 

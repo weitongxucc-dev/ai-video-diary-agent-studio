@@ -235,6 +235,9 @@ from app.schemas import (
     ManualSourceItemRequest,
     ManualLinkRequest,
     MaterialAssetResponse,
+    MaterialAssetTagsRequest,
+    MaterialBatchTagsRequest,
+    MaterialBatchTagsResponse,
     MaterialCollectionCreateRequest,
     MaterialCollectionResponse,
     MaterialCollectionsResponse,
@@ -10063,15 +10066,100 @@ def list_production_materials(
         review_status=review_status,
     )
     return MaterialLibraryResponse(
-        assets=[
-            _material_asset_response(asset)
-            for asset in assets
-        ],
+        assets=[_material_asset_response(asset) for asset in assets],
         total_count=total,
         limit=limit,
         offset=offset,
         has_more=offset + len(assets) < total,
     )
+
+
+def _material_binding_status(workspace_id: str) -> dict[str, object]:
+    binding = production_repo.get_material_ingestion_binding()
+    return {
+        "bound_to_current_workspace": binding is not None and binding[0] == workspace_id,
+        "available": binding is None or binding[0] == workspace_id,
+        "scan_interval_seconds": 60,
+    }
+
+
+@app.get("/api/production/materials/intake")
+def get_material_intake_status(request: Request) -> dict[str, object]:
+    return _material_binding_status(current_workspace_id(request))
+
+
+@app.post("/api/production/materials/intake/bind")
+def bind_material_intake(request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.bind_material_ingestion(workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    material_ingestion.wake()
+    return _material_binding_status(workspace_id)
+
+
+@app.post("/api/production/materials/intake/scan")
+def scan_material_intake(request: Request) -> MaterialLibraryResponse:
+    workspace_id = current_workspace_id(request)
+    if not _material_binding_status(workspace_id)["bound_to_current_workspace"]:
+        raise HTTPException(status_code=409, detail="请先在当前工作区绑定素材目录")
+    material_ingestion.scan_once()
+    assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
+    return MaterialLibraryResponse(
+        assets=[_material_asset_response(asset) for asset in assets],
+        total_count=total, limit=24, offset=0, has_more=len(assets) < total,
+    )
+
+
+@app.post("/api/production/materials/{asset_id}/intake/retry")
+def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.retry_material_ingestion(workspace_id, asset_id)
+        asset = production_repo.get_asset(workspace_id, asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    material_ingestion.wake()
+    return _material_asset_response(asset)
+
+
+@app.put("/api/production/materials/{asset_id}/tags", response_model=MaterialAssetResponse)
+def update_material_asset_tags(asset_id: str, request: Request, payload: MaterialAssetTagsRequest) -> MaterialAssetResponse:
+    try:
+        asset = production_repo.update_asset_tags(current_workspace_id(request), asset_id, payload.user_tags)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _material_asset_response(asset)
+
+
+@app.post("/api/production/materials/tags/batch", response_model=MaterialBatchTagsResponse)
+def update_material_asset_tags_batch(request: Request, payload: MaterialBatchTagsRequest) -> MaterialBatchTagsResponse:
+    try:
+        assets = production_repo.update_assets_tags_batch(
+            current_workspace_id(request), payload.asset_ids,
+            add=payload.add, remove=payload.remove,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="所选素材有不属于当前工作区的项目，未做任何修改") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MaterialBatchTagsResponse(assets=[_material_asset_response(asset) for asset in assets])
+
+
+@app.get("/api/production/materials/{asset_id}/unmatched-corrections")
+def get_unmatched_material_corrections(asset_id: str, request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.get_asset(workspace_id, asset_id)
+        items = production_repo.list_unmatched_material_corrections(workspace_id, asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
+    return {"asset_id": asset_id, "items": items}
 
 
 @app.get(
@@ -10701,9 +10789,11 @@ async def is_setup():
 
 
 def _reload_runtime_dependencies() -> None:
-    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker
+    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
 
     execution_worker.shutdown(wait=True)
+    if material_ingestion is not None:
+        material_ingestion.stop()
 
     settings = Settings.from_env()
     configure_process_temporary_directory(settings)
@@ -10765,6 +10855,8 @@ def _reload_runtime_dependencies() -> None:
     video_job_runner.recover_after_restart()
     creation_execution = _new_creation_execution()
     execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+    material_ingestion = _new_material_ingestion()
+    material_ingestion.start()
     _recover_creation_executions()
 
 
@@ -12248,15 +12340,26 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
 
 creation_execution = _new_creation_execution()
 execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+material_ingestion = None
+
+
+def _new_material_ingestion():
+    from app.material_ingestion import MaterialIngestionService
+    return MaterialIngestionService(production_repo, scan_interval_seconds=60, stable_seconds=10)
 
 
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
+    global material_ingestion
+    material_ingestion = _new_material_ingestion()
+    material_ingestion.start()
     _recover_creation_executions()
 
 
 @app.on_event("shutdown")
 def stop_creation_execution_worker() -> None:
+    if material_ingestion is not None:
+        material_ingestion.stop()
     execution_worker.shutdown(wait=True)
 
 

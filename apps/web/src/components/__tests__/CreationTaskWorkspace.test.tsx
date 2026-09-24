@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => {
     generateNarration: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
+    getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
+    previewExecution: vi.fn().mockResolvedValue(null),
+    startExecution: vi.fn(),
+    resumeExecution: vi.fn(),
+    cancelExecution: vi.fn(),
     previewEdit: vi.fn(),
     previewSelection: vi.fn(),
     askAssistant: vi.fn(),
@@ -55,6 +60,11 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getCreationExecution: mocks.getExecution,
+  previewCreationExecution: mocks.previewExecution,
+  startCreationExecution: mocks.startExecution,
+  resumeCreationExecution: mocks.resumeExecution,
+  cancelCreationExecution: mocks.cancelExecution,
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
   sendCreationTaskAssistantTurn: mocks.askAssistant,
   previewCreationTaskEdit: mocks.previewEdit,
@@ -234,10 +244,53 @@ function workspaceWithCover() {
 
 afterEach(() => {
   vi.clearAllMocks();
+  mocks.previewExecution.mockResolvedValue(null);
   Reflect.deleteProperty(window, "electronAPI");
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("starts only after showing the confirmed script and making requirements", async () => {
+    const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
+    const preview = {
+      task_id: "task-1", script_id: "script-1", script_title: "真实文案",
+      script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
+      plan_id: "plan-1", input_digest: "a".repeat(64),
+      requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
+        presenter_share_target: 20, lipsync_quality: "high", selected_voice: "voice-1",
+        template_settings: {} },
+    };
+    mocks.previewExecution.mockResolvedValue(preview);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.startExecution.mockResolvedValue({ task_id: "task-1", job: {
+      id: "job-1", kind: "creation_task_execution", status: "queued", progress: 0,
+      failure_reason: null, impact: null, repair_action: null,
+    }, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await waitFor(() => expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument());
+    expect(screen.getByText(/露脸目标 20%/)).toBeInTheDocument();
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
+    await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", preview));
+    expect(mocks.generateNarration).not.toHaveBeenCalled();
+  });
+
+  it("keeps start unavailable until an authorized voice is selected", async () => {
+    const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.previewExecution.mockResolvedValue({
+      task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
+      script_sections: [{ title: "正文", content: "实际内容" }],
+      plan_id: "plan-1", input_digest: "b".repeat(64),
+      requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
+        presenter_share_target: 0, lipsync_quality: "fast", selected_voice: null,
+        template_settings: {} },
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByText("请先在下方选择已授权声音，再开始制作。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "请先选择授权声音" })).toBeDisabled();
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+  });
+
   it("keeps the assistant proposal under explicit confirmation and the selected clip", async () => {
     const initial = subtitleCoverWorkspace();
     initial.montage!.clips = [{
@@ -475,12 +528,24 @@ describe("CreationTaskWorkspace", () => {
     selected.available_voices = initial.available_voices;
     mocks.selectVoice.mockResolvedValue(selected);
     mocks.getWorkspace.mockResolvedValue(selected);
+    const preview = {
+      task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
+      script_sections: [{ title: "正文", content: "实际内容" }],
+      plan_id: "plan-1", input_digest: "c".repeat(64),
+      requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
+        presenter_share_target: 0, lipsync_quality: "fast", selected_voice: null as string | null,
+        template_settings: {} },
+    };
+    mocks.previewExecution.mockResolvedValueOnce(preview).mockResolvedValueOnce({
+      ...preview, requirements: { ...preview.requirements, selected_voice: "voice-1" },
+    });
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByRole("button", { name: "请先选择授权声音" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "使用此声音" }));
 
     await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", { voice_profile_id: "voice-1", voice_version: "v1" }));
-    expect(await screen.findByRole("button", { name: "生成配音" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
   });
 
   it("sends only the task id to the native save boundary", async () => {

@@ -75,7 +75,9 @@ class CreationExecution:
 
     def start(self, workspace_id: str, task_id: str, script_id: str, digest: str) -> JobRun:
         task = self.repository.get_creation_task(workspace_id, task_id)
-        self.validate_input(workspace_id, task, script_id, digest)
+        _, plan = self.validate_input(workspace_id, task, script_id, digest)
+        if plan.selected_voice is None:
+            raise ValueError("请先为本次制作选择已授权声音")
         key = f"creation-execution:{task_id}:{digest}"
         run = self.repository.create_job_run(
             JobRun(

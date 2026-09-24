@@ -6,6 +6,7 @@ vi.mock("../types", () => ({}));
 beforeEach(() => {
   vi.resetModules();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("apiUrl", () => {
@@ -64,5 +65,34 @@ describe("server authorization provider", () => {
         headers: expect.not.objectContaining({ Authorization: expect.anything() }),
       }),
     );
+  });
+});
+
+describe("creation execution API", () => {
+  it("sends an explicit start bound to the previewed script and requirement digest", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("{}") });
+    vi.stubGlobal("fetch", fetchMock);
+    const { startCreationExecution } = await import("../api");
+    await startCreationExecution("task 1", {
+      task_id: "task 1", script_id: "script-1", script_title: "文案", script_sections: [],
+      plan_id: "plan-1", input_digest: "a".repeat(64),
+      requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
+        presenter_share_target: 20, lipsync_quality: "high", selected_voice: "voice-1",
+        template_settings: {} },
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/creation-tasks/task%201/execution/start", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ script_id: "script-1", input_digest: "a".repeat(64), requirements_confirmed: true }),
+    }));
+  });
+
+  it("sends a single asset tag replacement to the scoped route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { updateMaterialAssetTags } = await import("../api");
+    await updateMaterialAssetTags("asset/1", ["访谈"]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/production/materials/asset%2F1/tags", expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ user_tags: ["访谈"] }),
+    }));
   });
 });

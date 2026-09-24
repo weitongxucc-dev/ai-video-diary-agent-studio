@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.creation_execution import CreationExecution, revision_digest
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask, ProductionRepository
 from app.artifact_store import ArtifactStore
 
 
-def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True):
+def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True):
     library = tmp_path / "library"
     library.mkdir(exist_ok=True)
     repo = ProductionRepository(database_path=tmp_path / "isolated.sqlite3", video_library_path=library)
@@ -25,7 +27,12 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
         id=f"plan_{workspace_id}", workspace_id=workspace_id,
         goal="一条测试视频", name="测试", target_count=1, language="zh-CN",
         aspect_ratio="9:16", duration_target_seconds=30,
-        knowledge_references=[], source_references=[], selected_voice=None,
+        knowledge_references=[], source_references=[],
+        selected_voice=CreationPlanVoiceReference(
+            profile_id="voice_1", version="v1", person_profile_id="person_1", person_version="v1",
+            person_authorization_id="person_auth_1", person_authorization_version="v1",
+            authorization_id="voice_auth_1", authorization_version="v1", language="zh-CN", model_id="test",
+        ) if voice else None,
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary="测试", model_snapshot=[], confirmation_points=[],
         blockers=[], preflight_fingerprint="test",
@@ -81,6 +88,13 @@ def test_draft_and_wrong_workspace_cannot_start(tmp_path, monkeypatch):
     assert not repo.list_job_runs("workspace_a", task_id)
     with pytest.raises(KeyError):
         execution.start("workspace_b", task_id, script_id, digest)
+
+
+def test_missing_authorized_voice_blocks_start_before_job_creation(tmp_path):
+    repo, task_id, script_id, digest = _seed(tmp_path, voice=False)
+    with pytest.raises(ValueError, match="选择已授权声音"):
+        _execution(repo).start("workspace_a", task_id, script_id, digest)
+    assert repo.list_job_runs("workspace_a", task_id) == []
 
 
 def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path, monkeypatch):
@@ -232,3 +246,62 @@ def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path
     current_version.snapshot["output_refs"] = [published.logical_ref]
     store.resolve_file(published.logical_ref).write_bytes(b"corrupt")
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
+
+
+def test_concurrent_duplicate_start_returns_one_job(tmp_path):
+    repo, task_id, script_id, digest = _seed(tmp_path)
+    execution = _execution(repo)
+    barrier = Barrier(12)
+
+    def start_once(_index):
+        barrier.wait()
+        return execution.start("workspace_a", task_id, script_id, digest).id
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        ids = list(pool.map(start_once, range(12)))
+    assert len(set(ids)) == 1
+    assert len(execution.jobs("workspace_a", task_id)) == 1
+
+
+def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    execution = _execution(repo)
+    queued = execution.start("local", task_id, script_id, digest)
+    submitted = []
+    worker = SimpleNamespace(
+        submit=lambda *args: submitted.append(args), shutdown=lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "creation_execution", execution)
+    monkeypatch.setattr(main_module, "execution_worker", worker)
+    monkeypatch.setattr(main_module, "material_ingestion", None)
+    with TestClient(main_module.app) as client:
+        assert submitted and submitted[0][1:] == ("local", queued.id)
+        assert client.get("/api/production/materials/intake").json()["bound_to_current_workspace"] is False
+        bound = client.post("/api/production/materials/intake/bind")
+        assert bound.status_code == 200
+        assert bound.json() == {"bound_to_current_workspace": True, "available": True, "scan_interval_seconds": 60}
+        assert "library" not in bound.text
+
+
+def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
+    repo, _, _, _ = _seed(tmp_path, workspace_id="local")
+    library = tmp_path / "library"
+    (library / "one.mp4").write_bytes(b"synthetic")
+    (library / "two.mp4").write_bytes(b"synthetic two")
+    assets = repo.scan_library("local")
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    client = TestClient(main_module.app)
+    first = client.put(f"/api/production/materials/{assets[0].id}/tags", json={"user_tags": [" 访谈 ", "访谈"]})
+    assert first.status_code == 200
+    assert first.json()["user_tags"] == ["访谈"]
+    batch = client.post("/api/production/materials/tags/batch", json={
+        "asset_ids": [asset.id for asset in assets], "add": ["产品"], "remove": ["访谈"],
+    })
+    assert batch.status_code == 200
+    assert [item["user_tags"] for item in batch.json()["assets"]] == [["产品"], ["产品"]]
+    rejected = client.post("/api/production/materials/tags/batch", json={
+        "asset_ids": [assets[0].id, "foreign"], "add": ["不可部分提交"], "remove": [],
+    })
+    assert rejected.status_code == 404
+    assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]

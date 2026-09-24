@@ -471,6 +471,7 @@ class MaterialAssetResponse(BaseModel):
     use_state: ContentUseState
     analysis_status: Literal["pending", "ready", "blocked", "failed"]
     analysis_message: str
+    user_tags: list[str] = Field(default_factory=list)
     speech_analysis: MaterialSpeechAnalysisResponse | None = None
     segments: list[MaterialSegmentResponse]
     created_at: datetime
@@ -522,6 +523,22 @@ class MaterialReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     review_status: Literal["raw", "approved", "rejected"]
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] = "unassigned"
+
+
+class MaterialAssetTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_tags: list[str] = Field(max_length=50)
+
+
+class MaterialBatchTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_ids: list[str] = Field(min_length=1, max_length=100)
+    add: list[str] = Field(default_factory=list, max_length=50)
+    remove: list[str] = Field(default_factory=list, max_length=50)
+
+
+class MaterialBatchTagsResponse(BaseModel):
+    assets: list[MaterialAssetResponse]
 
 
 class MaterialUseStateRequest(BaseModel):

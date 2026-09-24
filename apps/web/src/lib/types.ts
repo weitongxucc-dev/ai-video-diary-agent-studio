@@ -1417,6 +1417,40 @@ export type CreationTaskWorkspace = {
   image_generation_capability: CreationTaskCapability;
 };
 
+export type CreationExecutionPreview = {
+  task_id: string;
+  script_id: string;
+  script_title: string;
+  script_sections: { title: string; content: string }[];
+  plan_id: string;
+  requirements: {
+    aspect_ratio: string;
+    duration_target_seconds: number;
+    presenter_share_target: number;
+    lipsync_quality: "high" | "fast";
+    selected_voice: string | null;
+    template_settings: Record<string, unknown>;
+  };
+  input_digest: string;
+};
+
+export type CreationExecutionStatus = {
+  task_id: string;
+  job: {
+    id: string;
+    kind: string;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+    progress: number;
+    failure_reason: string | null;
+    impact: string | null;
+    repair_action: string | null;
+  } | null;
+  stages: { stage: string; status: string; reason?: string; at: string }[];
+  video_ready: boolean;
+  cover_status: "ready" | "pending";
+  cover_message: string | null;
+};
+
 export type CreationTaskEditIntent = {
   id: string;
   workspace_id: string;
@@ -1670,6 +1704,7 @@ export type MaterialAsset = {
   use_state: "available" | "reference_only" | "excluded" | "not_for_automation" | "not_for_publish";
   analysis_status: "pending" | "ready" | "blocked" | "failed";
   analysis_message: string;
+  user_tags: string[];
   speech_analysis?: {
     status: "ready" | "blocked" | "failed";
     source_fingerprint: string;

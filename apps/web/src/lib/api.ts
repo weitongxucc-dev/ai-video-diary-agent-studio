@@ -7,6 +7,8 @@ import type {
   WorkspaceAssistantPlanTurnResponse,
   CreationTasksResponse,
   CreationTaskWorkspace,
+  CreationExecutionPreview,
+  CreationExecutionStatus,
   CreationTaskScriptsResponse,
   CreationTaskScriptSection,
   CreationTaskNarration,
@@ -241,6 +243,34 @@ export function scanProductionMaterials(): Promise<MaterialLibrary> {
   });
 }
 
+export function getMaterialIntakeStatus(): Promise<{ bound_to_current_workspace: boolean; available: boolean; scan_interval_seconds: number }> {
+  return request("/api/production/materials/intake");
+}
+
+export function bindMaterialIntake(): Promise<{ bound_to_current_workspace: boolean; available: boolean; scan_interval_seconds: number }> {
+  return request("/api/production/materials/intake/bind", { method: "POST" });
+}
+
+export function scanMaterialIntake(): Promise<MaterialLibrary> {
+  return request("/api/production/materials/intake/scan", { method: "POST" });
+}
+
+export function retryMaterialIntake(assetId: string): Promise<MaterialAsset> {
+  return request(`/api/production/materials/${encodeURIComponent(assetId)}/intake/retry`, { method: "POST" });
+}
+
+export function updateMaterialAssetTags(assetId: string, userTags: string[]): Promise<MaterialAsset> {
+  return request(`/api/production/materials/${encodeURIComponent(assetId)}/tags`, {
+    method: "PUT", body: JSON.stringify({ user_tags: userTags }),
+  });
+}
+
+export function updateMaterialAssetTagsBatch(assetIds: string[], add: string[], remove: string[]): Promise<{ assets: MaterialAsset[] }> {
+  return request("/api/production/materials/tags/batch", {
+    method: "POST", body: JSON.stringify({ asset_ids: assetIds, add, remove }),
+  });
+}
+
 export function analyzeProductionMaterial(
   assetId: string,
 ): Promise<MaterialAsset> {
@@ -399,6 +429,43 @@ export function confirmCreationTaskTopic(
 export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
   return creationPlanRequest<CreationTaskWorkspace>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}`,
+  );
+}
+
+export function previewCreationExecution(taskId: string): Promise<CreationExecutionPreview> {
+  return creationPlanRequest<CreationExecutionPreview>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`,
+  );
+}
+
+export function getCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution`,
+  );
+}
+
+export function startCreationExecution(taskId: string, preview: CreationExecutionPreview): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start`,
+    { method: "POST", body: JSON.stringify({
+      script_id: preview.script_id,
+      input_digest: preview.input_digest,
+      requirements_confirmed: true,
+    }) },
+  );
+}
+
+export function resumeCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume`,
+    { method: "POST" },
+  );
+}
+
+export function cancelCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/cancel`,
+    { method: "POST" },
   );
 }
 
