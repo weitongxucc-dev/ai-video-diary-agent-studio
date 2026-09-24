@@ -1,8 +1,20 @@
 import socket
+from pathlib import Path
 
 from app.config import Settings
 from app.models import utc_now
-from app.runtime_health import _deepseek_item
+from app.runtime_health import _deepseek_item, _obsidian_item
+
+
+def test_startup_health_does_not_traverse_user_documents(tmp_path, monkeypatch):
+    def blocked_scan(*args, **kwargs):
+        raise AssertionError("Readiness must not scan nested user directories")
+    monkeypatch.setattr(Path, "rglob", blocked_scan)
+    item = _obsidian_item(Settings(obsidian_vault_path=str(tmp_path)), utc_now())
+    assert item["status"] == "ready"
+    assert "内容在读取资料时检查" in item["reason"]
+    status = Settings(obsidian_vault_path=str(tmp_path)).safe_runtime_settings()["status"]
+    assert status["obsidian"]["markdown_count"] is None
 
 
 def test_closed_local_model_port_is_not_reported_available():

@@ -1,7 +1,7 @@
 {
   "name": "ai-video-diary-studio",
-  "version": "0.11.0-test.1",
-  "description": "AI视频日记 Agent Studio — macOS 本地内容生产 Agent",
+  "version": "0.11.0-test.3",
+  "description": "智能视频日记 — macOS 本地内容生产 Agent",
   "main": "main.js",
   "author": "AI视频日记 Contributors",
   "license": "MIT",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.aivideodiary.studio",
-    "productName": "AI视频日记 0.11 测试版",
+    "productName": "智能视频日记 0.11 测试版",
     "copyright": "MIT License",
     "mac": {
       "category": "public.app-category.utilities",
@@ -35,14 +35,14 @@
       "entitlementsInherit": "assets/entitlements.plist",
       "hardenedRuntime": true,
       "extendInfo": {
-        "CFBundleName": "AI视频日记 0.11 测试版",
-        "CFBundleDisplayName": "AI视频日记 0.11 测试版",
+        "CFBundleName": "智能视频日记 0.11 测试版",
+        "CFBundleDisplayName": "智能视频日记 0.11 测试版",
         "NSMicrophoneUsageDescription": "AI视频日记需要使用麦克风进行语音指令输入",
         "NSDesktopFolderUsageDescription": "AI视频日记需要访问桌面文件夹读取知识库和视频文件"
       }
     },
     "dmg": {
-      "title": "AI视频日记 Agent Studio",
+      "title": "智能视频日记",
       "contents": [
         { "x": 130, "y": 220 },
         { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
@@ -59,6 +59,7 @@
     "extraResources": [
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },
+      { "from": "../api/agent_tools", "to": "agent-tools", "filter": ["**/*.ts"] },
       { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] }
     ],
     "publish": {

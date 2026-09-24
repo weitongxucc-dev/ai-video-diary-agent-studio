@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CreationTask, ProductionFoundation } from "@/lib/types";
 
@@ -10,10 +10,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
 }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, creationTasks, inspector }: { children: React.ReactNode; creationTasks?: CreationTask[]; inspector?: React.ReactNode }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><aside data-testid="run-board">{inspector}</aside><main>{children}</main></>,
+  AppShell: ({ children, creationTasks }: { children: React.ReactNode; creationTasks?: CreationTask[] }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><main>{children}</main></>,
 }));
-vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: () => <div>目标输入</div> }));
+vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: ({ task }: { task?: CreationTask | null }) => <div>{task ? `正在修改：${task.name}` : "目标输入"}</div> }));
 vi.mock("@/lib/api.server", () => ({
   getProductionFoundation: mocks.getProductionFoundation,
   listCreationTasks: mocks.listCreationTasks,
@@ -63,27 +64,30 @@ const foundation = {
   eligible_episodes: [],
 } as unknown as ProductionFoundation;
 
-describe("HomePage CreationTask projection", () => {
-  it("shows each persisted task state once and counts mixed statuses truthfully", async () => {
+describe("HomePage three-zone workspace", () => {
+  it("shows real task execution beside chat and opens details only as a card", async () => {
     mocks.getProductionFoundation.mockResolvedValue(foundation);
     mocks.listCreationTasks.mockResolvedValue({
       items: (["not_started", "running", "waiting_for_user", "completed", "failed"] satisfies CreationTask["stage_status"][]).map(task),
       total_count: 5,
     });
 
-    render(await HomePage());
+    render(await HomePage({}));
 
-    expect(screen.getByRole("link", { name: /not_started 任务选题：未开始等待开始/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /running 任务选题：处理中选题处理中/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /waiting_for_user 任务选题：等待确认等待确认/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /completed 任务选题：已完成已完成/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /failed 任务选题：需要处理需要处理/ })).toBeInTheDocument();
-
-    const runBoard = within(screen.getByTestId("run-board"));
-    expect(runBoard.getByText("等待开始").parentElement).toHaveTextContent("等待开始1项");
-    expect(runBoard.getByText("进行中或待确认").parentElement).toHaveTextContent("进行中或待确认2项");
-    expect(runBoard.getByText("需要处理").parentElement).toHaveTextContent("需要处理1项");
-    expect(runBoard.getByText("已完成").parentElement).toHaveTextContent("已完成1项");
-    expect(screen.getAllByRole("heading", { level: 2, name: "创作任务" })).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "创作助手" })).toContainElement(screen.getByText("目标输入"));
+    const execution = within(screen.getByRole("region", { name: "任务执行" }));
+    expect(execution.getByText("任务执行")).toBeInTheDocument();
+    expect(execution.getByText("待处理").parentElement).toHaveTextContent("2待处理");
+    expect(execution.getByText("进行中").parentElement).toHaveTextContent("1进行中");
+    expect(execution.getAllByRole("button", { name: /任务/ })).toHaveLength(5);
+    expect(screen.queryByRole("dialog", { name: "任务卡片" })).not.toBeInTheDocument();
+    fireEvent.click(execution.getByRole("button", { name: /waiting_for_user 任务/ }));
+    const card = within(screen.getByRole("dialog", { name: "任务卡片" }));
+    expect(card.getByRole("link", { name: "打开任务" })).toHaveAttribute("href", "/tasks/task-waiting_for_user");
+    fireEvent.click(card.getByRole("button", { name: "对话修改" }));
+    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("正在修改：waiting_for_user 任务");
+    fireEvent.click(screen.getByRole("button", { name: "新建视频" }));
+    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("目标输入");
+    expect(screen.queryByRole("dialog", { name: "任务卡片" })).not.toBeInTheDocument();
   });
 });

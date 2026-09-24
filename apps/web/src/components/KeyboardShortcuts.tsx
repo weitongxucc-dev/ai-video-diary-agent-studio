@@ -77,7 +77,7 @@ export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: () => void }
 
       if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        router.push("/production?new=1");
+        router.push("/?new=1");
         return;
       }
 

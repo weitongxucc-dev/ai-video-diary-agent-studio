@@ -251,7 +251,7 @@ export function buildOnboardingSnapshot(input: {
     if (status?.obsidian.path) {
       state = obsidianConfigured ? "ready" : "missing";
       detail = obsidianConfigured
-        ? `已发现 ${status.obsidian.markdown_count} 篇笔记。`
+        ? (status.obsidian.markdown_count === null ? "资料目录可用，内容待读取。" : `已发现 ${status.obsidian.markdown_count} 篇笔记。`)
         : `路径未找到：${status.obsidian.path}`;
     } else if (status) {
       state = "missing";

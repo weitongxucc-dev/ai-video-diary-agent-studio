@@ -194,21 +194,6 @@ def _topic_source_urls_from_env() -> tuple[str, ...]:
     return tuple(url.strip() for url in raw.split(",") if url.strip())
 
 
-def _markdown_count(path: str | None) -> int:
-    if not path:
-        return 0
-    vault = Path(path).expanduser()
-    if not vault.exists() or not vault.is_dir():
-        return 0
-    return len(
-        [
-            note
-            for note in vault.rglob("*.md")
-            if not any(part.startswith(".") for part in note.relative_to(vault).parts)
-        ]
-    )
-
-
 def _pending_video_count(path: str | None) -> int:
     if not path:
         return 0
@@ -287,6 +272,10 @@ class Settings:
     avatar_model_worker_path: str = _default_avatar_model_worker_path()
     avatar_model_root_path: str | None = None
     avatar_model_id: str = "musetalk-v1.5-mps"
+    latentsync_worker_path: str = str(Path(__file__).resolve().parents[1] / "model_workers" / "latentsync_worker.py")
+    latentsync_runtime_python_path: str | None = None
+    latentsync_root_path: str | None = None
+    latentsync_pose_root_path: str | None = None
     draft_background_music_path: str | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
@@ -318,7 +307,8 @@ class Settings:
 
     @property
     def effective_llm_provider(self) -> str:
-        return (self.llm_provider or "deepseek").strip().lower()
+        # An existing DeepSeek-only installation keeps its previous provider.
+        return (self.llm_provider or ("deepseek" if self.deepseek_api_key else "minimax")).strip().lower()
 
     @property
     def effective_llm_api_key(self) -> str | None:
@@ -332,11 +322,18 @@ class Settings:
 
     @property
     def effective_llm_base_url(self) -> str:
-        return (self.llm_base_url or self.deepseek_base_url).rstrip("/")
+        default_url = (
+            "https://api.minimax.io/v1"
+            if self.effective_llm_provider == "minimax"
+            else self.deepseek_base_url
+        )
+        return (self.llm_base_url or default_url).rstrip("/")
 
     @property
     def effective_llm_model(self) -> str:
-        return self.llm_model or self.deepseek_model
+        return self.llm_model or (
+            "MiniMax-M3" if self.effective_llm_provider == "minimax" else self.deepseek_model
+        )
 
     @property
     def llm_configured(self) -> bool:
@@ -458,6 +455,13 @@ class Settings:
             or _default_avatar_model_worker_path(),
             avatar_model_root_path=os.getenv("AVATAR_MODEL_ROOT_PATH"),
             avatar_model_id=os.getenv("AVATAR_MODEL_ID", cls.avatar_model_id),
+            latentsync_worker_path=os.getenv("LATENTSYNC_WORKER_PATH") or cls.latentsync_worker_path,
+            latentsync_runtime_python_path=os.getenv("LATENTSYNC_RUNTIME_PYTHON_PATH")
+            or str(Path(model_root_path).parent / "model-runtimes" / "musetalk-mac" / ".venv" / "bin" / "python"),
+            latentsync_root_path=os.getenv("LATENTSYNC_ROOT_PATH")
+            or str(Path(model_root_path).parent / "model-runtimes" / "latentsync-mlx-candidate"),
+            latentsync_pose_root_path=os.getenv("LATENTSYNC_POSE_ROOT_PATH")
+            or str(Path(model_root_path) / "LatentSync-1.5" / "pose"),
             draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
@@ -490,7 +494,7 @@ class Settings:
                 "configured": bool(obsidian_path),
                 "exists": obsidian_exists,
                 "path": obsidian_path,
-                "markdown_count": _markdown_count(obsidian_path),
+                "markdown_count": None,
             },
             "product_hunt": {
                 "configured": bool(self.product_hunt_token),

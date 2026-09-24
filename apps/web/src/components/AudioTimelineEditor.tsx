@@ -73,7 +73,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
     </div>
     <div className={ui.audioScroll}><div style={{ width: `${zoom*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
-        <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>S</button></div>
+        <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>独听</button></div>
       <div className={ui.audioLane}>{track.clips.map(clip => <button type="button" key={`${clip.id}:${clip.source_ref}`} className={ui.audioClip} aria-label={`选择音频：${clip.name}`} aria-pressed={selectedId === clip.id}
         style={{ left: `${clip.timeline_start_ms/1000/duration*100}%`, width: `${(clip.source_end_ms-clip.source_start_ms)/1000/duration*100}%`, opacity: clip.muted || track.muted ? .45 : 1 }}
         onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();

@@ -99,12 +99,12 @@ export default async function ProductionPage({
         <div className="automation-unavailable">
           <AlertCircle size={21} />
           <div>
-            <h1>自动任务尚未接入</h1>
+            <h1>暂不支持定时</h1>
             <p>
-              当前本地服务尚未提供触发器、审核点、重试规则和通知配置；不会创建或假装运行自动任务。
+              目前可手动创建视频。定时制作将在后续版本提供。
             </p>
           </div>
-          <Link href="/templates">查看视频模板</Link>
+          <Link href="/templates">查看模板</Link>
         </div>
       </AppShell>
     );
@@ -238,15 +238,15 @@ export default async function ProductionPage({
               <strong>工作区已就绪</strong>
               <p>可以创建新任务，或继续下面尚未完成的任务。</p>
             </div>
-            <Link href="/production?new=1">开始制作<ArrowRight size={14} /></Link>
+            <Link href="/?new=1">开始制作<ArrowRight size={14} /></Link>
           </section>
         )}
 
         <section className="queue-section">
           <header>
             <h2>最近任务</h2>
-            <Link className="modern-primary-button" href="/production?new=1">
-              <Plus size={16} />开始制作新视频
+            <Link className="modern-primary-button" href="/?new=1">
+              <Plus size={16} />新建视频
             </Link>
           </header>
           {creationTasks.length ? (
@@ -260,7 +260,7 @@ export default async function ProductionPage({
                 <strong>还没有创作任务</strong>
                 <p>检查当前可用内容后，创建第一个创作任务。</p>
               </div>
-              <Link href="/production?new=1">开始制作</Link>
+              <Link href="/?new=1">开始制作</Link>
             </div>
           )}
         </section>

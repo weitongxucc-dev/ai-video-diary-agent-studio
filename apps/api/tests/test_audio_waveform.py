@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 from pathlib import Path
 import struct
 from types import SimpleNamespace
@@ -52,3 +53,21 @@ def test_waveform_api_rejects_another_tasks_artifact(monkeypatch):
                         SimpleNamespace(task_id="another-task", audio_path="unread"))
     response = TestClient(main.app).get("/api/creation-tasks/this-task/narration/waveform")
     assert response.status_code == 404
+
+
+def test_timeline_waveform_uses_default_cache_directory_when_not_configured(monkeypatch, tmp_path):
+    import app.main as main
+
+    source = tmp_path / "voice.wav"
+    write_audio(source, 16384)
+    monkeypatch.setattr(main, "settings", replace(main.settings, temporary_root_path=None, model_root_path=str(tmp_path / "models")))
+    monkeypatch.setattr(main, "_creation_task_or_404", lambda *args: None)
+    monkeypatch.setattr(main.production_repo, "get_creation_task_montage_plan", lambda *args: {})
+    monkeypatch.setattr(main, "creation_task_montage_plan_from_payload", lambda value: value)
+    monkeypatch.setattr(main, "_effective_audio_timeline", lambda plan: SimpleNamespace(
+        tracks=[SimpleNamespace(clips=[SimpleNamespace(id="voice", source_ref="voice-source")])]))
+    monkeypatch.setattr(main, "_task_audio", lambda: SimpleNamespace(source=lambda *args: source))
+    response = TestClient(main.app).get("/api/creation-tasks/this-task/audio/waveform/voice")
+    assert response.status_code == 200
+    assert max(response.json()["peaks"]) == pytest.approx(0.5)
+    assert list((tmp_path / "temporary" / "audio-waveforms").rglob("*.json"))

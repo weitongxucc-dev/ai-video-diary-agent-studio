@@ -31,7 +31,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     expect(screen.getByRole("option", { name: "已批准声音.wav" })).toHaveValue("workspace://approved/asset-1");
     expect(screen.queryByRole("option", { name: "不可引用.mp4" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("档案编号")).not.toBeInTheDocument();
-    fireEvent.submit(screen.getByRole("button", { name: "保存人物新版本" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "保存人物" }).closest("form")!);
     await waitFor(() => expect(api.savePersonProfile).toHaveBeenCalled());
     expect(api.savePersonProfile.mock.calls[0]?.[0]).toMatchObject({ id: "person-1" });
     expect(api.savePersonProfile.mock.calls[0]?.[0].authorization).toMatchObject({ content_types: ["person_likeness", "avatar_video"], usage_scopes: ["avatar_lipsync"] });
@@ -55,7 +55,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     arrange(); render(<PeopleAndVoiceWorkspace />); await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
     await screen.findByText("声音预览");
-    fireEvent.click(screen.getByRole("button", { name: "生成声音预览" }));
+    fireEvent.click(screen.getByRole("button", { name: "试听声音" }));
     await waitFor(() => expect(api.createVoicePreview).toHaveBeenCalledWith({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "你好", retry: false }));
   });
 
@@ -67,7 +67,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     await screen.findByText("人物预览");
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
     fireEvent.click(screen.getByRole("button", { name: "登记声音" }));
-    const form = screen.getByRole("button", { name: "登记声音新版本" }).closest("form")!;
+    const form = screen.getByRole("button", { name: "保存声音" }).closest("form")!;
     fireEvent.change(screen.getByLabelText("选择已授权 WAV"), { target: { files: [new File(["wav"], "owner.wav", { type: "audio/wav" })] } });
     await screen.findByText("WAV 已安全导入 · 1.0 秒");
     fireEvent.change(form.querySelector('input[name="version"]')!, { target: { value: "v2" } });
@@ -100,9 +100,9 @@ describe("PeopleAndVoiceWorkspace", () => {
 
     api.listMediaPreviews.mockResolvedValue({ items: [failedVoicePreview], total_count: 1 });
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    await screen.findByRole("button", { name: "重新生成声音预览" });
+    await screen.findByRole("button", { name: "重新制作" });
     expect(screen.queryByLabelText("声音预览")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新生成声音预览" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新制作" }));
     await waitFor(() => expect(api.createVoicePreview).toHaveBeenLastCalledWith({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "你好", retry: true }));
   });
 
@@ -113,7 +113,7 @@ describe("PeopleAndVoiceWorkspace", () => {
     api.createAvatarLipsyncPreview.mockResolvedValue(avatarRun);
     render(<PeopleAndVoiceWorkspace />);
     await screen.findByText("人物预览");
-    fireEvent.click(screen.getByRole("button", { name: "生成口型预览" }));
+    fireEvent.click(screen.getByRole("button", { name: "试做口型" }));
     await waitFor(() => expect(api.createAvatarLipsyncPreview).toHaveBeenCalledWith({ person_profile_id: "person-1", person_version: "v1", voice_profile_id: "voice-1", voice_version: "v1", voice_preview_identity: "voice-identity-1", motion: "natural", expression: "neutral", authorization_id: "person-auth-1", authorization_version: "v1", model_id: "local", retry: false }));
     expect(await screen.findByLabelText("人物口型预览")).toHaveAttribute("src", "/api/media/previews/avatar-lipsync/avatar-identity/media");
   });
@@ -125,6 +125,6 @@ describe("PeopleAndVoiceWorkspace", () => {
     render(<PeopleAndVoiceWorkspace />);
     await screen.findByText("授权已撤销");
     expect(screen.getByText("授权已撤销")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成口型预览" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "试做口型" })).toBeDisabled();
   });
 });

@@ -180,6 +180,7 @@ function userDotenvPath() {
 
 function ensureUserDotenv() {
   const p = userDotenvPath();
+  fs.mkdirSync(path.join(app.getPath('userData'), 'temporary'), { recursive: true });
   if (!fs.existsSync(p)) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, '', 'utf-8');
@@ -190,9 +191,14 @@ function ensureUserDotenv() {
 function localModelEnv() {
   const resourcePath = process.resourcesPath || path.join(__dirname, '..');
   return {
+    PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter),
+    TMPDIR: path.join(app.getPath('userData'), 'temporary'),
     VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
     VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
     UNDERSTANDING_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_vl_worker.py'),
+    AVATAR_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'musetalk_worker.py'),
+    LATENTSYNC_WORKER_PATH: path.join(resourcePath, 'model-workers', 'latentsync_worker.py'),
+    AI_VIDEO_DIARY_PI_EXTENSION: path.join(resourcePath, 'agent-tools', 'diary_tools.ts'),
   };
 }
 

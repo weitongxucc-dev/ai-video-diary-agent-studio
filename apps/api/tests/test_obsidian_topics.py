@@ -297,5 +297,5 @@ def test_settings_status_reports_obsidian_without_note_content(tmp_path):
     assert status["obsidian"]["configured"] is True
     assert status["obsidian"]["exists"] is True
     assert status["obsidian"]["path"] == str(vault)
-    assert status["obsidian"]["markdown_count"] == 1
+    assert status["obsidian"]["markdown_count"] is None
     assert "私密笔记" not in json.dumps(status, ensure_ascii=False)

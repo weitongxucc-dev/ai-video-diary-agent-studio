@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
@@ -179,7 +180,7 @@ class ObsidianStatusResponse(BaseModel):
     configured: bool
     exists: bool
     path: str | None
-    markdown_count: int
+    markdown_count: int | None
 
 
 class ProductHuntStatusResponse(BaseModel):
@@ -672,6 +673,8 @@ class CreationPlanDefaultsRequest(BaseModel):
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 20
+    lipsync_quality: Literal["high", "fast"] = "high"
     template_id: str | None = Field(default=None, min_length=1, max_length=120)
     template_version: int | None = Field(default=None, ge=1)
 
@@ -974,6 +977,7 @@ class CreationTaskPersonRenderRequest(BaseModel):
     person_version: str = Field(min_length=1, max_length=120)
     motion: Literal["natural"] = "natural"
     expression: Literal["neutral"] = "neutral"
+    lipsync_quality: Literal["high", "fast"] | None = None
 
 
 class CreationTaskPersonRenderResponse(BaseModel):
@@ -1069,6 +1073,8 @@ class AudioTimelineResponse(AudioTimeline):
 class CreationTaskMontagePlanResponse(BaseModel):
     graphic_overlays: list[TextOverlay | ImageOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    presenter_share_actual: float = Field(default=0, ge=0, le=100)
     id: str
     task_id: str
     script_id: str
@@ -1216,6 +1222,7 @@ class EditIntentResponse(BaseModel):
 
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
+        "ChangePresenterShare",
         "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",
@@ -1294,12 +1301,29 @@ class CreationTaskEditPreviewResponse(BaseModel):
     proposal: EditProposalResponse
 
 
+class CreationTaskAssistantTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
+    selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
+    playhead_ms: int | None = Field(default=None, ge=0)
+
+
+class CreationTaskAssistantTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    edit_preview: CreationTaskEditPreviewResponse | None = None
+
+
 class EditOperationResponse(BaseModel):
     id: str
     workspace_id: str
     task_id: str
     proposal_id: str
     operation_type: Literal[
+        "ChangePresenterShare",
         "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",
@@ -1357,6 +1381,8 @@ class CreationPlanPreviewResponse(BaseModel):
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     aspect_ratio: Literal["9:16", "16:9", "1:1"]
     duration_target_seconds: int = Field(ge=15)
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]
     selected_voice: CreationPlanVoiceReferenceResponse | None
@@ -1370,6 +1396,20 @@ class CreationPlanPreviewResponse(BaseModel):
     blockers: list[CreationPlanBlockerResponse]
     confirmable: bool
     preflight_fingerprint: str
+
+
+class WorkspaceAssistantPlanTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    conversation_id: UUID
+
+
+class WorkspaceAssistantPlanTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    plan_preview: CreationPlanPreviewResponse | None = None
 
 
 class CreationPlanResponse(CreationPlanPreviewResponse):

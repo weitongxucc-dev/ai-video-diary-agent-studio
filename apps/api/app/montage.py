@@ -129,6 +129,7 @@ class CreationTaskMontagePlan:
     clips: list[MontageClip]
     duration_seconds: float
     low_confidence_clip_count: int
+    presenter_share_target: int = 0
     aspect_ratio: AspectRatio = "9:16"
     narration_audio_path: str | None = None
     output_path: str | None = None
@@ -407,6 +408,8 @@ class MontagePlanner:
         narration_duration_seconds: float,
         narration_segment_ids_by_section: dict[str, str] | None = None,
         narration_segment_durations_by_section: dict[str, float] | None = None,
+        person_render_by_section: dict[str, tuple[str, float]] | None = None,
+        presenter_share_target: int = 0,
     ) -> CreationTaskMontagePlan:
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
@@ -425,8 +428,6 @@ class MontagePlanner:
             and effective_segment_usage_role(asset, segment) == "b_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
-        if not b_roll_candidates:
-            raise ValueError("可用素材库中没有已审核的 B-roll 镜头")
         cues = _build_creation_task_cues(
             script,
             min_seconds=profile.target_duration_min_seconds,
@@ -435,6 +436,9 @@ class MontagePlanner:
             narration_segment_ids_by_section=narration_segment_ids_by_section,
             narration_segment_durations_by_section=narration_segment_durations_by_section,
         )
+        person_render_by_section = person_render_by_section or {}
+        if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in cues):
+            raise ValueError("可用素材库中没有已审核的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
         visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
@@ -449,9 +453,31 @@ class MontagePlanner:
         segment_usage: dict[str, int] = {}
         asset_usage: dict[str, int] = {}
         timeline_cursor = 0.0
+        person_source_cursor: dict[str, float] = {}
         for cue in cues:
-            # Source talking-head footage is not aligned with this generated narration.
-            # Person renders are inserted explicitly with their narration dependency.
+            clip_duration = round(cue.duration_seconds, 3)
+            if cue.source_section_id in person_render_by_section:
+                render_id, render_duration = person_render_by_section[cue.source_section_id]
+                source_start = person_source_cursor.get(cue.source_section_id, 0.0)
+                source_end = round(source_start + clip_duration, 3)
+                if source_end > render_duration + 1 / 30:
+                    raise ValueError("人物口型输出不足以覆盖露脸段落")
+                clips.append(MontageClip(
+                    id=f"clip_{uuid4().hex[:10]}", cue_id=cue.id,
+                    asset_id=f"person:{render_id}", segment_id=cue.narration_segment_id,
+                    source_path=f"person-render://{render_id}",
+                    source_start_seconds=round(source_start, 3),
+                    source_end_seconds=min(source_end, render_duration),
+                    timeline_start_seconds=round(timeline_cursor, 3),
+                    timeline_end_seconds=round(timeline_cursor + clip_duration, 3),
+                    match_score=1.0,
+                    match_reasons=["按当前配音生成口型", f"露脸目标 {presenter_share_target}%"],
+                    needs_confirmation=False, role="a_roll", person_render_id=render_id,
+                ))
+                person_source_cursor[cue.source_section_id] = source_end
+                timeline_cursor += clip_duration
+                continue
+            # Source talking-head footage is not aligned with generated narration.
             duration_candidates = [
                 item for item in b_roll_candidates
                 if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
@@ -487,7 +513,6 @@ class MontagePlanner:
             role: Literal["a_roll", "b_roll"] = "b_roll"
             if role == "b_roll" and visual_score is None:
                 reasons.append(semantic_note or "该片段缺少可用的当前模型视觉向量，仅按素材文字与时长推荐")
-            clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
                 and self.semantic_auto_confirm_threshold is not None
@@ -531,6 +556,7 @@ class MontagePlanner:
             clips=clips,
             duration_seconds=round(timeline_cursor, 3),
             low_confidence_clip_count=low_confidence_count,
+            presenter_share_target=presenter_share_target,
             narration_audio_path=narration_audio_path,
             message=(
                 "镜头均有文案或画面语义依据，可以进入渲染。"
@@ -899,6 +925,34 @@ def _build_creation_task_cues(
                 )
             )
     return cues
+
+
+def select_presenter_sections(
+    section_durations: list[tuple[str, float]], target_percent: int
+) -> list[str]:
+    """Choose complete narration sections so only visible speech needs lip sync."""
+    if target_percent not in {0, 20, 40, 60, 80, 100}:
+        raise ValueError("露脸占比必须选择 0%、20%、40%、60%、80% 或 100%")
+    if not section_durations or target_percent == 0:
+        return []
+    if target_percent == 100:
+        return [section_id for section_id, _ in section_durations]
+    total = sum(duration for _, duration in section_durations)
+    if total <= 0:
+        raise ValueError("配音段落时长无效")
+    target = total * target_percent / 100
+    # Intro and closing speech establish the speaker; retain script order in output.
+    priority = [section_durations[0], *section_durations[-1:], *section_durations[1:-1]]
+    chosen: set[str] = set()
+    covered = 0.0
+    while len(chosen) < len(section_durations):
+        remaining = [(section_id, duration) for section_id, duration in priority if section_id not in chosen]
+        section_id, duration = min(remaining, key=lambda item: abs(target - covered - item[1]))
+        if chosen and abs(target - (covered + duration)) >= abs(target - covered):
+            break
+        chosen.add(section_id)
+        covered += duration
+    return [section_id for section_id, _ in section_durations if section_id in chosen]
 
 
 def _split_narration(text: str) -> list[str]:

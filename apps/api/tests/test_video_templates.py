@@ -78,6 +78,43 @@ def test_missing_template_voice_blocks_without_substitution(state):
     assert any(item["reason"] == "template_voice_unavailable" and "v9" in item["impact"] for item in preview["blockers"])
 
 
+def test_template_share_is_default_and_slider_choice_rechecks_plan(state):
+    production, template, client = state
+    production.save_video_template(replace(template, version=2, settings={**template.settings, "presenter_share_target": 40}))
+    base = {"goal": "完全不同的新主题", "template_id": template.id, "template_version": 2}
+    inherited = client.post("/api/creation-plans/preview", json=base)
+    chosen = client.post("/api/creation-plans/preview", json={**base, "presenter_share_target": 20})
+    assert inherited.status_code == chosen.status_code == 200
+    assert inherited.json()["presenter_share_target"] == 40
+    assert chosen.json()["presenter_share_target"] == 20
+    assert inherited.json()["preflight_fingerprint"] != chosen.json()["preflight_fingerprint"]
+
+
+def test_lipsync_quality_defaults_and_stays_in_versioned_plan(state):
+    production, template, client = state
+    goal = "完全不同的新主题"
+    new_preview = client.post("/api/creation-plans/preview", json={"goal": goal}).json()
+    fast_preview = client.post("/api/creation-plans/preview", json={"goal": goal, "lipsync_quality": "fast"}).json()
+    assert new_preview["lipsync_quality"] == "high"
+    assert fast_preview["lipsync_quality"] == "fast"
+    assert new_preview["preflight_fingerprint"] != fast_preview["preflight_fingerprint"]
+    assert any(item["id"].startswith("latentsync-") for item in new_preview["model_snapshot"])
+    assert any(item["id"] == main.avatar_lipsync_provider.model_id for item in fast_preview["model_snapshot"])
+
+    # Templates saved before the selector existed keep the former MuseTalk path.
+    payload = {"goal": goal, "template_id": template.id, "template_version": 1}
+    legacy = client.post("/api/creation-plans/preview", json=payload).json()
+    assert legacy["lipsync_quality"] == "fast"
+    confirmed = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": legacy["preflight_fingerprint"]})
+    assert confirmed.status_code == 201, confirmed.text
+    assert production.get_creation_plan("workspace_a", confirmed.json()["id"]).lipsync_quality == "fast"
+
+    production.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "high"}))
+    inherited = client.post("/api/creation-plans/preview", json={**payload, "template_version": 2}).json()
+    assert inherited["lipsync_quality"] == "high"
+    assert inherited["preflight_fingerprint"] != legacy["preflight_fingerprint"]
+
+
 def test_save_unrendered_task_is_conflict_not_server_error(state):
     _, _, client = state
     payload = {"goal": "尚未制作的视频"}

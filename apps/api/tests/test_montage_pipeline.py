@@ -45,6 +45,7 @@ from app.montage import (
     _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
+    select_presenter_sections,
 )
 from app.production import (
     Authorization,
@@ -1223,6 +1224,98 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
         creation_task_montage_plan_to_payload(plan)
     )
     assert restored == plan
+
+
+def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
+    sections = [(f"section_{index}", 4.0) for index in range(5)]
+    assert select_presenter_sections(sections, 0) == []
+    assert select_presenter_sections(sections, 20) == ["section_0"]
+    assert len(select_presenter_sections(sections, 40)) == 2
+    assert select_presenter_sections(sections, 100) == [item[0] for item in sections]
+
+    script = CreationTaskScript(
+        id="script_mix", workspace_id="workspace_a", task_id="task_mix",
+        run_id="run_mix", topic_id="topic_mix", title="混剪", language="zh-CN",
+        selection_status="confirmed",
+        sections=[CreationTaskScriptSection(
+            id=section_id, title=f"第 {index + 1} 段", content="介绍产品。",
+            visual_prompt="产品画面", evidence_reference_ids=[],
+        ) for index, (section_id, _) in enumerate(sections)],
+    )
+    chosen = select_presenter_sections(sections, 20)
+    plan = MontagePlanner().build_for_creation_task(
+        workspace_id="workspace_a", task_id="task_mix", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"),
+        assets=[_asset(tmp_path)],
+        media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
+        narration_audio_path="narration://artifact/mix", narration_duration_seconds=20,
+        narration_segment_ids_by_section={section_id: f"narration_{index}" for index, (section_id, _) in enumerate(sections)},
+        narration_segment_durations_by_section=dict(sections),
+        person_render_by_section={section_id: ("render_0", 4.0) for section_id in chosen},
+        presenter_share_target=20,
+    )
+    cues = {cue.id: cue for cue in plan.cues}
+    face_clips = [clip for clip in plan.clips if clip.person_render_id]
+    material_clips = [clip for clip in plan.clips if not clip.person_render_id]
+    assert face_clips and material_clips
+    assert {cues[clip.cue_id].source_section_id for clip in face_clips} == set(chosen)
+    assert all(clip.role == "b_roll" and clip.source_path.startswith("workspace://") for clip in material_clips)
+    assert sum(clip.timeline_end_seconds - clip.timeline_start_seconds for clip in face_clips) == pytest.approx(4.0)
+    assert plan.duration_seconds == pytest.approx(20.0)
+    assert plan.presenter_share_target == 20
+
+    all_face = MontagePlanner().build_for_creation_task(
+        workspace_id="workspace_a", task_id="task_mix", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"), assets=[],
+        media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
+        narration_audio_path="narration://artifact/mix", narration_duration_seconds=20,
+        narration_segment_ids_by_section={section_id: f"narration_{index}" for index, (section_id, _) in enumerate(sections)},
+        narration_segment_durations_by_section=dict(sections),
+        person_render_by_section={section_id: (f"render_{index}", 4.0) for index, (section_id, _) in enumerate(sections)},
+        presenter_share_target=100,
+    )
+    assert all(clip.person_render_id for clip in all_face.clips)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg is not installed")
+def test_mixed_person_and_material_clips_render_with_continuous_narration(tmp_path):
+    face = tmp_path / "face.mp4"
+    material = tmp_path / "material.mp4"
+    audio = tmp_path / "narration.wav"
+    for color, path in (("red", face), ("blue", material)):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=320x240:r=25:d=1",
+                        "-pix_fmt", "yuv420p", str(path)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    str(audio)], check=True, capture_output=True)
+    plan = CreationTaskMontagePlan(
+        id="mixed-render", workspace_id="workspace_a", task_id="task-mixed",
+        script_id="script-mixed", script_title="混剪", status="ready",
+        cues=[NarrationCue("cue-face", "section-face", "真人出镜。", 1.0, "narration-face"),
+              NarrationCue("cue-material", "section-material", "产品画面。", 1.0, "narration-material")],
+        clips=[
+            MontageClip("clip-face", "cue-face", "person:render", "narration-face", str(face),
+                        0.0, 1.0, 0.0, 1.0, 1.0, ["当前配音口型"], False,
+                        role="a_roll", person_render_id="render"),
+            MontageClip("clip-material", "cue-material", "asset", "segment", str(material),
+                        0.0, 1.0, 1.0, 2.0, 1.0, ["产品画面"], False),
+        ],
+        duration_seconds=2.0, low_confidence_clip_count=0,
+        presenter_share_target=40, narration_audio_path="narration://artifact/test",
+    )
+    MontageRenderer(tmp_path).render(plan, audio, job_staging_path=tmp_path / "job")
+    output = tmp_path / "job" / "preview.mp4"
+    assert output.is_file() and output.stat().st_size > 0
+    probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(output)],
+                                      check=True, capture_output=True, text=True).stdout)
+    assert {item["codec_type"] for item in probe["streams"]} >= {"video", "audio"}
+    assert float(next(item["duration"] for item in probe["streams"] if item["codec_type"] == "video")) == pytest.approx(2, abs=0.12)
+    def sample_color(at: float) -> bytes:
+        return subprocess.run(["ffmpeg", "-v", "error", "-ss", str(at), "-i", str(output),
+                               "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                              check=True, capture_output=True).stdout
+    red, blue = sample_color(0.4), sample_color(1.4)
+    assert red[0] > red[2] * 2
+    assert blue[2] > blue[0] * 2
 
 
 @pytest.mark.skipif(
@@ -2794,6 +2887,33 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     assert track.style == plan.template_settings["subtitle_style"]
 
 
+@pytest.mark.parametrize("target,expected_calls", [(0, 0), (100, 1)])
+def test_initial_montage_generates_face_only_for_selected_share(person_render_edit_state, monkeypatch, target, expected_calls):
+    state = person_render_edit_state
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task.stage = "montage"
+    task.stage_status = "not_started"
+    task.current_timeline_version_id = None
+    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.presenter_share_target = target
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    calls = []
+    def fake_generate(_workspace, _task, payload):
+        calls.append(payload.narration_segment_id)
+        return SimpleNamespace(id="render-selected", status="ready", duration_seconds=30.0)
+    monkeypatch.setattr(main_module, "_generate_creation_task_person_render_record", fake_generate)
+    monkeypatch.setattr(main_module, "_person_render_media_path", lambda _: Path("/tmp/test-render.mp4"))
+    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(calls) == expected_calls
+    assert body["presenter_share_target"] == target
+    assert body["presenter_share_actual"] == target
+    assert all(bool(clip["person_render_id"]) == bool(target) for clip in body["clips"])
+
+
 def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, monkeypatch):
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -3093,6 +3213,9 @@ def test_regenerated_narration_is_not_duplicated_by_split_clips(person_render_ed
     # Two adjacent portions of one cue must share its replacement duration.
     plan.clips=plan.clips[:1]
     first=plan.clips[0]
+    first.person_render_id=None
+    first.source_path=person_render_edit_state.production.workspace_media_reference_for_asset(
+        state.workspace_id, first.asset_id)
     second=replace(first,id="split-second",source_start_seconds=1,timeline_start_seconds=1)
     first.source_end_seconds=1;first.timeline_end_seconds=1
     plan.clips.append(second);plan.duration_seconds=4
@@ -3105,6 +3228,66 @@ def test_regenerated_narration_is_not_duplicated_by_split_clips(person_render_ed
     plan.clips[0].locked=True
     with pytest.raises(ValueError,match="锁定"):
         main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")
+
+
+def test_regenerated_narration_cannot_exceed_existing_person_render(person_render_edit_state):
+    state = person_render_edit_state
+    plan = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    plan.clips = plan.clips[:1]
+    plan.duration_seconds = 4
+    segment = SimpleNamespace(id=plan.cues[0].narration_segment_id, duration_seconds=6, status="ready")
+    with pytest.raises(ValueError, match="超过当前镜头可用范围"):
+        main_module._retime_montage_for_narration_segments(state.workspace_id, plan, [segment], "narration://artifact/new")
+
+
+def test_person_clip_crop_and_replacement_keep_editable_timeline(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    face = state.montage.clips[0]
+    crop = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "ChangeCrop", "clip_id": face.id,
+        "fit_mode": "fit", "crop_x": .5, "crop_y": .5,
+    })
+    assert crop.status_code == 200, crop.text
+    assert crop.json()["proposal"]["preview"]["before"]["label"] == "人物口播"
+    confirmed = state.client.post(base + f"/edits/{crop.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
+    replacement = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "ReplaceClip", "clip_id": face.id,
+        "asset_id": state.montage.clips[1].asset_id,
+        "segment_id": state.montage.clips[1].segment_id,
+    })
+    assert replacement.status_code == 200, replacement.text
+    confirmed = state.client.post(base + f"/edits/{replacement.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] is None
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
+
+
+def test_natural_language_presenter_share_previews_confirms_and_undoes(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()["montage"]
+    prior_renders = list(state.provider.output_cache_keys)
+    preview = state.client.post(base + "/edits/preview", json={
+        "raw_command": "露脸占比调到0%", "context_stage": "montage",
+        "selected_object_refs": [],
+    })
+    assert preview.status_code == 200, preview.text
+    assert "目标 0%" in preview.json()["proposal"]["preview"]["after"]["label"]
+    assert state.client.get(base).json()["montage"] == before
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()["montage"]
+    assert after["presenter_share_target"] == after["presenter_share_actual"] == 0
+    assert all(clip["person_render_id"] is None for clip in after["clips"])
+    assert after["cues"] == before["cues"]
+    assert after["audio_timeline"] == before["audio_timeline"]
+    assert state.provider.output_cache_keys == prior_renders
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["clips"]
 
 
 def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(person_render_edit_state, monkeypatch):

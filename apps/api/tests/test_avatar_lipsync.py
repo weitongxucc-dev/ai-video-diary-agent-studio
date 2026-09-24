@@ -13,12 +13,15 @@ from app.avatar_lipsync import (
     AvatarAndLipSyncService,
     PersonProfile,
     SubprocessAvatarAndLipSyncProvider,
+    LatentSyncAvatarAndLipSyncProvider,
     UnavailableAvatarAndLipSyncProvider,
     VoiceProfile,
     avatar_lipsync_cache_key,
+    avatar_lipsync_provider_from_settings,
     _parse_avatar_result,
     _probe_avatar_output,
 )
+from app.config import Settings
 
 
 @pytest.fixture(scope="module")
@@ -129,6 +132,30 @@ def test_avatar_lipsync_reports_unavailable_capability_and_versioned_cache(tmp_p
     assert avatar_lipsync_cache_key(request) != avatar_lipsync_cache_key(
         replace(request, language="en")
     )
+
+
+def test_high_and_low_use_distinct_models_without_fallback(tmp_path):
+    settings = replace(
+        Settings(),
+        avatar_model_runtime_python_path=str(tmp_path / "missing-low-runtime"),
+        avatar_model_root_path=str(tmp_path / "missing-low-root"),
+        latentsync_runtime_python_path=str(tmp_path / "missing-high-runtime"),
+        latentsync_root_path=str(tmp_path / "missing-high-root"),
+        latentsync_pose_root_path=str(tmp_path / "missing-pose"),
+    )
+    high = avatar_lipsync_provider_from_settings(settings, quality="high")
+    low = avatar_lipsync_provider_from_settings(settings, quality="fast")
+    assert isinstance(high, LatentSyncAvatarAndLipSyncProvider)
+    assert high.model_id != low.model_id
+    assert high.ready is False and low.ready is False
+    assert "高精度" in high.message
+    request = _request(tmp_path)
+    high_request = replace(request, model_id=high.model_id)
+    low_request = replace(request, model_id=low.model_id)
+    assert avatar_lipsync_cache_key(high_request) != avatar_lipsync_cache_key(low_request)
+    result = AvatarAndLipSyncService(tmp_path / "high", high).render(high_request)
+    assert result.status == "unavailable"
+    assert not (tmp_path / "high").exists()
 
 
 def test_avatar_lipsync_stops_unauthorized_request_before_provider(tmp_path):
@@ -465,3 +492,14 @@ def test_truncated_avatar_cache_is_regenerated_against_input_audio(
     assert len(calls) == 2
     assert restored.artifact_path == original.artifact_path
     assert _probe_avatar_output(cache, audio_path=avatar_video)[0] == 8.0
+
+
+def test_high_quality_uses_configured_packaged_worker(tmp_path):
+    worker = tmp_path / "resources" / "latentsync_worker.py"
+    settings = Settings(latentsync_runtime_python_path="/test/python",
+                        latentsync_root_path="/test/models",
+                        latentsync_pose_root_path="/test/pose",
+                        latentsync_worker_path=str(worker))
+    provider = avatar_lipsync_provider_from_settings(settings, quality="high")
+    assert isinstance(provider, LatentSyncAvatarAndLipSyncProvider)
+    assert provider.worker_path == worker

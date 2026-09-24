@@ -56,13 +56,14 @@ for (const required of [
 for (const required of [
   "desktop-sidebar",
   "desktop-toolbar",
-  "desktop-inspector",
+  "HomeCardDialog",
+  'aria-label="创作助手"',
   'href: "/"',
   'href: "/production"',
   'href: "/library"',
   'href: "/settings"',
   "ai-video-diary-theme",
-  'window.matchMedia("(min-width: 1280px)")',
+  "HomeCommandComposer",
 ]) {
   if (!shell.includes(required)) failures.push(`AppShell is missing: ${required}`);
 }
@@ -75,14 +76,14 @@ for (const [name, source] of [["home", home], ["composer", composer], ["library"
   if (/Pixel(?:Icon|Panel|Button|Status|Mascot|Agent)/.test(source)) failures.push(`${name} north-star UI imports Pixel components`);
 }
 
-for (const required of ["HomeCommandComposer", "想制作什么", "listCreationTasks", "/tasks/"]) {
+for (const required of ["HomeWorkspace", "listCreationTasks"]) {
   if (!home.includes(required)) failures.push(`modern home is missing: ${required}`);
 }
 for (const retired of ["recent_batches", "ProductionBatch", "production?batch="]) {
   if (home.includes(retired)) failures.push(`home still projects legacy Batch tasks: ${retired}`);
 }
 
-for (const retired of ["?batch=", "rendered_count", "target_count"]) {
+for (const retired of ["?batch=", "rendered_count", "target_count", "desktop-inspector", "chatOpen"]) {
   if (shell.includes(retired)) failures.push(`AppShell still projects legacy Batch task fields: ${retired}`);
 }
 
@@ -93,7 +94,7 @@ for (const required of ["defaultInspector", "已创建任务", "等待开始", "
   if (!production.includes(required)) failures.push(`production is missing the CreationTask boundary: ${required}`);
 }
 
-for (const required of ["/production?", 'new: "1"', "goal: normalizedGoal", "检查可用内容", "下一步只检查可用内容，不会直接开始生成"]) {
+for (const required of ["sendWorkspaceAssistantPlanTurn", "confirmCreationPlan", "preflight_fingerprint", "HomeCardDialog", "创建任务"]) {
   if (!composer.includes(required)) failures.push(`home command composer is missing the CreationPlan entry: ${required}`);
 }
 for (const retired of ["previewVoiceCommand", "executeVoiceCommand", "VoiceCommandResponse", "createProductionBatch", "添加素材", "语音输入"]) {

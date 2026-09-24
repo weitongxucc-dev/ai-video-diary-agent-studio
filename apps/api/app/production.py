@@ -433,6 +433,8 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    presenter_share_target: int = 0
+    lipsync_quality: Literal["high", "fast"] = "fast"
     template_id: str | None = None
     template_version: int | None = None
     template_settings: dict[str, object] = field(default_factory=dict)
@@ -799,6 +801,7 @@ class EditProposal:
 
 EditOperationStatus = Literal["running", "applied", "failed"]
 EditOperationType = Literal[
+    "ChangePresenterShare",
     "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",
@@ -832,6 +835,7 @@ EditOperationType = Literal[
     "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
+    "ChangePresenterShare",
     "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",

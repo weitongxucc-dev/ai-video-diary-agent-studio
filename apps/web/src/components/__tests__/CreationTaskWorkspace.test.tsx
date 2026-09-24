@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace } from "../CreationTaskWorkspace";
 import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     getWorkspace: vi.fn(),
     previewEdit: vi.fn(),
     previewSelection: vi.fn(),
+    askAssistant: vi.fn(),
     renderMontage: vi.fn(),
     selectVoice: vi.fn(),
     undoTimeline: vi.fn(),
@@ -34,8 +35,8 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, inspector, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; inspectorTitle?: string }) => (
-    <><header>{toolbar}{toolbarActions}</header><main>{children}</main>{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
+  AppShell: ({ children, conversation, inspector, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; inspectorTitle?: string }) => (
+    <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
   ),
 }));
 
@@ -54,6 +55,8 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
+  sendCreationTaskAssistantTurn: mocks.askAssistant,
   previewCreationTaskEdit: mocks.previewEdit,
   previewCompoundSelection: mocks.previewSelection,
   previewCreationTaskExactEdit: mocks.exactPreview,
@@ -235,6 +238,33 @@ afterEach(() => {
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("keeps the assistant proposal under explicit confirmation and the selected clip", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    const preview = exactPreview(initial.task, "ReplaceClip");
+    preview.intent.raw_command = "换成产品特写";
+    mocks.askAssistant.mockResolvedValue({ reply: "已生成镜头替换预览，请确认。", provider: "minimax", model: "MiniMax-M3", edit_preview: preview });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "换成产品特写" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith("task-1", expect.objectContaining({
+      message: "换成产品特写", selected_object_refs: ["clip:clip-1"],
+    })));
+    expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(screen.getByText("已生成镜头替换预览，请确认。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-ReplaceClip"));
+  });
   it("selects the playhead clip, keeps its position and discards a late preview for another clip", async () => {
     const initial = subtitleCoverWorkspace();
     const clip = {
@@ -381,8 +411,8 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace(baseTask);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(screen.queryByRole("button", { name: "生成真实配音" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "去登记授权声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.queryByRole("button", { name: "生成配音" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "添加声音" })).toHaveAttribute("href", "/profiles");
     expect(screen.getByText(/不需要重做选题或文案/)).toBeInTheDocument();
   });
 
@@ -447,10 +477,10 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(selected);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", { name: "使用这个声音继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "使用此声音" }));
 
     await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", { voice_profile_id: "voice-1", voice_version: "v1" }));
-    expect(await screen.findByRole("button", { name: "生成真实配音" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "生成配音" })).toBeInTheDocument();
   });
 
   it("sends only the task id to the native save boundary", async () => {
@@ -481,7 +511,7 @@ describe("CreationTaskWorkspace", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("成片.mp4");
     fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "渲染成片" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成成片" }));
     await waitFor(() => expect(mocks.renderMontage).toHaveBeenCalledWith("task-1"));
   });
 
@@ -568,7 +598,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button",{name:/^视频剪辑：/}));
     fireEvent.click(screen.getByRole("button",{name:"选择镜头 2"}));
-    fireEvent.click(screen.getByText("与前镜头的转场"));
+    fireEvent.click(screen.getByText("镜头过渡"));
     fireEvent.change(screen.getByLabelText("叠化时长（秒）"),{target:{value:"0.4"}});
     fireEvent.click(screen.getByRole("button",{name:"预览转场"}));
     await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"SetClipTransition",clip_id:"clip-2",transition_seconds:.4}));
@@ -617,7 +647,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("局部修改要求")).toBeDisabled();
     expect(screen.getByRole("button",{name:"确认修改"})).toBeDisabled();
     expect(screen.queryByLabelText("修改后画面")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button",{name:"重新预览所选修改"}));
+    fireEvent.click(screen.getByRole("button",{name:"重看所选"}));
     await waitFor(()=>expect(mocks.previewSelection).toHaveBeenCalledWith("task-1",original.proposal.id,[0]));
     await waitFor(()=>expect(screen.getByLabelText("修改后画面")).toHaveAttribute("src","/selected.mp4"));
     expect(screen.getByRole("button",{name:"确认修改"})).toBeEnabled();
@@ -639,10 +669,10 @@ describe("CreationTaskWorkspace", () => {
     mocks.exactPreview.mockResolvedValue(exactPreview(initial.task,"ChangeCanvas"));
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", {name:/^视频剪辑：/}));
-    fireEvent.click(screen.getByText("画幅与适配"));
+    fireEvent.click(screen.getByText("画幅设置"));
     fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"16:9"}});
     fireEvent.change(screen.getByLabelText("整片画面适配"),{target:{value:"fit"}});
-    fireEvent.click(screen.getByRole("button",{name:"预览画幅修改"}));
+    fireEvent.click(screen.getByRole("button",{name:"预览画幅"}));
     await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9",fit_mode:"fit"}));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"1:1"}});
@@ -698,7 +728,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
       operation_type: "ReplaceSubtitleText", track_id: "subtitle-track-zh", find_text: "旧名字", replacement_text: "新名字",
     }));
-    expect(await screen.findByText("查看 1 条字幕变化")).toBeInTheDocument();
+    expect(await screen.findByText("字幕变化 · 1")).toBeInTheDocument();
     expect(screen.getByText("修改前：旧名字")).toBeInTheDocument();
     expect(screen.getByText("修改后：新名字")).toBeInTheDocument();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
@@ -831,9 +861,9 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("源素材预览")).toBeInTheDocument();
     expect(screen.queryByText("不直接采用编辑响应")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("镜头分割位置"), { target: { value: "0" } });
-    expect(screen.getByRole("button", { name: "预览分割" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "预览切开" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("镜头分割位置"), { target: { value: "1.2" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览分割" }));
+    fireEvent.click(screen.getByRole("button", { name: "预览切开" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "SplitClip", clip_id: "clip-1", split_time_seconds: 1.2,
     }));
@@ -845,13 +875,13 @@ describe("CreationTaskWorkspace", () => {
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("画面倍速"), { target: { value: "1.5" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览画面变速" }));
+    fireEvent.click(screen.getByRole("button", { name: "预览速度" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeClipSpeed", clip_id: "clip-1", playback_rate: 1.5,
     }));
-    expect(screen.getByRole("button", { name: "预览关联变速" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "预览变速" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("关联倍速"), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: "预览关联变速" }));
+    fireEvent.click(screen.getByRole("button", { name: "预览变速" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
     }));
@@ -916,7 +946,7 @@ describe("CreationTaskWorkspace", () => {
     }
 
     mocks.exactPreview.mockResolvedValue(exactPreview(task, "ReplaceClip"));
-    fireEvent.click(screen.getAllByRole("button", { name: "替换素材" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "换素材" })[0]);
     await waitFor(() => expect(mocks.getCandidates).toHaveBeenCalledWith("task-1", "clip-1"));
     fireEvent.change(await screen.findByLabelText("替换为已审核镜头"), { target: { value: "asset-3:segment-3" } });
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
@@ -935,7 +965,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.exactPreview.mockResolvedValue(exactPreview(task, "ChangeCrop"));
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     fireEvent.change(screen.getAllByLabelText("画面显示方式")[0], { target: { value: "fit" } });
-    fireEvent.click(screen.getAllByRole("button", { name: "预览适配修改" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "预览画面" })[0]);
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
       operation_type: "ChangeCrop", clip_id: "clip-1", fit_mode: "fit", crop_x: .5, crop_y: .5,
     }));
@@ -1018,7 +1048,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("试听配音 1")).toHaveAttribute("src", "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio");
 
     fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
-    expect(screen.getByText("已选 配音 1")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("修改视频")).getByText("配音 1")).toBeInTheDocument();
     expect(screen.getByLabelText("已选配音详情")).toHaveTextContent("第一段真实配音");
     expect(screen.getByLabelText("已选配音详情")).toHaveTextContent("片段时长");
     fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "这句读慢一点" } });
@@ -1295,9 +1325,9 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:/^视频剪辑：/}));
     fireEvent.click(screen.getByRole("button",{name:"选择镜头 1"}));
     fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"),{target:{value:"3"}});
-    expect(screen.getByRole("button",{name:"提取原声并试听"})).toBeDisabled();
+    expect(screen.getByRole("button",{name:"试听原声"})).toBeDisabled();
     fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"),{target:{value:"2"}});
-    fireEvent.click(screen.getByRole("button",{name:"提取原声并试听"}));
+    fireEvent.click(screen.getByRole("button",{name:"试听原声"}));
     await waitFor(()=>expect(mocks.previewEdit).toHaveBeenCalledWith("task-1",{
       raw_command:"提取当前镜头原声",context_stage:"montage",selected_object_refs:["clip:clip-original"],playhead_ms:1500}));
     expect(screen.getByLabelText("局部修改要求")).toHaveValue("提取当前镜头原声");

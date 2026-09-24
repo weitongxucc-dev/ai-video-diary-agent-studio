@@ -4,6 +4,7 @@ import type {
   CreationPlan,
   CreationPlanInput,
   CreationPlanPreview,
+  WorkspaceAssistantPlanTurnResponse,
   CreationTasksResponse,
   CreationTaskWorkspace,
   CreationTaskScriptsResponse,
@@ -14,6 +15,7 @@ import type {
   CreationTaskExactEditInput,
   CreationTaskEditConfirmResponse,
   CreationTaskEditPreviewResponse,
+  CreationTaskAssistantTurnResponse,
   CreationTaskTopicsResponse,
   FeedbackSummary,
   KnowledgeNote,
@@ -347,6 +349,13 @@ export function previewCreationPlan(input: CreationPlanInput): Promise<CreationP
   });
 }
 
+export function sendWorkspaceAssistantPlanTurn(message: string, conversationId: string): Promise<WorkspaceAssistantPlanTurnResponse> {
+  return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
+    "/api/assistant/plan/turn",
+    { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
+  );
+}
+
 export function confirmCreationPlan(
   input: CreationPlanInput & { preflight_fingerprint: string },
 ): Promise<CreationPlan> {
@@ -504,6 +513,21 @@ export function previewCreationTaskEdit(
 ): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest<CreationTaskEditPreviewResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function sendCreationTaskAssistantTurn(
+  taskId: string,
+  input: {
+    message: string;
+    context_stage: string;
+    selected_object_refs: string[];
+    playhead_ms: number | null;
+  },
+): Promise<CreationTaskAssistantTurnResponse> {
+  return creationPlanRequest<CreationTaskAssistantTurnResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }

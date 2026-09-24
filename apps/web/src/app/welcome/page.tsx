@@ -156,13 +156,18 @@ export default function WelcomePage() {
   const onVerifyKey = useCallback(async () => {
     const trimmed = apiKey.trim();
     if (!trimmed) {
-      setKeyFeedback({ tone: "red", text: "请先填入 DeepSeek API Key。" });
+      setKeyFeedback({ tone: "red", text: "请先填入 MiniMax API Key。" });
       return;
     }
     setVerifyingKey(true);
     setKeyFeedback(null);
     try {
-      await updateRuntimeSettings({ deepseek_api_key: trimmed });
+      await updateRuntimeSettings({
+        llm_provider: "minimax",
+        llm_base_url: "https://api.minimax.io/v1",
+        llm_model: "MiniMax-M3",
+        llm_api_key: trimmed,
+      });
       const health = await getRuntimeHealth();
       const llmItem = health.items.find(
         (item) =>
@@ -171,7 +176,7 @@ export default function WelcomePage() {
           item.label.includes("DeepSeek"),
       );
       if (llmItem && llmItem.status === "ready") {
-        setKeyFeedback({ tone: "green", text: "DeepSeek 配置通过验证。" });
+        setKeyFeedback({ tone: "yellow", text: "MiniMax 配置已保存；实际模型请求尚未验证。" });
       } else if (llmItem) {
         setKeyFeedback({
           tone: "yellow",
@@ -180,7 +185,7 @@ export default function WelcomePage() {
       } else {
         setKeyFeedback({
           tone: "green",
-          text: "DeepSeek Key 已保存，可在下一步继续。",
+          text: "MiniMax Key 已保存，可在下一步继续。",
         });
       }
     } catch (error) {
@@ -461,7 +466,7 @@ function StepModel({
         <span className="section-kicker">Step 2</span>
         <h2>连接 AI 模型</h2>
         <p>
-          可在这里快速连接 DeepSeek。使用 OpenAI、OpenRouter、Gemini、Ollama
+          对话和文字创作可在这里连接 MiniMax-M3；本地 4B 仍用于后台素材解析。使用 DeepSeek、OpenAI、OpenRouter、Gemini、Ollama
           或自定义接口，请进入完整模型设置。
         </p>
         <Link className="welcome-inline-link" href="/settings?section=model">
@@ -470,14 +475,14 @@ function StepModel({
       </div>
 
       <div className="welcome-field">
-        <label htmlFor="deepseek-key">
-          <span>DeepSeek API Key</span>
+        <label htmlFor="minimax-key">
+          <span>MiniMax API Key</span>
         </label>
         <div className="welcome-field-row">
           <input
             autoComplete="off"
-            id="deepseek-key"
-            name="deepseek_api_key"
+            id="minimax-key"
+            name="llm_api_key"
             onChange={(event) => onChangeApiKey(event.target.value)}
             placeholder="sk-..."
             type={apiKeyVisible ? "text" : "password"}
@@ -496,7 +501,7 @@ function StepModel({
             onClick={onVerify}
             type="button"
           >
-            {verifying ? "验证中…" : "验证并保存"}
+            {verifying ? "保存中…" : "保存配置"}
           </button>
         </div>
         {feedback ? (

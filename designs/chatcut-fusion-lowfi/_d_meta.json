@@ -1,0 +1,18 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "三栏剪辑工作台低保真": {
+      "versions": [
+        {
+          "path": "index.html",
+          "createdAt": "2026-09-24T02:16:08.636Z",
+          "status": "needs-review"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-09-24T02:16:08.641Z",
+  "updatedAt": "2026-09-24T02:24:53.153Z"
+}

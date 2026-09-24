@@ -1,0 +1,54 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "初版三栏": {
+      "versions": [
+        {
+          "path": "index-pre-stitch.html",
+          "createdAt": "2026-09-24T02:46:02.554Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "Stitch 融合版": {
+      "versions": [
+        {
+          "path": "index.html",
+          "createdAt": "2026-09-24T02:46:02.620Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "初次参考融合": {
+      "versions": [
+        {
+          "path": "index-plan-board.html",
+          "createdAt": "2026-09-24T02:51:36.570Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "旧首页方案": {
+      "versions": [
+        {
+          "path": "index-before-seven-pages.html",
+          "createdAt": "2026-09-24T03:06:00.950Z",
+          "status": "needs-review"
+        }
+      ]
+    },
+    "七页三栏原型": {
+      "versions": [
+        {
+          "path": "index.html",
+          "createdAt": "2026-09-24T03:06:01.058Z",
+          "status": "needs-review"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-09-24T02:36:40.388Z",
+  "updatedAt": "2026-09-24T03:06:01.059Z"
+}

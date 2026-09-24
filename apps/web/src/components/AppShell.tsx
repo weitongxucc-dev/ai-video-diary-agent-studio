@@ -15,7 +15,6 @@ import {
   Library,
   Menu,
   Moon,
-  PanelRight,
   PanelLeft,
   Plus,
   Search,
@@ -23,18 +22,18 @@ import {
   Sparkles,
   Sun,
   UserRound,
-  X,
 } from "lucide-react";
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
   Suspense,
   type ComponentType,
   type ReactNode,
   type CSSProperties,
 } from "react";
+import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
@@ -69,10 +68,10 @@ const primaryNav: NavItem[] = [
   { href: "/", label: "首页", icon: Home },
   { href: "/library", label: "素材库", icon: Library },
   { href: "/knowledge", label: "内容资料", icon: BookOpen },
-  { href: "/profiles", label: "人物与声音", icon: UserRound },
+  { href: "/profiles", label: "人物声音", icon: UserRound },
   { href: "/templates", label: "视频模板", icon: FileStack },
-  { href: "/production?view=automations", label: "自动任务", icon: Sparkles, activePath: "/automations" },
-  { href: "/history", label: "发布与数据", icon: Activity },
+  { href: "/production?view=automations", label: "定时任务", icon: Sparkles, activePath: "/automations" },
+  { href: "/history", label: "发布记录", icon: Activity },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
@@ -85,7 +84,7 @@ const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   { href: "/settings", label: "设置" },
   { href: "/onboarding", label: "启动检查" },
   { href: "/profile", label: "创作者画像" },
-  { href: "/profiles", label: "人物与声音" },
+  { href: "/profiles", label: "人物声音" },
 ];
 
 export type AppShellWorkspaceStatus = {
@@ -97,12 +96,13 @@ export type AppShellProps = {
   children: ReactNode;
   creationTasks?: AppShellCreationTask[];
   inspector?: ReactNode;
+  conversation?: ReactNode;
+  autoFocus?: boolean;
   inspectorTitle?: string;
   workspaceStatus?: AppShellWorkspaceStatus;
   editorLayout?: boolean;
   toolbar?: ReactNode;
   toolbarActions?: ReactNode;
-  inspectorSelectionKey?: string | null;
   inspectorDismissKey?: string;
 };
 
@@ -188,26 +188,26 @@ function applyTheme(mode: ThemeMode) {
 export function AppShell({
   children,
   creationTasks,
-  inspector,
+  inspector: providedInspector,
+  conversation,
+  autoFocus = false,
+  inspectorDismissKey,
   inspectorTitle = "当前任务详情",
   workspaceStatus,
   editorLayout = false,
   toolbar,
   toolbarActions,
-  inspectorSelectionKey,
-  inspectorDismissKey,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
-  const hasInspector = Boolean(inspector);
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
   const router = useRouter();
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
-  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("ai-video-diary-theme") as ThemeMode | null;
@@ -238,37 +238,7 @@ export function AppShell({
     setRecentTasks((current) => mergeCreationTasks(creationTasks, current));
   }, [creationTasks]);
 
-  useEffect(() => {
-    if (!hasInspector) {
-      setInspectorOpen(false);
-      return;
-    }
-    const desktopQuery = window.matchMedia("(min-width: 1280px)");
-    const syncInspector = () => setInspectorOpen(desktopQuery.matches);
-    syncInspector();
-    desktopQuery.addEventListener("change", syncInspector);
-    return () => desktopQuery.removeEventListener("change", syncInspector);
-  }, [hasInspector, inspectorSelectionKey]);
-
-  useEffect(() => {
-    if (inspectorDismissKey && window.innerWidth < 1280) setInspectorOpen(false);
-  }, [inspectorDismissKey]);
-
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [pathname]);
-
-  useEffect(() => {
-    if (!inspectorOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && window.innerWidth < 1280) {
-        setInspectorOpen(false);
-        inspectorTriggerRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [inspectorOpen]);
+  useEffect(() => { setSidebarOpen(false); setDetailsOpen(false); }, [pathname]);
 
   function cycleTheme() {
     const next: ThemeMode = themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system";
@@ -279,7 +249,7 @@ export function AppShell({
 
   const ThemeIcon = themeMode === "dark" ? Moon : Sun;
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
-    { id: "new-production", label: "开始制作新视频", description: "输入目标并检查当前可用内容", href: "/production?new=1", icon: Plus },
+    { id: "new-production", label: "新建视频", description: "说说想法", href: "/?new=1", icon: Plus },
     ...primaryNav.map((item) => ({
       id: `nav-${item.href}`,
       label: item.label,
@@ -316,7 +286,7 @@ export function AppShell({
             <span className="desktop-brand__mark">
               <Image alt="" aria-hidden height={18} src="/favicon.svg" width={18} />
             </span>
-            <span>AI 视频日记</span>
+            <span>智能视频日记</span>
           </Link>
           <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button" onClick={() => setSearchOpen(true)} type="button">
             <Search size={16} />
@@ -324,10 +294,10 @@ export function AppShell({
         </div>
 
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
-          <Link aria-label="开始制作新视频" className="new-production-button" href="/production?new=1">
+          <Link aria-label="新建视频" className="new-production-button" href="/?new=1">
             <Plus size={16} />
             <span>新建视频</span>
-            <kbd>⌘N</kbd>
+
           </Link>
 
           <div className="desktop-nav-group">
@@ -368,7 +338,7 @@ export function AppShell({
           <div className="desktop-user-row">
             <span className="desktop-user-avatar"><UserRound size={14} /></span>
             <span>{localAuthMode ? "本机创作者" : "我的工作区"}</span>
-            <button aria-label={`当前主题：${themeMode}，点击切换`} className="shell-icon-button" onClick={cycleTheme} type="button">
+            <button aria-label={`当前主题：${themeMode === "dark" ? "深色" : themeMode === "light" ? "浅色" : "跟随系统"}，点击切换`} className="shell-icon-button" onClick={cycleTheme} type="button">
               <ThemeIcon size={15} />
             </button>
           </div>
@@ -394,21 +364,9 @@ export function AppShell({
             {toolbarActions}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
-              <kbd>⌘K</kbd>
+
             </button>
-            {inspector ? (
-              <button
-                aria-controls="agent-inspector"
-                aria-expanded={inspectorOpen}
-                aria-label={inspectorOpen ? "关闭详情" : "打开详情"}
-                className={`shell-icon-button${inspectorOpen ? " is-active" : ""}`}
-                onClick={() => setInspectorOpen((open) => !open)}
-                ref={inspectorTriggerRef}
-                type="button"
-              >
-                <PanelRight size={17} />
-              </button>
-            ) : null}
+            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
             <button aria-label="帮助" className="shell-icon-button" onClick={() => toggleHelpPanel()} type="button">
               <CircleHelp size={17} />
             </button>
@@ -420,26 +378,20 @@ export function AppShell({
           </div>
         </header>
 
-        <div className={`desktop-content-grid${inspector ? " has-inspector" : ""}${inspectorOpen ? " inspector-open" : ""}`}>
-          <main className="desktop-main-scroll" data-scroll-region="main-y">{children}</main>
-
-          {inspector ? (
-            <>
-              {inspectorOpen ? <button aria-label="关闭详情" className="inspector-backdrop" onClick={() => setInspectorOpen(false)} type="button" /> : null}
-              <aside aria-label={inspectorTitle} className="desktop-inspector" hidden={!inspectorOpen} id="agent-inspector">
-                <div className={`${editorShell.separator} ${editorShell.rightSeparator}`} {...panels.separator("right")} />
-                <header className="desktop-inspector__header">
-                  <h2>{inspectorTitle}</h2>
-                  <button aria-label="关闭详情" className="shell-icon-button" onClick={() => setInspectorOpen(false)} type="button"><X size={16} /></button>
-                </header>
-                <div className="desktop-inspector__body">{inspector}</div>
-              </aside>
-            </>
-          ) : null}
+        <div className={editorShell.contentGrid}>
+          <section aria-label="创作助手" className={editorShell.conversation}>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small></header>
+            <div className={editorShell.conversationBody}>
+              {conversation || <HomeCommandComposer autoFocus={autoFocus} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
+            </div>
+            <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
+          </section>
+          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>{children}</main>
         </div>
 
       </section>
       <KeyboardShortcuts onOpenSearch={() => setSearchOpen(true)} />
+      {detailsOpen && providedInspector ? <HomeCardDialog title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}</HomeCardDialog> : null}
       <HelpPanel />
       <CommandPalette
         items={commandItems}

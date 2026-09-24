@@ -87,11 +87,11 @@ def _deepseek_check(settings: Settings) -> dict:
         )
     return _preflight_item(
         item_id="deepseek",
-        label="云端文案增强",
+        label="对话与文字模型",
         status="degraded",
-        summary="未配置外部模型，使用本地来源摘要生成器",
-        impact="本地选题和文案仍可生成，表达丰富度可能较低。",
-        repair_action="可选：在设置页连接自有模型服务开启增强。",
+        summary="未配置外部文字模型；本地来源摘要不能代替对话",
+        impact="0.11 对话和文字创作不可用；后台本地素材分析可独立运行。",
+        repair_action="在设置页连接 MiniMax-M3 或主动选择 DeepSeek。",
         settings_target="llm_api_key",
     )
 

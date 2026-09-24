@@ -154,11 +154,11 @@ def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
         )
     return _health_item(
         item_id="deepseek",
-        label="云端文案增强",
+        label="对话与文字模型",
         status="degraded",
-        reason="未配置外部模型，当前使用本地来源摘要生成器。",
-        impact="本地闭环可用，但文案的表达丰富度较低。",
-        repair_action="可选：在设置页连接自有模型服务开启云端增强。",
+        reason="未配置外部文字模型；本地来源摘要不能代替对话 Agent。",
+        impact="0.11 对话和文字创作不可用；后台本地素材分析可独立运行。",
+        repair_action="在设置页连接 MiniMax-M3 或主动选择 DeepSeek。",
         fix_command=None,
         checked_at=checked_at,
     )
@@ -168,10 +168,11 @@ def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
     path = Path(settings.obsidian_vault_path).expanduser() if settings.obsidian_vault_path else None
     fix_command = None
     if path and path.is_dir():
-        markdown_count = len(list(path.rglob("*.md")))
-        status = "ready" if markdown_count else "degraded"
-        reason = f"已找到 {markdown_count} 篇 Markdown 笔记。"
-        repair_action = "无需处理。" if markdown_count else "放入笔记或重新选择知识库目录。"
+        # Desktop readiness must not walk a user's entire vault: a nested
+        # cloud/permission-gated directory can block startup indefinitely.
+        status = "ready"
+        reason = "资料目录存在；具体内容在读取资料时检查。"
+        repair_action = "无需处理。"
     else:
         status = "missing"
         reason = "Obsidian Vault 路径不存在。"

@@ -380,6 +380,49 @@ class SubprocessAvatarAndLipSyncProvider:
             raise subprocess.SubprocessError(detail or f"exit {completed.returncode}")
 
 
+class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
+    """Local high-precision option; keep its model identity separate from MuseTalk."""
+
+    def __init__(self, *, pose_root: str | Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.pose_root = Path(pose_root).expanduser()
+
+    @property
+    def ready(self) -> bool:
+        required = (
+            self.worker_path,
+            self.worker_path.with_name("latentsync_entry.py"),
+            self.runtime_root / "inference_fidelity.py",
+            self.runtime_root / "dependencies" / "mlx" / "nn" / "__init__.py",
+            self.runtime_root / "upstream" / "latentsync" / "utils" / "affine_transform.py",
+            self.runtime_root / "checkpoints" / "latentsync_unet_mlx.safetensors",
+            self.runtime_root / "checkpoints" / "vae_mlx.safetensors",
+            self.runtime_root / "checkpoints" / "whisper" / "tiny.pt",
+            self.pose_root / "official_onnx.py",
+            self.pose_root / "dw-ll_ucoco_384.onnx",
+            self.pose_root / "dependencies" / "onnxruntime" / "__init__.py",
+            self.pose_root / "dependencies" / "loguru" / "__init__.py",
+        )
+        return (
+            self.runtime_path.is_file()
+            and all(path.is_file() for path in required)
+            and any((self.runtime_root / "dependencies" / "mlx").glob("core*.so"))
+        )
+
+    @property
+    def message(self) -> str:
+        return "高精度口型已就绪；处理时间较长。" if self.ready else "高精度口型环境不完整，请检查外接盘模型与运行依赖。"
+
+    def _run_command(self, command: list[str]) -> None:
+        completed = subprocess.run(
+            [*command, "--pose-root", str(self.pose_root.resolve())],
+            check=False, capture_output=True, text=True, timeout=6 * 60 * 60,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
+
+
 class AvatarAndLipSyncService:
     def __init__(self, output_root: str | Path, provider: AvatarAndLipSyncProvider) -> None:
         self.output_root = Path(output_root).expanduser()
@@ -923,7 +966,19 @@ def _authorization_cache_identity(authorization: Authorization) -> dict[str, str
 
 def avatar_lipsync_provider_from_settings(
     settings: Settings,
+    *, quality: Literal["high", "fast"] = "fast",
 ) -> AvatarAndLipSyncProvider:
+    if quality == "high":
+        if not settings.latentsync_runtime_python_path or not settings.latentsync_root_path or not settings.latentsync_pose_root_path:
+            return UnavailableAvatarAndLipSyncProvider("高精度口型环境尚未配置。")
+        return LatentSyncAvatarAndLipSyncProvider(
+            runtime_path=settings.latentsync_runtime_python_path,
+            worker_path=settings.latentsync_worker_path,
+            runtime_root=settings.latentsync_root_path,
+            pose_root=settings.latentsync_pose_root_path,
+            model_id="latentsync-1.5-mlx-fidelity-brow",
+            supported_languages=("zh",),
+        )
     runtime = settings.avatar_model_runtime_python_path
     runtime_root = settings.avatar_model_root_path
     if not runtime or not runtime_root:

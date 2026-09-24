@@ -12,17 +12,25 @@
 .button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stageRail { flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; }
-.stageRail ol { display: flex; justify-content: space-between; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.stageRail button { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
+.stageRail li { flex: 0 0 auto; }
+.stageRail ol { overflow-x: auto; display: flex; justify-content: space-between; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.stageRail button { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
 .stageRail button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
 .stageRail button:disabled { color: var(--text-3); cursor: default; }
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 20px; overflow: auto; }
 .previewToolbar { display: flex; flex: 0 0 auto; min-height: 52px; align-items: center; gap: 12px; }
 .previewToolbar strong { font-size: 14px; font-weight: 500; }
 .previewToolbar > span { color: var(--text-3); font-size: 12px; }
-.previewToolbar > div { margin-left: auto; }
+.previewActions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.canvasControls { position: relative; }
+.canvasControls summary { display: inline-flex; min-height: 32px; align-items: center; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 8px; color: var(--text-2); font-size: 12px; cursor: pointer; list-style: none; }
+.canvasControls summary::-webkit-details-marker { display: none; }
+.canvasControls[open] summary { border-color: var(--accent); color: var(--accent); }
+.canvasControlsPanel { position: absolute; z-index: 9; right: 0; top: 40px; display: grid; width: 244px; gap: 10px; padding: 14px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); box-shadow: 0 8px 24px rgb(0 0 0 / 14%); }
+.canvasControlsPanel small { color: var(--text-2); font-size: 12px; }
+.canvasControlsPanel > button { justify-self: start; }
 .previewToolbar .warning { color: var(--warning); }
-.player { position: relative; display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-height: 180px; overflow: hidden; border: 1px solid var(--border-1); border-bottom: 0; border-radius: 8px 8px 0 0; background: #181b1e; }
+.player { position: relative; display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-height: 250px; overflow: hidden; border: 1px solid var(--border-1); border-bottom: 0; border-radius: 8px 8px 0 0; background: #181b1e; }
 .player > video { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; position: absolute; inset: 0; }
 .player > p { color: #e1e3e6; font-size: 14px; padding: 24px; }
 .playerBadge { position: absolute; top: 12px; left: 12px; padding: 4px 8px; border-radius: 6px; background: rgb(0 0 0 / 65%); color: white; font-size: 12px; }
@@ -81,23 +89,20 @@
 .actionRow > span { font-size: 13px; color: var(--text-2); }
 .propertySection audio { width: 100%; height: 32px; }
 .propertySection summary { cursor: pointer; font-size: 13px; }
+.advancedGroup { padding: 13px 0; border-bottom: 1px solid var(--border-1); }
+.advancedGroup > summary { cursor: pointer; font-size: 13px; font-weight: 500; }
+.advancedContent { padding-top: 4px; }
+.advancedContent .propertySection:last-child { border-bottom: 0; padding-bottom: 0; }
 .source { overflow-wrap: anywhere; }
 .source strong { font-weight: 500; }
 .source p, .source ul { color: var(--text-2); font-size: 13px; }
 .source ul { padding-left: 18px; }
 .source a { color: var(--accent); font-size: 13px; }
-.contextCommandBar { position: relative; flex: 0 0 auto; padding: 12px 20px 16px; background: var(--surface-1); z-index: 5; }
-.commandRow { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-2); border-radius: 10px; padding: 6px 8px; background: var(--surface-1); box-shadow: 0 2px 8px rgb(0 0 0 / 4%), 0 8px 24px rgb(0 0 0 / 3%); }
 .contextSelection, .contextEmpty { flex-shrink: 0; padding: 4px 7px; border-radius: 5px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); font-size: 12px; }
 .contextEmpty { color: var(--text-3); background: var(--surface-2); }
 .commandInput { flex: 1; min-width: 0; }
 .commandInput input { width: 100%; min-width: 0; height: 32px; padding: 4px; border: 0; outline: 0; background: transparent; color: var(--text-1); font: 400 14px/1.4 "PingFang SC", sans-serif; }
 .commandInput input:focus-visible { box-shadow: inset 0 -1px var(--accent); }
-.hasPreview .commandRow { opacity: .65; }
-.changePreview { position: absolute; bottom: calc(100% - 4px); left: 20px; right: 20px; max-height: min(400px, 65vh); overflow-y: auto; padding: 16px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--surface-1); box-shadow: 0 8px 32px rgb(0 0 0 / 16%); }
-.changePreview header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.changePreview header strong { font-size: 14px; font-weight: 500; }
-.changePreview header span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .previewDiff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .previewDiff section { display: grid; align-content: start; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); }
 .previewDiff small { color: var(--text-3); font-size: 12px; }
@@ -107,9 +112,8 @@
 .previewEffects strong { margin-right: 8px; font-weight: 500; }
 .previewActions { display: flex; justify-content: flex-end; gap: 8px; }
 .feedback { display: flex; align-items: center; gap: 8px; padding: 6px 20px; color: var(--text-2); background: var(--surface-2); font-size: 13px; }
-@media (max-width: 1279px) { .stage { padding-inline: 16px; } .stageRail { padding-inline: 12px; } .stageRail button { padding-inline: 8px; } .contextCommandBar { padding-inline: 16px; } }
+@media (max-width: 1279px) { .stage { padding-inline: 16px; } .stageRail { padding-inline: 12px; } .stageRail button { padding-inline: 8px; } .player { min-height: 220px; } }
 
-.commandRow:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-2)); }
 
 .audioTimeline { display: grid; gap: 8px; min-width: 0; }
 .audioToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-2); }
@@ -118,7 +122,7 @@
 .audioToolbar input[type=range] { width: 80px; }
 .audioToolbar select, .audioToolbar input[type=number] { min-height: 30px; padding: 3px 6px; border: 1px solid var(--border-2); border-radius: 5px; background: var(--surface-1); color: var(--text-1); font: inherit; }
 .audioScroll { overflow-x: auto; max-height: 230px; overflow-y: auto; }
-.audioTrack { display: grid; grid-template-columns: 86px minmax(0,1fr); gap: 8px; min-height: 48px; margin-bottom: 4px; }
+.audioTrack { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 8px; min-height: 48px; margin-bottom: 4px; }
 .audioTrackLabel { display: flex; align-items: center; gap: 4px; position: sticky; left: 0; z-index: 1; background: var(--surface-1); }
 .audioTrackLabel button { padding: 3px; border: 0; color: var(--text-2); background: transparent; font-size: 12px; cursor: pointer; }
 .audioTrackLabel button[aria-pressed=true] { color: var(--accent); background: var(--accent-muted); }
@@ -139,3 +143,20 @@
 .textChanges span { display: block; overflow-wrap: anywhere; color: var(--text-2); }
 
 .subtitleStylePreview { display: block; width: 100%; height: 300px; object-fit: contain; background: var(--text-2); border-radius: var(--radius-sm); }
+
+.chatCommand { display: flex; flex-direction: column; flex: 1; gap: 14px; min-height: 0; padding: 16px; }
+.chatEntry { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding: 12px; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-2); order: 3; }
+.chatEntry .contextSelection, .chatEntry .contextEmpty { max-width: 100%; white-space: normal; }
+.chatEntry .commandInput { flex: 0 0 100%; min-width: 0; }
+.chatEntry input { width: 100%; min-height: 65px; background: transparent; border: 0; font-size: 14px; }
+.chatCommand :global(.assistant-meta) { order: 4; font-size: 12px; }
+.chatCommand :global(.assistant-reply) { order: 1; margin: 0; padding: 14px; border-radius: 8px; background: var(--surface-2); font-size: 14px; line-height: 1.7; }
+.dialogPreview { display: grid; gap: 14px; }
+.dialogPreview header { display: flex; justify-content: space-between; gap: 12px; }
+.dialogPreview header strong { font-size: 14px; font-weight: 500; }
+.dialogPreview header span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
+
+.chatSuggestions { padding: 14px; border-radius: 8px; background: var(--surface-2); }
+.chatSuggestions h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.chatSuggestions p { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.chatSuggestions button { display: block; width: 100%; margin-top: 8px; padding: 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); text-align: left; color: var(--text-1); font-size: 13px; cursor: pointer; }

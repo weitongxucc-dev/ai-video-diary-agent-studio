@@ -153,11 +153,14 @@ MediaAsset 中可独立检索、预览和使用的时间片段。
 - knowledge_refs、source_refs、asset_refs；
 - person_profile_ref、voice_profile_ref；
 - topic_strategy、script_style、visual_strategy；
+- presenter_share_target（制作方案六档 0%、20%、40%、60%、80%、100% 的露脸时长目标；默认 20%）；
+- lipsync_quality（口型制作档位 high=LatentSync、fast=MuseTalk；新方案默认 high，旧计划读取为 fast。PersonRender 的 model_id 与音频、人物、版本一起决定缓存身份；不能跨档位复用）；
 - subtitle_strategy、cover_strategy；
 - confirmation_points、blocking_conditions；
 - status、version。
 
 Plan 必须引用真实可用对象。用户确认 Plan 后创建或推进 CreationTask。
+露脸占比是视觉策略约束，不是独立时间线或已完成口型的证明。StoryBoard/TimelineVersion 从实际片段起止时间计算露脸占比；人物片段只可引用与当前配音版本匹配的 PersonRender 或保留原声同步的原片。补充素材片段继续引用原素材并共享配音轨。目标与实际不同须保留原因，不能把无口型的人物画面计作已同步出镜。
 
 ### 5.2 CreationTask
 

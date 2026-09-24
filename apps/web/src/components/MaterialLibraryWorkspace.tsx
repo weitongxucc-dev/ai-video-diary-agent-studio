@@ -377,7 +377,7 @@ export function MaterialLibraryWorkspace({
       </div>
       <dl className="library-inspector__meta">
         <div>
-          <dt>AI 建议</dt>
+          <dt>画面建议</dt>
           <dd>
             {roleLabel(selected)}{" "}
             {selected.usage_role_confidence
@@ -425,7 +425,7 @@ export function MaterialLibraryWorkspace({
           type="button"
         >
           <Check size={14} />
-          批准为补充画面
+          用作配图
         </button>
       </div>
       {selected.segments.length ? (
@@ -578,14 +578,7 @@ export function MaterialLibraryWorkspace({
               </span>
             ))}
           </div>
-          <div className="library-coverage__gaps">
-            <span>建议补充</span>
-            <p>
-              {insights.recommended_gaps.length
-                ? insights.recommended_gaps.join("、")
-                : "当前未发现明显缺口"}
-            </p>
-          </div>
+
         </section>
 
         <div className="library-toolbar">
@@ -637,7 +630,7 @@ export function MaterialLibraryWorkspace({
             ) : (
               <FolderSearch size={16} />
             )}
-            {busy === "scan" ? "正在扫描…" : "扫描目录"}
+            {busy === "scan" ? "正在扫描…" : "找新素材"}
           </button>
         </div>
 
@@ -654,7 +647,7 @@ export function MaterialLibraryWorkspace({
               <button
                 className={`library-card${selected?.id === asset.id ? " is-selected" : ""}`}
                 key={asset.id}
-                onClick={() => selectAsset(asset)}
+                data-open-details onClick={() => selectAsset(asset)}
                 type="button"
                 >
                 <span className="library-card__poster">

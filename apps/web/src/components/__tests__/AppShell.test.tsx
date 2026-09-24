@@ -28,7 +28,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
-vi.mock("@/lib/api", () => ({ listCreationTasks: apiMocks.listCreationTasks }));
+vi.mock("@/lib/api", () => ({ listCreationTasks: apiMocks.listCreationTasks, getRuntimeSettings: vi.fn().mockResolvedValue({status:{llm:{configured:false}}}) }));
 
 import { AppShell } from "@/components/AppShell";
 
@@ -63,6 +63,7 @@ function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
 }
 
 beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   pathname = "/";
   search = "";
   apiMocks.listCreationTasks.mockReset();
@@ -75,6 +76,17 @@ beforeEach(() => {
 });
 
 describe("AppShell", () => {
+  it("keeps conversation visible and opens object details only in a dismissible card", () => {
+    const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
+    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
+    expect(screen.queryByText("镜头属性")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "镜头一" }));
+    expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("镜头属性");
+    view.rerender(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("任务对话")).toBeVisible();
+  });
+
   it("retains editor panel widths and collapse state after remount, within bounds", () => {
     localStorage.clear();
     const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
@@ -105,10 +117,11 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    for (const label of ["首页", "素材库", "内容资料", "人物与声音", "视频模板", "自动任务", "发布与数据"]) {
+    for (const label of ["首页", "素材库", "内容资料", "人物声音", "视频模板", "定时任务", "发布记录"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByRole("link", { name: "人物声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
     expect(screen.getAllByText("等待开始")).not.toHaveLength(0);
@@ -169,8 +182,8 @@ describe("AppShell", () => {
     pathname = "/production";
     search = "view=automations";
     render(<AppShell><p>页面内容</p></AppShell>);
-    expect(screen.getByRole("link", { name: "自动任务" })).toHaveClass("is-active");
-    expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
+    expect(screen.getByRole("link", { name: "定时任务" })).toHaveClass("is-active");
+    expect(screen.getByRole("link", { name: "发布记录" })).not.toHaveClass("is-active");
   });
 
   it("turns both search affordances into one real page and task command palette", () => {

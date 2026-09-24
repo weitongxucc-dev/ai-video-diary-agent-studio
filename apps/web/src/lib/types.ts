@@ -233,7 +233,7 @@ export type SystemStatus = {
     configured: boolean;
     exists: boolean;
     path: string | null;
-    markdown_count: number;
+    markdown_count: number | null;
   };
   product_hunt: {
     configured: boolean;
@@ -280,6 +280,8 @@ export type VideoTemplateSettings = {
   language: CreationPlanInput["language"];
   aspect_ratio: "9:16" | "16:9" | "1:1";
   duration_target_seconds: number;
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
   voice: { profile_id: string; version: string } | null;
   script_structure?: string[];
   script_section_count?: number | null;
@@ -959,6 +961,8 @@ export type CreationPlanInput = {
   language: "zh-CN" | "en-US" | "zh-CN/en-US";
   aspect_ratio: "9:16" | "16:9" | "1:1";
   duration_target_seconds: number;
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
 };
 
 export type CreationPlanKnowledgeReference = {
@@ -1373,6 +1377,9 @@ export type AudioEditInput = { base_version_id: string | null; action: "add" | "
 export type CreationTaskMontage = {
   graphic_overlays?:GraphicOverlay[];
   aspect_ratio?: "9:16" | "16:9" | "1:1";
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
+  presenter_share_actual?: number;
   audio_timeline?: AudioTimeline | null;
   id: string;
   task_id: string;
@@ -1472,7 +1479,7 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming";
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
@@ -1492,12 +1499,19 @@ export type CreationTaskEditPreviewResponse = {
   proposal: CreationTaskEditProposal;
 };
 
+export type CreationTaskAssistantTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  edit_preview: CreationTaskEditPreviewResponse | null;
+};
+
 export type CreationTaskEditOperation = {
   id: string;
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming";
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;
@@ -1529,6 +1543,13 @@ export type CreationPlanPreview = CreationPlanInput & {
   blockers: CreationPlanBlocker[];
   confirmable: boolean;
   preflight_fingerprint: string;
+};
+
+export type WorkspaceAssistantPlanTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  plan_preview: CreationPlanPreview | null;
 };
 
 export type CreationPlan = CreationPlanPreview & {
