@@ -14,9 +14,11 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import styles from "./MaterialLibraryControls.module.css";
 import {
   analyzeProductionMaterial,
   createMaterialCollection,
@@ -45,6 +47,14 @@ type Busy =
   | "segment"
   | "collection"
   | null;
+
+const useStateOptions: { value: MaterialAsset["use_state"]; label: string; impact: string }[] = [
+  { value: "available", label: "可用于创作", impact: "可用于选片和发布。" },
+  { value: "reference_only", label: "仅参考", impact: "只供查看，不用于成片。" },
+  { value: "excluded", label: "不使用", impact: "不用于创作或发布。" },
+  { value: "not_for_automation", label: "不用于自动任务", impact: "手动创作可用，自动任务不使用。" },
+  { value: "not_for_publish", label: "不用于发布", impact: "可用于制作预览，发布时排除。" },
+];
 
 function duration(value: number | null) {
   if (value === null) return "--:--";
@@ -89,6 +99,20 @@ function fileLabel(value: string) {
     .replace(/episode/gi, "创作任务");
 }
 
+function visibleError(cause: unknown, fallback: string) {
+  if (!(cause instanceof Error)) return fallback;
+  let message = cause.message;
+  if (message.startsWith("{")) {
+    try {
+      const payload = JSON.parse(message) as { detail?: unknown };
+      message = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      return fallback;
+    }
+  }
+  return /[\u3400-\u9fff]/.test(message) ? message : fallback;
+}
+
 export function MaterialLibraryWorkspace({
   initialLibrary,
   initialInsights,
@@ -115,9 +139,10 @@ export function MaterialLibraryWorkspace({
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
-  const [tagDraft, setTagDraft] = useState(
-    initialLibrary.assets[0]?.segments[0]?.user_tags.join(", ") ?? "",
-  );
+  const [detailError, setDetailError] = useState("");
+  const [tagError, setTagError] = useState("");
+  const [tagDraft, setTagDraft] = useState("");
+  const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
   );
@@ -125,6 +150,7 @@ export function MaterialLibraryWorkspace({
   const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
   const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
   const sourceVideo = useRef<HTMLVideoElement>(null);
+  const isComposingTag = useRef(false);
 
   const selected =
     assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -184,8 +210,11 @@ export function MaterialLibraryWorkspace({
     setTranscriptDraft(first?.transcript ?? "");
     setSelectedId(asset.id);
     setSelectedSegmentId(first?.id ?? "");
-    setTagDraft(first?.user_tags.join(", ") ?? "");
+    setTagDraft("");
     setCollectionDraft(first?.collection_ids[0] ?? "");
+    setCollectionQuery("");
+    setDetailError("");
+    setTagError("");
   }
 
   function selectSegment(segment: MaterialSegment) {
@@ -193,8 +222,11 @@ export function MaterialLibraryWorkspace({
     setDescriptionDraft(segment.description);
     setTranscriptDraft(segment.transcript);
     if (sourceVideo.current) sourceVideo.current.currentTime = segment.start_seconds;
-    setTagDraft(segment.user_tags.join(", "));
+    setTagDraft("");
     setCollectionDraft(segment.collection_ids[0] ?? "");
+    setCollectionQuery("");
+    setDetailError("");
+    setTagError("");
   }
 
   async function refreshInsights() {
@@ -258,14 +290,14 @@ export function MaterialLibraryWorkspace({
   async function analyze() {
     if (!selected) return;
     setBusy("analyze");
-    setError("");
+    setDetailError("");
     try {
       const updated = await analyzeProductionMaterial(selected.id);
       replaceAsset(updated);
       if (updated.segments[0]) selectSegment(updated.segments[0]);
       await refreshInsights();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "素材分析失败");
+      setDetailError(visibleError(cause, "素材分析失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -274,12 +306,12 @@ export function MaterialLibraryWorkspace({
   async function changeUseState(useState: MaterialAsset["use_state"]) {
     if (!selected) return;
     setBusy("review");
-    setError("");
+    setDetailError("");
     try {
       replaceAsset(await updateMaterialUseState(selected.id, useState));
       await refreshInsights();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "使用状态保存失败");
+      setDetailError(visibleError(cause, "使用状态保存失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -291,7 +323,7 @@ export function MaterialLibraryWorkspace({
   ) {
     if (!selected) return;
     setBusy("review");
-    setError("");
+    setDetailError("");
     try {
       replaceAsset(
         await reviewProductionMaterial(selected.id, {
@@ -300,7 +332,7 @@ export function MaterialLibraryWorkspace({
         }),
       );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "素材审核失败");
+      setDetailError(visibleError(cause, "素材审核失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -309,12 +341,8 @@ export function MaterialLibraryWorkspace({
   async function saveSegmentOrganization() {
     if (!selected || !selectedSegment) return;
     setBusy("segment");
-    setError("");
+    setDetailError("");
     try {
-      const tags = tagDraft
-        .split(/[,\n]/)
-        .map((tag) => tag.trim())
-        .filter(Boolean);
       const updated = await updateProductionMaterialSegment(
         selected.id,
         selectedSegment.id,
@@ -323,31 +351,65 @@ export function MaterialLibraryWorkspace({
           transcript: transcriptDraft,
           review_status: selectedSegment.review_status,
           usage_role: selectedSegment.usage_role,
-          user_tags: Array.from(new Set(tags)),
+          user_tags: selectedSegment.user_tags,
           collection_ids: collectionDraft ? [collectionDraft] : [],
         },
       );
       replaceAsset(updated);
       await refreshInsights();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存片段分类失败");
+      setDetailError(visibleError(cause, "片段修改保存失败，请重试"));
     } finally {
       setBusy(null);
     }
+  }
+
+  async function saveTags(nextTags: string[], clearInput = false) {
+    if (!selected || !selectedSegment || busy !== null) return;
+    setBusy("segment");
+    setTagError("");
+    try {
+      const updated = await updateProductionMaterialSegment(selected.id, selectedSegment.id, {
+        description: selectedSegment.description,
+        transcript: selectedSegment.transcript,
+        review_status: selectedSegment.review_status,
+        usage_role: selectedSegment.usage_role,
+        user_tags: nextTags,
+        collection_ids: selectedSegment.collection_ids,
+      });
+      replaceAsset(updated);
+      if (clearInput) setTagDraft("");
+      await refreshInsights();
+    } catch (cause) {
+      setTagError(visibleError(cause, "标签保存失败，请重试"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function addTag(value: string) {
+    if (!selectedSegment || busy !== null) return;
+    const tag = value.trim();
+    if (!tag) return;
+    if (selectedSegment.user_tags.includes(tag)) {
+      if (value === tagDraft) setTagDraft("");
+      return;
+    }
+    void saveTags([...selectedSegment.user_tags, tag], value === tagDraft);
   }
 
   async function addCollection() {
     const name = newCollectionName.trim();
     if (!name) return;
     setBusy("collection");
-    setError("");
+    setDetailError("");
     try {
       const created = await createMaterialCollection({ name });
       setCollections((current) => [...current, created]);
       setCollectionDraft(created.id);
       setNewCollectionName("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "新建标签夹失败");
+      setDetailError(visibleError(cause, "新建标签夹失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -375,6 +437,7 @@ export function MaterialLibraryWorkspace({
           {roleLabel(selected)} · {reviewLabel(selected)}
         </span>
       </div>
+      {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
       <dl className="library-inspector__meta">
         <div>
           <dt>画面建议</dt>
@@ -388,14 +451,19 @@ export function MaterialLibraryWorkspace({
         <div>
           <dt>使用状态</dt>
           <dd>
-            <select aria-label="素材使用状态" value={selected.use_state} disabled={busy !== null}
-              onChange={(event) => void changeUseState(event.target.value as MaterialAsset["use_state"])}>
-              <option value="available">可用于创作</option>
-              <option value="reference_only">仅参考</option>
-              <option value="excluded">不使用</option>
-              <option value="not_for_automation">不用于自动任务</option>
-              <option value="not_for_publish">不用于发布</option>
-            </select>
+            <div className={styles.useStateOptions} role="group" aria-label="素材使用状态">
+              {useStateOptions.map((option) => (
+                <button
+                  aria-pressed={selected.use_state === option.value}
+                  className={selected.use_state === option.value ? styles.isSelected : ""}
+                  disabled={busy !== null}
+                  key={option.value}
+                  onClick={() => void changeUseState(option.value)}
+                  type="button"
+                >{option.label}</button>
+              ))}
+            </div>
+            <small className={styles.useStateImpact}>{useStateOptions.find((option) => option.value === selected.use_state)?.impact}</small>
           </dd>
         </div>
         <div>
@@ -436,6 +504,7 @@ export function MaterialLibraryWorkspace({
               className={
                 selectedSegment?.id === segment.id ? "is-selected" : ""
               }
+              disabled={busy !== null}
               key={segment.id}
               onClick={() => selectSegment(segment)}
               type="button"
@@ -466,6 +535,7 @@ export function MaterialLibraryWorkspace({
                 : ""}
             </span>
           </div>
+          <p className={styles.segmentRange}>当前片段：{duration(selectedSegment.start_seconds)}–{duration(selectedSegment.end_seconds)}。下面的标签只用于这段画面。</p>
           {selectedSegment.understanding ? <section className="library-speech-evidence" aria-label="画面观察证据">
             <strong>画面观察</strong>
             {selectedSegment.understanding.status === "ready" ? <>
@@ -506,28 +576,60 @@ export function MaterialLibraryWorkspace({
               <small>等待画面理解生成系统标签</small>
             ) : null}
           </div>
-          <label>
-            <span>我的标签</span>
+          <div className={styles.tagEditor}>
+            <strong>我的标签</strong>
+            <div className={styles.tagChips} aria-label="已保存的我的标签">
+              {selectedSegment.user_tags.length ? selectedSegment.user_tags.map((tag) => (
+                <span className={styles.tagChip} key={tag}>{tag}
+                  <button aria-label={`移除标签 ${tag}`} disabled={busy !== null} onClick={() => void saveTags(selectedSegment.user_tags.filter((entry) => entry !== tag))} type="button"><X size={13} /></button>
+                </span>
+              )) : <small>这段画面还没有我的标签。</small>}
+            </div>
+            <label htmlFor="material-tag-input">添加标签</label>
+            {tagError ? <p className={styles.tagError} role="alert">{tagError}</p> : null}
             <input
+              autoComplete="off"
+              disabled={busy !== null}
+              id="material-tag-input"
               onChange={(event) => setTagDraft(event.target.value)}
-              placeholder="人物, 产品演示, 夜景"
+              onCompositionStart={() => { isComposingTag.current = true; }}
+              onCompositionEnd={() => { isComposingTag.current = false; }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !isComposingTag.current && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  addTag(tagDraft);
+                }
+              }}
+              placeholder="输入标签后按回车，如产品演示"
               value={tagDraft}
             />
-          </label>
-          <label>
-            <span>标签夹</span>
-            <select
-              onChange={(event) => setCollectionDraft(event.target.value)}
-              value={collectionDraft}
-            >
-              <option value="">未归类</option>
-              {collections.map((collection) => (
-                <option key={collection.id} value={collection.id}>
-                  {collection.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            {insights.tags.some((entry) => !selectedSegment.user_tags.includes(entry.tag)) ? (
+              <div className={styles.commonTags} aria-label="常用标签">
+                <span>常用标签</span>
+                {insights.tags.filter((entry) => !selectedSegment.user_tags.includes(entry.tag)).slice(0, 6).map((entry) => (
+                  <button disabled={busy !== null} key={entry.tag} onClick={() => addTag(entry.tag)} type="button">{tagLabel(entry.tag)}</button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className={styles.collectionPicker}>
+            <label htmlFor="material-collection-search">标签夹</label>
+            <input
+              id="material-collection-search"
+              onChange={(event) => setCollectionQuery(event.target.value)}
+              placeholder="搜索标签夹"
+              type="search"
+              value={collectionQuery}
+            />
+            <div className={styles.collectionOptions} role="group" aria-label="选择标签夹">
+              {[{ id: "", name: "未归类" }, ...collections]
+                .filter((collection) => collection.name.includes(collectionQuery.trim()))
+                .map((collection) => (
+                  <button aria-pressed={collectionDraft === collection.id} className={collectionDraft === collection.id ? styles.isSelected : ""} key={collection.id || "none"} onClick={() => setCollectionDraft(collection.id)} type="button">{collection.name}</button>
+                ))}
+              {!collections.some((collection) => collection.name.includes(collectionQuery.trim())) && !"未归类".includes(collectionQuery.trim()) ? <small>没有匹配的标签夹</small> : null}
+            </div>
+          </div>
           <div className="library-collection-create">
             <input
               aria-label="新标签夹名称"
