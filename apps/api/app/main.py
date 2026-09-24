@@ -236,6 +236,8 @@ from app.schemas import (
     ManualLinkRequest,
     MaterialAssetResponse,
     MaterialAssetTagsRequest,
+    MaterialIntakeBindRequest,
+    MaterialIntakeStatusResponse,
     MaterialBatchTagsRequest,
     MaterialBatchTagsResponse,
     MaterialCollectionCreateRequest,
@@ -10074,38 +10076,78 @@ def list_production_materials(
     )
 
 
-def _material_binding_status(workspace_id: str) -> dict[str, object]:
-    binding = production_repo.get_material_ingestion_binding()
-    return {
-        "bound_to_current_workspace": binding is not None and binding[0] == workspace_id,
-        "available": binding is None or binding[0] == workspace_id,
-        "scan_interval_seconds": 60,
-    }
+def _material_binding_status(workspace_id: str, repository: ProductionRepository) -> MaterialIntakeStatusResponse:
+    directory = repository.material_ingestion_directory_state(workspace_id)
+    binding = repository.get_material_ingestion_binding()
+    foreign = bool(directory["bound_to_another_workspace"]) or (binding is not None and binding[0] != workspace_id)
+    bound = binding is not None and binding[0] == workspace_id
+    if foreign:
+        state = "unknown"
+        message = "素材目录已关联其他工作区；当前工作区不能读取。"
+        repair = "切换到原工作区，或先明确解除原绑定。"
+    elif directory["configured_path_changed"]:
+        state = "changed"
+        message = "当前设置的素材目录与本工作区原绑定目录不同。"
+        repair = "先检查目录设置并处理原绑定，再重新确认。"
+    else:
+        state = str(directory["status"])
+        message, repair = {
+            "ready": ("素材目录可访问；文件稳定后会进入分析。", None),
+            "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
+            "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
+            "invalid": ("当前素材目录不可用于自动导入。", "在设置中选择可访问的素材目录。"),
+        }.get(state, ("尚未确认素材目录状态。", "检查目录设置后重试。"))
+    return MaterialIntakeStatusResponse(
+        bound_to_current_workspace=bound,
+        binding_available=not foreign,
+        configured_directory=None if foreign else str(directory["directory"]),
+        bound_directory=binding[1] if bound else None,
+        directory_state=state,
+        directory_message=message,
+        repair_action=repair,
+        scan_interval_seconds=60,
+        file_counts=(repository.material_ingestion_state_counts(workspace_id) if bound else
+                     {"observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0}),
+    )
 
 
-@app.get("/api/production/materials/intake")
-def get_material_intake_status(request: Request) -> dict[str, object]:
-    return _material_binding_status(current_workspace_id(request))
+def _material_ingestion_for(repository: ProductionRepository):
+    service = material_ingestion
+    if service is None or service.repository is not repository:
+        raise HTTPException(status_code=503, detail="素材扫描服务尚未就绪，请稍后重试。")
+    return service
 
 
-@app.post("/api/production/materials/intake/bind")
-def bind_material_intake(request: Request) -> dict[str, object]:
+@app.get("/api/production/materials/intake", response_model=MaterialIntakeStatusResponse)
+def get_material_intake_status(request: Request) -> MaterialIntakeStatusResponse:
+    repository = production_repo
+    return _material_binding_status(current_workspace_id(request), repository)
+
+
+@app.post("/api/production/materials/intake/bind", response_model=MaterialIntakeStatusResponse)
+def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -> MaterialIntakeStatusResponse:
     workspace_id = current_workspace_id(request)
+    repository = production_repo
+    service = _material_ingestion_for(repository)
     try:
-        production_repo.bind_material_ingestion(workspace_id)
+        repository.bind_material_ingestion(workspace_id, expected_directory=payload.expected_directory)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    material_ingestion.wake()
-    return _material_binding_status(workspace_id)
+    service.wake()
+    return _material_binding_status(workspace_id, repository)
 
 
 @app.post("/api/production/materials/intake/scan")
 def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
-    if not _material_binding_status(workspace_id)["bound_to_current_workspace"]:
+    repository = production_repo
+    status = _material_binding_status(workspace_id, repository)
+    if not status.bound_to_current_workspace:
         raise HTTPException(status_code=409, detail="请先在当前工作区绑定素材目录")
-    material_ingestion.scan_once()
-    assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
+    if status.directory_state != "ready":
+        raise HTTPException(status_code=409, detail=status.directory_message)
+    _material_ingestion_for(repository).scan_once()
+    assets, total = repository.list_assets_page(workspace_id, limit=24, offset=0)
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],
         total_count=total, limit=24, offset=0, has_more=len(assets) < total,
@@ -10115,14 +10157,19 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
 @app.post("/api/production/materials/{asset_id}/intake/retry")
 def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetResponse:
     workspace_id = current_workspace_id(request)
+    repository = production_repo
+    service = _material_ingestion_for(repository)
+    status = _material_binding_status(workspace_id, repository)
+    if status.directory_state != "ready":
+        raise HTTPException(status_code=409, detail=status.directory_message)
     try:
-        production_repo.retry_material_ingestion(workspace_id, asset_id)
-        asset = production_repo.get_asset(workspace_id, asset_id)
+        repository.retry_material_ingestion(workspace_id, asset_id)
+        asset = repository.get_asset(workspace_id, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    material_ingestion.wake()
+    service.wake()
     return _material_asset_response(asset)
 
 

@@ -279,11 +279,37 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "material_ingestion", None)
     with TestClient(main_module.app) as client:
         assert submitted and submitted[0][1:] == ("local", queued.id)
-        assert client.get("/api/production/materials/intake").json()["bound_to_current_workspace"] is False
-        bound = client.post("/api/production/materials/intake/bind")
+        before = client.get("/api/production/materials/intake").json()
+        assert before["bound_to_current_workspace"] is False
+        assert before["binding_available"] is True
+        assert before["directory_state"] == "ready"
+        assert before["configured_directory"] == str((tmp_path / "library").resolve())
+        assert before["bound_directory"] is None
+        assert client.post("/api/production/materials/intake/bind", json={
+            "expected_directory": str(tmp_path / "old-directory"),
+        }).status_code == 409
+        bound = client.post("/api/production/materials/intake/bind", json={
+            "expected_directory": before["configured_directory"],
+        })
         assert bound.status_code == 200
-        assert bound.json() == {"bound_to_current_workspace": True, "available": True, "scan_interval_seconds": 60}
-        assert "library" not in bound.text
+        assert bound.json()["bound_to_current_workspace"] is True
+        assert bound.json()["bound_directory"] == before["configured_directory"]
+        assert bound.json()["file_counts"] == {
+            "observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0,
+        }
+        foreign = main_module._material_binding_status("other_workspace", repo)
+        assert foreign.configured_directory is None and foreign.bound_directory is None
+        assert foreign.directory_state == "unknown"
+        newer_directory = tmp_path / "new-library"
+        newer_directory.mkdir()
+        repo.video_library_path = newer_directory
+        changed = client.get("/api/production/materials/intake").json()
+        assert changed["directory_state"] == "changed"
+        assert changed["configured_directory"] == str(newer_directory.resolve())
+        assert changed["bound_directory"] == before["configured_directory"]
+        assert client.post("/api/production/materials/intake/bind", json={
+            "expected_directory": changed["configured_directory"],
+        }).status_code == 409
 
 
 def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch):

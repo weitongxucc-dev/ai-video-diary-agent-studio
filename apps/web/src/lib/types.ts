@@ -1688,6 +1688,18 @@ export type MaterialSegment = {
   updated_at: string;
 };
 
+export type MaterialIntakeStatus = {
+  bound_to_current_workspace: boolean;
+  binding_available: boolean;
+  configured_directory: string | null;
+  bound_directory: string | null;
+  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "changed" | "unknown";
+  directory_message: string;
+  repair_action: string | null;
+  scan_interval_seconds: number;
+  file_counts: { observing: number; running: number; ready: number; failed: number; blocked_disk: number };
+};
+
 export type MaterialAsset = {
   id: string;
   workspace_id: string;

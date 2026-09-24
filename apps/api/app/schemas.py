@@ -530,6 +530,23 @@ class MaterialAssetTagsRequest(BaseModel):
     user_tags: list[str] = Field(max_length=50)
 
 
+class MaterialIntakeBindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_directory: str = Field(min_length=1)
+
+
+class MaterialIntakeStatusResponse(BaseModel):
+    bound_to_current_workspace: bool
+    binding_available: bool
+    configured_directory: str | None
+    bound_directory: str | None
+    directory_state: Literal["ready", "missing", "unmounted", "invalid", "changed", "unknown"]
+    directory_message: str
+    repair_action: str | None
+    scan_interval_seconds: int
+    file_counts: dict[str, int]
+
+
 class MaterialBatchTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     asset_ids: list[str] = Field(min_length=1, max_length=100)

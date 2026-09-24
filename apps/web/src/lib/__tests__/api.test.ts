@@ -95,4 +95,14 @@ describe("creation execution API", () => {
       method: "PUT", body: JSON.stringify({ user_tags: ["访谈"] }),
     }));
   });
+
+  it("binds only the directory the user inspected", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { bindMaterialIntake } = await import("../api");
+    await bindMaterialIntake("/Volumes/test/library");
+    expect(fetchMock).toHaveBeenCalledWith("/api/production/materials/intake/bind", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ expected_directory: "/Volumes/test/library" }),
+    }));
+  });
 });

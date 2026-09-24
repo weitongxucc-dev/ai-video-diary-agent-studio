@@ -9,6 +9,7 @@ import type {
   CreationTaskWorkspace,
   CreationExecutionPreview,
   CreationExecutionStatus,
+  MaterialIntakeStatus,
   CreationTaskScriptsResponse,
   CreationTaskScriptSection,
   CreationTaskNarration,
@@ -243,12 +244,14 @@ export function scanProductionMaterials(): Promise<MaterialLibrary> {
   });
 }
 
-export function getMaterialIntakeStatus(): Promise<{ bound_to_current_workspace: boolean; available: boolean; scan_interval_seconds: number }> {
+export function getMaterialIntakeStatus(): Promise<MaterialIntakeStatus> {
   return request("/api/production/materials/intake");
 }
 
-export function bindMaterialIntake(): Promise<{ bound_to_current_workspace: boolean; available: boolean; scan_interval_seconds: number }> {
-  return request("/api/production/materials/intake/bind", { method: "POST" });
+export function bindMaterialIntake(expectedDirectory: string): Promise<MaterialIntakeStatus> {
+  return request("/api/production/materials/intake/bind", {
+    method: "POST", body: JSON.stringify({ expected_directory: expectedDirectory }),
+  });
 }
 
 export function scanMaterialIntake(): Promise<MaterialLibrary> {
