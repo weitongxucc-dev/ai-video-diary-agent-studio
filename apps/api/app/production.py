@@ -3837,6 +3837,14 @@ class ProductionRepository:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
+                raced = conn.execute(
+                    "SELECT * FROM task_events WHERE id = ?", (event.id,)
+                ).fetchone()
+                if raced is not None:
+                    persisted = self._task_event_from_row(raced)
+                    if persisted != event:
+                        raise ValueError("任务事件 ID 已存在，且领域字段不一致") from exc
+                    return persisted
                 raise ValueError("任务事件 ID 已存在") from exc
         return self.get_task_event(event.workspace_id, event.id)
 

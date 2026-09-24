@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import hashlib
 import os
 import shutil
@@ -14,7 +15,7 @@ import time
 import pytest
 
 from app.material_ingestion import MaterialIngestionService
-from app.production import CreationPlan, CreationTask, JobRun, ProductionRepository
+from app.production import CreationPlan, CreationTask, JobRun, ProductionRepository, TaskEvent
 
 
 def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[ProductionRepository, Path]:
@@ -27,6 +28,19 @@ def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[
         scene_reader=scene_reader or (lambda path, duration: []),
     )
     return repo, library
+
+
+def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: str) -> None:
+    plan = CreationPlan(
+        id=f"plan-{task_id}", workspace_id=workspace_id, goal="并发制作", name="测试任务",
+        target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
+        knowledge_references=[], source_references=[], selected_voice=None,
+        pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
+        material_rule_summary="测试", model_snapshot=[], confirmation_points=[], blockers=[],
+        preflight_fingerprint=f"fingerprint-{task_id}",
+    )
+    task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name, scenario="knowledge_explanation")
+    repo.confirm_creation_plan(plan, task)
 
 
 def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> None:
@@ -274,20 +288,7 @@ def test_generated_video_uses_real_probe_and_scene_tools(tmp_path: Path) -> None
 
 def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path: Path) -> None:
     repo, _ = make_repo(tmp_path)
-
-    def seed(workspace_id: str, task_id: str) -> None:
-        plan = CreationPlan(
-            id=f"plan-{task_id}", workspace_id=workspace_id, goal="并发制作", name="测试任务",
-            target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
-            knowledge_references=[], source_references=[], selected_voice=None,
-            pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
-            material_rule_summary="测试", model_snapshot=[], confirmation_points=[], blockers=[],
-            preflight_fingerprint=f"fingerprint-{task_id}",
-        )
-        task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name, scenario="knowledge_explanation")
-        repo.confirm_creation_plan(plan, task)
-
-    seed("one", "task-one")
+    seed_creation_task(repo, "one", "task-one")
     gate = threading.Barrier(12)
 
     def create(index: int) -> JobRun:
@@ -311,9 +312,37 @@ def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path:
             id=created[0].id, workspace_id="one", task_id="task-one",
             kind="creation_task_execution", idempotency_key="different-request", input_digest="different",
         ))
-    seed("two", "task-two")
+    seed_creation_task(repo, "two", "task-two")
     other = repo.create_job_run(JobRun(
         id="other-workspace-job", workspace_id="two", task_id="task-two",
         kind="creation_task_execution", idempotency_key="same-request", input_digest="same-input",
     ))
     assert other.id != created[0].id
+
+
+def test_concurrent_identical_task_event_returns_one_record(tmp_path: Path) -> None:
+    repo, _ = make_repo(tmp_path)
+    seed_creation_task(repo, "one", "task-one")
+    job = repo.create_job_run(JobRun(
+        id="job-one", workspace_id="one", task_id="task-one", kind="creation_task_execution",
+        idempotency_key="request-one", input_digest="input-one",
+    ))
+    event = TaskEvent(
+        id="start-one", workspace_id="one", task_id="task-one", job_id=job.id,
+        event_type="creation_started", payload={"job_id": job.id}, created_at=job.created_at,
+    )
+    gate = threading.Barrier(12)
+
+    def append(_: int) -> TaskEvent:
+        gate.wait()
+        return repo.append_task_event(event)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        events = list(pool.map(append, range(12)))
+    assert all(item == event for item in events)
+    assert repo.list_task_events("one", "task-one") == [event]
+    with pytest.raises(ValueError, match="领域字段不一致"):
+        repo.append_task_event(replace(event, payload={"job_id": "different"}))
+    seed_creation_task(repo, "two", "task-two")
+    with pytest.raises(ValueError, match="领域字段不一致"):
+        repo.append_task_event(replace(event, workspace_id="two", task_id="task-two", job_id=None))
