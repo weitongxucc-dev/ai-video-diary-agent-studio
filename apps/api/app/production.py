@@ -3472,6 +3472,19 @@ class ProductionRepository:
                     _job_run_values(run),
                 )
             except sqlite3.IntegrityError as exc:
+                raced = conn.execute(
+                    "SELECT * FROM job_runs WHERE workspace_id = ? AND idempotency_key = ?",
+                    (run.workspace_id, run.idempotency_key),
+                ).fetchone()
+                if raced is not None:
+                    persisted = self._job_run_from_row(raced)
+                    if (
+                        persisted.task_id != run.task_id
+                        or persisted.kind != run.kind
+                        or persisted.input_digest != run.input_digest
+                    ):
+                        raise ValueError("幂等键已绑定到不同的任务输入") from exc
+                    return persisted
                 raise ValueError("任务运行记录 ID 已存在") from exc
         return self.get_job_run(run.workspace_id, run.id)
 

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import Mock
+from concurrent.futures import ThreadPoolExecutor
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 import pytest
 
 from app.material_ingestion import MaterialIngestionService
-from app.production import ProductionRepository
+from app.production import CreationPlan, CreationTask, JobRun, ProductionRepository
 
 
 def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[ProductionRepository, Path]:
@@ -197,3 +199,50 @@ def test_generated_video_uses_real_probe_and_scene_tools(tmp_path: Path) -> None
     assert analyzed[0].analysis_status == "ready"
     assert analyzed[0].duration_seconds == pytest.approx(1.2, abs=0.2)
     assert analyzed[0].segments
+
+
+def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path: Path) -> None:
+    repo, _ = make_repo(tmp_path)
+
+    def seed(workspace_id: str, task_id: str) -> None:
+        plan = CreationPlan(
+            id=f"plan-{task_id}", workspace_id=workspace_id, goal="并发制作", name="测试任务",
+            target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
+            knowledge_references=[], source_references=[], selected_voice=None,
+            pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
+            material_rule_summary="测试", model_snapshot=[], confirmation_points=[], blockers=[],
+            preflight_fingerprint=f"fingerprint-{task_id}",
+        )
+        task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name, scenario="knowledge_explanation")
+        repo.confirm_creation_plan(plan, task)
+
+    seed("one", "task-one")
+    gate = threading.Barrier(12)
+
+    def create(index: int) -> JobRun:
+        gate.wait()
+        return repo.create_job_run(JobRun(
+            id=f"job-{index}", workspace_id="one", task_id="task-one",
+            kind="creation_task_execution", idempotency_key="same-request", input_digest="same-input",
+        ))
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        created = list(pool.map(create, range(12)))
+    assert len({job.id for job in created}) == 1
+    assert len(repo.list_job_runs("one", "task-one")) == 1
+    with pytest.raises(ValueError, match="不同的任务输入"):
+        repo.create_job_run(JobRun(
+            id="different-input", workspace_id="one", task_id="task-one",
+            kind="creation_task_execution", idempotency_key="same-request", input_digest="changed",
+        ))
+    with pytest.raises(ValueError, match="ID 已存在"):
+        repo.create_job_run(JobRun(
+            id=created[0].id, workspace_id="one", task_id="task-one",
+            kind="creation_task_execution", idempotency_key="different-request", input_digest="different",
+        ))
+    seed("two", "task-two")
+    other = repo.create_job_run(JobRun(
+        id="other-workspace-job", workspace_id="two", task_id="task-two",
+        kind="creation_task_execution", idempotency_key="same-request", input_digest="same-input",
+    ))
+    assert other.id != created[0].id
