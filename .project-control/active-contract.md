@@ -22,7 +22,9 @@ ACTIVE，2026-09-24 用户提供三个独立 Codex 开发任务，授权主控�
 
 MAKE02 接线范围由同一制作流程任务继续负责：apps/web/src/components/CreationTaskWorkspace.tsx、apps/web/src/lib/api.ts、apps/web/src/lib/types.ts、apps/api/app/schemas.py，以及相邻 CreationTaskWorkspace.test.tsx、lib/__tests__/api.test.ts。共享文件仅为确认后的连续制作请求、状态和恢复接口作必要增量，不重构无关类型/页面。文案确认和“开始制作”须为两个明确动作；开始展示将使用的已确认文案与要求，成功后使用后台事实显示进度，重启/切页恢复同一任务，不假造百分比。UI01 不写这些文件；其素材或布局需要接口/属性变更时向 MAKE02 发精确提案。
 
-MAKE01 先提交可审查的后台候选，再继续 MAKE02，不把五个专项自测当独立验收。Pi 实际文案准备及会话连续性的新增文件须先报接口和保存方案，主控再分配；当前任务页按钮接通不代表整个中栏对话闭环完成。
+MAKE01 先提交可审查的后台候选，再继续 MAKE02，不把五个专项自测当独立验收。当前任务页按钮接通不代表整个中栏对话闭环完成。
+
+MAKE03 继续由制作流程任务独占 apps/api/app/assistant_pi.py、apps/api/agent_tools/diary_tools.ts 和 apps/api/tests/test_assistant_pi.py；必要新增专项测试限 test_assistant_script.py。它沿任务绑定的 Pi 会话和受控工具准备待确认文案，经现有 Repository 持久化，不能自动确认文案或开始制作。任务页中栏和会话历史接口仍归 MAKE02 所属文件；每轮必要用户消息、助手答复与阶段沿现有 TaskEvent 保存并按 workspace/task 查询，不把 Pi 文件或浏览器状态当产品事实源，不保存凭据或任意完整工具输出。ProductionRepository 的文案保存方法由 MAT01 实施，优先复用原文案字段、来源校验及确认路径，不建立平行文案库。旧已确认文案与有效产物在用户确认新版本前不得被候选替换；所有工具以服务端绑定 workspace/task 限定对象。收费模型实调仍未获得授权，模拟工具调用与真实 Pi/模型分别报告。
 
 各角色均为独立可见 Codex 任务，由主控通过任务消息派工与检查交付。保留任务现有模型设置，不把内部代理并发限制套用于独立任务。发布交付角色在基础接口明确后由主控创建；不得因未启动就视作范围删除。设计先交布局与组件依据，桌面工程可先做不依赖新布局的标签交互；几何方案审核前不批量改全局外壳。
 
