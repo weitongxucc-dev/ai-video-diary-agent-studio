@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ import app.main as main_module
 from app.creation_execution import CreationExecution, revision_digest
 from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask, ProductionRepository
 from app.artifact_store import ArtifactStore
+from app.config import Settings
 
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True):
@@ -282,6 +284,76 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
         assert bound.status_code == 200
         assert bound.json() == {"bound_to_current_workspace": True, "available": True, "scan_interval_seconds": 60}
         assert "library" not in bound.text
+
+
+def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch):
+    # Keep the full runtime reload inside a synthetic library and restore its
+    # module globals afterwards; no provider or media operation is invoked.
+    for name in (
+        "settings repo source_repository model_catalog model_installer visual_semantic_provider "
+        "voice_clone_provider avatar_lipsync_provider latentsync_provider production_repo "
+        "montage_repo montage_planner montage_renderer artifact_store narration_generator "
+        "voice_preview_service avatar_preview_service vault video_inbox video_processor "
+        "video_pipeline draft_workspace source_tracker service workflow auth_context "
+        "video_job_runner creation_execution execution_worker material_ingestion"
+    ).split():
+        monkeypatch.setattr(main_module, name, getattr(main_module, name))
+    monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    (tmp_path / "library").mkdir()
+    isolated = Settings(
+        database_path=str(tmp_path / "isolated.sqlite3"),
+        video_inbox_path=str(tmp_path / "library"),
+        video_output_path=str(tmp_path / "output"),
+        draft_output_path=str(tmp_path / "drafts"),
+        jianying_draft_root_path=str(tmp_path / "jianying"),
+        obsidian_vault_path=str(tmp_path / "vault"),
+        model_root_path=str(tmp_path / "models"),
+        temporary_root_path=str(tmp_path / "temporary"),
+        hermes_radar_path=str(tmp_path / "radar"),
+    )
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda _cls: isolated))
+    monkeypatch.setattr(main_module, "execution_worker", ThreadPoolExecutor(max_workers=1))
+    monkeypatch.setattr(main_module, "material_ingestion", None)
+
+    def assert_running():
+        service = main_module.material_ingestion
+        worker = main_module.execution_worker
+        assert service is not None and service._thread is not None and service._thread.is_alive()
+        assert worker.submit(lambda: "ready").result(timeout=2) == "ready"
+        return service, service._thread, worker
+
+    def assert_stopped(service, thread, worker):
+        assert service._thread is None and not thread.is_alive()
+        with pytest.raises(RuntimeError, match="shutdown"):
+            worker.submit(lambda: None)
+
+    main_module._reload_runtime_dependencies()
+    first_service, first_thread, first_worker = assert_running()
+    with TestClient(main_module.app):
+        assert main_module.material_ingestion is first_service
+        assert main_module.execution_worker is first_worker
+    assert_stopped(first_service, first_thread, first_worker)
+
+    with TestClient(main_module.app):
+        second_service, second_thread, second_worker = assert_running()
+        main_module._reload_runtime_dependencies()
+        assert_stopped(second_service, second_thread, second_worker)
+        third_service, third_thread, third_worker = assert_running()
+    assert_stopped(third_service, third_thread, third_worker)
+
+    main_module.resume_persisted_creation_executions()
+    fourth_service, fourth_thread, fourth_worker = assert_running()
+    main_module.resume_persisted_creation_executions()
+    assert main_module.material_ingestion is fourth_service
+    assert main_module.execution_worker is fourth_worker
+    main_module.stop_creation_execution_worker()
+    main_module.stop_creation_execution_worker()
+    assert_stopped(fourth_service, fourth_thread, fourth_worker)
+    main_module.resume_persisted_creation_executions()
+    fifth_service, fifth_thread, fifth_worker = assert_running()
+    assert fifth_service is not fourth_service and fifth_worker is not fourth_worker
+    main_module.stop_creation_execution_worker()
+    assert_stopped(fifth_service, fifth_thread, fifth_worker)
 
 
 def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):

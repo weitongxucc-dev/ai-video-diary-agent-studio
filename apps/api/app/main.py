@@ -10791,9 +10791,8 @@ async def is_setup():
 def _reload_runtime_dependencies() -> None:
     global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
 
-    execution_worker.shutdown(wait=True)
-    if material_ingestion is not None:
-        material_ingestion.stop()
+    _stop_execution_worker()
+    _stop_material_ingestion()
 
     settings = Settings.from_env()
     configure_process_temporary_directory(settings)
@@ -10854,9 +10853,8 @@ def _reload_runtime_dependencies() -> None:
     workflow = LangGraphEpisodeWorkflow(service)
     video_job_runner.recover_after_restart()
     creation_execution = _new_creation_execution()
-    execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
-    material_ingestion = _new_material_ingestion()
-    material_ingestion.start()
+    _start_execution_worker()
+    _start_material_ingestion()
     _recover_creation_executions()
 
 
@@ -12348,19 +12346,58 @@ def _new_material_ingestion():
     return MaterialIngestionService(production_repo, scan_interval_seconds=60, stable_seconds=10)
 
 
+def _start_execution_worker() -> None:
+    global execution_worker
+    if execution_worker is None:
+        execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+
+
+def _stop_execution_worker() -> None:
+    global execution_worker
+    worker = execution_worker
+    execution_worker = None
+    if worker is not None:
+        worker.shutdown(wait=True)
+
+
+def _start_material_ingestion() -> None:
+    global material_ingestion
+    if material_ingestion is not None:
+        material_ingestion.start()
+        return
+    service = _new_material_ingestion()
+    try:
+        service.start()
+    except Exception:
+        service.stop()
+        raise
+    material_ingestion = service
+
+
+def _stop_material_ingestion() -> None:
+    global material_ingestion
+    service = material_ingestion
+    material_ingestion = None
+    if service is not None:
+        service.stop()
+
+
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
-    global material_ingestion
-    material_ingestion = _new_material_ingestion()
-    material_ingestion.start()
-    _recover_creation_executions()
+    _start_execution_worker()
+    try:
+        _start_material_ingestion()
+        _recover_creation_executions()
+    except Exception:
+        _stop_material_ingestion()
+        _stop_execution_worker()
+        raise
 
 
 @app.on_event("shutdown")
 def stop_creation_execution_worker() -> None:
-    if material_ingestion is not None:
-        material_ingestion.stop()
-    execution_worker.shutdown(wait=True)
+    _stop_material_ingestion()
+    _stop_execution_worker()
 
 
 @app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)
