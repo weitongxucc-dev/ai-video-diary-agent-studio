@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
@@ -216,4 +216,31 @@ it("uses manual scan only as a secondary repair action for a bound ready directo
   fireEvent.click(await screen.findByRole("button", { name:"立即检查" }));
   await waitFor(() => expect(scanMaterialIntake).toHaveBeenCalledTimes(1));
   expect(screen.queryByRole("button", { name:"找新素材" })).not.toBeInTheDocument();
+});
+
+it("keeps a loaded second page, selected asset and draft during background refresh", async () => {
+  vi.useFakeTimers({ toFake:["setInterval", "clearInterval"] });
+  try {
+    const firstPage = { ...library, assets:[taggedAsset], total_count:2, limit:1, has_more:true };
+    const secondPage = { ...firstPage, assets:[{ ...otherAsset, review_status:"raw" as const, analysis_status:"pending" as const }], offset:1, has_more:false };
+    const updatedSecond = { ...secondPage.assets[0], analysis_status:"failed" as const, analysis_message:"分析服务暂不可用" };
+    vi.mocked(getProductionMaterials).mockImplementation(async (input) => {
+      if (input?.offset === 1) return secondPage;
+      return { ...firstPage, assets:input?.limit === 2 ? [taggedAsset, updatedSecond] : [taggedAsset], has_more:input?.limit !== 2 };
+    });
+    vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace:true, bound_directory:intakeReady.configured_directory });
+    render(<MaterialLibraryWorkspace initialLibrary={firstPage} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+    fireEvent.click(screen.getByRole("button", { name:/载入更多/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name:/自造素材B\.mp4/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("添加标签"), { target:{ value:"尚未保存的草稿" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ limit:2, offset:0 }));
+    expect(screen.getByRole("button", { name:/自造素材B\.mp4/ })).toHaveClass("is-selected");
+    expect(screen.getByLabelText("添加标签")).toHaveValue("尚未保存的草稿");
+    expect(screen.getAllByText("分析服务暂不可用")).toHaveLength(2);
+    expect(screen.getByText("已载入 2 / 2")).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
 });

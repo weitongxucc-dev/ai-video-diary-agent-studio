@@ -197,7 +197,10 @@ export function MaterialLibraryWorkspace({
 
   useEffect(() => {
     let active = true;
+    let inFlight = false;
     async function refresh() {
+      if (inFlight) return;
+      inFlight = true;
       const revision = intakeRevision.current;
       try {
         const status = await getMaterialIntakeStatus();
@@ -208,6 +211,7 @@ export function MaterialLibraryWorkspace({
       } catch (cause) {
         if (active && revision === intakeRevision.current) setIntakeError(visibleError(cause, "无法查看素材目录状态，请重试。"));
       } finally {
+        inFlight = false;
         if (active) setIntakeBusy((current) => current === "refresh" ? null : current);
       }
     }
@@ -226,25 +230,34 @@ export function MaterialLibraryWorkspace({
       if (document.visibilityState !== "visible" || inFlight) return;
       inFlight = true;
       const revision = assetWriteRevision.current;
+      const loadedCount = Math.max(initialLibrary.limit, assets.length);
       try {
-        const [libraryResult, insightsResult] = await Promise.allSettled([
-          getProductionMaterials({ limit: initialLibrary.limit, offset: 0, query: query.trim(), reviewStatus: filter }),
-          getMaterialLibraryInsights(),
-        ]);
-        if (active && revision === assetWriteRevision.current) {
-          if (libraryResult.status === "fulfilled") {
-            setAssets(libraryResult.value.assets);
-            setTotalCount(libraryResult.value.total_count);
-            setHasMore(libraryResult.value.has_more);
-          }
-          if (insightsResult.status === "fulfilled") setInsights(insightsResult.value);
+        const libraries: MaterialLibrary[] = [];
+        for (let offset = 0; offset < loadedCount; offset += 100) {
+          libraries.push(await getProductionMaterials({
+            limit: Math.min(100, loadedCount - offset), offset,
+            query: query.trim(), reviewStatus: filter,
+          }));
         }
+        if (active && revision === assetWriteRevision.current) {
+          const refreshed = libraries.flatMap((page) => page.assets);
+          setAssets((current) => {
+            const retained = current.find((asset) => asset.id === selectedId);
+            if (retained && refreshed.length >= loadedCount && !refreshed.some((asset) => asset.id === retained.id)) refreshed.push(retained);
+            return refreshed;
+          });
+          setTotalCount(libraries[0]?.total_count ?? 0);
+          setHasMore(refreshed.length < (libraries[0]?.total_count ?? 0));
+        }
+        try { const latestInsights = await getMaterialLibraryInsights(); if (active) setInsights(latestInsights); } catch { /* Keep the last usable summary. */ }
+      } catch {
+        // Keep the loaded pages until a later refresh succeeds.
       } finally {
         inFlight = false;
       }
     }, 15000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [busy, filter, initialLibrary.limit, intake?.bound_to_current_workspace, query]);
+  }, [assets.length, busy, filter, initialLibrary.limit, intake?.bound_to_current_workspace, query, selectedId]);
 
   useEffect(() => {
     if (lastSearch.current.filter === filter && lastSearch.current.query === query) return;
@@ -391,6 +404,7 @@ export function MaterialLibraryWorkspace({
         query: query.trim(),
         reviewStatus: filter,
       });
+      assetWriteRevision.current += 1;
       setAssets((current) => {
         const known = new Set(current.map((asset) => asset.id));
         return [
