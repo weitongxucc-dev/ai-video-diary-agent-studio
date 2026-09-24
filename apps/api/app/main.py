@@ -10092,7 +10092,8 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
     else:
         state = str(directory["status"])
         message, repair = {
-            "ready": ("素材目录可访问；文件稳定后会进入分析。", None),
+            "ready": (("素材目录可访问；文件稳定后会进入分析。" if bound else
+                       "素材目录可访问，等待关联到当前工作区。"), None),
             "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
             "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
             "invalid": ("当前素材目录不可用于自动导入。", "在设置中选择可访问的素材目录。"),
