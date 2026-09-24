@@ -39,6 +39,7 @@ import {
   getCreationTaskTopics,
   getCreationTaskWorkspace,
   getCreationExecution,
+  getCreationTaskAssistantHistory,
   previewCreationExecution,
   startCreationExecution,
   resumeCreationExecution,
@@ -65,6 +66,7 @@ import type {
   CreationTaskWorkspace as WorkspaceState,
   CreationExecutionPreview,
   CreationExecutionStatus,
+  CreationTaskAssistantHistory,
   MontageClipCandidate,
 } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
@@ -374,6 +376,24 @@ const executionStageLabels: Record<string, string> = {
   cover: "准备封面",
 };
 
+type AssistantTurnRecord = { command: string; reply: string; context: string };
+
+function assistantHistoryTurns(items: CreationTaskAssistantHistory["items"]): AssistantTurnRecord[] {
+  const turns: AssistantTurnRecord[] = [];
+  let pending: CreationTaskAssistantHistory["items"][number] | null = null;
+  for (const item of items) {
+    if (item.role === "user") {
+      if (pending) turns.push({ command: pending.message, reply: "上次没有得到完整回复。", context: pending.stage });
+      pending = item;
+    } else {
+      turns.push({ command: pending?.message ?? "", reply: item.message, context: item.stage });
+      pending = null;
+    }
+  }
+  if (pending) turns.push({ command: pending.message, reply: "上次没有得到完整回复。", context: pending.stage });
+  return turns.slice(-8);
+}
+
 function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, onCancel }: {
   preview: CreationExecutionPreview | null;
   execution: CreationExecutionStatus | null;
@@ -411,6 +431,7 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
 
 function ContextCommandBar({
   compact = false,
+  scriptMode = false,
   busy,
   command,
   onCancel,
@@ -428,6 +449,7 @@ function ContextCommandBar({
   selectedContextPlaceholder,
 }: {
   compact?: boolean;
+  scriptMode?: boolean;
   busy: BusyAction | null;
   command: string;
   onCancel: () => void;
@@ -461,19 +483,19 @@ function ContextCommandBar({
 
   return (
     <section
-      aria-label="修改视频"
+      aria-label={scriptMode ? "文案对话" : "修改视频"}
       className={editorUi.chatCommand}
       ref={barRef}
     >
-      {!assistantReply ? <div className={editorUi.chatSuggestions}><h2>这条怎么改？</h2><p>{selectedContextLabel ? `已选中${selectedContextLabel}` : "点选右边的镜头，再告诉我想怎么改。"}</p>{[["换个镜头", "换一个更合适的镜头，保留声音"], ["亮一点", "把当前镜头调亮一点"], ["字幕大些", "把字幕字号调大一点"]].map(([label, value]) => <button key={label} type="button" disabled={busy !== null} onClick={() => onCommandChange(value)}>{label}</button>)}</div> : null}
+      {!assistantReply ? <div className={editorUi.chatSuggestions}><h2>{scriptMode ? "这段文案怎么写？" : "这条怎么改？"}</h2><p>{scriptMode ? "说说想突出什么，草稿会放在右侧等你确认。" : selectedContextLabel ? `已选中${selectedContextLabel}` : "点选右边的镜头，再告诉我想怎么改。"}</p>{(scriptMode ? [["写个开头", "为当前选题写一个简短开头"], ["说得简单些", "把当前文案改得更容易理解"], ["再短一点", "缩短当前文案，保留关键事实和出处"]] : [["换个镜头", "换一个更合适的镜头，保留声音"], ["亮一点", "把当前镜头调亮一点"], ["字幕大些", "把字幕字号调大一点"]]).map(([label, value]) => <button key={label} type="button" disabled={busy !== null} onClick={() => onCommandChange(value)}>{label}</button>)}</div> : null}
       <div className={editorUi.chatEntry}>
         <span className={selectedContextLabel ? ui.contextSelection : ui.contextEmpty}>
-          {selectedContextLabel ?? "先选对象"}
+          {scriptMode ? "当前文案" : selectedContextLabel ?? "先选对象"}
         </span>
         <label className={ui.commandInput}>
-          {!compact ? <span>说说怎么改</span> : null}
+          {!compact ? <span>{scriptMode ? "说说文案想怎么写" : "说说怎么改"}</span> : null}
           <input
-            aria-label="局部修改要求"
+            aria-label={scriptMode ? "文案要求" : "局部修改要求"}
             disabled={busy !== null || selectionChanged}
             onChange={(event) => onCommandChange(event.target.value)}
             placeholder={steps.length ? "想保留哪项？" : selectedContextPlaceholder}
@@ -489,7 +511,7 @@ function ContextCommandBar({
           {busy === "assistant" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}
           发送
         </button>
-        {selectedContextLabel ? <button className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">预览修改</button> : null}
+        {selectedContextLabel && !scriptMode ? <button className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">预览修改</button> : null}
       </div>
       <div className="assistant-meta">
         <span>{assistantConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
@@ -826,7 +848,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [editCommand, setEditCommand] = useState("");
   const [editPreview, setEditPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
   const [assistantReply, setAssistantReply] = useState<string | null>(null);
-  const [assistantTurns, setAssistantTurns] = useState<{ command: string; reply: string; context: string }[]>([]);
+  const [assistantTurns, setAssistantTurns] = useState<AssistantTurnRecord[]>([]);
   const [assistantModel, setAssistantModel] = useState("外部文字模型待连接");
   const [assistantConfigured, setAssistantConfigured] = useState(false);
   const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
@@ -843,6 +865,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }).catch(() => undefined);
   }, []);
   const task = workspace.task;
+  useEffect(() => {
+    let active = true;
+    setAssistantTurns([]);
+    setAssistantReply(null);
+    void getCreationTaskAssistantHistory(task.id).then((history) => {
+      if (!active) return;
+      const turns = assistantHistoryTurns(history.items);
+      setAssistantTurns(turns);
+      setAssistantReply(history.items.at(-1)?.role === "assistant" ? history.items.at(-1)!.message : null);
+    }).catch((cause) => { if (active) setError(errorDetails(cause)); });
+    return () => { active = false; };
+  }, [task.id]);
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
@@ -1186,7 +1220,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function askAssistant() {
     const message = editCommand.trim();
     if (!message) return;
-    const contextLabel = selectedEditContext?.label ?? "当前任务";
+    const contextLabel = activeView === "script" ? "当前文案" : selectedEditContext?.label ?? "当前任务";
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -1203,7 +1237,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
       });
-      if (revision === editContextRevision.current) {
+      const contextStillCurrent = revision === editContextRevision.current;
+      if (result.script_draft) await refresh(true);
+      if (contextStillCurrent) {
         setAssistantReply(result.reply);
         setAssistantTurns((current) => [...current, { command: message, reply: result.reply, context: contextLabel }].slice(-8));
         setAssistantModel(`${result.provider} / ${result.model}`);
@@ -1212,6 +1248,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
     } catch (cause) {
       setError(errorDetails(cause));
+      if (activeView === "script") await refresh().catch(() => undefined);
     } finally {
       setBusy(null);
     }
@@ -1351,7 +1388,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     : <Inspector activeView={activeView} busy={busy !== null} error={error} onPreparePersonEdit={preparePersonEdit} selectedContext={selectedEditContext} workspace={workspace} />;
 
   return (
-    <AppShell conversation={(!savingTemplate && (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack))) ? <ContextCommandBar key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} editorLayout={isEditor}  inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
+    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} editorLayout={isEditor}  inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <div className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
         <nav className={editorUi.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage) => {
           const presentation = productStageState(

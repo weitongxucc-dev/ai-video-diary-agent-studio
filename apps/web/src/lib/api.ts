@@ -19,6 +19,7 @@ import type {
   CreationTaskEditConfirmResponse,
   CreationTaskEditPreviewResponse,
   CreationTaskAssistantTurnResponse,
+  CreationTaskAssistantHistory,
   CreationTaskTopicsResponse,
   FeedbackSummary,
   KnowledgeNote,
@@ -599,6 +600,12 @@ export function sendCreationTaskAssistantTurn(
   return creationPlanRequest<CreationTaskAssistantTurnResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`,
     { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function getCreationTaskAssistantHistory(taskId: string): Promise<CreationTaskAssistantHistory> {
+  return creationPlanRequest<CreationTaskAssistantHistory>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/history`,
   );
 }
 

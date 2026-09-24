@@ -105,4 +105,12 @@ describe("creation execution API", () => {
       method: "POST", body: JSON.stringify({ expected_directory: "/Volumes/test/library" }),
     }));
   });
+
+  it("reads task-scoped assistant history", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve(JSON.stringify({ items: [] })) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getCreationTaskAssistantHistory } = await import("../api");
+    await getCreationTaskAssistantHistory("task/one");
+    expect(fetchMock).toHaveBeenCalledWith("/api/creation-tasks/task%2Fone/assistant/history", expect.anything());
+  });
 });

@@ -191,6 +191,7 @@ from app.schemas import (
     CreationTaskTopicGenerateRequest,
     CreationTaskTopicsResponse,
     CreationTaskScriptConfirmRequest,
+    CreationTaskScriptResponse,
     CreationTaskScriptGenerateRequest,
     CreationTaskScriptsResponse,
     CreationTaskNarrationResponse,
@@ -205,6 +206,7 @@ from app.schemas import (
     CreationTaskEditPreviewRequest,
     CreationTaskAssistantTurnRequest,
     CreationTaskAssistantTurnResponse,
+    CreationTaskAssistantHistoryResponse,
     WorkspaceAssistantPlanTurnRequest,
     WorkspaceAssistantPlanTurnResponse,
     CompoundEditSelectionRequest,
@@ -3993,6 +3995,129 @@ def get_creation_task_workspace(
     )
 
 
+def _assistant_script_inputs(workspace_id: str, task_id: str):
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.stage != "script" or task.confirmed_script_id:
+        raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    topic = next((item for item in production_repo.list_topic_candidates(workspace_id, task_id)
+                  if item.id == task.selected_topic_id), None)
+    if topic is None:
+        raise HTTPException(status_code=409, detail="请先确认本次选题")
+    try:
+        sources, input_references, _ = _creation_task_topic_inputs(
+            workspace_id, task, plan, cloud_egress=True,
+        )
+    except _CreationTaskTopicPreflightError as exc:
+        raise HTTPException(status_code=409, detail={
+            "reason": exc.reason, "impact": exc.impact, "repair_action": exc.repair_action,
+        }) from exc
+    return task, plan, topic, sources, input_references
+
+
+@app.get("/api/creation-tasks/{task_id}/assistant/script-context")
+def get_assistant_script_context(task_id: str, request: Request) -> dict[str, object]:
+    workspace_id = current_workspace_id(request)
+    task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
+    scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
+    draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
+    return {
+        "task_id": task.id,
+        "goal": plan.goal,
+        "language": plan.language,
+        "duration_target_seconds": plan.duration_target_seconds,
+        "topic": {"title": topic.title, "angle": topic.angle, "audience": topic.audience,
+                  "outline": topic.outline},
+        "sources": [{"reference_id": source.reference_id, "title": source.title,
+                     "text": source.text} for source in sources],
+        "draft": ({"id": draft.id, "title": draft.title,
+                   "sections": [asdict(section) for section in draft.sections]}
+                  if draft is not None else None),
+    }
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/assistant/script-draft",
+    response_model=CreationTaskScriptResponse,
+)
+def save_assistant_script_draft(
+    task_id: str, request: Request, payload: CreationTaskScriptConfirmRequest,
+) -> CreationTaskScriptResponse:
+    workspace_id = current_workspace_id(request)
+    task, plan, topic, _, input_references = _assistant_script_inputs(workspace_id, task_id)
+    sections = [CreationTaskScriptSection(**section.model_dump()) for section in payload.sections]
+    allowed = {str(item["reference_id"]) for item in input_references}
+    if any(not set(section.evidence_reference_ids).issubset(allowed) for section in sections):
+        raise HTTPException(status_code=422, detail="文案引用了本次任务以外的资料")
+    scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
+    if scripts and scripts[0].selection_status == "draft" and task.stage_status == "waiting_for_user":
+        try:
+            draft = production_repo.update_assistant_script_draft(
+                workspace_id, task_id, scripts[0].id, title=payload.title, sections=sections,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        run = ScriptGenerationRun(
+            id=f"script_run_{uuid4().hex[:12]}", workspace_id=workspace_id,
+            task_id=task_id, plan_id=plan.id, topic_id=topic.id, status="running",
+            route_snapshot=_topic_route_snapshot(),
+            prompt_schema_version="assistant-script-draft/v1",
+            input_references=input_references,
+        )
+        try:
+            production_repo.start_script_generation(run)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        draft = CreationTaskScript(
+            id=f"script_{uuid4().hex[:12]}", workspace_id=workspace_id,
+            task_id=task_id, run_id=run.id, topic_id=topic.id,
+            title=payload.title, language=plan.language, sections=sections,
+        )
+        try:
+            _, _, draft = production_repo.complete_script_generation(run.id, draft)
+        except ValueError as exc:
+            production_repo.fail_script_generation(
+                run.id, reason="assistant_script_invalid",
+                impact="本轮文案未保存，原有文案不变。",
+                repair_action="检查文案内容和来源后重试。",
+                retryable=True, provider_attempted=True,
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CreationTaskScriptResponse.model_validate(asdict(draft))
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/assistant/history",
+    response_model=CreationTaskAssistantHistoryResponse,
+)
+def get_creation_task_assistant_history(task_id: str, request: Request) -> CreationTaskAssistantHistoryResponse:
+    workspace_id = current_workspace_id(request)
+    _creation_task_or_404(workspace_id, task_id)
+    return CreationTaskAssistantHistoryResponse.model_validate({"items": [
+        {"role": event.payload.get("role"), "message": event.payload.get("message"),
+         "stage": event.payload.get("stage"), "script_id": event.payload.get("script_id"),
+         "at": event.created_at}
+        for event in production_repo.list_task_events(workspace_id, task_id)
+        if event.event_type == "assistant_turn" and event.payload.get("role") in {"user", "assistant"}
+    ]})
+
+
+def _assistant_text_without_credentials(value: str) -> str:
+    safe = value
+    for known in (settings.effective_llm_api_key, settings.tencentcloud_secret_id,
+                  settings.tencentcloud_secret_key):
+        if known and len(known) >= 8:
+            safe = safe.replace(known, "[已隐藏凭据]")
+    for pattern in (
+        r"(?i)(\bauthorization\s*:\s*bearer\s+)\S+",
+        r"(?i)(\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*)\S+",
+        r"\bsk-[A-Za-z0-9_-]{16,}\b",
+    ):
+        safe = re.sub(pattern, lambda match: (match.group(1) if match.lastindex else "") + "[已隐藏凭据]", safe)
+    return safe
+
+
 @app.post(
     "/api/creation-tasks/{task_id}/assistant/turn",
     response_model=CreationTaskAssistantTurnResponse,
@@ -4004,12 +4129,21 @@ def creation_task_assistant_turn(
 ) -> CreationTaskAssistantTurnResponse:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
+    message = payload.message.strip()
+    if _assistant_text_without_credentials(message) != message:
+        raise HTTPException(status_code=422, detail="请勿在创作要求中粘贴密钥或口令。")
+    production_repo.append_task_event(TaskEvent(
+        id=f"event_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
+        job_id=None, event_type="assistant_turn",
+        payload={"role": "user", "message": message, "stage": payload.context_stage},
+        created_at=utc_now(),
+    ))
     try:
         reply, preview = run_task_turn(
             settings,
             workspace_id=workspace_id,
             task_id=task_id,
-            message=payload.message.strip(),
+            message=message,
             stage=payload.context_stage,
             selected_refs=payload.selected_object_refs,
             playhead_ms=payload.playhead_ms,
@@ -4018,17 +4152,39 @@ def creation_task_assistant_turn(
         )
     except AssistantUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if preview is not None:
+    reply = _assistant_text_without_credentials(reply)
+    script_draft = None
+    if preview is not None and payload.context_stage == "script":
+        script_id = preview.get("script_id") if isinstance(preview, dict) else None
+        if not isinstance(script_id, str):
+            raise HTTPException(status_code=502, detail="对话没有返回可核实的文案草稿。")
+        try:
+            candidate = production_repo.get_creation_task_script(workspace_id, script_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
+        if candidate.task_id != task_id or candidate.selection_status != "draft":
+            raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
+        script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
+        edit_preview = None
+    elif preview is not None:
         edit_preview = CreationTaskEditPreviewResponse.model_validate(preview)
         if edit_preview.proposal.task_id != task_id or edit_preview.proposal.workspace_id != workspace_id:
             raise HTTPException(status_code=502, detail="对话工具返回了不属于当前任务的编辑提案。")
     else:
         edit_preview = None
+    production_repo.append_task_event(TaskEvent(
+        id=f"event_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
+        job_id=None, event_type="assistant_turn",
+        payload={"role": "assistant", "message": reply, "stage": payload.context_stage,
+                 "script_id": script_draft.id if script_draft else None},
+        created_at=utc_now(),
+    ))
     return CreationTaskAssistantTurnResponse(
         reply=reply,
         provider=settings.effective_llm_provider,
         model=settings.effective_llm_model,
         edit_preview=edit_preview,
+        script_draft=script_draft,
     )
 
 

@@ -6,6 +6,7 @@ const playheadMs = process.env.AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS
   ? Number(process.env.AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS)
   : null;
 let previewCreated = false;
+let currentTaskRead = false;
 
 async function request(path: string, init?: RequestInit) {
   if (!apiBase) throw new Error("本地业务服务不可用");
@@ -139,6 +140,9 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
     execute: async () => {
       if (!taskId) throw new Error("当前创作任务不可用");
       const task = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
+      const scriptContext = stage === "script"
+        ? await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/script-context`)
+        : null;
       const allClips = task.montage?.clips || [];
       const selectedClipIds = new Set(selectedRefs.filter((ref: string) => ref.startsWith("clip:")).map((ref: string) => ref.slice(5)));
       const clips = allClips.filter((clip: Record<string, unknown>, index: number) => index < 24 || selectedClipIds.has(String(clip.id)))
@@ -175,7 +179,9 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         subtitle_tracks: subtitleTracks,
         narration_segments: narrationSegments,
         omitted_clip_count: Math.max(0, allClips.length - clips.length),
+        ...(scriptContext ? { script_context: scriptContext } : {}),
       };
+      currentTaskRead = true;
       return { content: [{ type: "text", text: JSON.stringify(context) }], details: context };
     },
   });
@@ -191,21 +197,68 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
       additionalProperties: false,
     },
     execute: async (_id: string, params: { query: string }) => {
-      const data = await request("/api/knowledge-items");
+      const data = stage === "script" && taskId
+        ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`)
+        : await request("/api/knowledge-items");
       const terms = params.query.toLowerCase().split(/\s+/).filter(Boolean);
-      const matches = (data.items || [])
+      const matches = (stage === "script" ? data.sources || [] : data.items || [])
         .filter((item: Record<string, unknown>) => {
-          const text = `${item.title || ""} ${item.body || ""}`.toLowerCase();
+          const text = `${item.title || ""} ${item.text || item.body || ""}`.toLowerCase();
           return terms.some((term) => text.includes(term));
         })
         .slice(0, 5)
         .map((item: Record<string, unknown>) => ({
-          id: item.id,
+          id: stage === "script" ? item.reference_id : item.id,
           title: item.title,
           version: item.version,
-          excerpt: String(item.body || "").slice(0, 900),
+          excerpt: String(item.text || item.body || "").slice(0, 900),
         }));
       return { content: [{ type: "text", text: JSON.stringify(matches) }], details: { matches } };
+    },
+  });
+
+  pi.registerTool({
+    name: "preview_script_draft",
+    label: "保存待确认文案",
+    description: "只为当前任务保存一份待用户检查的完整文案草稿；不会确认文案或开始制作。每段必须引用当前任务允许的来源 ID。",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 160 },
+        sections: { type: "array", minItems: 1, maxItems: 20, items: {
+          type: "object",
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 120 },
+            title: { type: "string", minLength: 1, maxLength: 160 },
+            content: { type: "string", minLength: 1, maxLength: 4000 },
+            visual_prompt: { type: "string", minLength: 1, maxLength: 1000 },
+            evidence_reference_ids: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" } },
+          },
+          required: ["title", "content", "visual_prompt", "evidence_reference_ids"],
+          additionalProperties: false,
+        } },
+      },
+      required: ["title", "sections"], additionalProperties: false,
+    },
+    execute: async (_id: string, params: { title: string; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
+      if (!taskId || stage !== "script") throw new Error("当前步骤不能保存文案草稿");
+      if (!currentTaskRead) throw new Error("请先读取当前任务和允许使用的资料");
+      if (previewCreated) throw new Error("本轮已保存文案草稿，请用户检查后再继续");
+      const draft = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, {
+        method: "POST",
+        body: JSON.stringify({ title: params.title, sections: params.sections.map((section, index) => ({
+          ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
+        })) }),
+      });
+      previewCreated = true;
+      const preview = { script_id: draft.id };
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          title: draft.title, section_count: draft.sections.length,
+          instruction: "文案已保存为待确认草稿，请用户在工作台检查并明确确认。尚未开始制作。",
+        }) }],
+        details: { kind: "script_draft", preview },
+      };
     },
   });
 

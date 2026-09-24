@@ -1349,6 +1349,19 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     provider: str
     model: str
     edit_preview: CreationTaskEditPreviewResponse | None = None
+    script_draft: CreationTaskScriptResponse | None = None
+
+
+class CreationTaskAssistantHistoryEntry(BaseModel):
+    role: Literal["user", "assistant"]
+    message: str
+    stage: str
+    script_id: str | None = None
+    at: datetime
+
+
+class CreationTaskAssistantHistoryResponse(BaseModel):
+    items: list[CreationTaskAssistantHistoryEntry]
 
 
 class EditOperationResponse(BaseModel):

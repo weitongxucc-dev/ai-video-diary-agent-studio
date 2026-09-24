@@ -1,6 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +38,36 @@ def test_pi_events_keep_plan_preview_separate_from_edit_preview():
     ])
     assert _last_answer_and_preview(output, "plan_preview") == ("请检查新任务预检。", {"name": "新任务"})
     assert _last_answer_and_preview(output, "edit_preview") == ("请检查新任务预检。", None)
+
+
+def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, tmp_path):
+    (tmp_path / "models").mkdir()
+    fake_pi = tmp_path / "pi"
+    fake_pi.touch()
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
+    settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
+                        llm_api_key_provider="minimax")
+    commands = []
+
+    def fake_run(cmd, **_kwargs):
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            json.dumps({"type": "tool_execution_end", "toolName": "preview_script_draft",
+                        "isError": False, "result": {"details": {"kind": "script_draft",
+                        "preview": {"script_id": "draft-one"}}}}),
+            json.dumps({"type": "message_end", "message": {"role": "assistant",
+                        "stopReason": "stop", "content": [{"type": "text", "text": "请检查文案。"}]}}),
+            '{"type":"agent_settled"}',
+        ]), stderr="")
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    for task_id in ("task-one", "task-one", "task-two"):
+        reply, preview = run_task_turn(settings, workspace_id="workspace-one", task_id=task_id,
+                                       message="把开头改短", stage="script", selected_refs=[], playhead_ms=None)
+        assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one"})
+    assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
+    assert commands[0][commands[0].index("--session-id") + 1] != commands[2][commands[2].index("--session-id") + 1]
+    assert commands[0][commands[0].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_script_draft"
 
 
 def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatch, tmp_path):
@@ -93,6 +124,7 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
     monkeypatch.setattr(main_module, "current_workspace_id",
                         lambda request: request.headers.get("x-test-workspace", "workspace-a"))
     monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
     payload = {"message": "请检查镜头", "context_stage": "montage",

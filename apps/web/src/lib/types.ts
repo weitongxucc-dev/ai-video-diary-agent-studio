@@ -1538,6 +1538,17 @@ export type CreationTaskAssistantTurnResponse = {
   provider: string;
   model: string;
   edit_preview: CreationTaskEditPreviewResponse | null;
+  script_draft: CreationTaskScript | null;
+};
+
+export type CreationTaskAssistantHistory = {
+  items: {
+    role: "user" | "assistant";
+    message: string;
+    stage: string;
+    script_id: string | null;
+    at: string;
+  }[];
 };
 
 export type CreationTaskEditOperation = {

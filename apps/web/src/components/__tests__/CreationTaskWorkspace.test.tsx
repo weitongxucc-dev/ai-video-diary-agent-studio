@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
     generateNarration: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
+    getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
     previewExecution: vi.fn().mockResolvedValue(null),
     startExecution: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getCreationTaskAssistantHistory: mocks.getAssistantHistory,
   getCreationExecution: mocks.getExecution,
   previewCreationExecution: mocks.previewExecution,
   startCreationExecution: mocks.startExecution,
@@ -245,10 +247,50 @@ function workspaceWithCover() {
 afterEach(() => {
   vi.clearAllMocks();
   mocks.previewExecution.mockResolvedValue(null);
+  mocks.getAssistantHistory.mockResolvedValue({ items: [] });
   Reflect.deleteProperty(window, "electronAPI");
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("shows task script dialogue and refreshes the saved draft after the assistant reply", async () => {
+    const task = { ...baseTask, stage: "script" as const, stage_status: "not_started" as const,
+      status: "running" as const, confirmed_script_id: null };
+    const initial = workspace(task);
+    const draft = {
+      id: "draft-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
+      title: "待确认文案", language: "zh-CN" as const, selection_status: "draft" as const,
+      created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
+      sections: [{ id: "section-1", title: "开头", content: "真实草稿正文。",
+        visual_prompt: "现场画面", evidence_reference_ids: ["knowledge:one:v1"] }],
+    };
+    mocks.getWorkspace.mockResolvedValue({ ...initial, scripts: [draft], task: {
+      ...task, stage_status: "waiting_for_user", status: "waiting_for_user",
+    } });
+    mocks.askAssistant.mockResolvedValue({ reply: "草稿已保存，请检查。", provider: "minimax",
+      model: "test", edit_preview: null, script_draft: draft });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByRole("heading", { name: "这段文案怎么写？" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "文案要求" }), { target: { value: "写一个简短开头" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith("task-1", expect.objectContaining({
+      message: "写一个简短开头", context_stage: "script",
+    })));
+    expect(await screen.findByText("真实草稿正文。", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("草稿已保存，请检查。")).toBeInTheDocument();
+  });
+
+  it("restores task dialogue from persisted history after reopening", async () => {
+    const initial = workspace({ ...baseTask, stage: "script", confirmed_script_id: null });
+    mocks.getAssistantHistory.mockResolvedValue({ items: [
+      { role: "user", message: "把开头缩短", stage: "script", script_id: null, at: baseTask.created_at },
+      { role: "assistant", message: "已改好，请检查。", stage: "script", script_id: "draft-1", at: baseTask.updated_at },
+    ] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByText("已改好，请检查。")).toBeInTheDocument();
+    expect(mocks.getAssistantHistory).toHaveBeenCalledWith("task-1");
+  });
+
   it("starts only after showing the confirmed script and making requirements", async () => {
     const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
     const preview = {
