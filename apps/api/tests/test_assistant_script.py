@@ -30,6 +30,22 @@ def _script_task(tmp_path: Path):
     return repo
 
 
+def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monkeypatch):
+    repo = _script_task(tmp_path)
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+        SimpleNamespace(id="topic-one", title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"]),
+    ])
+    monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("Pi must not be called")))
+    response = TestClient(main_module.app).post("/api/creation-tasks/task-one/assistant/turn", json={
+        "message": "请写开头", "context_stage": "script", "selected_object_refs": [],
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "content_sources_missing"
+    assert repo.list_task_events("local", "task-one") == []
+
+
 def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_path, monkeypatch):
     repo = _script_task(tmp_path)
     topic = SimpleNamespace(id="topic-one", title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"])
