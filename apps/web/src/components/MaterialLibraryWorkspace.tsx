@@ -17,15 +17,19 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import styles from "./MaterialLibraryControls.module.css";
 import {
   analyzeProductionMaterial,
   createMaterialCollection,
   getMaterialLibraryInsights,
+  getMaterialIntakeStatus,
   getProductionMaterials,
+  bindMaterialIntake,
   reviewProductionMaterial,
-  scanProductionMaterials,
+  retryMaterialIntake,
+  scanMaterialIntake,
   updateProductionMaterialSegment,
   updateMaterialUseState,
 } from "@/lib/api";
@@ -38,6 +42,7 @@ import type {
 } from "@/lib/types";
 
 type Filter = "all" | "raw" | "approved" | "rejected";
+type IntakeStatus = Awaited<ReturnType<typeof getMaterialIntakeStatus>>;
 type Busy =
   | "scan"
   | "search"
@@ -46,7 +51,17 @@ type Busy =
   | "review"
   | "segment"
   | "collection"
+  | "retry"
   | null;
+
+const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
+  ready: "目录可用",
+  missing: "目录不存在",
+  unmounted: "外接盘未连接",
+  invalid: "目录不可用",
+  changed: "目录已变更",
+  unknown: "等待确认",
+};
 
 const useStateOptions: { value: MaterialAsset["use_state"]; label: string; impact: string }[] = [
   { value: "available", label: "可用于创作", impact: "可用于选片和发布。" },
@@ -81,10 +96,20 @@ function reviewLabel(asset: MaterialAsset) {
   if (asset.use_state === "reference_only") return "仅参考";
   if (asset.review_status === "approved") return "已审核";
   if (asset.review_status === "rejected") return "用途待确认";
-  if (asset.analysis_status === "ready") return "等待审核";
+  if (asset.analysis_status === "ready") return "已分析";
   if (asset.analysis_status === "failed" || asset.analysis_status === "blocked")
     return "分析受阻";
   return "等待分析";
+}
+
+function analysisMessage(asset: MaterialAsset) {
+  const message = asset.analysis_message.trim();
+  if (!message || /[{}\n\r]|Traceback|Error:|\/Users\/|\/Volumes\/|[A-Za-z]:\\/.test(message)) {
+    return asset.analysis_status === "blocked"
+      ? "素材目录暂不可用，请连接原盘后重新检查。"
+      : "素材分析失败，请检查文件或本地模型后重试。";
+  }
+  return message;
 }
 
 function tagLabel(value: string) {
@@ -139,6 +164,9 @@ export function MaterialLibraryWorkspace({
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
+  const [intake, setIntake] = useState<IntakeStatus | null>(null);
+  const [intakeError, setIntakeError] = useState("");
+  const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | null>("refresh");
   const [detailError, setDetailError] = useState("");
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
@@ -152,7 +180,9 @@ export function MaterialLibraryWorkspace({
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
+  const intakeRevision = useRef(0);
   const lastSearch = useRef({ filter, query });
+  const assetWriteRevision = useRef(0);
 
   const selected =
     assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -166,10 +196,62 @@ export function MaterialLibraryWorkspace({
   const visible = assets;
 
   useEffect(() => {
+    let active = true;
+    async function refresh() {
+      const revision = intakeRevision.current;
+      try {
+        const status = await getMaterialIntakeStatus();
+        if (active && revision === intakeRevision.current) {
+          setIntake(status);
+          setIntakeError("");
+        }
+      } catch (cause) {
+        if (active && revision === intakeRevision.current) setIntakeError(visibleError(cause, "无法查看素材目录状态，请重试。"));
+      } finally {
+        if (active) setIntakeBusy((current) => current === "refresh" ? null : current);
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
+    if (!intake?.bound_to_current_workspace || busy !== null) return;
+    let active = true;
+    let inFlight = false;
+    const timer = window.setInterval(async () => {
+      if (document.visibilityState !== "visible" || inFlight) return;
+      inFlight = true;
+      const revision = assetWriteRevision.current;
+      try {
+        const [libraryResult, insightsResult] = await Promise.allSettled([
+          getProductionMaterials({ limit: initialLibrary.limit, offset: 0, query: query.trim(), reviewStatus: filter }),
+          getMaterialLibraryInsights(),
+        ]);
+        if (active && revision === assetWriteRevision.current) {
+          if (libraryResult.status === "fulfilled") {
+            setAssets(libraryResult.value.assets);
+            setTotalCount(libraryResult.value.total_count);
+            setHasMore(libraryResult.value.has_more);
+          }
+          if (insightsResult.status === "fulfilled") setInsights(insightsResult.value);
+        }
+      } finally {
+        inFlight = false;
+      }
+    }, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [busy, filter, initialLibrary.limit, intake?.bound_to_current_workspace, query]);
+
+  useEffect(() => {
     if (lastSearch.current.filter === filter && lastSearch.current.query === query) return;
     lastSearch.current = { filter, query };
     let active = true;
     const timer = window.setTimeout(() => {
+      const revision = assetWriteRevision.current;
       setBusy("search");
       getProductionMaterials({
         limit: initialLibrary.limit,
@@ -178,7 +260,7 @@ export function MaterialLibraryWorkspace({
         reviewStatus: filter,
       })
         .then((result) => {
-          if (!active) return;
+          if (!active || revision !== assetWriteRevision.current) return;
           setAssets(result.assets);
           setTotalCount(result.total_count);
           setHasMore(result.has_more);
@@ -206,6 +288,7 @@ export function MaterialLibraryWorkspace({
   }, [filter, initialLibrary.limit, query]);
 
   function replaceAsset(updated: MaterialAsset) {
+    assetWriteRevision.current += 1;
     setAssets((current) =>
       current.map((asset) => (asset.id === updated.id ? updated : asset)),
     );
@@ -242,11 +325,42 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function refreshIntakeStatus() {
+    const revision = ++intakeRevision.current;
+    setIntakeBusy("refresh");
+    try {
+      const status = await getMaterialIntakeStatus();
+      if (revision === intakeRevision.current) { setIntake(status); setIntakeError(""); }
+    } catch (cause) {
+      if (revision === intakeRevision.current) setIntakeError(visibleError(cause, "无法查看素材目录状态，请重试。"));
+    } finally {
+      setIntakeBusy(null);
+    }
+  }
+
+  async function bindIntake() {
+    const directory = intake?.configured_directory;
+    if (!directory || !intake.binding_available || intake.directory_state !== "ready" || intake.bound_to_current_workspace) return;
+    ++intakeRevision.current;
+    setIntakeBusy("bind");
+    setIntakeError("");
+    try {
+      setIntake(await bindMaterialIntake(directory));
+    } catch (cause) {
+      setIntakeError(visibleError(cause, "接入失败。请核对目录后重新确认。"));
+      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Preserve the reviewed directory and error. */ }
+    } finally {
+      setIntakeBusy(null);
+    }
+  }
+
   async function scan() {
+    if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
     setBusy("scan");
     setError("");
     try {
-      const result = await scanProductionMaterials();
+      const result = await scanMaterialIntake();
+      assetWriteRevision.current += 1;
       setAssets(result.assets);
       setTotalCount(result.total_count);
       setHasMore(result.has_more);
@@ -259,8 +373,9 @@ export function MaterialLibraryWorkspace({
         selectAsset(result.assets[0]);
       }
       await refreshInsights();
+      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Keep the last directory status. */ }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "扫描素材失败");
+      setError(visibleError(cause, "检查素材目录失败，请重试。"));
     } finally {
       setBusy(null);
     }
@@ -304,6 +419,21 @@ export function MaterialLibraryWorkspace({
       await refreshInsights();
     } catch (cause) {
       if (revision === selectionRevision.current) setDetailError(visibleError(cause, "素材分析失败，请重试"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function retryFailedAsset() {
+    if (!selected || selected.analysis_status !== "failed") return;
+    const revision = selectionRevision.current;
+    setBusy("retry");
+    setDetailError("");
+    try {
+      replaceAsset(await retryMaterialIntake(selected.id));
+      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Keep the last directory status. */ }
+    } catch (cause) {
+      if (revision === selectionRevision.current) setDetailError(visibleError(cause, "重试失败，请检查素材目录后再试。"));
     } finally {
       setBusy(null);
     }
@@ -450,6 +580,9 @@ export function MaterialLibraryWorkspace({
           {roleLabel(selected)} · {reviewLabel(selected)}
         </span>
       </div>
+      {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
+        <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
+      ) : null}
       {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
       <dl className="library-inspector__meta">
         <div>
@@ -491,14 +624,17 @@ export function MaterialLibraryWorkspace({
         </div>
       ) : null}
       <div className="library-inspector__actions">
-        <button
-          disabled={busy !== null}
-          onClick={() => void analyze()}
-          type="button"
-        >
-          <RefreshCw size={14} />
-          {busy === "analyze" ? "分析中…" : "重新分析"}
-        </button>
+        {selected.analysis_status === "failed" ? (
+          <button disabled={busy !== null} onClick={() => void retryFailedAsset()} type="button">
+            <RefreshCw size={14} />
+            {busy === "retry" ? "正在重试…" : "重试分析"}
+          </button>
+        ) : selected.analysis_status === "ready" ? (
+          <button disabled={busy !== null} onClick={() => void analyze()} type="button">
+            <RefreshCw size={14} />
+            {busy === "analyze" ? "分析中…" : "重新分析"}
+          </button>
+        ) : null}
         <button
           className="is-primary"
           disabled={busy !== null}
@@ -675,6 +811,58 @@ export function MaterialLibraryWorkspace({
   return (
     <AppShell inspector={inspector} inspectorTitle="素材详情">
       <div className="modern-library">
+        <section className={styles.intakePanel} aria-label="素材自动接入">
+          <div className={styles.intakeHeading}>
+            <strong>素材自动接入</strong>
+            <span>{intake ? directoryStateLabel[intake.directory_state] : "正在核对目录"}</span>
+          </div>
+          {intakeError ? (
+            <p className={styles.intakeError} role="alert">{intakeError}
+              <button disabled={intakeBusy !== null} onClick={() => void refreshIntakeStatus()} type="button">重新检查</button>
+            </p>
+          ) : null}
+          {!intake ? (
+            <p className={styles.intakeDescription}>{intakeError ? "暂时无法确认目录状态，请重新检查。" : "正在确认素材目录与当前工作区的关系…"}</p>
+          ) : !intake.binding_available ? (
+            <p className={styles.intakeDescription}>该目录已接入其他工作区。请切换到所属工作区处理，当前工作区不能直接接入。</p>
+          ) : intake.directory_state === "changed" ? (
+            <p className={styles.intakeDescription}>{intake.directory_message} {intake.repair_action} 请在<Link href="/settings">设置</Link>中核对目录；不会自动更改工作区归属。</p>
+          ) : !intake.configured_directory ? (
+            <p className={styles.intakeDescription}>尚未选择素材目录。请先到<Link href="/settings">设置</Link>选择目录。</p>
+          ) : !intake.bound_to_current_workspace ? (
+            <div className={styles.intakeRow}>
+              <p className={styles.intakeDescription}>
+                确认将 <code title={intake.configured_directory}>{intake.configured_directory}</code> 接入当前工作区。接入后每 {intake.scan_interval_seconds} 秒检查新文件并分析，不会自动创建视频任务。
+                {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : ""}
+              </p>
+              <button className={styles.intakePrimary} disabled={intakeBusy !== null || intake.directory_state !== "ready"} onClick={() => void bindIntake()} type="button">
+                {intakeBusy === "bind" ? "正在接入…" : "确认接入"}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className={styles.intakeRow}>
+                <p className={styles.intakeDescription}>
+                  已接入 <code title={intake.bound_directory ?? ""}>{intake.bound_directory}</code>，每 {intake.scan_interval_seconds} 秒自动检查。
+                  {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : " 新文件稳定后自动分析。"}
+                </p>
+                {intake.directory_state === "ready" ? (
+                  <button className={styles.intakeSecondary} disabled={busy !== null || intakeBusy !== null} onClick={() => void scan()} type="button">
+                    {busy === "scan" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderSearch size={15} />}
+                    {busy === "scan" ? "正在检查…" : "立即检查"}
+                  </button>
+                ) : null}
+              </div>
+              <div className={styles.intakeCounts} aria-label="自动接入进度">
+                <span>等待稳定 {intake.file_counts.observing}</span>
+                <span>分析中 {intake.file_counts.running}</span>
+                <span>已就绪 {intake.file_counts.ready}</span>
+                <span>失败 {intake.file_counts.failed}</span>
+                <span>等待磁盘 {intake.file_counts.blocked_disk}</span>
+              </div>
+            </>
+          )}
+        </section>
         <section
           className="library-coverage"
           aria-label="素材覆盖"
@@ -734,19 +922,6 @@ export function MaterialLibraryWorkspace({
           <span className="library-count">
             已载入 {assets.length} / {totalCount}
           </span>
-          <button
-            className="modern-primary-button"
-            disabled={busy !== null}
-            onClick={() => void scan()}
-            type="button"
-          >
-            {busy === "scan" ? (
-              <LoaderCircle className="is-spinning" size={16} />
-            ) : (
-              <FolderSearch size={16} />
-            )}
-            {busy === "scan" ? "正在扫描…" : "找新素材"}
-          </button>
         </div>
 
         {error ? (
@@ -792,6 +967,9 @@ export function MaterialLibraryWorkspace({
                   <small>
                     {roleLabel(asset)} · {reviewLabel(asset)}
                   </small>
+                  {(asset.analysis_status === "blocked" || asset.analysis_status === "failed") ? (
+                    <small className={styles.assetDiagnostic}>{analysisMessage(asset)}</small>
+                  ) : null}
                 </span>
               </button>
             ))}
@@ -806,14 +984,11 @@ export function MaterialLibraryWorkspace({
               <p>
                 {assets.length
                   ? "调整搜索条件或审核状态。"
-                  : "选择素材目录后，系统会识别长视频中的可用片段。"}
+                  : intake?.bound_to_current_workspace
+                    ? "系统会自动检查新素材。新文件稳定并完成分析后，将显示在这里。"
+                    : "先在上方确认素材目录，系统随后会自动检查新文件。"}
               </p>
             </div>
-            {!assets.length ? (
-              <button onClick={() => void scan()} type="button">
-                扫描素材目录
-              </button>
-            ) : null}
           </div>
         )}
         {hasMore ? (
