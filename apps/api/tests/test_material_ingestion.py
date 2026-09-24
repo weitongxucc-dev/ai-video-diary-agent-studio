@@ -58,7 +58,7 @@ def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> N
     service = MaterialIngestionService(repo, stable_seconds=0)
     assert service.scan_once() == []
     assert repo.list_assets("one") == []
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     assert service.scan_once() == []
     assert repo.list_assets("one")[0].analysis_status == "blocked"
     source.write_bytes(b"finished")
@@ -84,7 +84,7 @@ def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> N
     assert duration.call_count == 2
     assert restarted.list_assets("other") == []
     with pytest.raises(ValueError, match="已绑定另一工作区"):
-        restarted.bind_material_ingestion("other")
+        restarted.bind_material_ingestion("other", expected_directory=str(library))
 
 
 def test_failure_is_isolated_and_retry_is_explicit(tmp_path: Path) -> None:
@@ -96,7 +96,7 @@ def test_failure_is_isolated_and_retry_is_explicit(tmp_path: Path) -> None:
     repo, library = make_repo(tmp_path, duration)
     (library / "good.mp4").write_bytes(b"good")
     (library / "bad.mp4").write_bytes(b"bad")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -117,7 +117,7 @@ def test_unchanged_ready_and_failed_files_do_not_rehash_each_scan(tmp_path: Path
     repo, library = make_repo(tmp_path, duration)
     (library / "ready.mp4").write_bytes(b"ready")
     (library / "failed.mp4").write_bytes(b"failed")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -156,7 +156,7 @@ def test_copy_waits_for_stable_window(tmp_path: Path, monkeypatch: pytest.Monkey
     repo, library = make_repo(tmp_path, duration)
     source = library / "copy.mp4"
     source.write_bytes(b"part")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=30)
     service.scan_once()
     clock[0] = 1020
@@ -183,7 +183,7 @@ def test_binding_wakes_background_scan_without_waiting_for_interval(tmp_path: Pa
     service = MaterialIngestionService(repo, scan_interval_seconds=3600, stable_seconds=0)
     service.start()
     try:
-        repo.bind_material_ingestion("one")
+        repo.bind_material_ingestion("one", expected_directory=str(library))
         service.wake()
         deadline = time.monotonic() + 2
         while not repo.list_assets("one") and time.monotonic() < deadline:
@@ -202,7 +202,7 @@ def test_missing_disk_and_symlink_escape(tmp_path: Path) -> None:
     outside = tmp_path / "private.mp4"
     outside.write_bytes(b"outside")
     (library / "escape.mp4").symlink_to(outside)
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -224,7 +224,7 @@ def test_ingestion_state_counts_are_workspace_scoped_and_path_free(tmp_path: Pat
     repo, library = make_repo(tmp_path, duration)
     (library / "ready.mp4").write_bytes(b"ready")
     (library / "failed.mp4").write_bytes(b"failed")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -241,12 +241,78 @@ def test_ingestion_state_counts_are_workspace_scoped_and_path_free(tmp_path: Pat
     }
 
 
+def test_directory_state_and_confirmation_reject_stale_or_foreign_binding(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    assert repo.material_ingestion_directory_state("one") == {
+        "directory": str(library), "status": "ready", "bound_to_current_workspace": False,
+        "bound_to_another_workspace": False, "configured_path_changed": False,
+    }
+    with pytest.raises(ValueError, match="配置已变化"):
+        repo.bind_material_ingestion("one", expected_directory=str(tmp_path / "stale"))
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    assert repo.material_ingestion_directory_state("one")["bound_to_current_workspace"] is True
+    foreign = repo.material_ingestion_directory_state("other")
+    assert foreign["directory"] is None
+    assert foreign["bound_to_another_workspace"] is True
+    assert str(library) not in repr(foreign)
+    with pytest.raises(ValueError, match="已绑定另一工作区"):
+        repo.bind_material_ingestion("other", expected_directory=str(library))
+
+    alternate = tmp_path / "another"
+    alternate.mkdir()
+    reconfigured = ProductionRepository(tmp_path / "production.sqlite", alternate)
+    changed = reconfigured.material_ingestion_directory_state("one")
+    assert changed["configured_path_changed"] is True
+    assert changed["bound_to_current_workspace"] is False
+    with pytest.raises(ValueError, match="配置已变化"):
+        reconfigured.bind_material_ingestion("one", expected_directory=str(library))
+    with pytest.raises(ValueError, match="已绑定另一工作区或目录"):
+        reconfigured.bind_material_ingestion("one", expected_directory=str(alternate))
+
+    missing = ProductionRepository(tmp_path / "missing.sqlite", tmp_path / "absent")
+    assert missing.material_ingestion_directory_state("one")["status"] == "missing"
+    invalid_file = tmp_path / "plain-file"
+    invalid_file.write_text("not a directory")
+    invalid = ProductionRepository(tmp_path / "invalid.sqlite", invalid_file)
+    assert invalid.material_ingestion_directory_state("one")["status"] == "invalid"
+    unmounted = ProductionRepository(tmp_path / "unmounted.sqlite", "/Volumes/codex-mat01-unmounted/inbox")
+    assert unmounted.material_ingestion_directory_state("one")["status"] == "unmounted"
+
+    (library / "video.mp4").write_bytes(b"fixture")
+    service = MaterialIngestionService(repo, stable_seconds=0)
+    service.scan_once()
+    assert service.scan_once()[0].analysis_status == "ready"
+
+
+def test_material_failure_messages_do_not_expose_exception_paths(tmp_path: Path) -> None:
+    secret_path = "/Users/someone/private/token-and-video.mp4"
+
+    def bad_media(path: Path) -> float:
+        raise ValueError(f"ffprobe failed on {secret_path}")
+
+    repo, library = make_repo(tmp_path, bad_media)
+    (library / "bad.mp4").write_bytes(b"broken")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    service = MaterialIngestionService(repo, stable_seconds=0)
+    service.scan_once()
+    asset = service.scan_once()[0]
+    assert asset.analysis_status == "failed"
+    assert "格式或内容无效" in asset.analysis_message
+    assert secret_path not in asset.analysis_message
+
+    repo.fail_material_ingestion("one", asset.id, "digest", RuntimeError(f"worker failed at {secret_path}"))
+    persisted = repo.get_asset("one", asset.id)
+    assert "本机日志" in persisted.analysis_message
+    assert secret_path not in persisted.analysis_message
+
+
 def test_reanalysis_preserves_unmatched_manual_correction(tmp_path: Path) -> None:
     boundaries = [2.0]
     repo, library = make_repo(tmp_path, duration_reader=lambda path: 4.0, scene_reader=lambda path, duration: boundaries)
     source = library / "clip.mp4"
     source.write_bytes(b"video")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     asset = service.scan_once()[0]
@@ -264,7 +330,7 @@ def test_asset_tags_are_atomic_workspace_scoped_and_searchable(tmp_path: Path) -
     repo, library = make_repo(tmp_path)
     (library / "one.mp4").write_bytes(b"one")
     (library / "two.mp4").write_bytes(b"two")
-    repo.bind_material_ingestion("one")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -309,7 +375,7 @@ def test_generated_video_uses_real_probe_and_scene_tools(tmp_path: Path) -> None
         check=True,
     )
     real_repo = ProductionRepository(tmp_path / "real.sqlite", library)
-    real_repo.bind_material_ingestion("one")
+    real_repo.bind_material_ingestion("one", expected_directory=str(library))
     service = MaterialIngestionService(real_repo, stable_seconds=0)
     service.scan_once()
     analyzed = service.scan_once()

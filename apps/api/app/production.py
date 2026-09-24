@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -36,6 +37,8 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
@@ -137,6 +140,22 @@ class MaterialAsset:
 
 def material_allows_footage(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
+
+
+def _material_analysis_public_error(error: Exception) -> str:
+    if isinstance(error, PermissionError):
+        return "素材文件没有读取权限"
+    if isinstance(error, FileNotFoundError):
+        return "素材文件已移动或外接盘暂不可用"
+    if isinstance(error, OSError):
+        return "素材文件无法读取"
+    if isinstance(error, subprocess.SubprocessError):
+        return "媒体探测或解码失败，请检查文件格式"
+    if isinstance(error, VisualSemanticError):
+        return "画面分析模型不可用或执行失败"
+    if isinstance(error, ValueError):
+        return "媒体格式或内容无效"
+    return "分析服务未能完成，请查看本机日志"
 
 
 @dataclass
@@ -2461,16 +2480,20 @@ class ProductionRepository:
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
 
-    def bind_material_ingestion(self, workspace_id: str) -> None:
+    def bind_material_ingestion(self, workspace_id: str, *, expected_directory: str) -> None:
         """Bind the configured inbox to one authenticated workspace, never to the current login."""
         if not workspace_id.strip():
             raise ValueError("必须先选择已验证的工作区")
-        root = self.video_library_path
-        if not self._material_library_available():
-            raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
-        root_path = str(root.resolve())
+        if not expected_directory.strip() or not Path(expected_directory).expanduser().is_absolute():
+            raise ValueError("请先确认当前素材目录")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if self._material_library_status() != "ready":
+                raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
+            root_path = str(self.video_library_path.resolve())
+            expected_path = str(Path(expected_directory).expanduser().resolve())
+            if expected_path != root_path:
+                raise ValueError("素材目录配置已变化，请刷新后重新确认")
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
             if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
                 raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
@@ -2483,6 +2506,22 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
+        """Describe the configured directory without revealing another workspace's binding."""
+        if not workspace_id.strip():
+            raise ValueError("必须先选择已验证的工作区")
+        binding = self.get_material_ingestion_binding()
+        current_path = str(self.video_library_path)
+        resolved_path = str(self.video_library_path.resolve())
+        foreign_binding = binding is not None and binding[0] != workspace_id
+        return {
+            "directory": None if foreign_binding else current_path,
+            "status": self._material_library_status(),
+            "bound_to_current_workspace": binding == (workspace_id, resolved_path),
+            "bound_to_another_workspace": foreign_binding,
+            "configured_path_changed": binding is not None and binding[1] != resolved_path,
+        }
 
     def material_ingestion_state_counts(self, workspace_id: str) -> dict[str, int]:
         """Return intake totals for one workspace without exposing file paths."""
@@ -2500,15 +2539,22 @@ class ProductionRepository:
         return counts
 
     def _material_library_available(self) -> bool:
+        return self._material_library_status() == "ready"
+
+    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "ready"]:
         root = self.video_library_path
-        if not root.is_dir() or root.is_symlink():
-            return False
+        if not root.is_absolute() or root.is_symlink():
+            return "invalid"
         # A leftover /Volumes/<name> directory is not evidence that its disk is mounted.
         if len(root.parts) >= 3 and root.parts[1] == "Volumes":
             volume = Path(*root.parts[:3])
             if not volume.is_mount():
-                return False
-        return True
+                return "unmounted"
+        if not root.exists():
+            return "missing"
+        if not root.is_dir():
+            return "invalid"
+        return "ready"
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""
@@ -2636,10 +2682,10 @@ class ProductionRepository:
                 ("failed" if failed else "ready", int(failed), digest, workspace_id, asset.path, digest),
             )
 
-    def fail_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, reason: str) -> None:
+    def fail_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, reason: Exception) -> None:
         asset = self.get_asset(workspace_id, asset_id)
         asset.analysis_status = "failed"
-        asset.analysis_message = f"素材分析失败：{reason}。可检查文件或模型后手动重试。"
+        asset.analysis_message = f"素材分析失败：{_material_analysis_public_error(reason)}。检查后可手动重试。"
         self._save_asset(asset)
         self.finish_material_ingestion(workspace_id, asset_id, digest, failed=True)
 
@@ -2968,8 +3014,9 @@ class ProductionRepository:
                 f"画面观察 {sum(bool(item.understanding and item.understanding.status == 'ready') for item in segments)}/{len(segments)} 个片段。"
             ).strip()
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            logger.exception("Material analysis failed for asset %s", asset_id)
             asset.analysis_status = "failed"
-            asset.analysis_message = f"镜头分析失败：{exc}"
+            asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
         final_stat = path.stat()
         if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")

@@ -62,7 +62,7 @@ class MaterialIngestionService:
                     asset = self.repository.analyze_asset(workspace_id, asset_id, expected_source_digest=digest)
                 except Exception as exc:
                     logger.exception("Material analysis failed for asset %s", asset_id)
-                    self.repository.fail_material_ingestion(workspace_id, asset_id, digest, str(exc))
+                    self.repository.fail_material_ingestion(workspace_id, asset_id, digest, exc)
                     continue
                 self.repository.finish_material_ingestion(
                     workspace_id, asset_id, digest, failed=asset.analysis_status == "failed"
