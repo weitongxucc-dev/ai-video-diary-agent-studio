@@ -24,6 +24,7 @@ class MaterialIngestionService:
         self.scan_interval_seconds = scan_interval_seconds
         self.stable_seconds = stable_seconds
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._scan_lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -31,14 +32,20 @@ class MaterialIngestionService:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
+        self._wake.clear()
         self._thread = threading.Thread(target=self._run, name="material-ingestion", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._thread is not None:
             self._thread.join()
             self._thread = None
+
+    def wake(self) -> None:
+        """Schedule the next scan after binding or retry without blocking the request."""
+        self._wake.set()
 
     def scan_once(self) -> list[MaterialAsset]:
         """Run one bounded intake cycle; safe to call beside the background thread."""
@@ -69,4 +76,5 @@ class MaterialIngestionService:
                 self.scan_once()
             except Exception:
                 logger.exception("Material ingestion cycle failed")
-            self._stop.wait(self.scan_interval_seconds)
+            self._wake.wait(self.scan_interval_seconds)
+            self._wake.clear()

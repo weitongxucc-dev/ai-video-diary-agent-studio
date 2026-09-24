@@ -104,6 +104,31 @@ def test_copy_waits_for_stable_window(tmp_path: Path, monkeypatch: pytest.Monkey
     assert service.scan_once()[0].analysis_status == "ready"
 
 
+def test_binding_wakes_background_scan_without_waiting_for_interval(tmp_path: Path) -> None:
+    analyzed = threading.Event()
+
+    def duration(path: Path) -> float:
+        analyzed.set()
+        return 1.0
+
+    repo, library = make_repo(tmp_path, duration)
+    (library / "new.mp4").write_bytes(b"video")
+    service = MaterialIngestionService(repo, scan_interval_seconds=3600, stable_seconds=0)
+    service.start()
+    try:
+        repo.bind_material_ingestion("one")
+        service.wake()
+        deadline = time.monotonic() + 2
+        while not repo.list_assets("one") and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert repo.list_assets("one")
+        service.wake()
+        assert analyzed.wait(2)
+    finally:
+        service.stop()
+    assert repo.list_assets("one")[0].analysis_status == "ready"
+
+
 def test_missing_disk_and_symlink_escape(tmp_path: Path) -> None:
     repo, library = make_repo(tmp_path)
     (library / "clip.mp4").write_bytes(b"video")
