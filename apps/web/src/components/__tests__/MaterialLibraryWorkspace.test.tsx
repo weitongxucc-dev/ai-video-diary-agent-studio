@@ -48,6 +48,20 @@ it("adds a tag only after the segment update succeeds and keeps the time range v
   expect(input).toHaveValue("");
 });
 
+it("keeps a saved tag when the separate insights refresh fails", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
+  vi.mocked(getMaterialLibraryInsights).mockRejectedValue(new Error("统计暂不可用"));
+  vi.mocked(updateProductionMaterialSegment).mockResolvedValue({ ...taggedAsset, segments: [{ ...segment, user_tags: ["旧标签", "产品演示"] }] });
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const input = screen.getByLabelText("添加标签");
+  fireEvent.change(input, { target: { value: "产品演示" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(screen.getByLabelText("移除标签 产品演示")).toBeInTheDocument());
+  await waitFor(() => expect(getMaterialLibraryInsights).toHaveBeenCalled());
+  expect(input).toHaveValue("");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("does not submit while Chinese input is composing and preserves input on failure", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
   vi.mocked(updateProductionMaterialSegment).mockRejectedValue(new Error('{"detail":"暂时无法保存"}'));
