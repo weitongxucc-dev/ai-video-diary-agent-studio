@@ -17,7 +17,7 @@ from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 
 
 KIND = "creation_task_execution"
-STAGES = (("narration", 25), ("montage_plan", 60), ("render", 95))
+STAGES = ("narration", "montage_plan", "render")
 
 
 class ExecutionStartRequest(BaseModel):
@@ -179,15 +179,15 @@ class CreationExecution:
         event = self.repository.get_task_event(context.workspace_id, f"event_{job.id}_start")
         script_id = str(event.payload["script_id"])
         workspace_id, task_id = context.workspace_id, job.task_id
-        for stage, progress in STAGES:
+        for stage in STAGES:
             context.raise_if_cancelled()
             task = self.repository.get_creation_task(workspace_id, task_id)
             try:
                 self.validate_input(workspace_id, task, script_id, job.input_digest)
             except (KeyError, ValueError) as exc:
                 raise JobFailure(str(exc), "制作输入已变化，未继续执行下游阶段。", "重新确认文案与制作要求后开始。") from exc
-            if self._stage_was_attempted_for_digest(job, stage) and self._valid_stage(workspace_id, task, stage):
-                self._stage_event(context, stage, "reused")
+            if self._stage_has_matching_output(job, task, stage):
+                self._stage_event(context, stage, "reused", output=self._output_identity(workspace_id, task, stage))
             else:
                 self._stage_event(context, stage, "running")
                 try:
@@ -204,13 +204,15 @@ class CreationExecution:
                         repair = "修复当前阶段后点击继续制作。"
                     self._stage_event(context, stage, "failed", reason=reason)
                     raise JobFailure(reason, impact, repair) from exc
-                self._stage_event(context, stage, "completed")
-            context.report_progress(progress)
+                completed_task = self.repository.get_creation_task(workspace_id, task_id)
+                self._stage_event(
+                    context, stage, "completed",
+                    output=self._output_identity(workspace_id, completed_task, stage),
+                )
         plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
         if not self.render_is_valid(workspace_id, task_id):
             raise JobFailure("成片产物不可用", "渲染完成状态不能作为可播放成片。", "检查渲染产物后继续制作。")
         self._stage_event(context, "cover", "pending", reason="尚未生成封面，请单独制作或选择封面。")
-        context.report_progress(100)
         return JobResult()
 
     def _valid_stage(self, workspace_id: str, task: CreationTask, stage: str) -> bool:
@@ -236,7 +238,12 @@ class CreationExecution:
         plan = self.repository.get_creation_task_montage_plan(workspace_id, task.id)
         return plan.get("script_id") == task.confirmed_script_id and self.render_is_valid(workspace_id, task.id)
 
-    def _stage_was_attempted_for_digest(self, job: JobRun, stage: str) -> bool:
+    def _stage_has_matching_output(self, job: JobRun, task: CreationTask, stage: str) -> bool:
+        if not self._valid_stage(job.workspace_id, task, stage):
+            return False
+        current_output = self._output_identity(job.workspace_id, task, stage)
+        if not current_output:
+            return False
         matching_ids = {
             prior.id for prior in self.jobs(job.workspace_id, job.task_id)
             if prior.input_digest == job.input_digest
@@ -245,16 +252,33 @@ class CreationExecution:
             event.job_id in matching_ids
             and event.event_type == "creation_execution_stage"
             and event.payload.get("stage") == stage
-            and event.payload.get("status") in {"running", "completed", "reused"}
+            and event.payload.get("status") in {"completed", "reused"}
+            and event.payload.get("output") == current_output
             for event in self.repository.list_task_events(job.workspace_id, job.task_id)
         )
 
-    def _stage_event(self, context: JobContext, stage: str, status: str, *, reason: str | None = None) -> None:
+    def _output_identity(self, workspace_id: str, task: CreationTask, stage: str) -> str | None:
+        if stage == "narration":
+            return task.narration_cache_key
+        if stage == "montage_plan":
+            return task.montage_plan_id
+        if not task.current_timeline_version_id:
+            return None
+        plan = self.repository.get_creation_task_montage_plan(workspace_id, task.id)
+        output = plan.get("output_path")
+        return f"{task.current_timeline_version_id}:{output}" if isinstance(output, str) else None
+
+    def _stage_event(
+        self, context: JobContext, stage: str, status: str,
+        *, reason: str | None = None, output: str | None = None,
+    ) -> None:
         self.repository.append_task_event(
             TaskEvent(
                 id=f"event_{uuid4().hex}", workspace_id=context.workspace_id,
                 task_id=self.repository.get_job_run(context.workspace_id, context.job_id).task_id,
                 job_id=context.job_id, event_type="creation_execution_stage",
-                payload={"stage": stage, "status": status, **({"reason": reason} if reason else {})},
+                payload={"stage": stage, "status": status,
+                         **({"reason": reason} if reason else {}),
+                         **({"output": output} if output else {})},
             )
         )

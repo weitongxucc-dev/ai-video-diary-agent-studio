@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.creation_execution import CreationExecution, revision_digest
 from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.artifact_store import ArtifactStore
 
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True):
@@ -177,3 +178,57 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     assert first.json()["job"]["id"] == second.json()["job"]["id"]
     assert len(repo.list_job_runs("local", task_id)) == 1
     assert len(scheduled) == 2  # atomic JobRun claim ensures only one worker executes
+
+
+def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypatch):
+    repo, task_id, script_id, digest = _seed(tmp_path)
+    old_audio = tmp_path / "old.wav"
+    old_audio.write_bytes(b"old voice")
+    task = repo.get_creation_task("workspace_a", task_id)
+    task.narration_cache_key = "old_voice_cache"
+    with sqlite3.connect(repo.database_path) as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(task), default=str), "workspace_a", task_id))
+    monkeypatch.setattr(repo, "get_narration_artifact", lambda *_: SimpleNamespace(
+        task_id=task_id, script_id=script_id, audio_path=str(old_audio)))
+    attempts = []
+
+    def failing_narration(*_):
+        attempts.append("called")
+        raise ValueError("新声音暂不可用")
+
+    execution = _execution(repo, {"narration": failing_narration})
+    first = execution.start("workspace_a", task_id, script_id, digest)
+    assert execution.execute("workspace_a", first.id).status == "failed"
+    resumed = execution.retry("workspace_a", task_id)
+    assert execution.execute("workspace_a", resumed.id).status == "failed"
+    assert attempts == ["called", "called"]
+
+
+def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path, monkeypatch):
+    store = ArtifactStore(tmp_path / "artifacts")
+    published = store.publish_bytes("task/preview.mp4", b"invalid media")
+    task = SimpleNamespace(current_timeline_version_id="version_1", confirmed_script_id="script_1")
+    plan = {"status": "rendered", "script_id": "script_1", "output_path": published.logical_ref,
+            "aspect_ratio": "9:16"}
+    record = SimpleNamespace(logical_ref=published.logical_ref, kind="rendered_video",
+                             producer_job_id="render_1", sha256=published.sha256,
+                             size_bytes=published.size_bytes)
+    current_version = SimpleNamespace(task_id="task_1", snapshot={"output_refs": [published.logical_ref]})
+    repository = SimpleNamespace(
+        get_creation_task=lambda *_: task,
+        get_creation_task_montage_plan=lambda *_: plan,
+        get_timeline_version=lambda *_: current_version,
+        list_artifact_records=lambda *_: [record],
+        get_job_run=lambda *_: SimpleNamespace(status="succeeded"),
+    )
+    monkeypatch.setattr(main_module, "production_repo", repository)
+    monkeypatch.setattr(main_module, "artifact_store", store)
+    assert not main_module._creation_render_is_valid("workspace_a", "task_1")
+    monkeypatch.setattr(main_module, "_validate_rendered_media", lambda *_args, **_kwargs: None)
+    assert main_module._creation_render_is_valid("workspace_a", "task_1")
+    current_version.snapshot["output_refs"] = []
+    assert not main_module._creation_render_is_valid("workspace_a", "task_1")
+    current_version.snapshot["output_refs"] = [published.logical_ref]
+    store.resolve_file(published.logical_ref).write_bytes(b"corrupt")
+    assert not main_module._creation_render_is_valid("workspace_a", "task_1")

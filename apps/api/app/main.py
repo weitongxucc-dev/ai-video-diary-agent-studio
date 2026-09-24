@@ -109,6 +109,7 @@ from app.montage import (
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
     select_presenter_sections,
+    _validate_rendered_media,
 )
 from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService, compile_narration_command
 from app.preference_memory import PreferenceState, build_preference_memory
@@ -12098,13 +12099,30 @@ _LEGACY_WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
 
 def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
     try:
+        task = production_repo.get_creation_task(workspace_id, task_id)
+        if not task.current_timeline_version_id:
+            return False
         plan = production_repo.get_creation_task_montage_plan(workspace_id, task_id)
         ref = plan.get("output_path")
-        if plan.get("status") != "rendered" or not isinstance(ref, str):
+        if (plan.get("status") != "rendered" or not isinstance(ref, str)
+                or plan.get("script_id") != task.confirmed_script_id):
             return False
-        artifact_store.describe(ref)
+        version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        if version.task_id != task_id or ref not in version.snapshot.get("output_refs", []):
+            return False
+        registered = next(
+            (artifact for artifact in production_repo.list_artifact_records(workspace_id, task_id)
+             if artifact.logical_ref == ref and artifact.kind == "rendered_video"),
+            None,
+        )
+        if registered is None or production_repo.get_job_run(workspace_id, registered.producer_job_id).status != "succeeded":
+            return False
+        published = artifact_store.describe(ref)
+        if published.sha256 != registered.sha256 or published.size_bytes != registered.size_bytes:
+            return False
+        _validate_rendered_media(artifact_store.resolve_file(ref), expected_size=canvas_size(str(plan["aspect_ratio"])))
         return True
-    except (KeyError, FileNotFoundError):
+    except (KeyError, FileNotFoundError, ValueError, OSError):
         return False
 
 
