@@ -152,6 +152,7 @@ export function MaterialLibraryWorkspace({
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
+  const lastSearch = useRef({ filter, query });
 
   const selected =
     assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -165,6 +166,8 @@ export function MaterialLibraryWorkspace({
   const visible = assets;
 
   useEffect(() => {
+    if (lastSearch.current.filter === filter && lastSearch.current.query === query) return;
+    lastSearch.current = { filter, query };
     let active = true;
     const timer = window.setTimeout(() => {
       setBusy("search");
