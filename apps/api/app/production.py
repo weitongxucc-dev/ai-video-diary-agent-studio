@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -14,7 +15,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
@@ -37,6 +38,9 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
+
+if TYPE_CHECKING:
+    from app.device_scheduler import Grant, WorkRequest
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +140,57 @@ class MaterialAsset:
     segments: list[MaterialSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class MaterialHashCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    provisional_revision: str
+    stage_input_digest: str
+    unit_key: str
+
+
+@dataclass(frozen=True)
+class MaterialHashResult:
+    candidate: MaterialHashCandidate
+    source_sha256: str
+
+
+@dataclass(frozen=True)
+class MaterialProbeDependency:
+    workspace_id: str
+    asset_id: str
+    source_sha256: str
+    provisional_revision: str
+
+
+def _material_hash_candidate(
+    workspace_id: str, bound_path: str, path: Path, stat: os.stat_result, asset_id: str
+) -> MaterialHashCandidate:
+    revision_input = {
+        "workspace_id": workspace_id,
+        "bound_path": bound_path,
+        "file_path": str(path),
+        "size_bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+        "inode": stat.st_ino,
+    }
+    provisional = hashlib.sha256(
+        json.dumps(revision_input, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    stage_input = hashlib.sha256(
+        json.dumps(
+            {"stage": "hash:v1", "algorithm": "sha256", "provisional_revision": provisional},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return MaterialHashCandidate(
+        workspace_id, asset_id, str(path), provisional, stage_input,
+        f"hash:v1:{stage_input}",
+    )
 
 
 def material_allows_footage(asset: MaterialAsset) -> bool:
@@ -2555,6 +2610,356 @@ class ProductionRepository:
         if not root.is_dir():
             return "invalid"
         return "ready"
+
+    def discover_material_hash_candidates(self, *, stable_seconds: float = 10.0) -> list[MaterialHashCandidate]:
+        """Observe stable files for the opt-in scheduler path without reading their content."""
+        import time
+
+        if stable_seconds < 0:
+            raise ValueError("素材稳定等待时间无效")
+        binding = self.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        workspace_id, bound_path = binding
+        root = self.video_library_path
+        if not self._material_library_available() or str(root.resolve()) != bound_path:
+            self._mark_material_ingestion_disk_missing(workspace_id)
+            return []
+        with self._connect() as conn:
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(material_ingestion_files)")}
+        if "provisional_revision" not in columns:
+            raise RuntimeError("素材调度检查点迁移尚未就绪")
+
+        now = time.time()
+        candidates: list[MaterialHashCandidate] = []
+        for path in sorted(root.rglob("*")):
+            if (path.is_symlink() or not path.is_file()
+                    or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
+                    or "_已处理" in path.parts):
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root.resolve()):
+                continue
+            try:
+                stat = resolved.stat()
+            except FileNotFoundError:
+                continue
+            asset_id = "asset_" + hashlib.sha256(
+                f"{workspace_id}\0{resolved}".encode("utf-8")
+            ).hexdigest()[:16]
+            candidate = _material_hash_candidate(workspace_id, bound_path, resolved, stat, asset_id)
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                changed = row is None or row["provisional_revision"] != candidate.provisional_revision
+                if changed:
+                    conn.execute(
+                        """INSERT INTO material_ingestion_files
+                           (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
+                            observed_at, state, provisional_revision)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?)
+                           ON CONFLICT(workspace_id, file_path) DO UPDATE SET
+                             size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
+                             ctime_ns=excluded.ctime_ns, inode=excluded.inode,
+                             observed_at=excluded.observed_at, state='observing',
+                             provisional_revision=excluded.provisional_revision,
+                             attempted_digest=NULL""",
+                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns,
+                         stat.st_ctime_ns, stat.st_ino, now, candidate.provisional_revision),
+                    )
+                elif row["state"] in {"ready", "failed"} or row["attempted_digest"]:
+                    continue
+                elif now - float(row["observed_at"]) >= stable_seconds:
+                    conn.execute(
+                        "UPDATE material_ingestion_files SET state='waiting' "
+                        "WHERE workspace_id=? AND file_path=? AND provisional_revision=?",
+                        (workspace_id, str(resolved), candidate.provisional_revision),
+                    )
+                    candidates.append(candidate)
+            if changed:
+                try:
+                    self._upsert_discovered_asset(workspace_id, resolved)
+                except FileNotFoundError:
+                    continue
+                self._mark_material_hash_asset_blocked(
+                    workspace_id, asset_id, "文件仍在复制或变化；写入稳定后自动安排校验。"
+                )
+            elif candidate in candidates:
+                # Repair a crash between recording the observation and creating its asset.
+                try:
+                    self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
+                    try:
+                        self._upsert_discovered_asset(workspace_id, resolved)
+                    except FileNotFoundError:
+                        candidates.remove(candidate)
+                        continue
+                    self._mark_material_hash_asset_blocked(
+                        workspace_id, asset_id, "文件已稳定，等待设备许可后校验。"
+                    )
+        return candidates
+
+    def _mark_material_hash_asset_blocked(self, workspace_id: str, asset_id: str, message: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+                (workspace_id, asset_id),
+            ).fetchone()
+            if row is None:
+                return
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset.analysis_status = "blocked"
+            asset.analysis_message = message
+            asset.updated_at = utc_now()
+            conn.execute(
+                "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
+            )
+
+    def material_hash_verdict(
+        self, workspace_id: str, asset_id: str, input_digest: str,
+        unit_key: str, conn: sqlite3.Connection,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        binding = conn.execute(
+            "SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1"
+        ).fetchone()
+        if binding is None or binding["workspace_id"] != workspace_id:
+            return "unauthorized"
+        if not self._material_library_available():
+            return "dependency"
+        bound_path = str(self.video_library_path.resolve())
+        if binding["library_path"] != bound_path:
+            return "stale"
+        asset_row = conn.execute(
+            "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+        if asset_row is None:
+            return "stale"
+        path = Path(str(asset_row["file_path"]))
+        if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
+            return "stale"
+        observation = conn.execute(
+            "SELECT provisional_revision, state, attempted_digest FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (workspace_id, str(path)),
+        ).fetchone()
+        if observation is None:
+            return "stale"
+        if observation["state"] != "waiting" or observation["attempted_digest"] is not None:
+            return "stale"
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return "dependency"
+        except OSError:
+            return "unknown"
+        candidate = _material_hash_candidate(workspace_id, bound_path, path, stat, asset_id)
+        if (observation["provisional_revision"] != candidate.provisional_revision
+                or input_digest != candidate.provisional_revision
+                or unit_key != candidate.unit_key):
+            return "stale"
+        return "ready"
+
+    def material_hash_candidate_for_grant(self, grant: Grant) -> MaterialHashCandidate:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?",
+                (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"], row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                raise PermissionError("素材哈希许可与执行对象不匹配")
+            asset_id = str(row["owner_id"])
+            verdict = self.material_hash_verdict(
+                grant.workspace_id, asset_id, grant.input_digest, grant.unit_key, conn
+            )
+            if verdict != "ready":
+                raise ValueError(f"素材哈希输入不可执行：{verdict}")
+            asset = conn.execute(
+                "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+                (grant.workspace_id, asset_id),
+            ).fetchone()
+        path = Path(str(asset["file_path"]))
+        candidate = _material_hash_candidate(
+            grant.workspace_id, str(self.video_library_path.resolve()), path,
+            path.stat(), asset_id,
+        )
+        if (candidate.provisional_revision, candidate.unit_key) != (
+            grant.input_digest, grant.unit_key
+        ):
+            raise ValueError("素材哈希源修订已变化")
+        return candidate
+
+    def material_hash_verdict_for_grant(
+        self, grant: Grant,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?",
+                (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"], row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                return "unauthorized"
+            return self.material_hash_verdict(
+                grant.workspace_id, str(row["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            )
+
+    def hash_granted_material(
+        self, grant: Grant, assert_grant: Callable[[Grant], None],
+    ) -> MaterialHashResult:
+        """Read content only under an active grant, checking it between chunks."""
+        candidate = self.material_hash_candidate_for_grant(grant)
+        path = Path(candidate.file_path)
+        if path.is_symlink() or not path.resolve().is_relative_to(self.video_library_path.resolve()):
+            raise ValueError("素材路径不在已绑定目录内")
+        before = path.stat()
+        digest = hashlib.sha256()
+        assert_grant(grant)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as source:
+            opened = os.fstat(source.fileno())
+            if ((opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns, opened.st_ino)
+                    != (before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino)):
+                raise ValueError("素材文件在打开时已变化")
+            while True:
+                assert_grant(grant)
+                chunk = source.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        after = path.stat()
+        if ((before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino)):
+            raise ValueError("哈希期间源文件发生变化")
+        current = _material_hash_candidate(
+            candidate.workspace_id, str(self.video_library_path.resolve()),
+            path, after, candidate.asset_id,
+        )
+        if current != candidate:
+            raise ValueError("哈希期间素材绑定或源修订发生变化")
+        return MaterialHashResult(candidate, digest.hexdigest())
+
+    def commit_material_hash(
+        self, conn: sqlite3.Connection, grant: Grant, result: MaterialHashResult,
+    ) -> str:
+        """Write the hash fact on the scheduler's permit transaction connection."""
+        candidate = result.candidate
+        if not re.fullmatch(r"[0-9a-f]{64}", result.source_sha256):
+            raise ValueError("素材哈希结果无效")
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or (candidate.workspace_id, candidate.provisional_revision, candidate.unit_key)
+                != (grant.workspace_id, grant.input_digest, grant.unit_key)):
+            raise PermissionError("素材哈希检查点不属于当前许可尝试")
+        if self.material_hash_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，未保存过期哈希")
+        checkpoint = conn.execute(
+            """SELECT stage_input_digest, result_ref FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+             result.source_sha256, candidate.unit_key),
+        ).fetchone()
+        result_ref = f"sha256:{result.source_sha256}"
+        if checkpoint is not None and (
+            checkpoint["stage_input_digest"] != candidate.stage_input_digest
+            or checkpoint["result_ref"] != result_ref
+        ):
+            raise ValueError("既有哈希检查点结果不匹配")
+        updated = conn.execute(
+            """UPDATE material_ingestion_files
+               SET attempted_digest=?, state='waiting'
+               WHERE workspace_id=? AND file_path=? AND provisional_revision=?""",
+            (result.source_sha256, candidate.workspace_id, candidate.file_path,
+             candidate.provisional_revision),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("素材观察已失效，未写入哈希检查点")
+        if checkpoint is None:
+            conn.execute(
+                """INSERT INTO material_analysis_checkpoints
+                   (workspace_id, asset_id, source_sha256, provisional_revision,
+                    unit_key, stage_input_digest, result_ref, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (candidate.workspace_id, candidate.asset_id, result.source_sha256,
+                 candidate.provisional_revision, candidate.unit_key,
+                 candidate.stage_input_digest, result_ref, utc_now().isoformat()),
+            )
+        return f"material_hash:{candidate.asset_id}:{candidate.provisional_revision}"
+
+    def pending_material_probe_dependencies(self) -> list[MaterialProbeDependency]:
+        """Expose durable hash outputs for a future permitted probe submitter."""
+        binding = self.get_material_ingestion_binding()
+        if binding is None or not self._material_library_available():
+            return []
+        workspace_id, bound_path = binding
+        if str(self.video_library_path.resolve()) != bound_path:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT f.file_path, f.provisional_revision, f.attempted_digest,
+                          a.id AS asset_id
+                   FROM material_ingestion_files f
+                   JOIN material_assets a ON a.workspace_id=f.workspace_id
+                                         AND a.file_path=f.file_path
+                   WHERE f.workspace_id=? AND f.state='waiting'
+                     AND f.attempted_digest IS NOT NULL""",
+                (workspace_id,),
+            ).fetchall()
+            dependencies: list[MaterialProbeDependency] = []
+            for row in rows:
+                path = Path(str(row["file_path"]))
+                try:
+                    if path.is_symlink() or not path.resolve().is_relative_to(self.video_library_path.resolve()):
+                        continue
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                candidate = _material_hash_candidate(
+                    workspace_id, bound_path, path, stat, str(row["asset_id"]),
+                )
+                if candidate.provisional_revision != row["provisional_revision"]:
+                    continue
+                checkpoint = conn.execute(
+                    """SELECT stage_input_digest, result_ref
+                       FROM material_analysis_checkpoints
+                       WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                         AND source_sha256=? AND unit_key=?""",
+                    (workspace_id, candidate.asset_id, candidate.provisional_revision,
+                     row["attempted_digest"], candidate.unit_key),
+                ).fetchone()
+                if (checkpoint is None
+                        or checkpoint["stage_input_digest"] != candidate.stage_input_digest
+                        or checkpoint["result_ref"] != f"sha256:{row['attempted_digest']}"):
+                    continue
+                dependencies.append(MaterialProbeDependency(
+                    workspace_id, candidate.asset_id, str(row["attempted_digest"]),
+                    candidate.provisional_revision,
+                ))
+        return dependencies
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""

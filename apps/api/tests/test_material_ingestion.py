@@ -14,10 +14,14 @@ import time
 
 import pytest
 
-from app.material_ingestion import MaterialIngestionService
+from app.device_scheduler import DeviceScheduler, ProcessIdentity, SchedulePolicy, SubmissionIntent
+from app.material_ingestion import (
+    MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialIngestionService,
+)
 from app.production import (
     CreationPlan, CreationTask, CreationTaskScript, CreationTaskScriptSection,
-    JobRun, ProductionRepository, ScriptGenerationRun, TaskEvent,
+    JobRun, MaterialProbeDependency, ProductionRepository, ScriptGenerationRun, TaskEvent,
+    _material_hash_candidate,
 )
 
 
@@ -31,6 +35,174 @@ def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[
         scene_reader=scene_reader or (lambda path, duration: []),
     )
     return repo, library
+
+
+class HashResources:
+    def __init__(self, admit: bool | None = True):
+        self.admit_value = admit
+
+    def admit(self, request):
+        return self.admit_value
+
+    def continue_unit(self, grant):
+        return True
+
+    def released(self, grant):
+        return True
+
+
+class HashProcesses:
+    def current(self):
+        return ProcessIdentity(os.getpid(), f"test-{os.getpid()}", "test-boot")
+
+    def children_released(self, children):
+        return not children
+
+    def recovery_state(self, holder, children):
+        return "released" if not children else "unknown"
+
+
+def hash_scheduler(repo: ProductionRepository, tmp_path: Path, *, resources=None) -> DeviceScheduler:
+    return DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
+        resources=resources or HashResources(), processes=HashProcesses(),
+    )
+
+
+def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: Path) -> None:
+    duration = Mock(return_value=1.0)
+    repo, library = make_repo(tmp_path, duration)
+    source = library / "clip.mp4"
+    source.write_bytes(b"bounded source")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    with pytest.raises(ValueError, match="必须显式注入"):
+        MaterialIngestionService(repo, execution_mode="scheduled")
+    scheduler = hash_scheduler(repo, tmp_path)
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        assert service.discover_and_submit_hashes() == []
+        asset_id = repo.list_assets("one")[0].id
+        premature = _material_hash_candidate(
+            "one", str(library.resolve()), source.resolve(), source.stat(), asset_id,
+        )
+        with pytest.raises(PermissionError, match="不可提交"):
+            scheduler.submit(
+                SubmissionIntent("one", "material_asset", asset_id,
+                                 premature.provisional_revision, premature.unit_key,
+                                 SchedulePolicy()),
+                MaterialHashServiceActor("one", str(library.resolve())),
+            )
+        request_ids = service.discover_and_submit_hashes()
+        assert len(request_ids) == 1
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT attempted_digest FROM material_ingestion_files").fetchone() == (None,)
+        assert repo.get_asset("one", repo.list_assets("one")[0].id).analysis_status == "blocked"
+        assert duration.call_count == 0
+
+        grant = scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == request_ids[0]
+        digest = service.run_granted_hash(grant)
+        assert digest == hashlib.sha256(source.read_bytes()).hexdigest()
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT attempted_digest, state FROM material_ingestion_files").fetchone() == (digest, "waiting")
+            assert conn.execute("SELECT source_sha256, result_ref FROM material_analysis_checkpoints").fetchone() == (digest, f"sha256:{digest}")
+        assert repo.get_asset("one", repo.list_assets("one")[0].id).analysis_status == "blocked"
+        assert duration.call_count == 0  # Hash completion is not scene analysis or ready.
+        assert service.discover_and_submit_hashes() == []
+        with pytest.raises(PermissionError, match="不可提交"):
+            scheduler.submit(
+                SubmissionIntent("one", "material_asset", asset_id,
+                                 premature.provisional_revision, premature.unit_key,
+                                 SchedulePolicy()),
+                MaterialHashServiceActor("one", str(library.resolve())),
+            )
+        restarted = ProductionRepository(repo.database_path, library, duration_reader=duration)
+        assert restarted.pending_material_probe_dependencies() == [
+            MaterialProbeDependency("one", repo.list_assets("one")[0].id, digest,
+                                    grant.input_digest),
+        ]
+    finally:
+        scheduler.close()
+
+
+def test_scheduled_hash_changed_source_defers_old_grant_and_keeps_workspace_owner(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    source = library / "clip.mp4"
+    source.write_bytes(b"first")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = hash_scheduler(repo, tmp_path)
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        service.discover_and_submit_hashes()
+        service.discover_and_submit_hashes()
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        source.write_bytes(b"second version")
+        with pytest.raises(PermissionError, match="失效"):
+            service.run_granted_hash(grant)
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT state, wait_reason FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone() == ("blocked", "input_stale")
+            assert conn.execute("SELECT attempted_digest FROM material_ingestion_files").fetchone() == (None,)
+            assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints").fetchone() == (0,)
+        assert service.discover_and_submit_hashes() == []
+        new_ids = service.discover_and_submit_hashes()
+        assert len(new_ids) == 1 and new_ids[0] != grant.request_id
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT DISTINCT workspace_id FROM device_work_requests").fetchall() == [("one",)]
+    finally:
+        scheduler.close()
+
+
+def test_scheduled_hash_missing_library_defers_without_checkpoint(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    (library / "clip.mp4").write_bytes(b"source")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = hash_scheduler(repo, tmp_path)
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        service.discover_and_submit_hashes()
+        request_id = service.discover_and_submit_hashes()[0]
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        library.rename(tmp_path / "disconnected")
+        with pytest.raises(PermissionError, match="失效"):
+            service.run_granted_hash(grant)
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute(
+                "SELECT state, wait_reason FROM device_work_requests WHERE id=?", (request_id,)
+            ).fetchone() == ("blocked", "dependency_unavailable")
+            assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints").fetchone() == (0,)
+    finally:
+        scheduler.close()
+
+
+def test_scheduled_hash_unknown_resources_and_foreign_actor_fail_closed(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    (library / "clip.mp4").write_bytes(b"source")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = hash_scheduler(repo, tmp_path, resources=HashResources(None))
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        service.discover_and_submit_hashes()
+        request_id = service.discover_and_submit_hashes()[0]
+        assert scheduler.pick_and_grant() is None
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT state, wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone() == ("blocked", "resource_unknown")
+            assert conn.execute("SELECT attempted_digest FROM material_ingestion_files").fetchone() == (None,)
+            request = conn.execute("SELECT workspace_id, owner_type, owner_id, input_digest, unit_key FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+        intent = SubmissionIntent(*request, SchedulePolicy())
+        with pytest.raises(PermissionError, match="后台归属"):
+            MaterialHashOwnerVerifier(repo).verify_submission(intent, MaterialHashServiceActor("other", str(library)))
+    finally:
+        scheduler.close()
 
 
 def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: str, *, script_stage: bool = False) -> None:
