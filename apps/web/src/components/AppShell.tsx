@@ -214,33 +214,59 @@ export function AppShell({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(true);
   const [quickSize, setQuickSize] = useState({ width: 400, height: 0, maxTop: 8 });
+  const [quickPreviewOccluded, setQuickPreviewOccluded] = useState(false);
   const [quickPosition, setQuickPosition] = useState<{ left: number; top: number } | null>(null);
   const editorMainRef = useRef<HTMLElement>(null);
   const quickExpandRef = useRef<HTMLButtonElement>(null);
   const quickPanelRef = useRef<HTMLElement>(null);
   const quickDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
-  const quickWasNarrowRef = useRef<boolean | null>(null);
+  const quickManualRef = useRef(false);
+  const quickMainWidthRef = useRef<number | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
-  useEffect(() => { setQuickOpen((editorMainRef.current?.getBoundingClientRect().width ?? 540) >= 540); }, [quickInspectorKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
+  const quickFits = quickSize.height >= 240 && quickSize.width >= 400;
+  const quickShown = quickAvailable && quickOpen && quickFits;
 
   useLayoutEffect(() => {
     const main = editorMainRef.current;
     if (!quickAvailable || !main) return;
+    quickManualRef.current = false;
+    quickMainWidthRef.current = null;
+    setQuickPosition(null);
     let frame = 0;
     const measure = () => {
       const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
       const player = main.querySelector<HTMLElement>("[data-editor-player]");
       const mainRect = main.getBoundingClientRect();
+      const mainWidth = Math.round(mainRect.width);
+      if (quickMainWidthRef.current !== null && Math.abs(mainWidth - quickMainWidthRef.current) > 1) quickManualRef.current = false;
+      quickMainWidthRef.current = mainWidth;
       const anchorTop = transport?.getBoundingClientRect().top ?? player?.getBoundingClientRect().bottom ?? mainRect.bottom;
       const available = Math.floor(anchorTop - mainRect.top - 16);
       const height = Math.max(0, Math.min(400, available));
       const width = Math.min(480, Math.max(400, Math.round(mainRect.width * .62)), Math.max(0, Math.floor(mainRect.width - 16)));
       const maxTop = Math.max(8, Math.floor(anchorTop - mainRect.top - height - 8));
+      let previewOccluded = false;
+      const video = player?.querySelector("video");
+      if (player && video && width > 0 && height > 0) {
+        const playerRect = player.getBoundingClientRect();
+        const [declaredWidth, declaredHeight] = (player.dataset.editorAspectRatio ?? "9:16").split(":").map(Number);
+        const ratio = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : declaredWidth / declaredHeight;
+        const frameWidth = Math.min(playerRect.width, playerRect.height * ratio);
+        const frameHeight = frameWidth / ratio;
+        const frameLeft = playerRect.left + (playerRect.width - frameWidth) / 2;
+        const frameTop = playerRect.top + (playerRect.height - frameHeight) / 2;
+        const floatLeft = mainRect.right - width - 8;
+        const floatTop = mainRect.top + 8;
+        const overlapWidth = Math.max(0, Math.min(floatLeft + width, frameLeft + frameWidth) - Math.max(floatLeft, frameLeft));
+        const overlapHeight = Math.max(0, Math.min(floatTop + height, frameTop + frameHeight) - Math.max(floatTop, frameTop));
+        previewOccluded = overlapWidth > 0 && overlapHeight > 0;
+      }
+      setQuickPreviewOccluded(previewOccluded);
       setQuickSize((current) => current.height === height && current.width === width && current.maxTop === maxTop ? current : { width, height, maxTop });
       setQuickPosition((current) => {
         if (!current) return null;
@@ -248,9 +274,7 @@ export function AppShell({
         const top = Math.min(Math.max(8, current.top), maxTop);
         return left === current.left && top === current.top ? current : { left, top };
       });
-      const isNarrow = mainRect.width < 540;
-      if (isNarrow && quickWasNarrowRef.current === false) setQuickOpen(false);
-      quickWasNarrowRef.current = isNarrow;
+      if (!quickManualRef.current) setQuickOpen(mainRect.width >= 540 && width >= 400 && height >= 240 && !previewOccluded);
     };
     const scheduleMeasure = () => {
       window.cancelAnimationFrame(frame);
@@ -260,14 +284,17 @@ export function AppShell({
     observer?.observe(main);
     const player = main.querySelector<HTMLElement>("[data-editor-player]");
     const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
+    const video = player?.querySelector("video");
     if (player) observer?.observe(player);
     if (transport) observer?.observe(transport);
+    video?.addEventListener("loadedmetadata", scheduleMeasure);
     main.addEventListener("scroll", scheduleMeasure, true);
     window.addEventListener("resize", scheduleMeasure);
     measure();
     return () => {
       window.cancelAnimationFrame(frame);
       observer?.disconnect();
+      video?.removeEventListener("loadedmetadata", scheduleMeasure);
       main.removeEventListener("scroll", scheduleMeasure, true);
       window.removeEventListener("resize", scheduleMeasure);
     };
@@ -333,11 +360,13 @@ export function AppShell({
   ], [recentTasks]);
 
   function collapseQuick() {
+    quickManualRef.current = true;
     setQuickOpen(false);
     window.requestAnimationFrame(() => quickExpandRef.current?.focus());
   }
 
   function expandQuick() {
+    quickManualRef.current = true;
     setQuickOpen(true);
     window.requestAnimationFrame(() => {
       quickPanelRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
@@ -469,6 +498,7 @@ export function AppShell({
           </div>
           <div className="desktop-toolbar__actions">
             {toolbarActions}
+            {quickAvailable && !quickShown ? <button aria-label={quickFits ? "展开镜头编辑" : "查看镜头详情"} className={editorShell.quickCollapsed} onClick={quickFits ? expandQuick : () => setDetailsOpen(true)} ref={quickExpandRef} title={quickPreviewOccluded ? "浮卡已收起，避免遮挡预览画面" : quickInspectorLabel ?? "镜头编辑"} type="button"><span>{quickInspectorLabel ?? "镜头编辑"}</span><strong>{quickFits ? "展开" : "详情"}</strong></button> : null}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
 
@@ -495,8 +525,7 @@ export function AppShell({
           </section>
           <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
-            {quickAvailable && quickInspector ? (
-              quickOpen && quickSize.height >= 240 && quickSize.width >= 400 ? (
+            {quickShown && quickInspector ? (
                 <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? 8, left: quickPosition?.left, right: quickPosition ? undefined : 8 }}>
                   <header className={editorShell.quickHeader} onPointerDown={startQuickDrag} onPointerMove={moveQuickDrag} onPointerUp={stopQuickDrag} onPointerCancel={stopQuickDrag} title="拖动以调整浮卡位置">
                     <strong>{quickInspectorLabel ?? "镜头快速编辑"}</strong>
@@ -507,13 +536,6 @@ export function AppShell({
                   </header>
                   {quickInspector(() => setDetailsOpen(true))}
                 </section>
-              ) : (
-                <div className={editorShell.quickCollapsed} style={{ width: quickSize.width }}>
-                  <span>{quickInspectorLabel ?? "镜头编辑"}{quickSize.height < 240 || quickSize.width < 400 ? " · 空间不足" : ""}</span>
-                  {quickSize.height < 240 || quickSize.width < 400 ? <button onClick={() => setDetailsOpen(true)} type="button">查看详情</button>
-                    : <button onClick={expandQuick} ref={quickExpandRef} type="button">展开</button>}
-                </div>
-              )
             ) : null}
           </main>
         </div>

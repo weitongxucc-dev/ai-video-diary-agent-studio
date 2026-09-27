@@ -199,24 +199,45 @@ describe("AppShell", () => {
     expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
   });
 
-  it("places a collapsible quick editor above playback controls without opening the details card", async () => {
+  it("defaults to a collapsed quick editor when the float would cover the portrait preview", async () => {
     const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const top = this.hasAttribute("data-editor-transport") ? 560 : this.hasAttribute("data-editor-player") ? 72 : 0;
       const bottom = this.hasAttribute("data-editor-player") ? 536 : 768;
-      return { top, bottom, left:0, right:812, width:812, height:bottom - top, x:0, y:top, toJSON:() => ({}) };
+      const left = this.hasAttribute("data-editor-player") ? 20 : 0;
+      const width = this.hasAttribute("data-editor-player") ? 772 : 812;
+      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
     });
     try {
       render(<AppShell editorLayout inspector={<p>完整属性</p>} inspectorTitle="镜头详情" quickInspectorLabel="镜头 1 · 0:00–0:03" quickInspectorKey="task:version:clip" quickInspector={openDetails => <button onClick={openDetails} type="button">打开候选</button>}>
-        <div data-editor-player /><div data-editor-transport />
+        <div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport />
       </AppShell>);
+      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
+      const expand = await screen.findByRole("button", { name:"展开镜头编辑" });
+      expect(expand).toHaveAttribute("title", "浮卡已收起，避免遮挡预览画面");
+      fireEvent.click(expand);
       const panel = await screen.findByRole("region", { name:"镜头 1 · 0:00–0:03" });
       expect(panel).toHaveStyle({ width:"480px", height:"400px", top:"8px", right:"8px" });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name:"收起镜头编辑" }));
       expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name:"展开" }));
+      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
       fireEvent.click(screen.getByRole("button", { name:"打开候选" }));
       expect(screen.getByRole("dialog", { name:"镜头详情" })).toHaveTextContent("完整属性");
+    } finally { rect.mockRestore(); }
+  });
+
+  it("opens by default when the portrait picture fits beside the float", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const isPlayer = this.hasAttribute("data-editor-player");
+      const top = this.hasAttribute("data-editor-transport") ? 560 : isPlayer ? 72 : 0;
+      const bottom = isPlayer ? 536 : 768;
+      const left = isPlayer ? 20 : 0;
+      const width = isPlayer ? 1260 : 1300;
+      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout quickInspectorKey="wide-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport /></AppShell>);
+      expect(await screen.findByRole("region", { name:"镜头 1" })).toHaveStyle({ width:"480px", height:"400px" });
     } finally { rect.mockRestore(); }
   });
 
@@ -228,7 +249,7 @@ describe("AppShell", () => {
     try {
       render(<AppShell editorLayout quickInspectorKey="narrow-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player /><div data-editor-transport /></AppShell>);
       expect(screen.queryByRole("region", { name:"镜头 1" })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name:"展开" }));
+      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
       const panel = await screen.findByRole("region", { name:"镜头 1" });
       expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
       fireEvent(window, new Event("resize"));

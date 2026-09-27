@@ -51,7 +51,7 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
   return <div className={ui.stage}>
     <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls key={workspace.task.current_timeline_version_id} ratio={montage.aspect_ratio ?? "9:16"} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
-    <div className={ui.player} data-editor-player>
+    <div className={ui.player} data-editor-player data-editor-aspect-ratio={montage.aspect_ratio ?? "9:16"}>
       {montage.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
         onLoadedMetadata={event => { event.currentTarget.currentTime = initialTime; setPlaybackError(false); }}
         onTimeUpdate={event => position(event.currentTarget)} onSeeked={event => position(event.currentTarget)}
