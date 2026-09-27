@@ -59,3 +59,5 @@ Codex可见线程（可用于现有主控收尾；新工具无法访问时以交
 ## 后续增量：联合候选等待最终复验
 
 SCHED7c9414e监测叶子QA通过；MAT d4519ed已补Limit终态/Unavailable延期及真实探针测试。准确集成依赖：SCHED dadc618→2da0594→7c9414e，MAT279f492→49fa7b2→d4519ed。MAT工作树现分支codex/011-mat-scene-joint-check，其中SCHED等价挑入a055d1b不要重复集成。工作者报联合89通过，独立联合QA尚待结论。生产预算未配置，仍dependency。最新逐线程记录见evidence/material-takeover-status.md及scheduling-takeover-status.md。
+
+最终独立QA：d4519ed限定测试profile的场景窗口联合集成PASS，89测试及真实32s长GOP恢复通过，报告见evidence/mat-sched-d4519ed-joint-review.md。这些候选仍未合入开发分支；生产SceneWindowBudget/硬件校准、失败probe人工重试与后续音画分析仍缺，不将父R10/R31标完成。
