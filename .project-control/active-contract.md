@@ -105,3 +105,22 @@ UI01独占本包的 `apps/web/src/components/AppShell.tsx`、`EditorShell.module
 UI01独占 `apps/web/src/app/knowledge/page.tsx`、必要时同步其 `loading.tsx`、新增 `KnowledgeWorkspace.tsx`、`KnowledgeWorkspace.module.css` 及该目录 `__tests__/page.test.tsx`。页面入口保留数据加载，展示组件独立以便隔离示例和测试，不从Next页面入口导出额外组件。按v4分类入口、来源封面网格及可操作详情实施；保留现有搜索、来源信息、原文和真实读端。用途分类不能从文件格式擅自推断，缺分类数据需明确未分类；没有真实引用/版本/纠正接口的操作不得伪造成功。原文及摘要只显示已有事实，不能编造解析、主题关系或问答出处。隔离示例可用于完整布局验收并明确标注。
 
 本包不写 `modern-overrides.css`、API/types、后端或其他页面；旧全局选择器如确实阻断，先提交具体冲突选择器与局部解决证据。第一包与本包分开提交；知识库页面改造不代表知识解析、召回及权限业务完成。
+
+
+## 2026-09-27 第二批持续执行：CI 收口与真实调度
+
+当前已推送基线 `13b253f`；用户要求上一批交付后继续安排并执行。此前本文的“不得推送”限制已被用户后续明确要求同步 GitHub 的授权覆盖：主控可审核后推送开发分支，不自动合并 main。主控仍不写产品代码。最新 CI 36314639592 的剩余阻断是后端 Ruff 244 项与前端旧扫描符号约束；局部测试通过不能替代 CI。
+
+| 执行者 | 本批结果 | 独占范围与边界 |
+| --- | --- | --- |
+| cmux Claude / GLM | 修后端叶子模块 Ruff，保留逻辑 | audio_timeline、compound_edits、graphic_overlays、graphic_sources、local_portrait、subtitle_edits、subtitle_schedule、visual_effects；只修诊断位置，AST等价，禁止全仓格式化 |
+| cmux Pi / Kimi | 修 CI 日志中的测试规范问题 | test_audio_timeline、test_canvas、test_compound_selection、test_graphic_overlays、test_linked_timeline、test_montage_pipeline、test_production_foundation、test_silence_edits、test_subtitle_alignment、test_subtitle_edits、test_subtitle_style、test_transitions、test_visual_effects、test_voice_clone；不删除断言，不改生产 |
+| UI01 | 更新过时扫描约束，再对接真实队列事实 | modern-desktop-contract-check.mjs及必要相邻检查测试；不弱化检查，不恢复手动扫描为默认；后续展示仍沿原UI归属，新增文件先列范围 |
+| SCHED01 | 真实资源/进程探针和执行前注册子进程 | 新host_resource_probes.py、granted_subprocess.py及相邻测试，device_runtime必要适配；允许仅为可靠采样新增psutil至api pyproject/uv.lock，无无关升级；无可信测量则unknown，不启用生产 |
+| MAT01 | 获许可后的有界真实ffprobe及检查点恢复 | 原production/material_ingestion及测试；新增material_probe.py及专项；不造队列、不改main/DDL，场景/视觉未实现不得报完成；production.py规范窄修单独提交 |
+| MAKE01 | JobRun提交、获许可阶段执行与恢复适配 | 原main/creation_execution/schema及既定前端API文件；creation_execution规范窄修独立提交；host/媒体依赖未齐不激活新生产路径 |
+| QA01 | 单许可、活子进程、超时/取消、两空间竞争的独立证据 | 原QA隔离目录；合成候选只做一次必要集成验证，失败只阻断对应包 |
+
+两位cmux使用已清洁的既有工作副本，新分支分别为 `codex/ci-ruff-production`、`codex/ci-ruff-tests`，基线均为13b253f。除上述测试文件暂交Pi外，既有归属不变；MAKE/MAT不得同时修改这些CI清理文件，需变更则先交主控协调。
+
+推进规则：工作者完成首个可审提交后继续其已授权剩余范围；依赖未到时完成不依赖部分并报告具体接口，主控接收后审核、合成、必要复验、推送、同步Linear。候选完成不等于整个版本完成，也不自动解除生产切换门槛。当前未配置后台自动唤醒，不声称关闭本次会话后主控仍能持续监控。
