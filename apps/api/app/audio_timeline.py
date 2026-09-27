@@ -100,7 +100,7 @@ class AudioTimeline(BaseModel):
 class AudioEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_version_id: str | None = None
-    action: Literal["add", "update", "delete", "split", "duplicate", "track"]
+    action: Literal["add", "update", "delete", "split", "duplicate", "track", "replace_narration"]
     target_id: str
     values: dict[str, object] = Field(default_factory=dict)
     raw_command: str = Field(default="精确音频编辑", max_length=500)
@@ -152,7 +152,21 @@ def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_m
         if clip.locked and not (edit.action == "update" and edit.values == {"locked": False}):
             raise ValueError("音频片段已锁定，请先解锁")
         index = track.clips.index(clip)
-        if edit.action == "delete":
+        if edit.action == "replace_narration":
+            if (track.role != "narration" or len(track.clips) != 1
+                    or clip.source_start_ms != 0 or clip.timeline_start_ms != 0
+                    or abs(clip.duration_ms - duration_ms) > 20
+                    or set(edit.values) != {"source_ref", "source_end_ms"}
+                    or not isinstance(edit.values["source_ref"], str)
+                    or type(edit.values["source_end_ms"]) is not int
+                    or edit.values["source_end_ms"] != duration_ms
+                    or edit.values["source_ref"] == clip.source_ref):
+                raise ValueError("只能替换未分割且与当前成片等长的整条旁白")
+            track.clips[index] = TimelineAudioClip.model_validate({
+                **clip.model_dump(), "source_ref": edit.values["source_ref"],
+                "source_end_ms": duration_ms, "name": "本机录音",
+            })
+        elif edit.action == "delete":
             if edit.values:
                 raise ValueError("删除音频不接受附加参数")
             track.clips.pop(index)

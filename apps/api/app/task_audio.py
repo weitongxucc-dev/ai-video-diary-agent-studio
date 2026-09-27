@@ -27,9 +27,31 @@ class TaskAudio:
         if reference.startswith("workspace://"):
             return self.repository.resolve_workspace_media_reference(workspace_id, reference, require_registered=True)
         records = self.repository.list_artifact_records(workspace_id, task_id)
-        if not any(record.logical_ref == reference and record.kind in {"audio_source", "audio_preview"} for record in records):
+        if not any(record.logical_ref == reference and record.kind in {"audio_source", "audio_preview", "task_recording"} for record in records):
             raise ValueError("音频产物不属于当前任务")
         return self.artifact_store.resolve_file(reference)
+
+    def recording(self, workspace_id: str, task_id: str, reference: str) -> tuple[ArtifactRecord, int]:
+        """Return a persisted recording and its server-measured duration."""
+        record = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
+                       if item.logical_ref == reference and item.kind == "task_recording"), None)
+        if record is None:
+            raise ValueError("当前任务没有这条电脑录音")
+        job = self.repository.get_job_run(workspace_id, record.producer_job_id)
+        transform_id = record.producer_job_id.replace("job_", "transform_", 1)
+        transform = self.repository.get_transform_run(workspace_id, transform_id)
+        duration_ms = transform.parameters.get("duration_ms")
+        task = self.repository.get_creation_task(workspace_id, task_id)
+        if (job.task_id != task_id or job.status != "succeeded" or transform.task_id != task_id
+                or transform.job_id != job.id or transform.status != "succeeded"
+                or transform.output_refs != [reference]
+                or transform.parameters.get("script_id") != task.confirmed_script_id
+                or transform.parameters.get("montage_plan_id") != task.montage_plan_id
+                or type(duration_ms) is not int or duration_ms <= 0):
+            raise ValueError("电脑录音尚未完整保存")
+        if self.source(workspace_id, task_id, reference).stat().st_size != record.size_bytes:
+            raise ValueError("电脑录音文件已变化")
+        return record, duration_ms
 
     def validate_material_use(self, workspace_id: str, task_id: str, reference: str) -> None:
         records = {item.logical_ref: item for item in self.repository.list_artifact_records(workspace_id, task_id)}
@@ -67,14 +89,29 @@ class TaskAudio:
             with TemporaryDirectory(prefix="task-audio-", dir=self.temporary_root) as directory:
                 path = Path(directory) / f"audio{suffix}"
                 produce(path)
-                probe_audio_source(path)
+                if kind == "task_recording":
+                    with path.open("rb") as source:
+                        header = source.read(16)
+                    matches = {
+                        ".webm": header.startswith(b"\x1a\x45\xdf\xa3"),
+                        ".ogg": header.startswith(b"OggS"),
+                        ".mp4": header[4:8] == b"ftyp",
+                        ".m4a": header[4:8] == b"ftyp",
+                        ".wav": header.startswith(b"RIFF") and header[8:12] == b"WAVE",
+                    }
+                    if not matches.get(suffix, False):
+                        raise ValueError("录音容器与文件格式不一致")
+                duration = probe_audio_source(path)
+                if kind == "task_recording" and duration > 600:
+                    raise ValueError("电脑录音最长为十分钟")
                 published = self.artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/audio{suffix}", path)
             artifact = self.repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",
                 workspace_id=workspace_id, task_id=task_id, kind=kind, logical_ref=published.logical_ref,
                 sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs))
             transform = self.repository.create_transform_run(TransformRun(id=f"transform_{identity}", workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, transform_type=kind, input_digest=digest, input_refs=input_refs,
-                output_refs=[artifact.logical_ref], engine=engine, parameters=parameters,
+                output_refs=[artifact.logical_ref], engine=engine,
+                parameters={**parameters, **({"duration_ms": round(duration * 1000)} if kind == "task_recording" else {})},
                 status="succeeded", started_at=running.started_at, finished_at=utc_now()))
             for index, reference in enumerate(input_refs):
                 self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,

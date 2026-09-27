@@ -2806,6 +2806,46 @@ def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile
     return {"source_ref": record.logical_ref, "name": Path(audio.filename or "音频").name[:120], "duration_ms": round(duration*1000)}
 
 
+@app.post("/api/creation-tasks/{task_id}/audio/recordings")
+def save_creation_task_recording(task_id: str, request: Request, audio: UploadFile = File(...)):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if creation_execution_mode == "scheduled":
+        raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
+    if task.stage not in {"montage", "review"} or not task.confirmed_script_id or not task.montage_plan_id:
+        raise HTTPException(status_code=409, detail="当前任务尚无可替换旁白的故事板")
+    suffix = Path(audio.filename or "").suffix.lower()
+    if suffix not in {".webm", ".mp4", ".m4a", ".ogg", ".wav"}:
+        raise HTTPException(status_code=422, detail="当前录音格式不可用，请使用 WebM、MP4、Ogg 或 WAV")
+
+    def produce(path: Path) -> None:
+        total = 0
+        with path.open("wb") as output:
+            while chunk := audio.file.read(1024 * 1024):
+                total += len(chunk)
+                if total > 50 * 1024 * 1024:
+                    raise ValueError("电脑录音不能超过 50 MB")
+                output.write(chunk)
+        if total == 0:
+            raise ValueError("电脑录音为空")
+
+    try:
+        service = _task_audio()
+        record = service.publish(
+            workspace_id, task_id, kind="task_recording",
+            parameters={"script_id": task.confirmed_script_id, "montage_plan_id": task.montage_plan_id},
+            input_refs=[], produce=produce, suffix=suffix,
+        )
+        _, duration_ms = service.recording(workspace_id, task_id, record.logical_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"电脑录音未保存：{exc}") from exc
+    except (KeyError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail="电脑录音未保存，请检查录音格式和本地存储") from exc
+    return {"source_ref": record.logical_ref, "artifact_id": record.id,
+            "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
+            "duration_ms": duration_ms, "applied": False}
+
+
 @app.get("/api/creation-tasks/{task_id}/audio/artifacts/{artifact_id}")
 def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Request):
     workspace_id = current_workspace_id(request)
@@ -2817,7 +2857,9 @@ def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Re
         path = _task_audio().source(workspace_id, task_id, record.logical_ref)
     except (KeyError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="当前任务的音频不存在") from exc
-    return FileResponse(path, media_type="audio/wav" if path.suffix == ".wav" else None)
+    audio_media_types = {".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
+                         ".m4a": "audio/mp4", ".mp4": "audio/mp4"}
+    return FileResponse(path, media_type=audio_media_types.get(path.suffix))
 
 
 @app.get("/api/creation-tasks/{task_id}/audio/waveform/{clip_id}")
@@ -2906,18 +2948,53 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
     try:
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         before = _effective_audio_timeline(plan)
-        after = apply_audio_edit(before, payload, round(plan.duration_seconds*1000))
         service = _task_audio()
-        service.validate(workspace_id, task_id, after, plan.duration_seconds)
-        start, end = audio_edit_preview_range(before, after, payload, plan.duration_seconds)
-        previews = []
-        for graph in (before, after):
-            record = service.publish(workspace_id, task_id, kind="audio_preview",
-                parameters={"audio_timeline": graph.model_dump(), "start_seconds": start, "end_seconds": end},
-                input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
-                produce=lambda path, graph=graph: render_audio_mix(graph, plan.duration_seconds,
-                    lambda ref: service.source(workspace_id, task_id, ref), path, start_seconds=start, end_seconds=end))
-            previews.append(record)
+        edit = payload
+        if payload.action == "replace_narration":
+            if set(payload.values) != {"source_ref"} or any(clip.person_render_id for clip in plan.clips):
+                raise ValueError("人物口型或附加参数不能随整条旁白录音替换保留")
+            source_ref = payload.values["source_ref"]
+            if not isinstance(source_ref, str):
+                raise ValueError("请选择当前任务已保存的电脑录音")
+            recording, measured_ms = service.recording(workspace_id, task_id, source_ref)
+            duration_ms = round(plan.duration_seconds * 1000)
+            if not duration_ms - 20 <= measured_ms <= duration_ms + 250:
+                raise ValueError("录音时长与当前画面不符，请重录到接近整片时长")
+            edit = payload.model_copy(update={"values": {"source_ref": source_ref, "source_end_ms": duration_ms}})
+            after = apply_audio_edit(before, edit, duration_ms)
+            original_ref = next(clip.source_ref for track in before.tracks if track.role == "narration" for clip in track.clips)
+            service.source(workspace_id, task_id, original_ref)
+            if original_ref.startswith("narration://artifact/"):
+                if original_ref != production_repo.narration_artifact_reference(task.narration_cache_key or ""):
+                    raise ValueError("当前旁白引用与任务版本不一致，请刷新后重试")
+                before_url = f"/api/creation-tasks/{task_id}/narration/audio"
+            else:
+                original = next(record for record in production_repo.list_artifact_records(workspace_id, task_id)
+                                if record.logical_ref == original_ref)
+                before_url = f"/api/creation-tasks/{task_id}/audio/artifacts/{original.id}"
+            preview_media = {
+                "before": {"ref": original_ref, "label": "当前旁白", "detail": "当前版本的完整旁白",
+                           "audio_url": before_url},
+                "after": {"ref": source_ref, "label": "本次电脑录音", "detail": "确认后替换整条旁白；画面时长不变",
+                          "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{recording.id}"},
+            }
+            start = 0.0
+        else:
+            after = apply_audio_edit(before, payload, round(plan.duration_seconds*1000))
+            service.validate(workspace_id, task_id, after, plan.duration_seconds)
+            start, end = audio_edit_preview_range(before, after, payload, plan.duration_seconds)
+            previews = []
+            for graph in (before, after):
+                record = service.publish(workspace_id, task_id, kind="audio_preview",
+                    parameters={"audio_timeline": graph.model_dump(), "start_seconds": start, "end_seconds": end},
+                    input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
+                    produce=lambda path, graph=graph: render_audio_mix(graph, plan.duration_seconds,
+                        lambda ref: service.source(workspace_id, task_id, ref), path, start_seconds=start, end_seconds=end))
+                previews.append(record)
+            preview_media = {side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else "音轨修改后",
+                "detail": f"试听 {start:.1f}–{end:.1f} 秒；完整音轨在确认后生效",
+                "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
+                for side, record in zip(("before", "after"), previews)}
     except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
         detail = str(exc) if isinstance(exc, ValueError) else "本地音频预览失败，请检查源文件、FFmpeg 与外接盘"
         raise HTTPException(status_code=422, detail=detail) from exc
@@ -2928,19 +3005,19 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
         raw_command=payload.raw_command, context_stage="montage", selected_object_refs=[f"audio:{payload.target_id}"],
         playhead_ms=round(start*1000), intent_type="edit_audio", scope={"kind": "audio", "target_id": payload.target_id},
         constraints={"preserve_video": True}, confidence=1, status="interpreted"))
-    labels = {"add": "添加音频片段", "update": "修改音频片段", "delete": "删除音频片段（保留时间空隙）", "split": "分割音频片段", "duplicate": "复制音频片段", "track": "修改音轨设置"}
+    labels = {"add": "添加音频片段", "update": "修改音频片段", "delete": "删除音频片段（保留时间空隙）", "split": "分割音频片段", "duplicate": "复制音频片段", "track": "修改音轨设置", "replace_narration": "用本机录音替换整条旁白"}
     summary = labels[payload.action]
     if payload.action == "add" and any(track.id == payload.target_id and track.role == "original" for track in before.tracks):
         summary = "添加原声，与现有音轨混合；画面和配音不变"
     proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
         task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
         operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
-            "edit": payload.model_dump(), "expected_audio_timeline": before.model_dump()}},
+            "edit": edit.model_dump(), "expected_audio_timeline": before.model_dump(),
+            **({"recording_duration_ms": measured_ms} if payload.action == "replace_narration" else {})}},
         invalidated_refs=_logical_montage_output_refs(plan),
-        preview={side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else summary,
-            "detail": f"试听 {start:.1f}–{end:.1f} 秒；完整音轨在确认后生效",
-            "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
-            for side, record in zip(("before", "after"), previews)}, external_effects=[]))
+        preview=preview_media,
+        external_effects=(["新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。"]
+                          if payload.action == "replace_narration" else [])))
     return _edit_preview_response(intent, proposal)
 
 
@@ -7374,10 +7451,25 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409, detail="时间线已经变化，不能确认旧的音频提案")
         try:
             montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-            if _effective_audio_timeline(montage).model_dump() != operation_payload.get("expected_audio_timeline"):
+            current_audio = _effective_audio_timeline(montage)
+            if current_audio.model_dump() != operation_payload.get("expected_audio_timeline"):
                 raise ValueError("原音轨已变化，请重新预览")
             updated_audio = AudioTimeline.model_validate(operation_payload["audio_timeline"])
-            _task_audio().validate(workspace_id, task_id, updated_audio, montage.duration_seconds)
+            edit = AudioEditRequest.model_validate(operation_payload["edit"])
+            if edit.action == "replace_narration":
+                if any(clip.person_render_id for clip in montage.clips):
+                    raise ValueError("当前人物口型依赖旧配音，请先移除或重做口型")
+                source_ref = edit.values.get("source_ref")
+                if not isinstance(source_ref, str):
+                    raise ValueError("录音引用无效")
+                _recording, measured_ms = _task_audio().recording(workspace_id, task_id, source_ref)
+                duration_ms = round(montage.duration_seconds * 1000)
+                if (measured_ms != operation_payload.get("recording_duration_ms")
+                        or not duration_ms - 20 <= measured_ms <= duration_ms + 250
+                        or apply_audio_edit(current_audio, edit, duration_ms).model_dump() != updated_audio.model_dump()):
+                    raise ValueError("录音或旁白替换提案已变化，请重新预览")
+            else:
+                _task_audio().validate(workspace_id, task_id, updated_audio, montage.duration_seconds)
         except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
             raise HTTPException(status_code=409, detail="音频提案不再适用，请检查源文件并重新预览") from exc
         montage.audio_timeline = updated_audio
