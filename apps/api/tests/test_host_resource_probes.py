@@ -16,7 +16,9 @@ from app.granted_subprocess import (
     GrantedCommandTimeout,
     run_granted_command,
 )
-from app.host_resource_probes import CpuRenderBudget, HostBudget, HostProcessProbe, HostResourceProbe
+from app.host_resource_probes import (
+    CpuRenderBudget, HostBudget, HostProcessProbe, HostResourceProbe, SceneWindowBudget,
+)
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork
 
@@ -103,6 +105,48 @@ def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
     probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
     assert probe.admit(SimpleNamespace(resources=_render_resources())) is False
+
+
+def _scene_resources():
+    return {"kind": "material_scene_window", "source_codec": "h264",
+            "source_width_px": 160, "source_height_px": 120,
+            "source_frame_rate_fps": 10.0, "size_bytes": 1600,
+            "scan_seconds": 15.0, "output_sample_fps": 2,
+            "output_max_width_px": 320, "output_max_frames": 30,
+            "ffmpeg_threads": 1, "timeout_seconds": 12.0}
+
+
+def _scene_budget():
+    return SceneWindowBudget(
+        allowed_source_codecs=("h264",), max_source_bytes=10_000,
+        max_source_width_px=320, max_source_height_px=240,
+        max_source_frame_rate_fps=30, max_nominal_decode_frames=450,
+        max_scan_seconds=15, max_output_sample_fps=2,
+        max_output_width_px=320, max_output_frames=30,
+        max_threads=1, max_timeout_seconds=12,
+        additional_memory_bytes=1, additional_disk_bytes=1,
+    )
+
+
+def test_scene_window_requires_calibrated_input_decode_and_hard_timeout(tmp_path):
+    base = dict(max_cpu_percent=100, min_available_memory_bytes=0,
+                max_swap_used_bytes=2**63, min_free_disk_bytes=0,
+                max_disk_io_bytes_per_second=2**63, max_unit_input_bytes=1024,
+                sample_seconds=0.02)
+    resources = _scene_resources()
+    unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                budget=HostBudget(**base))
+    assert unknown.admit(SimpleNamespace(resources=resources)) is None
+    measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                 budget=HostBudget(**base, scene_window=_scene_budget()))
+    assert measured.admit(SimpleNamespace(resources=resources)) is True
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_codec": "av1"})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": None})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_width_px": 3840})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": 60})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "scan_seconds": 16})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "output_max_frames": 20})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "timeout_seconds": 20})) is False
 
 
 def test_registration_ack_precedes_real_exec(tmp_path):

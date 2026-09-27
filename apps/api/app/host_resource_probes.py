@@ -56,6 +56,40 @@ class CpuRenderBudget:
 
 
 @dataclass(frozen=True)
+class SceneWindowBudget:
+    """Calibrated cap for one timed FFmpeg source-window decode."""
+
+    allowed_source_codecs: tuple[str, ...]
+    max_source_bytes: int
+    max_source_width_px: int
+    max_source_height_px: int
+    max_source_frame_rate_fps: float
+    max_nominal_decode_frames: float
+    max_scan_seconds: float
+    max_output_sample_fps: float
+    max_output_width_px: int
+    max_output_frames: int
+    max_threads: int
+    max_timeout_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self) -> None:
+        rates = (self.max_source_frame_rate_fps, self.max_nominal_decode_frames,
+                 self.max_scan_seconds, self.max_output_sample_fps, self.max_timeout_seconds)
+        if any(not math.isfinite(value) or value <= 0 for value in rates):
+            raise ValueError("Scene timing and decode budgets must be finite and positive")
+        integers = (self.max_source_bytes, self.max_source_width_px, self.max_source_height_px,
+                    self.max_output_width_px, self.max_output_frames, self.max_threads,
+                    self.additional_memory_bytes, self.additional_disk_bytes)
+        if (any(type(value) is not int or value <= 0 for value in integers)
+                or not self.allowed_source_codecs
+                or any(not isinstance(codec, str) or not codec or codec != codec.lower()
+                       for codec in self.allowed_source_codecs)):
+            raise ValueError("Scene codec and size budgets must be explicit and positive")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -65,6 +99,7 @@ class HostBudget:
     max_unit_input_bytes: int
     sample_seconds: float = 0.1
     cpu_render: CpuRenderBudget | None = None
+    scene_window: SceneWindowBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -131,6 +166,36 @@ class HostResourceProbe:
                 return False
             required_memory = self.budget.min_available_memory_bytes
             required_disk = self.budget.min_free_disk_bytes
+        elif kind == "material_scene_window":
+            scene = self.budget.scene_window
+            if scene is None or resources.get("source_codec") not in scene.allowed_source_codecs:
+                return None
+            real_fields = ("source_frame_rate_fps", "scan_seconds", "output_sample_fps",
+                           "timeout_seconds")
+            int_fields = ("size_bytes", "source_width_px", "source_height_px",
+                          "output_max_width_px", "output_max_frames", "ffmpeg_threads")
+            if (any(type(resources.get(name)) not in {int, float}
+                    or not math.isfinite(resources[name]) or resources[name] <= 0
+                    for name in real_fields)
+                    or any(type(resources.get(name)) is not int or resources[name] <= 0
+                           for name in int_fields)):
+                return None
+            if (resources["size_bytes"] > scene.max_source_bytes
+                    or resources["source_width_px"] > scene.max_source_width_px
+                    or resources["source_height_px"] > scene.max_source_height_px
+                    or resources["source_frame_rate_fps"] > scene.max_source_frame_rate_fps
+                    or resources["source_frame_rate_fps"] * resources["scan_seconds"] > scene.max_nominal_decode_frames
+                    or resources["scan_seconds"] > scene.max_scan_seconds
+                    or resources["output_sample_fps"] > scene.max_output_sample_fps
+                    or resources["output_max_width_px"] > scene.max_output_width_px
+                    or resources["output_max_frames"] > scene.max_output_frames
+                    or resources["ffmpeg_threads"] > scene.max_threads
+                    or resources["timeout_seconds"] > scene.max_timeout_seconds):
+                return False
+            if resources["output_sample_fps"] * resources["scan_seconds"] > resources["output_max_frames"]:
+                return None
+            required_memory = self.budget.min_available_memory_bytes + scene.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes + scene.additional_disk_bytes
         else:
             return None
         try:
@@ -193,6 +258,8 @@ class HostResourceProbe:
             return True
         if (resources.get("kind") == "creation_render"
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
+            return True
+        if resources.get("kind") == "material_scene_window":
             return True
         return None
 
