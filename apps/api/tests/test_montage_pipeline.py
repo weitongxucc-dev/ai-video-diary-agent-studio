@@ -44,6 +44,7 @@ from app.montage import (
     _subtitle_font,
     _subtitle_font_and_lines,
     _tokens,
+    _validate_rendered_media,
     _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
@@ -1375,6 +1376,9 @@ def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path):
     assert rendered.status == "rendered"
     assert (tmp_path / "job" / "preview.mp4").stat().st_size <= 8 * 1024 * 1024
     assert len(scheduler.children) == 3  # duration probe, encoder, output probe
+    with pytest.raises(OSError, match="时长不足"):
+        _validate_rendered_media(tmp_path / "job" / "preview.mp4", expected_size=(1080, 1920),
+                                 expected_duration_seconds=5)
 
 
 @pytest.mark.skipif(

@@ -712,6 +712,7 @@ class MontageRenderer:
             if max_output_bytes is not None and output_path.stat().st_size > max_output_bytes:
                 raise OSError("成片超出本次受许可输出上限")
             _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920),
+                                     expected_duration_seconds=plan.duration_seconds,
                                      scheduler=scheduler, grant=grant, cancel_event=cancel_event,
                                      deadline_monotonic=deadline_monotonic)
         except subprocess.CalledProcessError as exc:
@@ -722,6 +723,11 @@ class MontageRenderer:
         except (OSError, subprocess.SubprocessError) as exc:
             plan.status = "failed"
             plan.message = f"FFmpeg 渲染失败：{exc}"
+            raise
+        except RuntimeError as exc:
+            if grant is not None:
+                plan.status = "failed"
+                plan.message = f"受许可渲染中断：{exc}"
             raise
         plan.status = "rendered"
         if isinstance(plan, CreationTaskMontagePlan):
@@ -1454,6 +1460,7 @@ def _probe_duration(path: Path, *, scheduler: DeviceScheduler | None = None,
 
 
 def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
+                             expected_duration_seconds: float | None = None,
                              scheduler: DeviceScheduler | None = None, grant: Grant | None = None,
                              cancel_event: threading.Event | None = None,
                              deadline_monotonic: float | None = None) -> None:
@@ -1464,7 +1471,9 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,width,height",
+            "stream=codec_type,codec_name,width,height,duration",
+            "-show_entries",
+            "format=duration",
             "-of",
             "json",
             str(output_path),
@@ -1487,7 +1496,8 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
             stderr=completed.stderr,
         )
     try:
-        streams = json.loads(completed.stdout).get("streams", [])
+        metadata = json.loads(completed.stdout)
+        streams = metadata.get("streams", [])
     except json.JSONDecodeError as exc:
         raise OSError("ffprobe 返回了无效的媒体元数据") from exc
     video_stream = next(
@@ -1504,6 +1514,16 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
         raise OSError("渲染输出缺少 AAC 音频轨")
     if (video_stream.get("width"), video_stream.get("height")) != expected_size:
         raise OSError(f"渲染输出画幅不符合 {expected_size[0]}×{expected_size[1]}")
+    if expected_duration_seconds is not None:
+        if not math.isfinite(expected_duration_seconds) or expected_duration_seconds <= 0:
+            raise ValueError("成片计划时长无效")
+        for stream in (video_stream, audio_stream):
+            try:
+                duration = float(stream["duration"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise OSError("渲染输出缺少可核对的音视频时长") from exc
+            if not math.isfinite(duration) or duration + 0.1 < expected_duration_seconds:
+                raise OSError("渲染输出音视频时长不足，未完成整段计划")
 
 
 def _render_error_from_process(exc: subprocess.CalledProcessError) -> MontageRenderError:
