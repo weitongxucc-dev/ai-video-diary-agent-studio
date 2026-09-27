@@ -21,7 +21,7 @@ ACTIVE。本文件只保留当前协作边界；已结束批次的指令和旧�
 | UI01 桌面实现 | 01a0d259-8b42-7d30-82c5-8834f31842e5 | AppShell、EditorShell.module.css、VideoEditor、MaterialLibraryWorkspace、HomeWorkspace、KnowledgeWorkspace、ExecutionQueueStatus、useEditorPanels及相邻样式/测试；knowledge/page.tsx、loading.tsx；modern-desktop-contract-check.mjs |
 | SCHED01 整机调度 | 01a0d29d-226b-7460-8ba6-76f14dc8c56a | device_scheduler.py、device_runtime.py、host_resource_probes.py、granted_subprocess.py及专项测试；database_migrations.py新增调度迁移；api pyproject/uv.lock仅已批准psutil依赖 |
 | DESIGN01 界面设计 | 01a0d25f-5080-7991-9e9c-54efde64d4e9 | 自己工作树的 designs/desktop-011/，不写生产组件和DESIGN.md |
-| AUTH01 账号共享 | 01a0e1c4-23e1-71b1-b23a-22ea2993e7ef | 当前仅账号共享接口提案；产品代码写入须另分配精确范围 |
+| AUTH01 账号共享 | 01a0e1c4-23e1-71b1-b23a-22ea2993e7ef | 账号共享接口及当前实施包明确授权的新增服务/测试/Supabase迁移 |
 | QA01 独立验收 | 01a0d25f-53ad-7a83-8197-16f9d0a17aa2 | 自己工作树的 work/qa-011/ 隔离证据；不修改产品代码或共享规则 |
 
 后端省略目录的文件位于 apps/api/app/；前端组件位于 apps/web/src/components/。cmux 当前临时接管的文件以下表为准，原负责人不得同时改。Repository接口交MAT，main和任务父层交MAKE，DDL交SCHED；主控裁决跨域变更。
@@ -60,16 +60,15 @@ UI01独占 `apps/web/src/app/knowledge/page.tsx`、必要时同步其 `loading.t
 
 ## 当前实施包与依赖
 
-| 执行者 | 本批结果 | 独占范围与边界 |
+| 执行者 | 当前结果与独占增量 | 退出条件 |
 | --- | --- | --- |
-| cmux Claude / GLM | 修后端叶子模块 Ruff，保留逻辑 | audio_timeline、compound_edits、graphic_overlays、graphic_sources、local_portrait、subtitle_edits、subtitle_schedule、visual_effects；只修诊断位置，AST等价，禁止全仓格式化 |
-| cmux Pi / Kimi | 修 CI 日志中的测试规范问题 | test_audio_timeline、test_canvas、test_compound_selection、test_graphic_overlays、test_linked_timeline、test_montage_pipeline、test_production_foundation、test_silence_edits、test_subtitle_alignment、test_subtitle_edits、test_subtitle_style、test_transitions、test_visual_effects、test_voice_clone；不删除断言，不改生产 |
-| UI01 | 更新过时扫描约束，再对接真实队列事实 | modern-desktop-contract-check.mjs及必要相邻检查测试；不弱化检查，不恢复手动扫描为默认；后续展示仍沿原UI归属，新增文件先列范围 |
-| SCHED01 | 真实资源/进程探针和执行前注册子进程 | 新host_resource_probes.py、granted_subprocess.py及相邻测试，device_runtime必要适配；允许仅为可靠采样新增psutil至api pyproject/uv.lock，无无关升级；无可信测量则unknown，不启用生产 |
-| MAT01 | 获许可后的有界真实ffprobe及检查点恢复 | 原production/material_ingestion及测试；新增material_probe.py及专项；不造队列、不改main/DDL，场景/视觉未实现不得报完成；production.py规范窄修单独提交 |
-| MAKE01 | JobRun提交、获许可阶段执行与恢复适配 | 原main/creation_execution/schema及既定前端API文件；creation_execution规范窄修独立提交；host/媒体依赖未齐不激活新生产路径 |
-| QA01 | 单许可、活子进程、超时/取消、两空间竞争的独立证据 | 原QA隔离目录；合成候选只做一次必要集成验证，失败只阻断对应包 |
+| MAKE01 / WIL-65 | CPU成片渲染；在原范围上增加montage.py、audio_timeline.py、local_portrait.py及专项测试；GLM机械清理已收口，停止其这些文件写入 | 既有配音和已确认剪辑计划产出真实短片；所有子进程同grant，内层作业不再取许可；超时/取消/检查点恢复无重复渲染；不开放全局scheduled |
+| SCHED01 / WIL-66 | 原host/runtime范围内为CPU渲染和MAT场景单元提供明确资源kind、预算和准入 | 与消费者约定时长/输入量/线程等实际限制，未知拒绝；真实采样和单许可，不冒用hash许可 |
+| AUTH01 / WIL-67 | 新增apps/api/app/device_accounts.py、tests/test_device_accounts.py及独立Supabase新迁移；不写历史迁移、auth.py、source_repository.py、main或SQLiteDDL | 可信设备前提下邀请接受/撤销/过期/幂等和并发五人名额，owner占位，固定目标空间；隔离PG/RLS验证；真实设备注册根仍是交付缺口 |
+| MAT01 | 在原范围上新增material_scene.py及专项测试；复用源时间区间的有界场景分析 | 镜头变化小样、真实定位、检查点/重启恢复；不跑完整ASR/VLM，不提前标资产ready；资源字段先与SCHED对齐 |
+| UI01 | 新增DesktopVoiceRecorder.tsx、相邻module.css和组件测试 | 真实浏览器录音/停止/试听/重录/释放设备、诚实错误；onRecorded回调交MAKE接线，父层和API不跨写；摄像头/录屏不包含 |
+| QA01 | 原隔离证据范围；审核上述包 | 按具体候选做必要复验，区分组件/真实媒体/产品闭环；失败只阻断对应包 |
 
-两位cmux使用已清洁的既有工作副本，新分支分别为 `codex/ci-ruff-production`、`codex/ci-ruff-tests`，当时均从13b253f派生；当前提交以各工作树Git为准，不作为新任务起点。除上述测试文件暂交Pi外，既有归属不变；MAKE/MAT不得同时修改这些CI清理文件，需变更则先交主控协调。
+cmux前一批生产叶子和测试规范清理已交付，旧临时写入许可结束；后续派包必须重新限定文件，不得继续沿历史消息写媒体文件。当前包基线由主控消息指定，不能从已结束批次推断。
 
-推进规则：工作者完成首个可审提交后继续其已授权剩余范围；依赖未到时完成不依赖部分并报告具体接口，主控接收后审核、合成、必要复验、推送、同步Linear。候选完成不等于整个版本完成，也不自动解除生产切换门槛。后台监控是否启用以实际自动化配置为准，不能由派工消息推断。
+推进规则：工作者完成首个可审提交后继续已授权剩余范围；依赖未到时完成独立部分并报告具体接口。主控接收后审核、合成、必要复验、推送、同步Linear。候选完成不等于整个版本完成，也不解除生产门禁。后台监控以实际自动化配置为准。

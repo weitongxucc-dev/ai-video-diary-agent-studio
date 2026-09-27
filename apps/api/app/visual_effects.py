@@ -181,7 +181,8 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":max_seconds}
     effects=VisualEffects.model_validate(clip.visual_effects)
     if effects.beauty_strength or effects.skin_exposure:
-        if portrait is None: raise ValueError("本地人像组件未就绪")
+        if portrait is None:
+            raise ValueError("本地人像组件未就绪")
         parameters["portrait_runtime_fingerprint"]=portrait.fingerprint()
     digest=hashlib.sha256(json.dumps(parameters,sort_keys=True).encode()).hexdigest()
     identity=uuid4().hex
@@ -235,7 +236,8 @@ def _compile_visual_step(command: str, current: dict) -> VisualEffects | None:
         return VisualEffects.model_validate({**base.model_dump(),"rotation":float(match[2])*(-1 if match[1]=="逆时针" else 1)})
     match=re.fullmatch(r"(?:向|往)(左|右|上|下)(?:移动|移)(?:画面)?\s*(\d+(?:\.\d+)?)\s*[%％]",text)
     if match:
-        direction,amount=match.groups(); key="offset_x" if direction in {"左","右"} else "offset_y"
+        direction,amount=match.groups()
+        key="offset_x" if direction in {"左","右"} else "offset_y"
         value=getattr(base,key)+float(amount)/100*(-1 if direction in {"左","上"} else 1)
         return VisualEffects.model_validate({**base.model_dump(),key:value})
     if text in {"重置调色", "恢复原色"}:
@@ -244,7 +246,8 @@ def _compile_visual_step(command: str, current: dict) -> VisualEffects | None:
     relative_color={"亮一点":("exposure",.25),"暗一点":("exposure",-.25),"暖一点":("temperature",.15),"冷一点":("temperature",-.15),
         "皮肤亮一点":("skin_exposure",.15),"肤色亮一点":("skin_exposure",.15)}
     if text.removeprefix("再") in relative_color:
-        key,delta=relative_color[text.removeprefix("再")];values[key]+=delta
+        key,delta=relative_color[text.removeprefix("再")]
+        values[key]+=delta
         return VisualEffects.model_validate(values)
     match=re.fullmatch(r"(?:轻(?:微)?(?:一点)?(?:地)?)?(?:美颜|磨皮)(?:一下)?(?:轻一点)?",text)
     if match:
@@ -253,16 +256,20 @@ def _compile_visual_step(command: str, current: dict) -> VisualEffects | None:
     match=re.fullmatch(r"(?:关闭|取消)(美颜|磨皮)",text)
     if match:
         values["beauty_strength"]=0
-        if match[1]=="美颜":values["skin_exposure"]=0
+        if match[1]=="美颜":
+            values["skin_exposure"]=0
         return VisualEffects.model_validate(values)
     match=re.fullmatch(r"(美颜|磨皮)(?:强度)?(?:设为|改为|为)?\s*(\d+(?:\.\d+)?)",text)
     if match:
-        values["beauty_strength"]=float(match[2]);return VisualEffects.model_validate(values)
+        values["beauty_strength"]=float(match[2])
+        return VisualEffects.model_validate(values)
     match=re.fullmatch(r"((?:肤色|皮肤)曝光|曝光|对比度|饱和度)(?:(?:设为|改为|到|为)?\s*([+-]?\d+(?:\.\d+)?)|(?:低|小|降低|减小)(?:一点)?|(?:高|大|提高|增加)(?:一点)?)",text)
     if match:
         key={"曝光":"exposure","对比度":"contrast","饱和度":"saturation"}.get(match[1],"skin_exposure")
-        if match[2]:values[key]=float(match[2])
-        else:values[key]+=-.1 if re.search(r"低|小|降低|减小",text) else .1
+        if match[2]:
+            values[key]=float(match[2])
+        else:
+            values[key]+=-.1 if re.search(r"低|小|降低|减小",text) else .1
         return VisualEffects.model_validate(values)
     return None
 
@@ -273,15 +280,23 @@ def compile_visual_command(command: str, current: dict) -> VisualEffects | None:
     parts=[part.strip() for part in re.split(r"[，,；;]|(?:并且|同时|然后)",command.strip().rstrip("。！")) if part.strip()]
     constraints={"其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变"}
     effects=VisualEffects.model_validate(current)
-    applied=False;unknown=[];last_beauty=False
+    applied=False
+    unknown=[]
+    last_beauty=False
     for part in parts:
-        if part in constraints:continue
+        if part in constraints:
+            continue
         if part=="轻一点" and last_beauty:
-            effects=effects.model_copy(update={"beauty_strength":.2});continue
+            effects=effects.model_copy(update={"beauty_strength":.2})
+            continue
         candidate=_compile_visual_step(part,effects.model_dump())
         if candidate is None:
-            unknown.append(part);last_beauty=False;continue
-        applied=True;effects=candidate;last_beauty=bool(re.search(r"美颜|磨皮",part)) and effects.beauty_strength>0
+            unknown.append(part)
+            last_beauty=False
+            continue
+        applied=True
+        effects=candidate
+        last_beauty=bool(re.search(r"美颜|磨皮",part)) and effects.beauty_strength>0
     if unknown and (applied or any(re.search(r"曝光|对比度|饱和度|美颜|磨皮|亮一点|淡入|淡出|缩放|旋转",part) for part in unknown)):
         raise ValueError("这条指令包含尚未支持的限制或操作："+"；".join(unknown)+"。没有应用任何修改，请调整后重新预览")
     return effects if applied else None

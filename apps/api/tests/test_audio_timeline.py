@@ -37,7 +37,8 @@ def test_actual_mix_preserves_both_tracks_and_solo_does_not_change_export(tmp_pa
             id="m", name="音乐", source_ref="artifacts/music", source_start_ms=0, source_end_ms=2000,
             timeline_start_ms=1000, gain_db=-6, fade_out_ms=500)]),
     ])
-    resolver = lambda ref: {"artifacts/voice": voice, "artifacts/music": music}[ref]
+    def resolver(ref):
+        return {"artifacts/voice": voice, "artifacts/music": music}[ref]
     snapshot = timeline.model_dump()
     full = render_audio_mix(timeline, 4, resolver, tmp_path / "full.wav")
     both = samples(full, 1.2, 1.7)
@@ -84,12 +85,14 @@ def test_split_keeps_original_source_and_fade_envelope(tmp_path):
 
 def test_ducking_recovers_after_voice_and_rejects_source_overrun(tmp_path):
     voice,music=tmp_path/"voice.wav",tmp_path/"music.wav"
-    tone(voice,440);tone(music,660)
+    tone(voice,440)
+    tone(music,660)
     timeline=AudioTimeline(tracks=[
         TimelineAudioTrack(id="voice",name="配音",role="narration",clips=[TimelineAudioClip(id="v",name="v",source_ref="artifacts/voice",source_start_ms=0,source_end_ms=1000,timeline_start_ms=1000)]),
         TimelineAudioTrack(id="music",name="音乐",role="music",duck_under_voice=True,clips=[TimelineAudioClip(id="m",name="m",source_ref="artifacts/music",source_start_ms=0,source_end_ms=4000,timeline_start_ms=0)]),
     ])
-    resolver=lambda ref:voice if ref.endswith("voice") else music
+    def resolver(ref):
+        return voice if ref.endswith("voice") else music
     output=render_audio_mix(timeline,4,resolver,tmp_path/"duck.wav")
     before=amplitude(samples(output,.2,.5),660)
     during=amplitude(samples(output,1.3,1.6),660)
@@ -249,7 +252,8 @@ def test_compound_audio_parameters_share_one_patch_and_cover_both_fades():
     assert ordered.values=={'gain_db':-3}
     assert compile_audio_command('淡入1秒和淡出2秒','audio-narration-main',timeline,'version',None).values=={'fade_in_ms':1000,'fade_out_ms':2000}
     for command in ('音量小一点，删除字幕','静音但保留原声','解锁音乐','音量降低3分贝，然后加混响'):
-        with pytest.raises(ValueError):compile_audio_command(command,'audio-narration-main',timeline,'version',None)
+        with pytest.raises(ValueError):
+            compile_audio_command(command,'audio-narration-main',timeline,'version',None)
 
 @pytest.mark.parametrize('use_state', ['reference_only', 'excluded'])
 def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use_state, monkeypatch):

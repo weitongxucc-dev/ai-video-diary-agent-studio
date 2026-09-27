@@ -199,9 +199,11 @@ def compile_audio_command(command: str, target_id: str, timeline: AudioTimeline,
     action = "update" if clip else "track"
     target = clip or track
     parts=[part.strip() for part in re.split(r"[，,；;]|(?:同时|顺便|然后|并且|以及|和)",command.strip().casefold().rstrip("。！")) if part.strip()]
-    values={};structural=None
+    values={}
+    structural=None
     for part in parts:
-        if part in {"画面不变","不改画面","字幕不变","其他不要动","其他别动"}:continue
+        if part in {"画面不变","不改画面","字幕不变","其他不要动","其他别动"}:
+            continue
         # Object names refer to the explicitly selected track, never another implicit track.
         named_roles=re.findall(r"音乐|配音|原声|音效",part)
         if any(track.role!={"音乐":"music","配音":"narration","原声":"original","音效":"effect"}[name] for name in named_roles):
@@ -211,18 +213,26 @@ def compile_audio_command(command: str, target_id: str, timeline: AudioTimeline,
         patch=None
         if text in {"解锁","锁定","取消静音","恢复声音","静音"}:
             patch={"locked":text=="锁定"} if text in {"解锁","锁定"} else {"muted":text=="静音"}
-        elif not clip and text in {"说话时压低","说话时压低音乐","有人说话时压低音乐"}:patch={"duck_under_voice":True}
-        elif not clip and text in {"取消自动压低","关闭自动压低"}:patch={"duck_under_voice":False}
+        elif not clip and text in {"说话时压低","说话时压低音乐","有人说话时压低音乐"}:
+            patch={"duck_under_voice":True}
+        elif not clip and text in {"取消自动压低","关闭自动压低"}:
+            patch={"duck_under_voice":False}
         elif clip and text in {"复制","删除","分割","在播放位置分割"}:
-            if structural or values or len(parts)>1:raise ValueError("分割、复制和删除暂不能与其他音频操作合并，请分别预览")
-            if text=="复制":structural=("duplicate",{"timeline_start_ms":clip.timeline_start_ms+clip.duration_ms})
-            elif text=="删除":structural=("delete",{})
-            elif playhead_ms is not None:structural=("split",{"at_ms":playhead_ms})
-            else:raise ValueError("请先定位音频分割位置")
+            if structural or values or len(parts)>1:
+                raise ValueError("分割、复制和删除暂不能与其他音频操作合并，请分别预览")
+            if text=="复制":
+                structural=("duplicate",{"timeline_start_ms":clip.timeline_start_ms+clip.duration_ms})
+            elif text=="删除":
+                structural=("delete",{})
+            elif playhead_ms is not None:
+                structural=("split",{"at_ms":playhead_ms})
+            else:
+                raise ValueError("请先定位音频分割位置")
             continue
         else:
             match=re.fullmatch(r"(淡入|淡出)(?:设为|改为|为)?\s*(\d+(?:\.\d+)?)\s*秒",text)
-            if clip and match:patch={"fade_in_ms" if match[1]=="淡入" else "fade_out_ms":round(float(match[2])*1000)}
+            if clip and match:
+                patch={"fade_in_ms" if match[1]=="淡入" else "fade_out_ms":round(float(match[2])*1000)}
             elif clip and text in {"轻降噪","轻微降噪","降噪","降噪一下","关闭降噪","取消降噪"}:
                 patch={"denoise_db":0 if text.startswith(("关闭","取消")) else 6 if "轻" in text else 12}
             elif clip and text in {"统一响度","响度标准化","关闭响度","取消响度标准化"}:
@@ -232,15 +242,20 @@ def compile_audio_command(command: str, target_id: str, timeline: AudioTimeline,
                 gain=re.fullmatch(r"(?:音量)?(降低|减小|提高|设为|改为|到|为)?\s*([+-]?\d+(?:\.\d+)?)\s*(?:db|分贝)",text)
                 level=re.sub(r"^音量","",text)
                 current_gain=values.get("gain_db",target.gain_db)
-                if clip and move:patch={"timeline_start_ms":round(float(move[1])*1000)}
+                if clip and move:
+                    patch={"timeline_start_ms":round(float(move[1])*1000)}
                 elif gain:
-                    amount=float(gain[2]);patch={"gain_db":current_gain-abs(amount) if gain[1] in {"降低","减小"} else current_gain+abs(amount) if gain[1]=="提高" else amount}
+                    amount=float(gain[2])
+                    patch={"gain_db":current_gain-abs(amount) if gain[1] in {"降低","减小"} else current_gain+abs(amount) if gain[1]=="提高" else amount}
                 elif level in {"减半","降低一半","降到一半","一半","小一点","低一点","轻一点","大一点","高一点"}:
                     patch={"gain_db":current_gain+(-6.0206 if "半" in level else 3 if level in {"大一点","高一点"} else -3)}
-        if patch is None:raise ValueError("无法完整执行音频要求："+part+"。没有应用任何修改，请明确参数后重新预览")
+        if patch is None:
+            raise ValueError("无法完整执行音频要求："+part+"。没有应用任何修改，请明确参数后重新预览")
         values.update(patch)
-    if structural:action,values=structural
-    elif not values:raise ValueError("请指定要修改的音频参数")
+    if structural:
+        action,values=structural
+    elif not values:
+        raise ValueError("请指定要修改的音频参数")
     return AudioEditRequest(base_version_id=base_version_id, action=action, target_id=target_id, values=values, raw_command=command)
 
 
