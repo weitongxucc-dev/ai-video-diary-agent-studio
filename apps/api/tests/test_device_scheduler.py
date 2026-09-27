@@ -8,7 +8,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
