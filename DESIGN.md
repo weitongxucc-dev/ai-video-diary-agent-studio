@@ -1,6 +1,6 @@
 ---
 name: AI 视频日记 — Modern Desktop System
-version: "4.3"
+version: "4.4"
 status: approved-product-structure
 applies_to: "apps/web, apps/desktop, product screenshots, UI tests"
 source_priority:
@@ -27,9 +27,9 @@ colors:
   danger: "light #B73A36 / dark #F1847E"
 typography:
   family: "PingFang SC, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-  body: "14px / 1.55 / 400"
+  body: "13px / 1.45 / 400"
   compact: "12-13px / 1.45 / 400"
-  title: "22-28px / 1.25 / 500"
+  title: "18-20px / 1.25 / 500"
 spacing:
   base: "4px"
   scale: "4, 8, 12, 16, 24, 32"
@@ -38,8 +38,8 @@ rounded:
   panel: "10px"
   dialog: "14px"
 components:
-  sidebar_width: "220px"
-  conversation_width: "350px"
+  sidebar_width: "188px"
+  conversation_width: "280px"
   toolbar_height: "44-48px"
 ---
 
@@ -75,7 +75,7 @@ components:
 - 精细修改采用右侧临时浮动边栏，形成三加一；不成为常驻第四栏，不挤压三栏或改变播放器尺寸。来源详情、录音、对照预览和重要确认可使用弹窗卡片。
 - 1024–1279px 仍保留三栏；边栏需避让关键视频画面与必要播放操作，可调整浮动位置或高度并支持收起。不得靠缩小正文、遮挡关键画面或横向挤压满足布局。
 - 开关边栏保留当前任务、选中对象和播放位置。关闭不是确认修改或放弃草稿；未提交内容必须可恢复，明确放弃才丢弃。
-- 设计参考是 `designs/product-flow-lowfi/index.html` 的浅灰背景、白色面板、细边框、深色主按钮和紧凑列表；参考内示例素材、统计和功能状态不得进入生产数据。
+- 视觉与交互基线采用第5.10节登记的 v4 主账号/成员原型，覆盖页面结构与实际点击行为；示例素材、统计和模拟成功不得进入生产数据。
 - Electron 最小窗口 1024×700。导航与对话栏支持拖动和记忆，工作区优先获得剩余宽度。
 
 ### 2.1 一级导航
@@ -283,7 +283,7 @@ components:
 
 导航默认188px、可在160–280px调整；对话默认280px、可在240–400px调整；工作区优先。中文 PingFang SC，400/500 字重；正文及对话13px，辅助12px。没有真实能力的按钮和波形不做模拟交互。
 
-视觉参考只约束构图、质感与密度；素材、名称、状态及产物来自当前任务。先验收这一个代表页，再推广公共组件，不以全局样式改动替代代表页验收。
+第5.10节原型约束视觉与交互；素材、名称、状态及产物来自当前任务。先验收这一个代表页，再推广公共组件，不以全局样式改动替代代表页验收。
 
 ### 5.6 视频模板
 
@@ -326,19 +326,16 @@ components:
 
 把“已安排”“正在处理”“完成当前步骤后让出”“已暂停”分开；忙碌不显示为错误，不用无变化旋转图标掩盖长期等待。排队时仍可查看已完成结果、继续编辑和调整本人任务安排；内容变更使旧输入失效时，先重新确认，不让旧任务偷偷继续。大量导入/长等待建议在当前卡片中给出，不频繁弹窗、不替用户选择夜间运行。
 
-### 5.10 视觉参考资产
+### 5.10 当前视觉与交互基线
 
-下列图片只用于构图、密度和质感参考，不能覆盖本文的对象、命名、状态和响应式规则，也不能作为页面实现或验收证据：
+用户已确认 **workspace-dual-v4** 是当前桌面视觉与交互基线，包含页面组织、信息密度和点击操作，不仅是图片风格参考。
 
-- [`00-lowfi-source.png`](docs/design/product-ui-v2/00-lowfi-source.png)：低保真结构来源；
-- [`01-material-library.png`](docs/design/product-ui-v2/01-material-library.png)：素材库；
-- [`02-home-command-center.png`](docs/design/product-ui-v2/02-home-command-center.png)：首页命令中心；
-- [`03-presenter-lipsync.png`](docs/design/product-ui-v2/03-presenter-lipsync.png)：人物与口型；
-- [`04-video-editor.png`](docs/design/product-ui-v2/04-video-editor.png)：可视化剪辑；
-- [`05-automation-operations.png`](docs/design/product-ui-v2/05-automation-operations.png)：自动任务与运行情况；
-- [`06-content-sources.png`](docs/design/product-ui-v2/06-content-sources.png)：知识库与信息源。
-
-带有 `draft`、日期或旧版本后缀的图片不属于当前参考集合；需要追溯时使用 Git 历史，不在活动目录保留并列版本。
+- 用户确认入口：[本地主账号页面](http://127.0.0.1:4327/workspace-dual-v4/owner.html)。
+- 仓库可运行来源：[主账号](docs/design/workspace-dual-v4/owner.html)、[成员](docs/design/workspace-dual-v4/member.html)，[本地打开方法](docs/design/workspace-dual-v4/README.md)。
+- 实现需逐页对照导航—创作助手—核心工作区三栏、拖动/收起/恢复、紧凑字号间距、右上精细修改浮卡，以及首页图表/词云、知识与素材网格、模板详情和页面内交互。
+- 生产接线保留原型中的操作意图，使用真实对象、权限和持久化结果；缺失能力明确说明，不将示例数字、固定回答或模拟成功当作服务实现。
+- 原型中尚未覆盖的九阶段、权限与异常行为按本文和产品需求补齐。后续候选原型未经用户确认，不自动替代 v4；不得另起整体布局。若发现本文其他视觉条款与已确认 v4 冲突，应先修正文档再派工，不能静默采用旧标准。
+- 已被替代的图片和旧原型不属于活动参考集合，不在活动目录并列保留；历史追溯使用 Git。原型提供视觉与交互对照，真实媒体、权限、模型与平台能力另行验收。
 
 ## 6. 主题、桌面和存储
 
