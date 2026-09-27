@@ -253,7 +253,9 @@ export function AppShell({
         const ratio = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : declaredWidth / declaredHeight;
         const frameWidth = Math.min(playerRect.width, playerRect.height * ratio);
         const frameHeight = frameWidth / ratio;
-        const frameLeft = playerRect.left + (playerRect.width - frameWidth) / 2;
+        // The open float uses the player's empty right side, so measure the
+        // picture in the same left-aligned position used while it is visible.
+        const frameLeft = playerRect.left;
         const frameTop = playerRect.top + (playerRect.height - frameHeight) / 2;
         const floatLeft = mainRect.right - width - 8;
         const floatTop = mainRect.top + 8;
@@ -518,7 +520,7 @@ export function AppShell({
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+          <main className={`desktop-main-scroll${quickShown ? ` ${editorShell.quickPreviewBesideFloat}` : ""}`} data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
             {quickShown && quickInspector ? (
                 <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? 8, left: quickPosition?.left, right: quickPosition ? undefined : 8 }}>
