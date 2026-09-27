@@ -6,10 +6,14 @@ import json
 import re
 from pathlib import Path
 import subprocess
+import threading
+import time
 from typing import Callable, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.device_scheduler import DeviceScheduler, Grant
 
 
 # FFmpeg loudnorm can emit NaN for fully silent input; preserve silence for encoders.
@@ -332,6 +336,7 @@ def _gain_expression(clip: TimelineAudioClip, track_gain: float) -> str:
 def build_audio_mix_command(
     timeline: AudioTimeline, duration_seconds: float, resolve_source: Callable[[str], Path], output: Path,
     *, solo_track_ids: set[str] | None = None, start_seconds: float = 0, end_seconds: float | None = None,
+    probe_duration: Callable[[Path], float] | None = None,
 ) -> list[str]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("音频时间线时长无效")
@@ -356,7 +361,7 @@ def build_audio_mix_command(
             if not source.is_file():
                 raise ValueError("音轨的源文件已丢失")
             if source not in durations:
-                durations[source] = probe_audio_source(source)
+                durations[source] = (probe_duration or probe_audio_source)(source)
             if clip.source_end_ms > round(durations[source] * 1000) + 20:
                 raise ValueError("音频源区间超出实际文件时长")
             command.extend(["-protocol_whitelist", "file,pipe", "-i", str(source)])
@@ -401,16 +406,70 @@ def build_audio_mix_command(
 
 
 def render_audio_mix(*args, **kwargs) -> Path:
+    scheduler = kwargs.pop("scheduler", None)
+    grant = kwargs.pop("grant", None)
+    cancel_event = kwargs.pop("cancel_event", None)
+    deadline_monotonic = kwargs.pop("deadline_monotonic", None)
+    max_output_bytes = kwargs.pop("max_output_bytes", None)
+    threads = kwargs.pop("threads", None)
+    if (scheduler is None) != (grant is None):
+        raise ValueError("音轨渲染许可和调度器必须一起提供")
+    if grant is not None:
+        if (deadline_monotonic is None or max_output_bytes is None or max_output_bytes <= 0
+                or threads is None or threads <= 0):
+            raise ValueError("受许可音轨渲染必须提供输出、线程和总时限")
+        kwargs["probe_duration"] = lambda path: probe_audio_source(
+            path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+            deadline_monotonic=deadline_monotonic,
+        )
     command = build_audio_mix_command(*args, **kwargs)
-    subprocess.run(command, capture_output=True, check=True, timeout=600)
+    if grant is None:
+        subprocess.run(command, capture_output=True, check=True, timeout=600)
+    else:
+        command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
+        command[-1:-1] = ["-threads:a", str(threads), "-fs", str(max_output_bytes)]
+        _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
+                                   cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+        if Path(command[-1]).stat().st_size > max_output_bytes:
+            raise OSError("音轨中间产物超出本次受许可输出上限")
     return Path(command[-1])
 
 
-def probe_audio_source(path: Path) -> float:
-    result = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0", "-show_entries",
-                             "stream=duration:format=duration", "-of", "json", str(path)],
-                            capture_output=True, text=True, check=True, timeout=30)
-    payload = json.loads(result.stdout)
+def _run_granted_audio_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,
+                               timeout_seconds: float | None, cancel_event: threading.Event | None,
+                               deadline_monotonic: float | None):
+    from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
+
+    if deadline_monotonic is None:
+        raise ValueError("受许可音轨命令缺少阶段总时限")
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        raise GrantedCommandTimeout("音轨阶段已超出总时限")
+    timeout = min(timeout_seconds, remaining) if timeout_seconds is not None else remaining
+    result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout,
+                                 max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
+                                 cancel_event=cancel_event)
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout,
+                                            stderr=result.stderr)
+    return result
+
+
+def probe_audio_source(path: Path, *, scheduler: DeviceScheduler | None = None,
+                       grant: Grant | None = None, cancel_event: threading.Event | None = None,
+                       deadline_monotonic: float | None = None) -> float:
+    command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0", "-show_entries",
+               "stream=duration:format=duration", "-of", "json", str(path)]
+    if grant is None:
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
+        stdout = result.stdout
+    else:
+        if scheduler is None:
+            raise ValueError("受许可音频探测缺少调度器")
+        stdout = _run_granted_audio_command(scheduler, grant, command, timeout_seconds=30,
+                                            cancel_event=cancel_event,
+                                            deadline_monotonic=deadline_monotonic).stdout
+    payload = json.loads(stdout)
     if not payload.get("streams"):
         raise ValueError("源文件没有可用音轨")
     raw = payload["streams"][0].get("duration", payload.get("format", {}).get("duration"))
