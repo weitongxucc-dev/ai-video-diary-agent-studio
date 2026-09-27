@@ -344,6 +344,113 @@ class DeviceScheduler:
             conn.commit()
         return self._request(row)
 
+    def replace_unexecuted_request(
+        self, old_request_id: str, replacement_intent: SubmissionIntent,
+        actor: object, reason: str,
+    ) -> WorkRequest:
+        """Supersede an unexecuted legacy material probe without resetting its wait age.
+
+        Both rows and the transition event remain in the production database.
+        This is intentionally limited to the probe-scene:v1 to probe-meta:v1
+        contract change; it cannot migrate a grant, attempt, or result.
+        """
+        if not reason or len(reason) > 128:
+            raise ValueError("替换原因须简短且非空")
+        trusted = self.owners.verify_submission(replacement_intent, actor)
+        actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id,
+                  trusted.input_digest, trusted.unit_key)
+        supplied = (replacement_intent.workspace_id, replacement_intent.owner_type,
+                    replacement_intent.owner_id, replacement_intent.input_digest,
+                    replacement_intent.unit_key)
+        if actual != supplied or any(not value for value in actual):
+            raise PermissionError("替换单元未通过服务端验证")
+        self._assert_material_stage_key(trusted)
+        if (trusted.owner_type != "material_asset" or trusted.work_class != "background"
+                or trusted.member_id is not None or trusted.resources.get("kind") != "material_probe_meta"
+                or type(trusted.resources.get("size_bytes")) is not int
+                or trusted.resources["size_bytes"] < 0):
+            raise ValueError("仅支持可信的素材元数据探针替换")
+        now = _stamp(self._now())
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (old_request_id,)).fetchone()
+            if old_row is None:
+                raise KeyError(old_request_id)
+            old = self._request(old_row)
+            old_prefix, _, old_digest = old.unit_key.rpartition(":")
+            new_prefix, _, new_digest = trusted.unit_key.rpartition(":")
+            if (old.owner_type != "material_asset" or old_prefix != "probe-scene:v1"
+                    or new_prefix != "probe-meta:v1"
+                    or not re.fullmatch(r"[0-9a-f]{64}", old_digest)
+                    or not re.fullmatch(r"[0-9a-f]{64}", new_digest)
+                    or (old.workspace_id, old.owner_id, old.input_digest) !=
+                    (trusted.workspace_id, trusted.owner_id, trusted.input_digest)
+                    or old.policy != replacement_intent.policy
+                    or old.member_id is not None or old.work_class != "background"
+                    or old.source_refs != trusted.source_refs):
+                raise ValueError("旧请求与替换单元的素材、摘要或执行策略不匹配")
+            existing = conn.execute(
+                """SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type=?
+                AND owner_id=? AND input_digest=? AND unit_key=?""", supplied,
+            ).fetchone()
+            if old.state == "cancelled" and old.wait_reason and old.wait_reason.startswith("replaced_by:"):
+                if existing is None or old.wait_reason != f"replaced_by:{existing['id']}":
+                    raise RecoveryBlocked("已替换请求的审计指针不一致")
+                return self._request(existing)
+            if (old.state not in {"waiting", "blocked"} or old.attempt_number != 1
+                    or old.last_grant_generation is not None or old_row["checkpoint_ref"] is not None
+                    or old_row["last_failure_reason"] is not None):
+                raise ValueError("仅可替换尚未执行的阻断请求")
+            if existing is not None and (existing["attempt_number"] != 1
+                                         or existing["last_grant_generation"] is not None
+                                         or existing["state"] not in {"waiting", "blocked"}):
+                raise ValueError("替换单元已开始执行，不能迁移等待年龄")
+            refs_json = json.dumps([vars(ref) for ref in trusted.source_refs], sort_keys=True)
+            if existing is not None and (existing["member_id"] != trusted.member_id
+                                         or existing["work_class"] != trusted.work_class
+                                         or existing["source_refs_json"] != refs_json
+                                         or self._request(existing).policy != replacement_intent.policy
+                                         or json.loads(existing["resources_json"]) != trusted.resources):
+                raise PermissionError("既有替换单元的可信归属已变化")
+            if existing is None:
+                new_id = uuid.uuid4().hex
+                window = vars(replacement_intent.policy.window) if replacement_intent.policy.window else None
+                conn.execute(
+                    """INSERT INTO device_work_requests
+                    (id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+                     source_refs_json, work_class, policy, not_before_utc, window_json,
+                     first_ready_at_utc, eligible_since_utc, eligible_wait_seconds,
+                     state, resources_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?)""",
+                    (new_id, trusted.workspace_id, trusted.member_id, trusted.owner_type,
+                     trusted.owner_id, trusted.input_digest, trusted.unit_key, refs_json,
+                     trusted.work_class, replacement_intent.policy.mode,
+                     _stamp(replacement_intent.policy.not_before_utc) if replacement_intent.policy.not_before_utc else None,
+                     json.dumps(window), old_row["first_ready_at_utc"],
+                     old_row["eligible_since_utc"], old_row["eligible_wait_seconds"],
+                     json.dumps(trusted.resources, sort_keys=True), now, now),
+                )
+            else:
+                new_id = existing["id"]
+                earliest_ready = min(old_row["first_ready_at_utc"], existing["first_ready_at_utc"])
+                eligible_since = min(filter(None, (old_row["eligible_since_utc"],
+                                                   existing["eligible_since_utc"])), default=None)
+                conn.execute(
+                    """UPDATE device_work_requests SET first_ready_at_utc=?, eligible_since_utc=?,
+                    eligible_wait_seconds=?, updated_at=? WHERE id=?""",
+                    (earliest_ready, eligible_since,
+                     max(old_row["eligible_wait_seconds"], existing["eligible_wait_seconds"]),
+                     now, new_id),
+                )
+            new_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (new_id,)).fetchone()
+            if self.owners.check_current(self._request(new_row), conn) != "ready":
+                raise PermissionError("替换单元的当前素材或授权尚未就绪")
+            self._record_event(conn, old_row, "deferred", f"superseded_by:{new_id}:{reason}", None, now)
+            conn.execute("UPDATE device_work_requests SET state='cancelled', wait_reason=?, updated_at=? WHERE id=?",
+                         (f"replaced_by:{new_id}", now, old.id))
+            conn.commit()
+        return self._request(new_row)
+
     def wake_existing(self, intent: SubmissionIntent, actor: object) -> dict[str, object]:
         """Authorized manual analysis may wake an existing material unit only.
 

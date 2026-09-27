@@ -402,6 +402,81 @@ def test_unknown_resources_and_reused_request_age_do_not_fake_readiness(tmp_path
     _complete(scheduler, grant)
 
 
+@pytest.mark.parametrize("old_state,preexisting_new", [("waiting", False), ("blocked", True)])
+def test_unexecuted_probe_contract_replacement_preserves_age_and_audit(
+    tmp_path, old_state, preexisting_new,
+):
+    class MaterialOwner(Owners):
+        def verify_submission(self, intent, actor):
+            if actor != "service":
+                raise PermissionError("not discovery service")
+            return VerifiedWork(intent.workspace_id, intent.owner_type, intent.owner_id,
+                                intent.input_digest, intent.unit_key, None, "background",
+                                {"kind": "material_probe_meta" if intent.unit_key.startswith("probe-meta:")
+                                 else "material_probe_scene", "size_bytes": 512},
+                                stage_input_digest=intent.unit_key.rsplit(":", 1)[-1])
+
+        def check_current(self, request, conn):
+            return "ready" if request.unit_key.startswith("probe-meta:") else "dependency"
+
+    scheduler = _scheduler(tmp_path, owners=MaterialOwner())
+    source_sha = "sha256:" + "a" * 64
+    old_intent = SubmissionIntent("private-a", "material_asset", "asset", source_sha,
+                                  material_stage_unit_key("probe-scene:v1", "b" * 64),
+                                  SchedulePolicy())
+    new_intent = SubmissionIntent("private-a", "material_asset", "asset", source_sha,
+                                  material_stage_unit_key("probe-meta:v1", "c" * 64),
+                                  SchedulePolicy())
+    old = scheduler.submit(old_intent, "service")
+    if old_state == "blocked":
+        assert scheduler.pick_and_grant() is None
+    existing = scheduler.submit(new_intent, "service") if preexisting_new else None
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET eligible_wait_seconds=77 WHERE id=?", (old.id,))
+    replacement = scheduler.replace_unexecuted_request(
+        old.id, new_intent, "service", "bounded_metadata_contract",
+    )
+    assert replacement.id == (existing.id if existing else replacement.id)
+    assert replacement.first_ready_at_utc == old.first_ready_at_utc
+    assert replacement.eligible_wait_seconds == 77
+    assert scheduler.replace_unexecuted_request(old.id, new_intent, "service", "retry").id == replacement.id
+    with sqlite3.connect(scheduler.database_path) as conn:
+        old_state_row = conn.execute(
+            "SELECT state, wait_reason FROM device_work_requests WHERE id=?", (old.id,),
+        ).fetchone()
+        event = conn.execute(
+            "SELECT reason FROM device_request_events WHERE request_id=?", (old.id,),
+        ).fetchone()
+    assert old_state_row == ("cancelled", f"replaced_by:{replacement.id}")
+    assert event and event[0] == f"superseded_by:{replacement.id}:bounded_metadata_contract"
+    grant = scheduler.pick_and_grant()
+    assert grant and grant.request_id == replacement.id
+    _complete(scheduler, grant)
+
+
+def test_probe_contract_replacement_rejects_any_prior_grant(tmp_path):
+    class MaterialOwner(Owners):
+        def verify_submission(self, intent, actor):
+            return VerifiedWork(intent.workspace_id, intent.owner_type, intent.owner_id,
+                                intent.input_digest, intent.unit_key, None, "background",
+                                {"kind": "material_probe_meta", "size_bytes": 1},
+                                stage_input_digest=intent.unit_key.rsplit(":", 1)[-1])
+
+    scheduler = _scheduler(tmp_path, owners=MaterialOwner())
+    old = scheduler.submit(
+        SubmissionIntent("private-a", "material_asset", "asset", "sha256:" + "a" * 64,
+                         material_stage_unit_key("probe-scene:v1", "b" * 64), SchedulePolicy()),
+        "service",
+    )
+    grant = scheduler.pick_and_grant()
+    assert grant is not None
+    replacement = SubmissionIntent("private-a", "material_asset", "asset", "sha256:" + "a" * 64,
+                                   material_stage_unit_key("probe-meta:v1", "c" * 64), SchedulePolicy())
+    with pytest.raises(ValueError, match="尚未执行"):
+        scheduler.replace_unexecuted_request(old.id, replacement, "service", "stage_upgrade")
+    _complete(scheduler, grant)
+
+
 def test_material_hash_provisional_revision_then_real_sha_and_manual_wake_is_idempotent(tmp_path):
     scheduler = _scheduler(tmp_path)
     hash_unit = SubmissionIntent("private-a", "material_asset", "asset-1",
