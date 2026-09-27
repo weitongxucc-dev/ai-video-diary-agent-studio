@@ -1371,8 +1371,16 @@ export type TimelineAudioTrack = {
   gain_db: number; muted: boolean; locked: boolean; duck_under_voice: boolean; clips: TimelineAudioClip[];
 };
 export type AudioTimeline = { format_version: 1; tracks: TimelineAudioTrack[] };
-export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track";
+export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track" | "replace_narration";
   target_id: string; values: Record<string, unknown>; raw_command?: string };
+export type CreationTaskRecording = {
+  source_ref: string;
+  artifact_id: string;
+  audio_url: string;
+  duration_ms: number;
+  applied: boolean;
+  created_at?: string;
+};
 
 export type CreationTaskMontage = {
   graphic_overlays?:GraphicOverlay[];

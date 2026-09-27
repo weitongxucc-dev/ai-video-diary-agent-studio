@@ -1,4 +1,4 @@
-import type { VideoTemplate, AudioEditInput } from "./types";
+import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -786,6 +786,22 @@ export function saveVideoTemplate(taskId: string, input: {
 
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
+}
+export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`);
+}
+export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording> {
+  const mediaType = recording.type.split(";")[0].trim().toLowerCase();
+  const suffix = ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a",
+    "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav" } as Record<string, string>)[mediaType];
+  if (!suffix) throw new Error("当前录音格式无法保存，请换一个支持录音的浏览器重试。");
+  const body = new FormData();
+  body.append("audio", recording, `本机录音.${suffix}`);
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`),
+    { method: "POST", body, cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "电脑录音未保存");
+  return payload as CreationTaskRecording;
 }
 export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string }> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/listen`, { method: "POST", body: JSON.stringify(input) });
