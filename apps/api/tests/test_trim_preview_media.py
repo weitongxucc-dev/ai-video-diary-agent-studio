@@ -12,7 +12,7 @@ from PIL import Image
 
 from app import main as main_module
 from app.artifact_store import ArtifactStore
-from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_to_payload
+from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import (
     CreationPlan, CreationTask, MaterialAsset, MaterialSegment,
     MaterialSegmentMatch, NarrationArtifactRecord, ProductionRepository,
@@ -175,3 +175,24 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "another-workspace")
     assert client.get(preview.json()["proposal"]["preview"]["after"]["video_url"].split("#")[0]).status_code == 404
+
+    # A detached legacy task must not silently attach an older, different snapshot.
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    changed_montage = creation_task_montage_plan_from_payload(
+        repository.get_creation_task_montage_plan(workspace_id, task_id)
+    )
+    changed_montage.clips[0].fit_mode = "fit"
+    changed_payload = creation_task_montage_plan_to_payload(changed_montage)
+    repository.save_creation_task_montage_plan(workspace_id, task_id, montage.id, changed_payload)
+    saved_payload = repository.get_creation_task_montage_plan(workspace_id, task_id)
+    with repository._connect() as conn:
+        row = conn.execute("SELECT payload FROM creation_tasks WHERE id = ?", (task_id,)).fetchone()
+        detached = json.loads(row["payload"])
+        detached["current_timeline_version_id"] = None
+        conn.execute("UPDATE creation_tasks SET payload = ? WHERE id = ?", (json.dumps(detached), task_id))
+    conflict = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize")
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["error"] == "timeline_version_conflict"
+    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.get_creation_task_montage_plan(workspace_id, task_id) == saved_payload
+    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1

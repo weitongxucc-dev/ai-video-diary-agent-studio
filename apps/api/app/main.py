@@ -5499,6 +5499,22 @@ def initialize_creation_task_timeline(task_id: str, request: Request) -> dict[st
         production_repo.get_creation_task_montage_plan(workspace_id, task_id)
     )
     _logical_montage_output_refs(plan)
+    if task.current_timeline_version_id is None:
+        versions = production_repo.list_timeline_versions(workspace_id, task_id)
+        if versions:
+            current_snapshot = {
+                "montage": creation_task_montage_plan_to_payload(plan),
+                **_current_narration_snapshot(workspace_id, task),
+            }
+            if any(versions[-1].snapshot.get(key) != value for key, value in current_snapshot.items()):
+                raise _topic_failure_response(
+                    status_code=409,
+                    error="timeline_version_conflict",
+                    reason="当前故事板与已有时间线版本内容不同，不能把旧版本当作当前版本。",
+                    impact="当前故事板和历史版本均已保留，没有写入或替换。",
+                    repair_action="请先核对当前故事板与版本历史，再联系支持修复版本关联。",
+                    retryable=False,
+                )
     version = _ensure_montage_base_version(workspace_id, task, plan)
     if task.current_timeline_version_id is None:
         version = production_repo.create_timeline_version(version)
