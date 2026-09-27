@@ -987,12 +987,24 @@ describe("CreationTaskWorkspace", () => {
     expect(afterVideo.currentTime).toBe(1.5);
     const pauseOtherMedia = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     const pause = vi.spyOn(afterVideo, "pause").mockImplementation(() => {});
-    afterVideo.currentTime = 4.5;
+    afterVideo.currentTime = 4.7;
     fireEvent.timeUpdate(afterVideo);
     expect(pause).toHaveBeenCalledOnce();
+    expect(afterVideo.currentTime).toBe(4.5);
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
     fireEvent.play(afterVideo);
     expect(afterVideo.currentTime).toBe(1.5);
+    const pausesBeforeFrame = pause.mock.calls.length;
+    afterVideo.currentTime = 4.7;
+    frames[0](0);
+    expect(afterVideo.currentTime).toBe(4.5);
+    expect(pause.mock.calls.length).toBeGreaterThan(pausesBeforeFrame);
     expect(afterVideo.muted).toBe(false);
+    animationFrame.mockRestore();
     pause.mockRestore();
     pauseOtherMedia.mockRestore();
     fireEvent.click(await screen.findByRole("button", { name: "确认修改" }));

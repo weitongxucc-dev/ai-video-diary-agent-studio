@@ -438,8 +438,29 @@ function PreviewVideo({ url, label, muted, pauseOthers }: {
   muted: boolean;
   pauseOthers: (current: HTMLVideoElement) => void;
 }) {
+  const frameRef = useRef<number | null>(null);
   const match = /#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(url);
   const range = match ? { start: Number(match[1]), end: Number(match[2]) } : null;
+  useEffect(() => () => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+  }, []);
+  const stopAtEnd = (video: HTMLVideoElement) => {
+    if (!range) return;
+    if (video.currentTime < range.start) video.currentTime = range.start;
+    if (video.currentTime >= range.end) {
+      video.pause();
+      video.currentTime = range.end;
+    }
+  };
+  const watchPlayback = (video: HTMLVideoElement) => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    const tick = () => {
+      frameRef.current = null;
+      stopAtEnd(video);
+      if (!video.paused) frameRef.current = requestAnimationFrame(tick);
+    };
+    frameRef.current = requestAnimationFrame(tick);
+  };
   return <video
     className={editorUi.effectPreview}
     aria-label={label}
@@ -454,11 +475,13 @@ function PreviewVideo({ url, label, muted, pauseOthers }: {
       if (range && (event.currentTarget.currentTime < range.start || event.currentTarget.currentTime >= range.end)) {
         event.currentTarget.currentTime = range.start;
       }
+      if (range) watchPlayback(event.currentTarget);
     }}
-    onTimeUpdate={event => {
-      if (!range) return;
-      if (event.currentTarget.currentTime < range.start) event.currentTarget.currentTime = range.start;
-      if (event.currentTarget.currentTime >= range.end) event.currentTarget.pause();
+    onTimeUpdate={event => stopAtEnd(event.currentTarget)}
+    onPause={event => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      stopAtEnd(event.currentTarget);
     }}
   />;
 }
