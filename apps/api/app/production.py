@@ -40,7 +40,7 @@ from app.visual_semantics import (
 )
 
 if TYPE_CHECKING:
-    from app.device_scheduler import Grant, WorkRequest
+    from app.device_scheduler import Grant
 
 logger = logging.getLogger(__name__)
 
