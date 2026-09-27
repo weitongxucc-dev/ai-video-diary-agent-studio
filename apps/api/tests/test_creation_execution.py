@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -125,7 +126,8 @@ def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tm
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg tools unavailable")
-def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_change", [False, True])
+def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path, monkeypatch, source_change):
     repo, task_id, script_id, digest = _seed(tmp_path)
     audio = tmp_path / "voice.wav"
     video = tmp_path / "library" / "source.mp4"
@@ -278,16 +280,29 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
                       if item.kind == "creation_task_montage_render"]
         assert len(inner_jobs) == 1 and inner_jobs[0].status == "succeeded"
 
-        # A changed source or an independently edited version invalidates the
-        # original grant, even though its already published output exists.
-        source_stat = video.stat()
-        source_bytes = video.read_bytes()
-        video.write_bytes(source_bytes + b"changed")
-        with pytest.raises(PermissionError, match="失效"):
-            retry_executor.execute(retry_grant, scheduler)
-        assert render_calls == [1]
-        video.write_bytes(source_bytes)
-        os.utime(video, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        # A same-length write with restored mtime is still a new local source
+        # identity. Do not resume the old grant after this branch changes it.
+        if source_change:
+            source_stat = video.stat()
+            source_bytes = video.read_bytes()
+            time.sleep(0.01)
+            changed = bytearray(source_bytes)
+            changed[-1] ^= 1
+            video.write_bytes(changed)
+            os.utime(video, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+            changed_stat = video.stat()
+            assert changed_stat.st_size == source_stat.st_size
+            assert changed_stat.st_mtime_ns == source_stat.st_mtime_ns
+            assert changed_stat.st_ino == source_stat.st_ino
+            assert changed_stat.st_ctime_ns != source_stat.st_ctime_ns
+            with pytest.raises(PermissionError, match="失效"):
+                retry_executor.execute(retry_grant, scheduler)
+            assert render_calls == [1]
+            scheduler.defer_unit(retry_grant, reason="input_stale")
+            scheduler.assert_released(retry_grant)
+            return
+
+        # An independently edited timeline version also invalidates the grant.
         repo.create_timeline_version(TimelineVersion(
             id="timeline_independent_edit", workspace_id=task.workspace_id, task_id=task_id,
             parent_version_id=published_version.id, sequence=published_version.sequence + 1,

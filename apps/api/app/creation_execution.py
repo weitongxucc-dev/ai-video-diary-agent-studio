@@ -121,8 +121,11 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         stat = path.stat()
         if stat.st_size <= 0:
             raise ValueError("渲染源文件为空")
+        # ctime is a local mutation signal, including same-length writes whose
+        # mtime was restored. It is not a content hash or a remote-file proof.
         source_facts.append({"path": str(path), "size": stat.st_size,
-                             "mtime_ns": stat.st_mtime_ns, "inode": stat.st_ino,
+                             "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+                             "inode": stat.st_ino,
                              "device": stat.st_dev})
     manifest = {
         "plan": {key: value for key, value in payload.items()
