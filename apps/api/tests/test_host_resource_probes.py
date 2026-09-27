@@ -2,6 +2,7 @@ import shutil
 import sqlite3
 import sys
 import threading
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,10 +21,11 @@ from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionInte
 
 
 class RecordingScheduler:
-    def __init__(self, *, reject_registration=False):
+    def __init__(self, *, reject_registration=False, cancel_on_registration=None):
         self.processes = HostProcessProbe()
         self.children = []
         self.reject_registration = reject_registration
+        self.cancel_on_registration = cancel_on_registration
 
     def assert_grant(self, grant):
         assert grant == "isolated-grant"
@@ -33,6 +35,8 @@ class RecordingScheduler:
         if self.reject_registration:
             raise RuntimeError("ledger unavailable")
         self.children.append(child)
+        if self.cancel_on_registration is not None:
+            self.cancel_on_registration.set()
 
 
 def run(scheduler, argv, **options):
@@ -62,6 +66,41 @@ def test_registration_ack_precedes_real_exec(tmp_path):
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         run(scheduler, [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"])
     assert not marker.exists()
+
+
+def test_cancel_before_or_during_registration_never_execs_marker(tmp_path):
+    marker = tmp_path / "must-not-exist"
+    command = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    cancelled = threading.Event()
+    cancelled.set()
+    scheduler = RecordingScheduler()
+    with pytest.raises(GrantedCommandCancelled):
+        run(scheduler, command, cancel_event=cancelled)
+    assert not scheduler.children and not marker.exists()
+
+    cancelled.clear()
+    scheduler = RecordingScheduler(cancel_on_registration=cancelled)
+    with pytest.raises(GrantedCommandCancelled):
+        run(scheduler, command, cancel_event=cancelled)
+    assert scheduler.children and not marker.exists()
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+def test_cancel_after_output_eof_still_stops_live_process():
+    scheduler = RecordingScheduler()
+    cancelled = threading.Event()
+    timer = threading.Timer(0.15, cancelled.set)
+    timer.start()
+    start = time.monotonic()
+    try:
+        with pytest.raises(GrantedCommandCancelled):
+            run(scheduler, [sys.executable, "-c",
+                            "import os,time; os.close(1); os.close(2); time.sleep(5)"],
+                timeout_seconds=1.5, cancel_event=cancelled)
+    finally:
+        timer.cancel()
+    assert time.monotonic() - start < 1
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
 def test_real_command_timeout_cancel_output_limit_and_release():

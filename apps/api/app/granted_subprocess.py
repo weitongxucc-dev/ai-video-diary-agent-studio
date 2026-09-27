@@ -110,7 +110,11 @@ def run_granted_command(
     probe = scheduler.processes
     if not isinstance(probe, HostProcessProbe):
         raise RuntimeError("Grant-gated subprocess requires HostProcessProbe")
+    if cancel_event is not None and cancel_event.is_set():
+        raise GrantedCommandCancelled("Command cancelled before launch")
     scheduler.assert_grant(grant)
+    if cancel_event is not None and cancel_event.is_set():
+        raise GrantedCommandCancelled("Command cancelled before launch")
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     child: ProcessIdentity | None = None
@@ -130,6 +134,8 @@ def run_granted_command(
         child = probe.identity(process.pid)
         scheduler.register_child(grant, child)
         scheduler.assert_grant(grant)
+        if cancel_event is not None and cancel_event.is_set():
+            raise GrantedCommandCancelled("Command cancelled before exec ACK")
         os.write(write_fd, b"G")
         os.close(write_fd)
         write_fd = -1
@@ -154,10 +160,19 @@ def run_granted_command(
                         outputs[name].extend(chunk)
                         if len(outputs[name]) > limits[name]:
                             raise GrantedCommandOutputLimit(f"{name} exceeded its byte limit")
-        try:
-            process.wait(timeout=max(0.001, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired as exc:
-            raise GrantedCommandTimeout("Command exceeded its unit deadline") from exc
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise GrantedCommandCancelled("Command cancelled")
+            if process.poll() is not None:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise GrantedCommandTimeout("Command exceeded its unit deadline")
+            pause = min(0.05, remaining)
+            if cancel_event is None:
+                time.sleep(pause)
+            else:
+                cancel_event.wait(pause)
         if probe.children_released((child,)) is not True:
             _terminate_and_verify(process, child, probe)
             raise GrantedCommandError("Command left a live process-group descendant")
