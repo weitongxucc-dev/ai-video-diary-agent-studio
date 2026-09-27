@@ -53,12 +53,22 @@ class MaterialProbeFacts:
             raise ValueError("媒体检查点事实无效")
         streams: list[MaterialMediaStream] = []
         indices: set[int] = set()
+        old_stream_fields = {"index", "kind", "codec", "width", "height", "sample_rate"}
+        new_stream_fields = old_stream_fields | {"avg_frame_rate_fps", "r_frame_rate_fps"}
+        legacy: bool | None = None
         for item in raw_streams:
-            if not isinstance(item, dict) or set(item) != {
-                "index", "kind", "codec", "width", "height", "sample_rate",
-                "avg_frame_rate_fps", "r_frame_rate_fps",
+            if not isinstance(item, dict) or frozenset(item) not in {
+                frozenset(old_stream_fields), frozenset(new_stream_fields),
             }:
                 raise ValueError("媒体检查点流结构无效")
+            item_is_legacy = set(item) == old_stream_fields
+            if legacy is not None and legacy != item_is_legacy:
+                raise ValueError("媒体检查点流版本混用")
+            legacy = item_is_legacy
+            item = dict(item)
+            if item_is_legacy:
+                item["avg_frame_rate_fps"] = None
+                item["r_frame_rate_fps"] = None
             index, kind = item["index"], item["kind"]
             if (isinstance(index, bool) or not isinstance(index, int) or index < 0
                     or index in indices or not isinstance(kind, str)
@@ -84,9 +94,21 @@ class MaterialProbeFacts:
         if not any(stream.kind == "video" for stream in streams):
             raise ValueError("媒体检查点缺少视频流")
         facts = cls(duration, format_name, tuple(streams))
-        if facts.checkpoint_json() != value:
+        canonical = asdict(facts)
+        if legacy:
+            for stream in canonical["streams"]:
+                stream.pop("avg_frame_rate_fps")
+                stream.pop("r_frame_rate_fps")
+        if json.dumps(canonical, sort_keys=True, separators=(",", ":")) != value:
             raise ValueError("媒体检查点不是规范编码")
         return facts
+
+
+def probe_checkpoint_needs_rate_refresh(value: str) -> bool:
+    """Only historical checkpoints missing rate fields need a new probe grant."""
+    MaterialProbeFacts.from_checkpoint_json(value)
+    payload = json.loads(value)
+    return "avg_frame_rate_fps" not in payload["streams"][0]
 
 
 def _positive_duration(value: object) -> float | None:

@@ -65,17 +65,22 @@ class MaterialHashOwnerVerifier:
                     "WHERE a.workspace_id=? AND a.id=? AND f.provisional_revision=?",
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
-            elif intent.unit_key.startswith("probe-meta:v1:"):
+            elif intent.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
                 verdict = self.repository.material_probe_source_verdict(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
                 row = conn.execute(
-                    "SELECT size_bytes FROM material_ingestion_files f "
+                    "SELECT f.size_bytes, f.provisional_revision FROM material_ingestion_files f "
                     "JOIN material_assets a ON a.workspace_id=f.workspace_id AND a.file_path=f.file_path "
                     "WHERE a.workspace_id=? AND a.id=? AND f.attempted_digest=?",
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
+                if row is not None and intent.unit_key != self.repository._preferred_material_probe_key(
+                    conn, intent.workspace_id, intent.owner_id, intent.input_digest,
+                    str(row["provisional_revision"]),
+                ):
+                    verdict = "stale"
             elif intent.unit_key.startswith("scene-window:v1:"):
                 candidate = self.repository.material_scene_candidate(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
@@ -122,7 +127,7 @@ class MaterialHashOwnerVerifier:
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
-        if request.unit_key.startswith("probe-meta:v1:"):
+        if request.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
             verdict = self.repository.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
@@ -132,6 +137,18 @@ class MaterialHashOwnerVerifier:
                 or importlib.util.find_spec("app.granted_subprocess") is None
             ):
                 return "dependency"
+            if verdict == "ready":
+                row = conn.execute(
+                    "SELECT f.provisional_revision FROM material_ingestion_files f "
+                    "JOIN material_assets a ON a.workspace_id=f.workspace_id "
+                    "AND a.file_path=f.file_path WHERE a.workspace_id=? AND a.id=?",
+                    (request.workspace_id, request.owner_id),
+                ).fetchone()
+                if row is None or request.unit_key != self.repository._preferred_material_probe_key(
+                    conn, request.workspace_id, request.owner_id, request.input_digest,
+                    str(row["provisional_revision"]),
+                ):
+                    return "stale"
             return verdict
         if request.unit_key.startswith("scene-window:v1:"):
             source_verdict = self.repository.material_probe_source_verdict(
@@ -278,13 +295,15 @@ class MaterialIngestionService:
         for dependency in self.repository.pending_material_probe_dependencies():
             if dependency.workspace_id != binding[0]:
                 raise PermissionError("素材哈希检查点归属与绑定不一致")
+            unit_key = self.repository.material_probe_key_for_dependency(dependency)
             intent = SubmissionIntent(
                 workspace_id=dependency.workspace_id, owner_type="material_asset",
                 owner_id=dependency.asset_id, input_digest=dependency.source_sha256,
-                unit_key=material_probe_unit_key(dependency.source_sha256),
+                unit_key=unit_key,
                 policy=SchedulePolicy(),
             )
-            legacy_id = self.repository.legacy_probe_request_for_replacement(dependency)
+            legacy_id = (self.repository.legacy_probe_request_for_replacement(dependency)
+                         if unit_key.startswith("probe-meta:v1:") else None)
             if legacy_id is not None:
                 replace = getattr(self.scheduler, "replace_unexecuted_request", None)
                 if replace is None:
@@ -588,7 +607,7 @@ class MaterialHashUnitExecutor:
             raise PermissionError("素材许可不属于哈希执行器")
         if grant.unit_key.startswith("hash:v1:"):
             self._service.run_granted_hash(grant)
-        elif grant.unit_key.startswith("probe-meta:v1:"):
+        elif grant.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
             self._service.run_granted_probe(grant)
         elif grant.unit_key.startswith("scene-window:v1:"):
             self._service.run_granted_scene(grant)

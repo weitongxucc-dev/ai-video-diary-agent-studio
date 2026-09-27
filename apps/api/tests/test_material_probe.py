@@ -20,7 +20,10 @@ from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialHashUnitExecutor,
     MaterialIngestionService,
 )
-from app.material_probe import MaterialProbeFacts, MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
+from app.material_probe import (
+    MaterialProbeFacts, MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output,
+    probe_checkpoint_needs_rate_refresh,
+)
 from app.production import MaterialProbeDependency, ProductionRepository, material_probe_unit_key
 
 
@@ -68,6 +71,9 @@ def test_probe_parser_marks_unknown_or_variable_reported_rate_unavailable() -> N
     stream = parse_ffprobe_output(json.dumps(payload).encode()).streams[0]
     assert stream.avg_frame_rate_fps is None
     assert stream.r_frame_rate_fps == 5.0
+    assert not probe_checkpoint_needs_rate_refresh(
+        parse_ffprobe_output(json.dumps(payload).encode()).checkpoint_json()
+    )
 
 
 def test_probe_parser_rejects_malformed_unbounded_or_invalid_duration() -> None:
@@ -108,12 +114,99 @@ class _CheckpointProbeOwner(MaterialHashOwnerVerifier):
     """Test only: allow the metadata checkpoint without launching ffprobe."""
 
     def check_current(self, request, conn):
-        if request.unit_key.startswith("probe-meta:v1:"):
+        if request.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
             return self.repository.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
         return super().check_current(request, conn)
+
+
+def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "clip.mp4"
+    source.write_bytes(b"same material source")
+    repo = ProductionRepository(tmp_path / "production.sqlite", library)
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock", owners=_CheckpointProbeOwner(repo),
+        resources=_Resources(), processes=_Processes(),
+    )
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        service.discover_and_submit_hashes()
+        service.discover_and_submit_hashes()
+        asset_id = repo.list_assets("one")[0].id
+        repo.update_asset_tags("one", asset_id, ["人工标注"])
+        hash_grant = scheduler.pick_and_grant()
+        assert hash_grant is not None
+        source_sha = service.run_granted_hash(hash_grant)
+        assert source_sha is not None
+        probe_grant = scheduler.pick_and_grant()
+        assert probe_grant is not None and probe_grant.unit_key.startswith("probe-meta:v1:")
+        candidate = repo.material_probe_candidate_for_grant(probe_grant)
+        facts = parse_ffprobe_output(probe_payload())
+        scheduler.complete_unit(
+            probe_grant, checkpoint_database_path=repo.database_path,
+            checkpoint_write=lambda conn, active: repo.commit_material_probe(
+                conn, active, candidate, facts,
+            ),
+        )
+        legacy_payload = json.loads(facts.checkpoint_json())
+        for stream in legacy_payload["streams"]:
+            stream.pop("avg_frame_rate_fps")
+            stream.pop("r_frame_rate_fps")
+        legacy_json = json.dumps(legacy_payload, sort_keys=True, separators=(",", ":"))
+        assert probe_checkpoint_needs_rate_refresh(legacy_json)
+        with sqlite3.connect(repo.database_path) as conn:
+            conn.execute(
+                "UPDATE material_analysis_checkpoints SET result_json=?, result_ref=? "
+                "WHERE unit_key=?",
+                (legacy_json, "sha256:" + hashlib.sha256(legacy_json.encode()).hexdigest(),
+                 probe_grant.unit_key),
+            )
+        dependency = MaterialProbeDependency(
+            "one", asset_id, source_sha, hash_grant.input_digest,
+        )
+        assert repo.material_probe_key_for_dependency(dependency) == material_probe_unit_key(
+            source_sha, version=2,
+        )
+        assert repo.pending_material_scene_dependencies() == []
+        assert len(service.submit_pending_probe_dependencies()) == 1
+        v2_grant = scheduler.pick_and_grant()
+        assert v2_grant is not None and v2_grant.unit_key == material_probe_unit_key(
+            source_sha, version=2,
+        )
+        v2_candidate = repo.material_probe_candidate_for_grant(v2_grant)
+        scheduler.complete_unit(
+            v2_grant, checkpoint_database_path=repo.database_path,
+            checkpoint_write=lambda conn, active: repo.commit_material_probe(
+                conn, active, v2_candidate, facts,
+            ),
+        )
+        assert repo.pending_material_scene_dependencies() == [dependency]
+        assert len(repo.pending_material_scene_windows()) == 1
+        assert repo.get_asset("one", asset_id).user_tags == ["人工标注"]
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM material_analysis_checkpoints "
+                "WHERE unit_key LIKE 'probe-meta:v%:%'"
+            ).fetchone() == (2,)
+        restarted = ProductionRepository(repo.database_path, library)
+        assert restarted.material_probe_key_for_dependency(dependency) == v2_grant.unit_key
+        assert len(service.submit_pending_probe_dependencies()) == 1
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM device_work_requests "
+                "WHERE unit_key LIKE 'probe-meta:v%:%'"
+            ).fetchone() == (2,)
+        source.write_bytes(b"changed source")
+        assert restarted.pending_material_scene_windows() == []
+    finally:
+        scheduler.close()
 
 
 def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_path: Path) -> None:

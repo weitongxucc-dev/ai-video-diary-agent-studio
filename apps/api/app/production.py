@@ -38,7 +38,7 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
-from app.material_probe import MaterialProbeFacts
+from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
 from app.material_scene import (
     SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
     scene_window_for_key, scene_windows,
@@ -200,16 +200,19 @@ class MaterialSceneCandidate:
     unit_key: str
 
 
-def material_probe_unit_key(source_sha256: str) -> str:
+def material_probe_unit_key(source_sha256: str, *, version: int = 1) -> str:
     """Identity for bounded ffprobe metadata only; scene analysis is separate."""
     if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
         raise ValueError("素材源哈希无效")
+    if version not in {1, 2}:
+        raise ValueError("素材探测契约版本无效")
     stage_input = hashlib.sha256(json.dumps(
-        {"stage": "probe-meta:v1", "source_sha256": source_sha256,
-         "probe_contract": "ffprobe-metadata:v1"},
+        {"stage": f"probe-meta:v{version}", "source_sha256": source_sha256,
+         "probe_contract": ("ffprobe-metadata:v1" if version == 1
+                            else "ffprobe-metadata-rates:v2")},
         sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest()
-    return f"probe-meta:v1:{stage_input}"
+    return f"probe-meta:v{version}:{stage_input}"
 
 
 def _material_hash_candidate(
@@ -2994,6 +2997,36 @@ class ProductionRepository:
                 ))
         return dependencies
 
+    def material_probe_key_for_dependency(self, dependency: MaterialProbeDependency) -> str:
+        with self._connect() as conn:
+            return self._preferred_material_probe_key(
+                conn, dependency.workspace_id, dependency.asset_id,
+                dependency.source_sha256, dependency.provisional_revision,
+            )
+
+    def _preferred_material_probe_key(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+        source_sha256: str, provisional_revision: str,
+    ) -> str:
+        v1_key = material_probe_unit_key(source_sha256)
+        row = conn.execute(
+            """SELECT stage_input_digest, result_json, result_ref
+               FROM material_analysis_checkpoints WHERE workspace_id=? AND asset_id=?
+                 AND source_sha256=? AND provisional_revision=? AND unit_key=?""",
+            (workspace_id, asset_id, source_sha256, provisional_revision, v1_key),
+        ).fetchone()
+        if row is None or not isinstance(row["result_json"], str):
+            return v1_key
+        result_json = row["result_json"]
+        if (row["stage_input_digest"] != v1_key.rsplit(":", 1)[-1]
+                or row["result_ref"] != "sha256:" + hashlib.sha256(result_json.encode()).hexdigest()):
+            return v1_key
+        try:
+            legacy = probe_checkpoint_needs_rate_refresh(result_json)
+        except ValueError:
+            return v1_key
+        return material_probe_unit_key(source_sha256, version=2) if legacy else v1_key
+
     def legacy_probe_request_for_replacement(
         self, dependency: MaterialProbeDependency,
     ) -> str | None:
@@ -3041,7 +3074,8 @@ class ProductionRepository:
             return "stale"
         if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
             return "stale"
-        if unit_key != material_probe_unit_key(source_sha256):
+        if unit_key not in {material_probe_unit_key(source_sha256),
+                            material_probe_unit_key(source_sha256, version=2)}:
             return "stale"
         asset = conn.execute(
             "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
@@ -3161,6 +3195,11 @@ class ProductionRepository:
             candidate.unit_key, conn,
         ) != "ready":
             raise ValueError("素材来源已变化，未保存过期媒体探测结果")
+        if candidate.unit_key != self._preferred_material_probe_key(
+            conn, candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.provisional_revision,
+        ):
+            raise ValueError("素材媒体探测契约已更新，未保存旧检查点")
         asset_row = conn.execute(
             "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
             (candidate.workspace_id, candidate.asset_id),
@@ -3281,14 +3320,17 @@ class ProductionRepository:
                           a.payload
                    FROM material_analysis_checkpoints c
                    JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
-                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v1:%'""",
+                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v%:%'""",
                 (workspace_id,),
             ).fetchall()
             pending: list[MaterialProbeDependency] = []
             for row in rows:
                 source_sha256 = str(row["source_sha256"])
                 unit_key = str(row["unit_key"])
-                if (unit_key != material_probe_unit_key(source_sha256)
+                if (unit_key != self._preferred_material_probe_key(
+                            conn, workspace_id, str(row["asset_id"]), source_sha256,
+                            str(row["provisional_revision"]),
+                        )
                         or row["stage_input_digest"] != unit_key.rsplit(":", 1)[-1]
                         or self.material_probe_source_verdict(
                             workspace_id, str(row["asset_id"]), source_sha256,
@@ -3320,22 +3362,32 @@ class ProductionRepository:
     ) -> tuple[sqlite3.Row, MaterialProbeFacts, str] | None:
         if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
             return None
-        probe_key = material_probe_unit_key(source_sha256)
         if self.material_probe_source_verdict(
-            workspace_id, asset_id, source_sha256, probe_key, conn,
+            workspace_id, asset_id, source_sha256,
+            material_probe_unit_key(source_sha256), conn,
         ) != "ready":
             return None
-        row = conn.execute(
-            """SELECT c.provisional_revision, c.stage_input_digest, c.result_json, c.result_ref,
+        rows = conn.execute(
+            """SELECT c.provisional_revision, c.unit_key, c.stage_input_digest,
+                      c.result_json, c.result_ref,
                       a.file_path, a.payload, f.size_bytes
                FROM material_analysis_checkpoints c
                JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
                JOIN material_ingestion_files f ON f.workspace_id=a.workspace_id
                     AND f.file_path=a.file_path
                WHERE c.workspace_id=? AND c.asset_id=? AND c.source_sha256=?
-                 AND c.unit_key=? AND c.provisional_revision=f.provisional_revision""",
-            (workspace_id, asset_id, source_sha256, probe_key),
-        ).fetchone()
+                 AND c.unit_key IN (?, ?) AND c.provisional_revision=f.provisional_revision""",
+            (workspace_id, asset_id, source_sha256,
+             material_probe_unit_key(source_sha256),
+             material_probe_unit_key(source_sha256, version=2)),
+        ).fetchall()
+        if not rows:
+            return None
+        probe_key = self._preferred_material_probe_key(
+            conn, workspace_id, asset_id, source_sha256,
+            str(rows[0]["provisional_revision"]),
+        )
+        row = next((item for item in rows if item["unit_key"] == probe_key), None)
         if (row is None or row["stage_input_digest"] != probe_key.rsplit(":", 1)[-1]
                 or not isinstance(row["result_json"], str)):
             return None
