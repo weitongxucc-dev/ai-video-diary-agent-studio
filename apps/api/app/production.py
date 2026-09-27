@@ -38,6 +38,7 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
+from app.material_probe import MaterialProbeFacts
 
 if TYPE_CHECKING:
     from app.device_scheduler import Grant
@@ -166,16 +167,26 @@ class MaterialProbeDependency:
     provisional_revision: str
 
 
+@dataclass(frozen=True)
+class MaterialProbeCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    source_sha256: str
+    provisional_revision: str
+    unit_key: str
+
+
 def material_probe_unit_key(source_sha256: str) -> str:
-    """Identity for a future bounded scene probe, never an executable probe permit."""
+    """Identity for bounded ffprobe metadata only; scene analysis is separate."""
     if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
         raise ValueError("素材源哈希无效")
     stage_input = hashlib.sha256(json.dumps(
-        {"stage": "probe-scene:v1", "source_sha256": source_sha256,
-         "probe_contract": "bounded-window:v1"},
+        {"stage": "probe-meta:v1", "source_sha256": source_sha256,
+         "probe_contract": "ffprobe-metadata:v1"},
         sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest()
-    return f"probe-scene:v1:{stage_input}"
+    return f"probe-meta:v1:{stage_input}"
 
 
 def _material_hash_candidate(
@@ -2960,6 +2971,30 @@ class ProductionRepository:
                 ))
         return dependencies
 
+    def legacy_probe_request_for_replacement(
+        self, dependency: MaterialProbeDependency,
+    ) -> str | None:
+        """Locate the old scene-named request without changing scheduler queue state."""
+        with self._connect() as conn:
+            current = conn.execute(
+                """SELECT id FROM device_work_requests
+                   WHERE workspace_id=? AND owner_type='material_asset' AND owner_id=?
+                     AND input_digest=? AND unit_key=?""",
+                (dependency.workspace_id, dependency.asset_id,
+                 dependency.source_sha256, material_probe_unit_key(dependency.source_sha256)),
+            ).fetchone()
+            if current is not None:
+                return None
+            legacy = conn.execute(
+                """SELECT id FROM device_work_requests
+                   WHERE workspace_id=? AND owner_type='material_asset' AND owner_id=?
+                     AND input_digest=? AND unit_key LIKE 'probe-scene:v1:%'""",
+                (dependency.workspace_id, dependency.asset_id, dependency.source_sha256),
+            ).fetchall()
+        if len(legacy) > 1:
+            raise ValueError("存在多个旧媒体探测请求，拒绝自动替换")
+        return str(legacy[0]["id"]) if legacy else None
+
     def material_probe_source_verdict(
         self, workspace_id: str, asset_id: str, source_sha256: str,
         unit_key: str, conn: sqlite3.Connection,
@@ -3023,6 +3058,232 @@ class ProductionRepository:
                 or checkpoint["result_ref"] != f"sha256:{source_sha256}"):
             return "stale"
         return "ready"
+
+    def material_probe_candidate_for_grant(self, grant: Grant) -> MaterialProbeCandidate:
+        with self._connect() as conn:
+            request = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (request is None or request["owner_type"] != "material_asset"
+                    or (request["workspace_id"], request["input_digest"], request["unit_key"],
+                        request["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                raise PermissionError("素材媒体探测许可与执行对象不匹配")
+            asset_id = str(request["owner_id"])
+            verdict = self.material_probe_source_verdict(
+                grant.workspace_id, asset_id, grant.input_digest, grant.unit_key, conn,
+            )
+            if verdict != "ready":
+                raise ValueError(f"素材媒体探测输入不可执行：{verdict}")
+            asset = conn.execute(
+                "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+                (grant.workspace_id, asset_id),
+            ).fetchone()
+            observation = conn.execute(
+                "SELECT provisional_revision FROM material_ingestion_files "
+                "WHERE workspace_id=? AND file_path=?",
+                (grant.workspace_id, asset["file_path"]),
+            ).fetchone()
+        return MaterialProbeCandidate(
+            grant.workspace_id, asset_id, str(asset["file_path"]), grant.input_digest,
+            str(observation["provisional_revision"]), grant.unit_key,
+        )
+
+    def material_probe_verdict_for_grant(
+        self, grant: Grant,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        with self._connect() as conn:
+            request = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (request is None or request["owner_type"] != "material_asset"
+                    or (request["workspace_id"], request["input_digest"], request["unit_key"],
+                        request["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                return "unauthorized"
+            return self.material_probe_source_verdict(
+                grant.workspace_id, str(request["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            )
+
+    def commit_material_probe(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialProbeCandidate, facts: MaterialProbeFacts,
+    ) -> str:
+        """Commit typed ffprobe facts and duration on the permit's SQLite transaction."""
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or (candidate.workspace_id, candidate.source_sha256, candidate.unit_key)
+                != (grant.workspace_id, grant.input_digest, grant.unit_key)):
+            raise PermissionError("素材媒体检查点不属于当前许可尝试")
+        if self.material_probe_source_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，未保存过期媒体探测结果")
+        asset_row = conn.execute(
+            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        observation = conn.execute(
+            "SELECT provisional_revision FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (candidate.workspace_id, candidate.file_path),
+        ).fetchone()
+        if (asset_row is None or asset_row["file_path"] != candidate.file_path
+                or observation is None
+                or observation["provisional_revision"] != candidate.provisional_revision):
+            raise ValueError("素材媒体探测来源修订已变化")
+        stage_input_digest = candidate.unit_key.rsplit(":", 1)[-1]
+        result_json = facts.checkpoint_json()
+        result_ref = "sha256:" + hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+        existing = conn.execute(
+            """SELECT stage_input_digest, result_json, result_ref FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+             candidate.source_sha256, candidate.unit_key),
+        ).fetchone()
+        if existing is not None and (
+            existing["stage_input_digest"] != stage_input_digest
+            or existing["result_json"] != result_json
+            or existing["result_ref"] != result_ref
+        ):
+            raise ValueError("既有媒体探测检查点结果不匹配")
+        asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
+        asset.duration_seconds = facts.duration_seconds
+        asset.analysis_status = "blocked"
+        asset.analysis_message = "已读取时长与媒体流；镜头和画面分析尚未完成。"
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
+             candidate.asset_id),
+        )
+        if existing is None:
+            conn.execute(
+                """INSERT INTO material_analysis_checkpoints
+                   (workspace_id, asset_id, source_sha256, provisional_revision,
+                    unit_key, stage_input_digest, result_json, result_ref, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+                 candidate.provisional_revision, candidate.unit_key,
+                 stage_input_digest, result_json, result_ref, utc_now().isoformat()),
+            )
+        return f"material_probe_meta:{candidate.asset_id}:{candidate.provisional_revision}"
+
+    def fail_material_probe(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialProbeCandidate, reason: Literal[
+            "probe_invalid_media", "probe_timeout", "probe_output_limit", "probe_failed",
+        ],
+    ) -> None:
+        """Record a terminal metadata failure with the scheduler's failed request."""
+        if self.material_probe_source_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，不能把旧媒体探测错误写给新素材")
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}):
+            raise PermissionError("素材媒体失败不属于当前许可尝试")
+        row = conn.execute(
+            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        if row is None or row["file_path"] != candidate.file_path:
+            raise ValueError("素材媒体失败来源已变化")
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        asset.analysis_status = "failed"
+        asset.analysis_message = {
+            "probe_invalid_media": "媒体信息无效；检查文件后可手动重试。",
+            "probe_timeout": "读取媒体信息超时；检查文件后可手动重试。",
+            "probe_output_limit": "媒体信息输出超出上限；检查文件后可手动重试。",
+            "probe_failed": "无法读取媒体信息；检查文件后可手动重试。",
+        }[reason]
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
+             candidate.asset_id),
+        )
+        updated = conn.execute(
+            """UPDATE material_ingestion_files SET state='failed'
+               WHERE workspace_id=? AND file_path=? AND provisional_revision=?
+                 AND attempted_digest=?""",
+            (candidate.workspace_id, candidate.file_path, candidate.provisional_revision,
+             candidate.source_sha256),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("素材观察已变化，未记录旧媒体探测失败")
+
+    def pending_material_scene_dependencies(self) -> list[MaterialProbeDependency]:
+        """Expose verified metadata checkpoints needing a future scene contract."""
+        binding = self.get_material_ingestion_binding()
+        if binding is None or not self._material_library_available():
+            return []
+        workspace_id, bound_path = binding
+        if str(self.video_library_path.resolve()) != bound_path:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.asset_id, c.source_sha256, c.provisional_revision,
+                          c.unit_key, c.stage_input_digest, c.result_json, c.result_ref,
+                          a.payload
+                   FROM material_analysis_checkpoints c
+                   JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
+                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v1:%'""",
+                (workspace_id,),
+            ).fetchall()
+            pending: list[MaterialProbeDependency] = []
+            for row in rows:
+                source_sha256 = str(row["source_sha256"])
+                unit_key = str(row["unit_key"])
+                if (unit_key != material_probe_unit_key(source_sha256)
+                        or row["stage_input_digest"] != unit_key.rsplit(":", 1)[-1]
+                        or self.material_probe_source_verdict(
+                            workspace_id, str(row["asset_id"]), source_sha256,
+                            unit_key, conn,
+                        ) != "ready"):
+                    continue
+                result_json = row["result_json"]
+                if (not isinstance(result_json, str)
+                        or row["result_ref"] != "sha256:" + hashlib.sha256(
+                            result_json.encode("utf-8")
+                        ).hexdigest()):
+                    continue
+                try:
+                    facts = MaterialProbeFacts.from_checkpoint_json(result_json)
+                    asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if asset.duration_seconds != facts.duration_seconds or asset.analysis_status != "blocked":
+                    continue
+                pending.append(MaterialProbeDependency(
+                    workspace_id, str(row["asset_id"]), source_sha256,
+                    str(row["provisional_revision"]),
+                ))
+        return pending
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""

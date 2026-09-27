@@ -115,18 +115,16 @@ def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: P
             assert conn.execute("SELECT source_sha256, result_ref FROM material_analysis_checkpoints").fetchone() == (digest, f"sha256:{digest}")
             assert conn.execute(
                 "SELECT input_digest, unit_key FROM device_work_requests "
-                "WHERE owner_type='material_asset' AND unit_key LIKE 'probe-scene:v1:%'"
+                "WHERE owner_type='material_asset' AND unit_key LIKE 'probe-meta:v1:%'"
             ).fetchall() == [(digest, material_probe_unit_key(digest))]
         assert repo.get_asset("one", repo.list_assets("one")[0].id).analysis_status == "blocked"
         assert duration.call_count == 0  # Hash completion is not scene analysis or ready.
         assert service.discover_and_submit_hashes() == []
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (2,)
-        assert scheduler.pick_and_grant() is None
-        with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
-                "SELECT state, wait_reason FROM device_work_requests WHERE unit_key LIKE 'probe-scene:v1:%'"
-            ).fetchone() == ("blocked", "dependency")
+                "SELECT state FROM device_work_requests WHERE unit_key LIKE 'probe-meta:v1:%'"
+            ).fetchone() == ("waiting",)
         with pytest.raises(PermissionError, match="不可提交"):
             scheduler.submit(
                 SubmissionIntent("one", "material_asset", asset_id,

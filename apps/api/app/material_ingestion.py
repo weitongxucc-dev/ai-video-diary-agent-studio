@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import importlib.util
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -16,6 +18,7 @@ from app.device_scheduler import (
 from app.production import (
     MaterialAsset, ProductionRepository, material_probe_unit_key,
 )
+from app.material_probe import MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,7 @@ class MaterialHashOwnerVerifier:
                     "WHERE a.workspace_id=? AND a.id=? AND f.provisional_revision=?",
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
-            elif intent.unit_key.startswith("probe-scene:v1:"):
+            elif intent.unit_key.startswith("probe-meta:v1:"):
                 verdict = self.repository.material_probe_source_verdict(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
@@ -74,7 +77,7 @@ class MaterialHashOwnerVerifier:
             owner_id=intent.owner_id, input_digest=intent.input_digest,
             unit_key=intent.unit_key, member_id=None, work_class="background",
             resources={"kind": "material_hash" if intent.unit_key.startswith("hash:v1:")
-                       else "material_probe_scene", "size_bytes": int(row["size_bytes"])},
+                       else "material_probe_meta", "size_bytes": int(row["size_bytes"])},
             stage_input_digest=intent.unit_key.rsplit(":", 1)[-1],
         )
 
@@ -87,13 +90,17 @@ class MaterialHashOwnerVerifier:
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
-        if request.unit_key.startswith("probe-scene:v1:"):
+        if request.unit_key.startswith("probe-meta:v1:"):
             verdict = self.repository.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
-            # The bounded probe executor is not installed; this unit must never grant.
-            return "dependency" if verdict == "ready" else verdict
+            if verdict == "ready" and (
+                shutil.which("ffprobe") is None
+                or importlib.util.find_spec("app.granted_subprocess") is None
+            ):
+                return "dependency"
+            return verdict
         return "stale"
 
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
@@ -228,7 +235,17 @@ class MaterialIngestionService:
                 unit_key=material_probe_unit_key(dependency.source_sha256),
                 policy=SchedulePolicy(),
             )
-            request_ids.append(self.scheduler.submit(intent, actor).id)
+            legacy_id = self.repository.legacy_probe_request_for_replacement(dependency)
+            if legacy_id is not None:
+                replace = getattr(self.scheduler, "replace_unexecuted_request", None)
+                if replace is None:
+                    raise RecoveryBlocked("整机调度器尚无保留旧请求等待年龄的替换接口")
+                request = replace(
+                    legacy_id, intent, actor, "bounded_ffprobe_metadata_stage",
+                )
+            else:
+                request = self.scheduler.submit(intent, actor)
+            request_ids.append(request.id)
         return request_ids
 
     def run_granted_hash(self, grant: Grant) -> str | None:
@@ -268,6 +285,106 @@ class MaterialIngestionService:
             logger.exception("素材哈希完成，但探测请求提交失败；周期补扫将重试")
         return result.source_sha256
 
+    def run_granted_probe(self, grant: Grant) -> str | None:
+        """Run bounded ffprobe under a registered child and commit only metadata."""
+        from app.granted_subprocess import (
+            GrantedCommandCancelled, GrantedCommandError, GrantedCommandOutputLimit,
+            GrantedCommandTimeout, run_granted_command,
+        )
+
+        if self.execution_mode != "scheduled" or self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        scheduler = self.scheduler
+        try:
+            scheduler.assert_grant(grant)
+            candidate = self.repository.material_probe_candidate_for_grant(grant)
+        except (OSError, ValueError, PermissionError):
+            if self._defer_stale_probe(grant):
+                return None
+            raise
+        try:
+            ffprobe = shutil.which("ffprobe")
+            if ffprobe is None:
+                raise FileNotFoundError("ffprobe is unavailable")
+            completed = run_granted_command(
+                scheduler, grant,
+                [ffprobe, "-v", "error", "-show_format", "-show_streams",
+                 "-of", "json", "-i", candidate.file_path],
+                timeout_seconds=20, max_stdout_bytes=MAX_PROBE_OUTPUT_BYTES,
+                max_stderr_bytes=32 * 1024,
+            )
+        except RecoveryBlocked:
+            raise
+        except (GrantedCommandTimeout, GrantedCommandOutputLimit, GrantedCommandCancelled) as error:
+            if self._defer_stale_probe(grant):
+                return None
+            if isinstance(error, GrantedCommandCancelled):
+                scheduler.defer_unit(
+                    grant, reason="worker_interrupted",
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1),
+                )
+            else:
+                reason = "probe_timeout" if isinstance(error, GrantedCommandTimeout) else "probe_output_limit"
+                scheduler.fail_unit(
+                    grant, reason=reason,
+                    failure_write=lambda conn, active: self.repository.fail_material_probe(
+                        conn, active, candidate, reason,
+                    ),
+                )
+            return None
+        except (OSError, ValueError, PermissionError, GrantedCommandError):
+            if self._defer_stale_probe(grant):
+                return None
+            scheduler.fail_unit(
+                grant, reason="probe_failed",
+                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                    conn, active, candidate, "probe_failed",
+                ),
+            )
+            return None
+        if self._defer_stale_probe(grant):
+            return None
+        if completed.returncode != 0:
+            scheduler.fail_unit(
+                grant, reason="probe_failed",
+                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                    conn, active, candidate, "probe_failed",
+                ),
+            )
+            return None
+        try:
+            facts = parse_ffprobe_output(completed.stdout)
+        except ValueError:
+            scheduler.fail_unit(
+                grant, reason="probe_invalid_media",
+                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                    conn, active, candidate, "probe_invalid_media",
+                ),
+            )
+            return None
+        scheduler.complete_unit(
+            grant, checkpoint_database_path=self.repository.database_path,
+            checkpoint_write=lambda conn, active: self.repository.commit_material_probe(
+                conn, active, candidate, facts,
+            ),
+        )
+        return facts.checkpoint_json()
+
+    def _defer_stale_probe(self, grant: Grant) -> bool:
+        if self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        verdict = self.repository.material_probe_verdict_for_grant(grant)
+        if verdict == "ready" and shutil.which("ffprobe") is None:
+            verdict = "dependency"
+        if verdict == "ready":
+            return False
+        reason = {"dependency": "dependency_unavailable", "stale": "input_stale",
+                  "unauthorized": "authorization_lost"}.get(verdict, "transient_failure")
+        retry_at = (datetime.now(timezone.utc) + timedelta(minutes=1)
+                    if reason == "transient_failure" else None)
+        self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
+        return True
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -291,7 +408,11 @@ class MaterialHashUnitExecutor:
         self._service = service
 
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
-        if (self._service is None or scheduler is not self._service.scheduler
-                or not grant.unit_key.startswith("hash:v1:")):
+        if self._service is None or scheduler is not self._service.scheduler:
             raise PermissionError("素材许可不属于哈希执行器")
-        self._service.run_granted_hash(grant)
+        if grant.unit_key.startswith("hash:v1:"):
+            self._service.run_granted_hash(grant)
+        elif grant.unit_key.startswith("probe-meta:v1:"):
+            self._service.run_granted_probe(grant)
+        else:
+            raise PermissionError("素材许可阶段没有已注册的执行器")
