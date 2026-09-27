@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -25,7 +26,8 @@ from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.host_resource_probes import HostProcessProbe
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository)
+                            MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
+                            TimelineVersion)
 from app.artifact_store import ArtifactStore
 from app.config import Settings
 from app.video_jobs import VideoJobRunner
@@ -199,14 +201,35 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         assert submit_creation_stage(execution, scheduler, job, actor) == request_id
         grant = scheduler.pick_and_grant()
         assert grant is not None
+        original_claim = repo.claim_job_run
+
+        def cancel_before_claim(workspace_id, job_id):
+            execution.cancel(workspace_id, task_id, member_id=actor.member_id)
+            return original_claim(workspace_id, job_id)
+
+        monkeypatch.setattr(repo, "claim_job_run", cancel_before_claim)
+        CreationJobUnitExecutor(
+            repo, render_action=lambda *_args: pytest.fail("cancelled job must not render"),
+            render_is_valid=lambda *_args: pytest.fail("cancelled job must not validate output"),
+        ).execute(grant, scheduler)
+        monkeypatch.setattr(repo, "claim_job_run", original_claim)
+        scheduler.assert_released(grant)
+        assert repo.get_job_run(task.workspace_id, job.id).status == "cancelled"
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "cancelled"
+
+        failed_attempt = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
+        failure_request_id = submit_creation_stage(execution, scheduler, failed_attempt, actor)
+        failure_grant = scheduler.pick_and_grant()
+        assert failure_grant is not None and failure_grant.request_id == failure_request_id
         CreationJobUnitExecutor(
             repo, render_action=lambda *_args: (_ for _ in ()).throw(ValueError("synthetic render failure")),
             render_is_valid=lambda *_args: pytest.fail("failed render cannot validate output"),
-        ).execute(grant, scheduler)
-        scheduler.assert_released(grant)
-        assert repo.get_job_run(task.workspace_id, job.id).status == "failed"
+        ).execute(failure_grant, scheduler)
+        scheduler.assert_released(failure_grant)
+        assert repo.get_job_run(task.workspace_id, failed_attempt.id).status == "failed"
         with repo._connect() as conn:
-            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "failed"
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (failure_request_id,)).fetchone()[0] == "failed"
         resumed = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
         retry_request_id = submit_creation_stage(execution, scheduler, resumed, actor)
         retry_grant = scheduler.pick_and_grant()
@@ -219,7 +242,15 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         monkeypatch.setattr(main_module, "settings", SimpleNamespace(
             video_output_path=str(tmp_path / "outputs"), video_inbox_path=str(tmp_path / "library"),
             effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
-        CreationJobUnitExecutor(
+        render_calls = []
+        original_render = main_module._render_montage_with_resolved_clip_sources
+
+        def counted_render(*args, **kwargs):
+            render_calls.append(1)
+            return original_render(*args, **kwargs)
+
+        monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", counted_render)
+        retry_executor = CreationJobUnitExecutor(
             repo,
             render_action=lambda workspace_id, current_task_id, context: (
                 main_module._render_creation_task_montage_for_workspace(
@@ -227,7 +258,53 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             render_is_valid=lambda workspace_id, current_task_id, context: (
                 main_module._creation_render_is_valid(
                     workspace_id, current_task_id, render_context=context)),
-        ).execute(retry_grant, scheduler)
+        )
+        real_checkpoint = retry_executor._checkpoint
+        crash_once = {"pending": True}
+
+        def crash_after_inner(conn, current_grant, *, status, output=None, reason=None):
+            if status == "succeeded" and crash_once["pending"]:
+                crash_once["pending"] = False
+                raise RuntimeError("simulated crash after inner publication")
+            return real_checkpoint(conn, current_grant, status=status, output=output, reason=reason)
+
+        retry_executor._checkpoint = crash_after_inner
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1]
+        published_task = repo.get_creation_task(task.workspace_id, task_id)
+        published_version = repo.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
+        inner_jobs = [item for item in repo.list_job_runs(task.workspace_id, task_id)
+                      if item.kind == "creation_task_montage_render"]
+        assert len(inner_jobs) == 1 and inner_jobs[0].status == "succeeded"
+
+        # A changed source or an independently edited version invalidates the
+        # original grant, even though its already published output exists.
+        source_stat = video.stat()
+        source_bytes = video.read_bytes()
+        video.write_bytes(source_bytes + b"changed")
+        with pytest.raises(PermissionError, match="失效"):
+            retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1]
+        video.write_bytes(source_bytes)
+        os.utime(video, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        repo.create_timeline_version(TimelineVersion(
+            id="timeline_independent_edit", workspace_id=task.workspace_id, task_id=task_id,
+            parent_version_id=published_version.id, sequence=published_version.sequence + 1,
+            snapshot=published_version.snapshot, created_by_operation_id="operation_independent_edit",
+        ))
+        with pytest.raises(PermissionError, match="失效"):
+            retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1]
+        restored_task = repo.get_creation_task(task.workspace_id, task_id)
+        restored_task.current_timeline_version_id = published_version.id
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                         (json.dumps(asdict(restored_task), default=str), task.workspace_id, task_id))
+
+        retry_executor._checkpoint = real_checkpoint
+        retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1], "outer recovery must reuse its published inner render"
         scheduler.assert_released(retry_grant)
         finished = repo.get_job_run(task.workspace_id, resumed.id)
         assert finished.status == "succeeded", finished.failure_reason

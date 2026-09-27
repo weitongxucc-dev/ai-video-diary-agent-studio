@@ -392,7 +392,18 @@ class CreationJobUnitExecutor:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? "
                                  "AND kind=? AND status='running'",
                                  (grant.workspace_id, grant.owner_id, KIND))
-            job = self.repository.claim_job_run(grant.workspace_id, grant.owner_id)
+            try:
+                job = self.repository.claim_job_run(grant.workspace_id, grant.owner_id)
+            except ValueError:
+                if self.repository.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
+                    raise
+                # No child has been launched by this executor yet. The scheduler
+                # still verifies that every previously registered child exited.
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                                        checkpoint_write=lambda conn, current: self._checkpoint(
+                                            conn, current, status="cancelled", reason="user_cancelled"),
+                                        cancelled=True)
+                return
             context = CpuRenderGrantContext(
                 scheduler, grant, deadline, int(resources["max_output_bytes"]),
                 int(resources["threads"]), cancellation,

@@ -9891,6 +9891,47 @@ def _render_creation_task_montage_for_workspace(
     input_digest = hashlib.sha256(
         json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+    if (render_context is not None and active_version is not None
+            and active_version.snapshot.get("creation_render_request_id") == render_context.grant.request_id):
+        # The published version owns output subtitle tracks. They were not an
+        # input to this render, so bind recovery to the input captured before
+        # publication instead of hashing those newly generated tracks.
+        snapshot = active_version.snapshot
+        original_tracks = snapshot.get("render_input_subtitle_tracks")
+        original_visible = snapshot.get("render_input_subtitles_visible")
+        original_digest = snapshot.get("render_input_digest")
+        if not isinstance(original_tracks, list) or not isinstance(original_visible, bool):
+            raise ValueError("成片恢复缺少原始字幕输入")
+        plan_input["subtitle_tracks"] = original_tracks
+        plan_input["subtitles_visible"] = original_visible
+        input_digest = hashlib.sha256(
+            json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        transform_id = snapshot.get("transform_run_id")
+        if not isinstance(transform_id, str) or not transform_id.startswith("transform_job_"):
+            raise ValueError("成片恢复缺少内层渲染记录")
+        inner_id = transform_id.removeprefix("transform_")
+        inner_job = production_repo.get_job_run(workspace_id, inner_id)
+        transform = production_repo.get_transform_run(workspace_id, transform_id)
+        output_refs = [plan.output_path, plan.subtitle_path]
+        if (input_digest != original_digest or inner_job.task_id != task.id
+                or inner_job.kind != "creation_task_montage_render"
+                or inner_job.status != "succeeded" or inner_job.input_digest != input_digest
+                or inner_job.output_refs != output_refs
+                or transform.task_id != task.id or transform.job_id != inner_id
+                or transform.status != "succeeded" or transform.input_digest != input_digest
+                or transform.output_refs != output_refs
+                or plan.status != "rendered" or not all(isinstance(ref, str) and ref for ref in output_refs)
+                or snapshot.get("output_refs") != output_refs):
+            raise ValueError("成片恢复输入或已发布产物不匹配")
+        render_context.scheduler.assert_grant(render_context.grant)
+        subtitle_record = production_repo.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
+        published_subtitle = artifact_store.describe(plan.subtitle_path)
+        if (subtitle_record.producer_job_id != inner_id or subtitle_record.logical_ref != plan.subtitle_path
+                or subtitle_record.sha256 != published_subtitle.sha256
+                or subtitle_record.size_bytes != published_subtitle.size_bytes):
+            raise ValueError("成片恢复字幕产物校验失败")
+        return _creation_task_montage_response(plan)
     base_idempotency_key = f"montage-render:{task.id}:{input_digest}"
     matching_jobs = [
         existing
@@ -10180,6 +10221,12 @@ def _render_creation_task_montage_for_workspace(
                         **({"subtitle_track_ids": []} if explicit_subtitles and not active_subtitle_tracks else {}),
                         "output_refs": output_refs,
                         "transform_run_id": transform.id,
+                        **({
+                            "creation_render_request_id": render_context.grant.request_id,
+                            "render_input_digest": input_digest,
+                            "render_input_subtitle_tracks": plan_input["subtitle_tracks"],
+                            "render_input_subtitles_visible": subtitles_visible,
+                        } if render_context is not None else {}),
                         **({"cover_asset_id": f"cover_{version_id}"} if active_cover else {}),
                     },
                     created_by_operation_id=None,
