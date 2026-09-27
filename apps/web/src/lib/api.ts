@@ -633,6 +633,13 @@ export function undoCreationTaskTimeline(
   );
 }
 
+export function initializeCreationTaskTimeline(taskId: string): Promise<{ version_id: string }> {
+  return creationPlanRequest<{ version_id: string }>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/initialize`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 export function redoCreationTaskTimeline(taskId: string): Promise<CreationTaskEditConfirmResponse> {
   return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify({}) });
 }

@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     generateNarration: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
+    initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
     previewExecution: vi.fn().mockResolvedValue(null),
@@ -63,6 +64,7 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  initializeCreationTaskTimeline: mocks.initializeTimeline,
   getCreationTaskAssistantHistory: mocks.getAssistantHistory,
   getCreationExecution: mocks.getExecution,
   previewCreationExecution: mocks.previewExecution,
@@ -966,7 +968,11 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/版本 2$/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"), { target: { value: "1.5" } });
-    mocks.exactPreview.mockResolvedValue(exactPreview(task, "TrimClip"));
+    const trimProposal = exactPreview(task, "TrimClip");
+    mocks.exactPreview.mockResolvedValue({ ...trimProposal, proposal: { ...trimProposal.proposal, preview: {
+      before: { ...trimProposal.proposal.preview.before, video_url: "/api/production/materials/asset-1/media#t=1.000,4.000" },
+      after: { ...trimProposal.proposal.preview.after, video_url: "/api/production/materials/asset-1/media#t=1.500,4.500" },
+    } } });
     mocks.confirmEdit.mockResolvedValue({});
     fireEvent.click(screen.getByRole("button", { name: "预览裁剪" }));
 
@@ -976,6 +982,19 @@ describe("CreationTaskWorkspace", () => {
       source_start_seconds: 1.5,
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
+    const afterVideo = await screen.findByLabelText("修改后画面") as HTMLVideoElement;
+    fireEvent.loadedMetadata(afterVideo);
+    expect(afterVideo.currentTime).toBe(1.5);
+    const pauseOtherMedia = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const pause = vi.spyOn(afterVideo, "pause").mockImplementation(() => {});
+    afterVideo.currentTime = 4.5;
+    fireEvent.timeUpdate(afterVideo);
+    expect(pause).toHaveBeenCalledOnce();
+    fireEvent.play(afterVideo);
+    expect(afterVideo.currentTime).toBe(1.5);
+    expect(afterVideo.muted).toBe(false);
+    pause.mockRestore();
+    pauseOtherMedia.mockRestore();
     fireEvent.click(await screen.findByRole("button", { name: "确认修改" }));
     expect(await screen.findByText(/版本 3$/)).toBeInTheDocument();
     expect(screen.getByLabelText("源素材预览")).toBeInTheDocument();
@@ -1058,6 +1077,45 @@ describe("CreationTaskWorkspace", () => {
     ));
     fireEvent.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(screen.getByLabelText("镜头 1 快速裁剪起点")).toHaveValue(2));
+  });
+
+  it("offers an explicit version snapshot for a legacy storyboard without replacing its clips", async () => {
+    const task = {
+      ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, current_timeline_version_id: null,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "原故事板",
+      status: "ready" as const, cues: [], clips: [{
+        id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+        source_reference: "workspace://clip.mp4", source_start_seconds: 1,
+        source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3,
+        match_score: .9, match_reasons: ["已审核"], needs_confirmation: false,
+        role: "b_roll" as const, locked: false, manually_selected: false,
+      }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "保留原故事板", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.exactPreview.mockRejectedValue(new mocks.MockCreationPlanApiError(
+      409, "timeline_version_required", "当前故事板还没有可撤销的初始版本。",
+    ));
+    mocks.initializeTimeline.mockResolvedValue({ version_id: "timeline-version-1" });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览裁剪" }));
+    const initialize = await screen.findByRole("button", { name: "保留当前故事板并建立版本" });
+    expect(mocks.initializeTimeline).not.toHaveBeenCalled();
+    mocks.getWorkspace.mockResolvedValue(workspace(
+      { ...task, current_timeline_version_id: "timeline-version-1", timeline_sequence: 1 }, montage,
+    ));
+    fireEvent.click(initialize);
+    await waitFor(() => expect(mocks.initializeTimeline).toHaveBeenCalledWith(task.id));
+    expect(await screen.findByText(/版本 1$/)).toBeInTheDocument();
+    expect(screen.getByLabelText("镜头 1 裁剪起点")).toHaveValue(1);
   });
 
   it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {

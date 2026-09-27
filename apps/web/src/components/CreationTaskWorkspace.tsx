@@ -38,6 +38,7 @@ import {
   getCreationTaskMontageClipCandidates,
   getCreationTaskTopics,
   getCreationTaskWorkspace,
+  initializeCreationTaskTimeline,
   getCreationExecution,
   getCreationTaskAssistantHistory,
   previewCreationExecution,
@@ -157,12 +158,14 @@ function errorDetails(cause: unknown) {
       message: cause.message,
       impact: cause.impact,
       repairAction: cause.repairAction,
+      code: cause.code,
     };
   }
   return {
     message: cause instanceof Error ? cause.message : "操作没有完成。",
     impact: null,
     repairAction: null,
+    code: null,
   };
 }
 
@@ -429,6 +432,37 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
   </section>;
 }
 
+function PreviewVideo({ url, label, muted, pauseOthers }: {
+  url: string;
+  label: string;
+  muted: boolean;
+  pauseOthers: (current: HTMLVideoElement) => void;
+}) {
+  const match = /#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(url);
+  const range = match ? { start: Number(match[1]), end: Number(match[2]) } : null;
+  return <video
+    className={editorUi.effectPreview}
+    aria-label={label}
+    controls
+    muted={muted}
+    playsInline
+    preload="metadata"
+    src={apiUrl(url)}
+    onLoadedMetadata={event => { if (range) event.currentTarget.currentTime = range.start; }}
+    onPlay={event => {
+      pauseOthers(event.currentTarget);
+      if (range && (event.currentTarget.currentTime < range.start || event.currentTarget.currentTime >= range.end)) {
+        event.currentTarget.currentTime = range.start;
+      }
+    }}
+    onTimeUpdate={event => {
+      if (!range) return;
+      if (event.currentTarget.currentTime < range.start) event.currentTarget.currentTime = range.start;
+      if (event.currentTarget.currentTime >= range.end) event.currentTarget.pause();
+    }}
+  />;
+}
+
 function ContextCommandBar({
   compact = false,
   scriptMode = false,
@@ -525,8 +559,8 @@ function ContextCommandBar({
           <header><strong>{preview.proposal.summary}</strong><span>{(selectionChanged||commandChanged)?"重看效果":"待确认"}</span></header>
           {steps.length?<fieldset className={editorUi.propertySection}><legend>选择修改</legend>{steps.map(step=><label className={editorUi.actionRow} key={step.index}><input type="checkbox" aria-label={`保留修改${step.index+1}：${step.command}`} disabled={busy!==null||commandChanged} checked={selectedSteps.includes(step.index)} onChange={event=>setChosen(event.target.checked?[...selectedSteps,step.index]:selectedSteps.filter(index=>index!==step.index))}/><span>{step.index+1}. {step.command}</span></label>)}</fieldset>:null}
           {(selectionChanged||commandChanged)?<p role="status">内容已变，请重看效果。</p>:<div className={ui.previewDiff}>
-            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <video className={editorUi.effectPreview} aria-label="修改前画面" controls muted={!["EditCompoundTimeline","RemoveSilence"].includes(preview.proposal.operation.operation_type)} playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.before.video_url)} />:null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
-            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <video className={editorUi.effectPreview} aria-label="修改后画面" controls muted={!["EditCompoundTimeline","RemoveSilence"].includes(preview.proposal.operation.operation_type)} playsInline preload="metadata" onPlay={event=>{barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media=>{if(media!==event.currentTarget)media.pause();});}} src={apiUrl(preview.proposal.preview.after.video_url)} />:null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
+            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <PreviewVideo url={preview.proposal.preview.before.video_url} label="修改前画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
+            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <PreviewVideo url={preview.proposal.preview.after.video_url} label="修改后画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
           </div>}
           {preview.proposal.preview.text_changes?.length ? <details className={editorUi.textChanges} open><summary>字幕变化 · {preview.proposal.preview.text_changes.length}</summary><ol>{preview.proposal.preview.text_changes.map(change => <li key={change.cue_id}><span>修改前：{change.before}</span><span>修改后：{change.after}</span></li>)}</ol></details> : null}
           <div className={ui.previewEffects}>
@@ -1443,7 +1477,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           </li>;
         })}</ol></nav>
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
-        {error && (isEditor || activeView === "subtitle_cover") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span></div> : null}
+        {error && (isEditor || activeView === "subtitle_cover") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
         {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span></div> : null}
         {task.confirmed_script_id && (executionPreview || execution?.job) && (activeView === "script" || activeView === "narration") ? <CreationExecutionPanel preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} /> : null}
         {execution?.job && activeView !== "script" && activeView !== "narration" ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? "成片已生成" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
