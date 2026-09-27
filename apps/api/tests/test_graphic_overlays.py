@@ -3,7 +3,19 @@ from pathlib import Path
 import subprocess
 import pytest
 from app.graphic_overlays import TextOverlay, validate_overlays, write_text_overlay, splice_overlays, compile_overlay_command
-from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer
+from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, _resolve_subtitle_font
+
+
+def _available_cjk_font() -> str:
+    # CI installs fonts-noto-cjk on Linux; local dev usually runs macOS with PingFang SC.
+    for family in ('PingFang SC', 'Noto Sans CJK SC'):
+        try:
+            _resolve_subtitle_font(family)
+            return family
+        except OSError:
+            continue
+    pytest.fail('环境中没有可用的中文字体（PingFang SC / Noto Sans CJK SC）；请先安装系统字体')
+CHINESE_FONT = _available_cjk_font()
 
 
 def test_overlay_commands_and_linked_intervals_preserve_text():
@@ -22,7 +34,7 @@ def test_overlay_commands_and_linked_intervals_preserve_text():
 
 
 def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
-    value=TextOverlay(text='真实本地标题 Local video',start_seconds=0,end_seconds=1)
+    value=TextOverlay(text='真实本地标题 Local video',start_seconds=0,end_seconds=1,font_family=CHINESE_FONT)
     write_text_overlay(value.model_dump(),tmp_path/'title.png',(1080,1920))
     from PIL import Image
     image=Image.open(tmp_path/'title.png')
@@ -39,7 +51,7 @@ def test_real_title_only_appears_in_its_interval(tmp_path):
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','1',str(voice)],check=True)
     clip=MontageClip(id='clip',cue_id='cue',asset_id='a',segment_id='s',source_path=str(source),source_start_seconds=0,source_end_seconds=1,
         timeline_start_seconds=0,timeline_end_seconds=1,match_score=1,match_reasons=[],needs_confirmation=False)
-    overlay=TextOverlay(text='本地视频 Local',start_seconds=.2,end_seconds=.6,font_size=96).model_dump()
+    overlay=TextOverlay(text='本地视频 Local',start_seconds=.2,end_seconds=.6,font_size=96,font_family=CHINESE_FONT).model_dump()
     plan=CreationTaskMontagePlan(id='plan',workspace_id='w',task_id='t',script_id='s',script_title='t',status='ready',cues=[],clips=[clip],
         duration_seconds=1,low_confidence_clip_count=0,graphic_overlays=[overlay])
     MontageRenderer(tmp_path).render(plan,voice,job_staging_path=tmp_path/'render',subtitle_tracks=[])
