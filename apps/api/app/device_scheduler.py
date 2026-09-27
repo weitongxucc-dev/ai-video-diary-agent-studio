@@ -241,6 +241,14 @@ def material_stage_unit_key(stage: str, stage_input_digest: str) -> str:
     return f"{stage}:{stage_input_digest}"
 
 
+def _material_key_has_digest(owner_type: str, unit_key: str) -> bool:
+    if owner_type != "material_asset":
+        return True
+    stage, separator, digest = unit_key.rpartition(":")
+    return bool(separator and re.fullmatch(r"[a-z0-9][a-z0-9:._-]*", stage)
+                and re.fullmatch(r"[0-9a-f]{64}", digest))
+
+
 class DeviceScheduler:
     """One SQLite queue plus a host-wide, path-stable OS lock and recovery ledger.
 
@@ -284,11 +292,10 @@ class DeviceScheduler:
     def _assert_material_stage_key(trusted: VerifiedWork) -> None:
         if trusted.owner_type != "material_asset":
             return
-        if trusted.unit_key == "hash:v1":
-            if trusted.stage_input_digest is not None:
-                raise ValueError("素材哈希单元使用独立的 provisional 输入摘要")
-        elif (trusted.stage_input_digest is None or
-              trusted.unit_key != material_stage_unit_key(trusted.unit_key.rsplit(":", 1)[0], trusted.stage_input_digest)):
+        if (trusted.stage_input_digest is None or
+                not _material_key_has_digest(trusted.owner_type, trusted.unit_key) or
+                trusted.unit_key != material_stage_unit_key(
+                    trusted.unit_key.rsplit(":", 1)[0], trusted.stage_input_digest)):
             raise ValueError("素材阶段单元键必须包含完整阶段输入摘要")
 
     def submit(self, intent: SubmissionIntent, actor: object) -> WorkRequest:
@@ -354,6 +361,8 @@ class DeviceScheduler:
             request = self._request(row)
             if not self.owners.can_wake(request, actor):
                 raise PermissionError("不能唤醒未授权素材")
+            if not _material_key_has_digest(request.owner_type, request.unit_key):
+                raise ValueError("旧素材请求缺少阶段输入摘要，须由发现循环创建新请求")
             if request.state in {"done", "cancelled"}:
                 raise ValueError("该素材单元已经结束，须核验新的源版本")
             conn.execute("UPDATE device_work_requests SET updated_at=? WHERE id=?", (_stamp(self._now()), request.id))
@@ -567,6 +576,9 @@ class DeviceScheduler:
 
     def _eligible(self, conn: sqlite3.Connection, row: sqlite3.Row, now: datetime) -> bool:
         request = self._request(row)
+        if not _material_key_has_digest(request.owner_type, request.unit_key):
+            self._update_wait(conn, row, now, "legacy_stage_digest_missing")
+            return False
         owner_state = self.owners.check_current(request, conn)
         if owner_state == "stale":
             self._update_wait(conn, row, now, "input_stale")
@@ -723,6 +735,8 @@ class DeviceScheduler:
 
     def _assert_current(self, conn: sqlite3.Connection, grant: Grant) -> None:
         row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+        if row is not None and not _material_key_has_digest(row["owner_type"], row["unit_key"]):
+            raise PermissionError("旧素材请求缺少阶段输入摘要，不能执行")
         if row is None or self.owners.check_current(self._request(row), conn) != "ready":
             raise PermissionError("输入版本或共享授权已失效")
 
@@ -926,6 +940,8 @@ class DeviceScheduler:
             actor_id = self.owners.verify_retry(request, actor, reason, conn)
             if not actor_id:
                 raise PermissionError("重试身份未通过服务端验证")
+            if not _material_key_has_digest(request.owner_type, request.unit_key):
+                raise ValueError("旧素材请求缺少阶段输入摘要，须由发现循环创建新请求")
             if self.owners.check_current(request, conn) != "ready":
                 raise PermissionError("输入版本或共享授权未恢复")
             permit = conn.execute("SELECT request_id FROM device_permit WHERE id=1").fetchone()

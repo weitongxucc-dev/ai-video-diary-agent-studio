@@ -56,7 +56,7 @@ class Owners:
                             intent.unit_key, None if actor == "service" else actor, kind,
                             {"cpu_threads": 2}, self.references,
                             intent.unit_key.rsplit(":", 1)[-1]
-                            if intent.owner_type == "material_asset" and intent.unit_key != "hash:v1" else None)
+                            if intent.owner_type == "material_asset" else None)
 
     def check_current(self, request, conn):
         return "unauthorized" if self.revoked else "ready"
@@ -135,8 +135,8 @@ def _db(path):
 
 def _intent(owner_id, *, workspace="private-a", owner_type="job_run", unit="narration", policy=None):
     if owner_type == "material_asset" and unit == "narration":
-        unit = "hash:v1"
-    digest = "provisional:stat-and-bound-root" if unit == "hash:v1" else "sha256:one"
+        unit = material_stage_unit_key("hash:v1", "c" * 64)
+    digest = "provisional:stat-and-bound-root" if unit.startswith("hash:v1:") else "sha256:one"
     return SubmissionIntent(workspace, owner_type, owner_id, digest, unit, policy or SchedulePolicy())
 
 
@@ -384,7 +384,7 @@ def test_unknown_resources_and_reused_request_age_do_not_fake_readiness(tmp_path
 def test_material_hash_provisional_revision_then_real_sha_and_manual_wake_is_idempotent(tmp_path):
     scheduler = _scheduler(tmp_path)
     hash_unit = SubmissionIntent("private-a", "material_asset", "asset-1",
-                                 "provisional:stat-and-bound-root", "hash:v1", SchedulePolicy())
+                                 "provisional:stat-and-bound-root", material_stage_unit_key("hash:v1", "c" * 64), SchedulePolicy())
     with pytest.raises(KeyError):
         scheduler.wake_existing(hash_unit, "member-a")
     with pytest.raises(PermissionError):
@@ -489,6 +489,9 @@ def test_v8_to_v9_preserves_requests_and_rebuilds_index(tmp_path):
 def test_material_stage_digest_is_in_idempotency_key(tmp_path):
     scheduler = _scheduler(tmp_path)
     with pytest.raises(ValueError, match="阶段输入摘要"):
+        scheduler.submit(SubmissionIntent("private-a", "material_asset", "asset", "provisional:stat",
+                                          "hash:v1", SchedulePolicy()), "service")
+    with pytest.raises(ValueError, match="阶段输入摘要"):
         scheduler.submit(SubmissionIntent("private-a", "material_asset", "asset", "sha256:one",
                                           "probe:v1", SchedulePolicy()), "service")
     first = SubmissionIntent("private-a", "material_asset", "asset", "sha256:one",
@@ -499,6 +502,36 @@ def test_material_stage_digest_is_in_idempotency_key(tmp_path):
     assert scheduler._get(first_row.id).state == "done"
     changed = replace(first, unit_key=material_stage_unit_key("probe:v1", "b" * 64))
     assert scheduler.submit(changed, "service").id != first_row.id
+
+
+def test_legacy_hash_request_is_blocked_on_execution_wake_retry_and_recovery(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    normalized = _intent("asset", owner_type="material_asset")
+    original = scheduler.submit(normalized, "service")
+    grant = scheduler.pick_and_grant()
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET unit_key='hash:v1' WHERE id=?", (original.id,))
+    legacy_grant = replace(grant, unit_key="hash:v1")
+    with pytest.raises(PermissionError, match="旧素材"):
+        scheduler.assert_grant(legacy_grant)
+    legacy_intent = replace(normalized, unit_key="hash:v1")
+    with pytest.raises(ValueError, match="旧素材"):
+        scheduler.wake_existing(legacy_intent, "member-a")
+    scheduler.close()
+    replacement = _scheduler(tmp_path)
+    assert replacement.pick_and_grant() is None
+    blocked = replacement._get(original.id)
+    assert (blocked.state, blocked.wait_reason) == ("blocked", "legacy_stage_digest_missing")
+    with sqlite3.connect(replacement.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET state='cancelled' WHERE id=?", (original.id,))
+    with pytest.raises(ValueError, match="旧素材"):
+        replacement.retry_existing(original.id, "member-a", reason="cancelled")
+    with sqlite3.connect(replacement.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET state='done' WHERE id=?", (original.id,))
+    fresh = replacement.submit(normalized, "service")
+    assert fresh.id != original.id and fresh.state == "waiting"
+    changed_algorithm = replace(normalized, unit_key=material_stage_unit_key("hash:v1", "d" * 64))
+    assert replacement.submit(changed_algorithm, "service").id not in {original.id, fresh.id}
 
 
 def test_defer_releases_only_after_resources_and_rechecks_eligibility(tmp_path):
