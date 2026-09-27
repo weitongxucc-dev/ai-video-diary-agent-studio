@@ -7,6 +7,7 @@ is deliberately unsupported until an owner can measure and release it.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -21,6 +22,40 @@ from app.device_scheduler import Grant, ProcessIdentity, RecoveryState, WorkRequ
 
 
 @dataclass(frozen=True)
+class CpuRenderBudget:
+    """Device-calibrated limits for the explicitly bounded FFmpeg CPU path."""
+
+    max_duration_seconds: float
+    max_pixel_seconds: float
+    max_width_px: int
+    max_height_px: int
+    max_input_bytes: int
+    max_clip_count: int
+    max_overlay_count: int
+    max_output_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self) -> None:
+        if (not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds <= 0
+                or not math.isfinite(self.max_pixel_seconds) or self.max_pixel_seconds <= 0
+                or not math.isfinite(self.max_timeout_seconds) or self.max_timeout_seconds <= 0):
+            raise ValueError("Render duration and timeout budgets must be finite and positive")
+        if any(type(value) is not int or value < 0 for value in (
+            self.max_width_px, self.max_height_px, self.max_input_bytes,
+            self.max_clip_count, self.max_overlay_count, self.max_output_bytes, self.max_threads,
+            self.additional_memory_bytes, self.additional_disk_bytes,
+        )) or any(value == 0 for value in (
+            self.max_width_px, self.max_height_px, self.max_input_bytes,
+            self.max_clip_count, self.max_output_bytes, self.max_threads,
+            self.additional_memory_bytes, self.additional_disk_bytes,
+        )):
+            raise ValueError("Render limits must be explicit nonnegative integers")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -29,6 +64,7 @@ class HostBudget:
     max_disk_io_bytes_per_second: int
     max_unit_input_bytes: int
     sample_seconds: float = 0.1
+    cpu_render: CpuRenderBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -42,7 +78,7 @@ class HostBudget:
 
 
 class HostResourceProbe:
-    """Only admits known bounded material hash and metadata probe units."""
+    """Admit measured material work and explicitly bounded CPU render only."""
 
     _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta"})
 
@@ -56,12 +92,47 @@ class HostResourceProbe:
 
     def _sample(self, resources: dict[str, object]) -> bool | None:
         kind, size = resources.get("kind"), resources.get("size_bytes")
-        if kind not in self._SUPPORTED_KINDS:
+        render = self.budget.cpu_render if kind == "creation_render" else None
+        if kind == "creation_render":
+            if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
+                return None
+            numeric_fields = ("duration_seconds", "timeout_seconds")
+            integer_fields = ("width_px", "height_px", "input_bytes", "clip_count",
+                              "overlay_count", "max_output_bytes", "threads")
+            if any(type(resources.get(name)) not in {int, float}
+                   or not math.isfinite(resources[name]) or resources[name] <= 0
+                   for name in numeric_fields):
+                return None
+            if any(type(resources.get(name)) is not int or resources[name] < 0
+                   for name in integer_fields):
+                return None
+            if any(resources[name] == 0 for name in
+                   ("width_px", "height_px", "clip_count", "max_output_bytes", "threads")):
+                return None
+            if (resources["duration_seconds"] > render.max_duration_seconds
+                    or resources["width_px"] > render.max_width_px
+                    or resources["height_px"] > render.max_height_px
+                    or (resources["width_px"] * resources["height_px"]
+                        * resources["duration_seconds"] > render.max_pixel_seconds)
+                    or resources["input_bytes"] > render.max_input_bytes
+                    or resources["clip_count"] > render.max_clip_count
+                    or resources["overlay_count"] > render.max_overlay_count
+                    or resources["max_output_bytes"] > render.max_output_bytes
+                    or resources["threads"] > render.max_threads
+                    or resources["timeout_seconds"] > render.max_timeout_seconds):
+                return False
+            required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
+            required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
+                             + resources["max_output_bytes"])
+        elif kind in self._SUPPORTED_KINDS:
+            if type(size) is not int or size < 0:
+                return None
+            if size > self.budget.max_unit_input_bytes:
+                return False
+            required_memory = self.budget.min_available_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes
+        else:
             return None
-        if type(size) is not int or size < 0:
-            return None
-        if size > self.budget.max_unit_input_bytes:
-            return False
         try:
             before = psutil.disk_io_counters()
             if before is None:
@@ -82,9 +153,9 @@ class HostResourceProbe:
         except (OSError, psutil.Error, ValueError):
             return None
         return (cpu <= self.budget.max_cpu_percent
-                and memory.available >= self.budget.min_available_memory_bytes
+                and memory.available >= required_memory
                 and swap.used <= self.budget.max_swap_used_bytes
-                and all(disk.free >= self.budget.min_free_disk_bytes for disk in disks)
+                and all(disk.free >= required_disk for disk in disks)
                 and io_bytes / duration <= self.budget.max_disk_io_bytes_per_second)
 
     def admit(self, request: WorkRequest) -> bool | None:
@@ -116,7 +187,14 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         # These kinds have no resident model/GPU allocation. Process descendants
         # are independently checked by DeviceScheduler before calling this.
-        return True if resources is not None and resources.get("kind") in self._SUPPORTED_KINDS else None
+        if resources is None:
+            return None
+        if resources.get("kind") in self._SUPPORTED_KINDS:
+            return True
+        if (resources.get("kind") == "creation_render"
+                and resources.get("execution_mode") == "cpu_ffmpeg"):
+            return True
+        return None
 
 
 class HostProcessProbe:
