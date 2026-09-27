@@ -12656,6 +12656,21 @@ def _recover_creation_executions() -> None:
     # taken only from each persisted JobRun, never from the current login.
     if creation_execution_mode == "scheduled":
         runtime = _scheduled_creation_runtime()
+        # A crash may land after the JobRun cancellation commits but before
+        # its device request is cancelled. Reconcile from both durable rows.
+        with production_repo._connect() as conn:
+            cancelled_requests = conn.execute(
+                "SELECT r.id, r.workspace_id, r.member_id, r.owner_id FROM device_work_requests r "
+                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
+                "WHERE r.owner_type='creation_job' AND j.kind='creation_task_execution' "
+                "AND j.status='cancelled' AND r.state IN ('waiting', 'blocked', 'granted')"
+            ).fetchall()
+        for row in cancelled_requests:
+            event = production_repo.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
+            if (row["workspace_id"] != LEGACY_WORKSPACE_ID or row["member_id"] != "local-owner"
+                    or event.payload.get("member_id") != row["member_id"]):
+                raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
+            runtime.scheduler.cancel(row["id"], CreationExecutionActor(row["workspace_id"], row["member_id"]))
         for job in production_repo.list_pending_creation_executions():
             event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
             member_id = event.payload.get("member_id")
@@ -12735,12 +12750,15 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
         if start_event.payload.get("member_id") == "local-owner":
             with production_repo._connect() as conn:
                 row = conn.execute(
-                    "SELECT wait_reason, updated_at FROM device_work_requests "
+                    "SELECT unit_key, wait_reason, updated_at FROM device_work_requests "
                     "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
-                    "AND input_digest=? ORDER BY created_at DESC LIMIT 1",
+                    "AND input_digest=? AND state IN ('waiting', 'blocked', 'granted', 'yield_requested') "
+                    "ORDER BY created_at DESC LIMIT 1",
                     (workspace_id, "local-owner", job.id, job.input_digest),
                 ).fetchone()
             if row is not None:
+                if row["unit_key"] in {"narration", "montage_plan", "render"}:
+                    current_stage = row["unit_key"]
                 waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
                 if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
                     status_updated_at = row["updated_at"]

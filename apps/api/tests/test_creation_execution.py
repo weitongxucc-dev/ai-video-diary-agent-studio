@@ -262,7 +262,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     second = client.post(route + "/start", json=payload)
     assert first.status_code == second.status_code == 202
     assert first.json()["job"]["id"] == second.json()["job"]["id"]
-    assert first.json()["current_stage"] is None
+    assert first.json()["current_stage"] == "narration"
     assert first.json()["waiting_reason"] is None
     assert first.json()["status_updated_at"] is not None
     with repo._connect() as conn:
@@ -275,7 +275,15 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     waiting = client.get(route)
     assert waiting.status_code == 200
     assert waiting.json()["waiting_reason"] == "等待前一步或受许可执行能力就绪。"
-    assert waiting.json()["current_stage"] is None
+    assert waiting.json()["current_stage"] == "narration"
+    # Reproduce a crash between durable JobRun cancellation and device-request
+    # cancellation. Recovery must finish the latter without resubmitting work.
+    assert execution.cancel("local", task_id, member_id="local-owner").status == "cancelled"
+    with repo._connect() as conn:
+        assert conn.execute("SELECT state FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == "blocked"
+    main_module._recover_creation_executions()
+    with repo._connect() as conn:
+        assert conn.execute("SELECT state FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == "cancelled"
     stopped = client.post(route + "/cancel")
     assert stopped.status_code == 200
     assert stopped.json()["waiting_reason"] is None
