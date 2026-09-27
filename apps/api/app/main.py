@@ -9384,7 +9384,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                     **media_previews.get("after", {}),
                 },
             },
-            external_effects=(["可播放裁剪前后的源片段区间；成片配音、字幕和画面效果以最终渲染为准。有效任务版本未改变。"]
+            external_effects=(["这里播放的是原视频画面和原声；配音、字幕和画面效果以最终成片为准。当前任务版本未改变。"]
                 if payload.operation_type == "TrimClip" else
                 ["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"]
                 if media_previews else ["只更新任务版本；重新渲染前不会执行媒体进程。"]),

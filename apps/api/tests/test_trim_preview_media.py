@@ -144,6 +144,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
         })
     assert preview.status_code == 200, preview.text
+    assert "原视频画面和原声" in preview.json()["proposal"]["external_effects"][0]
     version_after_preview = repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert version_after_preview is not None
     for side, dominant, start, end in (("before", "red", 0, 1), ("after", "blue", 1.2, 2.2)):
