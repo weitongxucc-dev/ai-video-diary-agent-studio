@@ -16,7 +16,7 @@ export type DesktopVoiceRecorderProps = {
   onCancel: () => void;
 };
 
-type Phase = "idle" | "requesting" | "recording" | "stopping" | "review" | "submitting" | "submitted";
+type Phase = "idle" | "requesting" | "countdown" | "recording" | "stopping" | "review" | "submitting" | "submitted";
 
 function recordingError(error: unknown): string {
   if (error instanceof DOMException) {
@@ -41,6 +41,7 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
   const [error, setError] = useState<string | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
+  const [countdown, setCountdown] = useState(3);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [recording, setRecording] = useState<{ blob: Blob; metadata: RecordedVoiceMetadata } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
   const startedAtRef = useRef(0);
   const stopRequestedRef = useRef(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestRef = useRef(0);
   const submitPendingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -58,6 +60,11 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
   function clearTick() {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = null;
+  }
+
+  function clearCountdown() {
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    countdownTimerRef.current = null;
   }
 
   function releaseRecorder() {
@@ -74,6 +81,7 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
     stopTracks(streamRef.current);
     streamRef.current = null;
     clearTick();
+    clearCountdown();
   }
 
   function clearPreview() {
@@ -101,6 +109,7 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
       stopTracks(streamRef.current);
       streamRef.current = null;
       if (tickRef.current) clearInterval(tickRef.current);
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
   }, []);
@@ -171,10 +180,30 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
         setElapsedMs(durationMs);
         setPhase("review");
       };
-      recorder.start();
-      startedAtRef.current = Date.now();
-      setPhase("recording");
-      tickRef.current = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 250);
+      setCountdown(3);
+      setPhase("countdown");
+      const advance = (seconds: number) => {
+        countdownTimerRef.current = setTimeout(() => {
+          if (!mountedRef.current || request !== requestRef.current) return;
+          if (seconds > 1) {
+            setCountdown(seconds - 1);
+            advance(seconds - 1);
+            return;
+          }
+          countdownTimerRef.current = null;
+          try {
+            recorder.start();
+            startedAtRef.current = Date.now();
+            setPhase("recording");
+            tickRef.current = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 250);
+          } catch (cause) {
+            releaseRecorder();
+            setError(recordingError(cause));
+            setPhase("idle");
+          }
+        }, 1000);
+      };
+      advance(3);
       if (navigator.mediaDevices.enumerateDevices) {
         void navigator.mediaDevices.enumerateDevices().then((available) => {
           if (mountedRef.current) setDevices(available.filter((device) => device.kind === "audioinput"));
@@ -239,12 +268,12 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
     onCancel();
   }
 
-  const busy = phase === "requesting" || phase === "stopping" || phase === "submitting";
+  const busy = phase === "requesting" || phase === "countdown" || phase === "stopping" || phase === "submitting";
   return <section aria-label="电脑录音" className={styles.recorder}>
     <div className={styles.heading}><div><span className={styles.eyebrow}>本机麦克风</span><h2>为这条视频录音</h2></div><button aria-label={phase === "submitted" ? "关闭录音" : "取消录音"} className={styles.iconButton} disabled={phase === "submitting"} onClick={cancel} type="button"><X size={16} /></button></div>
     {scriptText ? <p className={styles.script}>{scriptText}</p> : <p className={styles.help}>录完先试听，确认后再交给当前任务。</p>}
     {devices.length > 1 ? <div className={styles.devices} role="group" aria-label="选择麦克风"><span>录音设备</span><div><button aria-pressed={!deviceId} className={styles.deviceButton} disabled={phase === "recording" || busy || phase === "submitted"} onClick={() => setDeviceId("")} type="button">系统默认</button>{devices.map((device, index) => <button aria-pressed={deviceId === device.deviceId} className={styles.deviceButton} disabled={phase === "recording" || busy || phase === "submitted"} key={device.deviceId || index} onClick={() => setDeviceId(device.deviceId)} type="button">{device.label || `麦克风 ${index + 1}`}</button>)}</div></div> : null}
-    <div aria-live="polite" className={styles.state}>{phase === "requesting" ? "正在连接麦克风…" : phase === "recording" ? `正在录音 · ${Math.floor(elapsedMs / 1000)} 秒` : phase === "stopping" ? "正在整理录音…" : phase === "submitting" ? "正在保存录音，请等待结果…" : phase === "review" || phase === "submitted" ? `已录制 ${elapsedMs < 1000 ? "不足 1 秒" : `${Math.round(elapsedMs / 1000)} 秒`}` : "麦克风将在开始后启用"}</div>
+    <div aria-live="polite" className={styles.state}>{phase === "requesting" ? "正在连接麦克风…" : phase === "countdown" ? `${countdown} 秒后开始录音` : phase === "recording" ? `正在录音 · ${Math.floor(elapsedMs / 1000)} 秒` : phase === "stopping" ? "正在整理录音…" : phase === "submitting" ? "正在保存录音，请等待结果…" : phase === "review" || phase === "submitted" ? `已录制 ${elapsedMs < 1000 ? "不足 1 秒" : `${Math.round(elapsedMs / 1000)} 秒`}` : "麦克风将在开始后启用"}</div>
     {previewUrl ? <audio aria-label="试听本次录音" controls onError={() => setError("试听失败，请重新录音。")} preload="metadata" src={previewUrl} /> : null}
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {phase === "submitted" ? <p className={styles.notice} role="status">录音已交给当前任务，保存结果以任务提示为准。</p> : null}
@@ -252,7 +281,7 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
       {phase === "idle" ? <button className={styles.primaryButton} onClick={() => void start()} type="button"><Mic size={16} />开始录音</button> : null}
       {phase === "recording" ? <button className={styles.primaryButton} onClick={stop} type="button"><Square size={14} fill="currentColor" />停止录音</button> : null}
       {phase === "review" ? <><button className={styles.primaryButton} onClick={() => void submitRecording()} type="button">使用录音</button><button className={styles.secondaryButton} onClick={() => void start()} type="button"><RotateCcw size={15} />重新录音</button></> : null}
-      {busy ? <button className={styles.primaryButton} disabled type="button">{phase === "requesting" ? "等待麦克风…" : phase === "stopping" ? "正在整理…" : "正在保存…"}</button> : null}
+      {busy ? <button className={styles.primaryButton} disabled type="button">{phase === "requesting" ? "等待麦克风…" : phase === "countdown" ? "准备录音…" : phase === "stopping" ? "正在整理…" : "正在保存…"}</button> : null}
       <button className={styles.secondaryButton} disabled={phase === "submitting"} onClick={cancel} type="button">{phase === "submitted" ? "关闭" : "取消"}</button>
     </div>
   </section>;

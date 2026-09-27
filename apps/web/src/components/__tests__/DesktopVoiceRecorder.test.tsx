@@ -35,6 +35,16 @@ function microphone(getUserMedia = vi.fn(async () => stream), inputs = [{ kind: 
   return { getUserMedia, enumerateDevices };
 }
 
+async function beginRecording(buttonName = "开始录音") {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  fireEvent.click(screen.getByRole("button", { name: buttonName }));
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByText("3 秒后开始录音")).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  vi.useRealTimers();
+  expect(screen.getByRole("button", { name: "停止录音" })).toBeInTheDocument();
+}
+
 describe("DesktopVoiceRecorder", () => {
   beforeEach(() => {
     TestMediaRecorder.instances = [];
@@ -44,6 +54,7 @@ describe("DesktopVoiceRecorder", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -54,8 +65,7 @@ describe("DesktopVoiceRecorder", () => {
     const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
     render(<DesktopVoiceRecorder onRecorded={onRecorded} onCancel={vi.fn()} scriptText="今天的文案" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(TestMediaRecorder.instances[0].options).toEqual({ mimeType: "audio/webm" });
     expect(screen.getByText("今天的文案")).toBeInTheDocument();
@@ -100,14 +110,53 @@ describe("DesktopVoiceRecorder", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it("asks for microphone access before counting down and starts only after three seconds", async () => {
+    let grant!: (value: MediaStream) => void;
+    const { getUserMedia } = microphone(vi.fn(() => new Promise<MediaStream>((resolve) => { grant = resolve; })));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    render(<DesktopVoiceRecorder onRecorded={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(screen.getByText("正在连接麦克风…")).toBeInTheDocument();
+    expect(screen.queryByText(/秒后开始录音/)).not.toBeInTheDocument();
+
+    await act(async () => { grant(stream); });
+    expect(screen.getByText("3 秒后开始录音")).toBeInTheDocument();
+    expect(TestMediaRecorder.instances[0].state).toBe("inactive");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByText("2 秒后开始录音")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByText("1 秒后开始录音")).toBeInTheDocument();
+    expect(TestMediaRecorder.instances[0].state).toBe("inactive");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByRole("button", { name: "停止录音" })).toBeInTheDocument();
+    expect(TestMediaRecorder.instances[0].state).toBe("recording");
+  });
+
+  it("cancels the countdown, releases the granted device, and cannot start later", async () => {
+    microphone();
+    const onCancel = vi.fn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    render(<DesktopVoiceRecorder onRecorded={vi.fn()} onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("3 秒后开始录音")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(trackStop).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(TestMediaRecorder.instances[0].state).toBe("inactive");
+    expect(screen.queryByRole("button", { name: "停止录音" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始录音" })).toBeInTheDocument();
+  });
+
   it("re-records without retaining the old preview and releases an active stream on unmount", async () => {
     microphone();
     const { unmount } = render(<DesktopVoiceRecorder onRecorded={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
-    fireEvent.click(screen.getByRole("button", { name: "重新录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording("重新录音");
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-preview");
     unmount();
     expect(trackStop).toHaveBeenCalledTimes(2);
@@ -116,8 +165,7 @@ describe("DesktopVoiceRecorder", () => {
   it("keeps the preview when the parent rejects the recording", async () => {
     microphone();
     render(<DesktopVoiceRecorder onRecorded={vi.fn().mockRejectedValue(new Error("任务未准备好"))} onCancel={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
     fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("保存录音失败：任务未准备好");
@@ -135,8 +183,7 @@ describe("DesktopVoiceRecorder", () => {
     fireEvent.click(choice);
     expect(choice).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     expect(getUserMedia).toHaveBeenCalledWith({ audio: { deviceId: { exact: "mic-2" } } });
   });
 
@@ -152,8 +199,7 @@ describe("DesktopVoiceRecorder", () => {
   it("reports an unexpected recorder stop instead of offering a partial clip", async () => {
     microphone();
     render(<DesktopVoiceRecorder onRecorded={vi.fn()} onCancel={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     act(() => { TestMediaRecorder.instances[0].stop(); });
     expect(screen.getByRole("alert")).toHaveTextContent("录音意外中断");
     expect(screen.queryByLabelText("试听本次录音")).not.toBeInTheDocument();
@@ -166,8 +212,7 @@ describe("DesktopVoiceRecorder", () => {
     const onRecorded = vi.fn(() => new Promise<void>((resolve) => { finishSave = resolve; }));
     const onCancel = vi.fn();
     render(<DesktopVoiceRecorder onRecorded={onRecorded} onCancel={onCancel} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
     fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
 
@@ -197,8 +242,7 @@ describe("DesktopVoiceRecorder", () => {
       .mockResolvedValueOnce(undefined);
     const onCancel = vi.fn();
     render(<DesktopVoiceRecorder onRecorded={onRecorded} onCancel={onCancel} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
-    await screen.findByRole("button", { name: "停止录音" });
+    await beginRecording();
     fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
     fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
     expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
