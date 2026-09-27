@@ -428,12 +428,18 @@ def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use
     if usable:
         assert restarted.resolve_clip_media_reference('workspace_a',asset.id,reference).is_file()
     else:
-        with pytest.raises(MediaAuthorityError):restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
-    with pytest.raises(KeyError):restarted.update_asset_use_state('workspace_b',asset.id,'available')
-    with pytest.raises(ValueError,match='使用状态'):restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
+        with pytest.raises(MediaAuthorityError):
+            restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
+    with pytest.raises(KeyError):
+        restarted.update_asset_use_state('workspace_b',asset.id,'available')
+    with pytest.raises(ValueError,match='使用状态'):
+        restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
     if use_state=='excluded':
-        with pytest.raises(ValueError,match='不使用'):production.analyze_asset('workspace_a',asset.id)
-    legacy=asdict(asset);legacy.pop('use_state');legacy.update(rights_confirmed=False,brand_safe=False)
+        with pytest.raises(ValueError,match='不使用'):
+            production.analyze_asset('workspace_a',asset.id)
+    legacy=asdict(asset)
+    legacy.pop('use_state')
+    legacy.update(rights_confirmed=False,brand_safe=False)
     assert ProductionRepository._asset_from_payload(legacy).use_state=='available'
     for key,value in [('review_status','rejected'),('usage_role','exclude')]:
         assert ProductionRepository._asset_from_payload({**legacy,key:value}).use_state=='excluded'
@@ -3684,7 +3690,8 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
     provider=_FakeVisualProvider()
     production=ProductionRepository(database_path=tmp_path/'studio.sqlite3',video_library_path=tmp_path,
         duration_reader=lambda _:8.0,scene_reader=lambda *_:[4.0],visual_provider=provider)
-    video=tmp_path/'source.mp4';video.write_bytes(b'original source')
+    video=tmp_path/'source.mp4'
+    video.write_bytes(b'original source')
     asset=production.scan_library('workspace_a')[0]
     analyzed=production.analyze_asset('workspace_a',asset.id)
     segment=analyzed.segments[0]
@@ -3693,8 +3700,10 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
     segment.description='人工修正画面描述'
     production._save_asset(analyzed)
     assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
-    if change=='replace_file':video.write_bytes(b'replacement source with different length')
-    elif change=='remove_file':video.unlink()
+    if change=='replace_file':
+        video.write_bytes(b'replacement source with different length')
+    elif change=='remove_file':
+        video.unlink()
     elif change=='change_interval':
         segment.end_seconds-=1
         production._save_asset(analyzed)

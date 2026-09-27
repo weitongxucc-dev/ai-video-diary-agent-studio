@@ -18,4 +18,5 @@ def test_real_silence_detection_keeps_word_edges_and_uses_frame_boundaries(tmp_p
 def test_no_speech_or_no_silence_does_not_propose_a_cut(tmp_path,expression):
     source=tmp_path/'input.wav'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',f'aevalsrc={expression}:s=48000:d=1',str(source)],check=True)
-    with pytest.raises(ValueError):detect_silence_cuts(source,1)
+    with pytest.raises(ValueError):
+        detect_silence_cuts(source,1)

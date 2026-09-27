@@ -26,7 +26,8 @@ def test_real_dissolves_keep_all_frames_audio_clock_and_mix_both_sources(tmp_pat
     output=tmp_path/'dissolve.mp4'
     subprocess.run(MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=clips),voice,output,[],subtitle_intervals=[]),capture_output=True,check=True,timeout=60)
     metadata=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(output)]))['streams']
-    video=next(s for s in metadata if s['codec_type']=='video');audio=next(s for s in metadata if s['codec_type']=='audio')
+    video=next(s for s in metadata if s['codec_type']=='video')
+    audio=next(s for s in metadata if s['codec_type']=='audio')
     assert int(video['nb_frames'])==72
     assert abs(float(audio['duration'])-2.4)<=.04
     raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(output),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
@@ -34,7 +35,8 @@ def test_real_dissolves_keep_all_frames_audio_clock_and_mix_both_sources(tmp_pat
     assert pixels[0][0]>240 and pixels[-1][2]>240
     assert all(sum(p)>230 for p in pixels)
     assert pixels[54][1]>80 and pixels[54][2]>80
-    if transitions[1]: assert pixels[30][0]>80 and pixels[30][1]>80
+    if transitions[1]:
+        assert pixels[30][0]>80 and pixels[30][1]>80
     assert [(c.source_end_seconds,c.timeline_end_seconds) for c in clips]==before
 
 

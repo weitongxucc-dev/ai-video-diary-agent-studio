@@ -27,8 +27,10 @@ def test_overlay_commands_and_linked_intervals_preserve_text():
     assert [(p['start_seconds'],p['end_seconds']) for p in pieces]==[(0,1),(1,2)]
     assert len({p['id'] for p in pieces})==2 and all(p['text']==value['text'] for p in pieces)
     for invalid in ([{**value,'end_seconds':5}],[value,value]):
-        with pytest.raises(ValueError):validate_overlays(invalid,3)
-    with pytest.raises(ValueError):TextOverlay(text=' ',start_seconds=0,end_seconds=1)
+        with pytest.raises(ValueError):
+            validate_overlays(invalid,3)
+    with pytest.raises(ValueError):
+        TextOverlay(text=' ',start_seconds=0,end_seconds=1)
 
 
 def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
@@ -44,7 +46,8 @@ def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
 
 
 def test_real_title_only_appears_in_its_interval(tmp_path):
-    source=tmp_path/'blue.mp4';voice=tmp_path/'voice.wav'
+    source=tmp_path/'blue.mp4'
+    voice=tmp_path/'voice.wav'
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=180x320:r=30:d=1','-c:v','libx264',str(source)],check=True)
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','1',str(voice)],check=True)
     clip=MontageClip(id='clip',cue_id='cue',asset_id='a',segment_id='s',source_path=str(source),source_start_seconds=0,source_end_seconds=1,
@@ -63,10 +66,13 @@ def test_real_title_only_appears_in_its_interval(tmp_path):
 def test_image_overlay_preserves_alpha_aspect_and_natural_parameters(tmp_path):
     from PIL import Image,ImageDraw
     from app.graphic_overlays import ImageOverlay,write_graphic_overlay
-    source=tmp_path/'logo.png';image=Image.new('RGBA',(200,100),(0,0,0,0))
-    ImageDraw.Draw(image).rectangle((50,0,149,99),fill=(255,0,0,255));image.save(source)
+    source=tmp_path/'logo.png'
+    image=Image.new('RGBA',(200,100),(0,0,0,0))
+    ImageDraw.Draw(image).rectangle((50,0,149,99),fill=(255,0,0,255))
+    image.save(source)
     value=ImageOverlay(source_ref=str(source),name='logo.png',start_seconds=0,end_seconds=1,width=.4,opacity=.5)
-    output=tmp_path/'layer.png';write_graphic_overlay(value.model_dump(),output,(1000,1000))
+    output=tmp_path/'layer.png'
+    write_graphic_overlay(value.model_dump(),output,(1000,1000))
     rendered=Image.open(output)
     left,top,right,bottom=rendered.getbbox()
     assert (left+right)/2==500 and (top,bottom)==(400,600)
@@ -92,12 +98,18 @@ def test_graphic_import_rejects_oversize_empty_and_animation_before_publication(
     from app.graphic_sources import import_graphic_source
     def attempt(data):
         return import_graphic_source(None,None,tmp_path,'w','t',SimpleNamespace(filename='test.png',file=io.BytesIO(data)))
-    with pytest.raises(ValueError,match='为空'):attempt(b'')
-    with pytest.raises(ValueError,match='20MB'):attempt(b'x'*(20*1024*1024+1))
-    large=io.BytesIO();Image.new('RGB',(8193,1)).save(large,format='PNG')
-    with pytest.raises(ValueError,match='尺寸过大'):attempt(large.getvalue())
-    animated=io.BytesIO();Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
-    with pytest.raises(ValueError,match='静态'):attempt(animated.getvalue())
+    with pytest.raises(ValueError,match='为空'):
+        attempt(b'')
+    with pytest.raises(ValueError,match='20MB'):
+        attempt(b'x'*(20*1024*1024+1))
+    large=io.BytesIO()
+    Image.new('RGB',(8193,1)).save(large,format='PNG')
+    with pytest.raises(ValueError,match='尺寸过大'):
+        attempt(large.getvalue())
+    animated=io.BytesIO()
+    Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
+    with pytest.raises(ValueError,match='静态'):
+        attempt(animated.getvalue())
 
 
 def test_overlay_context_is_bound_to_identity_and_type():

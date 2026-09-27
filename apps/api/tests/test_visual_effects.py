@@ -114,7 +114,8 @@ def test_transform_commands_keep_color_and_color_reset_keeps_geometry():
     assert restored.exposure==0 and restored.zoom==1.3 and restored.offset_x==.1
     reset=compile_visual_command('重置画面变换',moved.model_dump())
     assert reset.zoom==1 and reset.rotation==0 and reset.exposure==.5
-    with pytest.raises(ValueError):compile_visual_command('放大到9倍',{})
+    with pytest.raises(ValueError):
+        compile_visual_command('放大到9倍',{})
 
 
 def test_geometry_preview_and_export_match_without_stretching_or_clock_change(tmp_path):
@@ -150,7 +151,8 @@ def test_many_fractional_shots_do_not_accumulate_frames_or_drop_the_last_shot(tm
         source_start_seconds=0,source_end_seconds=.137,timeline_start_seconds=i*.137,timeline_end_seconds=(i+1)*.137) for i in range(12)]
     voice=tmp_path/'voice.wav'
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t',str(duration),str(voice)],check=True)
-    overlay=tmp_path/'overlay.png';Image.new('RGBA',(1080,1920),(0,0,0,0)).save(overlay)
+    overlay=tmp_path/'overlay.png'
+    Image.new('RGBA',(1080,1920),(0,0,0,0)).save(overlay)
     output=tmp_path/'fractional.mp4'
     command=MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=clips),voice,output,[overlay],subtitle_intervals=[(0,duration)])
     subprocess.run(command,capture_output=True,check=True,timeout=60)
@@ -196,7 +198,8 @@ def test_fade_preview_includes_tail_and_matches_export(tmp_path):
     def samples(path):
         raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
         return list(zip(raw[0::3],raw[1::3],raw[2::3]))
-    before=samples(preview);after=samples(output)
+    before=samples(preview)
+    after=samples(output)
     assert len(before)==len(after)==180
     for pixels in (before,after):
         assert max(pixels[0])<8 and max(pixels[-1])<8
@@ -229,7 +232,8 @@ def test_split_inside_fades_has_same_visible_frames_as_unsplit(tmp_path):
             assert newfade.fade_envelope_duration_frames is None and newfade.fade_envelope_offset_frames==0
     def pixels(path):
         return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
-    a=pixels(whole);b=b''.join(pixels(path) for path in paths)
+    a=pixels(whole)
+    b=b''.join(pixels(path) for path in paths)
     assert len(a)==len(b)==90
     assert max(abs(x-y) for x,y in zip(a,b))<=4
 
@@ -264,5 +268,6 @@ def test_compound_visual_edit_compiles_all_clauses_in_order_or_rejects_all():
     sequential=compile_visual_command('曝光改为0.5，恢复原色，然后暖一点',{})
     assert sequential.exposure==0 and sequential.temperature==.15
     for command in ('亮一点，加上闪电特效','恢复原色但不要改饱和度','替换第二个镜头，同时亮一点','淡出0.4秒，曝光改为99'):
-        with pytest.raises(ValueError):compile_visual_command(command,original)
+        with pytest.raises(ValueError):
+            compile_visual_command(command,original)
     assert compile_visual_command('美颜一下，轻一点，配音不变',{}).beauty_strength==.2
