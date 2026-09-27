@@ -2983,17 +2983,23 @@ class ProductionRepository:
                 (dependency.workspace_id, dependency.asset_id,
                  dependency.source_sha256, material_probe_unit_key(dependency.source_sha256)),
             ).fetchone()
-            if current is not None:
-                return None
             legacy = conn.execute(
-                """SELECT id FROM device_work_requests
+                """SELECT id, state, wait_reason FROM device_work_requests
                    WHERE workspace_id=? AND owner_type='material_asset' AND owner_id=?
                      AND input_digest=? AND unit_key LIKE 'probe-scene:v1:%'""",
                 (dependency.workspace_id, dependency.asset_id, dependency.source_sha256),
             ).fetchall()
         if len(legacy) > 1:
             raise ValueError("存在多个旧媒体探测请求，拒绝自动替换")
-        return str(legacy[0]["id"]) if legacy else None
+        if not legacy:
+            return None
+        old = legacy[0]
+        if (old["state"] == "cancelled" and current is not None
+                and old["wait_reason"] == f"replaced_by:{current['id']}"):
+            return None
+        if old["state"] not in {"waiting", "blocked"}:
+            raise ValueError("旧素材探测请求已执行或终止，拒绝自动替换")
+        return str(old["id"])
 
     def material_probe_source_verdict(
         self, workspace_id: str, asset_id: str, source_sha256: str,

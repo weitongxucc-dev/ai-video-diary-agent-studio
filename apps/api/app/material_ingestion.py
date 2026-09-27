@@ -21,6 +21,8 @@ from app.production import (
 from app.material_probe import MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
 
 logger = logging.getLogger(__name__)
+PROBE_TIMEOUT_SECONDS = 20.0
+PROBE_STDERR_LIMIT_BYTES = 32 * 1024
 
 
 @dataclass(frozen=True)
@@ -310,8 +312,10 @@ class MaterialIngestionService:
                 scheduler, grant,
                 [ffprobe, "-v", "error", "-show_format", "-show_streams",
                  "-of", "json", "-i", candidate.file_path],
-                timeout_seconds=20, max_stdout_bytes=MAX_PROBE_OUTPUT_BYTES,
-                max_stderr_bytes=32 * 1024,
+                timeout_seconds=PROBE_TIMEOUT_SECONDS,
+                max_stdout_bytes=MAX_PROBE_OUTPUT_BYTES,
+                max_stderr_bytes=PROBE_STDERR_LIMIT_BYTES,
+                cancel_event=self._stop,
             )
         except RecoveryBlocked:
             raise
