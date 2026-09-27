@@ -19,6 +19,34 @@ from app.material_scene import (
 from app.production import MaterialSegment, ProductionRepository, _segment_id
 
 
+def _scene_test_scheduler(repo: ProductionRepository, tmp_path: Path) -> DeviceScheduler:
+    host = pytest.importorskip("app.host_resource_probes")
+    # Explicit isolated test envelope; these numbers are not production calibration.
+    scene_budget = host.SceneWindowBudget(
+        allowed_source_codecs=("mpeg4",), max_source_bytes=3 * 1024 * 1024,
+        max_source_width_px=160, max_source_height_px=90,
+        max_source_frame_rate_fps=120, max_scan_seconds=15,
+        max_output_sample_fps=2, max_output_width_px=320, max_output_frames=30,
+        max_threads=1, max_timeout_seconds=12,
+        max_process_rss_bytes=64 * 1024 * 1024, max_process_threads=8,
+        runtime_sample_seconds=0.05,
+        additional_memory_bytes=128 * 1024 * 1024, additional_disk_bytes=1,
+    )
+    resources = host.HostResourceProbe(
+        repo.database_path, disk_paths=(tmp_path,),
+        budget=host.HostBudget(
+            100, 64 * 1024 * 1024, 2**63, 10 * 1024 * 1024,
+            2**63, 3 * 1024 * 1024, 0.02,
+            scene_window=scene_budget,
+        ),
+    )
+    return DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock",
+        owners=MaterialHashOwnerVerifier(repo), resources=resources,
+        processes=host.HostProcessProbe(),
+    )
+
+
 def test_scene_windows_bound_source_time_and_keep_one_second_overlap() -> None:
     windows = scene_windows(32.4)
     assert windows == (
@@ -62,7 +90,6 @@ def test_scene_stage_key_includes_source_window_and_probe_result() -> None:
 
 
 def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tmp_path: Path) -> None:
-    host = pytest.importorskip("app.host_resource_probes")
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None or shutil.which("ffprobe") is None:
         pytest.skip("FFmpeg tools are not installed")
@@ -83,22 +110,8 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
     repo.bind_material_ingestion("one", expected_directory=str(library))
 
-    class TestResources:
-        def admit(self, request):
-            return True
-
-        def continue_unit(self, grant):
-            return True
-
-        def released(self, grant):
-            return True
-
     def make_runtime(current_repo):
-        scheduler = DeviceScheduler(
-            current_repo.database_path, tmp_path / "device.lock",
-            owners=MaterialHashOwnerVerifier(current_repo),
-            resources=TestResources(), processes=host.HostProcessProbe(),
-        )
+        scheduler = _scene_test_scheduler(current_repo, tmp_path)
         service = MaterialIngestionService(
             current_repo, execution_mode="scheduled", scheduler=scheduler,
             stable_seconds=0,
@@ -187,10 +200,19 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
         scheduler.close()
 
 
-def test_scene_timeout_never_commits_a_scene_checkpoint(
+@pytest.mark.parametrize(
+    ("error_name", "expected_state", "expected_reason", "asset_status"),
+    [
+        ("GrantedCommandTimeout", "failed", "scene_timeout", "failed"),
+        ("GrantedCommandResourceLimit", "failed", "scene_resource_limit", "failed"),
+        ("GrantedCommandResourceUnavailable", "blocked", "resource_pressure", "blocked"),
+    ],
+)
+def test_scene_timeout_or_resource_stop_never_commits_a_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    error_name: str, expected_state: str, expected_reason: str,
+    asset_status: str,
 ) -> None:
-    host = pytest.importorskip("app.host_resource_probes")
     gated = pytest.importorskip("app.granted_subprocess")
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None or shutil.which("ffprobe") is None:
@@ -207,21 +229,7 @@ def test_scene_timeout_never_commits_a_scene_checkpoint(
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
     repo.bind_material_ingestion("one", expected_directory=str(library))
 
-    class TestResources:
-        def admit(self, request):
-            return True
-
-        def continue_unit(self, grant):
-            return True
-
-        def released(self, grant):
-            return True
-
-    scheduler = DeviceScheduler(
-        repo.database_path, tmp_path / "device.lock",
-        owners=MaterialHashOwnerVerifier(repo), resources=TestResources(),
-        processes=host.HostProcessProbe(),
-    )
+    scheduler = _scene_test_scheduler(repo, tmp_path)
     service = MaterialIngestionService(
         repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
     )
@@ -239,20 +247,22 @@ def test_scene_timeout_never_commits_a_scene_checkpoint(
         scene_grant = scheduler.pick_and_grant()
         assert scene_grant is not None and scene_grant.unit_key.startswith("scene-window:v1:")
 
-        def timeout(*args, **kwargs):
-            raise gated.GrantedCommandTimeout("test deadline")
+        def stopped(*args, **kwargs):
+            raise getattr(gated, error_name)("test stopped child")
 
-        monkeypatch.setattr(gated, "run_granted_command", timeout)
+        monkeypatch.setattr(gated, "run_granted_command", stopped)
         assert service.run_granted_scene(scene_grant) is None
-        assert repo.list_assets("one")[0].analysis_status == "failed"
+        assert repo.list_assets("one")[0].analysis_status == asset_status
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
                 "SELECT COUNT(*) FROM material_analysis_checkpoints "
                 "WHERE unit_key LIKE 'scene-window:v1:%'"
             ).fetchone() == (0,)
             assert conn.execute(
-                "SELECT state, last_failure_reason FROM device_work_requests WHERE id=?",
+                "SELECT state, COALESCE(last_failure_reason, wait_reason) "
+                "FROM device_work_requests WHERE id=?",
                 (scene_grant.request_id,),
-            ).fetchone() == ("failed", "scene_timeout")
+            ).fetchone() == (expected_state, expected_reason)
+        scheduler.assert_released(scene_grant)
     finally:
         scheduler.close()

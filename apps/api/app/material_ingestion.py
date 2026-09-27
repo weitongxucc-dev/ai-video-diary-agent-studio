@@ -467,6 +467,7 @@ class MaterialIngestionService:
         """Analyze one bounded source-time window under the registered process permit."""
         from app.granted_subprocess import (
             GrantedCommandCancelled, GrantedCommandError, GrantedCommandOutputLimit,
+            GrantedCommandResourceLimit, GrantedCommandResourceUnavailable,
             GrantedCommandTimeout, run_granted_command,
         )
 
@@ -501,6 +502,24 @@ class MaterialIngestionService:
             scheduler.defer_unit(
                 grant, reason="worker_interrupted",
                 retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1),
+            )
+            return None
+        except GrantedCommandResourceUnavailable:
+            if self._defer_stale_scene(grant):
+                return None
+            scheduler.defer_unit(
+                grant, reason="resource_pressure",
+                retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1),
+            )
+            return None
+        except GrantedCommandResourceLimit:
+            if self._defer_stale_scene(grant):
+                return None
+            scheduler.fail_unit(
+                grant, reason="scene_resource_limit",
+                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                    conn, active, candidate, "scene_resource_limit",
+                ),
             )
             return None
         except (GrantedCommandTimeout, GrantedCommandOutputLimit) as error:
