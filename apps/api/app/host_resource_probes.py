@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import psutil
 
-from app.device_scheduler import Grant, ProcessIdentity, RecoveryState, WorkRequest
+from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
 
 
 @dataclass(frozen=True)
@@ -64,29 +64,45 @@ class SceneWindowBudget:
     max_source_width_px: int
     max_source_height_px: int
     max_source_frame_rate_fps: float
-    max_nominal_decode_frames: float
     max_scan_seconds: float
     max_output_sample_fps: float
     max_output_width_px: int
     max_output_frames: int
     max_threads: int
     max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
     additional_memory_bytes: int
     additional_disk_bytes: int
 
     def __post_init__(self) -> None:
-        rates = (self.max_source_frame_rate_fps, self.max_nominal_decode_frames,
-                 self.max_scan_seconds, self.max_output_sample_fps, self.max_timeout_seconds)
+        rates = (self.max_source_frame_rate_fps, self.max_scan_seconds,
+                 self.max_output_sample_fps, self.max_timeout_seconds,
+                 self.runtime_sample_seconds)
         if any(not math.isfinite(value) or value <= 0 for value in rates):
             raise ValueError("Scene timing and decode budgets must be finite and positive")
         integers = (self.max_source_bytes, self.max_source_width_px, self.max_source_height_px,
                     self.max_output_width_px, self.max_output_frames, self.max_threads,
+                    self.max_process_rss_bytes, self.max_process_threads,
                     self.additional_memory_bytes, self.additional_disk_bytes)
         if (any(type(value) is not int or value <= 0 for value in integers)
                 or not self.allowed_source_codecs
                 or any(not isinstance(codec, str) or not codec or codec != codec.lower()
                        for codec in self.allowed_source_codecs)):
             raise ValueError("Scene codec and size budgets must be explicit and positive")
+        if (self.additional_memory_bytes < self.max_process_rss_bytes
+                or self.runtime_sample_seconds > 0.25):
+            raise ValueError("Scene process monitor needs reserved memory and a bounded sample interval")
+
+
+@dataclass(frozen=True)
+class SceneRuntimeLimits:
+    max_process_rss_bytes: int
+    max_process_threads: int
+    min_host_available_memory_bytes: int
+    max_host_swap_used_bytes: int
+    sample_seconds: float
 
 
 @dataclass(frozen=True)
@@ -110,6 +126,10 @@ class HostBudget:
             self.max_unit_input_bytes,
         )):
             raise ValueError("Host budget cannot contain negative limits")
+        if self.scene_window is not None and (
+            self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
+        ):
+            raise ValueError("Scene decode requires explicit host memory and disk headroom")
 
 
 class HostResourceProbe:
@@ -183,8 +203,9 @@ class HostResourceProbe:
             if (resources["size_bytes"] > scene.max_source_bytes
                     or resources["source_width_px"] > scene.max_source_width_px
                     or resources["source_height_px"] > scene.max_source_height_px
+                    # The reported rate screens calibrated profiles; it is not
+                    # an upper bound on VFR or long-GOP decoded input frames.
                     or resources["source_frame_rate_fps"] > scene.max_source_frame_rate_fps
-                    or resources["source_frame_rate_fps"] * resources["scan_seconds"] > scene.max_nominal_decode_frames
                     or resources["scan_seconds"] > scene.max_scan_seconds
                     or resources["output_sample_fps"] > scene.max_output_sample_fps
                     or resources["output_max_width_px"] > scene.max_output_width_px
@@ -247,6 +268,21 @@ class HostResourceProbe:
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
         return self._sample(resources) if resources is not None else None
+
+    def scene_runtime_limits(self, grant: Grant) -> SceneRuntimeLimits | None:
+        resources = self._grant_resources(grant)
+        if resources is None:
+            raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") != "material_scene_window":
+            return None
+        scene = self.budget.scene_window
+        if scene is None:
+            raise RecoveryBlocked("场景进程预算未配置，不能执行子进程")
+        return SceneRuntimeLimits(
+            scene.max_process_rss_bytes, scene.max_process_threads,
+            self.budget.min_available_memory_bytes,
+            self.budget.max_swap_used_bytes, scene.runtime_sample_seconds,
+        )
 
     def released(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)

@@ -12,8 +12,10 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
+import psutil
+
 from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, RecoveryBlocked
-from app.host_resource_probes import HostProcessProbe
+from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits
 
 
 _TRAMPOLINE = """
@@ -54,6 +56,44 @@ class GrantedCommandCancelled(GrantedCommandError):
 
 class GrantedCommandOutputLimit(GrantedCommandError):
     pass
+
+
+class GrantedCommandResourceLimit(GrantedCommandError):
+    """Measured process RSS or thread count exceeded the calibrated scene cap."""
+
+
+class GrantedCommandResourceUnavailable(GrantedCommandError):
+    """Host pressure or an unavailable scene process sample stopped execution."""
+
+
+def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentity,
+                         limits: SceneRuntimeLimits) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        root = psutil.Process(process.pid)
+        if f"{root.create_time():.6f}" != child.start_token:
+            raise GrantedCommandResourceUnavailable("Scene child identity changed during sampling")
+        processes = (root, *root.children(recursive=True))
+        rss = 0
+        threads = 0
+        for current in processes:
+            try:
+                rss += current.memory_info().rss
+                threads += current.num_threads()
+            except psutil.NoSuchProcess:
+                if current.pid == process.pid and process.poll() is None:
+                    raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling")
+        if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
+            raise GrantedCommandResourceLimit("Scene process exceeded RSS or thread budget")
+        if (psutil.virtual_memory().available < limits.min_host_available_memory_bytes
+                or psutil.swap_memory().used > limits.max_host_swap_used_bytes):
+            raise GrantedCommandResourceUnavailable("Host memory pressure during scene decode")
+    except psutil.NoSuchProcess as exc:
+        if process.poll() is None:
+            raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
+    except (psutil.Error, OSError) as exc:
+        raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
 
 
 def _terminate_and_verify(process: subprocess.Popen[bytes], child: ProcessIdentity | None,
@@ -115,6 +155,14 @@ def run_granted_command(
     scheduler.assert_grant(grant)
     if cancel_event is not None and cancel_event.is_set():
         raise GrantedCommandCancelled("Command cancelled before launch")
+    resources = getattr(scheduler, "resources", None)
+    scene_unit = (isinstance(grant, Grant) and grant.owner_type == "material_asset"
+                  and grant.unit_key.startswith("scene-window:v1:"))
+    if scene_unit and not isinstance(resources, HostResourceProbe):
+        raise RecoveryBlocked("场景子进程缺少真实资源探针")
+    scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None
+    if scene_unit and scene_limits is None:
+        raise RecoveryBlocked("场景子进程缺少运行中资源预算")
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     child: ProcessIdentity | None = None
@@ -142,6 +190,7 @@ def run_granted_command(
 
         outputs = {"stdout": bytearray(), "stderr": bytearray()}
         limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
+        next_scene_sample = time.monotonic()
         with selectors.DefaultSelector() as selector:
             assert process.stdout is not None and process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -149,6 +198,9 @@ def run_granted_command(
             while selector.get_map():
                 if cancel_event is not None and cancel_event.is_set():
                     raise GrantedCommandCancelled("Command cancelled")
+                if scene_limits is not None and time.monotonic() >= next_scene_sample:
+                    _check_scene_runtime(process, child, scene_limits)
+                    next_scene_sample = time.monotonic() + scene_limits.sample_seconds
                 if time.monotonic() >= deadline:
                     raise GrantedCommandTimeout("Command exceeded its unit deadline")
                 for key, _ in selector.select(timeout=min(0.05, max(0, deadline - time.monotonic()))):
@@ -163,6 +215,9 @@ def run_granted_command(
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 raise GrantedCommandCancelled("Command cancelled")
+            if scene_limits is not None and time.monotonic() >= next_scene_sample:
+                _check_scene_runtime(process, child, scene_limits)
+                next_scene_sample = time.monotonic() + scene_limits.sample_seconds
             if process.poll() is not None:
                 break
             remaining = deadline - time.monotonic()
