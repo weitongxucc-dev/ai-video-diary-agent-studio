@@ -3222,10 +3222,10 @@ class ProductionRepository:
         asset = self._asset_from_payload(json.loads(str(row["payload"])))
         asset.analysis_status = "failed"
         asset.analysis_message = {
-            "probe_invalid_media": "媒体信息无效；检查文件后可手动重试。",
-            "probe_timeout": "读取媒体信息超时；检查文件后可手动重试。",
-            "probe_output_limit": "媒体信息输出超出上限；检查文件后可手动重试。",
-            "probe_failed": "无法读取媒体信息；检查文件后可手动重试。",
+            "probe_invalid_media": "媒体信息无效；请检查或更换原文件，当前不会自动重试。",
+            "probe_timeout": "读取媒体信息超时；请检查磁盘和文件，当前不会自动重试。",
+            "probe_output_limit": "媒体信息输出超出上限；请检查文件，当前不会自动重试。",
+            "probe_failed": "无法读取媒体信息；请检查磁盘和文件，当前不会自动重试。",
         }[reason]
         asset.updated_at = utc_now()
         conn.execute(

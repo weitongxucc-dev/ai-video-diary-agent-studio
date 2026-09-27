@@ -21,7 +21,7 @@ from app.material_ingestion import (
     MaterialIngestionService,
 )
 from app.material_probe import MaterialProbeFacts, MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
-from app.production import MaterialProbeDependency, ProductionRepository
+from app.production import MaterialProbeDependency, ProductionRepository, material_probe_unit_key
 
 
 def probe_payload(*, duration: str = "3.250", video: bool = True) -> bytes:
@@ -185,7 +185,10 @@ def test_probe_terminal_failure_is_persisted_and_not_auto_retried(tmp_path: Path
                 conn, active, candidate, "probe_invalid_media",
             ),
         )
-        assert repo.get_asset("one", asset_id).analysis_status == "failed"
+        failed_asset = repo.get_asset("one", asset_id)
+        assert failed_asset.analysis_status == "failed"
+        assert "当前不会自动重试" in failed_asset.analysis_message
+        assert "手动重试" not in failed_asset.analysis_message
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
                 "SELECT state FROM material_ingestion_files"
@@ -481,8 +484,9 @@ def test_probe_source_change_before_exec_defers_without_checkpoint(
 
 
 @pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("new_exists", [False, True])
 def test_legacy_probe_request_replaced_once_without_losing_wait_age(
-    tmp_path: Path, blocked: bool,
+    tmp_path: Path, blocked: bool, new_exists: bool,
 ) -> None:
     if not hasattr(DeviceScheduler, "replace_unexecuted_request"):
         pytest.skip("SCHED replacement contract not yet integrated")
@@ -542,6 +546,15 @@ def test_legacy_probe_request_replaced_once_without_losing_wait_age(
         if blocked:
             assert scheduler.pick_and_grant() is None
         scheduler.owners = MaterialHashOwnerVerifier(repo)
+        prior_new_id = None
+        if new_exists:
+            prior_new_id = scheduler.submit(
+                SubmissionIntent(
+                    "one", "material_asset", asset_id, result.source_sha256,
+                    material_probe_unit_key(result.source_sha256), SchedulePolicy(),
+                ),
+                MaterialHashServiceActor("one", str(library.resolve())),
+            ).id
         with sqlite3.connect(repo.database_path) as conn:
             before = conn.execute(
                 "SELECT first_ready_at_utc, eligible_wait_seconds FROM device_work_requests WHERE id=?",
@@ -549,6 +562,8 @@ def test_legacy_probe_request_replaced_once_without_losing_wait_age(
             ).fetchone()
         replacement = service.submit_pending_probe_dependencies()
         assert len(replacement) == 1
+        if prior_new_id is not None:
+            assert replacement == [prior_new_id]
         assert service.submit_pending_probe_dependencies() == replacement
         with sqlite3.connect(repo.database_path) as conn:
             old_state = conn.execute(
