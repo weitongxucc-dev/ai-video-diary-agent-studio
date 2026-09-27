@@ -114,15 +114,30 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
   const frameChanged = draft.mode !== (clip.fit_mode ?? "fill") || draft.x !== (clip.crop_x ?? .5) || draft.y !== (clip.crop_y ?? .5);
   function update(next: VideoClipDraft) { onDraftStateChange(next); onDraftChange(); }
   return <div className={quickUi.editor} aria-label={`镜头 ${index + 1} 快速编辑`}>
+    <div className={quickUi.summary}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><span>成片 {editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</span></div>
     <nav className={quickUi.tabs} aria-label="快速编辑类别">
       <button aria-pressed={tab === "trim"} onClick={() => setTab("trim")} type="button">裁剪</button>
       <button aria-pressed={tab === "frame"} onClick={() => setTab("frame")} type="button">画面</button>
       <button aria-pressed={tab === "replace"} onClick={() => setTab("replace")} type="button">换素材</button>
     </nav>
     <div className={quickUi.body}>
-      {tab === "trim" ? <label>源画面起点（秒）<input aria-label={`镜头 ${index + 1} 快速裁剪起点`} type="number" min={0} step={.1} value={draft.start} disabled={busy || clip.locked} onChange={event => update({ ...draft, start: Number(event.target.value) })} /></label>
-        : tab === "frame" ? <label>显示方式<select aria-label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={event => update({ ...draft, mode: event.target.value as "fill" | "fit" })}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>
-          : <p>打开详情选择真实候选，预览后再确认替换。</p>}
+      {tab === "trim" ? <section className={quickUi.controlGroup}>
+        <h3>裁剪源画面</h3>
+        <p>调整这段镜头从源素材的哪里开始，成片中的位置和时长保持不变。</p>
+        <label>起点（秒）<input aria-label={`镜头 ${index + 1} 快速裁剪起点`} type="number" min={0} step={.1} value={draft.start} disabled={busy || clip.locked} onChange={event => update({ ...draft, start: Number(event.target.value) })} /></label>
+        <div className={quickUi.valueRow}><span>当前源画面</span><output>{editorTime(draft.start)}–{editorTime(draft.start + clip.timeline_end_seconds - clip.timeline_start_seconds)}</output></div>
+      </section> : tab === "frame" ? <section className={quickUi.controlGroup}>
+        <h3>画面适配</h3>
+        <p>填满画面时可以调整裁切位置；完整显示会保留源画面的全部内容。</p>
+        <label>显示方式<select aria-label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={event => update({ ...draft, mode: event.target.value as "fill" | "fit" })}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>
+        {draft.mode === "fill" ? <div className={quickUi.cropControls}>
+          <label>水平位置 <output>{Math.round(draft.x * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切水平位置`} type="range" min={0} max={1} step={.05} value={draft.x} disabled={busy || clip.locked} onChange={event => update({ ...draft, x: Number(event.target.value) })} /></label>
+          <label>垂直位置 <output>{Math.round(draft.y * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切垂直位置`} type="range" min={0} max={1} step={.05} value={draft.y} disabled={busy || clip.locked} onChange={event => update({ ...draft, y: Number(event.target.value) })} /></label>
+        </div> : null}
+      </section> : <section className={quickUi.controlGroup}>
+        <h3>换用其他素材</h3>
+        <p>在镜头详情里选择已审核的候选。先预览替换结果，再决定是否应用。</p>
+      </section>}
     </div>
     <footer className={quickUi.footer}>
       <small>{clip.locked ? "镜头已锁定" : tab === "trim" && trimChanged || tab === "frame" && frameChanged ? "修改尚未应用" : tab === "replace" ? "需在详情选择候选" : "当前设置已保存"}</small>

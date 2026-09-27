@@ -32,6 +32,7 @@ import {
   Suspense,
   type ComponentType,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   type CSSProperties,
 } from "react";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
@@ -212,16 +213,19 @@ export function AppShell({
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(true);
-  const [quickSize, setQuickSize] = useState({ width: 278, height: 0 });
+  const [quickSize, setQuickSize] = useState({ width: 400, height: 0, maxTop: 8 });
+  const [quickPosition, setQuickPosition] = useState<{ left: number; top: number } | null>(null);
   const editorMainRef = useRef<HTMLElement>(null);
   const quickExpandRef = useRef<HTMLButtonElement>(null);
   const quickPanelRef = useRef<HTMLElement>(null);
+  const quickDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
+  const quickWasNarrowRef = useRef<boolean | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
-  useEffect(() => { setQuickOpen(true); }, [quickInspectorKey]);
+  useEffect(() => { setQuickOpen((editorMainRef.current?.getBoundingClientRect().width ?? 540) >= 540); }, [quickInspectorKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
 
   useLayoutEffect(() => {
@@ -229,13 +233,24 @@ export function AppShell({
     if (!quickAvailable || !main) return;
     let frame = 0;
     const measure = () => {
-      const anchor = main.querySelector<HTMLElement>("[data-editor-transport]")
-        ?? main.querySelector<HTMLElement>("[data-editor-player]");
+      const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
+      const player = main.querySelector<HTMLElement>("[data-editor-player]");
       const mainRect = main.getBoundingClientRect();
-      const anchorBottom = anchor?.getBoundingClientRect().bottom ?? mainRect.bottom;
-      const height = Math.max(0, Math.min(246, Math.floor(mainRect.bottom - anchorBottom - 16)));
-      const width = Math.min(304, Math.max(278, Math.round(mainRect.width * .5)));
-      setQuickSize((current) => current.height === height && current.width === width ? current : { width, height });
+      const anchorTop = transport?.getBoundingClientRect().top ?? player?.getBoundingClientRect().bottom ?? mainRect.bottom;
+      const available = Math.floor(anchorTop - mainRect.top - 16);
+      const height = Math.max(0, Math.min(400, available));
+      const width = Math.min(480, Math.max(400, Math.round(mainRect.width * .62)), Math.max(0, Math.floor(mainRect.width - 16)));
+      const maxTop = Math.max(8, Math.floor(anchorTop - mainRect.top - height - 8));
+      setQuickSize((current) => current.height === height && current.width === width && current.maxTop === maxTop ? current : { width, height, maxTop });
+      setQuickPosition((current) => {
+        if (!current) return null;
+        const left = Math.min(Math.max(8, current.left), Math.max(8, mainRect.width - width - 8));
+        const top = Math.min(Math.max(8, current.top), maxTop);
+        return left === current.left && top === current.top ? current : { left, top };
+      });
+      const isNarrow = mainRect.width < 540;
+      if (isNarrow && quickWasNarrowRef.current === false) setQuickOpen(false);
+      quickWasNarrowRef.current = isNarrow;
     };
     const scheduleMeasure = () => {
       window.cancelAnimationFrame(frame);
@@ -327,6 +342,37 @@ export function AppShell({
     window.requestAnimationFrame(() => {
       quickPanelRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
     });
+  }
+
+  function startQuickDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (event.target instanceof Element && event.target.closest("button")) return;
+    const panel = quickPanelRef.current;
+    const main = editorMainRef.current;
+    if (!panel || !main) return;
+    const panelRect = panel.getBoundingClientRect();
+    const mainRect = main.getBoundingClientRect();
+    quickDragRef.current = {
+      pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      left: panelRect.left - mainRect.left, top: panelRect.top - mainRect.top,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function moveQuickDrag(event: ReactPointerEvent<HTMLElement>) {
+    const drag = quickDragRef.current;
+    const main = editorMainRef.current;
+    if (!drag || !main || drag.pointerId !== event.pointerId) return;
+    const maxLeft = Math.max(8, main.getBoundingClientRect().width - quickSize.width - 8);
+    setQuickPosition({
+      left: Math.min(maxLeft, Math.max(8, drag.left + event.clientX - drag.x)),
+      top: Math.min(quickSize.maxTop, Math.max(8, drag.top + event.clientY - drag.y)),
+    });
+  }
+
+  function stopQuickDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (quickDragRef.current?.pointerId !== event.pointerId) return;
+    quickDragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
   }
 
   return (
@@ -450,9 +496,9 @@ export function AppShell({
           <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
             {quickAvailable && quickInspector ? (
-              quickOpen && quickSize.height >= 150 ? (
-                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height }}>
-                  <header className={editorShell.quickHeader}>
+              quickOpen && quickSize.height >= 240 && quickSize.width >= 400 ? (
+                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? 8, left: quickPosition?.left, right: quickPosition ? undefined : 8 }}>
+                  <header className={editorShell.quickHeader} onPointerDown={startQuickDrag} onPointerMove={moveQuickDrag} onPointerUp={stopQuickDrag} onPointerCancel={stopQuickDrag} title="拖动以调整浮卡位置">
                     <strong>{quickInspectorLabel ?? "镜头快速编辑"}</strong>
                     <div>
                       <button onClick={() => setDetailsOpen(true)} type="button">更多剪辑</button>
@@ -463,8 +509,8 @@ export function AppShell({
                 </section>
               ) : (
                 <div className={editorShell.quickCollapsed} style={{ width: quickSize.width }}>
-                  <span>{quickInspectorLabel ?? "镜头编辑"}{quickSize.height < 150 ? " · 空间不足" : ""}</span>
-                  {quickSize.height < 150 ? <button onClick={() => setDetailsOpen(true)} type="button">查看详情</button>
+                  <span>{quickInspectorLabel ?? "镜头编辑"}{quickSize.height < 240 || quickSize.width < 400 ? " · 空间不足" : ""}</span>
+                  {quickSize.height < 240 || quickSize.width < 400 ? <button onClick={() => setDetailsOpen(true)} type="button">查看详情</button>
                     : <button onClick={expandQuick} ref={quickExpandRef} type="button">展开</button>}
                 </div>
               )

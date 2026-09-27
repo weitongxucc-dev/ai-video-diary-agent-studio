@@ -26,16 +26,18 @@ it("keeps a clip draft across categories and previews only typed changes", () =>
   fireEvent.click(preview);
   expect(onPreview).toHaveBeenCalledWith({ operation_type:"TrimClip", clip_id:"clip-1", source_start_seconds:1.5 });
   fireEvent.click(screen.getByRole("button", { name:"画面" }));
+  fireEvent.change(screen.getByRole("slider", { name:"镜头 1 快速裁切水平位置" }), { target:{ value:"0.7" } });
+  expect(screen.getByRole("slider", { name:"镜头 1 快速裁切水平位置" })).toHaveValue("0.7");
   fireEvent.change(screen.getByRole("combobox", { name:"镜头 1 快速画面方式" }), { target:{ value:"fit" } });
   fireEvent.click(screen.getByRole("button", { name:"预览修改" }));
-  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.5, crop_y:.5 });
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.7, crop_y:.5 });
   fireEvent.click(screen.getByRole("button", { name:"裁剪" }));
   expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toHaveValue(1.5);
   fireEvent.click(screen.getByRole("button", { name:"换素材" }));
   fireEvent.click(screen.getByRole("button", { name:"查看候选" }));
   expect(onOpenDetails).toHaveBeenCalledTimes(1);
   expect(onPreview).toHaveBeenCalledTimes(2);
-  expect(onDraftChange).toHaveBeenCalledTimes(2);
+  expect(onDraftChange).toHaveBeenCalledTimes(3);
 });
 
 it("opens the full editor with the same crop draft", () => {
