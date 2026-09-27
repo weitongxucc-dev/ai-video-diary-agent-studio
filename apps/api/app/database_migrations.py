@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 9
+PRODUCTION_SCHEMA_VERSION = 10
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -523,6 +523,28 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         CREATE INDEX idx_device_request_events_request
             ON device_request_events(request_id, id);
+        """,
+    ),
+    (
+        10,
+        """
+        ALTER TABLE material_ingestion_files ADD COLUMN provisional_revision TEXT;
+
+        CREATE TABLE material_analysis_checkpoints (
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            provisional_revision TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            stage_input_digest TEXT NOT NULL,
+            result_json TEXT,
+            result_ref TEXT,
+            completed_at TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, asset_id, provisional_revision, source_sha256, unit_key),
+            CHECK (result_json IS NOT NULL OR result_ref IS NOT NULL)
+        );
+        CREATE INDEX idx_material_analysis_checkpoint_source
+            ON material_analysis_checkpoints(workspace_id, asset_id, source_sha256, unit_key);
         """,
     ),
 )

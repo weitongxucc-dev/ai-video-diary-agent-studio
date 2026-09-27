@@ -127,8 +127,21 @@ def _pid_alive(pid):
     return True
 
 
+def _material_ingestion_table(conn):
+    # ProductionRepository creates this legacy table before applying migrations.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS material_ingestion_files (
+            workspace_id TEXT NOT NULL, file_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+            ctime_ns INTEGER NOT NULL DEFAULT 0, inode INTEGER NOT NULL DEFAULT 0,
+            observed_at REAL NOT NULL, completed_digest TEXT, attempted_digest TEXT,
+            state TEXT NOT NULL, PRIMARY KEY (workspace_id, file_path))"""
+    )
+
+
 def _db(path):
     with sqlite3.connect(path) as conn:
+        _material_ingestion_table(conn)
         apply_production_migrations(conn)
         assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == PRODUCTION_SCHEMA_VERSION
 
@@ -456,9 +469,10 @@ def test_same_database_authorization_rechecked_before_execution_and_checkpoint(t
                             checkpoint_write=lambda conn, current: None, cancelled=True)
 
 
-def test_v8_to_v9_preserves_requests_and_rebuilds_index(tmp_path):
+def test_v8_to_v10_preserves_requests_and_rebuilds_index(tmp_path):
     database = tmp_path / "old.sqlite"
     with sqlite3.connect(database) as conn:
+        _material_ingestion_table(conn)
         conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)")
         for version, sql in _MIGRATIONS:
             if version == 9:
@@ -482,8 +496,65 @@ def test_v8_to_v9_preserves_requests_and_rebuilds_index(tmp_path):
         assert (row["member_id"], row["first_ready_at_utc"], row["eligible_wait_seconds"],
                 row["attempt_number"], row["state"]) == (
                     "member-a", "2026-09-01T00:00:00+00:00", 91, 1, "blocked")
-        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 9
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_device_work_pending'").fetchone()
+
+
+def test_v10_material_checkpoint_upgrade_is_idempotent_and_transactional(tmp_path):
+    database = tmp_path / "production-v9.sqlite"
+    with sqlite3.connect(database) as conn:
+        _material_ingestion_table(conn)
+        conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+        for version, sql in _MIGRATIONS:
+            if version == 10:
+                break
+            conn.executescript(sql)
+            conn.execute("INSERT INTO production_schema_migrations(version) VALUES (?)", (version,))
+        conn.execute(
+            """INSERT INTO material_ingestion_files
+            (workspace_id, file_path, size_bytes, mtime_ns, observed_at, attempted_digest, state)
+            VALUES ('private-a', '/library/a.mp4', 10, 123, 1, 'old-sha', 'waiting')"""
+        )
+        conn.commit()
+        apply_production_migrations(conn)
+        assert conn.execute("SELECT attempted_digest, provisional_revision FROM material_ingestion_files").fetchone() == (
+            "old-sha", None)
+        conn.execute("UPDATE material_ingestion_files SET provisional_revision='stat-v1' WHERE file_path='/library/a.mp4'")
+        checkpoint = ("private-a", "asset-1", "old-sha", "stat-v1", "hash:v1:" + "a" * 64,
+                      "a" * 64, None, "material_ingestion_files:old-sha", "2026-09-27T00:00:00+00:00")
+        conn.execute("""INSERT INTO material_analysis_checkpoints
+            (workspace_id, asset_id, source_sha256, provisional_revision, unit_key,
+             stage_input_digest, result_json, result_ref, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", checkpoint)
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("""INSERT INTO material_analysis_checkpoints
+                (workspace_id, asset_id, source_sha256, provisional_revision, unit_key,
+                 stage_input_digest, result_json, result_ref, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", checkpoint)
+        conn.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("""INSERT INTO material_analysis_checkpoints
+                (workspace_id, asset_id, source_sha256, provisional_revision, unit_key,
+                 stage_input_digest, completed_at)
+                VALUES ('private-a', 'asset-1', 'old-sha', 'stat-v1', 'empty-result',
+                        'empty', '2026-09-27T00:00:00+00:00')""")
+        conn.rollback()
+        apply_production_migrations(conn)
+        assert conn.execute("SELECT count(*) FROM material_analysis_checkpoints").fetchone()[0] == 1
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE material_ingestion_files SET attempted_digest='uncommitted' WHERE file_path='/library/a.mp4'")
+        conn.execute("""INSERT INTO material_analysis_checkpoints
+            (workspace_id, asset_id, source_sha256, provisional_revision, unit_key,
+             stage_input_digest, result_ref, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("private-a", "asset-1", "uncommitted", "stat-v1",
+             material_stage_unit_key("probe:v1", "b" * 64), "b" * 64,
+             "temporary", "2026-09-27T00:01:00+00:00"))
+        conn.rollback()
+        assert conn.execute("SELECT attempted_digest FROM material_ingestion_files").fetchone()[0] == "old-sha"
+        assert conn.execute("SELECT count(*) FROM material_analysis_checkpoints").fetchone()[0] == 1
 
 
 def test_material_stage_digest_is_in_idempotency_key(tmp_path):
