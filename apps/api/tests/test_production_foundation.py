@@ -14,7 +14,11 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.config import Settings
-from app.database_migrations import _MIGRATIONS, apply_production_migrations
+from app.database_migrations import (
+    PRODUCTION_SCHEMA_VERSION,
+    _MIGRATIONS,
+    apply_production_migrations,
+)
 from app.model_runtime import ModelCatalog
 from app.production import (
     ArtifactRecord,
@@ -665,7 +669,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -919,7 +923,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     with sqlite3.connect(production.database_path) as conn:
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
 def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
@@ -1221,7 +1225,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -2330,7 +2334,7 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path):
         ).fetchall()
 
     assert row == ("person-render-v5", None, str(tmp_path / "person-render.mp4"))
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+    assert versions == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
