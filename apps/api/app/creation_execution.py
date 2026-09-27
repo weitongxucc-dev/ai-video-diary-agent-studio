@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
@@ -18,6 +20,128 @@ from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 
 KIND = "creation_task_execution"
 STAGES = ("narration", "montage_plan", "render")
+DEVICE_OWNER_TYPE = "creation_job"
+
+
+@dataclass(frozen=True)
+class CreationExecutionActor:
+    workspace_id: str
+    member_id: str
+
+
+class CreationJobOwnerVerifier:
+    """Validate a persisted JobRun before it can become a device work unit."""
+
+    def __init__(self, repository) -> None:
+        self.repository = repository
+
+    def _facts(self, conn: sqlite3.Connection, workspace_id: str, job_id: str):
+        row = conn.execute(
+            "SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)
+        ).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        job = self.repository._job_run_from_row(row)
+        task_row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
+            (workspace_id, job.task_id),
+        ).fetchone()
+        event_row = conn.execute(
+            "SELECT payload_json FROM task_events WHERE workspace_id=? AND id=? AND task_id=? AND job_id=?",
+            (workspace_id, f"event_{job.id}_start", job.task_id, job.id),
+        ).fetchone()
+        if task_row is None or event_row is None:
+            raise KeyError("创作任务或开始记录不存在")
+        task = self.repository._creation_task_from_payload(json.loads(task_row["payload"]))
+        event = json.loads(event_row["payload_json"])
+        script_row = conn.execute(
+            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=? AND task_id=?",
+            (workspace_id, event.get("script_id"), job.task_id),
+        ).fetchone()
+        plan_row = conn.execute(
+            "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+            (workspace_id, task.plan_id),
+        ).fetchone()
+        if script_row is None or plan_row is None:
+            raise KeyError("已确认文案或方案不存在")
+        script = self.repository._creation_task_script_from_payload(json.loads(script_row["payload"]))
+        plan = self.repository._creation_plan_from_payload(json.loads(plan_row["payload"]))
+        return job, task, event, script, plan
+
+    def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
+        if (not isinstance(actor, CreationExecutionActor) or not actor.member_id
+                or actor.workspace_id != intent.workspace_id or intent.owner_type != DEVICE_OWNER_TYPE):
+            raise PermissionError("制作执行身份未知或工作区不匹配")
+        with self.repository._connect() as conn:
+            job, task, event, script, plan = self._facts(conn, intent.workspace_id, intent.owner_id)
+            verdict = self._check_facts(job, task, event, script, plan, intent.unit_key, actor.member_id)
+        if verdict != "ready":
+            raise PermissionError(f"制作单元当前不可提交：{verdict}")
+        if intent.input_digest != job.input_digest:
+            raise PermissionError("制作输入摘要不匹配")
+        return VerifiedWork(
+            workspace_id=job.workspace_id, owner_type=DEVICE_OWNER_TYPE,
+            owner_id=job.id, input_digest=job.input_digest, unit_key=intent.unit_key,
+            member_id=actor.member_id, work_class="normal_make",
+            resources={"kind": f"creation_{intent.unit_key}"},
+        )
+
+    @staticmethod
+    def _check_facts(job, task, event, script, plan, stage: str, member_id: str | None) -> str:
+        if (not member_id or event.get("member_id") != member_id
+                or job.workspace_id != task.workspace_id or script.workspace_id != job.workspace_id
+                or plan.workspace_id != job.workspace_id or script.task_id != job.task_id):
+            return "unauthorized"
+        if (job.kind != KIND or stage not in STAGES or job.status not in {"queued", "interrupted", "running"}
+                or event.get("input_digest") != job.input_digest
+                or event.get("script_id") != script.id or event.get("plan_id") != task.plan_id
+                or task.confirmed_script_id != script.id or script.selection_status != "confirmed"
+                or plan.creation_task_id != task.id or plan.status != "confirmed"
+                or plan.selected_voice is None or revision_digest(script, plan) != job.input_digest):
+            return "stale"
+        return "ready"
+
+    def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
+        if (request.owner_type != DEVICE_OWNER_TYPE or request.work_class != "normal_make"
+                or request.source_refs or not request.member_id):
+            return "unauthorized"
+        try:
+            job, task, event, script, plan = self._facts(conn, request.workspace_id, request.owner_id)
+        except KeyError:
+            return "stale"
+        if request.input_digest != job.input_digest:
+            return "stale"
+        verdict = self._check_facts(job, task, event, script, plan, request.unit_key, request.member_id)
+        # No creation stage has a grant-bound model/process executor yet.
+        # Keep the request visible and blocked until every nested heavy call
+        # has a checked execution path; a caller cannot opt into unsafe grants.
+        return "dependency" if verdict == "ready" else verdict
+
+    def can_manage(self, request: WorkRequest, actor: object) -> bool:
+        return isinstance(actor, CreationExecutionActor) and (actor.workspace_id, actor.member_id) == (request.workspace_id, request.member_id)
+
+    def can_wake(self, request: WorkRequest, actor: object) -> bool:
+        return False
+
+    def can_view_detail(self, request: WorkRequest, actor: object) -> bool:
+        return self.can_manage(request, actor)
+
+    def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection) -> str:
+        raise PermissionError("请通过已确认任务的继续制作入口重试")
+
+
+def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceScheduler,
+                          job: JobRun, actor: CreationExecutionActor) -> str | None:
+    """Queue exactly the next persisted stage; repeated submissions reuse one request."""
+    if job.status not in {"queued", "interrupted"}:
+        return None
+    task = execution.repository.get_creation_task(job.workspace_id, job.task_id)
+    stage = next((item for item in STAGES if not execution._stage_has_matching_output(job, task, item)), None)
+    if stage is None:
+        return None
+    intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
+                              job.input_digest, stage, SchedulePolicy())
+    return scheduler.submit(intent, actor).id
 
 
 class ExecutionStartRequest(BaseModel):
@@ -73,7 +197,8 @@ class CreationExecution:
             raise ValueError("文案或制作要求已变化，请重新检查并确认")
         return script, plan
 
-    def start(self, workspace_id: str, task_id: str, script_id: str, digest: str) -> JobRun:
+    def start(self, workspace_id: str, task_id: str, script_id: str, digest: str,
+              *, member_id: str | None = None) -> JobRun:
         task = self.repository.get_creation_task(workspace_id, task_id)
         _, plan = self.validate_input(workspace_id, task, script_id, digest)
         if plan.selected_voice is None:
@@ -97,10 +222,15 @@ class CreationExecution:
                     task_id=task_id,
                     job_id=run.id,
                     event_type="creation_execution_started",
-                    payload={"script_id": script_id, "plan_id": task.plan_id, "input_digest": digest},
+                    payload={"script_id": script_id, "plan_id": task.plan_id, "input_digest": digest,
+                             **({"member_id": member_id} if member_id is not None else {})},
                     created_at=run.created_at,
                 )
             )
+        if member_id is not None:
+            start_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
+            if start_event.payload.get("member_id") != member_id:
+                raise PermissionError("已有制作任务的创建者身份与当前成员不同")
         return run
 
     def _has_start_event(self, workspace_id: str, job_id: str) -> bool:
@@ -110,15 +240,17 @@ class CreationExecution:
             return False
         return True
 
-    def retry(self, workspace_id: str, task_id: str) -> JobRun:
+    def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None) -> JobRun:
         latest = self.latest(workspace_id, task_id)
         if latest is None:
             raise ValueError("请先明确开始制作")
+        event = self.repository.get_task_event(workspace_id, f"event_{latest.id}_start")
+        if member_id is not None and event.payload.get("member_id") != member_id:
+            raise PermissionError("当前成员不能继续其他成员创建的制作任务")
         if latest.status in {"queued", "running", "succeeded"}:
             return latest
         if latest.status == "interrupted":
             return latest
-        event = self.repository.get_task_event(workspace_id, f"event_{latest.id}_start")
         script_id = str(event.payload["script_id"])
         task = self.repository.get_creation_task(workspace_id, task_id)
         self.validate_input(workspace_id, task, script_id, latest.input_digest)
@@ -147,6 +279,10 @@ class CreationExecution:
                     created_at=run.created_at,
                 )
             )
+        if member_id is not None:
+            resume_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
+            if resume_event.payload.get("member_id") != member_id:
+                raise PermissionError("已有继续任务的创建者身份与当前成员不同")
         return run
 
     def jobs(self, workspace_id: str, task_id: str) -> list[JobRun]:
@@ -166,10 +302,14 @@ class CreationExecution:
         finally:
             reset_workspace_context(token)
 
-    def cancel(self, workspace_id: str, task_id: str) -> JobRun:
+    def cancel(self, workspace_id: str, task_id: str, *, member_id: str | None = None) -> JobRun:
         job = self.latest(workspace_id, task_id)
         if job is None:
             raise ValueError("尚未开始制作")
+        if member_id is not None:
+            event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+            if event.payload.get("member_id") != member_id:
+                raise PermissionError("当前成员不能停止其他成员创建的制作任务")
         return self.runtime.cancel(
             workspace_id, job.id,
             impact="当前阶段在下一个安全边界停止；此前有效产物保留。",

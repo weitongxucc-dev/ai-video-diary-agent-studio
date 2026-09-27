@@ -72,7 +72,10 @@ from app.config import (
     runtime_env_file_path,
 )
 from app.content_templates import list_content_templates
-from app.creation_execution import CreationExecution, ExecutionStartRequest, revision_digest
+from app.creation_execution import (
+    CreationExecution, CreationExecutionActor, ExecutionStartRequest,
+    revision_digest, submit_creation_stage,
+)
 from app.creator_profile import (
     get_or_create_profile,
     upsert_creator_profile,
@@ -11211,7 +11214,7 @@ async def is_setup():
 def _reload_runtime_dependencies() -> None:
     global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
 
-    if material_execution_mode == "scheduled":
+    if material_execution_mode == "scheduled" or creation_execution_mode == "scheduled":
         raise RuntimeError("整机调度的安全重载尚未接通，现有驱动保持原状态。")
     _stop_execution_worker()
     _stop_material_ingestion()
@@ -12651,8 +12654,54 @@ def _new_creation_execution() -> CreationExecution:
 def _recover_creation_executions() -> None:
     # The repository owns the cross-workspace pending-job query. A workspace is
     # taken only from each persisted JobRun, never from the current login.
+    if creation_execution_mode == "scheduled":
+        runtime = _scheduled_creation_runtime()
+        for job in production_repo.list_pending_creation_executions():
+            event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
+            member_id = event.payload.get("member_id")
+            if job.workspace_id != LEGACY_WORKSPACE_ID or member_id != "local-owner":
+                raise RuntimeError("旧制作作业缺少可复核的本机成员身份，不能自动申请设备许可")
+            submit_creation_stage(creation_execution, runtime.scheduler, job,
+                                  CreationExecutionActor(job.workspace_id, member_id))
+        runtime.wake()
+        return
     for job in production_repo.list_pending_creation_executions():
         execution_worker.submit(creation_execution.execute, job.workspace_id, job.id)
+
+
+def _scheduled_creation_runtime():
+    runtime = device_runtime
+    if (runtime is None or runtime.last_error is not None
+            or "creation_job" not in runtime.registrations):
+        raise HTTPException(status_code=503, detail="整机制作许可尚未就绪，当前任务没有启动")
+    return runtime
+
+
+def _scheduled_creation_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
+    # The current auth service cannot recheck remote membership inside the
+    # scheduler's SQLite admission transaction. Do not mint a durable member
+    # identity from a request whose later authority cannot be verified.
+    if auth_context.enabled:
+        raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
+    if workspace_id != LEGACY_WORKSPACE_ID:
+        raise HTTPException(status_code=403, detail="本机制作身份与工作区不匹配")
+    return CreationExecutionActor(workspace_id, "local-owner")
+
+
+_EXECUTION_WAITING_TEXT = {
+    "dependency": "等待前一步或受许可执行能力就绪。",
+    "owner_unknown": "当前成员或任务归属暂不能核实。",
+    "authorization_lost": "当前任务授权已变化，请核对权限。",
+    "input_stale": "文案或制作要求已变化，请重新确认。",
+    "scheduled_time": "等待指定开始时间。",
+    "outside_window": "当前不在选择的执行时段内。",
+    "activity_unknown": "暂不能确认设备是否空闲。",
+    "device_active": "设备有人正在播放、录音或编辑。",
+    "resource_unknown": "暂不能确认设备资源是否足够。",
+    "resource_busy": "设备资源正在处理其他工作。",
+    "retry_not_before": "等待下次可重试时间。",
+    "recovered": "设备恢复后等待重新核验。",
+}
 
 
 def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, object]:
@@ -12672,10 +12721,36 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
         production_repo.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
         if task.current_timeline_version_id else []
     )
+    current_stage = None
+    if job and events:
+        latest_stage_event = events[-1]
+        if (latest_stage_event["stage"] in {"narration", "montage_plan", "render", "cover"}
+                and latest_stage_event["status"] in {"running", "failed", "pending"}):
+            current_stage = latest_stage_event["stage"]
+    waiting_reason = None
+    status_updated_at = job.updated_at.isoformat() if job else None
+    if (job and job.status in {"queued", "interrupted"}
+            and creation_execution_mode == "scheduled" and workspace_id == LEGACY_WORKSPACE_ID):
+        start_event = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
+        if start_event.payload.get("member_id") == "local-owner":
+            with production_repo._connect() as conn:
+                row = conn.execute(
+                    "SELECT wait_reason, updated_at FROM device_work_requests "
+                    "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
+                    "AND input_digest=? ORDER BY created_at DESC LIMIT 1",
+                    (workspace_id, "local-owner", job.id, job.input_digest),
+                ).fetchone()
+            if row is not None:
+                waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
+                if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
+                    status_updated_at = row["updated_at"]
     return {
         "task_id": task_id,
         "job": asdict(job) if job else None,
         "stages": events,
+        "current_stage": current_stage,
+        "waiting_reason": waiting_reason,
+        "status_updated_at": status_updated_at,
         "video_ready": _creation_render_is_valid(workspace_id, task_id),
         "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
         "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
@@ -12723,13 +12798,22 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
     workspace_id = current_workspace_id(request)
     if not payload.requirements_confirmed:
         raise HTTPException(status_code=409, detail="请先确认实际文案与本次制作要求")
+    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
+    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
     try:
-        job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest)
+        job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest,
+                                       member_id=actor.member_id if actor else None)
+        if runtime is not None and actor is not None:
+            submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="创作任务或确认对象不存在") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if job.status in {"queued", "interrupted"}:
+    if runtime is not None:
+        runtime.wake()
+    elif job.status in {"queued", "interrupted"}:
         execution_worker.submit(creation_execution.execute, workspace_id, job.id)
     return _creation_execution_status(workspace_id, task_id)
 
@@ -12738,11 +12822,20 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
 def resume_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
+    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
+    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
     try:
-        job = creation_execution.retry(workspace_id, task_id)
+        job = creation_execution.retry(workspace_id, task_id,
+                                       member_id=actor.member_id if actor else None)
+        if runtime is not None and actor is not None:
+            submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if job.status in {"queued", "interrupted"}:
+    if runtime is not None:
+        runtime.wake()
+    elif job.status in {"queued", "interrupted"}:
         execution_worker.submit(creation_execution.execute, workspace_id, job.id)
     return _creation_execution_status(workspace_id, task_id)
 
@@ -12751,10 +12844,24 @@ def resume_creation_execution(task_id: str, request: Request) -> dict[str, objec
 def cancel_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
+    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
+    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
     try:
-        creation_execution.cancel(workspace_id, task_id)
+        job = creation_execution.cancel(workspace_id, task_id,
+                                        member_id=actor.member_id if actor else None)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if runtime is not None and actor is not None:
+        with production_repo._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+                "AND owner_id=? AND state IN ('waiting', 'blocked', 'granted')",
+                (workspace_id, job.id),
+            ).fetchall()
+        for row in rows:
+            runtime.scheduler.cancel(row["id"], actor)
     return _creation_execution_status(workspace_id, task_id)
 
 
@@ -12762,6 +12869,7 @@ creation_execution = _new_creation_execution()
 execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
 material_ingestion = None
 material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
+creation_execution_mode: Literal["legacy", "scheduled"] = "legacy"
 device_runtime = None
 
 
@@ -12842,6 +12950,8 @@ def _stop_material_ingestion() -> None:
 
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
+    if creation_execution_mode == "scheduled":
+        raise RuntimeError("制作单元的统一许可启动尚未接通，不能同时启动旧素材与制作线程。")
     _start_execution_worker()
     try:
         _start_material_ingestion()

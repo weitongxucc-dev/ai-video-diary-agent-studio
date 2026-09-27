@@ -14,7 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.creation_execution import CreationExecution, revision_digest
+from app.creation_execution import (
+    CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier,
+    revision_digest, submit_creation_stage,
+)
+from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask, ProductionRepository
 from app.artifact_store import ArtifactStore
 from app.config import Settings
@@ -80,6 +84,35 @@ def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
         run_render=actions.get("render", lambda _w, _t: None),
         render_is_valid=render_ready,
     )
+
+
+def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tmp_path):
+    repo, task_id, script_id, digest = _seed(tmp_path)
+    execution = _execution(repo)
+    actor = CreationExecutionActor("workspace_a", "member-a")
+    job = execution.start(actor.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
+    owner = CreationJobOwnerVerifier(repo)
+    probe = SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+                            released=lambda _grant: True)
+    processes = SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
+                                children_released=lambda _children: True,
+                                recovery_state=lambda _holder, _children: "released")
+    scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock",
+                                owners=owner, resources=probe, processes=processes)
+    first = submit_creation_stage(execution, scheduler, job, actor)
+    second = submit_creation_stage(execution, scheduler, job, actor)
+    assert first == second
+    assert scheduler.pick_and_grant() is None
+    assert scheduler.view_for(first, actor)["wait_reason"] == "dependency"
+    with pytest.raises(PermissionError, match="身份"):
+        submit_creation_stage(execution, scheduler, job, CreationExecutionActor("workspace_b", "member-a"))
+    with pytest.raises(PermissionError, match="身份"):
+        submit_creation_stage(execution, scheduler, job, CreationExecutionActor("workspace_a", ""))
+    with pytest.raises(PermissionError, match="不可提交"):
+        submit_creation_stage(execution, scheduler, job, CreationExecutionActor("workspace_a", "member-b"))
+    with pytest.raises(PermissionError, match="创建者"):
+        execution.start("workspace_a", task_id, script_id, digest, member_id="member-b")
+    scheduler.close()
 
 
 def test_draft_and_wrong_workspace_cannot_start(tmp_path, monkeypatch):
@@ -192,8 +225,69 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     second = client.post(base + "/start", json=payload)
     assert first.status_code == second.status_code == 202
     assert first.json()["job"]["id"] == second.json()["job"]["id"]
+    assert first.json()["current_stage"] is None
+    assert first.json()["waiting_reason"] is None
+    assert first.json()["status_updated_at"] is not None
     assert len(repo.list_job_runs("local", task_id)) == 1
     assert len(scheduled) == 2  # atomic JobRun claim ensures only one worker executes
+
+
+def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait(tmp_path, monkeypatch):
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    execution = _execution(repo)
+    owner = CreationJobOwnerVerifier(repo)
+    scheduler = DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock", owners=owner,
+        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+                                  released=lambda _grant: True),
+        processes=SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
+                                  children_released=lambda _children: True,
+                                  recovery_state=lambda _holder, _children: "released"),
+    )
+    wake_calls = []
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "creation_execution", execution)
+    monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
+    monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
+        scheduler=scheduler, registrations={"creation_job": owner}, last_error=None,
+        wake=lambda: wake_calls.append(True),
+    ))
+    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
+        submit=lambda *_args: pytest.fail("scheduled request must not enter legacy worker"),
+    ))
+    client = TestClient(main_module.app)
+    route = f"/api/creation-tasks/{task_id}/execution"
+    payload = {"script_id": script_id, "input_digest": digest, "requirements_confirmed": True}
+    first = client.post(route + "/start", json=payload)
+    second = client.post(route + "/start", json=payload)
+    assert first.status_code == second.status_code == 202
+    assert first.json()["job"]["id"] == second.json()["job"]["id"]
+    assert first.json()["current_stage"] is None
+    assert first.json()["waiting_reason"] is None
+    assert first.json()["status_updated_at"] is not None
+    with repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 1
+    assert len(wake_calls) == 2
+    main_module._recover_creation_executions()
+    with repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 1
+    assert scheduler.pick_and_grant() is None
+    waiting = client.get(route)
+    assert waiting.status_code == 200
+    assert waiting.json()["waiting_reason"] == "等待前一步或受许可执行能力就绪。"
+    assert waiting.json()["current_stage"] is None
+    stopped = client.post(route + "/cancel")
+    assert stopped.status_code == 200
+    assert stopped.json()["waiting_reason"] is None
+    with repo._connect() as conn:
+        assert conn.execute("SELECT state FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == "cancelled"
+    resumed = client.post(route + "/resume")
+    assert resumed.status_code == 202
+    assert resumed.json()["job"]["id"] != first.json()["job"]["id"]
+    assert resumed.json()["job"]["status"] == "queued"
+    with repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 2
+    scheduler.close()
 
 
 def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypatch):
