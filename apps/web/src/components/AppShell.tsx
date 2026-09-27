@@ -221,7 +221,6 @@ export function AppShell({
   const quickPanelRef = useRef<HTMLElement>(null);
   const quickDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
   const quickManualRef = useRef(false);
-  const quickMainWidthRef = useRef<number | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -235,16 +234,12 @@ export function AppShell({
     const main = editorMainRef.current;
     if (!quickAvailable || !main) return;
     quickManualRef.current = false;
-    quickMainWidthRef.current = null;
     setQuickPosition(null);
     let frame = 0;
     const measure = () => {
       const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
       const player = main.querySelector<HTMLElement>("[data-editor-player]");
       const mainRect = main.getBoundingClientRect();
-      const mainWidth = Math.round(mainRect.width);
-      if (quickMainWidthRef.current !== null && Math.abs(mainWidth - quickMainWidthRef.current) > 1) quickManualRef.current = false;
-      quickMainWidthRef.current = mainWidth;
       const anchorTop = transport?.getBoundingClientRect().top ?? player?.getBoundingClientRect().bottom ?? mainRect.bottom;
       const available = Math.floor(anchorTop - mainRect.top - 16);
       const height = Math.max(0, Math.min(400, available));
