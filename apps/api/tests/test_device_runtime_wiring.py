@@ -7,6 +7,8 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app import main as main_module
+from app.device_runtime import RuntimeUnavailable
+from app.production import ProductionRepository
 
 
 def _request() -> Request:
@@ -96,3 +98,55 @@ def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pyt
     assert error.value.status_code == 503
     service.scan_once.assert_not_called()
     repository.scan_library.assert_not_called()
+
+
+def test_scheduled_mode_cannot_start_legacy_worker_or_stop_it_during_unwired_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(main_module, "material_execution_mode", "scheduled")
+    new_legacy_service = Mock()
+    stop_execution = Mock()
+    stop_ingestion = Mock()
+    monkeypatch.setattr(main_module, "_new_material_ingestion", new_legacy_service)
+    monkeypatch.setattr(main_module, "_stop_execution_worker", stop_execution)
+    monkeypatch.setattr(main_module, "_stop_material_ingestion", stop_ingestion)
+
+    with pytest.raises(RuntimeError, match="统一启动尚未接通"):
+        main_module._start_material_ingestion()
+    with pytest.raises(RuntimeError, match="安全重载尚未接通"):
+        main_module._reload_runtime_dependencies()
+    new_legacy_service.assert_not_called()
+    stop_execution.assert_not_called()
+    stop_ingestion.assert_not_called()
+
+
+def test_hash_runtime_candidate_binds_one_repository_without_starting(tmp_path) -> None:
+    repository = ProductionRepository(tmp_path / "production.sqlite", tmp_path / "library")
+    runtime, service = main_module._build_scheduled_material_components(
+        repository=repository,
+        device_lock_path=tmp_path / "device.lock",
+        device_access=Mock(),
+        resources=Mock(),
+        processes=Mock(),
+    )
+
+    assert runtime.running is False
+    assert service.repository is repository
+    assert service.execution_mode == "scheduled"
+    assert service.scheduler is runtime.scheduler
+    assert runtime.scheduler.database_path == repository.database_path.resolve()
+    assert set(runtime.registrations) == {"material_asset"}
+    assert runtime.registrations["material_asset"].executor._service is service
+
+
+@pytest.mark.parametrize("missing", ["device_access", "resources", "processes"])
+def test_hash_runtime_candidate_requires_explicit_host_adapters(tmp_path, missing) -> None:
+    repository = ProductionRepository(tmp_path / "production.sqlite", tmp_path / "library")
+    adapters = {"device_access": Mock(), "resources": Mock(), "processes": Mock()}
+    adapters[missing] = None
+    with pytest.raises(RuntimeUnavailable, match="探针|权限"):
+        main_module._build_scheduled_material_components(
+            repository=repository,
+            device_lock_path=tmp_path / "device.lock",
+            **adapters,
+        )

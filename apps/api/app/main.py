@@ -11099,6 +11099,8 @@ async def is_setup():
 def _reload_runtime_dependencies() -> None:
     global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
 
+    if material_execution_mode == "scheduled":
+        raise RuntimeError("整机调度的安全重载尚未接通，现有驱动保持原状态。")
     _stop_execution_worker()
     _stop_material_ingestion()
 
@@ -12651,6 +12653,38 @@ material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
 device_runtime = None
 
 
+def _build_scheduled_material_components(
+    *,
+    repository: ProductionRepository,
+    device_lock_path: str | Path,
+    device_access,
+    resources,
+    processes,
+):
+    """Compose one hash-only runtime candidate without starting production work."""
+    from app.device_runtime import OwnerRegistration, build_device_runtime
+    from app.material_ingestion import (
+        MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
+    )
+
+    executor = MaterialHashUnitExecutor()
+    runtime = build_device_runtime(
+        database_path=repository.database_path,
+        device_lock_path=device_lock_path,
+        device_access=device_access,
+        registrations={"material_asset": OwnerRegistration(MaterialHashOwnerVerifier(repository), executor)},
+        resources=resources,
+        processes=processes,
+        activity_source_reliable=False,
+    )
+    service = MaterialIngestionService(
+        repository, execution_mode="scheduled", scheduler=runtime.scheduler,
+        scan_interval_seconds=60, stable_seconds=10,
+    )
+    executor.bind(service)
+    return runtime, service
+
+
 def _new_material_ingestion():
     from app.material_ingestion import MaterialIngestionService
     return MaterialIngestionService(production_repo, scan_interval_seconds=60, stable_seconds=10)
@@ -12672,6 +12706,8 @@ def _stop_execution_worker() -> None:
 
 def _start_material_ingestion() -> None:
     global material_ingestion
+    if material_execution_mode == "scheduled":
+        raise RuntimeError("整机调度的统一启动尚未接通，不能启动旧素材线程。")
     if material_ingestion is not None:
         material_ingestion.start()
         return
