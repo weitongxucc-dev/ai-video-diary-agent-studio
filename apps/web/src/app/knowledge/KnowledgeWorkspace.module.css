@@ -1,0 +1,60 @@
+.page { min-width: 0; padding: 16px 20px 24px; color: var(--text-1); }
+.exampleBanner { margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
+.top { display: flex; align-items: stretch; gap: 9px; }
+.categories { display: grid; flex: 1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; min-width: 0; }
+.category { display: grid; align-content: center; justify-items: start; gap: 3px; min-width: 0; min-height: 86px; padding: 9px 11px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+.category:hover, .category[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); }
+.categoryIcon { color: var(--accent); }
+.category strong { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.category small { color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.actions { display: flex; align-items: flex-end; }
+.actions a { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 7px; color: var(--text-1); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.actions a:hover { background: var(--surface-2); }
+.searchBar { display: flex; align-items: center; gap: 7px; margin: 10px 0; }
+.searchBar label { display: flex; flex: 1; min-width: 0; min-height: 36px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-2); }
+.searchBar input { width: 100%; min-width: 0; height: 34px; border: 0; outline: 0; background: transparent; color: var(--text-1); font: inherit; font-size: 13px; }
+.searchBar button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.searchBar button[aria-pressed="true"] { color: var(--accent); }
+.searchBar button:disabled { cursor: default; opacity: .6; }
+.error { display: flex; gap: 8px; margin: 10px 0; padding: 10px; border: 1px solid var(--border-1); border-radius: 7px; font-size: 13px; }
+.error strong { font-weight: 500; }
+.error p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; }
+.columns { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(225px, .8fr); gap: 10px; align-items: start; }
+.card { min-width: 0; min-height: 220px; padding: 13px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
+.cardHeading h2 { margin: 0 0 2px; font-size: 14px; font-weight: 500; }
+.cardHeading small { color: var(--text-2); font-size: 11px; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.cover { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 190px; padding: 7px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+.cover:hover, .cover:focus-visible { border-color: var(--accent); outline: 0; }
+.coverArt { display: flex; min-height: 100px; flex-direction: column; align-items: flex-start; justify-content: space-between; padding: 10px; border-radius: 5px; background: var(--surface-2); color: var(--accent); }
+.coverArt small { color: var(--text-2); font-size: 11px; }
+.cover strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.cover > small { overflow: hidden; color: var(--text-2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.coverStatus { color: var(--text-2); font-size: 11px; }
+.empty { display: flex; min-height: 170px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); font-size: 12px; text-align: center; }
+.empty button { padding: 6px 9px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--accent); font: inherit; cursor: pointer; }
+.empty a { color: var(--accent); text-decoration: none; }
+.relationEmpty { display: grid; justify-items: center; gap: 7px; padding: 25px 8px; color: var(--text-2); text-align: center; }
+.relationEmpty strong { color: var(--text-1); font-size: 12px; font-weight: 500; }
+.relationEmpty p { max-width: 230px; margin: 0; font-size: 11px; line-height: 1.5; }
+.question { padding-top: 11px; border-top: 1px solid var(--border-1); }
+.question h3 { margin: 0 0 4px; font-size: 12px; font-weight: 500; }
+.question p { margin: 0; color: var(--text-2); font-size: 11px; }
+.spinning { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.inspector { display: grid; gap: 12px; min-width: 0; color: var(--text-1); }
+.inspector header { display: grid; gap: 4px; }
+.inspector header strong { font-size: 16px; font-weight: 500; }
+.inspector header small { color: var(--text-2); font-size: 12px; }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.compare section, .detailSection { min-width: 0; padding: 11px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); }
+.inspector h3 { margin: 0 0 7px; font-size: 13px; font-weight: 500; }
+.inspector p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.detailSection dl { display: grid; gap: 7px; margin: 10px 0 0; }
+.detailSection dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 9px; font-size: 12px; }
+.detailSection dt { color: var(--text-2); }
+.detailSection dd { overflow-wrap: anywhere; margin: 0; }
+.detailSection a { display: inline-flex; gap: 4px; margin-top: 10px; color: var(--accent); font-size: 12px; text-decoration: none; }
+@media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .columns { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1090px) { .top { flex-direction: column; } .actions { justify-content: flex-end; } .category { padding: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
