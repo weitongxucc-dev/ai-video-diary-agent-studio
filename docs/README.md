@@ -18,6 +18,10 @@
 
 ## 有效文档与隔离区
 
+当前事实按用途查询：产品规则看上表；当前写入范围看活动合同；需求覆盖看开发台账；交付状态看 Linear 对应工作单、Git/PR 与同提交 CI。README 不复制动态状态，活动合同直接改写现行规则，不用末尾追加文字覆盖前面的旧命令。
+
+`work/`、`output/`、设计原型、旧交接和未跟踪记录均不是默认启动输入。仅按当前任务给出的精确路径读取；不得把其中的历史基线、临时HOLD或旧授权重新激活。
+
 - 上表及其直接链接的长期项目文档构成当前有效权威；`.project-control/`下合同和开发计划仅是短期执行材料，不是产品、领域或架构的第二份权威。`docs/design/` 只保存由 `DESIGN.md` 解释的视觉参考资产，不独立定义产品规则。
 - `docs/archive/` 是非当前资料的隔离区，不属于渐进加载路径。除非任务明确要求历史追溯，Agent 搜索、读取和 Authority Snapshot 都必须排除该目录。
 - 普通旧版本默认从活动目录删除，由 Git 历史追溯。只有外部签收、法律合规、重要迁移或无法从 Git 重建的证据可以进入隔离区，具体规则见 [`archive/README.md`](archive/README.md)。
@@ -28,7 +32,7 @@
 - 新产品能力：`product-requirements.md` 的目标章节；涉及对象状态时补读 `domain-model.md`。
 - 0.11开发：工作包、依赖、技术候选和验收样本读 [`../.project-control/0.11-development-plan.md`](../.project-control/0.11-development-plan.md)；它不表示功能已实现，也不自动授权实施。当前是否可开始工作由活动合同及最新用户指令决定。
 - 下一阶段规划：长期优先级读 [`product-requirements.md`](product-requirements.md#151-制作质量修改效率与复用的优先级)；本轮工作包和剩余项读 [`../.project-control/active-contract.md`](../.project-control/active-contract.md)。后者是短期执行入口，不是第二份产品权威；合同结束删除时同步移除此链接。
-- UI 页面：按 design-md Skill 首次完整读取 `DESIGN.md`，同一任务不重复读取仍在上下文中的未变内容；后续定位目标页面和受影响规则。只有范围不明确时才读产品需求。
+- UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则；应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
 - 跨 Web/API/Worker：`system-architecture.md` 的目标边界和直接相关代码，不读全部产品文档。
 - 认证或发布：读取各自技术权威和实际实现；不要用产品文档推断当前运行状态。
 - 文档治理：本文件和目标文档；只有发现跨域冲突时才加载第二份权威。
