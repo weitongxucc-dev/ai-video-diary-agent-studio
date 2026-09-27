@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
   }
   return {
     MockCreationPlanApiError,
+    showQuickInspector: false,
+    openQuickDetails: vi.fn(),
     confirmEdit: vi.fn(),
     confirmScript: vi.fn(),
     exactEdit: vi.fn(),
@@ -41,8 +43,8 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, conversation, inspector, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; inspectorTitle?: string }) => (
-    <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
+  AppShell: ({ children, conversation, inspector, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; quickInspector?: (openDetails: () => void) => React.ReactNode; quickInspectorLabel?: string; inspectorTitle?: string }) => (
+    <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
   ),
 }));
 
@@ -245,6 +247,7 @@ function workspaceWithCover() {
 }
 
 afterEach(() => {
+  mocks.showQuickInspector = false;
   vi.clearAllMocks();
   mocks.previewExecution.mockResolvedValue(null);
   mocks.getAssistantHistory.mockResolvedValue({ items: [] });
@@ -1002,6 +1005,59 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
     }));
+  });
+
+  it("keeps each clip's quick draft through selection and a failed preview", async () => {
+    mocks.showQuickInspector = true;
+    const task = {
+      ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, current_timeline_version_id: "timeline-version-2", timeline_sequence: 2,
+      can_undo: true,
+    };
+    const clip = {
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const,
+      locked: false, manually_selected: false,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const, cues: [],
+      clips: [clip, { ...clip, id: "clip-2", timeline_start_seconds: 3, timeline_end_seconds: 6 }],
+      duration_seconds: 6, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.exactPreview.mockRejectedValue(new Error("预览暂不可用"));
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    const quick = screen.getByRole("region", { name: "镜头 01 快速编辑" });
+    fireEvent.change(within(quick).getByLabelText("镜头 1 快速裁剪起点"), { target: { value: "1.5" } });
+    expect(screen.getByText(/未应用 · 版本 2/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 2" }));
+    expect(screen.getByLabelText("镜头 2 快速裁剪起点")).toHaveValue(1);
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    expect(screen.getByLabelText("镜头 1 快速裁剪起点")).toHaveValue(1.5);
+    expect(screen.getByLabelText("镜头 1 裁剪起点")).toHaveValue(1.5);
+    fireEvent.click(within(quick).getByRole("button", { name: "预览修改" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith(task.id, {
+      operation_type: "TrimClip", clip_id: "clip-1", source_start_seconds: 1.5,
+    }));
+    await waitFor(() => expect(screen.getByLabelText("镜头 1 快速裁剪起点")).toHaveValue(1.5));
+    fireEvent.click(within(quick).getByRole("button", { name: "换素材" }));
+    fireEvent.click(within(quick).getByRole("button", { name: "查看候选" }));
+    expect(mocks.openQuickDetails).toHaveBeenCalledOnce();
+    mocks.undoTimeline.mockResolvedValue({});
+    mocks.getWorkspace.mockResolvedValue(workspace(
+      { ...task, current_timeline_version_id: "timeline-version-1", timeline_sequence: 1 },
+      { ...montage, clips: [{ ...clip, source_start_seconds: 2 }, montage.clips[1]] },
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(screen.getByLabelText("镜头 1 快速裁剪起点")).toHaveValue(2));
   });
 
   it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {

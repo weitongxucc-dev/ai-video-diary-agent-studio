@@ -74,7 +74,7 @@ import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEdit
 import { previewCreationTaskAudio, previewCreationTaskVisual } from "@/lib/api";
 import type { AudioEditInput, VisualEditInput } from "@/lib/types";
 import { SaveVideoTemplateForm } from "./SaveVideoTemplateForm";
-import { VideoEditingStage, VideoClipInspector, editorTime } from "./VideoEditor";
+import { VideoEditingStage, VideoClipInspector, VideoClipQuickEditor, createVideoClipDraft, editorTime, type VideoClipDraft } from "./VideoEditor";
 import editorUi from "./VideoEditor.module.css";
 
 type Props = {
@@ -831,6 +831,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
   const [editorDraft, setEditorDraft] = useState(false);
+  const [clipDrafts, setClipDrafts] = useState<Record<string, VideoClipDraft>>({});
   const [audioPlayhead, setAudioPlayhead] = useState(0);
   const [selectedAudioId, setSelectedAudioId] = useState<string | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
@@ -1386,10 +1387,36 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   const isEditor = activeView === "montage";
   const selectedClip = selectedClipIndex >= 0 ? workspace.montage?.clips[selectedClipIndex] : undefined;
+  const clipDraftKey = selectedClip ? `${task.current_timeline_version_id}:${selectedClip.id}` : undefined;
+  const savedClipDraft = selectedClip ? createVideoClipDraft(selectedClip) : undefined;
+  const clipDraft = clipDraftKey && savedClipDraft ? clipDrafts[clipDraftKey] ?? savedClipDraft : undefined;
+  const clipDraftChanged = Boolean(clipDraft && savedClipDraft && (
+    clipDraft.start !== savedClipDraft.start || clipDraft.mode !== savedClipDraft.mode
+    || clipDraft.x !== savedClipDraft.x || clipDraft.y !== savedClipDraft.y
+  ));
+  function updateClipDraft(next: VideoClipDraft) {
+    if (!clipDraftKey || !savedClipDraft) return;
+    setClipDrafts(current => ({ ...current, [clipDraftKey]: next }));
+    setEditorDraft(next.start !== savedClipDraft.start || next.mode !== savedClipDraft.mode
+      || next.x !== savedClipDraft.x || next.y !== savedClipDraft.y);
+  }
+  const quickInspector = isEditor && selectedClip && clipDraft && !selectedOverlay && !selectedAudioId
+    ? (openDetails: () => void) => <VideoClipQuickEditor
+      key={clipDraftKey}
+      clip={selectedClip}
+      index={selectedClipIndex}
+      busy={busy !== null}
+      draft={clipDraft}
+      onDraftStateChange={updateClipDraft}
+      onDraftChange={invalidateEditPreview}
+      onPreview={input => void previewExactEdit(input)}
+      onOpenDetails={openDetails}
+    />
+    : undefined;
   const inspector = isEditor
     ? selectedOverlay ? <GraphicOverlayEditor key={`${task.current_timeline_version_id}:${selectedOverlay.id}`} taskId={task.id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
     : selectedAudioTrack ? <AudioTimelineInspector key={`${task.current_timeline_version_id}:${selectedAudioId}`} track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
+    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} workspace={workspace} />
@@ -1397,7 +1424,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     : <Inspector activeView={activeView} busy={busy !== null} error={error} onPreparePersonEdit={preparePersonEdit} selectedContext={selectedEditContext} workspace={workspace} />;
 
   return (
-    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} editorLayout={isEditor}  inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
+    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <div className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
         <nav className={editorUi.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage) => {
           const presentation = productStageState(
