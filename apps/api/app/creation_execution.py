@@ -211,7 +211,7 @@ class CreationExecution:
                     context, stage, "completed",
                     output=self._output_identity(workspace_id, completed_task, stage),
                 )
-        plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
+        self.repository.get_creation_task_montage_plan(workspace_id, task_id)
         if not self.render_is_valid(workspace_id, task_id):
             raise JobFailure("成片产物不可用", "渲染完成状态不能作为可播放成片。", "检查渲染产物后继续制作。")
         self._stage_event(context, "cover", "pending", reason="尚未生成封面，请单独制作或选择封面。")
