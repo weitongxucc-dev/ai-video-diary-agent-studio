@@ -121,7 +121,17 @@ for (const [name, source, retired] of [
   if (source.includes(retired)) failures.push(`${name} still renders a retired duplicate heading: ${retired}`);
 }
 
-for (const required of ["scanProductionMaterials", "reviewProductionMaterial", "素材库", "/media"]) {
+for (const required of [
+  "getMaterialIntakeStatus",
+  "bindMaterialIntake",
+  "retryMaterialIntake",
+  "reviewProductionMaterial",
+  "素材自动接入",
+  "自动接入进度",
+  "新文件稳定后自动分析",
+  "立即检查",
+  "/media",
+]) {
   if (!library.includes(required)) failures.push(`material library is missing: ${required}`);
 }
 
