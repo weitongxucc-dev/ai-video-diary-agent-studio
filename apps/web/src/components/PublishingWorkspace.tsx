@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, Clock3, Film, LoaderCircle, RefreshCw, Send, Signal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { listCreationTasks } from "@/lib/api";
 import type { CreationTask } from "@/lib/types";
@@ -30,10 +30,13 @@ function formatTime(value: string): string {
 }
 
 function taskNextStep(task: CreationTask): string {
+  if (task.stage_status === "failed") {
+    const repair = task.stage_repair_action || "打开任务查看失败原因";
+    return task.output_ready ? `${repair}；已有成片可先检查保存` : repair;
+  }
   if (task.output_ready) return "检查并保存本地成片";
   if (task.stage_repair_action) return task.stage_repair_action;
   if (task.stage_status === "waiting_for_user") return `继续确认${stageLabels[task.stage]}`;
-  if (task.stage_status === "failed") return "打开任务查看失败原因";
   return `继续${stageLabels[task.stage]}`;
 }
 
@@ -43,12 +46,25 @@ export function PublishingWorkspace() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const latestRequest = useRef(0);
 
   async function refresh() {
+    const requestId = ++latestRequest.current;
     setLoading(true); setError(null);
-    try { const response = await listCreationTasks(); setTasks(response.items); setSelectedId((current) => current ?? response.items[0]?.id ?? null); }
-    catch (cause) { setError(cause instanceof Error && cause.message ? cause.message : "暂时无法连接本地服务。"); }
-    finally { setLoading(false); }
+    try {
+      const response = await listCreationTasks();
+      if (requestId !== latestRequest.current) return; // 过期响应：已有更新的读取，不能覆盖新状态
+      setTasks(response.items); setLoadedAt(new Date().toISOString()); setStale(false);
+      setSelectedId((current) => current ?? response.items[0]?.id ?? null);
+    } catch (cause) {
+      if (requestId !== latestRequest.current) return;
+      setError(cause instanceof Error && cause.message ? cause.message : "暂时无法连接本地服务。");
+      setStale(true); // 旧数据保留展示，但必须标记为可能过期，不能冒充最新
+    } finally {
+      if (requestId === latestRequest.current) setLoading(false);
+    }
   }
 
   useEffect(() => { void refresh(); }, []);
@@ -62,13 +78,15 @@ export function PublishingWorkspace() {
   const selected = filtered.find((task) => task.id === selectedId) ?? filtered[0] ?? null;
   const attentionCount = tasks.filter((task) => task.stage_status === "waiting_for_user").length;
   const readyCount = tasks.filter((task) => task.output_ready).length;
+  const staleHint = stale && loadedAt ? `（${formatTime(loadedAt)}）` : "";
 
   const inspector = selected ? (
     <div className={styles.inspector}>
       <span className={styles.objectEyebrow}>当前创作任务</span><h3>{selected.name}</h3>
       <span className={`${styles.stateBadge} ${taskState(selected).tone}`}>{taskState(selected).label}</span>
       <dl><div><dt>当前阶段</dt><dd>{stageLabels[selected.stage]}</dd></div><div><dt>整体进度</dt><dd>{selected.progress}%</dd></div><div><dt>最后更新</dt><dd>{formatTime(selected.updated_at)}</dd></div><div><dt>本地成片</dt><dd>{selected.output_ready ? "已生成，可检查" : "尚未生成"}</dd></div></dl>
-      {selected.stage_reason ? <section className={styles.inspectorNotice}><strong>{selected.stage_impact || "当前任务需要处理"}</strong>{selected.stage_repair_action ? <p>处理方式：{selected.stage_repair_action}</p> : null}</section> : null}
+      {stale ? <section className={styles.inspectorMuted}><strong>详情可能不是最新</strong><p>读取失败，以下详情来自上次成功读取{staleHint}。</p></section> : null}
+      {(selected.stage_reason || selected.stage_repair_action) ? <section className={styles.inspectorNotice}><strong>{selected.stage_impact || "当前任务需要处理"}</strong>{selected.stage_reason ? <p>原因：{selected.stage_reason}</p> : null}{selected.stage_repair_action ? <p>处理方式：{selected.stage_repair_action}</p> : null}</section> : null}
       <Link className={styles.primaryButton} href={`/tasks/${encodeURIComponent(selected.id)}`}>打开任务 <ArrowRight size={15} /></Link>
       <section className={styles.inspectorMuted}><strong>平台能力</strong><p>平台发布、定时发布和发布后监控尚未接入；本页不会把本地成片计为已发布。</p></section>
     </div>
@@ -78,11 +96,20 @@ export function PublishingWorkspace() {
     <AppShell creationTasks={tasks} inspector={inspector} inspectorTitle="记录详情">
       <div className={styles.page}>
         <section className={styles.capabilityBanner}><span><Signal size={18} /></span><div><strong>暂不支持发布</strong><p>可以先保存成片，再到平台上传。</p></div><Link href="/health">运行情况 <ArrowRight size={14} /></Link></section>
+        {error && tasks.length ? (
+          <section aria-label="读取失败提示" className={styles.inspectorNotice} role="status">
+            <strong>读取失败，以下统计和记录可能不是最新</strong>
+            <p>{error} 页面仍显示上次成功读取{staleHint}的任务；判断和操作前请先重新读取。</p>
+            <button className={styles.secondaryButton} disabled={loading} onClick={() => void refresh()} type="button">重新读取</button>
+          </section>
+        ) : null}
         <div className={styles.summaryRow} aria-label="真实任务摘要"><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{attentionCount}</strong> 需要处理</span><span><strong>{readyCount}</strong> 成片就绪</span><button className={styles.secondaryButton} disabled={loading} onClick={() => void refresh()} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={15} />刷新</button></div>
         <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setFilter(item.id)} type="button">{item.label}</button>)}</nav>
         <section className={styles.recordList}>
           <div className={styles.sectionHeading}><h2>{filter === "all" ? "最近更新" : filters.find((item) => item.id === filter)?.label}</h2><p>{loading ? "正在读取…" : `${filtered.length} 项`}</p></div>
-          {error ? <div className={styles.errorState} role="alert"><AlertCircle size={20} /><div><strong>暂时无法读取创作记录</strong><p>{error} 页面没有改用旧发布数据。</p></div><button onClick={() => void refresh()} type="button">重新读取</button></div> : loading ? <div className={styles.loadingState}><LoaderCircle className={styles.spinning} size={19} /> 正在读取当前工作区…</div> : filtered.length ? (
+          {error && !tasks.length ? <div className={styles.errorState} role="alert"><AlertCircle size={20} /><div><strong>暂时无法读取创作记录</strong><p>{error} 尚没有可显示的任务数据。</p></div><button disabled={loading} onClick={() => void refresh()} type="button">重新读取</button></div>
+            : loading && !tasks.length ? <div className={styles.loadingState}><LoaderCircle className={styles.spinning} size={19} /> 正在读取当前工作区…</div>
+            : filtered.length ? (
             <ol className={styles.records}>{filtered.map((task) => { const state = taskState(task); const StateIcon = state.icon; return <li key={task.id}><button aria-pressed={selected?.id === task.id} className={selected?.id === task.id ? styles.selectedRecord : undefined} data-open-details onClick={() => setSelectedId(task.id)} type="button"><span className={`${styles.recordState} ${state.tone}`}><StateIcon className={task.stage_status === "running" ? styles.spinning : undefined} size={16} /></span><span className={styles.recordBody}><span className={styles.recordTitle}><strong>{task.name}</strong><em>{state.label}</em></span><span>{stageLabels[task.stage]} · {taskNextStep(task)}</span><span className={styles.progressTrack} aria-label={`进度 ${task.progress}%`}><i style={{ width: `${task.progress}%` }} /></span></span><span className={styles.recordTime}>{formatTime(task.updated_at)}<ArrowRight size={15} /></span></button></li>; })}</ol>
           ) : <div className={styles.emptyStage}><span className={styles.emptyIcon}>{filter === "all" ? <Film size={22} /> : <Send size={22} />}</span><div><h2>{filter === "all" ? "还没有创作记录" : "当前筛选下没有记录"}</h2><p>{filter === "all" ? "从一个真实制作目标开始，任务进度会自动出现在这里。" : "切换筛选，或继续处理已有创作任务。"}</p></div><Link className={styles.primaryButton} href="/?new=1">新建视频</Link></div>}
         </section>
