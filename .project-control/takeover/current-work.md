@@ -67,3 +67,5 @@ MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作�
 **最新QA阻断（3aa2464）：** 已实证inner产物发布后、outer检查点前崩溃，重进执行会再次跑FFmpeg（调用1→2）。初判新增字幕轨道改变重算input_digest，使成功内层作业无法复用。QA隔离失败用例位于26aa/original/work/qa-011/output/make-3aa2464-sched-dadc618/apps/api/tests/test_creation_execution.py；已退回MAKE修复。该候选禁止按原专项通过直接集成，稳定输入绑定与真实版本变化都须覆盖。
 
 **同候选第二QA阻断：** assert_grant之后、claim_job_run之前API将JobRun取消，claim抛ValueError而permit遗留held。须在无活进程且状态核实后可靠释放，不能无条件finally放行。QA用例test_qa_cancel_between_initial_grant_check_and_claim_releases_permit已失败；第一重复渲染问题也在真实HostResourceProbe下复现。两项均已交MAKE，后续新SHA须复验。
+
+MAKE两项修复候选5ee08db已交，接手记录7c68f9c；工作树clean。作者报恢复实际render1→1、源字节/独立版本变化拒绝旧许可、claim前取消释放通过。**独立QA尚未复验，不解除原HOLD。** 对应实现/验证说明见最新production-takeover-status.md；不挑入纯handoff提交亦可读取说明。
