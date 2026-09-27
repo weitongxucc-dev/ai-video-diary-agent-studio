@@ -1,0 +1,31 @@
+.search {
+  display: flex;
+  flex: 0 1 260px;
+  min-width: 180px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-3);
+}
+
+.search input {
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.search input:focus {
+  outline: none;
+}
+
+.search input::placeholder {
+  color: var(--text-3);
+}
