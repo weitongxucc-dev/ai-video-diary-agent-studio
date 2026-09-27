@@ -228,6 +228,22 @@ def test_background_executor_error_is_visible_and_stops_before_next_unit(tmp_pat
     assert runtime.stop(0.1) is True
 
 
+def test_driver_rejects_freed_permit_with_unfinished_request_row(tmp_path):
+    class CorruptingExecutor:
+        def execute(self, grant, scheduler):
+            scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
+                                    checkpoint_write=lambda conn, current: current.owner_id)
+            with sqlite3.connect(scheduler.database_path) as conn:
+                conn.execute("UPDATE device_work_requests SET state='granted' WHERE id=?", (grant.request_id,))
+
+    runtime = _runtime(tmp_path, executor=CorruptingExecutor())
+    request = runtime.scheduler.submit(_intent("job"), "member")
+    with pytest.raises(RecoveryBlocked, match="尚未提交"):
+        runtime.run_once()
+    assert runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.stop(0.1) is True
+
+
 def test_unknown_resource_sample_never_reaches_executor(tmp_path):
     executor = CompletingExecutor()
     runtime = _runtime(tmp_path, executor=executor, resources=Resources(admit=None))

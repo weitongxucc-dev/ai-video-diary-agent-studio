@@ -769,11 +769,24 @@ class DeviceScheduler:
             raise RecoveryBlocked("全机许可账本尚未释放")
         with self._connect() as conn:
             permit = conn.execute("SELECT state, generation, request_id, token_hash FROM device_permit WHERE id=1").fetchone()
+            request = conn.execute(
+                """SELECT workspace_id, owner_type, owner_id, input_digest, unit_key,
+                   attempt_number, last_grant_generation, state
+                   FROM device_work_requests WHERE id=?""", (grant.request_id,)
+            ).fetchone()
         if (permit is None or permit["generation"] < grant.generation or
                 (permit["generation"] == grant.generation and
                  (permit["state"] != "free" or permit["request_id"] is not None
                   or permit["token_hash"] is not None))):
             raise RecoveryBlocked("业务库许可尚未释放")
+        if (request is None or
+                (request["workspace_id"], request["owner_type"], request["owner_id"],
+                 request["input_digest"], request["unit_key"], request["attempt_number"],
+                 request["last_grant_generation"]) !=
+                (grant.workspace_id, grant.owner_type, grant.owner_id, grant.input_digest,
+                 grant.unit_key, grant.attempt_number, grant.generation) or
+                request["state"] not in {"done", "cancelled", "failed", "blocked"}):
+            raise RecoveryBlocked("执行单元尚未提交完成、失败或安全等待状态")
 
     def register_child(self, grant: Grant, child: ProcessIdentity) -> None:
         """A future process wrapper must register and receive ACK before exec."""
