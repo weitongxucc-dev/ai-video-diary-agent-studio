@@ -63,3 +63,5 @@ SCHED7c9414e监测叶子QA通过；MAT d4519ed已补Limit终态/Unavailable延�
 最终独立QA：d4519ed限定测试profile的场景窗口联合集成PASS，89测试及真实32s长GOP恢复通过，报告见evidence/mat-sched-d4519ed-joint-review.md。这些候选仍未合入开发分支；生产SceneWindowBudget/硬件校准、失败probe人工重试与后续音画分析仍缺，不将父R10/R31标完成。
 
 MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作树已干净。说明见evidence/production-takeover-status.md。工作者专项15+39+18通过，主路径独立QA尚待；必须验证inner/outer检查点崩溃恢复不重复FFmpeg、取消竞争和多空间，不能引用旧montage叶子PASS替代。仅旁白+纯素材剪辑，生产scheduled未启用。
+
+**最新QA阻断（3aa2464）：** 已实证inner产物发布后、outer检查点前崩溃，重进执行会再次跑FFmpeg（调用1→2）。初判新增字幕轨道改变重算input_digest，使成功内层作业无法复用。QA隔离失败用例位于26aa/original/work/qa-011/output/make-3aa2464-sched-dadc618/apps/api/tests/test_creation_execution.py；已退回MAKE修复。该候选禁止按原专项通过直接集成，稳定输入绑定与真实版本变化都须覆盖。
