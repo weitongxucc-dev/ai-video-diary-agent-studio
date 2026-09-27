@@ -68,7 +68,19 @@ QWEN3_TTS_06B_BASE_8BIT = ModelSpec(
     approximate_download_bytes=1_991_296_593,
 )
 
-MODEL_SPECS = (CHINESE_CLIP_VIT_B16, QWEN3_TTS_06B_BASE_8BIT)
+QWEN3_VL_4B_4BIT = ModelSpec(
+    id="Qwen3-VL-4B-Instruct-4bit",
+    capability="visual_understanding",
+    display_name="Qwen3-VL 4B 4-bit",
+    repository="mlx-community/Qwen3-VL-4B-Instruct-4bit",
+    revision="2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+    license_name="Apache-2.0",
+    license_url="https://huggingface.co/mlx-community/Qwen3-VL-4B-Instruct-4bit",
+    approximate_download_bytes=3_110_000_000,
+)
+
+
+MODEL_SPECS = (CHINESE_CLIP_VIT_B16, QWEN3_TTS_06B_BASE_8BIT, QWEN3_VL_4B_4BIT)
 
 
 class ModelCatalog:
@@ -87,8 +99,13 @@ class ModelCatalog:
         runtime_python_path: str | Path | None,
         visual_worker_path: str | Path | None,
         voice_worker_path: str | Path | None = None,
+        *,
+        understanding_runtime_python_path: str | Path | None = None,
+        understanding_worker_path: str | Path | None = None,
     ) -> None:
         self.model_root_path = Path(model_root_path).expanduser()
+        self.understanding_runtime_python_path = Path(understanding_runtime_python_path).expanduser() if understanding_runtime_python_path else None
+        self.understanding_worker_path = Path(understanding_worker_path).expanduser() if understanding_worker_path else None
         self.runtime_python_path = (
             Path(runtime_python_path).expanduser() if runtime_python_path else None
         )
@@ -105,15 +122,16 @@ class ModelCatalog:
     def status(self, spec: ModelSpec) -> ModelRuntimeStatus:
         model_path = self.model_path(spec)
         worker_path = self._worker_path(spec)
+        runtime_python_path = self.runtime_path(spec)
         common = {
             "model": spec,
             "model_path": str(model_path),
             "runtime_python_path": (
-                str(self.runtime_python_path) if self.runtime_python_path else None
+                str(runtime_python_path) if runtime_python_path else None
             ),
             "worker_path": str(worker_path) if worker_path else None,
         }
-        if self.runtime_python_path is None or not self.runtime_python_path.is_file():
+        if runtime_python_path is None or not runtime_python_path.is_file():
             return ModelRuntimeStatus(
                 state="missing_runtime",
                 message="本地模型运行环境尚未安装。",
@@ -162,7 +180,7 @@ class ModelCatalog:
                 message=f"模型校验失败：{exc}",
                 model_path=str(model_path),
                 runtime_python_path=(
-                    str(self.runtime_python_path) if self.runtime_python_path else None
+                    str(self.runtime_path(spec)) if self.runtime_path(spec) else None
                 ),
                 worker_path=str(self._worker_path(spec)) if self._worker_path(spec) else None,
             )
@@ -171,7 +189,12 @@ class ModelCatalog:
     def model_path(self, spec: ModelSpec) -> Path:
         return self.model_root_path / spec.id
 
+    def runtime_path(self, spec: ModelSpec) -> Path | None:
+        return self.understanding_runtime_python_path if spec.capability == "visual_understanding" else self.runtime_python_path
+
     def _worker_path(self, spec: ModelSpec) -> Path | None:
+        if spec.capability == "visual_understanding":
+            return self.understanding_worker_path
         if spec.capability == "voice_clone_zh":
             return self.voice_worker_path
         return self.visual_worker_path

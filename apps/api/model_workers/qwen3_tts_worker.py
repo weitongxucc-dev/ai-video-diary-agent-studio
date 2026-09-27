@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 MODEL_ID = "qwen3-tts-12hz-0.6b-base-8bit"
+LANGUAGE_CODES = {"zh": "chinese", "en": "english", "zh-en": "auto"}
 
 
 def main() -> None:
@@ -33,6 +34,7 @@ def main() -> None:
     results = list(
         model.generate(
             text=request["text"],
+            lang_code=LANGUAGE_CODES[request["language"]],
             ref_audio=str(reference_path),
             ref_text=request["reference_text"],
         )
@@ -68,6 +70,10 @@ def main() -> None:
 def _validate_request(payload: object) -> None:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise ValueError("unsupported request schema")
+    if not isinstance(payload.get("language"), str) or payload["language"] not in LANGUAGE_CODES:
+        raise ValueError("language must be zh, en or zh-en")
+    if payload.get("pronunciation_dictionary"):
+        raise ValueError("this worker does not support pronunciation dictionaries")
     if payload.get("model_id") != MODEL_ID:
         raise ValueError("unexpected model id")
     for key in (

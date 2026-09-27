@@ -60,7 +60,8 @@ type FieldDef = {
   name: string;
   label: string;
   helper?: string;
-  kind: "text" | "secret" | "directory" | "textarea";
+  kind: "text" | "secret" | "directory" | "textarea" | "select";
+  options?: { value: string; label: string }[];
   defaultValue?: string;
   placeholder?: string;
   configured?: boolean;
@@ -78,7 +79,7 @@ const SECTIONS: SectionDef[] = [
     id: "asr",
     title: "语音识别 (ASR)",
     description:
-      "腾讯云 ASR 与本地 Whisper 二选一或叠加；填错会导致字幕生成失败。",
+      "默认本地 Whisper；只有主动选择腾讯云才会外发音频，失败不自动切换。",
     tone: "orange",
   },
   {
@@ -117,6 +118,8 @@ function buildFields(
 
   return {
     paths: [
+      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "text", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
+      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "text", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
       {
         name: "obsidian_vault_path",
         label: "Obsidian Vault 路径",
@@ -186,6 +189,20 @@ function buildFields(
     ],
     asr: [
       {
+        name: "local_whisper_backend", label: "本地运行方式", kind: "select",
+        defaultValue: valueOf("LOCAL_WHISPER_BACKEND") || "openai_whisper",
+        options: [{ value: "whisper_cpp", label: "whisper.cpp（原生运行）" }, { value: "openai_whisper", label: "OpenAI Whisper（Python）" }],
+      },
+      {
+        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "text",
+        defaultValue: valueOf("LOCAL_WHISPER_CLI_PATH"), helper: "选择 whisper.cpp 时使用；模型须为 GGML 格式。",
+      },
+      {
+        name: "asr_provider", label: "转写方式", kind: "select",
+        defaultValue: valueOf("ASR_PROVIDER") || "local_whisper",
+        options: [{ value: "local_whisper", label: "本地 Whisper" }, { value: "tencentcloud", label: "腾讯云（音频外发，可能产生费用）" }],
+      },
+      {
         name: "tencentcloud_secret_id",
         label: "Tencent SecretId",
         helper: "腾讯云访问凭证 SecretId。",
@@ -236,7 +253,7 @@ function buildFields(
       {
         name: "local_whisper_model_path",
         label: "Local Whisper Model",
-        helper: "本地 Whisper 模型目录或文件路径。",
+        helper: "模型文件路径：whisper.cpp 使用 ggml .bin，Python 使用 .pt。",
         kind: "text",
         defaultValue: valueOf("LOCAL_WHISPER_MODEL_PATH"),
         placeholder: "/Users/you/.cache/whisper/medium",
@@ -244,9 +261,9 @@ function buildFields(
       {
         name: "local_whisper_language",
         label: "Local Whisper Language",
-        helper: "默认 zh；空表示自动检测。",
+        helper: "auto 自动检测；也可指定 zh 中文或 en 英文。",
         kind: "text",
-        defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "zh",
+        defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "auto",
       },
     ],
     sources: [
@@ -280,6 +297,14 @@ function buildFields(
 }
 
 function FieldRow({ field }: { field: FieldDef }) {
+  if (field.kind === "select") {
+    return <label className="settings-field"><span>{field.label}</span>
+      <select aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
+        {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      {field.helper ? <small className="settings-field-helper">{field.helper}</small> : null}
+    </label>;
+  }
   if (field.kind === "secret") {
     return (
       <label className="settings-field">
@@ -387,12 +412,12 @@ const SETTINGS_CATEGORIES: Array<{
   label: string;
   description: string;
 }> = [
-  { id: "model", label: "模型与 API", description: "模型服务、能力与连接" },
-  { id: "production", label: "生产默认值", description: "文案时长与品牌" },
+  { id: "model", label: "对话服务", description: "模型服务、能力与连接" },
+  { id: "production", label: "制作习惯", description: "文案时长与品牌" },
   { id: "voices", label: "声音库", description: "默认声音与授权" },
-  { id: "paths", label: "存储与本地模型", description: "移动硬盘与输出" },
-  { id: "asr", label: "语音识别", description: "云端与本地 ASR" },
-  { id: "sources", label: "信息源", description: "知识库与外部来源" },
+  { id: "paths", label: "保存位置", description: "移动硬盘与输出" },
+  { id: "asr", label: "听写设置", description: "云端与本地 ASR" },
+  { id: "sources", label: "资料来源", description: "知识库与外部来源" },
 ];
 
 export default async function SettingsPage({
@@ -423,11 +448,11 @@ export default async function SettingsPage({
           <h3>当前生效配置</h3>
           <dl>
             <div>
-              <dt>文案模型</dt>
+              <dt>对话与文字模型</dt>
               <dd>
                 {status?.llm.configured
                   ? `${status.llm.provider} / ${status.llm.model}`
-                  : "本地摘要模式"}
+                  : "未连接"}
               </dd>
             </div>
             <div>
@@ -456,10 +481,6 @@ export default async function SettingsPage({
     >
       <div className="workspace-page settings-page">
         <aside className="settings-category-panel" aria-label="设置分类">
-          <div className="settings-category-heading">
-            <span className="section-kicker">偏好设置</span>
-            <strong>工作区配置</strong>
-          </div>
           <nav className="settings-category-nav">
             {SETTINGS_CATEGORIES.map((item) => (
               <Link
@@ -469,33 +490,17 @@ export default async function SettingsPage({
                 key={item.id}
               >
                 <strong>{item.label}</strong>
-                <span>{item.description}</span>
+
               </Link>
             ))}
           </nav>
-          <nav aria-label="法律信息" className="settings-legal-links">
+          <details className="settings-legal"><summary>使用须知</summary><nav aria-label="法律信息">
             <Link href="/privacy">隐私政策</Link>
             <Link href="/terms">使用条款</Link>
-          </nav>
+          </nav></details>
         </aside>
         <section className="workspace-main ui-panel">
-          <div className="workspace-header">
-            <div>
-              <h1>
-                {
-                  SETTINGS_CATEGORIES.find((item) => item.id === activeCategory)
-                    ?.label
-                }
-              </h1>
-              <p>
-                {offline
-                  ? "暂时无法连接本地 API。"
-                  : SETTINGS_CATEGORIES.find(
-                      (item) => item.id === activeCategory,
-                    )?.description}
-              </p>
-            </div>
-          </div>
+          {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
 
           {activeCategory === "model" ? (
             <FormErrorBanner
@@ -506,16 +511,16 @@ export default async function SettingsPage({
               <input name="settings_section" type="hidden" value="model" />
               <div className="settings-section-header">
                 <div>
-                  <h2>文案与选题模型</h2>
+                  <h2>对话服务</h2>
                   <p>
-                    选择模型服务后再选择具体模型；也可以接入自有服务或本地
-                    OpenAI-compatible 服务。
+                    用于聊天和写稿，素材仍在本机整理。
+                    仅发送相关文字，不发送原视频。
                   </p>
                 </div>
                 <span
                   className={`settings-connection-state ${status?.llm.configured ? "is-ready" : ""}`}
                 >
-                  {status?.llm.configured ? "已连接" : "本地降级模式"}
+                  {status?.llm.configured ? "已配置" : "待连接"}
                 </span>
               </div>
               <LlmProviderFields
@@ -524,13 +529,16 @@ export default async function SettingsPage({
                 )}
                 baseUrl={
                   valueOfSetting(settingItems, "LLM_BASE_URL") ||
-                  "https://api.deepseek.com"
+                  (status?.llm.configured ? status.llm.base_url : null) ||
+                  "https://api.minimax.io/v1"
                 }
                 model={
-                  valueOfSetting(settingItems, "LLM_MODEL") || "deepseek-chat"
+                  valueOfSetting(settingItems, "LLM_MODEL") ||
+                  (status?.llm.configured ? status.llm.model : null) || "MiniMax-M3"
                 }
                 provider={
-                  valueOfSetting(settingItems, "LLM_PROVIDER") || "deepseek"
+                  valueOfSetting(settingItems, "LLM_PROVIDER") ||
+                  (status?.llm.configured ? status.llm.provider : "minimax")
                 }
               />
               <div className="settings-actions">
@@ -539,9 +547,9 @@ export default async function SettingsPage({
                   disabled={offline}
                   type="submit"
                 >
-                  保存模型连接
+                  保存连接
                 </button>
-                <span>保存后立即用于新的选题和文案任务。</span>
+                <span>保存后用于下一次对话和写稿。</span>
               </div>
             </FormErrorBanner>
           ) : null}

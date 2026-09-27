@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.models import Episode, EpisodeStatus, utc_now
+from app.speech_timing import estimate_speech_seconds
 from app.avatar_lipsync import PronunciationEntry, VoiceProfile as VersionedVoiceProfile
 from app.production import ProductionProfile, VoiceProfile
 from app.voice_clone import (
@@ -251,16 +252,21 @@ class NarrationGenerator:
         segment_id: str | None = None,
         delivery_instruction: str | None = None,
         generation_identity: str | None = None,
+        language: str | None = None,
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
 
+        tempo = _delivery_tempo(delivery_instruction)
         text = narration_text.strip()
         if not text:
             raise ValueError("已确认文案没有可配音正文")
         if voice_identity.workspace_id != workspace_id:
             raise ValueError("声音版本不属于当前工作区")
-        if voice_identity.language != "zh":
-            raise ValueError("本地真成片 v0.1 只支持中文声音克隆")
+        resolved_language = language or voice_identity.language
+        if resolved_language not in {"zh", "en", "zh-en"}:
+            raise ValueError("配音语言无效")
+        if voice_identity.language not in {resolved_language, "zh-en"}:
+            raise ValueError("所选声音版本未声明支持本次配音语言，请选择对应语言的声音版本")
         authorization_failure = voice_identity.authorization.failure_for(
             content_type="voice", usage_scope="narration"
         )
@@ -274,7 +280,7 @@ class NarrationGenerator:
             raise ValueError("声音参考文件必须是当前工作区已授权的 WAV")
         if reference_path.stat().st_size == 0:
             raise ValueError("声音参考 WAV 为空")
-        if _estimated_text_seconds(text) > max_duration_seconds:
+        if estimate_speech_seconds(text) > max_duration_seconds:
             raise ValueError("文案预计时长超过创作方案上限，请先压缩并重新确认文案")
         pronunciation_dictionary = _pronunciation_dictionary(
             entries=pronunciation_entries,
@@ -284,7 +290,7 @@ class NarrationGenerator:
         )
         preflight_failure = text_to_speech_preflight(
             self.provider,
-            language="zh",
+            language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
         )
         if preflight_failure is not None:
@@ -299,6 +305,7 @@ class NarrationGenerator:
             segment_id=segment_id,
             delivery_instruction=delivery_instruction,
             generation_identity=generation_identity,
+            language=resolved_language,
         )
         output_path = (
             self.output_root
@@ -316,7 +323,7 @@ class NarrationGenerator:
             reference_audio_path=reference_path,
             reference_text=reference_text,
             output_path=output_path,
-            language="zh",
+            language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
         )
         resolved_output = output_path.resolve()
@@ -326,7 +333,6 @@ class NarrationGenerator:
             or resolved_output.stat().st_size == 0
         ):
             raise ValueError("声音克隆没有生成当前创作任务的 WAV")
-        tempo = _delivery_tempo(delivery_instruction)
         if tempo != 1.0:
             adjusted_path = output_path.with_name(f"{output_path.stem}_adjusted.wav")
             completed = subprocess.run(
@@ -358,7 +364,10 @@ class NarrationGenerator:
             )
         if result.duration_seconds > max_duration_seconds:
             resolved_output.unlink(missing_ok=True)
-            raise ValueError("实际配音时长超过创作方案上限，请先压缩并重新确认文案")
+            raise ValueError(
+                "实际配音时长超过创作方案上限，请先压缩并重新确认文案；"
+                f"实际 {result.duration_seconds:.2f} 秒，上限 {max_duration_seconds:g} 秒。"
+            )
         return NarrationArtifact(
             task_id=task_id,
             script_id=script_id,
@@ -368,7 +377,7 @@ class NarrationGenerator:
             model_id=self.provider.model_id,
             voice_profile_id=voice_identity.id,
             cache_key=cache_key,
-            language="zh",
+            language=resolved_language,
             pronunciation_version=_pronunciation_version(pronunciation_dictionary),
         )
 
@@ -383,6 +392,8 @@ class NarrationGenerator:
     ) -> NarrationArtifact:
         if not segments:
             raise ValueError("没有可拼合的配音片段")
+        if len({item.language for item in segments}) != 1:
+            raise ValueError("配音片段语言不一致，请按同一目标语言重新生成")
         if any(item.task_id != task_id or item.script_id != script_id for item in segments):
             raise ValueError("配音片段与当前任务文案不一致")
         cache_key = hashlib.sha256(
@@ -454,12 +465,14 @@ class NarrationGenerator:
         segment_id: str | None = None,
         delivery_instruction: str | None = None,
         generation_identity: str | None = None,
+        language: str | None = None,
     ) -> str:
         payload = {
             "workspace_id": workspace_id,
             "task_id": task_id,
             "script_id": script_id,
             "text": narration_text,
+            "language": language or voice_identity.language,
             "voice": {
                 "id": voice_identity.id,
                 "version": voice_identity.version,
@@ -627,7 +640,7 @@ class VoicePreviewService:
                 impact="声音预览被授权门禁阻断，不会生成或复用音频。",
                 repair_action="补充有效授权后以新的预览身份重试。",
             )
-        if resolved_language != voice.language:
+        if voice.language not in {resolved_language, "zh-en"}:
             return self._finish(
                 repository,
                 running,
@@ -779,21 +792,35 @@ def _estimated_narration_seconds(episode: Episode) -> float:
     )
 
 
-def _estimated_text_seconds(text: str) -> float:
-    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_words = len(re.findall(r"[A-Za-z0-9]+", text))
-    return chinese_chars / 4.0 + latin_words / 2.5
+def compile_narration_command(instruction: str) -> float:
+    """Compile only delivery changes the local generation pipeline can execute."""
+    clauses = re.split(r"[,，;；。.!！]|同时|并且|然后|\band\b|\bthen\b", instruction.casefold())
+    tempos: set[float] = set()
+    matched = False
+    for clause in clauses:
+        value = clause.strip()
+        if not value:
+            continue
+        value = re.sub(r"^(?:请|麻烦)(?:你)?\s*", "", value)
+        value = re.sub(r"^(?:这句|这一句|这段|当前配音|所选配音|配音)\s*", "", value)
+        value = re.sub(r"^please\s+", "", value)
+        if re.fullmatch(r"重新配音|重新读(?:一遍)?|重读(?:一遍)?|regenerate(?: (?:this |the )?(?:narration|sentence|segment))?", value):
+            matched = True
+            continue
+        if re.fullmatch(r"(?:读|说|语速)?慢(?:一点|一些|些)|(?:read |speak )?(?:a little )?slower", value):
+            tempos.add(0.9)
+        elif re.fullmatch(r"(?:读|说|语速)?快(?:一点|一些|些)|(?:read |speak )?(?:a little )?faster", value):
+            tempos.add(1.1)
+        else:
+            raise ValueError("配音要求尚不支持或含有歧义，请使用“这句重新配音”“这句读慢一点”或“这句读快一点”；其他修改请单独预览。")
+        matched = True
+    if not matched or len(tempos) > 1:
+        raise ValueError("请指定一种配音操作，不能同时要求读快和读慢。")
+    return next(iter(tempos), 1.0)
 
 
 def _delivery_tempo(instruction: str | None) -> float:
-    if not instruction:
-        return 1.0
-    value = instruction.casefold()
-    if any(token in value for token in ("慢一点", "慢些", "slower")):
-        return 0.9
-    if any(token in value for token in ("快一点", "快些", "faster")):
-        return 1.1
-    return 1.0
+    return 1.0 if instruction is None else compile_narration_command(instruction)
 
 
 def _probe_audio_duration(path: Path) -> float:

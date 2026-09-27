@@ -96,6 +96,7 @@ export const listMediaPreviewAttempts = (previewType: MediaPreview["preview_type
 
 export function mediaProfilesErrorMessage(error: unknown) {
   if (!(error instanceof MediaProfilesApiError)) return "读取人物与声音信息失败，请重试。";
+  if (error.status === 502) return "本机服务暂时连不上，请重试。";
   if (error.status === 0) return "本地服务未接通。";
   if (error.status === 404) return "本地服务版本未接通人物与声音接口。";
   if (error.status === 401) return "需要登录后才能管理人物与声音。";

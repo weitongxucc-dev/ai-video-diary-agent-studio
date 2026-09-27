@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 import app.main as main_module
 from app.runtime_settings import runtime_settings_updates
@@ -80,6 +81,35 @@ def test_unconfigured_missing_model_root_keeps_operating_system_temp(tmp_path, m
         assert "missing" not in str(selected)
     finally:
         tempfile.tempdir = original_tempdir
+
+
+@pytest.mark.parametrize("configure_model_root", [False, True])
+def test_temp_setup_rejects_unmounted_volume_even_when_parent_directory_exists(monkeypatch, configure_model_root):
+    import os
+    import tempfile
+    from pathlib import Path
+    from app.config import Settings, configure_process_temporary_directory
+
+    base = Path("/Volumes/AI-video-offline-test/project")
+    root = base / "temporary"
+    old_is_dir = Path.is_dir
+    monkeypatch.setattr(Path, "is_dir", lambda path: True if path == base else old_is_dir(path))
+    monkeypatch.setattr(Path, "is_mount", lambda path: False)
+
+    def unexpected_write(*args, **kwargs):
+        raise AssertionError("Missing external volume must not create local directories")
+
+    monkeypatch.setattr(Path, "mkdir", unexpected_write)
+    before_env = os.environ.get("TMPDIR")
+    before_tempdir = tempfile.tempdir
+    settings = (
+        Settings(model_root_path=str(base / "models"), model_root_path_configured=True)
+        if configure_model_root else Settings(temporary_root_path=str(root))
+    )
+    with pytest.raises(FileNotFoundError, match="外接存储未挂载"):
+        configure_process_temporary_directory(settings)
+    assert os.environ.get("TMPDIR") == before_env
+    assert tempfile.tempdir == before_tempdir
 
 
 def test_runtime_settings_updates_omits_empty_topic_source_urls():

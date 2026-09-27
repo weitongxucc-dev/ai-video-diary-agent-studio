@@ -106,7 +106,7 @@ class UnavailableVoiceCloneProvider:
 
 class Qwen3TTSSubprocessProvider:
     model_id = QWEN3_TTS_06B_BASE_8BIT.id
-    supported_languages = ("zh",)
+    supported_languages = ("zh", "en")
     supports_pronunciation_dictionary = False
 
     def __init__(

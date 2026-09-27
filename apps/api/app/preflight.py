@@ -87,11 +87,11 @@ def _deepseek_check(settings: Settings) -> dict:
         )
     return _preflight_item(
         item_id="deepseek",
-        label="云端文案增强",
+        label="对话与文字模型",
         status="degraded",
-        summary="未配置外部模型，使用本地来源摘要生成器",
-        impact="本地选题和文案仍可生成，表达丰富度可能较低。",
-        repair_action="可选：在设置页连接自有模型服务开启增强。",
+        summary="未配置外部文字模型；本地来源摘要不能代替对话",
+        impact="0.11 对话和文字创作不可用；后台本地素材分析可独立运行。",
+        repair_action="在设置页连接 MiniMax-M3 或主动选择 DeepSeek。",
         settings_target="llm_api_key",
     )
 
@@ -263,16 +263,9 @@ def _python_check() -> dict:
 
 
 def _asr_check(settings: Settings) -> dict:
-    """Aggregated ASR check: Tencent Cloud primary, local Whisper fallback.
-
-    The system is considered ready if *either* provider is available.
-    """
-    tencent_ok = bool(
-        settings.tencentcloud_secret_id and settings.tencentcloud_secret_key
-    )
     whisper_python = bool(
-        settings.local_whisper_python_path
-        and Path(settings.local_whisper_python_path).expanduser().is_file()
+        settings.local_whisper_runtime_path
+        and Path(settings.local_whisper_runtime_path).expanduser().is_file()
     )
     whisper_model = bool(
         settings.local_whisper_model_path
@@ -281,20 +274,14 @@ def _asr_check(settings: Settings) -> dict:
     whisper_ok = whisper_python and whisper_model
     whisper_partial = whisper_python or whisper_model
 
-    if tencent_ok:
-        summary_parts = ["Tencent Cloud ASR 配置已提供，远端可用性由 /api/runtime/health 验证"]
-        if whisper_ok:
-            summary_parts.append("本地 Whisper 备用就绪")
-        elif whisper_partial:
-            summary_parts.append("本地 Whisper 配置不完整（不影响使用）")
+    if settings.asr_provider == "tencentcloud":
         return _preflight_item(
-            item_id="asr",
-            label="语音转写（ASR）",
-            status="ready",
-            summary="，".join(summary_parts),
-            impact="语音日记转写、重复录制检测、字幕对齐依赖 ASR。",
-            repair_action="无需处理。",
-            settings_target="tencentcloud_secret_id",
+            item_id="asr", label="语音转写（ASR）",
+            status="ready" if settings.asr_configured else "missing",
+            summary="已主动选择腾讯云转写；凭据已配置，未验证远端调用。" if settings.asr_configured else "已选择腾讯云转写，但凭据不完整。",
+            impact="转写时音频将发送到腾讯云；失败不会切换供应商。",
+            repair_action="无需处理。" if settings.asr_configured else "补齐腾讯云凭据，或选择本地 Whisper。",
+            settings_target="asr_provider",
         )
 
     if whisper_ok:
@@ -302,7 +289,7 @@ def _asr_check(settings: Settings) -> dict:
             item_id="asr",
             label="语音转写（ASR）",
             status="ready",
-            summary="本地 Whisper 条件满足（Python 与模型路径可访问，未配置 Tencent Cloud ASR）",
+            summary="本地 Whisper 路径可访问，模型运行尚需实际转写验证",
             impact="语音日记转写将使用本地 Whisper 处理。",
             repair_action="无需处理。",
             settings_target="local_whisper_model_path",
@@ -314,17 +301,17 @@ def _asr_check(settings: Settings) -> dict:
             label="语音转写（ASR）",
             status="degraded",
             summary="本地 Whisper 配置不完整，无法使用转写功能",
-            impact="语音日记无法转写，需完善 Whisper 或配置 Tencent Cloud ASR。",
-            repair_action="完善本地 Whisper 的 Python 和模型路径，或配置 Tencent Cloud ASR。",
-            settings_target="local_whisper_python_path",
+            impact="语音日记无法转写，需完善本地 Whisper，不会自动外发音频。",
+            repair_action="完善本地 Whisper 的运行程序和对应格式的模型路径。",
+            settings_target="local_whisper_backend",
         )
 
     return _preflight_item(
         item_id="asr",
         label="语音转写（ASR）",
         status="missing",
-        summary="未配置任何 ASR（Tencent Cloud 或本地 Whisper）",
+        summary="当前选择本地 Whisper，但尚未配置。",
         impact="语音日记转写完全不可用。",
-        repair_action="在设置页配置 Tencent Cloud ASR 密钥，或配置本地 Whisper Python 和模型。",
-        settings_target="tencentcloud_secret_id",
+        repair_action="在设置页配置本地 Whisper 运行程序和模型。",
+        settings_target="local_whisper_backend",
     )

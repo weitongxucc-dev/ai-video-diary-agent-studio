@@ -4,8 +4,8 @@ import "./globals.css";
 import "./modern-overrides.css";
 
 export const metadata: Metadata = {
-  title: "AI 视频日记",
-  description: "从素材到成片的本地 AI 视频生产工作台",
+  title: "智能视频日记",
+  description: "从素材到成片的本机视频创作工具",
   icons: {
     icon: "/favicon.svg"
   }

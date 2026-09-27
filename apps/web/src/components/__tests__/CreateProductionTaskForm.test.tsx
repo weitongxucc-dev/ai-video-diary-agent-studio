@@ -78,6 +78,8 @@ describe("CreateProductionTaskForm", () => {
       language: "zh-CN",
       aspect_ratio: "9:16",
       duration_target_seconds: 60,
+      presenter_share_target: 20,
+      lipsync_quality: "high",
     }));
     expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
     expect(await screen.findByText("产品资料")).toBeInTheDocument();
@@ -98,6 +100,17 @@ describe("CreateProductionTaskForm", () => {
     expect(await screen.findByText("缺少可用于选题的资料。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认并创建任务" })).toBeDisabled();
     expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
+  });
+
+  it("sends the explicitly selected low-precision model and invalidates the old preflight", async () => {
+    mocks.previewCreationPlan.mockResolvedValue(preview());
+    renderForm();
+    fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await screen.findByRole("button", { name: "确认并创建任务" });
+    fireEvent.click(screen.getByRole("radio", { name: /低精度/ }));
+    expect(screen.queryByRole("button", { name: "确认并创建任务" })).not.toBeInTheDocument();
+    fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ lipsync_quality: "fast" })));
   });
 
   it("shows the server repair action after a stale confirm and stays on the form", async () => {
@@ -143,8 +156,23 @@ describe("CreateProductionTaskForm", () => {
       language: "zh-CN",
       aspect_ratio: "9:16",
       duration_target_seconds: 60,
+      presenter_share_target: 20,
+      lipsync_quality: "high",
       preflight_fingerprint: "f".repeat(64),
     }));
     expect(mocks.assignLocation).toHaveBeenCalledWith("/tasks/task-1?toast=success&toast_message=%E5%88%9B%E4%BD%9C%E4%BB%BB%E5%8A%A1%E5%B7%B2%E5%88%9B%E5%BB%BA%EF%BC%8C%E9%80%89%E9%A2%98%E5%B0%9A%E6%9C%AA%E5%BC%80%E5%A7%8B%E3%80%82");
   });
+});
+
+it("keeps the template identity through preview and confirmation", async () => {
+  const template = { id: "template_one", version: 3, name: "我的模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-09-12", settings: { language: "zh-CN" as const, aspect_ratio: "9:16" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
+  mocks.previewCreationPlan.mockResolvedValue(preview());
+  mocks.confirmCreationPlan.mockResolvedValue({ creation_task: { id: "new-task" } });
+  render(<CreateProductionTaskForm template={template} initialGoal="新的主题" assignLocation={mocks.assignLocation} />);
+  fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+  await screen.findByRole("button", { name: "确认并创建任务" });
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3, goal: "新的主题", duration_target_seconds: 30 }));
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ lipsync_quality: "fast" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
+  await waitFor(() => expect(mocks.confirmCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3 })));
 });

@@ -1,177 +1,75 @@
-# M3.2 人物出镜与真实口型迁移合同
+# 0.11 桌面闭环执行合同
 
-## 1. 合同状态
+## 当前授权与使用方式
 
-- 状态：ACCEPTED
-- 阶段：MILESTONE_3_2_ACCEPTED
-- 模式：MIGRATE
-- 纵向负责人：主 Agent
-- 基线：`e37a79c629a3c1f7b8b4e582d05de8a0dd140938`
-- 分支：`codex/milestone-3-2-avatar-lipsync`
-- 验收候选：`f43580f`
-- 建立日期：2026-09-01
+ACTIVE。本文件只保留当前协作边界；已结束批次的指令和旧基线从活动入口移除，历史由 Git、PR、Linear 追溯。不得用历史提交号把现有工作树回退或覆盖。
 
-本合同是当前唯一活动执行合同。被替换的长合同只保留在 Git 历史与已合并的 PR #41 中，普通任务不得读取或复制。
+- 主控只负责共享文档、派工、审核、集成与开发分支推送，不编写产品代码。
+- 实施使用用户授权的侧边栏可见 Codex 线程及 cmux Pi/Kimi、Claude Code/GLM，不派内部子智能体。保留现有模型配置。
+- 集成仓库：`/Volumes/Dujiangyan-VM/AI视频日记/repositories/bd25`；分支 `codex/0.11-development`。每包基线由主控按实际 Git 给出；仅吸收审核通过的具体依赖。开发分支可推送，不自动合并 main。
+- 不授权新增付费调用、真实平台发送/发布、签名、公证、真实用户库迁移或覆盖已安装版本。验证使用隔离数据；保护未跟踪记录和其他工作树的未提交修改。
+- 长期权威从[文档路由](../docs/README.md)按需读取；完整需求和 Linear 映射见[开发台账](0.11-development-plan.md)。本合同不维护完成率或 CI 快照。
 
-当前产品权威仍是：
+## 文件所有权
 
-- `docs/product-requirements.md`
-- `docs/domain-model.md`
-- `docs/system-architecture.md`
-- `DESIGN.md`
+下表是当前所有权，不是要求重新执行已结束工作。新包须给出结果、精确文件、依赖和退出条件；同一文件不得多人同时写入。未列出的媒体叶子文件不得因接线需要自动扩权。
 
-本合同只约束 M3.2 的实现和验收，不复制上层产品规则。
-
-## 2. 本阶段唯一用户结果
-
-在同一个 `CreationTask` 中，用户选中一个已配音的时间范围，选择当前人物版本，生成真实人物出镜口型片段；该片段进入当前 `TimelineVersion`，可预览、撤销、重启恢复，并可通过自然语言或精确操作只重做所选片段。
-
-代表性命令：
-
-- “这一段换成 cc 出镜”
-- “这一段表情更自然”
-- “这里只重做口型，其他都不要动”
-
-执行前必须展示理解结果、目标范围、人物版本、失效产物和预览差异；确认后才写入新版本。
-
-## 3. 已核实的当前事实
-
-- M1–M3.1 已合并到 `origin/main`，PR #41 的合并提交为本合同基线。
-- Chinese-CLIP 和 Qwen3-TTS 本地模型已真实就绪。
-- `AvatarAndLipSyncProvider`、本地子进程协议、预览运行记录和失败持久化边界已经存在。
-- MuseTalk v1.5 的 macOS arm64 本地运行环境、官方模型文件和受控 worker 已配置；任务能力只在运行时与模型文件完整时报告可用。
-- 当前 `CreationTask` 已有持久化 `PersonRender` 基础记录、受控媒体读取接口，并可由 `ChangePersonSegment` 写入 `TimelineVersion`。
-- 2026-09-02 已用 `person_cc:v1 + voice_cc:v1` 的真实任务配音分段生成 5.496 秒 MP4；`ffprobe` 证明包含 H.264 544×960 视频与 AAC 24kHz 单声道音频，任务媒体接口下载结果与产物 SHA-256 一致。
-- 长人物参考会在 worker 内按目标配音时长截取，避免为一个短片段预处理整段参考视频。
-- 2026-09-02 已在真实任务 `task_45c4865fc904` 上输入“这一段换成 cc 出镜”，生成并确认 `ChangePersonSegment`，将 `person_render_63cc8446ce609f2a109812ed` 写入第一段镜头；撤销后恢复原镜头，再次确认后复用已验证人物片段。
-- 2026-09-02 已对同一真实任务执行“只重做口型”：生成新 `person_render_22e31cf16e8906b414280d91`，与旧人物片段的字节大小和 SHA-256 均不同。
-- 新人物片段已绑定独立的 succeeded `JobRun`、`ArtifactRecord(kind=person_render)`、succeeded `TransformRun` 和 5 条上游 `DependencyEdge`。
-- 真实撤销后旧 `PersonRender` 恢复；再次应用时提案通过 `reuse_person_render_id` 精确恢复最新人物片段，没有再次运行 MuseTalk。
-- 当前成片为 1080×1920、26.633 秒、6,943,350 字节的 H.264 + AAC MP4，并保留烧录中文字幕和 6 段独立 SRT；任务处于 `review/waiting_for_user`。
-- API 重启后，当前时间线、新人物片段、成片、SRT 和实时能力投影均已恢复。
-- 浏览器实测证明人物命令先出现变更预览，确认前不执行；右栏区分“模型能力”与“片段状态”，并展示真实模型与固定参数。
-- 1024×768、1180×800 与主机默认尺寸无横向溢出或不可达按钮；相关 API 测试 64 项、Web 交互测试 10 项、TypeScript、ESLint、Next.js 生产构建均通过。
-
-因此，M3.2 在候选 `f43580f` 上已完成真实人物口型生成、类型化局部修改、精确重生成、撤销/恢复、谱系、最终混剪和 UI 门禁，独立审查结论为 `ACCEPT`，剩余 P0/P1 为零。
-
-## 4. 正向交付契约
-
-### 4.1 唯一事实源
-
-扩展现有 `ProductionRepository`，新增任务内的 `PersonRender` 记录。不得建立第二套人物任务、时间线、媒体仓储或前端内存事实源。
-
-`PersonRender` 至少记录：
-
-- `id`、`workspace_id`、`task_id`；
-- 所属时间线片段或目标时间范围；
-- 人物档案 ID 与版本；
-- 配音片段 ID、音频逻辑引用与输入摘要；
-- 作为人物驱动输入的工作区素材引用；
-- 模型 ID、动作、表情和口型偏移参数；
-- 产物逻辑引用、时长、对齐证据；
-- `queued/running/succeeded/failed/unavailable` 状态；
-- 失败原因、影响、修复动作与重试信息。
-
-产物文件继续由 `ArtifactRecord` 管理，依赖关系继续由 `DependencyEdge` 管理。
-
-### 4.2 依赖与增量重算
-
-最小依赖链为：
-
-`PersonProfileVersion + NarrationSegment + VisualSource + Parameters`
-→ `PersonRender`
-→ `TimelineItem`
-→ `Preview/FinalVideo`
-
-局部修改人物、表情、动作或口型偏移时，只使目标 `PersonRender`、引用它的时间线片段和最终预览失效；不得重做无关文案、配音、字幕或镜头。
-
-配音片段改变时，仅使依赖该配音的 `PersonRender` 及其下游失效。
-
-### 4.3 统一操作路径
-
-自然语言与精确控制必须编译到同一组类型化操作：
-
-- `ChangePersonSegment`
-- `RegeneratePersonRender`
-
-操作通过现有 `EditIntent` → `EditProposal` → `EditOperation` → `TimelineVersion` 路径确认和持久化，支持撤销与重启恢复。
-
-### 4.4 任务接口
-
-任务级接口必须位于现有 CreationTask 路径下，至少覆盖：
-
-- 读取当前人物片段和能力状态；
-- 预览人物片段变更；
-- 确认类型化变更；
-- 生成或显式重试真实 `PersonRender`；
-- 安全读取任务内人物视频产物。
-
-客户端不得提交任意源文件绝对路径。
-
-### 4.5 任务界面
-
-- 中栏以视频预览和时间线片段为主，不增加重复标题、解释性大卡片或空白占位。
-- 用户选择人物片段后，右栏显示人物版本、声音版本、语言、动作、表情、口型偏移、能力状态和唯一修复动作。
-- 能力不可用时按钮禁用并说明原因；不得显示看似可执行但只会失败的主按钮。
-- `>=1280px` 使用右侧 Inspector；`1024–1279px` 使用抽屉，不挤压主工作区。
-
-## 5. 产品边界
-
-- 用户放入当前工作区的素材、人物与声音默认可用于本地创作；本阶段不重新引入逐条授权证明表单作为任务门禁。
-- 工作区隔离、文件访问、云端外发、付费调用和删除确认仍是有效安全边界。
-- 首版只验收中文、单人物、单片段局部重做。
-- AI 封面、多语言、人物切换转场、模板、自动任务、发布与监控不进入 M3.2。
-- 不在本阶段重新设计全局导航或无关页面。
-
-## 6. 必须退役
-
-| 旧对象或行为 | 替代结果 | 完成状态 |
+| 负责人 | 可见线程 | 所属文件或目录 |
 | --- | --- | --- |
-| 档案页口型预览被当作任务成片能力 | 任务内 `PersonRender` | RETIRED |
-| API 固定不可用且没有可配置真实 provider | 显式配置、校验和报告的本地 provider | RETIRED |
-| 人物修改只改变界面状态 | 类型化操作和新 `TimelineVersion` | RETIRED |
-| 局部人物修改触发整条任务重做 | 精确依赖失效和增量重算 | RETIRED |
-| 无真实模型时仍提供可点击生成入口 | 禁用并显示唯一修复动作 | RETIRED |
-| 任务流继续强制逐条授权证明 | 工作区输入默认可创作 | RETIRED |
+| MAT01 素材工程 | 01a0d259-54c3-7621-b055-17ce9146cac4 | apps/api/app/production.py、material_ingestion.py、material_probe.py及对应专项测试 |
+| MAKE01 制作流程 | 01a0d259-67ee-75f1-ab83-8982eec022c7 | apps/api/app/main.py、creation_execution.py、schemas.py、assistant_pi.py、apps/api/agent_tools/diary_tools.ts；apps/web/src/components/CreationTaskWorkspace.tsx、src/lib/api.ts、types.ts及相邻专项测试 |
+| UI01 桌面实现 | 01a0d259-8b42-7d30-82c5-8834f31842e5 | AppShell、EditorShell.module.css、VideoEditor、MaterialLibraryWorkspace、HomeWorkspace、KnowledgeWorkspace、ExecutionQueueStatus、useEditorPanels及相邻样式/测试；knowledge/page.tsx、loading.tsx；modern-desktop-contract-check.mjs |
+| SCHED01 整机调度 | 01a0d29d-226b-7460-8ba6-76f14dc8c56a | device_scheduler.py、device_runtime.py、host_resource_probes.py、granted_subprocess.py及专项测试；database_migrations.py新增调度迁移；api pyproject/uv.lock仅已批准psutil依赖 |
+| DESIGN01 界面设计 | 01a0d25f-5080-7991-9e9c-54efde64d4e9 | 自己工作树的 designs/desktop-011/，不写生产组件和DESIGN.md |
+| AUTH01 账号共享 | 01a0e1c4-23e1-71b1-b23a-22ea2993e7ef | 当前仅账号共享接口提案；产品代码写入须另分配精确范围 |
+| QA01 独立验收 | 01a0d25f-53ad-7a83-8197-16f9d0a17aa2 | 自己工作树的 work/qa-011/ 隔离证据；不修改产品代码或共享规则 |
 
-状态只能按 `ACTIVE → COEXISTING → MIGRATED → RETIRED` 推进；只有 `RETIRED` 才计入完成。
+后端省略目录的文件位于 apps/api/app/；前端组件位于 apps/web/src/components/。cmux 当前临时接管的文件以下表为准，原负责人不得同时改。Repository接口交MAT，main和任务父层交MAKE，DDL交SCHED；主控裁决跨域变更。
 
-## 7. 真实运行门禁
+## 调度与交付边界
 
-进入人物口型实现前必须选定一个许可明确、可在本机 macOS arm64 运行、能接收受控 JSON 请求并输出有效 MP4 与对齐证据的真实引擎。
+- 单个本地重活许可、可信成员和对象授权、真实进程释放是生产接线前提；缺资源或身份事实时不能自行放行。
+- 素材元信息探测完成不代表场景、语音、视觉理解完成，不把资产提前标为可用。scheduled手动重试须真实接通授权入口后才能宣称可用。
+- 制作队列和状态展示可先集成；尚无受许可媒体执行器时保持dependency，不能把排队接线称为真实连续制作。startup门禁未完成前不启用scheduled生产运行。
+- 取消请求不等于子进程已退出；确认进程树释放后才可让出许可。检查点与调度完成使用同连接事务；具体接口由当前代码及架构权威确定。
+- 默认legacy与受控scheduled阶段并存期间，禁止同时启动两套重活驱动。全入口迁移仍需单独证明旧绕行路径退役。
+- 组件、API、真实媒体、浏览器、安装包和外部模型分别验收；三尺寸为1440×900、1180×800、1024×768。局部通过不标记父范围完成。
 
-只有同时满足以下条件才可将能力标记为 available：
+## 2026-09-27 用户确认的整体界面实现基线
 
-- 运行时、worker 和固定版本模型均存在；
-- 模型来源、版本、许可、文件清单和校验值已登记；
-- 对受控输入生成了非空有效 MP4；
-- `ffprobe` 证明视频流、时长和编码有效；
-- 输出路径位于任务允许的产物根目录；
-- provider 返回真实时长与口型对齐证据。
+用户明确认可 `http://127.0.0.1:4327/workspace-dual-v4/owner.html` 为基本达到70分的整体方案。其主账号与 `member.html` 成员版本是桌面UI整体实现基线；不能仅修旧外壳浮卡而遗漏这版页面组织与视觉结构。主控已实际读取该原型入口，源目录由设计负责人提供并固定。
 
-缺失任一条件时状态为 `BLOCKED` 或 `UNAVAILABLE`，不得建立回退成功路径。
+- 保留导航—持续创作助手—核心工作区三栏、可拖动分隔及收起、紧凑字号间距，以及右上精细修改浮卡。首页按这版总量、趋势、行业分布、任务阶段、可点词云、近期作品的组合布局落地；其他导航页逐页对照，不退回长条列表替代方案。
+- DESIGN-V5只能在v4上修正已确认的九阶段、交互缺口、密度和权限等问题；未经用户确认不得另起整体布局。先交v4到组件与产品页面的映射、差异及受控改动，不以新原型替代真实组件交付。
+- UI-FLOAT是整体方案落地的子项，其局部通过不代表整体UI通过。桌面负责人先给v4与现有组件逐页差距，主控据此分配具体页面；共享CreationTaskWorkspace/API仍由MAKE写，不得跨写。
+- 原型的示例数据是布局与交互依据，生产页面接真实服务；缺失能力明确显示状态，不把示例数字或按钮点击当功能已实现。QA除尺寸检查外，要逐页比对已认可v4结构和交互，分开报告示例、真实组件和真实业务链路。
 
-## 8. 同一候选验收
 
-M3.2 只有在同一 Git SHA 上同时满足下列条件才完成：
+### UI-V4 第一实施包：外壳与首页
 
-1. 一个真实 `CreationTask` 已有确认文案、真实中文配音和可编辑时间线。
-2. 选中一个片段并输入“这一段换成 cc 出镜”。
-3. 提案准确展示目标、人物版本、参数、失效范围与不会改变的内容。
-4. 用户确认后生成真实人物口型 MP4，并保存 `PersonRender`、`ArtifactRecord`、`DependencyEdge`、`EditOperation` 和新 `TimelineVersion`。
-5. 仅目标人物片段及真实下游被重算，其他配音、字幕和镜头摘要保持一致。
-6. 客户端可播放人物片段与合成预览；重启后状态和产物仍可恢复。
-7. 撤销后恢复前一时间线版本。
-8. 最终 MP4 保留音频和字幕，并通过 `ffprobe`。
-9. 1024×768、1180×800 与主机最大尺寸无裁切、遮挡、逐字换行或不可达按钮。
-10. 第 6 节旧行为均达到 `RETIRED`，并有源码、路由和 UI 消费者的不存在证明。
+UI01独占本包的 `apps/web/src/components/AppShell.tsx`、`EditorShell.module.css`、`HomeWorkspace.tsx`、新增 `HomeWorkspace.module.css`、`useEditorPanels.ts` 及对应AppShell/HomeWorkspace/useEditorPanels专项测试。布局hook仅为v4默认导航188px、助手280px及必要最小宽度、拖动/收起/恢复一致性调整；已有用户手动保存宽度不得静默重置。浮卡修正与首页改动分开提交。不得写MAKE的任务父组件、API/types或后端。
 
-源码可追踪、fixture、mock、单元测试和静态截图只能作为辅助证据，不能代替真实模型输出和真实点击。
+首页按v4组合看板实现，可信现有数据可用，缺聚合接口保留对应结构与诚实空态；隔离组件展示可用显著标注的示例供两身份三尺寸验收。角色未接真实服务不得伪造管理权限。MAKE先提供同源聚合和九阶段接口提案，知识库、模板及其他页面后续逐包指派，不因本包未包含而从范围删除。
 
-## 9. 停止规则
+### UI-V4 第二实施包：知识库页面
 
-- 尚未选定或安装真实口型引擎时，停止在 `MILESTONE_3_2_PREFLIGHT`，不得堆叠空 UI。
-- 同类失败连续两次且没有新产品证据时进入 HOLD，先复核事实源和工具。
-- 发现共享产品、领域、架构或设计权威有误时先 `HOLD_FOR_AUTHORITY_UPDATE`，更新唯一权威后再继续。
-- 测试环境阻断只可记为 `BLOCKED/UNKNOWN`，不得记为 PASS。
-- M3.2 完成前不启动封面、多语言、模板、自动任务、发布或新 DMG 打包。
+UI01独占 `apps/web/src/app/knowledge/page.tsx`、必要时同步其 `loading.tsx`、新增 `KnowledgeWorkspace.tsx`、`KnowledgeWorkspace.module.css` 及该目录 `__tests__/page.test.tsx`。页面入口保留数据加载，展示组件独立以便隔离示例和测试，不从Next页面入口导出额外组件。按v4分类入口、来源封面网格及可操作详情实施；保留现有搜索、来源信息、原文和真实读端。用途分类不能从文件格式擅自推断，缺分类数据需明确未分类；没有真实引用/版本/纠正接口的操作不得伪造成功。原文及摘要只显示已有事实，不能编造解析、主题关系或问答出处。隔离示例可用于完整布局验收并明确标注。
+
+本包不写 `modern-overrides.css`、API/types、后端或其他页面；旧全局选择器如确实阻断，先提交具体冲突选择器与局部解决证据。第一包与本包分开提交；知识库页面改造不代表知识解析、召回及权限业务完成。
+
+
+## 当前实施包与依赖
+
+| 执行者 | 本批结果 | 独占范围与边界 |
+| --- | --- | --- |
+| cmux Claude / GLM | 修后端叶子模块 Ruff，保留逻辑 | audio_timeline、compound_edits、graphic_overlays、graphic_sources、local_portrait、subtitle_edits、subtitle_schedule、visual_effects；只修诊断位置，AST等价，禁止全仓格式化 |
+| cmux Pi / Kimi | 修 CI 日志中的测试规范问题 | test_audio_timeline、test_canvas、test_compound_selection、test_graphic_overlays、test_linked_timeline、test_montage_pipeline、test_production_foundation、test_silence_edits、test_subtitle_alignment、test_subtitle_edits、test_subtitle_style、test_transitions、test_visual_effects、test_voice_clone；不删除断言，不改生产 |
+| UI01 | 更新过时扫描约束，再对接真实队列事实 | modern-desktop-contract-check.mjs及必要相邻检查测试；不弱化检查，不恢复手动扫描为默认；后续展示仍沿原UI归属，新增文件先列范围 |
+| SCHED01 | 真实资源/进程探针和执行前注册子进程 | 新host_resource_probes.py、granted_subprocess.py及相邻测试，device_runtime必要适配；允许仅为可靠采样新增psutil至api pyproject/uv.lock，无无关升级；无可信测量则unknown，不启用生产 |
+| MAT01 | 获许可后的有界真实ffprobe及检查点恢复 | 原production/material_ingestion及测试；新增material_probe.py及专项；不造队列、不改main/DDL，场景/视觉未实现不得报完成；production.py规范窄修单独提交 |
+| MAKE01 | JobRun提交、获许可阶段执行与恢复适配 | 原main/creation_execution/schema及既定前端API文件；creation_execution规范窄修独立提交；host/媒体依赖未齐不激活新生产路径 |
+| QA01 | 单许可、活子进程、超时/取消、两空间竞争的独立证据 | 原QA隔离目录；合成候选只做一次必要集成验证，失败只阻断对应包 |
+
+两位cmux使用已清洁的既有工作副本，新分支分别为 `codex/ci-ruff-production`、`codex/ci-ruff-tests`，当时均从13b253f派生；当前提交以各工作树Git为准，不作为新任务起点。除上述测试文件暂交Pi外，既有归属不变；MAKE/MAT不得同时修改这些CI清理文件，需变更则先交主控协调。
+
+推进规则：工作者完成首个可审提交后继续其已授权剩余范围；依赖未到时完成不依赖部分并报告具体接口，主控接收后审核、合成、必要复验、推送、同步Linear。候选完成不等于整个版本完成，也不自动解除生产切换门槛。后台监控是否启用以实际自动化配置为准，不能由派工消息推断。

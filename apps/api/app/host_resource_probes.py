@@ -1,0 +1,184 @@
+"""Measured, fail-closed host probes for bounded CPU-only device units.
+
+The caller supplies limits established for this machine. Model/GPU residency
+is deliberately unsupported until an owner can measure and release it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import quote
+
+import psutil
+
+from app.device_scheduler import Grant, ProcessIdentity, RecoveryState, WorkRequest
+
+
+@dataclass(frozen=True)
+class HostBudget:
+    max_cpu_percent: float
+    min_available_memory_bytes: int
+    max_swap_used_bytes: int
+    min_free_disk_bytes: int
+    max_disk_io_bytes_per_second: int
+    max_unit_input_bytes: int
+    sample_seconds: float = 0.1
+
+    def __post_init__(self) -> None:
+        if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
+            raise ValueError("CPU budget and sample interval must be positive")
+        if any(value < 0 for value in (
+            self.min_available_memory_bytes, self.max_swap_used_bytes,
+            self.min_free_disk_bytes, self.max_disk_io_bytes_per_second,
+            self.max_unit_input_bytes,
+        )):
+            raise ValueError("Host budget cannot contain negative limits")
+
+
+class HostResourceProbe:
+    """Only admits known bounded material hash and metadata probe units."""
+
+    _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta"})
+
+    def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...],
+                 budget: HostBudget) -> None:
+        if not disk_paths:
+            raise ValueError("At least one material/output disk path is required")
+        self.database_path = Path(database_path).expanduser().resolve()
+        self.disk_paths = tuple(Path(path).expanduser().resolve() for path in disk_paths)
+        self.budget = budget
+
+    def _sample(self, resources: dict[str, object]) -> bool | None:
+        kind, size = resources.get("kind"), resources.get("size_bytes")
+        if kind not in self._SUPPORTED_KINDS:
+            return None
+        if type(size) is not int or size < 0:
+            return None
+        if size > self.budget.max_unit_input_bytes:
+            return False
+        try:
+            before = psutil.disk_io_counters()
+            if before is None:
+                return None
+            start = time.monotonic()
+            cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
+            duration = time.monotonic() - start
+            after = psutil.disk_io_counters()
+            if after is None or duration <= 0:
+                return None
+            io_bytes = (after.read_bytes - before.read_bytes +
+                        after.write_bytes - before.write_bytes)
+            if io_bytes < 0:
+                return None
+            memory = psutil.virtual_memory()
+            swap = psutil.swap_memory()
+            disks = tuple(psutil.disk_usage(str(path)) for path in self.disk_paths)
+        except (OSError, psutil.Error, ValueError):
+            return None
+        return (cpu <= self.budget.max_cpu_percent
+                and memory.available >= self.budget.min_available_memory_bytes
+                and swap.used <= self.budget.max_swap_used_bytes
+                and all(disk.free >= self.budget.min_free_disk_bytes for disk in disks)
+                and io_bytes / duration <= self.budget.max_disk_io_bytes_per_second)
+
+    def admit(self, request: WorkRequest) -> bool | None:
+        return self._sample(request.resources)
+
+    def _grant_resources(self, grant: Grant) -> dict[str, object] | None:
+        if grant.database_path != self.database_path:
+            return None
+        try:
+            with sqlite3.connect(f"file:{quote(str(self.database_path))}?mode=ro", uri=True) as conn:
+                row = conn.execute(
+                    """SELECT resources_json FROM device_work_requests WHERE id=?
+                    AND workspace_id=? AND owner_type=? AND owner_id=?
+                    AND unit_key=? AND input_digest=? AND attempt_number=?
+                    AND last_grant_generation=? AND state IN ('granted','yield_requested')""",
+                    (grant.request_id, grant.workspace_id, grant.owner_type, grant.owner_id,
+                     grant.unit_key, grant.input_digest, grant.attempt_number, grant.generation),
+                ).fetchone()
+            resources = json.loads(row[0]) if row else None
+            return resources if isinstance(resources, dict) else None
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            return None
+
+    def continue_unit(self, grant: Grant) -> bool | None:
+        resources = self._grant_resources(grant)
+        return self._sample(resources) if resources is not None else None
+
+    def released(self, grant: Grant) -> bool | None:
+        resources = self._grant_resources(grant)
+        # These kinds have no resident model/GPU allocation. Process descendants
+        # are independently checked by DeviceScheduler before calling this.
+        return True if resources is not None and resources.get("kind") in self._SUPPORTED_KINDS else None
+
+
+class HostProcessProbe:
+    """Track exact PID/start/boot plus the POSIX process group owned by a child."""
+
+    def __init__(self) -> None:
+        if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
+            raise RuntimeError("Host process probe supports macOS and Linux only")
+
+    @staticmethod
+    def _boot_id() -> str:
+        if sys.platform == "linux":
+            return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return f"darwin:{psutil.boot_time():.0f}"
+
+    def identity(self, pid: int) -> ProcessIdentity:
+        return ProcessIdentity(pid, f"{psutil.Process(pid).create_time():.6f}", self._boot_id())
+
+    def current(self) -> ProcessIdentity:
+        return self.identity(os.getpid())
+
+    def _state(self, child: ProcessIdentity, *, group: bool) -> RecoveryState:
+        try:
+            boot = self._boot_id()
+            if not boot:
+                return "unknown"
+            if child.boot_id != boot:
+                return "released"
+            try:
+                observed = self.identity(child.pid)
+            except psutil.NoSuchProcess:
+                observed = None
+            if observed is not None and observed.start_token != child.start_token:
+                return "unknown" if group else "released"
+            if group:
+                # Wrapper makes its PID the session and process-group ID before
+                # registration. A surviving grandchild retains this group ID.
+                try:
+                    os.killpg(child.pid, 0)
+                except ProcessLookupError:
+                    return "released"
+                except PermissionError:
+                    return "unknown"
+                return "active"
+            return "active" if observed is not None else "released"
+        except (OSError, psutil.Error, ValueError):
+            return "unknown"
+
+    def children_released(self, children: tuple[ProcessIdentity, ...]) -> bool | None:
+        states = tuple(self._state(child, group=True) for child in children)
+        if "active" in states:
+            return False
+        if "unknown" in states:
+            return None
+        return True
+
+    def recovery_state(self, holder: ProcessIdentity,
+                       children: tuple[ProcessIdentity, ...]) -> RecoveryState:
+        states = (self._state(holder, group=False),
+                  *(self._state(child, group=True) for child in children))
+        if "active" in states:
+            return "active"
+        if "unknown" in states:
+            return "unknown"
+        return "released"

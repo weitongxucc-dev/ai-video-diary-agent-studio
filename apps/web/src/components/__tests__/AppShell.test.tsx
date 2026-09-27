@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
@@ -28,7 +28,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
-vi.mock("@/lib/api", () => ({ listCreationTasks: apiMocks.listCreationTasks }));
+vi.mock("@/lib/api", () => ({ listCreationTasks: apiMocks.listCreationTasks, getRuntimeSettings: vi.fn().mockResolvedValue({status:{llm:{configured:false}}}) }));
 
 import { AppShell } from "@/components/AppShell";
 
@@ -63,6 +63,7 @@ function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
 }
 
 beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   pathname = "/";
   search = "";
   apiMocks.listCreationTasks.mockReset();
@@ -75,6 +76,47 @@ beforeEach(() => {
 });
 
 describe("AppShell", () => {
+  it("keeps conversation visible and opens object details only in a dismissible card", () => {
+    const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
+    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
+    expect(screen.queryByText("镜头属性")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "镜头一" }));
+    expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("镜头属性");
+    view.rerender(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("任务对话")).toBeVisible();
+  });
+
+  it("retains editor panel widths and collapse state after remount, within bounds", () => {
+    localStorage.clear();
+    const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
+    const divider = screen.getByRole("separator", { name: "调整导航栏宽度" });
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    expect(divider).toHaveAttribute("aria-valuenow", "204");
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
+    expect(divider).toHaveAttribute("aria-valuenow", "188");
+    fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
+    first.unmount();
+    render(<AppShell editorLayout><p>剪辑</p></AppShell>);
+    expect(screen.queryByRole("separator", { name: "调整导航栏宽度" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
+    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "188");
+    localStorage.clear();
+  });
+
+  it("uses v4 widths for a fresh workspace and keeps a previously saved layout", () => {
+    localStorage.clear();
+    const first = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "188px", "--editor-right": "280px" });
+    first.unmount();
+    localStorage.setItem("video-editor-left-width", "224");
+    localStorage.setItem("video-workspace-chat-width", "350");
+    const saved = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    expect(saved.container.firstElementChild).toHaveStyle({ "--editor-left": "224px", "--editor-right": "350px" });
+    saved.unmount();
+    localStorage.clear();
+  });
+
   it("keeps the seven product entries and CreationTask links in the left rail", () => {
     render(
       <AppShell
@@ -88,10 +130,11 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    for (const label of ["首页", "素材库", "内容资料", "人物与声音", "视频模板", "自动任务", "发布与数据"]) {
+    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "定时任务", "发布与数据"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
     expect(screen.getAllByText("等待开始")).not.toHaveLength(0);
@@ -152,7 +195,7 @@ describe("AppShell", () => {
     pathname = "/production";
     search = "view=automations";
     render(<AppShell><p>页面内容</p></AppShell>);
-    expect(screen.getByRole("link", { name: "自动任务" })).toHaveClass("is-active");
+    expect(screen.getByRole("link", { name: "定时任务" })).toHaveClass("is-active");
     expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
   });
 
@@ -167,5 +210,115 @@ describe("AppShell", () => {
 
     expect(routerPush).toHaveBeenCalledWith("/tasks/task-search");
     expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
+  });
+
+  it("defaults to a collapsed quick editor when the float would cover the portrait preview", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const top = this.hasAttribute("data-editor-transport") ? 560 : this.hasAttribute("data-editor-player") ? 72 : 0;
+      const bottom = this.hasAttribute("data-editor-player") ? 536 : 768;
+      const left = this.hasAttribute("data-editor-player") ? 20 : 0;
+      const width = this.hasAttribute("data-editor-player") ? 516 : 556;
+      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout inspector={<p>完整属性</p>} inspectorTitle="镜头详情" quickInspectorLabel="镜头 1 · 0:00–0:03" quickInspectorKey="task:version:clip" quickInspector={openDetails => <button onClick={openDetails} type="button">打开候选</button>}>
+        <div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport />
+      </AppShell>);
+      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
+      const expand = await screen.findByRole("button", { name:"展开镜头编辑" });
+      expect(expand).toHaveAttribute("title", "浮卡已收起，避免遮挡预览画面");
+      fireEvent.click(expand);
+      const panel = await screen.findByRole("region", { name:"镜头 1 · 0:00–0:03" });
+      expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
+      expect(Number.parseFloat(screen.getByRole("main").style.getPropertyValue("--quick-preview-height"))).toBeLessThan(464);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name:"收起镜头编辑" }));
+      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
+      fireEvent.click(screen.getByRole("button", { name:"打开候选" }));
+      expect(screen.getByRole("dialog", { name:"镜头详情" })).toHaveTextContent("完整属性");
+    } finally { rect.mockRestore(); }
+  });
+
+  it("opens by default when the portrait picture fits beside the float", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const isPlayer = this.hasAttribute("data-editor-player");
+      const top = this.hasAttribute("data-editor-transport") ? 560 : isPlayer ? 72 : 0;
+      const bottom = isPlayer ? 536 : 768;
+      const left = isPlayer ? 20 : 0;
+      const width = isPlayer ? 1260 : 1300;
+      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout quickInspectorKey="wide-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport /></AppShell>);
+      expect(await screen.findByRole("region", { name:"镜头 1" })).toHaveStyle({ width:"480px", height:"400px" });
+    } finally { rect.mockRestore(); }
+  });
+
+  it("keeps the real-size portrait picture beside the float without shrinking the player", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const isPlayer = this.hasAttribute("data-editor-player");
+      const top = isPlayer ? 99 : 0;
+      const width = isPlayer ? 680 : 712;
+      const left = isPlayer ? 16 : 0;
+      const bottom = isPlayer ? 419 : 752;
+      return { top, bottom, left, right: left + width, width, height: bottom - top, x: left, y: top, toJSON: () => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout quickInspectorKey="portrait-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div></AppShell>);
+      expect(await screen.findByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "441px", height: "355px" });
+      expect(screen.getByRole("main").className).toContain("quickPreviewBesideFloat");
+      fireEvent.click(screen.getByRole("button", { name: "收起镜头编辑" }));
+      expect(screen.getByRole("main").className).not.toContain("quickPreviewBesideFloat");
+    } finally { rect.mockRestore(); }
+  });
+
+  it("starts collapsed when the editor center is narrow and lets the user expand it", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const top = this.hasAttribute("data-editor-transport") ? 560 : 0;
+      return { top, bottom:768, left:0, right:484, width:484, height:768 - top, x:0, y:top, toJSON:() => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout quickInspectorKey="narrow-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player /><div data-editor-transport /></AppShell>);
+      expect(screen.queryByRole("region", { name:"镜头 1" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
+      const panel = await screen.findByRole("region", { name:"镜头 1" });
+      expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(screen.getByRole("region", { name:"镜头 1" })).toBeInTheDocument());
+    } finally { rect.mockRestore(); }
+  });
+
+  it("keeps a manual float choice through small panel resizes and hides only when it cannot fit", async () => {
+    let mainWidth = 812;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const player = this.hasAttribute("data-editor-player");
+      const transport = this.hasAttribute("data-editor-transport");
+      const top = transport ? 560 : player ? 72 : 0;
+      const bottom = player ? 536 : 768;
+      const width = player ? mainWidth - 40 : mainWidth;
+      const left = player ? 20 : 0;
+      return { top, bottom, left, right: left + width, width, height: bottom - top, x: left, y: top, toJSON: () => ({}) };
+    });
+    try {
+      render(<AppShell editorLayout inspector={<p>完整属性</p>} quickInspectorKey="resizing-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport /></AppShell>);
+      fireEvent.click(await screen.findByRole("button", { name: "收起镜头编辑" }));
+      fireEvent.click(screen.getByRole("button", { name: "展开镜头编辑" }));
+      expect(await screen.findByRole("region", { name: "镜头 1" })).toBeInTheDocument();
+      mainWidth = 810;
+      await act(async () => { fireEvent(window, new Event("resize")); await new Promise(resolve => window.setTimeout(resolve, 30)); });
+      expect(screen.getByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "480px" });
+      mainWidth = 412;
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "查看镜头详情" })).toBeInTheDocument();
+      mainWidth = 810;
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(screen.getByRole("region", { name: "镜头 1" })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "收起镜头编辑" }));
+      mainWidth = 812;
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument());
+    } finally { rect.mockRestore(); }
   });
 });

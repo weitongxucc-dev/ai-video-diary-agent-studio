@@ -17,6 +17,11 @@ from typing import Any
 _ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
 
 
+def structured_completion_options(model_id: str) -> dict[str, object]:
+    """Keep MiniMax reasoning outside the JSON content parsed by production."""
+    return {"reasoning_split": True} if model_id.startswith("MiniMax-") else {}
+
+
 def _resolve_dotenv_path() -> Path:
     """Return the primary .env path, honouring the override env var."""
     override = os.getenv(_ENV_FILE_OVERRIDE_VAR)
@@ -36,6 +41,12 @@ def runtime_env_file_path() -> Path:
 def configure_process_temporary_directory(settings: Settings) -> Path:
     """Route Python and child-process scratch files to the configured data disk."""
     root = settings.effective_temporary_root_path.resolve()
+    # On macOS a leftover /Volumes/<name> directory can exist on the internal
+    # disk even though the external volume is absent. Existence is not enough.
+    if len(root.parts) >= 3 and root.parts[1] == "Volumes":
+        volume = Path(*root.parts[:3])
+        if not volume.is_mount():
+            raise FileNotFoundError(f"外接存储未挂载：{volume}。请连接原数据盘后重新启动应用。")
     if root.parent.is_dir():
         root.mkdir(parents=False, exist_ok=True)
         os.environ["TMPDIR"] = str(root)
@@ -183,21 +194,6 @@ def _topic_source_urls_from_env() -> tuple[str, ...]:
     return tuple(url.strip() for url in raw.split(",") if url.strip())
 
 
-def _markdown_count(path: str | None) -> int:
-    if not path:
-        return 0
-    vault = Path(path).expanduser()
-    if not vault.exists() or not vault.is_dir():
-        return 0
-    return len(
-        [
-            note
-            for note in vault.rglob("*.md")
-            if not any(part.startswith(".") for part in note.relative_to(vault).parts)
-        ]
-    )
-
-
 def _pending_video_count(path: str | None) -> int:
     if not path:
         return 0
@@ -249,6 +245,7 @@ class Settings:
     draft_output_path: str = _default_draft_output_path()
     jianying_draft_root_path: str = _default_jianying_draft_root_path()
     database_path: str = _default_database_path()
+    asr_provider: str = "local_whisper"
     tencentcloud_secret_id: str | None = None
     tencentcloud_secret_key: str | None = None
     tencentcloud_asr_region: str = "ap-shanghai"
@@ -256,28 +253,62 @@ class Settings:
     tencentcloud_asr_max_wait_seconds: int = 120
     tencentcloud_asr_poll_interval_seconds: float = 2.0
     tencentcloud_asr_max_local_audio_bytes: int = 5_000_000
+    local_whisper_backend: str = "openai_whisper"
+    local_whisper_cli_path: str | None = None
     local_whisper_python_path: str | None = None
     local_whisper_model_path: str | None = None
-    local_whisper_language: str = "zh"
+    local_whisper_language: str = "auto"
     model_root_path: str = _default_model_root_path()
     model_root_path_configured: bool = False
     temporary_root_path: str | None = None
     model_runtime_python_path: str = _default_model_runtime_python_path()
     visual_model_worker_path: str = _default_visual_model_worker_path()
     voice_model_worker_path: str = _default_voice_model_worker_path()
+    understanding_runtime_python_path: str | None = None
+    understanding_worker_path: str = str(Path(__file__).resolve().parents[1] / "model_workers" / "qwen3_vl_worker.py")
+    native_ocr_worker_path: str | None = None
+    native_portrait_worker_path: str | None = None
     avatar_model_runtime_python_path: str | None = None
     avatar_model_worker_path: str = _default_avatar_model_worker_path()
     avatar_model_root_path: str | None = None
     avatar_model_id: str = "musetalk-v1.5-mps"
+    latentsync_worker_path: str = str(Path(__file__).resolve().parents[1] / "model_workers" / "latentsync_worker.py")
+    latentsync_runtime_python_path: str | None = None
+    latentsync_root_path: str | None = None
+    latentsync_pose_root_path: str | None = None
     draft_background_music_path: str | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
     supabase_jwt_audience: str = "authenticated"
     supabase_jwt_issuer: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.asr_provider not in {"local_whisper", "tencentcloud"}:
+            raise ValueError("ASR_PROVIDER 必须是 local_whisper 或 tencentcloud。")
+
+        if self.local_whisper_backend not in {"openai_whisper", "whisper_cpp"}:
+            raise ValueError("LOCAL_WHISPER_BACKEND 必须是 openai_whisper 或 whisper_cpp。")
+
+    @property
+    def local_whisper_runtime_path(self) -> str | None:
+        return self.local_whisper_cli_path if self.local_whisper_backend == "whisper_cpp" else self.local_whisper_python_path
+
+    @property
+    def local_whisper_configured(self) -> bool:
+        runtime = self.local_whisper_runtime_path
+        return bool(runtime and Path(runtime).expanduser().is_file()
+                    and self.local_whisper_model_path and Path(self.local_whisper_model_path).expanduser().is_file())
+
+    @property
+    def asr_configured(self) -> bool:
+        if self.asr_provider == "tencentcloud":
+            return bool(self.tencentcloud_secret_id and self.tencentcloud_secret_key)
+        return self.local_whisper_configured
+
     @property
     def effective_llm_provider(self) -> str:
-        return (self.llm_provider or "deepseek").strip().lower()
+        # An existing DeepSeek-only installation keeps its previous provider.
+        return (self.llm_provider or ("deepseek" if self.deepseek_api_key else "minimax")).strip().lower()
 
     @property
     def effective_llm_api_key(self) -> str | None:
@@ -291,11 +322,18 @@ class Settings:
 
     @property
     def effective_llm_base_url(self) -> str:
-        return (self.llm_base_url or self.deepseek_base_url).rstrip("/")
+        default_url = (
+            "https://api.minimax.io/v1"
+            if self.effective_llm_provider == "minimax"
+            else self.deepseek_base_url
+        )
+        return (self.llm_base_url or default_url).rstrip("/")
 
     @property
     def effective_llm_model(self) -> str:
-        return self.llm_model or self.deepseek_model
+        return self.llm_model or (
+            "MiniMax-M3" if self.effective_llm_provider == "minimax" else self.deepseek_model
+        )
 
     @property
     def llm_configured(self) -> bool:
@@ -385,6 +423,9 @@ class Settings:
                     str(cls.tencentcloud_asr_max_local_audio_bytes),
                 )
             ),
+            asr_provider=os.getenv("ASR_PROVIDER", cls.asr_provider),
+            local_whisper_backend=os.getenv("LOCAL_WHISPER_BACKEND", cls.local_whisper_backend),
+            local_whisper_cli_path=os.getenv("LOCAL_WHISPER_CLI_PATH"),
             local_whisper_python_path=os.getenv("LOCAL_WHISPER_PYTHON_PATH")
             or _default_local_whisper_python_path(),
             local_whisper_model_path=os.getenv("LOCAL_WHISPER_MODEL_PATH")
@@ -402,6 +443,11 @@ class Settings:
             or _default_visual_model_worker_path(),
             voice_model_worker_path=os.getenv("VOICE_MODEL_WORKER_PATH")
             or _default_voice_model_worker_path(),
+            understanding_runtime_python_path=os.getenv("UNDERSTANDING_RUNTIME_PYTHON_PATH") or str(Path(model_root_path).parent / "model-runtimes" / "qwen-vl" / ".venv" / "bin" / "python"),
+            understanding_worker_path=os.getenv("UNDERSTANDING_WORKER_PATH")
+            or cls.understanding_worker_path,
+            native_ocr_worker_path=os.getenv("NATIVE_OCR_WORKER_PATH"),
+            native_portrait_worker_path=os.getenv("NATIVE_PORTRAIT_WORKER_PATH"),
             avatar_model_runtime_python_path=os.getenv(
                 "AVATAR_MODEL_RUNTIME_PYTHON_PATH"
             ),
@@ -409,6 +455,13 @@ class Settings:
             or _default_avatar_model_worker_path(),
             avatar_model_root_path=os.getenv("AVATAR_MODEL_ROOT_PATH"),
             avatar_model_id=os.getenv("AVATAR_MODEL_ID", cls.avatar_model_id),
+            latentsync_worker_path=os.getenv("LATENTSYNC_WORKER_PATH") or cls.latentsync_worker_path,
+            latentsync_runtime_python_path=os.getenv("LATENTSYNC_RUNTIME_PYTHON_PATH")
+            or str(Path(model_root_path).parent / "model-runtimes" / "musetalk-mac" / ".venv" / "bin" / "python"),
+            latentsync_root_path=os.getenv("LATENTSYNC_ROOT_PATH")
+            or str(Path(model_root_path).parent / "model-runtimes" / "latentsync-mlx-candidate"),
+            latentsync_pose_root_path=os.getenv("LATENTSYNC_POSE_ROOT_PATH")
+            or str(Path(model_root_path) / "LatentSync-1.5" / "pose"),
             draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
             supabase_url=os.getenv("SUPABASE_URL"),
             supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
@@ -441,7 +494,7 @@ class Settings:
                 "configured": bool(obsidian_path),
                 "exists": obsidian_exists,
                 "path": obsidian_path,
-                "markdown_count": _markdown_count(obsidian_path),
+                "markdown_count": None,
             },
             "product_hunt": {
                 "configured": bool(self.product_hunt_token),
@@ -465,22 +518,15 @@ class Settings:
                 "database_exists": database_path.exists(),
             },
             "asr": {
-                "provider": "tencentcloud",
-                "configured": bool(
-                    self.tencentcloud_secret_id and self.tencentcloud_secret_key
-                ),
+                "provider": self.asr_provider,
+                "configured": self.asr_configured,
                 "region": self.tencentcloud_asr_region,
                 "engine_model_type": self.tencentcloud_asr_engine_model_type,
                 "max_local_audio_mb": round(
                     self.tencentcloud_asr_max_local_audio_bytes / 1_000_000,
                     2,
                 ),
-                "local_whisper_configured": bool(
-                    self.local_whisper_python_path
-                    and Path(self.local_whisper_python_path).expanduser().is_file()
-                    and self.local_whisper_model_path
-                    and Path(self.local_whisper_model_path).expanduser().is_file()
-                ),
+                "local_whisper_configured": self.local_whisper_configured,
                 "local_whisper_python_path": self.local_whisper_python_path,
                 "local_whisper_model_path": self.local_whisper_model_path,
             },
@@ -590,6 +636,12 @@ class Settings:
                     "secret": True,
                 },
                 {
+                    "name": "ASR_PROVIDER",
+                    "configured": True,
+                    "value": self.asr_provider,
+                    "secret": False,
+                },
+                {
                     "name": "TENCENTCLOUD_SECRET_ID",
                     "configured": bool(self.tencentcloud_secret_id),
                     "value": "已配置" if self.tencentcloud_secret_id else "未配置",
@@ -613,6 +665,8 @@ class Settings:
                     "value": self.tencentcloud_asr_engine_model_type,
                     "secret": False,
                 },
+                {"name": "LOCAL_WHISPER_BACKEND", "configured": True, "value": self.local_whisper_backend, "secret": False},
+                {"name": "LOCAL_WHISPER_CLI_PATH", "configured": bool(self.local_whisper_cli_path), "value": self.local_whisper_cli_path, "secret": False},
                 {
                     "name": "LOCAL_WHISPER_PYTHON_PATH",
                     "configured": bool(self.local_whisper_python_path),
@@ -631,6 +685,8 @@ class Settings:
                     "value": self.local_whisper_language,
                     "secret": False,
                 },
+                {"name": "UNDERSTANDING_RUNTIME_PYTHON_PATH", "configured": bool(self.understanding_runtime_python_path), "value": self.understanding_runtime_python_path, "secret": False},
+                {"name": "NATIVE_OCR_WORKER_PATH", "configured": bool(self.native_ocr_worker_path), "value": self.native_ocr_worker_path, "secret": False},
                 {
                     "name": "AVATAR_MODEL_RUNTIME_PYTHON_PATH",
                     "configured": bool(self.avatar_model_runtime_python_path),

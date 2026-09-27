@@ -22,6 +22,11 @@ const serverFixture = `
 const http = require('node:http');
 const port = Number(process.env.FIXTURE_PORT || process.env.PORT || process.env.API_PORT);
 const server = http.createServer((request, response) => {
+  if (request.url === '/api/creation-tasks/task_fixture/covers/cover_fixture/image') {
+    response.writeHead(200, { 'content-type': 'image/png' });
+    response.end('fixture-png');
+    return;
+  }
   if (request.url === '/api/creation-tasks/task_missing/output') {
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ detail: 'creation task output not found' }));
@@ -99,7 +104,8 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
   const app = {
     isPackaged: packaged,
     whenReady: () => Promise.resolve(),
-    getPath: (name) => name === 'logs' ? logsPath : os.tmpdir(),
+    getPath: (name) => name === 'logs' ? logsPath
+      : name === 'userData' ? path.join(path.dirname(logsPath), 'user-data') : os.tmpdir(),
     getVersion: () => 'test',
     requestSingleInstanceLock: () => true,
     on(event, callback) {
@@ -404,37 +410,46 @@ async function startPackaged() {
   process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH = workerMarkerPath;
   process.env.OBSIDIAN_VAULT_PATH = vaultPath;
   const runtime = await loadMain({ resourcesPath: resources, development: false });
-  await waitFor(() => runtime.windows.length === 1, 'packaged BrowserWindow creation');
-  const status = await runtime.handlers.get('get-service-status')();
-  assert.deepEqual([status.api.state, status.web.state], ['ready', 'ready']);
-  const metadata = JSON.parse(fs.readFileSync(path.join(resources, 'app', 'build-identity.generated.json'), 'utf8'));
-  assert.equal(status.buildIdentity, metadata.candidateInputDigest);
-  assert.equal((await runtime.handlers.get('get-runtime-info')()).buildIdentity, metadata.candidateInputDigest);
-  assert.equal('worker' in status, false, 'legacy Worker must not be a desktop startup service');
-  assert.equal(fs.existsSync(workerMarkerPath), false, 'legacy Worker must not be launched');
-  return {
-    resources,
-    runtime,
-    status,
-    lifecycleLog: path.join(resources, 'logs', 'desktop-runtime.jsonl'),
-    previousWorkerMarkerPath,
-    previousVaultPath,
-  };
+  try {
+    await waitFor(() => runtime.windows.length === 1, 'packaged BrowserWindow creation');
+    const status = await runtime.handlers.get('get-service-status')();
+    assert.deepEqual([status.api.state, status.web.state], ['ready', 'ready']);
+    const metadata = JSON.parse(fs.readFileSync(path.join(resources, 'app', 'build-identity.generated.json'), 'utf8'));
+    assert.equal(status.buildIdentity, metadata.candidateInputDigest);
+    assert.equal((await runtime.handlers.get('get-runtime-info')()).buildIdentity, metadata.candidateInputDigest);
+    assert.equal('worker' in status, false, 'legacy Worker must not be a desktop startup service');
+    assert.equal(fs.existsSync(workerMarkerPath), false, 'legacy Worker must not be launched');
+    return {
+      resources,
+      runtime,
+      status,
+      lifecycleLog: path.join(resources, 'logs', 'desktop-runtime.jsonl'),
+      previousWorkerMarkerPath,
+      previousVaultPath,
+    };
+  } catch (error) {
+    const status = await runtime.handlers.get('get-service-status')();
+    await cleanupRuntime({ resources, runtime, status, previousWorkerMarkerPath, previousVaultPath });
+    throw error;
+  }
 }
 
 async function cleanupRuntime({ resources, runtime, status, previousWorkerMarkerPath, previousVaultPath }) {
   runtime.app.quit();
-  await waitFor(
-    () => [status.api.pid, status.web.pid]
-      .every((pid) => !isAlive(pid)),
-    'child-process cleanup',
-  );
-  runtime.restore();
-  if (previousWorkerMarkerPath === undefined) delete process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH;
-  else process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH = previousWorkerMarkerPath;
-  if (previousVaultPath === undefined) delete process.env.OBSIDIAN_VAULT_PATH;
-  else process.env.OBSIDIAN_VAULT_PATH = previousVaultPath;
-  fs.rmSync(resources, { recursive: true, force: true });
+  try {
+    await waitFor(
+      () => [status.api.pid, status.web.pid]
+        .every((pid) => !isAlive(pid)),
+      'child-process cleanup',
+    );
+    fs.rmSync(resources, { recursive: true, force: true });
+  } finally {
+    runtime.restore();
+    if (previousWorkerMarkerPath === undefined) delete process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH;
+    else process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH = previousWorkerMarkerPath;
+    if (previousVaultPath === undefined) delete process.env.OBSIDIAN_VAULT_PATH;
+    else process.env.OBSIDIAN_VAULT_PATH = previousVaultPath;
+  }
 }
 
 async function assertRuntimeExit(name) {
@@ -567,6 +582,20 @@ async function assertNativeRenderedVideoSaveBoundary() {
     const saved = await handler({}, 'task_fixture');
     assert.deepEqual(saved, { saved: true, fileName: 'chosen-output.mp4' });
     assert.equal(fs.readFileSync(destination, 'utf8'), 'fixture-mp4');
+
+    const saveCover = test.runtime.handlers.get('save-cover-image');
+    assert.equal(typeof saveCover, 'function');
+    assert.equal((await saveCover({}, 'task_fixture', '/tmp/source.png')).saved, false);
+    test.runtime.setSaveDialogResult({ canceled: true });
+    assert.deepEqual(await saveCover({}, 'task_fixture', 'cover_fixture'), { saved: false, canceled: true });
+    const coverDestination = path.join(test.resources, 'chosen-cover.png');
+    test.runtime.setSaveDialogResult({ canceled: false, filePath: coverDestination });
+    const wrongType = await saveCover({}, 'task_fixture', 'cover_unknown');
+    assert.equal(wrongType.saved, false, 'non-image response must not be saved');
+    assert.equal(fs.existsSync(coverDestination), false);
+    assert.deepEqual(await saveCover({}, 'task_fixture', 'cover_fixture'), { saved: true, fileName: 'chosen-cover.png' });
+    assert.equal(fs.readFileSync(coverDestination, 'utf8'), 'fixture-png');
+    assert.deepEqual(fs.readdirSync(test.resources).filter((name) => name.includes('.partial-')), []);
   } finally {
     await cleanupRuntime(test);
   }
@@ -590,7 +619,8 @@ async function main() {
   console.log('desktop lifecycle smoke: PASS');
 }
 
-const runner = process.argv.includes('--closed-pipe-probe') ? closedPipeProbe : main;
+const runner = process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
+  : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary : main;
 
 runner().catch((error) => {
   console.error('desktop lifecycle smoke: FAIL');

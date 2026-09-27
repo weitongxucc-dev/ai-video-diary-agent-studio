@@ -3,8 +3,15 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
+
+from app.graphic_overlays import TextOverlay, ImageOverlay
+from app.visual_effects import VisualEffects
+from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
+from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
+from app.production import ContentUseState
 
 from app.models import (
     EpisodeIntakeMode,
@@ -173,7 +180,7 @@ class ObsidianStatusResponse(BaseModel):
     configured: bool
     exists: bool
     path: str | None
-    markdown_count: int
+    markdown_count: int | None
 
 
 class ProductHuntStatusResponse(BaseModel):
@@ -369,6 +376,45 @@ class EpisodeVoiceSelectionResponse(BaseModel):
     source: Literal["episode", "none"]
 
 
+class VisualFactResponse(BaseModel):
+    kind: Literal["object", "action", "scene"]
+    text: str
+    sample_times: list[float]
+
+
+class OCRTextResponse(BaseModel):
+    text: str
+    confidence: float
+    box: list[float]
+
+    @computed_field
+    @property
+    def retrieval_eligible(self) -> bool:
+        return self.confidence >= OCR_RETRIEVAL_MIN_CONFIDENCE
+
+
+class OCRFrameResponse(BaseModel):
+    id: str
+    timestamp_seconds: float
+    width: int
+    height: int
+    observations: list[OCRTextResponse]
+
+
+class SegmentUnderstandingResponse(BaseModel):
+    status: Literal["ready", "blocked", "failed"]
+    fingerprint: str
+    model_id: str
+    sample_times: list[float]
+    summary: str
+    facts: list[VisualFactResponse]
+    unknowns: list[str]
+    ocr_status: Literal["ready", "blocked", "failed"]
+    ocr_model_id: str
+    ocr_frames: list[OCRFrameResponse]
+    message: str
+
+
 class MaterialSegmentResponse(BaseModel):
     id: str
     asset_id: str
@@ -379,6 +425,7 @@ class MaterialSegmentResponse(BaseModel):
     visual_status: Literal["pending", "ready", "blocked", "failed"]
     visual_model_id: str
     visual_sample_count: int = Field(ge=0, le=3)
+    understanding: SegmentUnderstandingResponse | None = None
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"]
     suggested_usage_role: Literal["unassigned", "a_roll", "b_roll"]
     usage_role_confidence: float = Field(ge=0, le=1)
@@ -391,6 +438,20 @@ class MaterialSegmentResponse(BaseModel):
     last_used_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class MaterialSpeechObservationResponse(BaseModel):
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+class MaterialSpeechAnalysisResponse(BaseModel):
+    status: Literal["ready", "blocked", "failed"]
+    source_fingerprint: str
+    model_id: str
+    observations: list[MaterialSpeechObservationResponse]
+    message: str
 
 
 class MaterialAssetResponse(BaseModel):
@@ -407,10 +468,11 @@ class MaterialAssetResponse(BaseModel):
     usage_role_confidence: float = Field(ge=0, le=1)
     usage_role_reason: str
     review_status: Literal["raw", "approved", "rejected"]
-    rights_confirmed: bool
-    brand_safe: bool
+    use_state: ContentUseState
     analysis_status: Literal["pending", "ready", "blocked", "failed"]
     analysis_message: str
+    user_tags: list[str] = Field(default_factory=list)
+    speech_analysis: MaterialSpeechAnalysisResponse | None = None
     segments: list[MaterialSegmentResponse]
     created_at: datetime
     updated_at: datetime
@@ -458,10 +520,47 @@ class MaterialLibraryInsightsResponse(BaseModel):
 
 
 class MaterialReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     review_status: Literal["raw", "approved", "rejected"]
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"] = "unassigned"
-    rights_confirmed: bool = False
-    brand_safe: bool = False
+
+
+class MaterialAssetTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_tags: list[str] = Field(max_length=50)
+
+
+class MaterialIntakeBindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_directory: str = Field(min_length=1)
+
+
+class MaterialIntakeStatusResponse(BaseModel):
+    bound_to_current_workspace: bool
+    binding_available: bool
+    configured_directory: str | None
+    bound_directory: str | None
+    directory_state: Literal["ready", "missing", "unmounted", "invalid", "changed", "unknown"]
+    directory_message: str
+    repair_action: str | None
+    scan_interval_seconds: int
+    file_counts: dict[str, int]
+
+
+class MaterialBatchTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_ids: list[str] = Field(min_length=1, max_length=100)
+    add: list[str] = Field(default_factory=list, max_length=50)
+    remove: list[str] = Field(default_factory=list, max_length=50)
+
+
+class MaterialBatchTagsResponse(BaseModel):
+    assets: list[MaterialAssetResponse]
+
+
+class MaterialUseStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    use_state: ContentUseState
 
 
 class MaterialSegmentUpdateRequest(BaseModel):
@@ -606,8 +705,12 @@ class CreationPlanDefaultsRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     target_count: int = Field(default=1, ge=1, le=50)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
-    aspect_ratio: Literal["9:16"] = "9:16"
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 20
+    lipsync_quality: Literal["high", "fast"] = "high"
+    template_id: str | None = Field(default=None, min_length=1, max_length=120)
+    template_version: int | None = Field(default=None, ge=1)
 
     @field_validator("goal")
     @classmethod
@@ -709,6 +812,8 @@ class CreationTaskResponse(BaseModel):
     current_timeline_version_id: str | None = None
     timeline_sequence: int = Field(default=0, ge=0)
     can_undo: bool = False
+    can_redo: bool = False
+    can_revise_script: bool = False
     output_ready: bool
     stage_reason: str | None
     stage_impact: str | None
@@ -848,7 +953,7 @@ class CreationTaskScriptResponse(BaseModel):
     run_id: str
     topic_id: str
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: list[CreationTaskScriptSectionResponse]
     selection_status: Literal["draft", "confirmed"]
     created_at: datetime
@@ -874,7 +979,7 @@ class CreationTaskNarrationSegmentResponse(BaseModel):
     model_id: str
     voice_profile_id: str
     voice_version: str
-    language: Literal["zh"]
+    language: Literal["zh", "en", "zh-en"]
     status: Literal["pending", "ready", "generating", "failed"]
 
 
@@ -886,7 +991,7 @@ class CreationTaskNarrationResponse(BaseModel):
     sample_rate: int = Field(gt=0)
     model_id: str
     voice_profile_id: str
-    language: Literal["zh"]
+    language: Literal["zh", "en", "zh-en"]
     pronunciation_version: str
     segments: list[CreationTaskNarrationSegmentResponse]
 
@@ -906,6 +1011,7 @@ class CreationTaskPersonRenderRequest(BaseModel):
     person_version: str = Field(min_length=1, max_length=120)
     motion: Literal["natural"] = "natural"
     expression: Literal["neutral"] = "neutral"
+    lipsync_quality: Literal["high", "fast"] | None = None
 
 
 class CreationTaskPersonRenderResponse(BaseModel):
@@ -947,6 +1053,14 @@ class CreationTaskVoiceOptionResponse(BaseModel):
 
 
 class CreationTaskMontageClipResponse(BaseModel):
+    transition_in_seconds: float = 0
+    fade_envelope_rate: float = 1
+    fade_envelope_offset_frames: float = 0
+    fade_envelope_duration_frames: float | None = None
+    visual_effects: VisualEffects = Field(default_factory=VisualEffects)
+    fit_mode: Literal["fill", "fit"] = "fill"
+    crop_x: float = Field(default=0.5, ge=0, le=1)
+    crop_y: float = Field(default=0.5, ge=0, le=1)
     id: str
     cue_id: str
     asset_id: str
@@ -973,7 +1087,28 @@ class CreationTaskNarrationCueResponse(BaseModel):
     duration_seconds: float = Field(gt=0)
 
 
+class TimelineAudioClipResponse(TimelineAudioClip):
+    editor_gain_points: list[AudioGainPoint] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def project_editor_gain_points(self):
+        self.editor_gain_points = visible_gain_points(self)
+        return self
+
+
+class TimelineAudioTrackResponse(TimelineAudioTrack):
+    clips: list[TimelineAudioClipResponse] = Field(default_factory=list)
+
+
+class AudioTimelineResponse(AudioTimeline):
+    tracks: list[TimelineAudioTrackResponse] = Field(default_factory=list)
+
+
 class CreationTaskMontagePlanResponse(BaseModel):
+    graphic_overlays: list[TextOverlay | ImageOverlay] = Field(default_factory=list)
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    presenter_share_actual: float = Field(default=0, ge=0, le=100)
     id: str
     task_id: str
     script_id: str
@@ -983,6 +1118,7 @@ class CreationTaskMontagePlanResponse(BaseModel):
     clips: list[CreationTaskMontageClipResponse]
     duration_seconds: float = Field(gt=0)
     low_confidence_clip_count: int = Field(ge=0)
+    audio_timeline: AudioTimelineResponse | None = None
     narration_reference: str
     output_url: str | None
     subtitle_url: str | None
@@ -996,6 +1132,11 @@ class CreationTaskMontageRenderRequest(BaseModel):
 
 
 class CreationTaskMontageClipUpdateRequest(BaseModel):
+    fit_mode: Literal["fill", "fit"] | None = None
+    crop_x: float | None = Field(default=None, ge=0, le=1)
+    crop_y: float | None = Field(default=None, ge=0, le=1)
+    split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1007,23 +1148,61 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 
 class CreationTaskExactEditRequest(BaseModel):
+    overlay_action: Literal["add","update","delete"] | None = None
+    graphic_overlay: TextOverlay | ImageOverlay | None = None
+    overlay_id: str | None = None
+    transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
+    fit_mode: Literal["fill", "fit"] | None = None
+    crop_x: float | None = Field(default=None, ge=0, le=1)
+    crop_y: float | None = Field(default=None, ge=0, le=1)
+    split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
     model_config = ConfigDict(extra="forbid")
 
     operation_type: Literal[
         "ReplaceClip",
+        "ChangeCanvas",
+        "SetClipTransition",
+        "EditGraphicOverlay",
+    "ChangeCrop",
         "TrimClip",
+        "SplitClip",
+        "ChangeClipSpeed",
+        "ChangeLinkedSpeed",
+        "DeleteClip",
+        "DuplicateClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
     ]
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] | None = None
+    split_offset: int | None = Field(default=None, ge=1)
+    find_text: str | None = Field(default=None, min_length=1, max_length=96)
+    replacement_text: str | None = Field(default=None, max_length=96)
+    track_id: str | None = Field(default=None, min_length=1, max_length=120)
     clip_id: str | None = Field(default=None, min_length=1, max_length=120)
     narration_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
     cue_id: str | None = Field(default=None, min_length=1, max_length=120)
+    start_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     text: str | None = Field(default=None, min_length=1, max_length=96)
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    subtitle_display: Literal["none", "zh", "en", "zh-en"] | None = None
+    target_language: Literal["en-US"] | None = None
+    line_breaks: list[int] | None = Field(default=None, max_length=8)
+    emphasis: list[str] | None = Field(default=None, max_length=8)
+    style: dict[str, object] | None = None
+    frame_time_seconds: float | None = Field(default=None, ge=0)
     delivery_instruction: str | None = Field(default=None, min_length=1, max_length=120)
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
     segment_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -1042,11 +1221,19 @@ class CreationTaskSubtitleCueUpdateRequest(BaseModel):
     text: str = Field(min_length=1, max_length=48)
 
 
+class CompoundEditSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    included_step_indices: list[int] | None = Field(default=None,min_length=1,max_length=100)
+    raw_command: str | None = Field(default=None,min_length=2,max_length=200)
+
+
 class CreationTaskEditPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     raw_command: str = Field(min_length=2, max_length=500)
-    context_stage: Literal["topic", "script", "narration", "montage", "review"]
+    context_stage: Literal[
+        "topic", "script", "narration", "montage", "review", "subtitle_cover"
+    ]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
 
@@ -1069,29 +1256,62 @@ class EditIntentResponse(BaseModel):
 
 class TypedEditOperationDraftResponse(BaseModel):
     operation_type: Literal[
+        "ChangePresenterShare",
+        "EditAudioTimeline",
+    "EditCompoundTimeline",
+        "RemoveSilence",
+        "AdjustVisualEffects",
+        "ChangeCanvas",
+        "SetClipTransition",
+        "EditGraphicOverlay",
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
+        "SplitClip",
+        "ChangeClipSpeed",
+        "ChangeLinkedSpeed",
+        "DeleteClip",
+        "DuplicateClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "AlignSubtitleTiming",
+        "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
+    "RedoTimelineVersion",
     ]
     payload: dict[str, object]
 
 
 class EditPreviewItemResponse(BaseModel):
+    image_url: str | None = None
+    video_url: str | None = None
+    audio_url: str | None = None
     ref: str
     label: str
     detail: str
 
 
+class SubtitleTextChangeResponse(BaseModel):
+    cue_id: str
+    before: str
+    after: str
+    occurrences: int
+
+
 class EditChangePreviewResponse(BaseModel):
     before: EditPreviewItemResponse
     after: EditPreviewItemResponse
+    text_changes: list[SubtitleTextChangeResponse] = Field(default_factory=list)
 
 
 class EditProposalResponse(BaseModel):
@@ -1115,22 +1335,73 @@ class CreationTaskEditPreviewResponse(BaseModel):
     proposal: EditProposalResponse
 
 
+class CreationTaskAssistantTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
+    selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
+    playhead_ms: int | None = Field(default=None, ge=0)
+
+
+class CreationTaskAssistantTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    edit_preview: CreationTaskEditPreviewResponse | None = None
+    script_draft: CreationTaskScriptResponse | None = None
+
+
+class CreationTaskAssistantHistoryEntry(BaseModel):
+    role: Literal["user", "assistant"]
+    message: str
+    stage: str
+    script_id: str | None = None
+    at: datetime
+
+
+class CreationTaskAssistantHistoryResponse(BaseModel):
+    items: list[CreationTaskAssistantHistoryEntry]
+
+
 class EditOperationResponse(BaseModel):
     id: str
     workspace_id: str
     task_id: str
     proposal_id: str
     operation_type: Literal[
+        "ChangePresenterShare",
+        "EditAudioTimeline",
+    "EditCompoundTimeline",
+        "RemoveSilence",
+        "AdjustVisualEffects",
+        "ChangeCanvas",
+        "SetClipTransition",
+        "EditGraphicOverlay",
+        "ChangeCrop",
         "ReplaceClip",
         "TrimClip",
+        "SplitClip",
+        "ChangeClipSpeed",
+        "ChangeLinkedSpeed",
+        "DeleteClip",
+        "DuplicateClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "UpdateSubtitleCue",
+        "AlignSubtitleTiming",
+        "ReplaceSubtitleText",
+        "SplitSubtitleCue",
+        "MergeSubtitleCue",
+        "DeleteSubtitleCue",
+        "ConfigureSubtitleTrack",
+        "GenerateCoverFromFrame",
         "ChangePersonSegment",
         "RegeneratePersonRender",
         "UndoTimelineVersion",
+    "RedoTimelineVersion",
     ]
     payload: dict[str, object]
     base_version_id: str | None
@@ -1148,12 +1419,17 @@ class CreationTaskEditConfirmResponse(BaseModel):
 
 
 class CreationPlanPreviewResponse(BaseModel):
+    template_id: str | None = None
+    template_version: int | None = None
+    template_settings: dict[str, object] = Field(default_factory=dict)
     goal: str
     name: str
     target_count: int = Field(ge=1)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
-    aspect_ratio: Literal["9:16"]
+    aspect_ratio: Literal["9:16", "16:9", "1:1"]
     duration_target_seconds: int = Field(ge=15)
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]
     selected_voice: CreationPlanVoiceReferenceResponse | None
@@ -1169,6 +1445,20 @@ class CreationPlanPreviewResponse(BaseModel):
     preflight_fingerprint: str
 
 
+class WorkspaceAssistantPlanTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    conversation_id: UUID
+
+
+class WorkspaceAssistantPlanTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    plan_preview: CreationPlanPreviewResponse | None = None
+
+
 class CreationPlanResponse(CreationPlanPreviewResponse):
     id: str
     workspace_id: str
@@ -1179,7 +1469,76 @@ class CreationPlanResponse(CreationPlanPreviewResponse):
     updated_at: datetime
 
 
+class SaveVideoTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    style_instruction: str = Field(default="", max_length=500)
+    template_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
 class PersonRenderCapabilityResponse(BaseModel):
+    available: bool
+    model_id: str | None
+    message: str
+    repair_action: str | None
+
+
+class SubtitleCueTrackResponse(BaseModel):
+    id: str
+    source_cue_id: str | None
+    text: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    speaker: str | None
+    line_breaks: list[int]
+    emphasis: list[str]
+
+
+class SubtitleTrackResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    language: Literal["zh-CN", "en-US"]
+    source_language: Literal["zh-CN", "en-US"] | None
+    style: dict[str, object]
+    cues: list[SubtitleCueTrackResponse]
+    generation_method: Literal["timeline", "translation"]
+    model_id: str | None
+    artifact_ref: str | None
+    transform_id: str | None
+    status: Literal["valid", "failed", "unavailable", "superseded"]
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CoverAssetResponse(BaseModel):
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    source_video_ref: str
+    frame_time_seconds: float = Field(ge=0)
+    title: str
+    safe_area: dict[str, float]
+    layout: dict[str, object]
+    generation_method: Literal["video_frame", "image_model"]
+    model_or_engine: str
+    artifact_ref: str | None
+    transform_id: str | None
+    status: Literal["valid", "failed", "unavailable", "superseded"]
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskCapabilityResponse(BaseModel):
     available: bool
     model_id: str | None
     message: str
@@ -1194,9 +1553,15 @@ class CreationTaskWorkspaceResponse(BaseModel):
     scripts: list[CreationTaskScriptResponse]
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
+    portrait_available: bool = False
     person_render_capability: PersonRenderCapabilityResponse
     person_renders: list[CreationTaskPersonRenderResponse] = Field(default_factory=list)
     montage: CreationTaskMontagePlanResponse | None
+    subtitle_tracks: list[SubtitleTrackResponse] = Field(default_factory=list)
+    cover_asset: CoverAssetResponse | None = None
+    subtitle_translation_capability: TaskCapabilityResponse
+    cover_frame_capability: TaskCapabilityResponse
+    image_generation_capability: TaskCapabilityResponse
 
 
 class NarrationCueResponse(BaseModel):
@@ -1871,6 +2236,11 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None
     product_hunt_token: str | None = None
+    asr_provider: Literal["local_whisper", "tencentcloud"] | None = None
+    understanding_runtime_python_path: str | None = None
+    native_ocr_worker_path: str | None = None
+    local_whisper_backend: Literal["openai_whisper", "whisper_cpp"] | None = None
+    local_whisper_cli_path: str | None = None
     tencentcloud_secret_id: str | None = None
     tencentcloud_secret_key: str | None = None
     tencentcloud_asr_region: str | None = None

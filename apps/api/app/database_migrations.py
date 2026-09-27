@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 6
+PRODUCTION_SCHEMA_VERSION = 10
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -359,6 +359,192 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN
             SELECT RAISE(ABORT, 'person_render artifact ref is immutable');
         END;
+        """,
+    ),
+    (
+        7,
+        """
+        CREATE TABLE IF NOT EXISTS subtitle_tracks (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            timeline_version_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, task_id, timeline_version_id, language)
+        );
+        CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_task
+            ON subtitle_tracks(
+                workspace_id,
+                task_id,
+                created_at ASC,
+                id ASC
+            );
+
+        CREATE TABLE IF NOT EXISTS cover_assets (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            timeline_version_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, task_id, timeline_version_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cover_assets_task
+            ON cover_assets(
+                workspace_id,
+                task_id,
+                created_at ASC,
+                id ASC
+            );
+        """,
+    ),
+    (
+        8,
+        """
+        CREATE TABLE device_work_requests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT,
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            work_class TEXT NOT NULL CHECK (work_class IN ('preview_dependency', 'normal_make', 'background')),
+            policy TEXT NOT NULL CHECK (policy IN ('asap', 'idle', 'scheduled')),
+            not_before_utc TEXT,
+            window_json TEXT,
+            first_ready_at_utc TEXT NOT NULL,
+            eligible_since_utc TEXT,
+            eligible_wait_seconds REAL NOT NULL DEFAULT 0,
+            state TEXT NOT NULL CHECK (state IN ('waiting', 'blocked', 'granted', 'yield_requested', 'done', 'cancelled')),
+            wait_reason TEXT,
+            checkpoint_ref TEXT,
+            resources_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, owner_type, owner_id, input_digest, unit_key)
+        );
+        CREATE INDEX idx_device_work_pending
+            ON device_work_requests(state, work_class, first_ready_at_utc, id);
+
+        CREATE TABLE device_permit (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            lock_key TEXT,
+            generation INTEGER NOT NULL DEFAULT 0,
+            request_id TEXT,
+            token_hash TEXT,
+            holder_json TEXT,
+            children_json TEXT NOT NULL DEFAULT '[]',
+            granted_at_utc TEXT,
+            heartbeat_at_utc TEXT,
+            state TEXT NOT NULL DEFAULT 'free' CHECK (state IN ('free', 'held', 'reconciling')),
+            last_groups_json TEXT NOT NULL DEFAULT '{}',
+            preview_burst INTEGER NOT NULL DEFAULT 0,
+            normal_burst INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO device_permit (id) VALUES (1);
+
+        CREATE TABLE device_session_activity (
+            session_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            last_heartbeat_at_utc TEXT NOT NULL,
+            last_interaction_at_utc TEXT NOT NULL,
+            playing INTEGER NOT NULL CHECK (playing IN (0, 1)),
+            recording INTEGER NOT NULL CHECK (recording IN (0, 1)),
+            editing INTEGER NOT NULL CHECK (editing IN (0, 1))
+        );
+        CREATE INDEX idx_device_session_heartbeat
+            ON device_session_activity(last_heartbeat_at_utc);
+        """,
+    ),
+    (
+        9,
+        """
+        ALTER TABLE device_work_requests RENAME TO device_work_requests_v8;
+        CREATE TABLE device_work_requests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT,
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            work_class TEXT NOT NULL CHECK (work_class IN ('preview_dependency', 'normal_make', 'background')),
+            policy TEXT NOT NULL CHECK (policy IN ('asap', 'idle', 'scheduled')),
+            not_before_utc TEXT,
+            window_json TEXT,
+            first_ready_at_utc TEXT NOT NULL,
+            eligible_since_utc TEXT,
+            eligible_wait_seconds REAL NOT NULL DEFAULT 0,
+            state TEXT NOT NULL CHECK (state IN ('waiting', 'blocked', 'granted', 'yield_requested', 'done', 'cancelled', 'failed')),
+            wait_reason TEXT,
+            checkpoint_ref TEXT,
+            resources_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number >= 1),
+            retry_not_before_utc TEXT,
+            last_failure_reason TEXT,
+            last_grant_generation INTEGER,
+            UNIQUE(workspace_id, owner_type, owner_id, input_digest, unit_key)
+        );
+        INSERT INTO device_work_requests
+            (id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+             source_refs_json, work_class, policy, not_before_utc, window_json,
+             first_ready_at_utc, eligible_since_utc, eligible_wait_seconds, state,
+             wait_reason, checkpoint_ref, resources_json, created_at, updated_at)
+        SELECT id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+               source_refs_json, work_class, policy, not_before_utc, window_json,
+               first_ready_at_utc, eligible_since_utc, eligible_wait_seconds, state,
+               wait_reason, checkpoint_ref, resources_json, created_at, updated_at
+        FROM device_work_requests_v8;
+        DROP TABLE device_work_requests_v8;
+        CREATE INDEX idx_device_work_pending
+            ON device_work_requests(state, work_class, first_ready_at_utc, id);
+
+        CREATE TABLE device_request_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            permit_generation INTEGER,
+            event_type TEXT NOT NULL CHECK (event_type IN ('deferred', 'failed', 'retried')),
+            reason TEXT NOT NULL,
+            actor_id TEXT,
+            prior_state TEXT NOT NULL,
+            prior_checkpoint_ref TEXT,
+            created_at_utc TEXT NOT NULL
+        );
+        CREATE INDEX idx_device_request_events_request
+            ON device_request_events(request_id, id);
+        """,
+    ),
+    (
+        10,
+        """
+        ALTER TABLE material_ingestion_files ADD COLUMN provisional_revision TEXT;
+
+        CREATE TABLE material_analysis_checkpoints (
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            provisional_revision TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            stage_input_digest TEXT NOT NULL,
+            result_json TEXT,
+            result_ref TEXT,
+            completed_at TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, asset_id, provisional_revision, source_sha256, unit_key),
+            CHECK (result_json IS NOT NULL OR result_ref IS NOT NULL)
+        );
+        CREATE INDEX idx_material_analysis_checkpoint_source
+            ON material_analysis_checkpoints(workspace_id, asset_id, source_sha256, unit_key);
         """,
     ),
 )

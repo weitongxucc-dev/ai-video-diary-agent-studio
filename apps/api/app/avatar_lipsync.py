@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -11,10 +13,33 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.voice_clone import MediaRuntimeFailure
+from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 
 if TYPE_CHECKING:
     from app.config import Settings
     from app.production import ProductionRepository
+
+
+def compile_person_edit_command(command: str) -> str:
+    """Require a complete executable request before offering person generation."""
+    operations = set()
+    for clause in re.split(r"[,，;；。.!！]|同时|并且|然后|\band\b|\bthen\b", command.casefold()):
+        value = clause.strip()
+        if not value:
+            continue
+        if re.fullmatch(r"其他(?:都)?(?:不要动|不变)|(?:保留|保持)(?:当前|原有)?(?:配音|字幕|原声|表情)(?:不变)?|(?:配音|字幕|原声|表情)不变", value):
+            continue
+        value = re.sub(r"^(?:请|麻烦)(?:你)?\s*", "", value)
+        value = re.sub(r"^(?:这里|这一段|这段|当前镜头|所选镜头)\s*", "", value)
+        if re.fullmatch(r"(?:只)?(?:重做|重新生成|重新对齐|再对齐)(?:人物)?口型|(?:regenerate|redo) (?:the )?(?:lip sync|lipsync)", value):
+            operations.add("RegeneratePersonRender")
+        elif re.fullmatch(r"(?:换成|改成|替换为)(?:当前|所选)人物(?:出镜)?|(?:使用|让)(?:当前|所选)人物出镜", value):
+            operations.add("ChangePersonSegment")
+        else:
+            raise ValueError("人物要求尚不支持或含有歧义；可以使用“这一段换成当前人物出镜”或“这里只重做口型，其他都不要动”。")
+    if len(operations) != 1:
+        raise ValueError("请明确选择换成人物出镜或重做现有口型，不能混合两种操作。")
+    return operations.pop()
 
 
 AuthorizationStatus = Literal["active", "pending", "expired", "revoked"]
@@ -342,7 +367,9 @@ class SubprocessAvatarAndLipSyncProvider:
                     impact="人物与口型步骤失败，当前视频不能进入后续剪辑。",
                     action=f"检查人物口型服务响应格式后重试：{exc}",
                 )
-        return _parse_avatar_result(payload, expected_output=output, cache_key=cache_key)
+        return _parse_avatar_result(
+            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key
+        )
 
     def _run_command(self, command: list[str]) -> None:
         completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
@@ -351,6 +378,49 @@ class SubprocessAvatarAndLipSyncProvider:
             if len(detail) > 4000:
                 detail = detail[-4000:]
             raise subprocess.SubprocessError(detail or f"exit {completed.returncode}")
+
+
+class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
+    """Local high-precision option; keep its model identity separate from MuseTalk."""
+
+    def __init__(self, *, pose_root: str | Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.pose_root = Path(pose_root).expanduser()
+
+    @property
+    def ready(self) -> bool:
+        required = (
+            self.worker_path,
+            self.worker_path.with_name("latentsync_entry.py"),
+            self.runtime_root / "inference_fidelity.py",
+            self.runtime_root / "dependencies" / "mlx" / "nn" / "__init__.py",
+            self.runtime_root / "upstream" / "latentsync" / "utils" / "affine_transform.py",
+            self.runtime_root / "checkpoints" / "latentsync_unet_mlx.safetensors",
+            self.runtime_root / "checkpoints" / "vae_mlx.safetensors",
+            self.runtime_root / "checkpoints" / "whisper" / "tiny.pt",
+            self.pose_root / "official_onnx.py",
+            self.pose_root / "dw-ll_ucoco_384.onnx",
+            self.pose_root / "dependencies" / "onnxruntime" / "__init__.py",
+            self.pose_root / "dependencies" / "loguru" / "__init__.py",
+        )
+        return (
+            self.runtime_path.is_file()
+            and all(path.is_file() for path in required)
+            and any((self.runtime_root / "dependencies" / "mlx").glob("core*.so"))
+        )
+
+    @property
+    def message(self) -> str:
+        return "高精度口型已就绪；处理时间较长。" if self.ready else "高精度口型环境不完整，请检查外接盘模型与运行依赖。"
+
+    def _run_command(self, command: list[str]) -> None:
+        completed = subprocess.run(
+            [*command, "--pose-root", str(self.pose_root.resolve())],
+            check=False, capture_output=True, text=True, timeout=6 * 60 * 60,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
 
 
 class AvatarAndLipSyncService:
@@ -404,13 +474,22 @@ class AvatarAndLipSyncService:
                 action="选择已配置的人物口型模型版本后重试。",
                 retryable=False,
             )
+        if self.provider.ready and request.language not in self.provider.supported_languages:
+            return _failure(
+                status="unavailable",
+                cache_key=cache_key,
+                code="language_unavailable",
+                impact="当前人物口型运行时未声明支持该配音语言，未生成或复用视频。",
+                action="选择已声明支持该语言的本地模型。",
+                retryable=False,
+            )
         output = (
             self.output_root
             / "avatar_lipsync"
             / _safe_component(request.workspace_id)
             / f"{cache_key}.mp4"
         )
-        reusable = _probe_avatar_output(output)
+        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path))
         if reusable is not None:
             duration_seconds, alignment_evidence = reusable
             return AvatarAndLipSyncResult(
@@ -424,6 +503,11 @@ class AvatarAndLipSyncService:
                 remediation_action=None,
             )
         result = self.provider.render(request=request, output_path=output)
+        if result.status != "succeeded":
+            # A failed attempt is not a reusable cache entry, even when it left
+            # behind a playable but incomplete file. This path is generated
+            # scratch output; published immutable artifacts live elsewhere.
+            output.unlink(missing_ok=True)
         return replace(result, cache_key=cache_key)
 
     def render_from_repository(
@@ -715,7 +799,7 @@ def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
 
 
 def _parse_avatar_result(
-    payload: object, *, expected_output: Path, cache_key: str
+    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str
 ) -> AvatarAndLipSyncResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         return _failure(
@@ -767,17 +851,25 @@ def _parse_avatar_result(
             impact="人物口型服务没有生成视频，当前视频不能进入后续剪辑。",
             action="检查输出目录权限和供应商任务结果后重试。",
         )
-    if b"ftyp" not in expected_output.read_bytes()[:64]:
+    media = _probe_avatar_output(expected_output, audio_path=audio_path)
+    if media is None:
         return _failure(
             status="failed",
             cache_key=cache_key,
             code="output_invalid",
-            impact="人物口型服务输出不是有效 MP4，当前视频不能进入后续剪辑。",
-            action="检查供应商输出编码后重试。",
+            impact="人物口型视频不可用或与配音时长不一致，当前视频不能进入后续剪辑。",
+            action="检查人物口型服务输出编码及完整配音时长后重试。",
         )
     duration = payload.get("duration_seconds")
     alignment_evidence = payload.get("alignment_evidence")
-    if not isinstance(duration, (int, float)) or duration <= 0 or not isinstance(alignment_evidence, str) or not alignment_evidence.strip():
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(duration)
+        or duration <= 0
+        or not isinstance(alignment_evidence, str)
+        or not alignment_evidence.strip()
+    ):
         return _failure(
             status="failed",
             cache_key=cache_key,
@@ -785,11 +877,22 @@ def _parse_avatar_result(
             impact="人物口型输出缺少时长或对齐证据，不能作为完成视频使用。",
             action="要求人物口型服务返回有效时长和对齐证据后重试。",
         )
+    actual_duration, _ = media
+    # Allow container/encoder rounding, but never publish a materially shorter
+    # output using only the worker's claimed duration.
+    if abs(actual_duration - duration) > 0.1:
+        return _failure(
+            status="failed",
+            cache_key=cache_key,
+            code="provider_evidence_invalid",
+            impact="人物口型输出的实际时长与服务返回值不一致，不能进入后续剪辑。",
+            action="检查人物口型输出是否被截断后重新生成。",
+        )
     return AvatarAndLipSyncResult(
         status="succeeded",
         cache_key=cache_key,
         artifact_path=str(expected_output),
-        duration_seconds=round(float(duration), 3),
+        duration_seconds=actual_duration,
         alignment_evidence=alignment_evidence.strip(),
         failure_code=None,
         failure_impact=None,
@@ -863,7 +966,19 @@ def _authorization_cache_identity(authorization: Authorization) -> dict[str, str
 
 def avatar_lipsync_provider_from_settings(
     settings: Settings,
+    *, quality: Literal["high", "fast"] = "fast",
 ) -> AvatarAndLipSyncProvider:
+    if quality == "high":
+        if not settings.latentsync_runtime_python_path or not settings.latentsync_root_path or not settings.latentsync_pose_root_path:
+            return UnavailableAvatarAndLipSyncProvider("高精度口型环境尚未配置。")
+        return LatentSyncAvatarAndLipSyncProvider(
+            runtime_path=settings.latentsync_runtime_python_path,
+            worker_path=settings.latentsync_worker_path,
+            runtime_root=settings.latentsync_root_path,
+            pose_root=settings.latentsync_pose_root_path,
+            model_id="latentsync-1.5-mlx-fidelity-brow",
+            supported_languages=("zh",),
+        )
     runtime = settings.avatar_model_runtime_python_path
     runtime_root = settings.avatar_model_root_path
     if not runtime or not runtime_root:
@@ -877,57 +992,11 @@ def avatar_lipsync_provider_from_settings(
     )
 
 
-def _probe_avatar_output(path: Path) -> tuple[float, str] | None:
+def _probe_avatar_output(path: Path, *, audio_path: Path | None = None) -> tuple[float, str] | None:
     if not path.is_file() or path.stat().st_size == 0:
         return None
-    completed = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
-            "-of",
-            "json",
-            str(path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if completed.returncode != 0:
-        return None
     try:
-        payload = json.loads(completed.stdout)
-        duration = float(payload["format"]["duration"])
-        streams = payload["streams"]
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        expected_duration = probe_media_duration(audio_path) if audio_path is not None else None
+        return probe_avatar_media(path, expected_duration=expected_duration)
+    except MediaTimingError:
         return None
-    video = next((item for item in streams if item.get("codec_type") == "video"), None)
-    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
-    if (
-        duration <= 0
-        or video is None
-        or audio is None
-        or video.get("codec_name") != "h264"
-        or audio.get("codec_name") != "aac"
-        or not video.get("width")
-        or not video.get("height")
-    ):
-        return None
-    evidence = json.dumps(
-        {
-            "engine": "musetalk-v1.5",
-            "duration_seconds": round(duration, 3),
-            "video_codec": video.get("codec_name"),
-            "width": video.get("width"),
-            "height": video.get("height"),
-            "audio_codec": audio.get("codec_name"),
-            "sample_rate": audio.get("sample_rate"),
-            "channels": audio.get("channels"),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return round(duration, 3), evidence

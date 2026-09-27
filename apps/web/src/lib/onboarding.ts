@@ -177,6 +177,8 @@ export function buildOnboardingSnapshot(input: {
     settings,
     "LOCAL_WHISPER_PYTHON_PATH",
   );
+  const localWhisperRuntime = settingsValue(settings, "LOCAL_WHISPER_BACKEND").value === "whisper_cpp"
+    ? settingsValue(settings, "LOCAL_WHISPER_CLI_PATH") : localWhisperPython;
   const localWhisperModel = settingsValue(settings, "LOCAL_WHISPER_MODEL_PATH");
   const draftOutput = settingsValue(settings, "DRAFT_OUTPUT_PATH");
   const jianyingRoot = settingsValue(settings, "JIANYING_DRAFT_ROOT_PATH");
@@ -249,7 +251,7 @@ export function buildOnboardingSnapshot(input: {
     if (status?.obsidian.path) {
       state = obsidianConfigured ? "ready" : "missing";
       detail = obsidianConfigured
-        ? `已发现 ${status.obsidian.markdown_count} 篇笔记。`
+        ? (status.obsidian.markdown_count === null ? "资料目录可用，内容待读取。" : `已发现 ${status.obsidian.markdown_count} 篇笔记。`)
         : `路径未找到：${status.obsidian.path}`;
     } else if (status) {
       state = "missing";
@@ -407,18 +409,14 @@ export function buildOnboardingSnapshot(input: {
     const hasTencent =
       tencentSecretId.configured && tencentSecretKey.configured;
     const hasLocal =
-      localWhisperPython.configured && localWhisperModel.configured;
-    if (hasTencent || hasLocal) {
-      const provider =
-        hasTencent && hasLocal
-          ? "腾讯云 ASR + 本地 Whisper"
-          : hasTencent
-            ? "腾讯云 ASR"
-            : "本地 Whisper";
+      localWhisperRuntime.configured && localWhisperModel.configured;
+    const useCloud = settingsValue(settings, "ASR_PROVIDER").value === "tencentcloud";
+    const provider = useCloud ? "腾讯云 ASR" : "本地 Whisper";
+    if (useCloud ? hasTencent : hasLocal) {
       return buildEntry({
         id: "tencentcloud_asr",
         title: "语音识别 (ASR)",
-        detail: `${provider} 已配置，语音转写可用。`,
+        detail: `${provider} 已配置，实际转写尚需验证。`,
         impact: "已具备 ASR 能力。",
         state: "ready",
         fixHref: "/settings",
@@ -431,7 +429,7 @@ export function buildOnboardingSnapshot(input: {
       id: "tencentcloud_asr",
       title: "语音识别 (ASR)",
       detail:
-        "腾讯云 SecretId/SecretKey 与本地 Whisper 路径都未配置，语音指令无法转写。",
+        `${provider} 配置不完整，语音指令无法转写；不会自动切换。`,
       impact: "没有 ASR，语音指令功能会完全不可用。",
       state: "missing",
       fixHref: "/settings",
@@ -445,12 +443,12 @@ export function buildOnboardingSnapshot(input: {
     id: "local_whisper",
     title: "本地 Whisper 路径",
     detail:
-      localWhisperPython.configured && localWhisperModel.configured
-        ? "已配置 Python 解释器和模型路径。腾讯云不可用时会降级到本地。"
-        : "本地 Whisper 路径未填写，会依赖腾讯云。",
+      localWhisperRuntime.configured && localWhisperModel.configured
+        ? "已配置所选运行程序和模型路径，实际转写尚需验证。"
+        : "所选本地 Whisper 程序或模型路径未填写，不会自动改用云端。",
     impact: "没有本地 Whisper，离线场景下无法转写。",
     state:
-      localWhisperPython.configured && localWhisperModel.configured
+      localWhisperRuntime.configured && localWhisperModel.configured
         ? "ready"
         : "attention",
     fixHref: "/settings",

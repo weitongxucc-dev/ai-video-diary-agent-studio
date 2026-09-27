@@ -3,7 +3,7 @@ import io
 import json
 import sqlite3
 import wave
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +14,11 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.config import Settings
-from app.database_migrations import _MIGRATIONS, apply_production_migrations
+from app.database_migrations import (
+    PRODUCTION_SCHEMA_VERSION,
+    _MIGRATIONS,
+    apply_production_migrations,
+)
 from app.model_runtime import ModelCatalog
 from app.production import (
     ArtifactRecord,
@@ -333,8 +337,6 @@ def _seed_creation_plan_facts(
         workspace_id,
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="b_roll",
     )
     voice_reference = production.video_library_path / "approved" / f"{workspace_id}.wav"
@@ -375,8 +377,6 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
             "workspace_a",
             assets[0].id,
             review_status="approved",
-            rights_confirmed=True,
-            brand_safe=True,
             usage_role="b_roll",
         )
 
@@ -393,22 +393,53 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
             "workspace_a",
             assets[0].id,
             review_status="approved",
-            rights_confirmed=True,
-            brand_safe=True,
         )
 
     approved = production.update_asset_review(
         "workspace_a",
         assets[0].id,
         review_status="approved",
-        rights_confirmed=False,
-        brand_safe=False,
         usage_role="b_roll",
     )
     assert approved.review_status == "approved"
-    assert approved.rights_confirmed is False
-    assert approved.brand_safe is False
+    assert approved.use_state == "available"
     assert all(segment.review_status == "approved" for segment in approved.segments)
+
+
+@pytest.mark.parametrize('use_state,usable',[
+    ('available',True),('reference_only',False),('excluded',False),('not_for_automation',True),('not_for_publish',True),
+])
+def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use_state,usable):
+    production=_repository(tmp_path)
+    (production.video_library_path/'state.mp4').write_bytes(b'local fixture')
+    asset=production.scan_library('workspace_a')[0]
+    assert asset.use_state=='available'
+    asset=production.analyze_asset('workspace_a',asset.id)
+    asset=production.update_asset_review('workspace_a',asset.id,review_status='approved',usage_role='b_roll')
+    reference=production.workspace_media_reference_for_asset('workspace_a',asset.id)
+    stale=production.get_asset('workspace_a',asset.id)
+    changed=production.update_asset_use_state('workspace_a',asset.id,use_state)
+    assert changed.use_state==use_state
+    assert changed.segments==stale.segments
+    production._save_asset(stale,analysis_only=True)
+    restarted=ProductionRepository(database_path=production.database_path,video_library_path=production.video_library_path)
+    assert restarted.get_asset('workspace_a',asset.id).use_state==use_state
+    assert bool(restarted.search_material_segments('workspace_a',usage_roles=['b_roll']))==usable
+    if usable:
+        assert restarted.resolve_clip_media_reference('workspace_a',asset.id,reference).is_file()
+    else:
+        with pytest.raises(MediaAuthorityError):restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
+    with pytest.raises(KeyError):restarted.update_asset_use_state('workspace_b',asset.id,'available')
+    with pytest.raises(ValueError,match='使用状态'):restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
+    if use_state=='excluded':
+        with pytest.raises(ValueError,match='不使用'):production.analyze_asset('workspace_a',asset.id)
+    legacy=asdict(asset);legacy.pop('use_state');legacy.update(rights_confirmed=False,brand_safe=False)
+    assert ProductionRepository._asset_from_payload(legacy).use_state=='available'
+    for key,value in [('review_status','rejected'),('usage_role','exclude')]:
+        assert ProductionRepository._asset_from_payload({**legacy,key:value}).use_state=='excluded'
+    with restarted._connect() as conn:
+        stored=json.loads(conn.execute('select payload from material_assets where id=?',(asset.id,)).fetchone()[0])
+    assert 'rights_confirmed' not in stored and 'brand_safe' not in stored
 
 
 def test_production_data_is_workspace_scoped_and_persistent(tmp_path):
@@ -442,8 +473,6 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         "workspace_a",
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="b_roll",
     )
     segment = asset.segments[0]
@@ -640,7 +669,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -894,7 +923,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     with sqlite3.connect(production.database_path) as conn:
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
 def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
@@ -1196,7 +1225,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
             )
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -1923,8 +1952,6 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
         "workspace_a",
         asset.id,
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         usage_role="a_roll",
     )
 
@@ -2245,11 +2272,21 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     )
 
 
-def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path):
+def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypatch):
     database_path = tmp_path / "production-v5.sqlite3"
     migration_five = dict(_MIGRATIONS)[5]
     created_at = datetime.now(timezone.utc).isoformat()
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    # Real Production databases create the base material tables before applying
+    # numbered migrations. Preserve that order when constructing the v5 fixture.
+    with monkeypatch.context() as patch:
+        patch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+        ProductionRepository(database_path, library_path)
     with sqlite3.connect(database_path) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='material_ingestion_files'"
+        ).fetchone() == ("material_ingestion_files",)
         conn.executescript(migration_five)
         conn.execute(
             """
@@ -2307,7 +2344,7 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path):
         ).fetchall()
 
     assert row == ("person-render-v5", None, str(tmp_path / "person-render.mp4"))
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,)]
+    assert versions == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
@@ -2858,6 +2895,42 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         impact="未生成配音。",
         repair_action="文案预计时长超过创作方案上限，请先压缩并重新确认文案",
         retryable=True,
+    )
+    failed_workspace = client.get(f"/api/creation-tasks/{task_id}").json()
+    assert failed_workspace["task"]["can_revise_script"] is True
+    failed_task = reloaded.get_creation_task("workspace_a", task_id)
+    for protected in (
+        replace(failed_task, narration_cache_key="completed-audio"),
+        replace(failed_task, current_timeline_version_id="existing-timeline"),
+        replace(failed_task, montage_plan_id="existing-montage"),
+        replace(failed_task, stage_status="running"),
+        replace(failed_task, stage_reason="voice_authorization_missing"),
+    ):
+        assert protected.can_revise_script is False
+    too_long = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
+        json={"title": "仍然过长", "sections": [
+            {**asdict(section), "content": "字" * 2000} for section in saved_script.sections
+        ]},
+    )
+    assert too_long.status_code == 422
+    assert reloaded.get_creation_task("workspace_a", task_id).stage_status == "failed"
+    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
+    direct_repair = client.post(
+        f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
+        json={"title": "直接修订", "sections": [
+            {**asdict(section), "content": "直接压缩正文，无需再次调用文字模型。"} for section in saved_script.sections
+        ]},
+    )
+    assert direct_repair.status_code == 200, direct_repair.text
+    assert direct_repair.json()["task"]["stage_status"] == "not_started"
+    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
+    assert len(script_calls) == 1
+    assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
+    reloaded.start_creation_task_narration("workspace_a", task_id)
+    reloaded.fail_creation_task_stage(
+        "workspace_a", task_id, stage="narration", reason="narration_generation_failed",
+        impact="配音超时。", repair_action="请压缩并重新确认文案", retryable=True,
     )
     repair_run = ScriptGenerationRun(
         id="script-run-repair",
@@ -3604,3 +3677,29 @@ def test_material_library_endpoint_is_paginated(tmp_path, monkeypatch):
     assert second.status_code == 200
     assert len(second.json()["assets"]) == 1
     assert second.json()["has_more"] is False
+
+
+@pytest.mark.parametrize('change',['replace_file','remove_file','remove_segment','change_interval'])
+def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,change):
+    provider=_FakeVisualProvider()
+    production=ProductionRepository(database_path=tmp_path/'studio.sqlite3',video_library_path=tmp_path,
+        duration_reader=lambda _:8.0,scene_reader=lambda *_:[4.0],visual_provider=provider)
+    video=tmp_path/'source.mp4';video.write_bytes(b'original source')
+    asset=production.scan_library('workspace_a')[0]
+    analyzed=production.analyze_asset('workspace_a',asset.id)
+    segment=analyzed.segments[0]
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
+    # A human text correction does not invalidate unchanged pixel embeddings.
+    segment.description='人工修正画面描述'
+    production._save_asset(analyzed)
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
+    if change=='replace_file':video.write_bytes(b'replacement source with different length')
+    elif change=='remove_file':video.unlink()
+    elif change=='change_interval':
+        segment.end_seconds-=1
+        production._save_asset(analyzed)
+    else:
+        analyzed.segments=[]
+        production._save_asset(analyzed)
+    assert production.get_visual_feature('workspace_a',segment.id,provider.model_id) is None
+    assert production.get_visual_feature('workspace_b',segment.id,provider.model_id) is None

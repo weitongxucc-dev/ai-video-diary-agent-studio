@@ -30,7 +30,6 @@
 .sectionHeading p,
 .emptyAction p,
 .scriptSections p,
-.storyboard p,
 .videoReview p,
 .inspector p {
   margin: 0;
@@ -67,7 +66,7 @@
   display: grid;
   width: 100%;
   min-width: 760px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -237,8 +236,7 @@
 .secondaryButton:hover:not(:disabled) { background: var(--surface-2); }
 
 .topicList,
-.scriptSections,
-.storyboard {
+.scriptSections {
   display: grid;
   gap: 12px;
 }
@@ -339,8 +337,7 @@
   .voiceMissing a { grid-column: 1 / -1; justify-self: stretch; text-align: center; }
 }
 
-.scriptSections article,
-.storyboard article {
+.scriptSections article {
   border: 1px solid var(--border-1);
   border-radius: 10px;
   background: var(--surface-2);
@@ -352,21 +349,6 @@
 .scriptSections header strong { font-weight: 500; }
 .scriptSections p { margin-top: 8px; font-size: 12px; }
 
-.storyboard article {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  background: var(--surface-1);
-}
-.storyboard article.needsReview { border-color: color-mix(in srgb, var(--warning) 52%, var(--border-1)); }
-.storyboardTools {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 .versionBadge {
   padding: 6px 9px;
   border: 1px solid var(--border-1);
@@ -376,64 +358,7 @@
   font-size: 12px;
   white-space: nowrap;
 }
-.storyboard article.selectedClip {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.clipSelector {
-  display: grid;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-}
-.clipSelector:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.clipSelector[aria-pressed="true"] .clipIndex { background: var(--accent); color: var(--accent-contrast); }
-.clipIndex { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--surface-3); color: var(--text-2); font-size: 12px; }
-.storyboard strong { font-weight: 500; }
-.storyboard p { margin: 4px 0; }
-.storyboard .matchReasons { color: var(--text-2); font-size: 12px; }
-.storyboard small { color: var(--text-3); }
-.subtitleEditor { display: grid; gap: 5px; margin: 8px 0; color: var(--text-2); font-size: 12px; }
-.subtitleEditor.selectedCue {
-  padding: 8px;
-  border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.subtitleHeader { display: flex; align-items: center; justify-content: space-between; }
-.subtitleHeader button {
-  min-height: 32px;
-  padding: 5px 8px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
-  background: var(--surface-1);
-  color: var(--text-2);
-  cursor: pointer;
-  font: inherit;
-}
-.subtitleHeader button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.subtitleHeader button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.subtitleEditor textarea {
-  width: 100%;
-  min-height: 56px;
-  resize: vertical;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
-  background: var(--surface-1);
-  color: var(--text-1);
-  padding: 8px 10px;
-  font: inherit;
-  line-height: 1.5;
-}
-.subtitleEditor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.trimControl { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
-.trimControl input { width: 92px; min-height: 34px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 5px 8px; font: inherit; }
-.replacement { display: grid; gap: 5px; margin-top: 10px; color: var(--text-2); font-size: 12px; }
-.replacement select { min-height: 36px; max-width: 100%; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 6px 8px; }
-.clipActions { display: flex; align-items: center; gap: 6px; }
-.clipActions button { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 6px 8px; }
-.clipActions span { display: inline-flex; align-items: center; gap: 5px; color: var(--success); font-size: 12px; }
+
 .contextCommandBar {
   position: sticky;
   z-index: 3;
@@ -503,8 +428,206 @@
 .previewActions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .videoReview { display: grid; gap: 16px; }
-.videoReview video { width: min(100%, 420px); max-height: 56vh; margin: 0 auto; border-radius: 10px; background: #111; box-shadow: var(--shadow-float); }
+.videoReview video { width: min(100%, 420px); max-height: clamp(220px, calc(100dvh - 440px), 440px); margin: 0 auto; border-radius: 10px; background: #111; box-shadow: var(--shadow-float); }
 .videoReview a { color: var(--accent); }
+
+.subtitleCoverWorkspace {
+  display: grid;
+  gap: 12px;
+}
+.editingHeader { display: flex; align-items: center; gap: 12px; }
+.editingHeader h1 { margin: 0; font-size: 22px; font-weight: 500; line-height: 1.3; }
+.editingHeader + .stageRail { margin: 12px 0; }
+.editingHeader + .stageRail li,
+.editingHeader + .stageRail li > button { min-height: 52px; }
+.subtitleWorkspace .contextCommandBar { position: static; box-shadow: none; backdrop-filter: none; }
+.styleScope { margin: 0; color: var(--text-2); font-size: 12px; }
+
+.subtitleCoverToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-1);
+  flex-wrap: wrap;
+}
+
+.subtitleCoverToolbar > .secondaryButton { margin-left: auto; }
+
+.segmentedControl {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.segmentedControl button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.segmentedControl button[aria-pressed="true"] {
+  background: var(--surface-1);
+  color: var(--text-1);
+  box-shadow: 0 0 0 1px var(--border-1);
+}
+
+.segmentedControl button:focus-visible,
+.trackTabs button:focus-visible,
+.cueTime:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.capabilityLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.capabilityLine svg { flex: 0 0 auto; margin-top: 2px; }
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: minmax(180px, .7fr) minmax(320px, 1.3fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.mediaPanel,
+.coverPanel {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.mediaPanel > header,
+.coverPanel > header {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.mediaPanel > header > span,
+.coverPanel > header > span { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
+.mediaPanel > header small,
+.coverPanel > header small { color: var(--text-3); font-size: 12px; }
+.mediaPanel video {
+  display: block;
+  width: 100%;
+  height: 264px;
+  background: #111;
+  object-fit: contain;
+}
+.coverBody { display: flex; align-items: stretch; gap: 12px; }
+.coverPanel img { width: 84px; height: 148px; flex: 0 0 84px; object-fit: contain; background: #111; }
+
+.coverPanel.selectedCover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+.coverControls {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  grid-template-columns: minmax(120px, .6fr) minmax(180px, 1.4fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.coverControls label { display: grid; min-width: 0; gap: 5px; color: var(--text-2); font-size: 13px; }
+.coverControls input,
+.cueFields input,
+.cueFields textarea {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.coverControls input:focus-visible,
+.cueFields input:focus-visible,
+.cueFields textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.coverActions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.coverDraft { grid-column: 1 / -1; color: var(--text-2); font-size: 12px; }
+
+.subtitleTracks {
+  min-width: 0;
+}
+.cueSelection { display: grid; gap: 4px; color: var(--text-2); font-size: 13px; }
+.cueSelection select { width: 100%; min-width: 0; min-height: 34px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 4px 8px; font: inherit; }
+
+.trackTabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.trackTabs button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+.trackTabs button[aria-selected="true"] { border-color: var(--border-1); background: var(--surface-2); color: var(--text-1); }
+.trackTabs small { color: var(--text-3); font-size: 12px; }
+
+.subtitleCueList { display: grid; margin-top: 8px; }
+.subtitleCue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+}
+.subtitleCue.selectedSubtitleCue { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.cueTime {
+  display: grid;
+  min-height: 32px;
+  align-content: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+.cueTime[aria-pressed="true"] { background: var(--surface-2); }
+.cueTime strong { font-size: 13px; font-weight: 500; }
+.cueTime small { color: var(--text-3); font-size: 12px; }
+.cueFields { display: grid; grid-column: 1 / -1; grid-row: 1; min-width: 0; gap: 8px; }
+.cueFields label { display: grid; min-width: 0; gap: 4px; color: var(--text-2); font-size: 12px; }
+.cueFields input,
+.cueFields textarea { font-size: 14px; }
+.cueFields textarea { min-height: 72px; resize: vertical; line-height: 1.45; }
+.cueAction { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.cueAction small { color: var(--text-3); font-size: 12px; }
+.inspectorRepair { margin-top: 12px !important; color: var(--warning) !important; font-size: 13px; }
 
 .inspector { display: grid; gap: 16px; }
 .inspector section { padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
@@ -532,8 +655,6 @@
 
 @media (max-width: 1279px) {
   .workspace { padding: 20px 24px 32px; }
-  .storyboard article { grid-template-columns: 32px minmax(0, 1fr); }
-  .clipActions { grid-column: 2; flex-wrap: wrap; }
 }
 
 @media (max-width: 1080px) {
@@ -542,7 +663,6 @@
   .sectionHeading { align-items: stretch; flex-direction: column; }
   .progress { justify-items: start; }
   .sectionHeading > button { align-self: flex-start; }
-  .storyboardTools { justify-content: flex-start; }
   .artifactGrid { grid-template-columns: 1fr; }
   .narrationSegments article { grid-template-columns: 1fr; }
   .commandRow { grid-template-columns: 1fr auto; }

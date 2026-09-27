@@ -42,6 +42,7 @@ function main() {
     write(root, 'apps/desktop/assets/runtime.json', '{"mode":"local"}');
     write(root, 'apps/desktop/dist/api-server', 'api-v1');
     write(root, 'apps/api/model_workers/voice.py', 'worker-v1');
+    write(root, 'apps/api/agent_tools/diary_tools.ts', 'agent-tools-v1');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/server.js', 'web-v1');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/BUILD_ID', 'build');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/app-path-routes-manifest.json', 'routes');
@@ -64,6 +65,7 @@ function main() {
       assert.equal(first.inputs.some((input) => input.path === inputPath), true, `${inputPath} must be auditable`);
     }
     for (const inputPath of [
+      'agent-tools/diary_tools.ts',
       'web/.next/BUILD_ID',
       'web/.next/app-path-routes-manifest.json',
       'web/.next/server/app/production/page_client-reference-manifest.js',
@@ -77,6 +79,7 @@ function main() {
       'apps/desktop/preload.js',
       'apps/desktop/package.json',
       'apps/desktop/assets/runtime.json',
+      'apps/api/agent_tools/diary_tools.ts',
     ]) assertChangesDigest(root, first, relativePath);
 
     write(root, 'apps/web/.next/standalone-bundled/apps/web/server.js', 'web-v2');

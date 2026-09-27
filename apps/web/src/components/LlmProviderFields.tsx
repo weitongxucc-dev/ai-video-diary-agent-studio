@@ -12,6 +12,12 @@ type ProviderPreset = {
 
 const PROVIDERS: ProviderPreset[] = [
   {
+    id: "minimax",
+    label: "MiniMax",
+    baseUrl: "https://api.minimax.io/v1",
+    models: ["MiniMax-M3"],
+  },
+  {
     id: "deepseek",
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
@@ -86,7 +92,7 @@ export function LlmProviderFields({
   return (
     <div className="llm-settings-stack">
       <label className="settings-field wide">
-          <span>模型服务</span>
+          <span>服务商</span>
         <select
           aria-label="模型服务"
           name="llm_provider"
@@ -100,17 +106,17 @@ export function LlmProviderFields({
           ))}
         </select>
         <small className="settings-field-helper">
-          模型服务决定默认连接地址；模型仍可自由填写，不会锁定在预设列表中。
+          选择你已开通的服务。
         </small>
       </label>
 
       <label className="settings-field wide">
         <span>
-          API Key
+          连接密钥
           <span
-            className={`settings-secret-badge ${apiKeyConfigured ? "green" : "red"}`}
+            className={`settings-secret-badge ${apiKeyConfigured && provider === initialProvider ? "green" : "red"}`}
           >
-            {apiKeyConfigured
+            {apiKeyConfigured && provider === initialProvider
               ? "已配置"
               : preset.apiKeyOptional
                 ? "可选"
@@ -123,14 +129,14 @@ export function LlmProviderFields({
           maxLength={512}
           name="llm_api_key"
           placeholder={
-            apiKeyConfigured
+            apiKeyConfigured && provider === initialProvider
               ? "已配置 · 留空不修改"
-              : "粘贴模型服务提供的 API Key"
+              : "粘贴服务商提供的密钥"
           }
           type="password"
         />
         <small className="settings-field-helper">
-          密钥只保存在这台电脑，不会在设置接口中明文返回。
+          仅保存在这台电脑，不会显示完整内容。
         </small>
       </label>
 
@@ -151,14 +157,14 @@ export function LlmProviderFields({
           ))}
         </datalist>
         <small className="settings-field-helper">
-          可选择推荐项，也可直接输入账号中可用的模型 ID。
+          填写服务商提供的型号名称。
         </small>
       </label>
 
       <details className="settings-advanced">
-        <summary>高级连接设置</summary>
+        <summary>连接详情</summary>
         <label className="settings-field wide">
-          <span>OpenAI-compatible Base URL</span>
+          <span>连接地址</span>
           <input
             aria-label="模型服务地址"
             name="llm_base_url"

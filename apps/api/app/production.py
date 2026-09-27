@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -13,7 +15,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
@@ -25,7 +27,10 @@ from app.avatar_lipsync import (
     VoiceProfile as VersionedVoiceProfile,
 )
 from app.database_migrations import apply_production_migrations
+from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
+from app.asr import SubtitleSegment as SpeechObservation
+from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis, speech_text_for_range
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
     SegmentWindow,
@@ -33,8 +38,15 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
+from app.material_probe import MaterialProbeFacts
+
+if TYPE_CHECKING:
+    from app.device_scheduler import Grant
+
+logger = logging.getLogger(__name__)
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
+ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -92,6 +104,7 @@ class MaterialSegment:
     visual_status: AnalysisStatus = "pending"
     visual_model_id: str = ""
     visual_sample_count: int = 0
+    understanding: SegmentUnderstanding | None = None
     usage_role: AssetUsageRole = "unassigned"
     suggested_usage_role: SuggestedUsageRole = "unassigned"
     usage_role_confidence: float = 0.0
@@ -120,13 +133,107 @@ class MaterialAsset:
     usage_role_confidence: float = 0.0
     usage_role_reason: str = ""
     review_status: AssetReviewStatus = "raw"
-    rights_confirmed: bool = False
-    brand_safe: bool = False
+    use_state: ContentUseState = "available"
+    user_tags: list[str] = field(default_factory=list)
     analysis_status: AnalysisStatus = "pending"
     analysis_message: str = "待分析镜头和画面内容。"
+    speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class MaterialHashCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    provisional_revision: str
+    stage_input_digest: str
+    unit_key: str
+
+
+@dataclass(frozen=True)
+class MaterialHashResult:
+    candidate: MaterialHashCandidate
+    source_sha256: str
+
+
+@dataclass(frozen=True)
+class MaterialProbeDependency:
+    workspace_id: str
+    asset_id: str
+    source_sha256: str
+    provisional_revision: str
+
+
+@dataclass(frozen=True)
+class MaterialProbeCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    source_sha256: str
+    provisional_revision: str
+    unit_key: str
+
+
+def material_probe_unit_key(source_sha256: str) -> str:
+    """Identity for bounded ffprobe metadata only; scene analysis is separate."""
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        raise ValueError("素材源哈希无效")
+    stage_input = hashlib.sha256(json.dumps(
+        {"stage": "probe-meta:v1", "source_sha256": source_sha256,
+         "probe_contract": "ffprobe-metadata:v1"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    return f"probe-meta:v1:{stage_input}"
+
+
+def _material_hash_candidate(
+    workspace_id: str, bound_path: str, path: Path, stat: os.stat_result, asset_id: str
+) -> MaterialHashCandidate:
+    revision_input = {
+        "workspace_id": workspace_id,
+        "bound_path": bound_path,
+        "file_path": str(path),
+        "size_bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+        "inode": stat.st_ino,
+    }
+    provisional = hashlib.sha256(
+        json.dumps(revision_input, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    stage_input = hashlib.sha256(
+        json.dumps(
+            {"stage": "hash:v1", "algorithm": "sha256", "provisional_revision": provisional},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return MaterialHashCandidate(
+        workspace_id, asset_id, str(path), provisional, stage_input,
+        f"hash:v1:{stage_input}",
+    )
+
+
+def material_allows_footage(asset: MaterialAsset) -> bool:
+    return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
+
+
+def _material_analysis_public_error(error: Exception) -> str:
+    if isinstance(error, PermissionError):
+        return "素材文件没有读取权限"
+    if isinstance(error, FileNotFoundError):
+        return "素材文件已移动或外接盘暂不可用"
+    if isinstance(error, OSError):
+        return "素材文件无法读取"
+    if isinstance(error, subprocess.SubprocessError):
+        return "媒体探测或解码失败，请检查文件格式"
+    if isinstance(error, VisualSemanticError):
+        return "画面分析模型不可用或执行失败"
+    if isinstance(error, ValueError):
+        return "媒体格式或内容无效"
+    return "分析服务未能完成，请查看本机日志"
 
 
 @dataclass
@@ -424,12 +531,30 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    presenter_share_target: int = 0
+    lipsync_quality: Literal["high", "fast"] = "fast"
+    template_id: str | None = None
+    template_version: int | None = None
+    template_settings: dict[str, object] = field(default_factory=dict)
     material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class VideoTemplate:
+    id: str
+    workspace_id: str
+    version: int
+    name: str
+    origin: Literal["built_in", "user"]
+    settings: dict[str, object]
+    source_task_id: str | None = None
+    source_timeline_version_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass
@@ -458,6 +583,24 @@ class CreationTask:
     stage_retryable: bool | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def needs_script_duration_repair(self) -> bool:
+        return (
+            self.stage == "narration" and self.stage_status == "failed"
+            and self.stage_reason == "narration_generation_failed"
+            and "压缩" in (self.stage_repair_action or "")
+            and "文案" in (self.stage_repair_action or "")
+        )
+
+    @property
+    def can_revise_script(self) -> bool:
+        return bool(
+            self.confirmed_script_id and not self.narration_cache_key
+            and not self.montage_plan_id and not self.current_timeline_version_id
+            and ((self.stage == "script" and self.stage_status == "failed")
+                 or self.needs_script_duration_repair)
+        )
 
 
 TopicGenerationRunStatus = Literal["running", "succeeded", "failed"]
@@ -553,7 +696,7 @@ class CreationTaskScript:
     run_id: str
     topic_id: str
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: list[CreationTaskScriptSection]
     selection_status: ScriptSelectionStatus = "draft"
     created_at: datetime = field(default_factory=utc_now)
@@ -576,6 +719,66 @@ class TimelineVersion:
     snapshot: dict[str, object]
     created_by_operation_id: str | None
     created_at: datetime = field(default_factory=utc_now)
+
+
+SubtitleTrackStatus = Literal["valid", "failed", "unavailable", "superseded"]
+
+
+@dataclass(frozen=True)
+class SubtitleCue:
+    id: str
+    source_cue_id: str | None
+    text: str
+    start_seconds: float
+    end_seconds: float
+    speaker: str | None = None
+    line_breaks: list[int] = field(default_factory=list)
+    emphasis: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SubtitleTrack:
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    language: Literal["zh-CN", "en-US"]
+    source_language: Literal["zh-CN", "en-US"] | None
+    style: dict[str, object]
+    cues: list[SubtitleCue]
+    generation_method: Literal["timeline", "translation"]
+    model_id: str | None
+    artifact_ref: str | None
+    transform_id: str | None
+    status: SubtitleTrackStatus
+    failure_reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class CoverAsset:
+    id: str
+    workspace_id: str
+    task_id: str
+    timeline_version_id: str
+    source_video_ref: str
+    frame_time_seconds: float
+    title: str
+    safe_area: dict[str, float]
+    layout: dict[str, object]
+    generation_method: Literal["video_frame", "image_model"]
+    model_or_engine: str
+    artifact_ref: str | None
+    transform_id: str | None
+    status: SubtitleTrackStatus
+    failure_reason: str | None = None
+    impact: str | None = None
+    repair_action: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True)
@@ -696,26 +899,70 @@ class EditProposal:
 
 EditOperationStatus = Literal["running", "applied", "failed"]
 EditOperationType = Literal[
+    "ChangePresenterShare",
+    "EditAudioTimeline",
+    "EditCompoundTimeline",
+        "RemoveSilence",
+    "AdjustVisualEffects",
+    "ChangeCrop",
+    "ChangeCanvas",
+        "SetClipTransition",
+        "EditGraphicOverlay",
     "ReplaceClip",
     "TrimClip",
+        "SplitClip",
+        "ChangeClipSpeed",
+        "ChangeLinkedSpeed",
+        "DeleteClip",
+        "DuplicateClip",
     "ReorderClip",
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
+    "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "AlignSubtitleTiming",
+    "ReplaceSubtitleText",
+    "SplitSubtitleCue",
+    "MergeSubtitleCue",
+    "DeleteSubtitleCue",
+    "ConfigureSubtitleTrack",
+    "GenerateCoverFromFrame",
     "ChangePersonSegment",
     "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
+    "ChangePresenterShare",
+    "EditAudioTimeline",
+    "EditCompoundTimeline",
+        "RemoveSilence",
+    "AdjustVisualEffects",
+    "ChangeCrop",
+    "ChangeCanvas",
+        "SetClipTransition",
+        "EditGraphicOverlay",
     "ReplaceClip",
     "TrimClip",
+        "SplitClip",
+        "ChangeClipSpeed",
+        "ChangeLinkedSpeed",
+        "DeleteClip",
+        "DuplicateClip",
     "ReorderClip",
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
+    "RedoTimelineVersion",
     "RegenerateNarrationSegment",
     "UpdateSubtitleCue",
+    "AlignSubtitleTiming",
+    "ReplaceSubtitleText",
+    "SplitSubtitleCue",
+    "MergeSubtitleCue",
+    "DeleteSubtitleCue",
+    "ConfigureSubtitleTrack",
+    "GenerateCoverFromFrame",
     "ChangePersonSegment",
     "RegeneratePersonRender",
 }
@@ -751,12 +998,16 @@ class ProductionRepository:
         duration_reader: Callable[[Path], float] | None = None,
         scene_reader: Callable[[Path, float], list[float]] | None = None,
         visual_provider: VisualSemanticProvider | None = None,
+        speech_analyzer: LocalMaterialSpeechAnalyzer | None = None,
+        visual_understanding: LocalVisualUnderstanding | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser()
         self.video_library_path = Path(video_library_path).expanduser()
         self.duration_reader = duration_reader or self._probe_duration
         self.scene_reader = scene_reader or self._detect_scene_boundaries
         self.visual_provider = visual_provider or UnavailableVisualSemanticProvider()
+        self.speech_analyzer = speech_analyzer
+        self.visual_understanding = visual_understanding
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
@@ -812,6 +1063,17 @@ class ProductionRepository:
         if require_registered:
             self._require_workspace_media_reference(workspace_id, value)
         return resolved
+
+    def validate_material_reference_use(self, workspace_id: str, reference: str) -> None:
+        """Check current material restrictions for a source retained in artifact lineage."""
+        path = self.resolve_workspace_media_reference(workspace_id, reference)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id = ? AND file_path = ?",
+                (workspace_id, str(path)),
+            ).fetchone()
+        if row is not None and not material_allows_footage(self._asset_from_payload(json.loads(row["payload"]))):
+            raise ValueError("来源素材使用状态不允许进入成片，请移除对应音频或在素材详情修改使用状态")
 
     def import_voice_reference_wav(
         self,
@@ -932,6 +1194,11 @@ class ProductionRepository:
         asset_id: str,
         reference: str,
     ) -> Path:
+        asset = self.get_asset(workspace_id, asset_id)
+        if not material_allows_footage(asset):
+            raise MediaAuthorityError(reason="material_use_restricted",
+                impact="素材已设为仅参考或不使用，未传给渲染器。",
+                repair_action="替换这个镜头，或在素材详情明确修改使用状态。")
         expected_reference = self.workspace_media_reference_for_asset(
             workspace_id,
             asset_id,
@@ -968,6 +1235,32 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_material_assets_workspace
                     ON material_assets(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS material_ingestion_binding (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    workspace_id TEXT NOT NULL,
+                    library_path TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS material_ingestion_files (
+                    workspace_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    ctime_ns INTEGER NOT NULL DEFAULT 0,
+                    inode INTEGER NOT NULL DEFAULT 0,
+                    observed_at REAL NOT NULL,
+                    completed_digest TEXT,
+                    attempted_digest TEXT,
+                    state TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, file_path)
+                );
+                CREATE TABLE IF NOT EXISTS material_unmatched_corrections (
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    segment_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    preserved_at TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, asset_id, segment_id)
+                );
                 CREATE TABLE IF NOT EXISTS material_segment_features (
                     workspace_id TEXT NOT NULL,
                     asset_id TEXT NOT NULL,
@@ -994,6 +1287,13 @@ class ProductionRepository:
                     workspace_id TEXT NOT NULL,
                     payload TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS video_templates (
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, id, version)
                 );
                 CREATE INDEX IF NOT EXISTS idx_creation_plans_workspace
                     ON creation_plans(workspace_id, updated_at DESC);
@@ -1205,6 +1505,14 @@ class ProductionRepository:
                 """
             )
             apply_production_migrations(conn)
+            ingestion_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(material_ingestion_files)")
+            }
+            if "ctime_ns" not in ingestion_columns:
+                conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
+            if "inode" not in ingestion_columns:
+                conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -2240,12 +2548,971 @@ class ProductionRepository:
         for path in sorted(self.video_library_path.rglob("*")):
             if (
                 not path.is_file()
+                or path.is_symlink()
                 or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
                 or "_已处理" in path.parts
             ):
                 continue
+            if not path.resolve().is_relative_to(self.video_library_path.resolve()):
+                continue
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
+
+    def bind_material_ingestion(self, workspace_id: str, *, expected_directory: str) -> None:
+        """Bind the configured inbox to one authenticated workspace, never to the current login."""
+        if not workspace_id.strip():
+            raise ValueError("必须先选择已验证的工作区")
+        if not expected_directory.strip() or not Path(expected_directory).expanduser().is_absolute():
+            raise ValueError("请先确认当前素材目录")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self._material_library_status() != "ready":
+                raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
+            root_path = str(self.video_library_path.resolve())
+            expected_path = str(Path(expected_directory).expanduser().resolve())
+            if expected_path != root_path:
+                raise ValueError("素材目录配置已变化，请刷新后重新确认")
+            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+            if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
+                raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
+            conn.execute(
+                "INSERT OR REPLACE INTO material_ingestion_binding (id, workspace_id, library_path) VALUES (1, ?, ?)",
+                (workspace_id, root_path),
+            )
+
+    def get_material_ingestion_binding(self) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+        return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
+        """Describe the configured directory without revealing another workspace's binding."""
+        if not workspace_id.strip():
+            raise ValueError("必须先选择已验证的工作区")
+        binding = self.get_material_ingestion_binding()
+        current_path = str(self.video_library_path)
+        resolved_path = str(self.video_library_path.resolve())
+        foreign_binding = binding is not None and binding[0] != workspace_id
+        return {
+            "directory": None if foreign_binding else current_path,
+            "status": self._material_library_status(),
+            "bound_to_current_workspace": binding == (workspace_id, resolved_path),
+            "bound_to_another_workspace": foreign_binding,
+            "configured_path_changed": binding is not None and binding[1] != resolved_path,
+        }
+
+    def material_ingestion_state_counts(self, workspace_id: str) -> dict[str, int]:
+        """Return intake totals for one workspace without exposing file paths."""
+        counts = {state: 0 for state in ("observing", "running", "ready", "failed", "blocked_disk")}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT state, COUNT(*) AS total FROM material_ingestion_files "
+                "WHERE workspace_id=? GROUP BY state",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            state = str(row["state"])
+            if state in counts:
+                counts[state] = int(row["total"])
+        return counts
+
+    def _material_library_available(self) -> bool:
+        return self._material_library_status() == "ready"
+
+    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "ready"]:
+        root = self.video_library_path
+        if not root.is_absolute() or root.is_symlink():
+            return "invalid"
+        # A leftover /Volumes/<name> directory is not evidence that its disk is mounted.
+        if len(root.parts) >= 3 and root.parts[1] == "Volumes":
+            volume = Path(*root.parts[:3])
+            if not volume.is_mount():
+                return "unmounted"
+        if not root.exists():
+            return "missing"
+        if not root.is_dir():
+            return "invalid"
+        return "ready"
+
+    def discover_material_hash_candidates(self, *, stable_seconds: float = 10.0) -> list[MaterialHashCandidate]:
+        """Observe stable files for the opt-in scheduler path without reading their content."""
+        import time
+
+        if stable_seconds < 0:
+            raise ValueError("素材稳定等待时间无效")
+        binding = self.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        workspace_id, bound_path = binding
+        root = self.video_library_path
+        if not self._material_library_available() or str(root.resolve()) != bound_path:
+            self._mark_material_ingestion_disk_missing(workspace_id)
+            return []
+        with self._connect() as conn:
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(material_ingestion_files)")}
+        if "provisional_revision" not in columns:
+            raise RuntimeError("素材调度检查点迁移尚未就绪")
+
+        now = time.time()
+        candidates: list[MaterialHashCandidate] = []
+        for path in sorted(root.rglob("*")):
+            if (path.is_symlink() or not path.is_file()
+                    or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
+                    or "_已处理" in path.parts):
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root.resolve()):
+                continue
+            try:
+                stat = resolved.stat()
+            except FileNotFoundError:
+                continue
+            asset_id = "asset_" + hashlib.sha256(
+                f"{workspace_id}\0{resolved}".encode("utf-8")
+            ).hexdigest()[:16]
+            candidate = _material_hash_candidate(workspace_id, bound_path, resolved, stat, asset_id)
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                changed = row is None or row["provisional_revision"] != candidate.provisional_revision
+                if changed:
+                    conn.execute(
+                        """INSERT INTO material_ingestion_files
+                           (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
+                            observed_at, state, provisional_revision)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?)
+                           ON CONFLICT(workspace_id, file_path) DO UPDATE SET
+                             size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
+                             ctime_ns=excluded.ctime_ns, inode=excluded.inode,
+                             observed_at=excluded.observed_at, state='observing',
+                             provisional_revision=excluded.provisional_revision,
+                             attempted_digest=NULL""",
+                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns,
+                         stat.st_ctime_ns, stat.st_ino, now, candidate.provisional_revision),
+                    )
+                elif row["state"] in {"ready", "failed"} or row["attempted_digest"]:
+                    continue
+                elif now - float(row["observed_at"]) >= stable_seconds:
+                    conn.execute(
+                        "UPDATE material_ingestion_files SET state='waiting' "
+                        "WHERE workspace_id=? AND file_path=? AND provisional_revision=?",
+                        (workspace_id, str(resolved), candidate.provisional_revision),
+                    )
+                    candidates.append(candidate)
+            if changed:
+                try:
+                    self._upsert_discovered_asset(workspace_id, resolved)
+                except FileNotFoundError:
+                    continue
+                self._mark_material_hash_asset_blocked(
+                    workspace_id, asset_id, "文件仍在复制或变化；写入稳定后自动安排校验。"
+                )
+            elif candidate in candidates:
+                # Repair a crash between recording the observation and creating its asset.
+                try:
+                    self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
+                    try:
+                        self._upsert_discovered_asset(workspace_id, resolved)
+                    except FileNotFoundError:
+                        candidates.remove(candidate)
+                        continue
+                    self._mark_material_hash_asset_blocked(
+                        workspace_id, asset_id, "文件已稳定，等待设备许可后校验。"
+                    )
+        return candidates
+
+    def _mark_material_hash_asset_blocked(self, workspace_id: str, asset_id: str, message: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+                (workspace_id, asset_id),
+            ).fetchone()
+            if row is None:
+                return
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset.analysis_status = "blocked"
+            asset.analysis_message = message
+            asset.updated_at = utc_now()
+            conn.execute(
+                "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
+            )
+
+    def material_hash_verdict(
+        self, workspace_id: str, asset_id: str, input_digest: str,
+        unit_key: str, conn: sqlite3.Connection,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        binding = conn.execute(
+            "SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1"
+        ).fetchone()
+        if binding is None or binding["workspace_id"] != workspace_id:
+            return "unauthorized"
+        if not self._material_library_available():
+            return "dependency"
+        bound_path = str(self.video_library_path.resolve())
+        if binding["library_path"] != bound_path:
+            return "stale"
+        asset_row = conn.execute(
+            "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+        if asset_row is None:
+            return "stale"
+        path = Path(str(asset_row["file_path"]))
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
+                return "stale"
+        except OSError:
+            return "unknown"
+        observation = conn.execute(
+            "SELECT provisional_revision, state, attempted_digest FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (workspace_id, str(path)),
+        ).fetchone()
+        if observation is None:
+            return "stale"
+        if observation["state"] != "waiting" or observation["attempted_digest"] is not None:
+            return "stale"
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return "dependency"
+        except OSError:
+            return "unknown"
+        candidate = _material_hash_candidate(workspace_id, bound_path, path, stat, asset_id)
+        if (observation["provisional_revision"] != candidate.provisional_revision
+                or input_digest != candidate.provisional_revision
+                or unit_key != candidate.unit_key):
+            return "stale"
+        return "ready"
+
+    def material_hash_candidate_for_grant(self, grant: Grant) -> MaterialHashCandidate:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?",
+                (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"], row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                raise PermissionError("素材哈希许可与执行对象不匹配")
+            asset_id = str(row["owner_id"])
+            verdict = self.material_hash_verdict(
+                grant.workspace_id, asset_id, grant.input_digest, grant.unit_key, conn
+            )
+            if verdict != "ready":
+                raise ValueError(f"素材哈希输入不可执行：{verdict}")
+            asset = conn.execute(
+                "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+                (grant.workspace_id, asset_id),
+            ).fetchone()
+        path = Path(str(asset["file_path"]))
+        candidate = _material_hash_candidate(
+            grant.workspace_id, str(self.video_library_path.resolve()), path,
+            path.stat(), asset_id,
+        )
+        if (candidate.provisional_revision, candidate.unit_key) != (
+            grant.input_digest, grant.unit_key
+        ):
+            raise ValueError("素材哈希源修订已变化")
+        return candidate
+
+    def material_hash_verdict_for_grant(
+        self, grant: Grant,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?",
+                (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"], row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                return "unauthorized"
+            return self.material_hash_verdict(
+                grant.workspace_id, str(row["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            )
+
+    def hash_granted_material(
+        self, grant: Grant, assert_grant: Callable[[Grant], None],
+    ) -> MaterialHashResult:
+        """Read content only under an active grant, checking it between chunks."""
+        candidate = self.material_hash_candidate_for_grant(grant)
+        path = Path(candidate.file_path)
+        if path.is_symlink() or not path.resolve().is_relative_to(self.video_library_path.resolve()):
+            raise ValueError("素材路径不在已绑定目录内")
+        before = path.stat()
+        digest = hashlib.sha256()
+        assert_grant(grant)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as source:
+            opened = os.fstat(source.fileno())
+            if ((opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns, opened.st_ino)
+                    != (before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino)):
+                raise ValueError("素材文件在打开时已变化")
+            while True:
+                assert_grant(grant)
+                chunk = source.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        after = path.stat()
+        if ((before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino)):
+            raise ValueError("哈希期间源文件发生变化")
+        current = _material_hash_candidate(
+            candidate.workspace_id, str(self.video_library_path.resolve()),
+            path, after, candidate.asset_id,
+        )
+        if current != candidate:
+            raise ValueError("哈希期间素材绑定或源修订发生变化")
+        return MaterialHashResult(candidate, digest.hexdigest())
+
+    def commit_material_hash(
+        self, conn: sqlite3.Connection, grant: Grant, result: MaterialHashResult,
+    ) -> str:
+        """Write the hash fact on the scheduler's permit transaction connection."""
+        candidate = result.candidate
+        if not re.fullmatch(r"[0-9a-f]{64}", result.source_sha256):
+            raise ValueError("素材哈希结果无效")
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or (candidate.workspace_id, candidate.provisional_revision, candidate.unit_key)
+                != (grant.workspace_id, grant.input_digest, grant.unit_key)):
+            raise PermissionError("素材哈希检查点不属于当前许可尝试")
+        if self.material_hash_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，未保存过期哈希")
+        checkpoint = conn.execute(
+            """SELECT stage_input_digest, result_ref FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+             result.source_sha256, candidate.unit_key),
+        ).fetchone()
+        result_ref = f"sha256:{result.source_sha256}"
+        if checkpoint is not None and (
+            checkpoint["stage_input_digest"] != candidate.stage_input_digest
+            or checkpoint["result_ref"] != result_ref
+        ):
+            raise ValueError("既有哈希检查点结果不匹配")
+        updated = conn.execute(
+            """UPDATE material_ingestion_files
+               SET attempted_digest=?, state='waiting'
+               WHERE workspace_id=? AND file_path=? AND provisional_revision=?""",
+            (result.source_sha256, candidate.workspace_id, candidate.file_path,
+             candidate.provisional_revision),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("素材观察已失效，未写入哈希检查点")
+        if checkpoint is None:
+            conn.execute(
+                """INSERT INTO material_analysis_checkpoints
+                   (workspace_id, asset_id, source_sha256, provisional_revision,
+                    unit_key, stage_input_digest, result_ref, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (candidate.workspace_id, candidate.asset_id, result.source_sha256,
+                 candidate.provisional_revision, candidate.unit_key,
+                 candidate.stage_input_digest, result_ref, utc_now().isoformat()),
+            )
+        return f"material_hash:{candidate.asset_id}:{candidate.provisional_revision}"
+
+    def pending_material_probe_dependencies(self) -> list[MaterialProbeDependency]:
+        """Expose durable hash outputs for a future permitted probe submitter."""
+        binding = self.get_material_ingestion_binding()
+        if binding is None or not self._material_library_available():
+            return []
+        workspace_id, bound_path = binding
+        if str(self.video_library_path.resolve()) != bound_path:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT f.provisional_revision, f.attempted_digest, a.id AS asset_id
+                   FROM material_ingestion_files f
+                   JOIN material_assets a ON a.workspace_id=f.workspace_id
+                                         AND a.file_path=f.file_path
+                   WHERE f.workspace_id=? AND f.state='waiting'
+                     AND f.attempted_digest IS NOT NULL""",
+                (workspace_id,),
+            ).fetchall()
+            dependencies: list[MaterialProbeDependency] = []
+            for row in rows:
+                source_sha256 = str(row["attempted_digest"])
+                try:
+                    unit_key = material_probe_unit_key(source_sha256)
+                except ValueError:
+                    continue
+                if self.material_probe_source_verdict(
+                    workspace_id, str(row["asset_id"]), source_sha256, unit_key, conn,
+                ) != "ready":
+                    continue
+                dependencies.append(MaterialProbeDependency(
+                    workspace_id, str(row["asset_id"]), source_sha256,
+                    str(row["provisional_revision"]),
+                ))
+        return dependencies
+
+    def legacy_probe_request_for_replacement(
+        self, dependency: MaterialProbeDependency,
+    ) -> str | None:
+        """Locate the old scene-named request without changing scheduler queue state."""
+        with self._connect() as conn:
+            current = conn.execute(
+                """SELECT id FROM device_work_requests
+                   WHERE workspace_id=? AND owner_type='material_asset' AND owner_id=?
+                     AND input_digest=? AND unit_key=?""",
+                (dependency.workspace_id, dependency.asset_id,
+                 dependency.source_sha256, material_probe_unit_key(dependency.source_sha256)),
+            ).fetchone()
+            legacy = conn.execute(
+                """SELECT id, state, wait_reason FROM device_work_requests
+                   WHERE workspace_id=? AND owner_type='material_asset' AND owner_id=?
+                     AND input_digest=? AND unit_key LIKE 'probe-scene:v1:%'""",
+                (dependency.workspace_id, dependency.asset_id, dependency.source_sha256),
+            ).fetchall()
+        if len(legacy) > 1:
+            raise ValueError("存在多个旧媒体探测请求，拒绝自动替换")
+        if not legacy:
+            return None
+        old = legacy[0]
+        if (old["state"] == "cancelled" and current is not None
+                and old["wait_reason"] == f"replaced_by:{current['id']}"):
+            return None
+        if old["state"] not in {"waiting", "blocked"}:
+            raise ValueError("旧素材探测请求已执行或终止，拒绝自动替换")
+        return str(old["id"])
+
+    def material_probe_source_verdict(
+        self, workspace_id: str, asset_id: str, source_sha256: str,
+        unit_key: str, conn: sqlite3.Connection,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        """Check the committed hash fact; no probe execution is authorized here."""
+        binding = conn.execute(
+            "SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1"
+        ).fetchone()
+        if binding is None or binding["workspace_id"] != workspace_id:
+            return "unauthorized"
+        if not self._material_library_available():
+            return "dependency"
+        bound_path = str(self.video_library_path.resolve())
+        if binding["library_path"] != bound_path:
+            return "stale"
+        if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+            return "stale"
+        if unit_key != material_probe_unit_key(source_sha256):
+            return "stale"
+        asset = conn.execute(
+            "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+        if asset is None:
+            return "stale"
+        path = Path(str(asset["file_path"]))
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
+                return "stale"
+        except OSError:
+            return "unknown"
+        observation = conn.execute(
+            "SELECT provisional_revision, state, attempted_digest FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (workspace_id, str(path)),
+        ).fetchone()
+        if (observation is None or observation["state"] != "waiting"
+                or observation["attempted_digest"] != source_sha256):
+            return "stale"
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return "dependency"
+        except OSError:
+            return "unknown"
+        candidate = _material_hash_candidate(
+            workspace_id, bound_path, path, stat, asset_id,
+        )
+        if candidate.provisional_revision != observation["provisional_revision"]:
+            return "stale"
+        checkpoint = conn.execute(
+            """SELECT stage_input_digest, result_ref
+               FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (workspace_id, asset_id, candidate.provisional_revision,
+             source_sha256, candidate.unit_key),
+        ).fetchone()
+        if (checkpoint is None
+                or checkpoint["stage_input_digest"] != candidate.stage_input_digest
+                or checkpoint["result_ref"] != f"sha256:{source_sha256}"):
+            return "stale"
+        return "ready"
+
+    def material_probe_candidate_for_grant(self, grant: Grant) -> MaterialProbeCandidate:
+        with self._connect() as conn:
+            request = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (request is None or request["owner_type"] != "material_asset"
+                    or (request["workspace_id"], request["input_digest"], request["unit_key"],
+                        request["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                raise PermissionError("素材媒体探测许可与执行对象不匹配")
+            asset_id = str(request["owner_id"])
+            verdict = self.material_probe_source_verdict(
+                grant.workspace_id, asset_id, grant.input_digest, grant.unit_key, conn,
+            )
+            if verdict != "ready":
+                raise ValueError(f"素材媒体探测输入不可执行：{verdict}")
+            asset = conn.execute(
+                "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+                (grant.workspace_id, asset_id),
+            ).fetchone()
+            observation = conn.execute(
+                "SELECT provisional_revision FROM material_ingestion_files "
+                "WHERE workspace_id=? AND file_path=?",
+                (grant.workspace_id, asset["file_path"]),
+            ).fetchone()
+        return MaterialProbeCandidate(
+            grant.workspace_id, asset_id, str(asset["file_path"]), grant.input_digest,
+            str(observation["provisional_revision"]), grant.unit_key,
+        )
+
+    def material_probe_verdict_for_grant(
+        self, grant: Grant,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        with self._connect() as conn:
+            request = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, attempt_number "
+                "FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (request is None or request["owner_type"] != "material_asset"
+                    or (request["workspace_id"], request["input_digest"], request["unit_key"],
+                        request["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key, grant.attempt_number)):
+                return "unauthorized"
+            return self.material_probe_source_verdict(
+                grant.workspace_id, str(request["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            )
+
+    def commit_material_probe(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialProbeCandidate, facts: MaterialProbeFacts,
+    ) -> str:
+        """Commit typed ffprobe facts and duration on the permit's SQLite transaction."""
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or (candidate.workspace_id, candidate.source_sha256, candidate.unit_key)
+                != (grant.workspace_id, grant.input_digest, grant.unit_key)):
+            raise PermissionError("素材媒体检查点不属于当前许可尝试")
+        if self.material_probe_source_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，未保存过期媒体探测结果")
+        asset_row = conn.execute(
+            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        observation = conn.execute(
+            "SELECT provisional_revision FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (candidate.workspace_id, candidate.file_path),
+        ).fetchone()
+        if (asset_row is None or asset_row["file_path"] != candidate.file_path
+                or observation is None
+                or observation["provisional_revision"] != candidate.provisional_revision):
+            raise ValueError("素材媒体探测来源修订已变化")
+        stage_input_digest = candidate.unit_key.rsplit(":", 1)[-1]
+        result_json = facts.checkpoint_json()
+        result_ref = "sha256:" + hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+        existing = conn.execute(
+            """SELECT stage_input_digest, result_json, result_ref FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (candidate.workspace_id, candidate.asset_id, candidate.provisional_revision,
+             candidate.source_sha256, candidate.unit_key),
+        ).fetchone()
+        if existing is not None and (
+            existing["stage_input_digest"] != stage_input_digest
+            or existing["result_json"] != result_json
+            or existing["result_ref"] != result_ref
+        ):
+            raise ValueError("既有媒体探测检查点结果不匹配")
+        asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
+        asset.duration_seconds = facts.duration_seconds
+        asset.analysis_status = "blocked"
+        asset.analysis_message = "已读取时长与媒体流；镜头和画面分析尚未完成。"
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
+             candidate.asset_id),
+        )
+        if existing is None:
+            conn.execute(
+                """INSERT INTO material_analysis_checkpoints
+                   (workspace_id, asset_id, source_sha256, provisional_revision,
+                    unit_key, stage_input_digest, result_json, result_ref, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+                 candidate.provisional_revision, candidate.unit_key,
+                 stage_input_digest, result_json, result_ref, utc_now().isoformat()),
+            )
+        return f"material_probe_meta:{candidate.asset_id}:{candidate.provisional_revision}"
+
+    def fail_material_probe(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialProbeCandidate, reason: Literal[
+            "probe_invalid_media", "probe_timeout", "probe_output_limit", "probe_failed",
+        ],
+    ) -> None:
+        """Record a terminal metadata failure with the scheduler's failed request."""
+        if self.material_probe_source_verdict(
+            candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.unit_key, conn,
+        ) != "ready":
+            raise ValueError("素材来源已变化，不能把旧媒体探测错误写给新素材")
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}):
+            raise PermissionError("素材媒体失败不属于当前许可尝试")
+        row = conn.execute(
+            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        if row is None or row["file_path"] != candidate.file_path:
+            raise ValueError("素材媒体失败来源已变化")
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        asset.analysis_status = "failed"
+        asset.analysis_message = {
+            "probe_invalid_media": "媒体信息无效；请检查或更换原文件，当前不会自动重试。",
+            "probe_timeout": "读取媒体信息超时；请检查磁盘和文件，当前不会自动重试。",
+            "probe_output_limit": "媒体信息输出超出上限；请检查文件，当前不会自动重试。",
+            "probe_failed": "无法读取媒体信息；请检查磁盘和文件，当前不会自动重试。",
+        }[reason]
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
+             candidate.asset_id),
+        )
+        updated = conn.execute(
+            """UPDATE material_ingestion_files SET state='failed'
+               WHERE workspace_id=? AND file_path=? AND provisional_revision=?
+                 AND attempted_digest=?""",
+            (candidate.workspace_id, candidate.file_path, candidate.provisional_revision,
+             candidate.source_sha256),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("素材观察已变化，未记录旧媒体探测失败")
+
+    def pending_material_scene_dependencies(self) -> list[MaterialProbeDependency]:
+        """Expose verified metadata checkpoints needing a future scene contract."""
+        binding = self.get_material_ingestion_binding()
+        if binding is None or not self._material_library_available():
+            return []
+        workspace_id, bound_path = binding
+        if str(self.video_library_path.resolve()) != bound_path:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.asset_id, c.source_sha256, c.provisional_revision,
+                          c.unit_key, c.stage_input_digest, c.result_json, c.result_ref,
+                          a.payload
+                   FROM material_analysis_checkpoints c
+                   JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
+                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v1:%'""",
+                (workspace_id,),
+            ).fetchall()
+            pending: list[MaterialProbeDependency] = []
+            for row in rows:
+                source_sha256 = str(row["source_sha256"])
+                unit_key = str(row["unit_key"])
+                if (unit_key != material_probe_unit_key(source_sha256)
+                        or row["stage_input_digest"] != unit_key.rsplit(":", 1)[-1]
+                        or self.material_probe_source_verdict(
+                            workspace_id, str(row["asset_id"]), source_sha256,
+                            unit_key, conn,
+                        ) != "ready"):
+                    continue
+                result_json = row["result_json"]
+                if (not isinstance(result_json, str)
+                        or row["result_ref"] != "sha256:" + hashlib.sha256(
+                            result_json.encode("utf-8")
+                        ).hexdigest()):
+                    continue
+                try:
+                    facts = MaterialProbeFacts.from_checkpoint_json(result_json)
+                    asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if asset.duration_seconds != facts.duration_seconds or asset.analysis_status != "blocked":
+                    continue
+                pending.append(MaterialProbeDependency(
+                    workspace_id, str(row["asset_id"]), source_sha256,
+                    str(row["provisional_revision"]),
+                ))
+        return pending
+
+    def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
+        """Persist observations and claim stable, changed files for one serial analyzer."""
+        import time
+
+        binding = self.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        workspace_id, bound_path = binding
+        root = self.video_library_path
+        if not self._material_library_available() or str(root.resolve()) != bound_path:
+            self._mark_material_ingestion_disk_missing(workspace_id)
+            return []
+        now = time.time()
+        claimed: list[tuple[str, str]] = []
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS or "_已处理" in path.parts:
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root.resolve()):
+                continue
+            try:
+                stat = resolved.stat()
+            except FileNotFoundError:
+                continue
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                changed = row is None or (
+                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
+                ) != (
+                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+                )
+                if changed:
+                    conn.execute(
+                        "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode, observed_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'observing') "
+                        "ON CONFLICT(workspace_id, file_path) DO UPDATE SET size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns, ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at, state='observing'",
+                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, now),
+                    )
+                elif row["state"] in {"ready", "failed"}:
+                    # Size, mtime, ctime and inode are the incremental boundary.
+                    # Full content is hashed only on change, recovery, or retry.
+                    continue
+                elif now - float(row["observed_at"]) < stable_seconds:
+                    continue
+            if changed:
+                try:
+                    asset = self._upsert_discovered_asset(workspace_id, resolved)
+                except FileNotFoundError:
+                    continue
+                asset.analysis_status = "blocked"
+                asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
+                self._save_asset(asset)
+                continue
+            try:
+                with resolved.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()
+                final_stat = resolved.stat()
+                if (final_stat.st_size, final_stat.st_mtime_ns, final_stat.st_ctime_ns, final_stat.st_ino) != (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino):
+                    continue
+            except OSError:
+                continue
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
+                    (workspace_id, str(resolved)),
+                ).fetchone()
+                if row is None or (
+                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
+                ) != (
+                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+                ):
+                    continue
+                if row["completed_digest"] == digest:
+                    if row["state"] != "ready":
+                        conn.execute("UPDATE material_ingestion_files SET state='ready' WHERE workspace_id=? AND file_path=?", (workspace_id, str(resolved)))
+                    completed = True
+                    failed_before = False
+                elif row["state"] == "failed" and row["attempted_digest"] == digest:
+                    completed = False
+                    failed_before = True
+                else:
+                    completed = False
+                    failed_before = False
+                    # An interrupted process leaves 'running'; the next process can reclaim it.
+                    conn.execute(
+                        "UPDATE material_ingestion_files SET attempted_digest=?, state='running' WHERE workspace_id=? AND file_path=?",
+                        (digest, workspace_id, str(resolved)),
+                    )
+            if completed:
+                try:
+                    asset = self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
+                    continue
+                if asset.analysis_status == "blocked":
+                    asset.analysis_status = "ready"
+                    asset.analysis_message = "分析已完成；外接盘已恢复。"
+                    self._save_asset(asset)
+                continue
+            if failed_before:
+                continue
+            try:
+                asset = self._upsert_discovered_asset(workspace_id, resolved)
+            except FileNotFoundError:
+                continue
+            if asset.segments or asset.analysis_status in {"ready", "failed"}:
+                self._reset_changed_material_asset(asset)
+            else:
+                asset.analysis_status = "pending"
+                asset.analysis_message = "文件已写入完成，正在分析。"
+                self._save_asset(asset)
+            claimed.append((asset.id, digest))
+        return claimed
+
+    def finish_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, *, failed: bool) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE material_ingestion_files SET state=?, completed_digest=CASE WHEN ? THEN completed_digest ELSE ? END "
+                "WHERE workspace_id=? AND file_path=? AND attempted_digest=?",
+                ("failed" if failed else "ready", int(failed), digest, workspace_id, asset.path, digest),
+            )
+
+    def fail_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, reason: Exception) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        asset.analysis_status = "failed"
+        asset.analysis_message = f"素材分析失败：{_material_analysis_public_error(reason)}。检查后可手动重试。"
+        self._save_asset(asset)
+        self.finish_material_ingestion(workspace_id, asset_id, digest, failed=True)
+
+    def retry_material_ingestion(self, workspace_id: str, asset_id: str) -> None:
+        asset = self.get_asset(workspace_id, asset_id)
+        binding = self.get_material_ingestion_binding()
+        if binding is None or binding[0] != workspace_id:
+            raise ValueError("当前工作区未绑定素材目录")
+        with self._connect() as conn:
+            conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
+        asset.analysis_status = "pending"
+        asset.analysis_message = "已请求重试，等待素材稳定后重新分析。"
+        self._save_asset(asset)
+
+    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+            if row is None:
+                raise KeyError(asset_id)
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset.user_tags = _normalized_labels(user_tags)
+            asset.updated_at = utc_now()
+            conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id))
+        return asset
+
+    def update_assets_tags_batch(
+        self, workspace_id: str, asset_ids: list[str], *, add: list[str], remove: list[str]
+    ) -> list[MaterialAsset]:
+        if not asset_ids:
+            raise ValueError("请选择至少一条素材")
+        normalized_add = _normalized_labels(add)
+        normalized_remove = {value.casefold() for value in _normalized_labels(remove)}
+        updated: list[MaterialAsset] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for asset_id in dict.fromkeys(asset_ids):
+                row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+                if row is None:
+                    raise KeyError(asset_id)
+                asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                kept = [tag for tag in asset.user_tags if tag.casefold() not in normalized_remove]
+                asset.user_tags = _normalized_labels([*kept, *normalized_add])
+                asset.updated_at = utc_now()
+                updated.append(asset)
+            for asset in updated:
+                conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id))
+        return updated
+
+    def _mark_material_ingestion_disk_missing(self, workspace_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE material_ingestion_files SET state='blocked_disk' WHERE workspace_id=? AND state='ready'",
+                (workspace_id,),
+            )
+            rows = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=?", (workspace_id,)).fetchall()
+        for row in rows:
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            if asset.analysis_status != "failed":
+                asset.analysis_status = "blocked"
+                asset.analysis_message = "外接盘或素材目录不可用；连接原盘后会继续补扫。"
+                self._save_asset(asset)
+
+    def _reset_changed_material_asset(self, asset: MaterialAsset) -> None:
+        self._preserve_unmatched_corrections(asset, asset.segments)
+        asset.segments = []
+        asset.speech_analysis = None
+        asset.duration_seconds = None
+        asset.analysis_status = "pending"
+        asset.analysis_message = "源文件已变化，正在重新分析；原有人工纠正已保留待核对。"
+        self._save_asset(asset)
+
+    def _preserve_unmatched_corrections(self, asset: MaterialAsset, segments: list[MaterialSegment]) -> int:
+        corrected = self._corrected_material_segments(segments)
+        if not corrected:
+            return 0
+        with self._connect() as conn:
+            for segment in corrected:
+                conn.execute(
+                    "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
+                    (asset.workspace_id, asset.id, segment.id, _json_payload(segment), utc_now().isoformat()),
+                )
+        return len(corrected)
+
+    @staticmethod
+    def _corrected_material_segments(segments: list[MaterialSegment]) -> list[MaterialSegment]:
+        return [segment for segment in segments if segment.description or segment.transcript or segment.user_tags or segment.collection_ids or segment.usage_role != "unassigned" or segment.review_status != "raw"]
+
+    def list_unmatched_material_corrections(self, workspace_id: str, asset_id: str) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
+        return [json.loads(str(row["payload"])) for row in rows]
 
     def list_assets(self, workspace_id: str) -> list[MaterialAsset]:
         with self._connect() as conn:
@@ -2270,8 +3537,33 @@ class ProductionRepository:
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
         if query:
-            clauses.append("LOWER(payload) LIKE ?")
-            parameters.append(f"%{query.strip().lower()}%")
+            clauses.append("""(
+                LOWER(json_extract(payload, '$.file_name')) LIKE ?
+                OR EXISTS (SELECT 1 FROM json_each(material_assets.payload, '$.user_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
+                OR EXISTS (
+                    SELECT 1 FROM json_each(material_assets.payload, '$.segments') AS segment
+                    WHERE LOWER(CASE WHEN trim(json_extract(segment.value, '$.description')) != ''
+                        THEN json_extract(segment.value, '$.description')
+                        WHEN json_extract(segment.value, '$.understanding.status') = 'ready'
+                        THEN json_extract(segment.value, '$.understanding.summary') ELSE '' END) LIKE ?
+                    OR LOWER(CASE WHEN trim(json_extract(segment.value, '$.transcript')) != ''
+                        THEN json_extract(segment.value, '$.transcript')
+                        ELSE (SELECT group_concat(json_extract(speech.value, '$.text'), ' ')
+                            FROM json_each(material_assets.payload, '$.speech_analysis.observations') AS speech
+                            WHERE json_extract(material_assets.payload, '$.speech_analysis.status') = 'ready'
+                            AND json_extract(speech.value, '$.end_ms') > json_extract(segment.value, '$.start_seconds') * 1000
+                            AND json_extract(speech.value, '$.start_ms') < json_extract(segment.value, '$.end_seconds') * 1000)
+                        END) LIKE ?
+                    OR EXISTS (SELECT 1 FROM json_each(segment.value, '$.user_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
+                    OR EXISTS (SELECT 1 FROM json_each(segment.value, '$.system_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
+                    OR (json_extract(segment.value, '$.understanding.ocr_status') = 'ready' AND EXISTS (
+                        SELECT 1 FROM json_each(segment.value, '$.understanding.ocr_frames') AS frame,
+                            json_each(frame.value, '$.observations') AS observation
+                        WHERE LOWER(json_extract(observation.value, '$.text')) LIKE ?
+                        AND json_extract(observation.value, '$.confidence') >= ?))
+                )
+            )""")
+            parameters.extend([*[f"%{query.strip().lower()}%"] * 7, OCR_RETRIEVAL_MIN_CONFIDENCE])
         if review_status:
             clauses.append("json_extract(payload, '$.review_status') = ?")
             parameters.append(review_status)
@@ -2330,10 +3622,10 @@ class ProductionRepository:
         normalized_query = query.strip().casefold()
         matches: list[MaterialSegmentMatch] = []
         for asset in self.list_assets(workspace_id):
-            if asset.review_status != "approved":
+            if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:
-                if segment.review_status != "approved":
+                if segment.review_status == "rejected":
                     continue
                 duration = max(0.0, segment.end_seconds - segment.start_seconds)
                 if (
@@ -2346,18 +3638,18 @@ class ProductionRepository:
                     and duration > max_duration_seconds
                 ):
                     continue
-                role = effective_segment_usage_role(asset, segment)
+                role = selectable_segment_usage_role(asset, segment)
                 if roles and role not in roles:
                     continue
                 segment_tags = {
                     value.casefold()
-                    for value in (*segment.system_tags, *segment.user_tags)
+                    for value in (*segment.system_tags, *segment.user_tags, *asset.user_tags)
                 }
                 if requested_tags and not set(requested_tags) <= segment_tags:
                     continue
 
                 score = 0.1
-                reasons = ["已通过当前工作区素材审核"]
+                reasons = ["当前工作区已分析素材"]
                 if roles:
                     score += 0.25
                     reasons.append(f"用途匹配 {role}")
@@ -2366,7 +3658,7 @@ class ProductionRepository:
                     reasons.append("标签匹配 " + "、".join(tags or []))
                 if normalized_query:
                     query_reasons = _material_query_reasons(
-                        normalized_query, segment
+                        normalized_query, segment, asset
                     )
                     if not query_reasons:
                         continue
@@ -2401,9 +3693,19 @@ class ProductionRepository:
             raise KeyError(asset_id)
         return self._asset_from_payload(json.loads(str(row["payload"])))
 
-    def analyze_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
+    def _asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND file_path=?", (workspace_id, file_path)).fetchone()
+        if row is None:
+            raise KeyError(file_path)
+        return self._asset_from_payload(json.loads(str(row["payload"])))
+
+    def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
+        if asset.use_state == "excluded":
+            raise ValueError("素材已设为不使用，请先修改使用状态再分析")
         path = self._validated_library_file(asset.path)
+        source_stat = path.stat()
         try:
             duration = float(self.duration_reader(path))
             if duration <= 0:
@@ -2427,17 +3729,38 @@ class ProductionRepository:
             asset.duration_seconds = round(duration, 3)
             asset.segments = segments
             asset.analysis_status = "ready"
+            source_fingerprint = None
+            if self.visual_understanding is not None:
+                with path.open("rb") as source:
+                    source_fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
+            if self.speech_analyzer is not None:
+                asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis, source_fingerprint)
+            if self.visual_understanding is not None:
+                observations = self.visual_understanding.analyze(path, segments, source_fingerprint)
+                for segment in segments:
+                    segment.understanding = observations[segment.id]
             visual_message = self._analyze_visual_semantics(asset, path)
             role_message = self._suggest_usage_roles(asset)
             for segment in asset.segments:
                 segment.system_tags = _infer_system_tags(asset, segment)
             asset.analysis_message = (
-                f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message}"
+                f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message} "
+                f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'} "
+                f"画面观察 {sum(bool(item.understanding and item.understanding.status == 'ready') for item in segments)}/{len(segments)} 个片段。"
             ).strip()
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            logger.exception("Material analysis failed for asset %s", asset_id)
             asset.analysis_status = "failed"
-            asset.analysis_message = f"镜头分析失败：{exc}"
-        return self._save_asset(asset)
+            asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
+        final_stat = path.stat()
+        if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+            raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
+        if expected_source_digest is not None:
+            with path.open("rb") as source:
+                final_digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if final_digest != expected_source_digest:
+                raise ValueError("分析期间原片内容发生变化，未保存本次结果，请重新分析。")
+        return self._save_asset(asset, analysis_only=True)
 
     def get_visual_feature(
         self,
@@ -2448,10 +3771,38 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT vector_json FROM material_segment_features
-                WHERE workspace_id = ? AND segment_id = ? AND model_id = ?
+                SELECT a.payload FROM material_assets a
+                JOIN material_segment_features f
+                    ON a.workspace_id = f.workspace_id AND a.id = f.asset_id
+                WHERE f.workspace_id = ? AND f.segment_id = ? AND f.model_id = ?
                 """,
                 (workspace_id, segment_id, model_id),
+            ).fetchone()
+        if row is None:
+            return None
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        segment = next((item for item in asset.segments if item.id == segment_id), None)
+        if segment is None:
+            return None
+        return self._visual_feature_for_segment(asset, segment, model_id)
+
+    def _visual_feature_for_segment(
+        self, asset: MaterialAsset, segment: MaterialSegment, model_id: str
+    ) -> list[float] | None:
+        # Analysis also calls this before newly detected segments are persisted.
+        try:
+            path = self._validated_library_file(asset.path)
+            fingerprint = _visual_fingerprint(path, segment, model_id)
+        except (OSError, ValueError):
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT vector_json FROM material_segment_features
+                WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
+                    AND model_id = ? AND fingerprint = ?
+                """,
+                (asset.workspace_id, asset.id, segment.id, model_id, fingerprint),
             ).fetchone()
         if row is None:
             return None
@@ -2460,14 +3811,19 @@ class ProductionRepository:
             return None
         return [float(value) for value in payload]
 
+    def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
+        if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
+            raise ValueError("素材使用状态无效")
+        asset = self.get_asset(workspace_id, asset_id)
+        asset.use_state = use_state
+        return self._save_asset(asset)
+
     def update_asset_review(
         self,
         workspace_id: str,
         asset_id: str,
         *,
         review_status: AssetReviewStatus,
-        rights_confirmed: bool,
-        brand_safe: bool,
         usage_role: AssetUsageRole = "unassigned",
     ) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
@@ -2480,8 +3836,8 @@ class ProductionRepository:
                 raise ValueError("请先完成镜头分析再审核素材")
         asset.review_status = review_status
         asset.usage_role = usage_role
-        asset.rights_confirmed = rights_confirmed
-        asset.brand_safe = brand_safe
+        if review_status == "rejected":
+            asset.use_state = "excluded"
         if review_status == "approved":
             for segment in asset.segments:
                 if segment.usage_role == "unassigned":
@@ -2637,6 +3993,29 @@ class ProductionRepository:
             raise KeyError(batch_id)
         return self._batch_from_payload(json.loads(str(row["payload"])))
 
+    def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
+        return [VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at")) for row in rows]
+
+    def get_video_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
+        if row is None:
+            raise KeyError(template_id)
+        return VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at"))
+
+    def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
+        if template.origin != "user" or template.version < 1 or not template.name.strip():
+            raise ValueError("用户模板必须有名称和有效版本。")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
+            if template.version != row["version"] + 1:
+                raise ValueError("模板版本已变化，请刷新后重新保存。")
+            conn.execute("INSERT INTO video_templates (workspace_id, id, version, payload) VALUES (?, ?, ?, ?)", (template.workspace_id, template.id, template.version, _json_payload(template)))
+        return template
+
     def confirm_creation_plan(
         self,
         plan: CreationPlan,
@@ -2682,8 +4061,10 @@ class ProductionRepository:
                 )
                 if (
                     segment is None
-                    or asset.review_status != "approved"
-                    or segment.review_status != "approved"
+                    or asset.analysis_status != "ready"
+                    or asset.review_status == "rejected"
+                    or not material_allows_footage(asset)
+                    or segment.review_status == "rejected"
                 ):
                     raise ValueError("创作方案引用的素材片段不可用")
             conn.execute(
@@ -2915,6 +4296,19 @@ class ProductionRepository:
                     _job_run_values(run),
                 )
             except sqlite3.IntegrityError as exc:
+                raced = conn.execute(
+                    "SELECT * FROM job_runs WHERE workspace_id = ? AND idempotency_key = ?",
+                    (run.workspace_id, run.idempotency_key),
+                ).fetchone()
+                if raced is not None:
+                    persisted = self._job_run_from_row(raced)
+                    if (
+                        persisted.task_id != run.task_id
+                        or persisted.kind != run.kind
+                        or persisted.input_digest != run.input_digest
+                    ):
+                        raise ValueError("幂等键已绑定到不同的任务输入") from exc
+                    return persisted
                 raise ValueError("任务运行记录 ID 已存在") from exc
         return self.get_job_run(run.workspace_id, run.id)
 
@@ -2950,6 +4344,15 @@ class ProductionRepository:
                 WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
                 """,
                 (workspace_id, task_id),
+            ).fetchall()
+        return [self._job_run_from_row(row) for row in rows]
+
+    def list_pending_creation_executions(self) -> list[JobRun]:
+        """Recover only explicitly persisted execution jobs and their original workspace."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM job_runs WHERE kind = 'creation_task_execution' "
+                "AND status IN ('queued', 'interrupted') ORDER BY created_at ASC, id ASC"
             ).fetchall()
         return [self._job_run_from_row(row) for row in rows]
 
@@ -3231,6 +4634,14 @@ class ProductionRepository:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
+                raced = conn.execute(
+                    "SELECT * FROM task_events WHERE id = ?", (event.id,)
+                ).fetchone()
+                if raced is not None:
+                    persisted = self._task_event_from_row(raced)
+                    if persisted != event:
+                        raise ValueError("任务事件 ID 已存在，且领域字段不一致") from exc
+                    return persisted
                 raise ValueError("任务事件 ID 已存在") from exc
         return self.get_task_event(event.workspace_id, event.id)
 
@@ -3755,6 +5166,167 @@ class ProductionRepository:
                 parameters,
             ).rowcount
 
+    def create_subtitle_track(self, track: SubtitleTrack) -> SubtitleTrack:
+        _validate_subtitle_track(track)
+        with self._connect() as conn:
+            self._require_creation_task(conn, track.workspace_id, track.task_id)
+            timeline = conn.execute(
+                """
+                SELECT 1 FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (track.workspace_id, track.task_id, track.timeline_version_id),
+            ).fetchone()
+            if timeline is None:
+                raise ValueError("字幕轨必须关联当前任务的时间线版本")
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO subtitle_tracks
+                        (id, workspace_id, task_id, timeline_version_id, language,
+                         payload_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        track.id,
+                        track.workspace_id,
+                        track.task_id,
+                        track.timeline_version_id,
+                        track.language,
+                        _json_payload(track),
+                        track.created_at.isoformat(),
+                        track.updated_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("同一时间线版本的字幕轨已存在") from exc
+        return self.get_subtitle_track(track.workspace_id, track.task_id, track.id)
+
+    def get_subtitle_track(
+        self, workspace_id: str, task_id: str, track_id: str
+    ) -> SubtitleTrack:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                """
+                SELECT * FROM subtitle_tracks
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, track_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(track_id)
+        return self._subtitle_track_from_row(row)
+
+    def list_subtitle_tracks(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        timeline_version_id: str | None = None,
+    ) -> list[SubtitleTrack]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            if timeline_version_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM subtitle_tracks
+                    WHERE workspace_id = ? AND task_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (workspace_id, task_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM subtitle_tracks
+                    WHERE workspace_id = ? AND task_id = ? AND timeline_version_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (workspace_id, task_id, timeline_version_id),
+                ).fetchall()
+        return [self._subtitle_track_from_row(row) for row in rows]
+
+    def create_cover_asset(self, cover: CoverAsset) -> CoverAsset:
+        _validate_cover_asset(cover)
+        with self._connect() as conn:
+            self._require_creation_task(conn, cover.workspace_id, cover.task_id)
+            timeline = conn.execute(
+                """
+                SELECT 1 FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (cover.workspace_id, cover.task_id, cover.timeline_version_id),
+            ).fetchone()
+            if timeline is None:
+                raise ValueError("封面必须关联当前任务的时间线版本")
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO cover_assets
+                        (id, workspace_id, task_id, timeline_version_id,
+                         payload_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cover.id,
+                        cover.workspace_id,
+                        cover.task_id,
+                        cover.timeline_version_id,
+                        _json_payload(cover),
+                        cover.created_at.isoformat(),
+                        cover.updated_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("同一时间线版本的封面已存在") from exc
+        return self.get_cover_asset(cover.workspace_id, cover.task_id, cover.id)
+
+    def get_cover_asset(
+        self, workspace_id: str, task_id: str, cover_id: str
+    ) -> CoverAsset:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                """
+                SELECT * FROM cover_assets
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, cover_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(cover_id)
+        return self._cover_asset_from_row(row)
+
+    def list_cover_assets(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        timeline_version_id: str | None = None,
+    ) -> list[CoverAsset]:
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            if timeline_version_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM cover_assets
+                    WHERE workspace_id = ? AND task_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (workspace_id, task_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM cover_assets
+                    WHERE workspace_id = ? AND task_id = ? AND timeline_version_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    (workspace_id, task_id, timeline_version_id),
+                ).fetchall()
+        return [self._cover_asset_from_row(row) for row in rows]
+
     def create_edit_intent(self, intent: EditIntent) -> EditIntent:
         _validate_edit_intent(intent)
         with self._connect() as conn:
@@ -3950,6 +5522,8 @@ class ProductionRepository:
         montage_payload: dict[str, object] | None = None,
         narration_segments: list[NarrationSegment] | None = None,
         narration_artifact: NarrationArtifactRecord | None = None,
+        subtitle_tracks: list[SubtitleTrack] | None = None,
+        cover_asset: CoverAsset | None = None,
     ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
         """Atomically confirm one proposal and persist its applied domain facts."""
         _validate_edit_operation(operation)
@@ -3969,11 +5543,34 @@ class ProductionRepository:
             raise ValueError("提案、编辑操作与结果时间线版本谱系不一致")
         if (montage_plan_id is None) != (montage_payload is None):
             raise ValueError("混剪计划 ID 与 payload 必须同时提供")
-        if operation.operation_type in {
-            "RegenerateNarrationSegment",
-            "UpdateSubtitleCue",
-        } and (narration_segments is None or montage_payload is None):
+        if operation.operation_type == "RegenerateNarrationSegment" and (
+            narration_segments is None or montage_payload is None
+        ):
             raise ValueError("声音或字幕编辑确认必须同时保存完整配音分段与 montage/cue 事实")
+        if operation.operation_type == "UpdateSubtitleCue" and not (
+            subtitle_tracks or (narration_segments is not None and montage_payload is not None)
+        ):
+            raise ValueError("字幕编辑确认必须保存完整字幕轨或迁移前 montage/cue 事实")
+        if operation.operation_type in {"ConfigureSubtitleTrack", "ReplaceSubtitleText", "AlignSubtitleTiming"} and not subtitle_tracks:
+            raise ValueError("字幕轨配置确认必须保存字幕轨事实")
+        if operation.operation_type == "GenerateCoverFromFrame" and cover_asset is None:
+            raise ValueError("封面确认必须保存封面事实")
+        for track in subtitle_tracks or []:
+            _validate_subtitle_track(track)
+            if (
+                track.workspace_id != workspace_id
+                or track.task_id != task_id
+                or track.timeline_version_id != result_version.id
+            ):
+                raise ValueError("字幕轨与结果时间线版本谱系不一致")
+        if cover_asset is not None:
+            _validate_cover_asset(cover_asset)
+            if (
+                cover_asset.workspace_id != workspace_id
+                or cover_asset.task_id != task_id
+                or cover_asset.timeline_version_id != result_version.id
+            ):
+                raise ValueError("封面与结果时间线版本谱系不一致")
         if narration_artifact is not None:
             if narration_segments is None:
                 raise ValueError("整轨配音产物必须与完整分段事实同时保存")
@@ -3985,11 +5582,17 @@ class ProductionRepository:
             ):
                 raise ValueError("整轨配音产物与当前任务不同源或音频无效")
         if montage_payload is not None:
+            allowed_montage_statuses = (
+                {"waiting_for_user", "ready", "rendered"}
+                if operation.operation_type in {"UndoTimelineVersion", "RedoTimelineVersion"}
+                else {"waiting_for_user", "ready"}
+            )
             if (
                 str(montage_payload.get("task_id", "")) != task_id
-                or str(montage_payload.get("status", "")) != "ready"
+                or str(montage_payload.get("status", ""))
+                not in allowed_montage_statuses
             ):
-                raise ValueError("确认编辑后的混剪计划必须同源且回到 ready")
+                raise ValueError("确认编辑后的混剪计划状态与操作类型不一致")
             _json_object(montage_payload)
 
         with self._connect() as conn:
@@ -4106,6 +5709,43 @@ class ProductionRepository:
                     result_version.created_at.isoformat(),
                 ),
             )
+            for track in subtitle_tracks or []:
+                conn.execute(
+                    """
+                    INSERT INTO subtitle_tracks
+                        (id, workspace_id, task_id, timeline_version_id, language,
+                         payload_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        track.id,
+                        workspace_id,
+                        task_id,
+                        result_version.id,
+                        track.language,
+                        _json_payload(track),
+                        track.created_at.isoformat(),
+                        track.updated_at.isoformat(),
+                    ),
+                )
+            if cover_asset is not None:
+                conn.execute(
+                    """
+                    INSERT INTO cover_assets
+                        (id, workspace_id, task_id, timeline_version_id,
+                         payload_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cover_asset.id,
+                        workspace_id,
+                        task_id,
+                        result_version.id,
+                        _json_payload(cover_asset),
+                        cover_asset.created_at.isoformat(),
+                        cover_asset.updated_at.isoformat(),
+                    ),
+                )
             conn.execute(
                 """
                 UPDATE edit_proposals SET status = 'confirmed', updated_at = ?
@@ -4131,12 +5771,17 @@ class ProductionRepository:
                     ),
                 )
                 task.montage_plan_id = montage_plan_id
-                task.output_ready = False
-                task.stage = "montage"
+                restored_rendered_output = bool(
+                    operation.operation_type in {"UndoTimelineVersion", "RedoTimelineVersion"}
+                    and montage_payload.get("status") == "rendered"
+                    and montage_payload.get("output_path")
+                )
+                task.output_ready = restored_rendered_output
+                task.stage = "review" if restored_rendered_output else "montage"
                 task.stage_status = "waiting_for_user"
                 task.status = "waiting_for_user"
-                task.progress = 75
-                task.recovery_point = "montage"
+                task.progress = 90 if restored_rendered_output else 75
+                task.recovery_point = "review" if restored_rendered_output else "montage"
                 task.stage_reason = None
                 task.stage_impact = None
                 task.stage_repair_action = None
@@ -4947,13 +6592,7 @@ class ProductionRepository:
             task = self._creation_task_from_payload(json.loads(str(row["payload"])))
             if task.plan_id != run.plan_id or task.selected_topic_id != run.topic_id:
                 raise ValueError("文案运行与已确认选题不一致")
-            duration_repair = (
-                task.stage == "narration"
-                and task.stage_status == "failed"
-                and task.stage_reason == "narration_generation_failed"
-                and "压缩" in (task.stage_repair_action or "")
-                and "文案" in (task.stage_repair_action or "")
-            )
+            duration_repair = task.needs_script_duration_repair and task.can_revise_script
             if not duration_repair and (
                 task.stage != "script"
                 or task.stage_status not in {"not_started", "failed"}
@@ -5210,6 +6849,73 @@ class ProductionRepository:
             raise KeyError(script_id)
         return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
 
+    def update_assistant_script_draft(
+        self,
+        workspace_id: str,
+        task_id: str,
+        script_id: str,
+        *,
+        title: str,
+        sections: list[CreationTaskScriptSection],
+    ) -> CreationTaskScript:
+        """Revise only the current unconfirmed assistant draft in its existing run."""
+        if not title.strip() or not sections or any(
+            not section.id.strip()
+            or not section.title.strip()
+            or not section.content.strip()
+            or not section.visual_prompt.strip()
+            or not section.evidence_reference_ids
+            for section in sections
+        ):
+            raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
+                (workspace_id, task_id, script_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(script_id)
+            script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+            if (
+                task.stage != "script"
+                or task.stage_status != "waiting_for_user"
+                or task.confirmed_script_id is not None
+                or script.selection_status != "draft"
+                or script.topic_id != task.selected_topic_id
+            ):
+                raise ValueError("当前创作任务不允许修改这份待确认文案")
+            run_row = conn.execute(
+                "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
+                "AND json_extract(payload, '$.status')='succeeded' "
+                "ORDER BY started_at DESC, id DESC LIMIT 1",
+                (workspace_id, task_id),
+            ).fetchone()
+            if run_row is None:
+                raise ValueError("这份文案没有已完成的生成记录")
+            run = self._script_generation_run_from_payload(json.loads(str(run_row["payload"])))
+            if script.run_id != run.id or run.topic_id != task.selected_topic_id or run.plan_id != task.plan_id:
+                raise ValueError("这份文案不是当前任务的最新草稿")
+            allowed_references = {
+                str(item["reference_id"])
+                for item in run.input_references
+                if isinstance(item, dict) and item.get("reference_id")
+            }
+            used_references = {
+                reference_id for section in sections for reference_id in section.evidence_reference_ids
+            }
+            if not used_references.issubset(allowed_references):
+                raise ValueError("文案引用了本次模型输入之外的资料")
+            script.title = title.strip()
+            script.sections = sections
+            script.updated_at = utc_now()
+            conn.execute(
+                "UPDATE creation_task_scripts SET payload=?, updated_at=? WHERE workspace_id=? AND task_id=? AND id=?",
+                (_json_payload(script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
+            )
+        return script
+
     def _demote_other_confirmed_scripts(
         self,
         conn: sqlite3.Connection,
@@ -5270,8 +6976,7 @@ class ProductionRepository:
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
-                and task.stage == "script"
-                and task.stage_status == "failed"
+                and task.can_revise_script
             )
             if (
                 task.confirmed_script_id == script_id
@@ -5664,18 +7369,19 @@ class ProductionRepository:
     ) -> dict[str, object]:
         profile = profile or self.get_profile(workspace_id)
         assets = self.list_assets(workspace_id)
-        approved_assets = [
+        usable_assets = [
             asset
             for asset in assets
-            if asset.review_status == "approved"
-            and asset.usage_role in {"a_roll", "b_roll"}
+            if asset.analysis_status == "ready"
+            and asset.review_status != "rejected"
+            and material_allows_footage(asset)
         ]
-        approved_segments = [
+        usable_segments = [
             segment
-            for asset in approved_assets
+            for asset in usable_assets
             for segment in asset.segments
-            if segment.review_status == "approved"
-            and effective_segment_usage_role(asset, segment) == "b_roll"
+            if segment.review_status != "rejected"
+            and selectable_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
         versioned_voices = self.list_versioned_voice_profiles(workspace_id)
@@ -5726,19 +7432,19 @@ class ProductionRepository:
                     "message": "自动选题来源池为空。",
                 }
             )
-        if not approved_segments:
+        if not usable_segments:
             blockers.append(
                 {
                     "code": "approved_materials_empty",
-                    "message": "可用素材库中还没有已审核的 B-roll 镜头。",
+                    "message": "可用素材库中还没有明确可作补充画面的镜头。",
                 }
             )
         return {
             "ready": not blockers,
             "blockers": blockers,
             "asset_count": len(assets),
-            "approved_asset_count": len(approved_assets),
-            "approved_segment_count": len(approved_segments),
+            "approved_asset_count": len(usable_assets),
+            "approved_segment_count": len(usable_segments),
             "total_duration_seconds": round(
                 sum(asset.duration_seconds or 0 for asset in assets), 3
             ),
@@ -5770,7 +7476,7 @@ class ProductionRepository:
         )
         stat = resolved.stat()
         if existing is None:
-            digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+            digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
             existing = MaterialAsset(
                 id=f"asset_{digest}",
                 workspace_id=workspace_id,
@@ -5785,9 +7491,46 @@ class ProductionRepository:
             existing.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
         return self._save_asset(existing)
 
-    def _save_asset(self, asset: MaterialAsset) -> MaterialAsset:
+    def _save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
         asset.updated_at = utc_now()
         with self._connect() as conn:
+            if analysis_only:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT payload FROM material_assets WHERE id = ? AND workspace_id = ?", (asset.id, asset.workspace_id)).fetchone()
+                if row is None:
+                    raise ValueError("素材已移除，未保存过期的分析结果。")
+                current = self._asset_from_payload(json.loads(row["payload"]))
+                if current.size_bytes != asset.size_bytes or current.modified_at != asset.modified_at:
+                    raise ValueError("分析期间素材文件发生变化，请重新分析。")
+                current_segments = {item.id: item for item in current.segments}
+                merged_segments = []
+                for analyzed in asset.segments:
+                    latest = current_segments.get(analyzed.id)
+                    if latest is not None:
+                        for name in ("visual_status", "visual_model_id", "visual_sample_count", "understanding",
+                                     "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
+                            setattr(latest, name, getattr(analyzed, name))
+                        latest.system_tags = _infer_system_tags(current, latest)
+                        merged_segments.append(latest)
+                    else:
+                        merged_segments.append(analyzed)
+                merged_ids = {segment.id for segment in merged_segments}
+                corrected = self._corrected_material_segments(
+                    [segment for segment in current.segments if segment.id not in merged_ids]
+                )
+                for segment in corrected:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
+                        (current.workspace_id, current.id, segment.id, _json_payload(segment), utc_now().isoformat()),
+                    )
+                for name in ("duration_seconds", "analysis_status", "analysis_message", "speech_analysis",
+                             "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
+                    setattr(current, name, getattr(asset, name))
+                current.segments = merged_segments
+                if corrected:
+                    current.analysis_message += f" {len(corrected)} 条旧片段的人工纠正因边界变化待核对。"
+                current.updated_at = asset.updated_at
+                asset = current
             conn.execute(
                 """
                 INSERT INTO material_assets
@@ -5909,11 +7652,7 @@ class ProductionRepository:
 
             scored_segments: list[MaterialSegment] = []
             for segment in asset.segments:
-                vector = self.get_visual_feature(
-                    asset.workspace_id,
-                    segment.id,
-                    provider.model_id,
-                )
+                vector = self._visual_feature_for_segment(asset, segment, provider.model_id)
                 if not vector:
                     continue
                 scores = [
@@ -6184,6 +7923,12 @@ class ProductionRepository:
 
     @staticmethod
     def _asset_from_payload(data: dict[str, object]) -> MaterialAsset:
+        # Read-only legacy boundary: old proof flags never regain mutation authority.
+        data = dict(data)
+        data.pop("rights_confirmed", None)
+        data.pop("brand_safe", None)
+        if "use_state" not in data:
+            data["use_state"] = "excluded" if data.get("review_status") == "rejected" or data.get("usage_role") == "exclude" else "available"
         segment_payloads = data.pop("segments", [])
         data = _with_datetime(data, "modified_at", "created_at", "updated_at")
         segments = [
@@ -6193,8 +7938,15 @@ class ProductionRepository:
             for segment in segment_payloads
             if isinstance(segment, dict)
         ]
-        asset = MaterialAsset(**data, segments=segments)
+        speech = data.pop("speech_analysis", None)
+        speech_analysis = MaterialSpeechAnalysis(
+            **{key: value for key, value in speech.items() if key != "observations"},
+            observations=[SpeechObservation(**item) for item in speech.get("observations", [])],
+        ) if isinstance(speech, dict) else None
+        asset = MaterialAsset(**data, segments=segments, speech_analysis=speech_analysis)
         for segment in asset.segments:
+            if isinstance(segment.understanding, dict):
+                segment.understanding = SegmentUnderstanding(**segment.understanding)
             if not segment.system_tags:
                 segment.system_tags = _infer_system_tags(asset, segment)
         return asset
@@ -6418,6 +8170,24 @@ class ProductionRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
+
+    @staticmethod
+    def _subtitle_track_from_row(row: sqlite3.Row) -> SubtitleTrack:
+        payload = _json_object_from_text(str(row["payload_json"]))
+        raw_cues = payload.pop("cues", [])
+        return SubtitleTrack(
+            **_with_datetime(payload, "created_at", "updated_at"),
+            cues=[
+                SubtitleCue(**cue)
+                for cue in raw_cues
+                if isinstance(cue, dict)
+            ],
+        )
+
+    @staticmethod
+    def _cover_asset_from_row(row: sqlite3.Row) -> CoverAsset:
+        payload = _json_object_from_text(str(row["payload_json"]))
+        return CoverAsset(**_with_datetime(payload, "created_at", "updated_at"))
 
     @staticmethod
     def _task_event_from_row(row: sqlite3.Row) -> TaskEvent:
@@ -6944,6 +8714,107 @@ def _validate_person_render(render: PersonRender) -> None:
         raise ValueError("人物片段状态无效")
 
 
+def _validate_subtitle_track(track: SubtitleTrack) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            track.id,
+            track.workspace_id,
+            track.task_id,
+            track.timeline_version_id,
+            track.language,
+            track.generation_method,
+        )
+    ):
+        raise ValueError("字幕轨缺少任务、时间线、语言或生成方式")
+    if track.language not in {"zh-CN", "en-US"}:
+        raise ValueError("字幕轨语言无效")
+    if track.generation_method not in {"timeline", "translation"}:
+        raise ValueError("字幕轨生成方式无效")
+    if track.source_language is not None and track.source_language not in {
+        "zh-CN",
+        "en-US",
+    }:
+        raise ValueError("字幕轨源语言无效")
+    if track.updated_at < track.created_at:
+        raise ValueError("字幕轨更新时间不能早于创建时间")
+    cue_ids: set[str] = set()
+    previous_end = 0.0
+    for cue in track.cues:
+        if not cue.id.strip() or not cue.text.strip():
+            raise ValueError("字幕条目缺少稳定标识或文字")
+        if cue.id in cue_ids:
+            raise ValueError("字幕轨包含重复条目标识")
+        cue_ids.add(cue.id)
+        if (
+            not math.isfinite(cue.start_seconds)
+            or not math.isfinite(cue.end_seconds)
+            or cue.start_seconds < 0
+            or cue.end_seconds <= cue.start_seconds
+            or cue.start_seconds < previous_end - 0.001
+        ):
+            raise ValueError("字幕条目时间无效或相互重叠")
+        if any(index <= 0 or index >= len(cue.text) for index in cue.line_breaks):
+            raise ValueError("字幕断行位置超出文字范围")
+        previous_end = cue.end_seconds
+    if track.status == "valid":
+        if not track.cues or not track.artifact_ref or not track.transform_id:
+            raise ValueError("valid 字幕轨必须有条目、产物和变换证据")
+        _validate_logical_reference(track.artifact_ref, "字幕产物引用")
+        if track.failure_reason or track.impact or track.repair_action:
+            raise ValueError("valid 字幕轨不能包含失败终态")
+    elif track.status in {"failed", "unavailable"}:
+        if not all(
+            (value or "").strip()
+            for value in (track.failure_reason, track.impact, track.repair_action)
+        ):
+            raise ValueError("失败或不可用字幕轨必须记录原因、影响和修复动作")
+        if track.artifact_ref is not None or track.transform_id is not None:
+            raise ValueError("失败或不可用字幕轨不能登记成功证据")
+    elif track.status != "superseded":
+        raise ValueError("字幕轨状态无效")
+
+
+def _validate_cover_asset(cover: CoverAsset) -> None:
+    if not all(
+        value.strip()
+        for value in (
+            cover.id,
+            cover.workspace_id,
+            cover.task_id,
+            cover.timeline_version_id,
+            cover.source_video_ref,
+            cover.title,
+            cover.generation_method,
+            cover.model_or_engine,
+        )
+    ):
+        raise ValueError("封面缺少任务、时间线、源画面、标题或执行器")
+    if not math.isfinite(cover.frame_time_seconds) or cover.frame_time_seconds < 0:
+        raise ValueError("封面选帧时间无效")
+    _validate_logical_reference(cover.source_video_ref, "封面源视频引用")
+    if cover.generation_method not in {"video_frame", "image_model"}:
+        raise ValueError("封面生成方式无效")
+    if cover.updated_at < cover.created_at:
+        raise ValueError("封面更新时间不能早于创建时间")
+    if cover.status == "valid":
+        if not cover.artifact_ref or not cover.transform_id:
+            raise ValueError("valid 封面必须有产物和变换证据")
+        _validate_logical_reference(cover.artifact_ref, "封面产物引用")
+        if cover.failure_reason or cover.impact or cover.repair_action:
+            raise ValueError("valid 封面不能包含失败终态")
+    elif cover.status in {"failed", "unavailable"}:
+        if not all(
+            (value or "").strip()
+            for value in (cover.failure_reason, cover.impact, cover.repair_action)
+        ):
+            raise ValueError("失败或不可用封面必须记录原因、影响和修复动作")
+        if cover.artifact_ref is not None or cover.transform_id is not None:
+            raise ValueError("失败或不可用封面不能登记成功证据")
+    elif cover.status != "superseded":
+        raise ValueError("封面状态无效")
+
+
 def _validate_task_event(event: TaskEvent) -> None:
     if not all(
         value.strip()
@@ -7297,6 +9168,15 @@ def effective_segment_usage_role(
     return segment.usage_role if segment.usage_role != "unassigned" else asset.usage_role
 
 
+def selectable_segment_usage_role(asset: MaterialAsset, segment: MaterialSegment) -> AssetUsageRole:
+    explicit = effective_segment_usage_role(asset, segment)
+    if explicit != "unassigned":
+        return explicit
+    if segment.usage_role_confidence >= 0.7:
+        return segment.suggested_usage_role
+    return "unassigned"
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -7326,7 +9206,8 @@ def _infer_system_tags(
     asset: MaterialAsset,
     segment: MaterialSegment,
 ) -> list[str]:
-    text = f"{asset.file_name} {segment.description} {segment.transcript}".lower()
+    # File names and spoken claims are search hints, not visible evidence.
+    text = segment.description.lower()
     role = effective_segment_usage_role(asset, segment)
     if role == "unassigned":
         role = segment.suggested_usage_role
@@ -7334,7 +9215,7 @@ def _infer_system_tags(
     rules = {
         "场景:办公": ("办公", "office", "workspace", "desk"),
         "物体:电脑": ("电脑", "笔记本", "laptop", "computer", "keyboard"),
-        "动作:打字": ("打字", "键盘", "typing", "keyboard"),
+        "动作:打字": ("打字", "typing"),
         "内容:软件界面": ("软件", "界面", "screen", "app", "website"),
         "场景:户外": ("户外", "街道", "风景", "outdoor", "street", "nature"),
         "主体:人物": ("人物", "人脸", "口播", "person", "face", "talking"),
@@ -7343,35 +9224,43 @@ def _infer_system_tags(
     for tag, keywords in rules.items():
         if any(keyword in text for keyword in keywords):
             tags.append(tag)
+    if not segment.description and segment.understanding and segment.understanding.status == "ready":
+        for fact in segment.understanding.facts:
+            prefix = {"object": "主体", "scene": "场景", "action": "动作"}[fact["kind"]]
+            tags.append(f"{prefix}:{fact['text']}")
     return _normalized_labels(tags)
 
 
 def _material_query_reasons(
-    normalized_query: str, segment: MaterialSegment
+    normalized_query: str, segment: MaterialSegment, asset: MaterialAsset
 ) -> list[str]:
     reasons: list[str] = []
     text_fields = (
         ("片段描述", segment.description),
-        ("片段转录", segment.transcript),
+        ("本地画面观察", segment.understanding.summary if not segment.description and segment.understanding and segment.understanding.status == "ready" else ""),
+        ("原片画面文字", searchable_ocr_text(segment.understanding)),
+        ("片段转录", segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds)),
     )
-    query_terms = [
-        value
-        for value in re.split(r"[^0-9a-z\u4e00-\u9fff]+", normalized_query)
-        if value
-    ]
+    query_terms = re.findall(r"[^\W_]+", normalized_query)
+
+    def contains_text(text: str, phrase: str) -> bool:
+        if re.search(r"[\u4e00-\u9fff]", phrase):
+            return phrase in text
+        return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
     for label, raw_value in text_fields:
         value = raw_value.strip().casefold()
         if not value:
             continue
         if (
-            normalized_query in value
-            or value in normalized_query
-            or any(term in value for term in query_terms)
+            contains_text(value, normalized_query)
+            or contains_text(normalized_query, value)
+            or any(contains_text(value, term) for term in query_terms)
         ):
             reasons.append(f"自然语言匹配{label}")
     for source, values in (
         ("系统标签", segment.system_tags),
         ("用户标签", segment.user_tags),
+        ("整条素材标签", asset.user_tags if isinstance(asset, MaterialAsset) else []),
     ):
         matched = []
         for raw_value in values:

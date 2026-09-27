@@ -178,14 +178,7 @@ class LocalWhisperTranscriber:
 
     @property
     def configured(self) -> bool:
-        python_path = self._settings.local_whisper_python_path
-        model_path = self._settings.local_whisper_model_path
-        return bool(
-            python_path
-            and Path(python_path).expanduser().is_file()
-            and model_path
-            and Path(model_path).expanduser().is_file()
-        )
+        return self._settings.local_whisper_configured
 
     def transcribe(self, audio_path: str | Path) -> ASRTranscription:
         if not self.configured:
@@ -207,17 +200,23 @@ class LocalWhisperTranscriber:
                 output_dir,
                 "--output_format",
                 "srt",
-                "--language",
-                self._settings.local_whisper_language,
                 "--fp16",
                 "False",
                 "--verbose",
                 "False",
             ]
+            language = self._settings.local_whisper_language.strip().lower() or "auto"
+            srt_path = Path(output_dir) / f"{path.stem}.srt"
+            if self._settings.local_whisper_backend == "whisper_cpp":
+                command = [str(Path(self._settings.local_whisper_cli_path or "").expanduser()),
+                           "-m", model_path, "-f", str(path), "-l", language,
+                           "-osrt", "-of", str(srt_path.with_suffix(""))]
+            elif language != "auto":
+                command.extend(["--language", language])
             try:
                 self._runner(command)
-            except (OSError, subprocess.CalledProcessError) as exc:
-                raise ASRTranscriptionError(f"Local Whisper failed: {exc}") from exc
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ASRTranscriptionError("本地 Whisper 转写失败，请检查所选运行方式与模型格式。") from exc
             srt_path = Path(output_dir) / f"{path.stem}.srt"
             if not srt_path.is_file():
                 raise ASRTranscriptionError("Local Whisper did not generate SRT output")
@@ -231,40 +230,13 @@ class LocalWhisperTranscriber:
         )
 
     def _run_command(self, command: list[str]) -> None:
-        subprocess.run(command, check=True)
-
-
-class FallbackASRTranscriber:
-    def __init__(self, transcribers: list[ASRTranscriber]) -> None:
-        self._transcribers = transcribers
-
-    @property
-    def configured(self) -> bool:
-        return any(transcriber.configured for transcriber in self._transcribers)
-
-    def transcribe(self, audio_path: str | Path) -> ASRTranscription:
-        errors: list[str] = []
-        attempted = False
-        for transcriber in self._transcribers:
-            if not transcriber.configured:
-                continue
-            attempted = True
-            try:
-                return transcriber.transcribe(audio_path)
-            except (ASRConfigurationError, ASRTranscriptionError) as exc:
-                errors.append(f"{type(transcriber).__name__}: {exc}")
-        if not attempted:
-            raise ASRConfigurationError("No ASR transcriber is configured")
-        raise ASRTranscriptionError("; ".join(errors))
+        subprocess.run(command, check=True, capture_output=True, timeout=1800)
 
 
 def asr_transcriber_from_settings(settings: Settings) -> ASRTranscriber:
-    return FallbackASRTranscriber(
-        [
-            TencentCloudASRTranscriber(settings),
-            LocalWhisperTranscriber(settings),
-        ]
-    )
+    if settings.asr_provider == "tencentcloud":
+        return TencentCloudASRTranscriber(settings)
+    return LocalWhisperTranscriber(settings)
 
 
 def _call_with_sdk_retry(fn, max_retries: int = 2) -> object:

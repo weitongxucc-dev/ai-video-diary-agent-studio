@@ -357,3 +357,26 @@ def test_invalid_input_never_calls_transport():
 
     assert exc_info.value.code == "input_invalid"
     assert called is False
+
+
+@pytest.mark.parametrize("language", ["en-US", "zh-CN/en-US"])
+def test_script_honors_requested_language_and_rejects_wrong_response(language):
+    from dataclasses import replace
+    seen = {}
+    def handler(request):
+        payload = json.loads(request.content)
+        seen["system"] = payload["messages"][0]["content"]
+        seen["input"] = json.loads(payload["messages"][1]["content"])
+        document = _script_document(evidence_ids=["evidence_1"])
+        document["script"]["language"] = language
+        document["script"]["sections"][0]["content"] = "Keep your footage on this computer."
+        return _response(document)
+    generator = OpenAICompatibleCreationTaskScriptGenerator("https://models.example/v1", "script-model", transport=httpx.MockTransport(handler))
+    result = generator.generate(replace(_script_input(), language=language))
+    assert result.language == language
+    assert seen["input"]["requirements"]["spoken_language"] == language
+    assert f"language 必须是 {language}" in seen["system"]
+    wrong = OpenAICompatibleCreationTaskScriptGenerator("https://models.example/v1", "script-model",
+        transport=httpx.MockTransport(lambda request: _response(_script_document(evidence_ids=["evidence_1"]))))
+    with pytest.raises(CreationTaskScriptGenerationError):
+        wrong.generate(replace(_script_input(), language=language))

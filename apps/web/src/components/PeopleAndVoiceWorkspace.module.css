@@ -1,6 +1,6 @@
-.page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
+.page { width: min(100%, 1160px); margin: 0 auto; padding: 0 0 24px; }
 .sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.secondaryButton, .primaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
 .secondaryButton:disabled, .primaryButton:disabled { cursor: not-allowed; opacity: .5; }
@@ -8,7 +8,7 @@
 .viewBar { display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--border-1); }
 .viewBar .tabs { min-width: 0; flex: 1; border-bottom: 0; }
 .viewBar > .secondaryButton { min-height: 36px; }
-.tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
+.tabs { display: flex; min-height: 32px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
 .tabs button { min-height: 39px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
 .tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 500; }
@@ -23,15 +23,15 @@
 .serviceEmpty strong { display: block; color: var(--text-1); font-size: 15px; font-weight: 500; }
 .serviceEmpty p { margin: 4px 0 0; font-size: 13px; }
 
-.workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 520px; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .singleStage { width: min(100%, 900px); min-height: 0; grid-template-columns: minmax(0, 1fr); margin-right: auto; margin-left: auto; }
-.objectRail { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
+.objectRail { display: flex; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
 .objectRail > header { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
 .objectRail > header > div { display: grid; }
 .objectRail > header span { color: var(--text-3); font-size: 11px; }
 .objectRail > header strong { margin-top: 2px; font-size: 13px; font-weight: 500; }
 .objectRail > header button, .editor header button { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
-.objectList { display: grid; align-content: start; padding: 8px; }
+.objectList { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; align-content: start; padding: 8px; }
 .objectList > button { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 8px; min-width: 0; padding: 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-1); cursor: pointer; text-align: left; }
 .objectList > button:hover { background: var(--surface-1); }
 .objectList > button.selectedObject { border-color: var(--border-1); background: var(--surface-1); box-shadow: 0 1px 2px rgb(20 20 18 / 4%); }
@@ -42,20 +42,15 @@
 .objectList button > svg { color: var(--text-3); }
 
 .stage { min-width: 0; background: var(--surface-1); }
-.preview { display: grid; min-height: 520px; align-content: center; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
+.preview { display: grid; align-content: start; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
 .previewIcon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); color: var(--accent); }
 .preview > strong { font-size: 19px; font-weight: 500; }
 .preview > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: 13px; }
-.mediaPlaceholder { display: grid; width: min(100%, 520px); min-height: 240px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
+.mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
 .preview video { width: min(100%, 520px); max-height: 320px; margin: 16px 0 8px; border-radius: 10px; background: #111; }
 .preview audio { width: min(100%, 520px); margin: 20px 0 12px; }
-.waveform { display: flex; width: min(100%, 520px); height: 126px; align-items: center; justify-content: center; gap: 5px; margin: 20px 0 12px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-2); }
-.waveform i { width: 3px; height: 28px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 45%, var(--surface-3)); }
-.waveform i:nth-child(3n) { height: 58px; }
-.waveform i:nth-child(4n) { height: 76px; }
-.waveform i:nth-child(5n) { height: 44px; }
-.previewActions { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.previewActions small { max-width: 300px; color: var(--text-3); font-size: 11px; text-align: left; }
+.previewActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
+.previewActions small { max-width: 300px; color: var(--text-2); font-size: 12px; text-align: left; }
 .previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size: 11px; }
 .previewHistory { width: min(100%, 520px); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-1); text-align: left; }
 .previewHistory h4 { margin: 0; font-size: 12px; font-weight: 500; }
@@ -119,3 +114,7 @@
   .inlineForm { grid-template-columns: 1fr 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
+
+.originalPreview { width: 100%; display: grid; justify-items: center; gap: 8px; }
+.originalPreview video { width: 100%; max-height: 330px; object-fit: contain; background: #18202c; border-radius: 8px; }
+.originalPreview small { color: var(--text-3); font-size: 12px; }

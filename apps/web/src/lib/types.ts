@@ -233,7 +233,7 @@ export type SystemStatus = {
     configured: boolean;
     exists: boolean;
     path: string | null;
-    markdown_count: number;
+    markdown_count: number | null;
   };
   product_hunt: {
     configured: boolean;
@@ -274,6 +274,32 @@ export type SystemStatus = {
     local_whisper_python_path: string | null;
     local_whisper_model_path: string | null;
   };
+};
+
+export type VideoTemplateSettings = {
+  language: CreationPlanInput["language"];
+  aspect_ratio: "9:16" | "16:9" | "1:1";
+  duration_target_seconds: number;
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
+  voice: { profile_id: string; version: string } | null;
+  script_structure?: string[];
+  script_section_count?: number | null;
+  style_instruction: string;
+  fit_mode: "fill" | "fit";
+  subtitle_style: Record<string, unknown>;
+  color_style?: { exposure: number; contrast: number; saturation: number; temperature: number } | null;
+};
+
+export type VideoTemplate = {
+  id: string;
+  version: number;
+  name: string;
+  origin: "built_in" | "user";
+  settings: VideoTemplateSettings;
+  source_task_id: string | null;
+  source_timeline_version_id: string | null;
+  created_at: string;
 };
 
 export type ContentTemplate = {
@@ -590,6 +616,11 @@ export type RuntimeSettings = {
 };
 
 export type RuntimeSettingsUpdate = {
+  understanding_runtime_python_path?: string;
+  native_ocr_worker_path?: string;
+  asr_provider?: string;
+  local_whisper_backend?: string;
+  local_whisper_cli_path?: string;
   llm_provider?: string;
   llm_api_key?: string;
   llm_base_url?: string;
@@ -922,12 +953,16 @@ export type ProductionFoundation = {
 };
 
 export type CreationPlanInput = {
+  template_id?: string | null;
+  template_version?: number | null;
   goal: string;
   name?: string;
   target_count: number;
   language: "zh-CN" | "en-US" | "zh-CN/en-US";
-  aspect_ratio: "9:16";
+  aspect_ratio: "9:16" | "16:9" | "1:1";
   duration_target_seconds: number;
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
 };
 
 export type CreationPlanKnowledgeReference = {
@@ -1008,6 +1043,8 @@ export type CreationTask = {
   current_timeline_version_id: string | null;
   timeline_sequence: number;
   can_undo: boolean;
+  can_redo?: boolean;
+  can_revise_script?: boolean;
   output_ready: boolean;
   stage_reason: string | null;
   stage_impact: string | null;
@@ -1106,7 +1143,7 @@ export type CreationTaskScript = {
   run_id: string;
   topic_id: string;
   title: string;
-  language: "zh-CN";
+  language: "zh-CN" | "en-US" | "zh-CN/en-US";
   sections: CreationTaskScriptSection[];
   selection_status: "draft" | "confirmed";
   created_at: string;
@@ -1142,7 +1179,7 @@ export type CreationTaskNarrationSegment = {
   model_id: string;
   voice_profile_id: string;
   voice_version: string;
-  language: "zh";
+  language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   status: "pending" | "ready" | "generating" | "failed";
 };
@@ -1155,7 +1192,7 @@ export type CreationTaskNarration = {
   sample_rate: number;
   model_id: string;
   voice_profile_id: string;
-  language: "zh";
+  language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   segments: CreationTaskNarrationSegment[];
 };
@@ -1190,6 +1227,94 @@ export type CreationTaskPersonRenderCapability = {
   repair_action: string | null;
 };
 
+export type CreationTaskCapability = {
+  available: boolean;
+  model_id: string | null;
+  message: string;
+  repair_action: string | null;
+};
+
+export type CreationTaskSubtitleStyle = {
+  stroke_width?: number;
+  stroke_color?: string;
+  background_color?: string;
+  background_opacity?: number;
+  enabled?: boolean;
+  name: string;
+  font_family: string;
+  font_size: number;
+  primary_color: string;
+  emphasis_color: string;
+  position: "top" | "middle" | "bottom";
+  bilingual_order: "source_then_translation" | "translation_then_source";
+};
+
+export type CreationTaskSubtitleCue = {
+  id: string;
+  source_cue_id: string | null;
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+  speaker: string | null;
+  line_breaks: number[];
+  emphasis: string[];
+};
+
+export type CreationTaskSubtitleTrack = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  timeline_version_id: string;
+  language: "zh-CN" | "en-US";
+  source_language: "zh-CN" | "en-US" | null;
+  style: CreationTaskSubtitleStyle;
+  cues: CreationTaskSubtitleCue[];
+  generation_method: "timeline" | "translation";
+  model_id: string | null;
+  artifact_ref: string | null;
+  transform_id: string | null;
+  status: "valid" | "failed" | "unavailable" | "superseded";
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreationTaskCoverLayout = {
+  title_position: "center" | "bottom";
+  text_align: "left" | "center";
+};
+
+export type CreationTaskCoverSafeArea = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+};
+
+export type CreationTaskCoverAsset = {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  timeline_version_id: string;
+  source_video_ref: string;
+  frame_time_seconds: number;
+  title: string;
+  safe_area: CreationTaskCoverSafeArea;
+  layout: CreationTaskCoverLayout;
+  generation_method: "video_frame" | "image_model";
+  model_or_engine: string;
+  artifact_ref: string | null;
+  transform_id: string | null;
+  status: "valid" | "failed" | "unavailable" | "superseded";
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CreationTaskVoiceOption = {
   profile_id: string;
   version: string;
@@ -1200,7 +1325,24 @@ export type CreationTaskVoiceOption = {
   runnable_reason: string | null;
 };
 
+export type VisualEffects = { fade_in_seconds?: number; fade_out_seconds?: number; zoom?: number; rotation?: number; offset_x?: number; offset_y?: number; beauty_strength?: number; skin_exposure?: number; exposure: number; contrast: number; saturation: number; temperature: number };
+export type VisualEditInput = { base_version_id: string | null; clip_ids: string[]; effects: VisualEffects; raw_command?: string };
+
+export type TextOverlay = {kind?:"text";id:string;text:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;font_size:number;font_family:string;color:string};
+
+export type ImageOverlay = {kind:"image";id:string;source_ref:string;name:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;opacity:number};
+export type GraphicOverlay = TextOverlay | ImageOverlay;
+export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number};
+
 export type CreationTaskMontageClip = {
+  transition_in_seconds?: number;
+  fade_envelope_offset_frames?: number;
+  fade_envelope_duration_frames?: number | null;
+  fade_envelope_rate?: number;
+  visual_effects?: VisualEffects;
+  fit_mode?: "fill" | "fit";
+  crop_x?: number;
+  crop_y?: number;
   id: string;
   cue_id: string;
   asset_id: string;
@@ -1219,7 +1361,26 @@ export type CreationTaskMontageClip = {
   person_render_id?: string | null;
 };
 
+export type TimelineAudioClip = {
+  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number;
+  gain_db: number; fade_in_ms: number; fade_out_ms: number; muted: boolean; locked: boolean; denoise_db: number; loudness_target_lufs?: number | null;
+  gain_points: { offset_ms: number; gain_db: number }[]; editor_gain_points?: { offset_ms: number; gain_db: number }[]; envelope_offset_ms: number; envelope_duration_ms: number | null;
+};
+export type TimelineAudioTrack = {
+  id: string; name: string; role: "narration" | "original" | "music" | "effect";
+  gain_db: number; muted: boolean; locked: boolean; duck_under_voice: boolean; clips: TimelineAudioClip[];
+};
+export type AudioTimeline = { format_version: 1; tracks: TimelineAudioTrack[] };
+export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track";
+  target_id: string; values: Record<string, unknown>; raw_command?: string };
+
 export type CreationTaskMontage = {
+  graphic_overlays?:GraphicOverlay[];
+  aspect_ratio?: "9:16" | "16:9" | "1:1";
+  presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
+  lipsync_quality?: "high" | "fast";
+  presenter_share_actual?: number;
+  audio_timeline?: AudioTimeline | null;
   id: string;
   task_id: string;
   script_id: string;
@@ -1246,8 +1407,51 @@ export type CreationTaskWorkspace = {
   available_voices: CreationTaskVoiceOption[];
   narration: CreationTaskNarration | null;
   person_renders: CreationTaskPersonRender[];
+  portrait_available?: boolean;
   person_render_capability: CreationTaskPersonRenderCapability;
   montage: CreationTaskMontage | null;
+  subtitle_tracks: CreationTaskSubtitleTrack[];
+  cover_asset: CreationTaskCoverAsset | null;
+  subtitle_translation_capability: CreationTaskCapability;
+  cover_frame_capability: CreationTaskCapability;
+  image_generation_capability: CreationTaskCapability;
+};
+
+export type CreationExecutionPreview = {
+  task_id: string;
+  script_id: string;
+  script_title: string;
+  script_sections: { title: string; content: string }[];
+  plan_id: string;
+  requirements: {
+    aspect_ratio: string;
+    duration_target_seconds: number;
+    presenter_share_target: number;
+    lipsync_quality: "high" | "fast";
+    selected_voice: string | null;
+    template_settings: Record<string, unknown>;
+  };
+  input_digest: string;
+};
+
+export type CreationExecutionStatus = {
+  task_id: string;
+  job: {
+    id: string;
+    kind: string;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+    progress: number;
+    failure_reason: string | null;
+    impact: string | null;
+    repair_action: string | null;
+  } | null;
+  stages: { stage: string; status: string; reason?: string; at: string }[];
+  current_stage: "narration" | "montage_plan" | "render" | "cover" | null;
+  waiting_reason: string | null;
+  status_updated_at: string | null;
+  video_ready: boolean;
+  cover_status: "ready" | "pending";
+  cover_message: string | null;
 };
 
 export type CreationTaskEditIntent = {
@@ -1267,13 +1471,25 @@ export type CreationTaskEditIntent = {
 };
 
 export type CreationTaskExactEditInput =
+  | { operation_type: "ChangeCrop"; clip_id: string; fit_mode: "fill" | "fit"; crop_x: number; crop_y: number }
   | { operation_type: "ReplaceClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
+  | { operation_type: "DeleteClip" | "DuplicateClip"; clip_id: string }
+  | { operation_type: "ChangeClipSpeed" | "ChangeLinkedSpeed"; clip_id: string; playback_rate: number }
+  | { operation_type: "SplitClip"; clip_id: string; split_time_seconds: number }
   | { operation_type: "TrimClip"; clip_id: string; source_start_seconds: number }
   | { operation_type: "ReorderClip"; clip_id: string; position: number }
   | { operation_type: "SetClipLock"; clip_id: string; locked: boolean }
   | { operation_type: "ConfirmClip"; clip_id: string }
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
-  | { operation_type: "UpdateSubtitleCue"; cue_id: string; text: string }
+  | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
+  | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
+  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id">) & {id?:string}; overlay_id?:string }
+  | { operation_type: "SetClipTransition"; clip_id: string; transition_seconds: number }
+  | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
+  | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
+  | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
+  | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: Partial<CreationTaskSubtitleStyle> }
+  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };
 
@@ -1284,6 +1500,9 @@ type CreationTaskExactEditPayload = CreationTaskExactEditInput extends infer Inp
   : never;
 
 export type EditPreviewItem = {
+  image_url?: string | null;
+  video_url?: string | null;
+  audio_url?: string | null;
   ref: string;
   label: string;
   detail: string;
@@ -1297,13 +1516,14 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"];
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
   preview: {
     before: EditPreviewItem;
     after: EditPreviewItem;
+    text_changes?: { cue_id: string; before: string; after: string; occurrences: number }[];
   };
   external_effects: string[];
   status: "proposed" | "confirmed" | "rejected" | "expired";
@@ -1316,12 +1536,30 @@ export type CreationTaskEditPreviewResponse = {
   proposal: CreationTaskEditProposal;
 };
 
+export type CreationTaskAssistantTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  edit_preview: CreationTaskEditPreviewResponse | null;
+  script_draft: CreationTaskScript | null;
+};
+
+export type CreationTaskAssistantHistory = {
+  items: {
+    role: "user" | "assistant";
+    message: string;
+    stage: string;
+    script_id: string | null;
+    at: string;
+  }[];
+};
+
 export type CreationTaskEditOperation = {
   id: string;
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"];
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;
@@ -1338,6 +1576,7 @@ export type CreationTaskEditConfirmResponse = {
 };
 
 export type CreationPlanPreview = CreationPlanInput & {
+  template_settings?: VideoTemplateSettings;
   name: string;
   knowledge_references: CreationPlanKnowledgeReference[];
   source_references: CreationPlanSourceReference[];
@@ -1352,6 +1591,13 @@ export type CreationPlanPreview = CreationPlanInput & {
   blockers: CreationPlanBlocker[];
   confirmable: boolean;
   preflight_fingerprint: string;
+};
+
+export type WorkspaceAssistantPlanTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  plan_preview: CreationPlanPreview | null;
 };
 
 export type CreationPlan = CreationPlanPreview & {
@@ -1432,6 +1678,16 @@ export type MaterialSegment = {
   visual_status: "pending" | "ready" | "blocked" | "failed";
   visual_model_id: string;
   visual_sample_count: number;
+  understanding?: {
+    status: "ready" | "blocked" | "failed"; fingerprint: string; model_id: string;
+    sample_times: number[]; summary: string;
+    facts: { kind: "object" | "action" | "scene"; text: string; sample_times: number[] }[];
+    unknowns: string[];
+    ocr_status: "ready" | "blocked" | "failed"; ocr_model_id: string;
+    ocr_frames: { id: string; timestamp_seconds: number; width: number; height: number;
+      observations: { text: string; confidence: number; box: number[]; retrieval_eligible: boolean }[] }[];
+    message: string;
+  } | null;
   usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
   suggested_usage_role: "unassigned" | "a_roll" | "b_roll";
   usage_role_confidence: number;
@@ -1444,6 +1700,18 @@ export type MaterialSegment = {
   last_used_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type MaterialIntakeStatus = {
+  bound_to_current_workspace: boolean;
+  binding_available: boolean;
+  configured_directory: string | null;
+  bound_directory: string | null;
+  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "changed" | "unknown";
+  directory_message: string;
+  repair_action: string | null;
+  scan_interval_seconds: number;
+  file_counts: { observing: number; running: number; ready: number; failed: number; blocked_disk: number };
 };
 
 export type MaterialAsset = {
@@ -1459,10 +1727,17 @@ export type MaterialAsset = {
   usage_role_confidence: number;
   usage_role_reason: string;
   review_status: "raw" | "approved" | "rejected";
-  rights_confirmed: boolean;
-  brand_safe: boolean;
+  use_state: "available" | "reference_only" | "excluded" | "not_for_automation" | "not_for_publish";
   analysis_status: "pending" | "ready" | "blocked" | "failed";
   analysis_message: string;
+  user_tags: string[];
+  speech_analysis?: {
+    status: "ready" | "blocked" | "failed";
+    source_fingerprint: string;
+    model_id: string;
+    observations: { start_ms: number; end_ms: number; text: string }[];
+    message: string;
+  } | null;
   segments: MaterialSegment[];
   created_at: string;
   updated_at: string;

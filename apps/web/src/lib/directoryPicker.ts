@@ -20,6 +20,12 @@ declare global {
         fileName?: string;
         error?: string;
       }>;
+      saveCoverImage?: (taskId: string, coverId: string) => Promise<{
+        saved: boolean;
+        canceled?: boolean;
+        fileName?: string;
+        error?: string;
+      }>;
     };
   }
 }

@@ -1,7 +1,7 @@
-.page { width: min(100%, 1160px); margin: 0 auto; padding: 20px 24px 48px; }
+.page { width: min(100%, 1160px); margin: 0 auto; padding: 0 0 24px; }
 .objectEyebrow { color: var(--text-3); font-size: 12px; font-weight: 500; }
 
-.primaryButton, .secondaryButton { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.primaryButton, .secondaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); }
 button.secondaryButton { cursor: pointer; }
@@ -10,7 +10,7 @@ button.secondaryButton { cursor: pointer; }
 .viewBar { display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--border-1); }
 .viewBar .tabs { min-width: 0; flex: 1; border-bottom: 0; }
 .viewBar > .primaryButton { min-height: 36px; }
-.tabs { display: flex; min-height: 40px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
+.tabs { display: flex; min-height: 32px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
 .tabs button { display: inline-flex; min-height: 39px; align-items: center; gap: 7px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
 .tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 500; }
@@ -20,9 +20,9 @@ button.secondaryButton { cursor: pointer; }
 .sectionHeading h2 { margin: 2px 0 0; font-size: 18px; font-weight: 500; }
 .sectionHeading p { margin: 0; color: var(--text-3); font-size: 12px; }
 
-.templateGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.templateCard { position: relative; display: grid; grid-template-columns: 90px minmax(0, 1fr) 18px; gap: 12px; align-items: center; min-width: 0; min-height: 126px; padding: 12px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); cursor: pointer; text-align: left; transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
-.templateCard:hover { border-color: var(--border-2); background: var(--surface-2); transform: translateY(-1px); }
+.templateGrid { padding-top: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.templateCard { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: center; min-width: 0; min-height: 126px; padding: 12px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); cursor: pointer; text-align: left; transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
+.templateCard:hover { border-color: var(--border-2); background: var(--surface-2); box-shadow: 0 2px 8px rgb(0 0 0 / 4%); }
 .templateCard.selectedCard { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-1)); background: color-mix(in srgb, var(--accent) 5%, var(--surface-1)); }
 .templateVisual { position: relative; display: grid; width: 90px; height: 100px; align-content: end; gap: 6px; padding: 11px; overflow: hidden; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px; background: color-mix(in srgb, currentColor 8%, var(--surface-2)); color: var(--accent); }
 .toneAmber .templateVisual { color: var(--warning); }
@@ -52,7 +52,7 @@ button.secondaryButton { cursor: pointer; }
 .inspector dl > div { padding: 11px 0; border-top: 1px solid var(--border-1); }
 .inspector dt { color: var(--text-3); font-size: 12px; }
 .inspector dd { margin: 3px 0 0; overflow-wrap: anywhere; color: var(--text-1); font-size: 13px; }
-.inspector .primaryButton { width: 100%; margin-top: 16px; }
+.inspector .primaryButton { width: fit-content; margin-top: 16px; }
 .inspectorNotice, .inspectorMuted { margin-top: 16px; padding: 13px; border-radius: 8px; background: color-mix(in srgb, var(--warning) 8%, var(--surface-2)); }
 .inspectorMuted { background: var(--surface-2); }
 .inspectorNotice strong, .inspectorMuted strong { font-size: 13px; font-weight: 500; }
@@ -85,7 +85,7 @@ button.secondaryButton { cursor: pointer; }
 .recordBody { display: grid; min-width: 0; gap: 5px; color: var(--text-2); font-size: 12px; }
 .recordTitle { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .recordTitle strong { overflow: hidden; color: var(--text-1); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.recordTitle em, .stateBadge { display: inline-flex; min-height: 23px; align-items: center; padding: 0 7px; border-radius: 999px; background: var(--surface-2); font-size: 11px; font-style: normal; white-space: nowrap; }
+.recordTitle em, .stateBadge { display: inline-flex; min-height: 23px; align-items: center; padding: 0 7px; border-radius: 999px; background: var(--surface-2); font-size: 12px; font-style: normal; white-space: nowrap; }
 .progressTrack { display: block; width: min(320px, 100%); height: 3px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
 .progressTrack i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 .recordTime { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; white-space: nowrap; }
@@ -105,7 +105,16 @@ button.secondaryButton { cursor: pointer; }
   .page { padding-right: 20px; padding-left: 20px; }
   .capabilityBanner { grid-template-columns: 38px minmax(0, 1fr); }
   .capabilityBanner a { grid-column: 2; }
-  .templateCard { grid-template-columns: 88px minmax(0, 1fr) 16px; }
+  .templateCard { grid-template-columns: minmax(0, 1fr); }
   .templateVisual { width: 88px; }
 }
 @media (prefers-reduced-motion: reduce) { .templateCard { transition: none; } .spinning { animation: none; } }
+
+.healthCards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.healthCard { min-width: 0; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.healthCard summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; cursor: pointer; list-style: none; }
+.healthCard summary span { display: flex; align-items: center; gap: 8px; }
+.healthCard summary strong { font-size: 14px; font-weight: 500; }
+.healthCard small { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.healthCard > div { padding: 0 16px 12px; border-top: 1px solid var(--border-1); }
+.healthCard p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; color: var(--text-2); }

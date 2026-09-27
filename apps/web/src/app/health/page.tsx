@@ -1,7 +1,7 @@
+import styles from "@/components/ProductWorkspace.module.css";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { PixelBlockMeter } from "@/components/PixelBlockMeter";
-import { PixelIcon } from "@/components/PixelIcon";
+import { Check, AlertCircle } from "lucide-react";
 import { getRuntimeHealth } from "@/lib/api.server";
 import type { RuntimeHealth, RuntimeHealthItem, RuntimeHealthStatus } from "@/lib/types";
 
@@ -20,22 +20,12 @@ async function loadRuntimeHealth(): Promise<{
 
 function statusLabel(status: RuntimeHealthStatus): string {
   const labels: Record<RuntimeHealthStatus, string> = {
-    degraded: "降级",
-    invalid: "无效",
-    missing: "缺失",
-    ready: "就绪",
+    degraded: "受限制",
+    invalid: "需调整",
+    missing: "未备好",
+    ready: "可使用",
   };
   return labels[status];
-}
-
-function statusProgress(status: RuntimeHealthStatus): number {
-  const progress: Record<RuntimeHealthStatus, number> = {
-    degraded: 50,
-    invalid: 25,
-    missing: 0,
-    ready: 100,
-  };
-  return progress[status];
 }
 
 function healthRows(items: RuntimeHealthItem[]): RuntimeHealthItem[] {
@@ -59,98 +49,14 @@ function healthRows(items: RuntimeHealthItem[]): RuntimeHealthItem[] {
 export default async function HealthPage() {
   const { health, offline } = await loadRuntimeHealth();
 
-  return (
-    <AppShell>
-      <div className="workspace-page health-page">
-        <section className="workspace-main ui-panel">
-          <div className="workspace-header">
-            <div>
-              <h1>本地依赖诊断台</h1>
-              <p>
-                {offline
-                  ? "暂时无法连接本地 API。"
-                  : "检查 DeepSeek、Obsidian、ffmpeg、Whisper、视频目录和剪映草稿目录是否可用。"}
-              </p>
-            </div>
-            <Link className="ui-button secondary" href="/settings">
-              去设置
-            </Link>
-          </div>
-
-          <div className="health-summary-grid">
-            <div className="health-summary-card">
-              <strong>{health?.summary.ready ?? 0}</strong>
-              <span>就绪</span>
-            </div>
-            <div className="health-summary-card">
-              <strong>{health?.summary.missing ?? 0}</strong>
-              <span>缺失</span>
-            </div>
-            <div className="health-summary-card">
-              <strong>{health?.summary.degraded ?? 0}</strong>
-              <span>降级</span>
-            </div>
-            <div className="health-summary-card">
-              <strong>{health?.summary.invalid ?? 0}</strong>
-              <span>无效</span>
-            </div>
-          </div>
-
-          <div className="health-table" role="table" aria-label="运行健康检查">
-            <div className="health-table-head" role="row">
-              <span role="columnheader">依赖</span>
-              <span role="columnheader">状态</span>
-              <span role="columnheader">原因</span>
-              <span role="columnheader">影响</span>
-              <span role="columnheader">修复动作</span>
-            </div>
-            {health ? (
-              healthRows(health.items).map((item) => (
-                <div className={`health-row ${item.status}`} key={item.id} role="row">
-                  <div role="cell">
-                    <PixelIcon
-                      name={item.status === "ready" ? "check" : "settings"}
-                    />
-                    <strong>{item.label}</strong>
-                  </div>
-                  <div role="cell">
-                    <span className="health-status-chip">{statusLabel(item.status)}</span>
-                    <PixelBlockMeter value={statusProgress(item.status)} />
-                  </div>
-                  <p role="cell">{item.reason}</p>
-                  <p role="cell">{item.impact}</p>
-                  <p role="cell">{item.repair_action}</p>
-                </div>
-              ))
-            ) : (
-              <div className="health-row missing" role="row">
-                <div role="cell">
-                  <PixelIcon name="settings" />
-                  <strong>API</strong>
-                </div>
-                <div role="cell">
-                  <span className="health-status-chip">缺失</span>
-                  <PixelBlockMeter value={0} />
-                </div>
-                <p role="cell">无法读取运行健康状态。</p>
-                <p role="cell">页面无法判断 DeepSeek、ffmpeg 等依赖状态。</p>
-                <p role="cell">启动本地 API 后刷新页面。</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="workspace-side">
-          <div className="ui-panel side-note">
-            <h2>检查重点</h2>
-            <p>DeepSeek 决定选题和脚本生成；ffmpeg 决定视频处理；Whisper 决定本地转写和重复录制检测。</p>
-          </div>
-          <div className="ui-panel side-note">
-            <h2>内测建议</h2>
-            <p>分享给同事前，先确认缺失项为 0；降级项可接受但需要在剪映里人工验证。</p>
-          </div>
-        </aside>
-      </div>
-    </AppShell>
-  );
+  const names: Record<string, string> = { "Obsidian": "内容资料", "ffmpeg": "视频制作", "本地 Whisper": "听写文字", "AI 文案模型": "文案助手", "对话与文字模型": "对话助手" };
+  return <AppShell><div className={styles.page}>
+    <div className={styles.sectionHeading}><h2>制作准备</h2><Link className={styles.secondaryButton} href="/settings">打开设置</Link></div>
+    {offline ? <section className={styles.errorState} role="alert"><AlertCircle size={20}/><p>暂时连不上本机服务，请重试。</p></section> : <div className={styles.healthCards}>
+      {health && healthRows(health.items).map(item => <details key={item.id} className={styles.healthCard}>
+        <summary><span>{item.status === "ready" ? <Check size={16}/> : <AlertCircle size={16}/>}<strong>{names[item.label] ?? item.label}</strong></span><small>{statusLabel(item.status)}</small></summary>
+        <div><p>{item.reason}</p><p>{item.impact}</p><p>{item.repair_action}</p></div>
+      </details>)}
+    </div>}
+  </div></AppShell>;
 }

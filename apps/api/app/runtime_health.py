@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import shutil
+import socket
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.models import utc_now
@@ -120,25 +122,43 @@ def _health_item(
 
 def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
     if settings.llm_configured:
+        endpoint = urlsplit(settings.effective_llm_base_url)
+        connection_note = "连接与实际生成尚未验证。"
+        if endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
+            try:
+                port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+                with socket.create_connection((endpoint.hostname, port), timeout=0.5):
+                    pass
+            except (OSError, ValueError):
+                return _health_item(
+                    item_id="deepseek",
+                    label="AI 文案模型",
+                    status="degraded",
+                    reason="已配置本地模型，但无法连接本机模型服务。",
+                    impact="当前不能通过该模型生成选题或文案。",
+                    repair_action="启动本地模型服务，并核对设置中的服务地址与端口。",
+                    checked_at=checked_at,
+                )
+            connection_note = "本机服务端口可连接；模型加载与实际生成尚未验证。"
         return _health_item(
             item_id="deepseek",
             label="AI 文案模型",
             status="ready",
             reason=(
                 f"已配置 {settings.effective_llm_provider} / "
-                f"{settings.effective_llm_model}"
+                f"{settings.effective_llm_model}。{connection_note}"
             ),
-            impact="可生成选题、脚本和语音指令草案。",
-            repair_action="无需处理。",
+            impact="用于生成选题、脚本和语音指令草案；配置检查不代表生成成功。",
+            repair_action="如生成失败，请检查模型服务及返回的具体错误。",
             checked_at=checked_at,
         )
     return _health_item(
         item_id="deepseek",
-        label="云端文案增强",
+        label="对话与文字模型",
         status="degraded",
-        reason="未配置外部模型，当前使用本地来源摘要生成器。",
-        impact="本地闭环可用，但文案的表达丰富度较低。",
-        repair_action="可选：在设置页连接自有模型服务开启云端增强。",
+        reason="未配置外部文字模型；本地来源摘要不能代替对话 Agent。",
+        impact="0.11 对话和文字创作不可用；后台本地素材分析可独立运行。",
+        repair_action="在设置页连接 MiniMax-M3 或主动选择 DeepSeek。",
         fix_command=None,
         checked_at=checked_at,
     )
@@ -148,10 +168,11 @@ def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
     path = Path(settings.obsidian_vault_path).expanduser() if settings.obsidian_vault_path else None
     fix_command = None
     if path and path.is_dir():
-        markdown_count = len(list(path.rglob("*.md")))
-        status = "ready" if markdown_count else "degraded"
-        reason = f"已找到 {markdown_count} 篇 Markdown 笔记。"
-        repair_action = "无需处理。" if markdown_count else "放入笔记或重新选择知识库目录。"
+        # Desktop readiness must not walk a user's entire vault: a nested
+        # cloud/permission-gated directory can block startup indefinitely.
+        status = "ready"
+        reason = "资料目录存在；具体内容在读取资料时检查。"
+        repair_action = "无需处理。"
     else:
         status = "missing"
         reason = "Obsidian Vault 路径不存在。"
@@ -185,8 +206,8 @@ def _ffmpeg_item(checked_at) -> dict[str, Any]:
 
 def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
     python_ok = bool(
-        settings.local_whisper_python_path
-        and Path(settings.local_whisper_python_path).expanduser().is_file()
+        settings.local_whisper_runtime_path
+        and Path(settings.local_whisper_runtime_path).expanduser().is_file()
     )
     model_ok = bool(
         settings.local_whisper_model_path
@@ -195,12 +216,12 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
     fix_command = None
     if python_ok and model_ok:
         status = "ready"
-        reason = "本地 Whisper Python 和模型均可访问。"
+        reason = "所选本地 Whisper 程序和模型可访问，尚需实际转写验证。"
         repair_action = "无需处理。"
     elif python_ok or model_ok:
         status = "invalid"
-        reason = "本地 Whisper Python 或模型路径不完整。"
-        repair_action = "在设置页同时配置 Python 路径和模型文件路径。"
+        reason = "所选本地 Whisper 程序或模型路径不完整。"
+        repair_action = "在设置页配置所选运行方式的程序和对应模型文件。"
     else:
         status = "missing"
         reason = "未配置本地 Whisper。"

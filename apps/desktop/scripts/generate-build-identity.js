@@ -20,6 +20,7 @@ const INPUT_SOURCES = [
   { identityPath: 'desktop/assets', relativePath: 'apps/desktop/assets' },
   { identityPath: 'api-server', relativePath: 'apps/desktop/dist/api-server' },
   { identityPath: 'model-workers', relativePath: 'apps/api/model_workers', include: (relativePath) => relativePath.endsWith('.py') },
+  { identityPath: 'agent-tools', relativePath: 'apps/api/agent_tools', include: (relativePath) => relativePath.endsWith('.ts') },
   { identityPath: 'web', relativePath: 'apps/web/.next/standalone-bundled/apps/web' },
 ];
 

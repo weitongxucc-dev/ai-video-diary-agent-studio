@@ -101,6 +101,11 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
     "topic_source_urls"
   >;
   const textFieldNames: RuntimeTextField[] = [
+    "asr_provider",
+    "understanding_runtime_python_path",
+    "native_ocr_worker_path",
+    "local_whisper_backend",
+    "local_whisper_cli_path",
     "llm_provider",
     "llm_api_key",
     "llm_base_url",

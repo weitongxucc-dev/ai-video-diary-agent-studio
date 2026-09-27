@@ -180,6 +180,7 @@ function userDotenvPath() {
 
 function ensureUserDotenv() {
   const p = userDotenvPath();
+  fs.mkdirSync(path.join(app.getPath('userData'), 'temporary'), { recursive: true });
   if (!fs.existsSync(p)) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, '', 'utf-8');
@@ -190,8 +191,14 @@ function ensureUserDotenv() {
 function localModelEnv() {
   const resourcePath = process.resourcesPath || path.join(__dirname, '..');
   return {
+    PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter),
+    TMPDIR: path.join(app.getPath('userData'), 'temporary'),
     VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
     VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
+    UNDERSTANDING_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_vl_worker.py'),
+    AVATAR_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'musetalk_worker.py'),
+    LATENTSYNC_WORKER_PATH: path.join(resourcePath, 'model-workers', 'latentsync_worker.py'),
+    AI_VIDEO_DIARY_PI_EXTENSION: path.join(resourcePath, 'agent-tools', 'diary_tools.ts'),
   };
 }
 
@@ -502,22 +509,26 @@ async function stopAllServices() {
   ]);
 }
 
-async function downloadCreationTaskOutput(taskId, temporaryPath) {
+async function downloadCreationTaskOutput(taskId, temporaryPath, coverId = null) {
   if (!Number.isInteger(apiPort) || apiPort <= 0 || serviceStates.api.state !== 'ready') {
     throw new Error('本地视频服务尚未就绪，请等待服务恢复后重试。');
   }
-  const requestPath = `/api/creation-tasks/${encodeURIComponent(taskId)}/output`;
+  const requestPath = coverId
+    ? `/api/creation-tasks/${encodeURIComponent(taskId)}/covers/${encodeURIComponent(coverId)}/image`
+    : `/api/creation-tasks/${encodeURIComponent(taskId)}/output`;
+  const mediaType = coverId ? 'image/png' : 'video/mp4';
+  const label = coverId ? 'PNG 封面' : 'MP4';
   await new Promise((resolve, reject) => {
     const request = http.get({
       hostname: '127.0.0.1',
       port: apiPort,
       path: requestPath,
-      headers: { Accept: 'video/mp4' },
+      headers: { Accept: mediaType },
     }, (response) => {
       const contentType = String(response.headers['content-type'] || '');
-      if (response.statusCode !== 200 || !contentType.startsWith('video/mp4')) {
+      if (response.statusCode !== 200 || contentType.split(';')[0].trim() !== mediaType) {
         response.resume();
-        reject(new Error(`本地服务没有返回可保存的 MP4（HTTP ${response.statusCode || 0}）。`));
+        reject(new Error(`本地服务没有返回可保存的 ${label}（HTTP ${response.statusCode || 0}）。`));
         return;
       }
       const output = fs.createWriteStream(temporaryPath, { flags: 'wx' });
@@ -579,6 +590,30 @@ function registerIpcHandlers() {
         errorCode: error.code || error.name || 'unknown',
       });
       return { saved: false, error: error.message || '成片保存失败。' };
+    }
+  });
+
+  ipcMain.handle('save-cover-image', async (_event, taskId, coverId) => {
+    if (typeof taskId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,80}$/.test(taskId)
+        || typeof coverId !== 'string' || !/^cover_[a-zA-Z0-9_-]{1,80}$/.test(coverId)) {
+      return { saved: false, error: '创作任务或封面标识无效。' };
+    }
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '保存封面',
+      defaultPath: path.join(app.getPath('pictures'), `${taskId}-cover.png`),
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+    });
+    if (result.canceled || !result.filePath) return { saved: false, canceled: true };
+    const temporaryPath = `${result.filePath}.partial-${crypto.randomUUID()}`;
+    try {
+      await downloadCreationTaskOutput(taskId, temporaryPath, coverId);
+      await fs.promises.rename(temporaryPath, result.filePath);
+      recordLifecycle('cover-image-saved', { taskId, coverId, fileName: path.basename(result.filePath) });
+      return { saved: true, fileName: path.basename(result.filePath) };
+    } catch (error) {
+      await fs.promises.unlink(temporaryPath).catch(() => undefined);
+      recordLifecycle('cover-image-save-failed', { taskId, coverId, errorCode: error.code || error.name || 'unknown' });
+      return { saved: false, error: error.message || '封面保存失败。' };
     }
   });
 
@@ -883,13 +918,13 @@ function configureAutoUpdater() {
 }
 
 function checkForUpdates(silent = true) {
-  if (!app.isPackaged) {
+  if (!app.isPackaged || !fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'))) {
     if (!silent) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: '未打包环境',
-        message: '当前为未打包环境，不检查更新。',
-        detail: '更新检查仅在打包版本中生效。',
+        title: '本地测试版本',
+        message: '此版本没有配置自动更新。',
+        detail: '请使用新的测试包手动更新应用。',
       });
     }
     return;

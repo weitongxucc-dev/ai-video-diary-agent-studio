@@ -1,10 +1,15 @@
+import type { VideoTemplate, AudioEditInput } from "./types";
 import type {
   ContentTemplates,
   CreationPlan,
   CreationPlanInput,
   CreationPlanPreview,
+  WorkspaceAssistantPlanTurnResponse,
   CreationTasksResponse,
   CreationTaskWorkspace,
+  CreationExecutionPreview,
+  CreationExecutionStatus,
+  MaterialIntakeStatus,
   CreationTaskScriptsResponse,
   CreationTaskScriptSection,
   CreationTaskNarration,
@@ -13,6 +18,8 @@ import type {
   CreationTaskExactEditInput,
   CreationTaskEditConfirmResponse,
   CreationTaskEditPreviewResponse,
+  CreationTaskAssistantTurnResponse,
+  CreationTaskAssistantHistory,
   CreationTaskTopicsResponse,
   FeedbackSummary,
   KnowledgeNote,
@@ -60,7 +67,7 @@ export const API_BASE =
     : (process.env.NEXT_PUBLIC_API_BASE ?? "");
 
 export function apiUrl(path: string): string {
-  return `${API_BASE}${path}`;
+  return path;
 }
 
 type ServerAuthorizationProvider = () => Promise<string | null>;
@@ -238,6 +245,36 @@ export function scanProductionMaterials(): Promise<MaterialLibrary> {
   });
 }
 
+export function getMaterialIntakeStatus(): Promise<MaterialIntakeStatus> {
+  return request("/api/production/materials/intake");
+}
+
+export function bindMaterialIntake(expectedDirectory: string): Promise<MaterialIntakeStatus> {
+  return request("/api/production/materials/intake/bind", {
+    method: "POST", body: JSON.stringify({ expected_directory: expectedDirectory }),
+  });
+}
+
+export function scanMaterialIntake(): Promise<MaterialLibrary> {
+  return request("/api/production/materials/intake/scan", { method: "POST" });
+}
+
+export function retryMaterialIntake(assetId: string): Promise<MaterialAsset> {
+  return request(`/api/production/materials/${encodeURIComponent(assetId)}/intake/retry`, { method: "POST" });
+}
+
+export function updateMaterialAssetTags(assetId: string, userTags: string[]): Promise<MaterialAsset> {
+  return request(`/api/production/materials/${encodeURIComponent(assetId)}/tags`, {
+    method: "PUT", body: JSON.stringify({ user_tags: userTags }),
+  });
+}
+
+export function updateMaterialAssetTagsBatch(assetIds: string[], add: string[], remove: string[]): Promise<{ assets: MaterialAsset[] }> {
+  return request("/api/production/materials/tags/batch", {
+    method: "POST", body: JSON.stringify({ asset_ids: assetIds, add, remove }),
+  });
+}
+
 export function analyzeProductionMaterial(
   assetId: string,
 ): Promise<MaterialAsset> {
@@ -254,13 +291,17 @@ export function reviewProductionMaterial(
   input: {
     review_status: "raw" | "approved" | "rejected";
     usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
-    rights_confirmed: boolean;
-    brand_safe: boolean;
   },
 ): Promise<MaterialAsset> {
   return request<MaterialAsset>(`/api/production/materials/${assetId}/review`, {
     method: "PUT",
     body: JSON.stringify(input),
+  });
+}
+
+export function updateMaterialUseState(assetId: string, useState: MaterialAsset["use_state"]): Promise<MaterialAsset> {
+  return request<MaterialAsset>(`/api/production/materials/${assetId}/use-state`, {
+    method: "PUT", body: JSON.stringify({ use_state: useState }),
   });
 }
 
@@ -342,6 +383,13 @@ export function previewCreationPlan(input: CreationPlanInput): Promise<CreationP
   });
 }
 
+export function sendWorkspaceAssistantPlanTurn(message: string, conversationId: string): Promise<WorkspaceAssistantPlanTurnResponse> {
+  return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
+    "/api/assistant/plan/turn",
+    { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
+  );
+}
+
 export function confirmCreationPlan(
   input: CreationPlanInput & { preflight_fingerprint: string },
 ): Promise<CreationPlan> {
@@ -385,6 +433,43 @@ export function confirmCreationTaskTopic(
 export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
   return creationPlanRequest<CreationTaskWorkspace>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}`,
+  );
+}
+
+export function previewCreationExecution(taskId: string): Promise<CreationExecutionPreview> {
+  return creationPlanRequest<CreationExecutionPreview>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`,
+  );
+}
+
+export function getCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution`,
+  );
+}
+
+export function startCreationExecution(taskId: string, preview: CreationExecutionPreview): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start`,
+    { method: "POST", body: JSON.stringify({
+      script_id: preview.script_id,
+      input_digest: preview.input_digest,
+      requirements_confirmed: true,
+    }) },
+  );
+}
+
+export function resumeCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume`,
+    { method: "POST" },
+  );
+}
+
+export function cancelCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
+  return creationPlanRequest<CreationExecutionStatus>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/cancel`,
+    { method: "POST" },
   );
 }
 
@@ -462,6 +547,16 @@ export function applyCreationTaskExactEdit(
   );
 }
 
+export function previewCreationTaskExactEdit(
+  taskId: string,
+  input: CreationTaskExactEditInput,
+): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export function getCreationTaskMontageClipCandidates(
   taskId: string,
   clipId: string,
@@ -493,6 +588,32 @@ export function previewCreationTaskEdit(
   );
 }
 
+export function sendCreationTaskAssistantTurn(
+  taskId: string,
+  input: {
+    message: string;
+    context_stage: string;
+    selected_object_refs: string[];
+    playhead_ms: number | null;
+  },
+): Promise<CreationTaskAssistantTurnResponse> {
+  return creationPlanRequest<CreationTaskAssistantTurnResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function getCreationTaskAssistantHistory(taskId: string): Promise<CreationTaskAssistantHistory> {
+  return creationPlanRequest<CreationTaskAssistantHistory>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/history`,
+  );
+}
+
+export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse>{
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview`,
+    {method:"POST",body:JSON.stringify(typeof selection==="string"?{raw_command:selection}:{included_step_indices:selection})});
+}
+
 export function confirmCreationTaskEdit(
   taskId: string,
   proposalId: string,
@@ -510,6 +631,17 @@ export function undoCreationTaskTimeline(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/undo`,
     { method: "POST", body: JSON.stringify({}) },
   );
+}
+
+export function initializeCreationTaskTimeline(taskId: string): Promise<{ version_id: string }> {
+  return creationPlanRequest<{ version_id: string }>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/initialize`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function redoCreationTaskTimeline(taskId: string): Promise<CreationTaskEditConfirmResponse> {
+  return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify({}) });
 }
 
 export function getRuntimeSettings(): Promise<RuntimeSettings> {
@@ -638,4 +770,46 @@ export function restorePreferenceCard(
     method: "PATCH",
     body: JSON.stringify({ signal: preferenceId }),
   });
+}
+
+export function listVideoTemplates(): Promise<{ items: VideoTemplate[] }> {
+  return creationPlanRequest("/api/video-templates");
+}
+
+export function saveVideoTemplate(taskId: string, input: {
+  name: string; style_instruction: string; template_id?: string; expected_version?: number;
+}): Promise<VideoTemplate> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/templates`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
+}
+export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string }> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/listen`, { method: "POST", body: JSON.stringify(input) });
+}
+export async function importCreationTaskAudio(taskId: string, file: File): Promise<{ source_ref: string; name: string; duration_ms: number }> {
+  const body = new FormData(); body.append("audio", file);
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
+  return payload;
+}
+
+export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview`, { method: "POST", body: JSON.stringify(input) });
+}
+
+
+export async function importCreationTaskGraphic(taskId:string,file:File):Promise<import("./types").GraphicSource> {
+  const body=new FormData();body.append("image",file);
+  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body});
+  const payload=await response.json();
+  if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:"图片导入失败");
+  return payload;
+}
+export function getCreationTaskGraphicSources(taskId:string):Promise<import("./types").GraphicSource[]> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`);
 }

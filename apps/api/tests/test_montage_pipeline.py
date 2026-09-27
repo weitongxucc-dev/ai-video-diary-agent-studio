@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from app.subtitle_schedule import subtitle_schedule
+
 import hashlib
 import json
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -32,11 +36,20 @@ from app.montage import (
     MontageRenderer,
     NarrationCue,
     _plan_to_srt,
+    _score_candidate,
+    _split_narration,
+    _split_text_evenly,
+    _subtitle_font,
+    _subtitle_font_and_lines,
+    _tokens,
+    _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
+    select_presenter_sections,
 )
 from app.production import (
     Authorization,
+    CoverAsset,
     CreationPlan,
     CreationPlanVoiceReference,
     CreationTask,
@@ -52,9 +65,46 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
+    SubtitleCue as ProductionSubtitleCue,
+    SubtitleTrack,
+    TimelineVersion,
     VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
+
+
+@pytest.mark.parametrize("text", [
+    "Check subtitle text and timing. Listen to the audio mix. Preview changes before confirming, then export your video.",
+    "Don't split English words or version 0.11 when creating captions for a video.",
+    "检查 English subtitles 的显示时间，再 preview changes，然后导出 video。" * 3,
+])
+def test_automatic_narration_cues_keep_words_and_text(text):
+    expected_words = re.findall(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", text)
+    for parts in (_split_narration(text), _split_text_evenly(text, 7)):
+        assert re.sub(r"\s", "", "".join(parts)) == re.sub(r"\s", "", text)
+        assert [word for part in parts for word in re.findall(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", part)] == expected_words
+    assert _split_text_evenly("Extraordinary", 3) == ["Extraordinary"]
+    assert _split_text_evenly("Hello, world", 1) == ["Hello, world"]
+    assert _split_text_evenly("First, second, third", 2) == ["First, second,", "third"]
+
+
+def test_matching_preserves_english_words_and_chinese_phrase_boundaries() -> None:
+    assert _tokens("USB port 特写，桌面 操作") == {"usb", "port", "特写", "桌面", "操作"}
+    cue = NarrationCue(
+        id="cue-port", source_section_id="section-port", narration_segment_id="voice-port",
+        text="Show the USB port", duration_seconds=4.0,
+    )
+    asset = SimpleNamespace(file_name="001.mp4", speech_analysis=None)
+    relevant = MaterialSegment(
+        id="port", asset_id="asset", start_seconds=0, end_seconds=4,
+        description="A close-up of a USB port",
+    )
+    unrelated = replace(relevant, id="desk", description="A wooden desk near a window")
+    port_score = _score_candidate(cue, asset, relevant, 0, 0)
+    desk_score = _score_candidate(cue, asset, unrelated, 0, 0)
+    assert port_score[1] == 0.5
+    assert desk_score[1] == 0.0
+    assert port_score[0] > desk_score[0]
 
 
 def test_srt_preserves_user_authored_subtitle_line_breaks() -> None:
@@ -95,6 +145,149 @@ def test_srt_preserves_user_authored_subtitle_line_breaks() -> None:
     )
 
     assert "本机页面记录来源，\n每一步都能追溯" in _plan_to_srt(plan)
+
+
+def test_render_plan_applies_track_line_breaks_and_emphasis_metadata() -> None:
+    plan = CreationTaskMontagePlan(
+        id="montage-track-style",
+        workspace_id="workspace_a",
+        task_id="task-track-style",
+        script_id="script-track-style",
+        script_title="字幕轨渲染",
+        status="ready",
+        cues=[NarrationCue("cue-track-style", "section", "旧字幕", 4.0)],
+        clips=[],
+        duration_seconds=4.0,
+        low_confidence_clip_count=0,
+    )
+    track = SubtitleTrack(
+        id="subtitle-track-style",
+        workspace_id="workspace_a",
+        task_id="task-track-style",
+        timeline_version_id="timeline-track-style",
+        language="zh-CN",
+        source_language=None,
+        style={"name": "emphasis", "emphasis_color": "#FFD54F"},
+        cues=[
+            ProductionSubtitleCue(
+                id="cue-track-style",
+                source_cue_id=None,
+                text="本机页面记录来源，每一步都能追溯",
+                start_seconds=0.0,
+                end_seconds=4.0,
+                line_breaks=[9],
+                emphasis=["本机页面"],
+            )
+        ],
+        generation_method="timeline",
+        model_id=None,
+        artifact_ref="artifacts/subtitles.srt",
+        transform_id="transform-track-style",
+        status="valid",
+    )
+
+    captions = subtitle_schedule([track], plan.duration_seconds)
+
+    assert captions[0].text == "本机页面记录来源，\n每一步都能追溯"
+    assert captions[0].subtitle_emphasis_ranges == [(0, 4)]
+    assert plan.cues[0].text == "旧字幕"
+    assert captions[0].subtitle_style["emphasis_color"] == "#FFD54F"
+    english = replace(track, id="english", language="en-US", source_language="zh-CN", cues=[
+        replace(track.cues[0], id="english-cue", source_cue_id=track.cues[0].id,
+                text="本机页面 English", line_breaks=[], emphasis=["English"])
+    ])
+    captions = subtitle_schedule([track, english], plan.duration_seconds)
+    assert captions[0].subtitle_emphasis_ranges == [(0, 4), (len(track.cues[0].text) + 4, len(track.cues[0].text) + 11)]
+
+
+@pytest.mark.parametrize("position", ["top", "middle", "bottom"])
+@pytest.mark.parametrize("size", [28, 72])
+def test_subtitle_overlay_renders_confirmed_style_and_manual_breaks(tmp_path, position, size):
+    family = _subtitle_font(40).getname()[0]
+    style = {
+        "font_family": family,
+        "font_size": size,
+        "primary_color": "#00FF00",
+        "emphasis_color": "#FFD54F",
+        "position": position,
+    }
+    font, lines = _subtitle_font_and_lines("真实运行\n字幕效果", style)
+    assert font.getname()[0] == family
+    assert font.size == size
+    assert lines == ["真实运行", "字幕效果"]
+    plan = SimpleNamespace(
+        cues=[NarrationCue("cue", "section", "真实运行\n字幕效果", 1, subtitle_style=style,
+                           subtitle_emphasis=["真实运行"])],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    path = _write_subtitle_overlays(plan, tmp_path)[0]
+    with Image.open(path) as overlay:
+        assert overlay.size == (1080, 1920)
+        assert overlay.getpixel((0, 0)) == (0, 0, 0, 0)
+        colors = {color for _, color in overlay.getcolors(1080 * 1920)}
+        assert (0, 255, 0, 255) in colors
+        assert (255, 213, 79, 255) in colors
+        left, top, right, bottom = overlay.getbbox()
+        assert 0 < left < right < 1080
+        if position == "top":
+            assert top == 250
+        elif position == "middle":
+            assert abs((top + bottom) / 2 - 960) <= 1
+        else:
+            assert bottom == 1671
+        assert bottom - top > size * 1.5
+
+
+def test_subtitle_layout_wraps_to_safe_width_without_resetting_font_size():
+    font, lines = _subtitle_font_and_lines("字幕参数真正进入画面，" * 6, {"font_size": 72})
+    assert font.size == 72
+    assert len(lines) > 2
+    assert all(font.getbbox(line, stroke_width=3)[2] <= 880 for line in lines)
+
+
+def test_subtitle_font_reports_missing_confirmed_family():
+    with pytest.raises(OSError, match="未安装.*请安装"):
+        _subtitle_font_and_lines("真实运行", {"font_family": "Missing Subtitle Family 123456"})
+
+
+def test_subtitle_font_resolves_pingfang_sc_collection_face():
+    try:
+        font = _subtitle_font(72, family="PingFang SC")
+    except OSError:
+        pytest.skip("PingFang SC is not installed on this host")
+    assert font.getname()[0] == "PingFang SC"
+    assert font.size == 72
+
+
+@pytest.mark.parametrize("style, message", [
+    ({"font_size": 0}, "字号"),
+    ({"font_size": True}, "字号"),
+    ({"font_size": 1921}, "字号"),
+    ({"font_family": ""}, "字体名称"),
+    ({"position": "center"}, "字幕位置"),
+])
+def test_subtitle_overlay_rejects_unrenderable_style(tmp_path, style, message):
+    plan = SimpleNamespace(
+        cues=[NarrationCue("cue", "section", "真实运行", 1, subtitle_style=style)],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    with pytest.raises(OSError, match=message):
+        _write_subtitle_overlays(plan, tmp_path)
+
+
+def test_subtitle_emphasis_survives_line_break_inside_term(tmp_path):
+    plan = SimpleNamespace(
+        cues=[NarrationCue(
+            "cue", "section", "真实\n运行", 1,
+            subtitle_style={"font_size": 72, "primary_color": "#00FF00"},
+            subtitle_emphasis=["真实运行"],
+        )],
+        clips=[SimpleNamespace(cue_id="cue")],
+    )
+    with Image.open(_write_subtitle_overlays(plan, tmp_path)[0]) as overlay:
+        colors = {color for _, color in overlay.getcolors(1080 * 1920)}
+        assert (255, 213, 79, 255) in colors
+        assert (0, 255, 0, 255) not in colors
 
 
 def _episode(workspace_id: str = "workspace_a") -> Episode:
@@ -147,8 +340,6 @@ def _asset(
         duration_seconds=24,
         usage_role="b_roll",
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         analysis_status="ready",
         segments=[
             MaterialSegment(
@@ -188,8 +379,6 @@ def _a_roll_asset(tmp_path: Path) -> MaterialAsset:
         duration_seconds=24,
         usage_role="a_roll",
         review_status="approved",
-        rights_confirmed=True,
-        brand_safe=True,
         analysis_status="ready",
         segments=[
             MaterialSegment(
@@ -563,7 +752,7 @@ def person_render_edit_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main_module,
         "settings",
-        SimpleNamespace(video_output_path=str(output_root)),
+        SimpleNamespace(video_output_path=str(output_root), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"),
     )
     monkeypatch.setattr(main_module, "avatar_lipsync_provider", provider)
     monkeypatch.setattr(
@@ -580,6 +769,20 @@ def person_render_edit_state(tmp_path, monkeypatch):
     )
 
 
+def test_trim_person_preview_accepts_legacy_and_synthetic_sources_but_checks_render_owner(person_render_edit_state):
+    state = person_render_edit_state
+    clip = state.montage.clips[0]
+    cue = state.montage.cues[0]
+    expected = f"/api/creation-tasks/{state.task.id}/person-renders/{state.old_render.id}/media#t=0.000,4.000"
+    assert main_module._trim_clip_source_url(state.workspace_id, state.task.id, clip, cue) == expected
+    synthetic = replace(clip, asset_id=f"person:{state.old_render.id}", source_path=f"person-render://{state.old_render.id}")
+    assert main_module._trim_clip_source_url(state.workspace_id, state.task.id, synthetic, cue) == expected
+    with pytest.raises(ValueError, match="配音段落不匹配"):
+        main_module._trim_clip_source_url(state.workspace_id, state.task.id, clip, replace(cue, narration_segment_id="foreign"))
+    with pytest.raises(KeyError):
+        main_module._trim_clip_source_url(state.workspace_id, f"{state.task.id}-other", synthetic, cue)
+
+
 def test_planner_matches_approved_segments_with_traceable_reasons(tmp_path):
     plan = MontagePlanner().build(
         workspace_id="workspace_a",
@@ -589,9 +792,11 @@ def test_planner_matches_approved_segments_with_traceable_reasons(tmp_path):
         assets=[_asset(tmp_path)],
     )
 
-    assert plan.status == "ready"
+    assert plan.status == "waiting_for_user"
     assert plan.clips
-    assert plan.low_confidence_clip_count == 0
+    assert plan.low_confidence_clip_count == 1
+    pending = next(clip for clip in plan.clips if clip.needs_confirmation)
+    assert next(cue.text for cue in plan.cues if cue.id == pending.cue_id) == "工具处理，"
     assert all(clip.match_reasons for clip in plan.clips)
     assert 30 <= plan.duration_seconds <= 90
 
@@ -648,9 +853,8 @@ def test_planner_rejects_narration_longer_than_profile_limit(tmp_path):
         )
 
 
-def test_planner_keeps_duration_only_matches_waiting_for_confirmation(tmp_path):
+def test_planner_keeps_duration_or_filename_only_matches_waiting_for_confirmation(tmp_path):
     asset = _asset(tmp_path, with_metadata=False)
-    asset.file_name = "素材001.mp4"
     plan = MontagePlanner().build(
         workspace_id="workspace_a",
         batch=_batch(),
@@ -785,6 +989,10 @@ def test_renderer_rejects_placeholder_output_after_running_command(tmp_path):
         profile=_profile(),
         assets=[asset],
     )
+    plan.status = "ready"
+    plan.low_confidence_clip_count = 0
+    for clip in plan.clips:
+        clip.needs_confirmation = False
     commands: list[list[str]] = []
 
     def runner(command: list[str]) -> None:
@@ -815,6 +1023,10 @@ def test_renderer_keeps_ffmpeg_exit_code_and_stderr(tmp_path):
         profile=_profile(),
         assets=[asset],
     )
+    plan.status = "ready"
+    plan.low_confidence_clip_count = 0
+    for clip in plan.clips:
+        clip.needs_confirmation = False
 
     def runner(_command: list[str]) -> None:
         raise subprocess.CalledProcessError(23, ["ffmpeg"], stderr="invalid filter")
@@ -869,7 +1081,8 @@ def test_renderer_rejects_unconfirmed_plan(tmp_path):
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
 )
-def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
+@pytest.mark.parametrize("fit_mode,crop_x", [("fill", 0), ("fill", 1), ("fit", 0.5)])
+def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path, fit_mode, crop_x):
     video_path = tmp_path / "source.mp4"
     audio_path = tmp_path / "voice.wav"
     subprocess.run(
@@ -879,7 +1092,7 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
             "-f",
             "lavfi",
             "-i",
-            "color=c=blue:s=640x360:d=1.5",
+            "color=c=blue:s=640x360:d=1.5,drawbox=x=320:y=0:w=320:h=360:color=red:t=fill",
             "-pix_fmt",
             "yuv420p",
             str(video_path),
@@ -907,7 +1120,15 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
         episode_id="episode_real",
         script_title="Real render",
         status="ready",
-        cues=[NarrationCue("cue_001", "hook", "真实渲染验收", 1.5)],
+        cues=[NarrationCue(
+            "cue_001", "hook", "真实运行\n字幕效果", 1.5,
+            subtitle_style={
+                "font_family": _subtitle_font(40).getname()[0],
+                "font_size": 72, "position": "middle",
+                "primary_color": "#00FF00", "emphasis_color": "#FFD54F",
+            },
+            subtitle_emphasis=["真实运行"],
+        )],
         clips=[
             MontageClip(
                 id="clip_real",
@@ -922,6 +1143,8 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
                 match_score=1,
                 match_reasons=["test"],
                 needs_confirmation=False,
+                fit_mode=fit_mode,
+                crop_x=crop_x,
             )
         ],
         duration_seconds=1.5,
@@ -953,6 +1176,25 @@ def test_real_ffmpeg_renders_playable_vertical_preview(tmp_path):
     }
     video = next(stream for stream in streams if stream["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1080, 1920)
+    frame_path = tmp_path / "rendered-style-frame.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.5", "-i", str(output_path), "-frames:v", "1", str(frame_path)],
+        check=True, capture_output=True,
+    )
+    with Image.open(frame_path) as frame:
+        center = frame.convert("RGB").crop((100, 800, 980, 1120))
+        colors = center.get_flattened_data()
+        assert sum(g > 180 and r < 80 and b < 80 for r, g, b in colors) > 100
+        assert sum(r > 180 and g > 140 and b < 130 for r, g, b in colors) > 100
+        pixel = frame.convert("RGB").getpixel((540, 1500))
+        if fit_mode == "fit":
+            assert max(pixel) < 15  # The whole landscape frame is letterboxed.
+            assert frame.convert("RGB").getpixel((100, 700))[2] > 200
+            assert frame.convert("RGB").getpixel((980, 700))[0] > 200
+        elif crop_x == 0:
+            assert pixel[2] > 200 and pixel[0] < 30
+        else:
+            assert pixel[0] > 200 and pixel[2] < 30
 
 
 def test_creation_task_planner_uses_confirmed_script_and_logical_material_references(tmp_path):
@@ -981,7 +1223,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
         task_id="task_1",
         script=script,
         profile=ProductionProfile(workspace_id="workspace_a"),
-        assets=[asset],
+        assets=[asset, _a_roll_asset(tmp_path)],
         media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
         narration_audio_path="narration://artifact/cache_1",
         narration_duration_seconds=6.0,
@@ -990,6 +1232,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     assert plan.task_id == "task_1"
     assert plan.script_id == script.id
     assert plan.clips
+    assert all(clip.asset_id == asset.id and clip.role == "b_roll" for clip in plan.clips)
     assert all(clip.source_path.startswith("workspace://") for clip in plan.clips)
     restored = creation_task_montage_plan_from_payload(
         creation_task_montage_plan_to_payload(plan)
@@ -997,11 +1240,105 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     assert restored == plan
 
 
+def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
+    sections = [(f"section_{index}", 4.0) for index in range(5)]
+    assert select_presenter_sections(sections, 0) == []
+    assert select_presenter_sections(sections, 20) == ["section_0"]
+    assert len(select_presenter_sections(sections, 40)) == 2
+    assert select_presenter_sections(sections, 100) == [item[0] for item in sections]
+
+    script = CreationTaskScript(
+        id="script_mix", workspace_id="workspace_a", task_id="task_mix",
+        run_id="run_mix", topic_id="topic_mix", title="混剪", language="zh-CN",
+        selection_status="confirmed",
+        sections=[CreationTaskScriptSection(
+            id=section_id, title=f"第 {index + 1} 段", content="介绍产品。",
+            visual_prompt="产品画面", evidence_reference_ids=[],
+        ) for index, (section_id, _) in enumerate(sections)],
+    )
+    chosen = select_presenter_sections(sections, 20)
+    plan = MontagePlanner().build_for_creation_task(
+        workspace_id="workspace_a", task_id="task_mix", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"),
+        assets=[_asset(tmp_path)],
+        media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
+        narration_audio_path="narration://artifact/mix", narration_duration_seconds=20,
+        narration_segment_ids_by_section={section_id: f"narration_{index}" for index, (section_id, _) in enumerate(sections)},
+        narration_segment_durations_by_section=dict(sections),
+        person_render_by_section={section_id: ("render_0", 4.0) for section_id in chosen},
+        presenter_share_target=20,
+    )
+    cues = {cue.id: cue for cue in plan.cues}
+    face_clips = [clip for clip in plan.clips if clip.person_render_id]
+    material_clips = [clip for clip in plan.clips if not clip.person_render_id]
+    assert face_clips and material_clips
+    assert {cues[clip.cue_id].source_section_id for clip in face_clips} == set(chosen)
+    assert all(clip.role == "b_roll" and clip.source_path.startswith("workspace://") for clip in material_clips)
+    assert sum(clip.timeline_end_seconds - clip.timeline_start_seconds for clip in face_clips) == pytest.approx(4.0)
+    assert plan.duration_seconds == pytest.approx(20.0)
+    assert plan.presenter_share_target == 20
+
+    all_face = MontagePlanner().build_for_creation_task(
+        workspace_id="workspace_a", task_id="task_mix", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"), assets=[],
+        media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
+        narration_audio_path="narration://artifact/mix", narration_duration_seconds=20,
+        narration_segment_ids_by_section={section_id: f"narration_{index}" for index, (section_id, _) in enumerate(sections)},
+        narration_segment_durations_by_section=dict(sections),
+        person_render_by_section={section_id: (f"render_{index}", 4.0) for index, (section_id, _) in enumerate(sections)},
+        presenter_share_target=100,
+    )
+    assert all(clip.person_render_id for clip in all_face.clips)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg is not installed")
+def test_mixed_person_and_material_clips_render_with_continuous_narration(tmp_path):
+    face = tmp_path / "face.mp4"
+    material = tmp_path / "material.mp4"
+    audio = tmp_path / "narration.wav"
+    for color, path in (("red", face), ("blue", material)):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=320x240:r=25:d=1",
+                        "-pix_fmt", "yuv420p", str(path)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    str(audio)], check=True, capture_output=True)
+    plan = CreationTaskMontagePlan(
+        id="mixed-render", workspace_id="workspace_a", task_id="task-mixed",
+        script_id="script-mixed", script_title="混剪", status="ready",
+        cues=[NarrationCue("cue-face", "section-face", "真人出镜。", 1.0, "narration-face"),
+              NarrationCue("cue-material", "section-material", "产品画面。", 1.0, "narration-material")],
+        clips=[
+            MontageClip("clip-face", "cue-face", "person:render", "narration-face", str(face),
+                        0.0, 1.0, 0.0, 1.0, 1.0, ["当前配音口型"], False,
+                        role="a_roll", person_render_id="render"),
+            MontageClip("clip-material", "cue-material", "asset", "segment", str(material),
+                        0.0, 1.0, 1.0, 2.0, 1.0, ["产品画面"], False),
+        ],
+        duration_seconds=2.0, low_confidence_clip_count=0,
+        presenter_share_target=40, narration_audio_path="narration://artifact/test",
+    )
+    MontageRenderer(tmp_path).render(plan, audio, job_staging_path=tmp_path / "job")
+    output = tmp_path / "job" / "preview.mp4"
+    assert output.is_file() and output.stat().st_size > 0
+    probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(output)],
+                                      check=True, capture_output=True, text=True).stdout)
+    assert {item["codec_type"] for item in probe["streams"]} >= {"video", "audio"}
+    assert float(next(item["duration"] for item in probe["streams"] if item["codec_type"] == "video")) == pytest.approx(2, abs=0.12)
+    def sample_color(at: float) -> bytes:
+        return subprocess.run(["ffmpeg", "-v", "error", "-ss", str(at), "-i", str(output),
+                               "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                              check=True, capture_output=True).stdout
+    red, blue = sample_color(0.4), sample_color(1.4)
+    assert red[0] > red[2] * 2
+    assert blue[2] > blue[0] * 2
+
+
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
 )
-def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
+@pytest.mark.parametrize("subtitle_mode", ["source", "bilingual", "hidden"])
+def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path, subtitle_mode):
+    bilingual = subtitle_mode != "source"
     video_path = tmp_path / "source-task.mp4"
     audio_path = tmp_path / "voice-task.wav"
     subprocess.run(
@@ -1061,20 +1398,60 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
     )
 
     renderer = MontageRenderer(tmp_path / "legacy-output")
+    for mismatched_duration in (0.6, 2.0):
+        mismatched = replace(plan, duration_seconds=mismatched_duration)
+        with pytest.raises(ValueError, match="配音与剪辑时长不一致"):
+            renderer.render(mismatched, audio_path, job_staging_path=tmp_path / "rejected")
+        assert not (tmp_path / "rejected" / "preview.mp4").exists()
+    if bilingual:
+        # Explicit artificial translation fixture: exercises the production track-to-render
+        # path, never a model-call assertion or a persisted user task.
+        chinese = SubtitleTrack(
+            id="fixture-zh", workspace_id="workspace_a", task_id="task_real",
+            timeline_version_id="fixture-version", language="zh-CN", source_language=None,
+            style={"font_family": "PingFang SC" if sys.platform == "darwin" else _subtitle_font(40).getname()[0], "font_size": 40, "position": "bottom"},
+            cues=[ProductionSubtitleCue(
+                id="cue_001", source_cue_id=None, text="人工测试字幕", start_seconds=.3, end_seconds=.8,
+                line_breaks=[2], emphasis=[],
+            )],
+            generation_method="timeline", model_id=None, artifact_ref=None, transform_id=None, status="valid",
+        )
+        english = replace(
+            chinese, id="fixture-en", language="en-US", source_language="zh-CN",
+            cues=[ProductionSubtitleCue(
+                id="fixture-en-cue", source_cue_id="cue_001",
+                text="MANUAL TEST SUBTITLESNot a model translation",
+                start_seconds=.3, end_seconds=.8, line_breaks=[21], emphasis=["MANUAL"],
+            )],
+        )
+        captions = subtitle_schedule([chinese, english], plan.duration_seconds)
+        assert captions[0].text == "人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation"
     with pytest.raises(ValueError, match="job-scoped"):
         renderer.render(plan, audio_path)
 
+    if subtitle_mode == "hidden":
+        chinese = replace(chinese, style={**chinese.style, "enabled": False})
+        english = replace(english, style={**english.style, "enabled": False})
     job_staging_path = tmp_path / "temp" / "job_render_1"
     rendered = renderer.render(
         plan,
         audio_path,
         job_staging_path=job_staging_path,
+        subtitle_tracks=[chinese, english] if bilingual else None,
     )
 
     staged_output = job_staging_path / "preview.mp4"
     staged_subtitle = job_staging_path / "subtitles.srt"
     assert staged_output.is_file()
-    assert staged_subtitle.read_text(encoding="utf-8").find("真实任务字幕") >= 0
+    srt = staged_subtitle.read_text(encoding="utf-8")
+    assert ("人工\n测试字幕\nMANUAL TEST SUBTITLES\nNot a model translation" if bilingual else "真实任务字幕") in srt
+    probe = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration,size:stream=codec_type,codec_name,width,height", "-of", "json", str(staged_output)],
+        check=True, capture_output=True, text=True,
+    ).stdout)
+    assert {stream["codec_type"] for stream in probe["streams"]} == {"video", "audio"}
+    assert float(probe["format"]["duration"]) == pytest.approx(1.2, abs=0.1)
+    assert int(probe["format"]["size"]) > 0
     assert rendered.output_path is None
     assert rendered.subtitle_path is None
     assert not (tmp_path / "legacy-output" / "creation-tasks").exists()
@@ -1100,7 +1477,19 @@ def test_creation_task_renderer_writes_task_scoped_mp4_and_srt(tmp_path):
             red > 220 and green > 220 and blue > 220
             for red, green, blue in subtitle_region.get_flattened_data()
         )
-    assert white_pixels > 50
+    assert white_pixels == 0 if subtitle_mode == "hidden" else white_pixels > 50
+    if bilingual:
+        assert "00:00:00,300 --> 00:00:00,800" in srt
+        for moment in (0.1, 1.0):
+            outside = tmp_path / f"outside-{moment}.png"
+            subprocess.run(["ffmpeg", "-y", "-ss", str(moment), "-i", str(staged_output),
+                            "-frames:v", "1", str(outside)], check=True, capture_output=True)
+            with Image.open(outside) as frame:
+                region = frame.convert("RGB").crop((0, 1300, 1080, 1800))
+                assert sum(r > 220 and g > 220 and b > 220 for r,g,b in region.get_flattened_data()) == 0
+        if subtitle_mode != "hidden":
+            assert sum(red > 180 and green > 140 and blue < 130
+                       for red, green, blue in subtitle_region.get_flattened_data()) > 50
 
 
 def test_creation_task_render_helper_restores_logical_media_references(
@@ -1292,8 +1681,11 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
     assert production.list_edit_operations(workspace_id, task.id) == []
 
 
+@pytest.mark.parametrize("language", ["zh-CN", "en-US"])
+@pytest.mark.parametrize("exact_replacement", [False, True])
+@pytest.mark.parametrize("mixed_color", [False, True])
 def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, exact_replacement, language, mixed_color
 ):
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -1324,7 +1716,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         goal="渲染一条可追溯成片",
         name="渲染迁移",
         target_count=1,
-        language="zh-CN",
+        language=language,
         aspect_ratio="9:16",
         duration_target_seconds=30,
         knowledge_references=[],
@@ -1402,6 +1794,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/route",
     )
+    plan.clips[0].visual_effects = {"exposure": 0.5, "saturation": 0.8}
+    plan.clips[1].visual_effects = {"exposure": 1 if mixed_color else 0.5, "saturation": 0.8}
     production.save_creation_task_montage_plan(
         workspace_id,
         task.id,
@@ -1412,7 +1806,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     audio_path = tmp_path / "voice.wav"
     audio_path.write_bytes(b"audio")
 
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"playable-video")
         (job_staging_path / "subtitles.srt").write_text(
@@ -1425,7 +1819,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
     monkeypatch.setattr(
-        main_module, "settings", SimpleNamespace(video_output_path=str(output_root))
+        main_module, "settings", SimpleNamespace(video_output_path=str(output_root), video_inbox_path=str(tmp_path), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp")
     )
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
@@ -1505,6 +1899,23 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert output_response.content == b"playable-video"
     assert "字幕内容" in subtitle_response.text
 
+    original_task = asdict(production.get_creation_task(workspace_id, task.id))
+    saved_template = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "成片设置", "style_instruction": "简洁说明"})
+    assert saved_template.status_code == 200, saved_template.text
+    template = saved_template.json()
+    assert template["source_timeline_version_id"] == original_task["current_timeline_version_id"]
+    assert template["settings"]["fit_mode"] == "fill"
+    assert template["settings"]["color_style"] == (None if mixed_color else {
+        "exposure": 0.5, "saturation": 0.8, "contrast": 1, "temperature": 0,
+    })
+    assert "字幕内容" not in json.dumps(template, ensure_ascii=False)
+    new_version = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "成片设置", "template_id": template["id"], "expected_version": 1})
+    assert new_version.status_code == 200 and new_version.json()["version"] == 2
+    conflict = client.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "冲突", "template_id": template["id"], "expected_version": 1})
+    assert conflict.status_code == 409
+    assert asdict(production.get_creation_task(workspace_id, task.id)) == original_task
+    assert client.get(f"/api/creation-tasks/{task.id}/output").content == output_response.content
+
     rendered_narration_reference = saved_plan.narration_audio_path
     saved_plan.output_path = str(tmp_path / "legacy-preview.mp4")
     saved_plan.subtitle_path = str(tmp_path / "legacy-subtitles.srt")
@@ -1517,7 +1928,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     legacy_base_response = client.post(
         f"/api/creation-tasks/{task.id}/edits/preview",
         json={
-            "raw_command": "把这个镜头换成另一个镜头",
+            "raw_command": "把这个镜头换成另一个镜头，保留当前配音",
             "context_stage": "review",
             "selected_object_refs": ["clip:clip-route"],
             "playhead_ms": 500,
@@ -1591,9 +2002,22 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert scope_required_response.status_code == 409
     assert scope_required_response.json()["detail"]["error"] == "edit_scope_required"
 
+    unchanged = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
+        "operation_type": "ReplaceClip", "clip_id": "clip-route",
+        "asset_id": asset.id, "segment_id": asset.segments[0].id,
+    })
+    assert unchanged.status_code == 409
+    assert unchanged.json()["detail"]["error"] == "edit_no_change"
+    assert production.list_edit_intents(workspace_id, task.id) == []
+
     preview_response = client.post(
-        f"/api/creation-tasks/{task.id}/edits/preview",
+        f"/api/creation-tasks/{task.id}/edits/" + ("exact/preview" if exact_replacement else "preview"),
         json={
+            "operation_type": "ReplaceClip",
+            "clip_id": "clip-route",
+            "asset_id": replacement_asset.id,
+            "segment_id": replacement_segment.id,
+        } if exact_replacement else {
             "raw_command": "把这个镜头换成户外画面",
             "context_stage": "review",
             "selected_object_refs": ["clip:clip-route"],
@@ -1602,7 +2026,14 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert preview_response.status_code == 200, preview_response.text
     preview_payload = preview_response.json()
-    assert preview_payload["intent"]["intent_type"] == "replace_visual"
+    assert preview_payload["intent"]["intent_type"] == ("exact_montage_edit" if exact_replacement else "replace_visual")
+    unchanged_plan = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(workspace_id, task.id)
+    )
+    assert unchanged_plan.clips[0].asset_id == asset.id
+    assert unchanged_plan.output_path == migrated_plan.output_path
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 1
+    assert production.list_edit_operations(workspace_id, task.id) == []
     assert preview_payload["proposal"]["operation"]["operation_type"] == "ReplaceClip"
     replacement_payload = preview_payload["proposal"]["operation"]["payload"]
     assert (replacement_payload["asset_id"], replacement_payload["segment_id"]) != (
@@ -1611,7 +2042,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert preview_payload["proposal"]["invalidated_refs"] == jobs[0].output_refs
     assert preview_payload["proposal"]["external_effects"] == [
-        "确认后只更新任务版本，不会立即调用模型或渲染。"
+        "只更新任务版本；重新渲染前不会执行媒体进程。" if exact_replacement
+        else "确认后只更新任务版本，不会立即调用模型或渲染。"
     ]
 
     confirm_response = client.post(
@@ -1652,16 +2084,42 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     workspace_after_rerender = client.get(f"/api/creation-tasks/{task.id}").json()
     assert workspace_after_rerender["task"]["timeline_sequence"] == 3
     assert workspace_after_rerender["task"]["can_undo"] is True
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
+    before_trim_version = production.get_creation_task(workspace_id, task.id).current_timeline_version_id
+    proposal_count = len(production.list_edit_proposals(workspace_id, task.id))
+    original_resolve = production.resolve_clip_media_reference
+    monkeypatch.setattr(
+        production, "resolve_clip_media_reference",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("源素材已断开")),
+    )
+    unavailable_preview = client.post(
+        f"/api/creation-tasks/{task.id}/edits/exact/preview",
+        json={"operation_type": "TrimClip", "clip_id": "clip-route", "source_start_seconds": before_trim_start + 0.5},
+    )
+    assert unavailable_preview.status_code == 422
+    assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
+    assert len(production.list_edit_proposals(workspace_id, task.id)) == proposal_count
+    monkeypatch.setattr(production, "resolve_clip_media_reference", original_resolve)
 
-    exact_trim = client.post(
-        f"/api/creation-tasks/{task.id}/edits/exact",
+    trim_preview = client.post(
+        f"/api/creation-tasks/{task.id}/edits/exact/preview",
         json={
             "operation_type": "TrimClip",
             "clip_id": "clip-route",
             "source_start_seconds": before_trim_start + 0.5,
         },
     )
+    assert trim_preview.status_code == 200, trim_preview.text
+    before_url = trim_preview.json()["proposal"]["preview"]["before"]["video_url"]
+    after_url = trim_preview.json()["proposal"]["preview"]["after"]["video_url"]
+    assert before_url.endswith(f"#t={before_trim_start:.3f},{rerendered_plan.clips[0].source_end_seconds:.3f}")
+    assert after_url.endswith(f"#t={before_trim_start + 0.5:.3f},{rerendered_plan.clips[0].source_end_seconds + 0.5:.3f}")
+    assert before_url.split("#")[0] == after_url.split("#")[0]
+    assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
+    exact_trim = client.post(f"/api/creation-tasks/{task.id}/edits/{trim_preview.json()['proposal']['id']}/confirm")
     assert exact_trim.status_code == 200, exact_trim.text
     assert exact_trim.json()["operation"]["operation_type"] == "TrimClip"
     trimmed_plan = creation_task_montage_plan_from_payload(
@@ -1671,7 +2129,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert trimmed_plan.clips[1].source_start_seconds == 1.0
     assert trimmed_plan.narration_audio_path == rendered_narration_reference
     assert trimmed_plan.output_path is None and trimmed_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 4
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 6
 
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
@@ -1684,7 +2142,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert restored_plan.clips[1].source_start_seconds == 1
     assert restored_plan.narration_audio_path == rendered_narration_reference
     assert restored_plan.output_path is None and restored_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 5
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 7
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -1698,20 +2156,86 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert creation_task_montage_plan_from_payload(
         reloaded.get_creation_task_montage_plan(workspace_id, task.id)
     ).clips[0].source_start_seconds == before_trim_start
-    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is False
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
 
     final_render = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
     assert final_render.status_code == 200, final_render.text
     assert final_render.json()["status"] == "rendered"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 6
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
+    current_task = production.get_creation_task(workspace_id, task.id)
+    current_tracks = production.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_task.current_timeline_version_id)
+    assert len(current_tracks) == 1 and current_tracks[0].language == language
+    assert current_tracks[0].artifact_ref == production.get_creation_task_montage_plan(workspace_id, task.id)["subtitle_path"]
+    assert current_tracks[0].transform_id is not None
+
+    before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
+    crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
+    crop_preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload)
+    assert crop_preview.status_code == 200, crop_preview.text
+    proposal = crop_preview.json()["proposal"]
+    assert proposal["preview"]["before"]["detail"] != proposal["preview"]["after"]["detail"]
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_crop["montage"]["clips"]
+    crop_confirm = client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm")
+    assert crop_confirm.status_code == 200, crop_confirm.text
+    assert crop_confirm.json()["operation"]["operation_type"] == "ChangeCrop"
+    cropped = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert cropped["montage"]["clips"][0]["fit_mode"] == "fit"
+    assert cropped["montage"]["clips"][0]["crop_x"] == 0
+    assert cropped["montage"]["clips"][0]["crop_y"] == 1
+    assert cropped["montage"]["clips"][1:] == before_crop["montage"]["clips"][1:]
+    assert cropped["narration"] == before_crop["narration"]
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    restored = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert restored["montage"]["clips"] == before_crop["montage"]["clips"]
+    assert restored["task"]["can_redo"] is True
+    redo = client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={})
+    assert redo.status_code == 200, redo.text
+    assert redo.json()["operation"]["operation_type"] == "RedoTimelineVersion"
+    redone = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert redone["montage"]["clips"] == cropped["montage"]["clips"]
+    assert redone["task"]["can_redo"] is False
+    assert redone["task"]["can_undo"] is True
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+
+    for change in ({"operation_type": "ReorderClip", "position": 1}, {"operation_type": "SetClipLock", "locked": True}):
+        before_change = client.get(f"/api/creation-tasks/{task.id}").json()
+        preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**change, "clip_id": "clip-route"})
+        assert preview.status_code == 200, preview.text
+        proposal = preview.json()["proposal"]
+        assert proposal["preview"]["before"]["detail"] != proposal["preview"]["after"]["detail"]
+        assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
+        assert client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm").status_code == 200
+        assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+        assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
+
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**crop_payload, "crop_x": 2}).status_code == 422
+    assert client.patch(f"/api/creation-tasks/{task.id}/montage/clips/clip-route", json={"fit_mode": "fit", "confirmed": True}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={"operation_type": "SetClipLock", "clip_id": "clip-route", "locked": True}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload).status_code == 409
+    locked_state = production.get_creation_task_montage_plan(workspace_id, task.id)
+    for edit in (
+        {"operation_type":"TrimClip", "clip_id":"clip-route", "source_start_seconds":0},
+        {"operation_type":"ReorderClip", "clip_id":"clip-route", "position":1},
+        {"operation_type":"ReorderClip", "clip_id":"clip-route-unchanged", "position":0},
+        {"operation_type":"ReplaceClip", "clip_id":"clip-route", "asset_id":asset.id,
+         "segment_id":asset.segments[0].id,"source_start_seconds":0},
+    ):
+        rejected = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=edit)
+        assert rejected.status_code == 409, rejected.text
+        assert production.get_creation_task_montage_plan(workspace_id, task.id) == locked_state
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
 
 
+@pytest.mark.parametrize("visual_only", [False, True])
 def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, visual_only
 ):
+    runtime_settings = main_module.settings
     workspace_id = "workspace_a"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
@@ -1864,7 +2388,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
             NarrationCue(
                 id="cue-subtitle-edit",
                 source_section_id=script.sections[0].id,
-                text=script.sections[0].content,
+                text="原始字幕\n内容。",
                 duration_seconds=4,
                 narration_segment_id=segment.id,
             )
@@ -1894,15 +2418,73 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     production.save_creation_task_montage_plan(
         workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage)
     )
+    production.create_timeline_version(
+        TimelineVersion(
+            id="timeline-subtitle-edit-base",
+            workspace_id=workspace_id,
+            task_id=task.id,
+            parent_version_id=None,
+            sequence=1,
+            snapshot={
+                "montage": creation_task_montage_plan_to_payload(montage),
+                "transform_run_id": "transform-subtitle-edit-rendered",
+                "cover_asset_id": "cover_subtitle_edit_base",
+            },
+            created_by_operation_id=None,
+        )
+    )
+    cover = production.create_cover_asset(CoverAsset(
+        id="cover_subtitle_edit_base", workspace_id=workspace_id, task_id=task.id,
+        timeline_version_id="timeline-subtitle-edit-base",
+        source_video_ref=montage.output_path, frame_time_seconds=0.5,
+        title="保留用户选择", safe_area={"left": 80, "top": 140, "right": 80, "bottom": 180},
+        layout={"title_position": "bottom"}, generation_method="video_frame",
+        model_or_engine="ffmpeg+Pillow", artifact_ref="artifacts/cover.png",
+        transform_id="transform_cover", status="valid",
+    ))
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
 
+    base = production.get_timeline_version(workspace_id, "timeline-subtitle-edit-base")
+    chinese = main_module._subtitle_track_from_montage(workspace_id, task, base, montage)
+    production.create_subtitle_track(chinese)
+    production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
+        replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
+    ]))
+    display_client = TestClient(main_module.app)
+    for mode, languages in [("en", {"en-US"}), ("zh", {"zh-CN"}), ("none", set())]:
+        preview = display_client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
+            "operation_type":"ConfigureSubtitleTrack", "subtitle_display":mode})
+        assert preview.status_code == 200, preview.text
+        result = display_client.post(f"/api/creation-tasks/{task.id}/edits/{preview.json()['proposal']['id']}/confirm")
+        assert result.status_code == 200, result.text
+        visible = display_client.get(f"/api/creation-tasks/{task.id}").json()
+        assert {track["language"] for track in visible["subtitle_tracks"] if track["style"].get("enabled",True)} == languages
+        assert display_client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    # Undo creates new versioned IDs; assertions below use the current tracks.
+    current = display_client.get(f"/api/creation-tasks/{task.id}").json()
+    current_zh = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="zh-CN")
+    current_en = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="en-US")
+    rejected_style = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/edits/exact", json={
+            "operation_type": "UpdateSubtitleCue", "track_id": current_en,
+            "cue_id": "english-cue", "text": "MANUAL TEST", "style": {"name": "emphasis"},
+        },
+    )
+    assert rejected_style.status_code == 422
+    english_preview = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/edits/preview", json={
+            "context_stage":"subtitle_cover", "selected_object_refs":["cue:english-cue"],
+            "raw_command":"把这句字幕改成 Manual edited English"})
+    assert english_preview.status_code == 200, english_preview.text
+    assert english_preview.json()["proposal"]["operation"]["payload"]["track_id"] == current_en
     response = TestClient(main_module.app).post(
         f"/api/creation-tasks/{task.id}/edits/exact",
         json={
             "operation_type": "UpdateSubtitleCue",
+            "track_id": current_zh,
             "cue_id": montage.cues[0].id,
-            "text": "修改后的字幕\n保留换行",
+            "text": "原始\n字幕内容。" if visual_only else "修改后的字幕\n保留换行",
         },
     )
 
@@ -1912,14 +2494,160 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     saved = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
-    assert saved.cues[0].text == "修改后的字幕\n保留换行"
+    assert saved.cues[0].text == ("原始字幕内容。" if visual_only else "修改后的字幕保留换行")
+    edited_track = production.list_subtitle_tracks(
+        workspace_id,
+        task.id,
+        timeline_version_id=production.get_creation_task(
+            workspace_id, task.id
+        ).current_timeline_version_id,
+    )
+    assert len(edited_track) == (2 if visual_only else 1)
+    edited_track = next(track for track in edited_track if track.language == "zh-CN")
+    assert edited_track.cues[0].line_breaks == ([2] if visual_only else [6])
     assert saved.narration_audio_path == montage.narration_audio_path
     assert saved.output_path is None and saved.subtitle_path is None
     assert production.get_creation_task(workspace_id, task.id).narration_cache_key == "whole-cache"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 2
-    assert production.list_edit_operations(workspace_id, task.id)[0].operation_type == "UpdateSubtitleCue"
+    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
+    assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.list_edit_operations(workspace_id, task.id))
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
+
+    undo = TestClient(main_module.app).post(
+        f"/api/creation-tasks/{task.id}/timeline/undo",
+        json={},
+    )
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["operation"]["operation_type"] == "UndoTimelineVersion"
+    restored = creation_task_montage_plan_from_payload(
+        production.get_creation_task_montage_plan(workspace_id, task.id)
+    )
+    assert restored.status == "rendered"
+    assert restored.output_path == montage.output_path
+    assert restored.subtitle_path == montage.subtitle_path
+    restored_workspace = TestClient(main_module.app).get(
+        f"/api/creation-tasks/{task.id}"
+    ).json()
+    assert restored_workspace["task"]["stage"] == "review"
+    assert restored_workspace["task"]["output_ready"] is True
+    assert restored_workspace["task"]["can_undo"] is False
+    assert {track["language"] for track in restored_workspace["subtitle_tracks"]} == {"zh-CN", "en-US"}
+    assert next(track for track in restored_workspace["subtitle_tracks"] if track["language"] == "zh-CN")["cues"][0]["line_breaks"] == [
+        4
+    ]
+    assert restored_workspace["cover_asset"]["artifact_ref"] == cover.artifact_ref
+
+    render_calls = []
+    def render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
+        render_calls.append(rendered_plan)
+        (job_staging_path / "preview.mp4").write_bytes(b"render-fixture")
+        (job_staging_path / "subtitles.srt").write_text(_plan_to_srt(rendered_plan))
+        rendered_plan.status = "rendered"
+        return rendered_plan
+
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
+    monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
+    client = TestClient(main_module.app)
+    # New renderer, then cache hit: both must carry the same immutable cover selection.
+    for _ in range(2):
+        result = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
+        assert result.status_code == 200, result.text
+        current = client.get(f"/api/creation-tasks/{task.id}").json()
+        assert current["cover_asset"]["title"] == cover.title
+        assert current["cover_asset"]["artifact_ref"] == cover.artifact_ref
+        assert current["cover_asset"]["source_video_ref"] == cover.source_video_ref
+        assert current["cover_asset"]["timeline_version_id"] == current["task"]["current_timeline_version_id"]
+    assert len(render_calls) == 1
+
+    # A rendering-contract change must not reuse an output from the previous engine.
+    monkeypatch.setattr(main_module, "CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION", "next-render-contract")
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert len(render_calls) == 2
+
+    from app.subtitle_tracks import SubtitleTranslationProviderError
+
+    class FailedTranslationProvider:
+        ready = True
+        provider_name = "test-configured"
+        model_id = "test-model"
+        message = "configured"
+
+        def translate(self, cues):
+            raise SubtitleTranslationProviderError(
+                code="insufficient_balance", reason="余额不足",
+                impact="中文字幕和成片保持不变。", repair_action="充值后重试。", retryable=True,
+            )
+
+    monkeypatch.setattr(main_module, "settings", runtime_settings)
+    monkeypatch.setattr(main_module, "subtitle_translation_provider_from_settings", lambda _: FailedTranslationProvider())
+    current_workspace = client.get(f"/api/creation-tasks/{task.id}").json()
+    current_chinese = next(track for track in current_workspace["subtitle_tracks"] if track["language"] == "zh-CN")
+    changed_source = client.post(f"/api/creation-tasks/{task.id}/edits/exact", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": current_chinese["id"],
+        "cue_id": current_chinese["cues"][0]["id"], "text": "测试新的翻译来源",
+    })
+    assert changed_source.status_code == 200, changed_source.text
+    before = client.get(f"/api/creation-tasks/{task.id}").json()
+    preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={"operation_type": "ConfigureSubtitleTrack"})
+    assert preview.status_code == 200, preview.text
+    failed = client.post(f"/api/creation-tasks/{task.id}/edits/{preview.json()['proposal']['id']}/confirm")
+    assert failed.status_code == 503, failed.text
+    monkeypatch.setattr(main_module, "production_repo", ProductionRepository(production.database_path, production.video_library_path))
+    after = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert after["task"]["current_timeline_version_id"] == before["task"]["current_timeline_version_id"]
+    assert after["subtitle_tracks"] == before["subtitle_tracks"]
+    assert after["cover_asset"] == before["cover_asset"]
+    assert after["subtitle_translation_capability"]["message"] == "上次翻译未完成：余额不足"
+    assert after["subtitle_translation_capability"]["repair_action"] == "充值后重试。"
+    assert after["subtitle_translation_capability"]["available"] is True
+
+    selected=after["subtitle_tracks"][0]
+    selected_cue=selected["cues"][0]
+    timing_preview=client.post(f"/api/creation-tasks/{task.id}/edits/preview", json={
+        "context_stage":"subtitle_cover", "selected_object_refs":[f"cue:{selected_cue['id']}"],
+        "raw_command":"这条字幕从0.4秒到3.6秒"})
+    assert timing_preview.status_code==200, timing_preview.text
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"]==after["subtitle_tracks"]
+    timing_result=client.post(f"/api/creation-tasks/{task.id}/edits/{timing_preview.json()['proposal']['id']}/confirm")
+    assert timing_result.status_code==200, timing_result.text
+    timed=client.get(f"/api/creation-tasks/{task.id}").json()
+    assert (timed["subtitle_tracks"][0]["cues"][0]["start_seconds"],timed["subtitle_tracks"][0]["cues"][0]["end_seconds"])==(.4,3.6)
+    assert timed["montage"]["clips"]==after["montage"]["clips"]
+    invalid=client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={
+        "operation_type":"UpdateSubtitleCue","cue_id":selected_cue["id"],"end_seconds":5})
+    assert invalid.status_code==422
+    undone=client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={})
+    assert undone.status_code==200, undone.text
+    restored=client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"][0]["cues"][0]
+    assert (restored["start_seconds"],restored["end_seconds"])==(selected_cue["start_seconds"],selected_cue["end_seconds"])
+    before_lock=client.get(f"/api/creation-tasks/{task.id}").json()
+    clip_id=before_lock["montage"]["clips"][0]["id"]
+    result=client.post(f"/api/creation-tasks/{task.id}/edits/exact",json={"operation_type":"SetClipLock","clip_id":clip_id,"locked":True})
+    assert result.status_code==200, result.text
+    for endpoint in (None,"/timeline/undo","/timeline/redo"):
+        if endpoint:
+            result=client.post(f"/api/creation-tasks/{task.id}"+endpoint,json={})
+            assert result.status_code==200, result.text
+        state=client.get(f"/api/creation-tasks/{task.id}").json()
+        assert [track["cues"] for track in state["subtitle_tracks"]]==[track["cues"] for track in before_lock["subtitle_tracks"]]
+        assert all(track["timeline_version_id"]==state["task"]["current_timeline_version_id"] for track in state["subtitle_tracks"])
+    visibility_before = client.get(f"/api/creation-tasks/{task.id}").json()
+    hidden_preview = client.post(f"/api/creation-tasks/{task.id}/edits/preview", json={
+        "context_stage":"subtitle_cover", "raw_command":"关闭字幕", "selected_object_refs":[]})
+    assert hidden_preview.status_code == 200, hidden_preview.text
+    assert client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"] == visibility_before["subtitle_tracks"]
+    result = client.post(f"/api/creation-tasks/{task.id}/edits/{hidden_preview.json()['proposal']['id']}/confirm")
+    assert result.status_code == 200, result.text
+    hidden = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert all(track["style"]["enabled"] is False for track in hidden["subtitle_tracks"])
+    assert [track["cues"] for track in hidden["subtitle_tracks"]] == [track["cues"] for track in visibility_before["subtitle_tracks"]]
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={}).status_code == 200
+    restored = client.get(f"/api/creation-tasks/{task.id}").json()
+    assert all(track["style"].get("enabled",True) for track in restored["subtitle_tracks"])
+    absent_english = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={"operation_type":"ConfigureSubtitleTrack","subtitle_display":"en"})
+    assert absent_english.status_code == 409
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(
@@ -2031,7 +2759,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         state.workspace_id, state.task.id
     )} == {state.old_render.id, new_render_id}
 
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"rerendered-video")
         (job_staging_path / "subtitles.srt").write_text(
@@ -2159,3 +2887,1678 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
     assert state.production.list_timeline_versions(
         state.workspace_id, state.task.id
     ) == []
+
+
+@pytest.mark.parametrize("language", ["zh-CN", "en-US"])
+@pytest.mark.parametrize("color_mode", ["legacy", "mixed", "uniform"])
+def test_template_settings_reach_initial_montage_and_subtitle_projection(person_render_edit_state, language, color_mode):
+    state = person_render_edit_state
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task.stage = "montage"
+    task.stage_status = "not_started"
+    task.current_timeline_version_id = None
+    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.language = language
+    plan.template_settings = {"fit_mode": "fit", "subtitle_style": {"position": "top", "font_size": 48}}
+    if color_mode != "legacy":
+        plan.template_settings["color_style"] = ({"exposure": 0.5, "contrast": 1.1, "saturation": 0.8, "temperature": 0.2}
+                                                  if color_mode == "uniform" else None)
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
+    assert response.status_code == 200, response.text
+    versioned_task = state.production.get_creation_task(state.workspace_id, task.id)
+    assert versioned_task.current_timeline_version_id is not None
+    assert len(state.production.list_timeline_versions(state.workspace_id, task.id)) == 1
+    montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
+    assert montage.clips and all(clip.fit_mode == "fit" for clip in montage.clips)
+    assert all(clip.visual_effects == (plan.template_settings.get("color_style") or {}) for clip in montage.clips)
+    assert all(cue.subtitle_style == plan.template_settings["subtitle_style"] for cue in montage.cues)
+    montage.status = "rendered"
+    montage.subtitle_path = "test/subtitle.srt"
+    version = SimpleNamespace(id="test-version", snapshot={"transform_run_id": "test-transform"})
+    track = main_module._subtitle_track_from_montage(state.workspace_id, task, version, montage)
+    assert track.language == language
+    assert track.style == plan.template_settings["subtitle_style"]
+
+
+@pytest.mark.parametrize("target,expected_calls", [(0, 0), (100, 1)])
+def test_initial_montage_generates_face_only_for_selected_share(person_render_edit_state, monkeypatch, target, expected_calls):
+    state = person_render_edit_state
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task.stage = "montage"
+    task.stage_status = "not_started"
+    task.current_timeline_version_id = None
+    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.presenter_share_target = target
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    calls = []
+    def fake_generate(_workspace, _task, payload):
+        calls.append(payload.narration_segment_id)
+        return SimpleNamespace(id="render-selected", status="ready", duration_seconds=30.0)
+    monkeypatch.setattr(main_module, "_generate_creation_task_person_render_record", fake_generate)
+    monkeypatch.setattr(main_module, "_person_render_media_path", lambda _: Path("/tmp/test-render.mp4"))
+    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(calls) == expected_calls
+    assert body["presenter_share_target"] == target
+    assert body["presenter_share_actual"] == target
+    assert all(bool(clip["person_render_id"]) == bool(target) for clip in body["clips"])
+
+
+def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, monkeypatch):
+    workspace_id = "workspace_a"
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=tmp_path,
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id)
+    production._save_asset(asset)
+    creation_plan = CreationPlan(
+        id="plan-render-route",
+        workspace_id=workspace_id,
+        goal="渲染一条可追溯成片",
+        name="渲染迁移",
+        target_count=1,
+        language="zh-CN",
+        aspect_ratio="9:16",
+        duration_target_seconds=30,
+        knowledge_references=[],
+        source_references=[],
+        selected_voice=None,
+        pronunciation_references=[],
+        approved_asset_count=1,
+        approved_clip_count=1,
+        material_rule_summary="使用当前任务素材",
+        model_snapshot=[],
+        confirmation_points=[],
+        blockers=[],
+        preflight_fingerprint="f" * 64,
+        material_matches=[
+            MaterialSegmentMatch(
+                asset_ref=f"asset:{asset.id}",
+                segment_ref=f"segment:{asset.segments[0].id}",
+                score=1.0,
+                reasons=["测试夹具中的已审核镜头"],
+            )
+        ],
+    )
+    task = CreationTask(
+        id="task-render-route",
+        workspace_id=workspace_id,
+        plan_id=creation_plan.id,
+        name=creation_plan.name,
+        scenario=creation_plan.goal,
+        stage="montage",
+        stage_status="waiting_for_user",
+        status="waiting_for_user",
+        progress=70,
+        recovery_point="montage",
+    )
+    production.confirm_creation_plan(creation_plan, task)
+    plan = CreationTaskMontagePlan(
+        id="montage-render-route",
+        workspace_id=workspace_id,
+        task_id=task.id,
+        script_id="script-render-route",
+        script_title="渲染迁移",
+        status="waiting_for_user",
+        cues=[NarrationCue("cue-route", "section-route", "字幕内容", 1.0)],
+        clips=[
+            MontageClip(
+                id="clip-route",
+                cue_id="cue-route",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path="workspace://source.mp4",
+                source_start_seconds=0,
+                source_end_seconds=1,
+                timeline_start_seconds=0,
+                timeline_end_seconds=1,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=True,
+            ),
+            MontageClip(
+                id="clip-route-unchanged",
+                cue_id="cue-route",
+                asset_id=asset.id,
+                segment_id=asset.segments[0].id,
+                source_path="workspace://source.mp4",
+                source_start_seconds=1,
+                source_end_seconds=2,
+                timeline_start_seconds=1,
+                timeline_end_seconds=2,
+                match_score=1,
+                match_reasons=["已确认"],
+                needs_confirmation=False,
+            ),
+        ],
+        duration_seconds=2,
+        low_confidence_clip_count=1,
+        narration_audio_path="narration://artifact/route",
+    )
+    production.save_creation_task_montage_plan(
+        workspace_id,
+        task.id,
+        plan.id,
+        creation_task_montage_plan_to_payload(plan),
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    client = TestClient(main_module.app)
+    changed, _ = main_module._prepare_changed_montage(plan, message="字幕已修改。")
+    assert changed.status == "waiting_for_user"
+    assert changed.low_confidence_clip_count == 1
+    # Old persisted versions may incorrectly say rendered; per-clip review remains authoritative.
+    inconsistent = creation_task_montage_plan_to_payload(plan)
+    inconsistent["status"] = "rendered"
+    production.save_creation_task_montage_plan(workspace_id, task.id, plan.id, inconsistent)
+    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 409
+    request = {"operation_type": "ConfirmClip", "clip_id": "clip-route"}
+    preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=request)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()["proposal"]
+    assert proposal["preview"]["before"]["detail"] == "待确认"
+    assert proposal["preview"]["after"]["detail"] == "已确认"
+    persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
+    assert persisted["clips"][0]["needs_confirmation"] is True
+    assert production.list_edit_operations(workspace_id, task.id) == []
+    confirmed = client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
+    assert persisted["clips"][0]["needs_confirmation"] is False
+    assert persisted["clips"][1] == creation_task_montage_plan_to_payload(plan)["clips"][1]
+    confirmed_task = production.get_creation_task(workspace_id, task.id)
+    confirmed_version = production.get_timeline_version(workspace_id, confirmed_task.current_timeline_version_id)
+    assert "subtitle_track_ids" not in confirmed_version.snapshot
+    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
+    assert undo.status_code == 200, undo.text
+    assert production.get_creation_task_montage_plan(workspace_id, task.id)["clips"][0]["needs_confirmation"] is True
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("把这句字幕改成：Keep your files on this computer.", "Keep your files on this computer."),
+    ('Replace with "Ready?"', "Ready?"),
+    ("把字幕改成：‘Hello!’", "Hello!"),
+    ("把字幕改成：保留标点。", "保留标点。"),
+    ("把字幕改成：It's ready.", "It's ready."),
+])
+def test_subtitle_command_preserves_authored_punctuation(command, expected):
+    assert main_module._subtitle_text_from_command(command) == expected
+
+
+@pytest.mark.parametrize("visual_prompt,content", [
+    ("USB port closeup", "Save your time."),
+    ("接口特写", "提高工作效率。"),
+])
+@pytest.mark.parametrize("action_times", [[0.2, 0.7], [3.0, 9.0]])
+def test_creation_task_retrieval_uses_visual_requirement_without_changing_narration(tmp_path, visual_prompt, content, action_times):
+    from app.visual_understanding import SegmentUnderstanding
+    script = CreationTaskScript(id="script", workspace_id="workspace_a", task_id="task",
+        run_id="run", topic_id="topic", title="Visual requirement", language="en-US",
+        selection_status="confirmed", sections=[CreationTaskScriptSection(
+            id="section", title="Intro", content=content, visual_prompt=visual_prompt,
+            evidence_reference_ids=[])])
+    asset = _asset(tmp_path)
+    relevant = replace(asset.segments[0], id="relevant", description=visual_prompt,
+        end_seconds=20, transcript="", understanding=SegmentUnderstanding(status="ready",
+            facts=[{"kind":"action", "text":"手指移动", "sample_times":action_times}],
+            unknowns=["软件内容不可见"]))
+    spoken_only = replace(asset.segments[0], id="spoken-only", description="A sunny garden",
+        end_seconds=4, transcript=visual_prompt + " " + content)
+    observed_queries = []
+    provider = SimpleNamespace(ready=True, model_id="test-local",
+        embed_texts=lambda texts: observed_queries.extend(texts) or [[1.0, 0.0] for _ in texts])
+    planner = MontagePlanner(semantic_provider=provider,
+        visual_feature_loader=lambda _workspace, segment_id, _model: [1.0, 0.0] if segment_id == "relevant" else [0.0, 1.0])
+    plan = planner.build_for_creation_task(workspace_id="workspace_a", task_id="task", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"), assets=[replace(asset, segments=[spoken_only, relevant])],
+        media_reference_for_asset=lambda _: "workspace://source.mp4",
+        narration_audio_path="narration://artifact/test", narration_duration_seconds=4)
+    assert observed_queries == [visual_prompt]
+    assert plan.clips[0].segment_id == relevant.id
+    assert plan.cues[0].text == content
+    assert script.sections[0].content == content
+    assert "镜头时长适配 100%" in plan.clips[0].match_reasons
+    assert plan.clips[0].source_end_seconds == 4
+    reasons = plan.clips[0].match_reasons
+    assert any("局部动作观察" in reason for reason in reasons) == (action_times == [0.2, 0.7])
+    assert "画面未确认：软件内容不可见" in reasons
+    if action_times == [3.0, 9.0]:
+        assert "选取区间缺少多帧动作证据；物体相似不代表动作符合" in reasons
+
+
+def test_creation_task_audio_claim_cannot_clear_missing_visual_evidence(tmp_path):
+    asset = _asset(tmp_path)
+    segment = replace(asset.segments[0], description="A sunny garden", transcript="USB port closeup", end_seconds=20)
+    cue = NarrationCue(id="cue", source_section_id="section", text="USB port closeup", duration_seconds=4)
+    result = _score_candidate(cue, asset, segment, 0, 0, visual_only=True)
+    assert result[1] == 0
+    assert "文字词重合 0%" in result[-1]
+    # Extra source duration does not reduce the ability to supply the requested shot.
+    exact = _score_candidate(cue, asset, replace(segment, end_seconds=4), 0, 0, visual_only=True)
+    assert result[0] == exact[0]
+
+
+@pytest.mark.parametrize("segmented", [False, True])
+def test_short_creation_subtitles_do_not_extend_real_narration(tmp_path, segmented):
+    from app.montage import _build_creation_task_cues
+    script = CreationTaskScript(id="s", workspace_id="w", task_id="t", run_id="r", topic_id="p",
+        title="Short cues", language="zh-CN", selection_status="confirmed", sections=[
+            CreationTaskScriptSection(id="a", title="A", content="好。开始。完成。", visual_prompt="", evidence_reference_ids=[]),
+            CreationTaskScriptSection(id="b", title="B", content="再见。", visual_prompt="", evidence_reference_ids=[])])
+    cues = _build_creation_task_cues(script, min_seconds=30, max_seconds=90,
+        narration_duration_seconds=1.321,
+        narration_segment_durations_by_section={"a":0.901,"b":0.420} if segmented else None)
+    assert sum(c.duration_seconds for c in cues) == pytest.approx(1.321, abs=0.000001)
+    assert all(c.duration_seconds > 0 for c in cues)
+    assert "".join(c.text for c in cues) == "好。开始。完成。再见。"
+    if segmented:
+        assert sum(c.duration_seconds for c in cues if c.source_section_id == "a") == pytest.approx(0.901)
+
+
+@pytest.mark.parametrize("durations", [{}, {"a":float("nan")}, {"a":3.0}])
+def test_creation_subtitles_reject_inconsistent_segment_clock(durations):
+    from app.montage import _build_creation_task_cues
+    script = CreationTaskScript(id="s", workspace_id="w", task_id="t", run_id="r", topic_id="p",
+        title="Invalid clock", language="zh-CN", selection_status="confirmed", sections=[
+            CreationTaskScriptSection(id="a", title="A", content="开始。", visual_prompt="", evidence_reference_ids=[])])
+    with pytest.raises(ValueError, match="配音时长"):
+        _build_creation_task_cues(script, min_seconds=30, max_seconds=90,
+            narration_duration_seconds=1.0, narration_segment_durations_by_section=durations)
+
+
+@pytest.mark.parametrize("natural", [False, True])
+def test_split_clip_preserves_clock_narration_and_roundtrips_undo(person_render_edit_state, natural):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    target = before["montage"]["clips"][0]
+    split_at = target["timeline_start_seconds"] + 1.25
+    if natural:
+        response = state.client.post(base + "/edits/preview", json={
+            "raw_command":"从这里分割镜头", "context_stage":"montage",
+            "selected_object_refs":[f"clip:{target['id']}"], "playhead_ms":round(split_at * 1000)})
+    else:
+        response = state.client.post(base + "/edits/exact/preview", json={
+            "operation_type":"SplitClip", "clip_id":target["id"], "split_time_seconds":split_at})
+    assert response.status_code == 200, response.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    proposal = response.json()["proposal"]
+    confirmed = state.client.post(base + f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    clips = after["montage"]["clips"]
+    assert len(clips) == len(before["montage"]["clips"]) + 1
+    assert clips[0]["timeline_end_seconds"] == clips[1]["timeline_start_seconds"] == split_at
+    assert clips[0]["source_end_seconds"] == clips[1]["source_start_seconds"] == target["source_start_seconds"] + 1.25
+    assert clips[1]["source_end_seconds"] == target["source_end_seconds"]
+    assert clips[1]["person_render_id"] == target["person_render_id"]
+    assert clips[2:] == before["montage"]["clips"][1:]
+    assert after["montage"]["duration_seconds"] == before["montage"]["duration_seconds"]
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    assert after["montage"]["cues"] == before["montage"]["cues"]
+    assert state.client.post(base + f"/edits/{proposal['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == clips
+
+
+def test_split_clip_rejects_endpoints_and_locked_source(person_render_edit_state):
+    state=person_render_edit_state
+    base=f"/api/creation-tasks/{state.task.id}"
+    clip=state.montage.clips[0]
+    mixed=state.client.patch(base+f"/montage/clips/{clip.id}",json={"split_time_seconds":1,"confirmed":True})
+    assert mixed.status_code == 409
+    for at in (clip.timeline_start_seconds, clip.timeline_end_seconds, clip.timeline_start_seconds + .01):
+        r=state.client.post(base+"/edits/exact/preview", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":at})
+        assert r.status_code == 422, r.text
+    r=state.client.post(base+"/edits/exact", json={"operation_type":"SetClipLock", "clip_id":clip.id, "locked":True})
+    assert r.status_code == 200, r.text
+    r=state.client.post(base+"/edits/exact/preview", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":1})
+    assert r.status_code == 409, r.text
+
+
+def test_split_person_render_keeps_source_offset_in_render_helper(person_render_edit_state, monkeypatch, tmp_path):
+    state=person_render_edit_state
+    montage=creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    first=montage.clips[0]
+    second=replace(first,id="split-second",source_start_seconds=1.25,timeline_start_seconds=1.25)
+    first.source_end_seconds=1.25
+    first.timeline_end_seconds=1.25
+    montage.clips=[first,second]
+    observed=[]
+    def render(plan,*args,**kwargs):
+        observed.extend((c.source_start_seconds,c.source_end_seconds) for c in plan.clips)
+        return plan
+    monkeypatch.setattr(main_module,"montage_renderer",SimpleNamespace(render=render))
+    main_module._render_montage_with_resolved_clip_sources(state.workspace_id,montage,tmp_path/"voice.wav")
+    assert observed == [(0,1.25),(1.25,4)]
+
+
+def test_regenerated_narration_is_not_duplicated_by_split_clips(person_render_edit_state):
+    state=person_render_edit_state
+    plan=creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    # Two adjacent portions of one cue must share its replacement duration.
+    plan.clips=plan.clips[:1]
+    first=plan.clips[0]
+    first.person_render_id=None
+    first.source_path=person_render_edit_state.production.workspace_media_reference_for_asset(
+        state.workspace_id, first.asset_id)
+    second=replace(first,id="split-second",source_start_seconds=1,timeline_start_seconds=1)
+    first.source_end_seconds=1;first.timeline_end_seconds=1
+    plan.clips.append(second);plan.duration_seconds=4
+    segment=SimpleNamespace(id=plan.cues[0].narration_segment_id,duration_seconds=6,status="ready")
+    result=main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")
+    assert result.duration_seconds == 6
+    assert [(c.timeline_start_seconds,c.timeline_end_seconds) for c in result.clips] == [(0,1.5),(1.5,6)]
+    assert [(c.source_start_seconds,c.source_end_seconds) for c in result.clips] == [(0,1.5),(1.5,6)]
+    assert plan.duration_seconds == 4
+    plan.clips[0].locked=True
+    with pytest.raises(ValueError,match="锁定"):
+        main_module._retime_montage_for_narration_segments(state.workspace_id,plan,[segment],"narration://artifact/new")
+
+
+def test_regenerated_narration_cannot_exceed_existing_person_render(person_render_edit_state):
+    state = person_render_edit_state
+    plan = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(state.montage))
+    plan.clips = plan.clips[:1]
+    plan.duration_seconds = 4
+    segment = SimpleNamespace(id=plan.cues[0].narration_segment_id, duration_seconds=6, status="ready")
+    with pytest.raises(ValueError, match="超过当前镜头可用范围"):
+        main_module._retime_montage_for_narration_segments(state.workspace_id, plan, [segment], "narration://artifact/new")
+
+
+def test_person_clip_crop_and_replacement_keep_editable_timeline(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    face = state.montage.clips[0]
+    crop = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "ChangeCrop", "clip_id": face.id,
+        "fit_mode": "fit", "crop_x": .5, "crop_y": .5,
+    })
+    assert crop.status_code == 200, crop.text
+    assert crop.json()["proposal"]["preview"]["before"]["label"] == "人物口播"
+    confirmed = state.client.post(base + f"/edits/{crop.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
+    replacement = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "ReplaceClip", "clip_id": face.id,
+        "asset_id": state.montage.clips[1].asset_id,
+        "segment_id": state.montage.clips[1].segment_id,
+    })
+    assert replacement.status_code == 200, replacement.text
+    confirmed = state.client.post(base + f"/edits/{replacement.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] is None
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
+
+
+def test_natural_language_presenter_share_previews_confirms_and_undoes(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()["montage"]
+    prior_renders = list(state.provider.output_cache_keys)
+    preview = state.client.post(base + "/edits/preview", json={
+        "raw_command": "露脸占比调到0%", "context_stage": "montage",
+        "selected_object_refs": [],
+    })
+    assert preview.status_code == 200, preview.text
+    assert "目标 0%" in preview.json()["proposal"]["preview"]["after"]["label"]
+    assert state.client.get(base).json()["montage"] == before
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()["montage"]
+    assert after["presenter_share_target"] == after["presenter_share_actual"] == 0
+    assert all(clip["person_render_id"] is None for clip in after["clips"])
+    assert after["cues"] == before["cues"]
+    assert after["audio_timeline"] == before["audio_timeline"]
+    assert state.provider.output_cache_keys == prior_renders
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["clips"]
+
+
+def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    segment_id = state.montage.cues[0].narration_segment_id
+    preview = state.client.post(base + "/edits/preview", json={
+        "raw_command": "这句重新配音", "context_stage": "narration",
+        "selected_object_refs": [f"narration:{segment_id}"],
+    })
+    assert preview.status_code == 200, preview.text
+    state.production.create_subtitle_track(SubtitleTrack(
+        id="retime-source", workspace_id=state.workspace_id, task_id=state.task.id,
+        timeline_version_id=preview.json()["proposal"]["operation"]["payload"]["base_version_id"],
+        language="zh-CN", source_language=None, style={"font_size": 40},
+        cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="手动改过的字幕", start_seconds=0, end_seconds=4)],
+        generation_method="timeline", model_id=None, artifact_ref="artifacts/original.srt",
+        transform_id="original-transform", status="valid"))
+    before = state.client.get(base).json()["subtitle_tracks"]
+    changed = main_module._retime_montage_for_narration_segments(state.workspace_id, state.montage,
+        [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/new")
+    # Model execution is covered separately; exercise the real confirmation transaction and file publication.
+    regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
+        for segment in state.production.list_narration_segments(
+            state.workspace_id, state.task.id, state.task.confirmed_script_id)]
+    monkeypatch.setattr(main_module, "_regenerate_creation_task_narration_segment",
+        lambda **kwargs: (regenerated, None, changed))
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    after = state.client.get(base).json()["subtitle_tracks"]
+    assert after[0]["cues"][0]["end_seconds"] == 6
+    assert after[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
+    assert after[0]["artifact_ref"] != before[0]["artifact_ref"]
+    path = main_module.artifact_store.resolve_file(after[0]["artifact_ref"])
+    assert "00:00:06,000" in path.read_text()
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    restored = state.client.get(base).json()["subtitle_tracks"]
+    assert restored[0]["cues"] == before[0]["cues"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == after[0]["cues"]
+    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
+
+
+@pytest.mark.parametrize("action,expected", [("DeleteClip", 4), ("DuplicateClip", 12)])
+def test_linked_clip_edits_preview_audio_and_undo(person_render_edit_state, action, expected):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type": action, "clip_id": state.montage.clips[0].id})
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    edited = state.client.get(base).json()
+    assert edited["montage"]["duration_seconds"] == expected
+    clips = edited["montage"]["audio_timeline"]["tracks"][0]["clips"]
+    assert sum(c["source_end_ms"] - c["source_start_ms"] for c in clips) == expected * 1000
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["audio_timeline"] == edited["montage"]["audio_timeline"]
+
+
+def test_linked_delete_removes_last_caption_without_reviving_projection(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="only-caption", workspace_id=state.workspace_id,
+        task_id=state.task.id, timeline_version_id=version.id, language="zh-CN", source_language=None,
+        style={}, cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="被删除的字幕", start_seconds=0, end_seconds=4)],
+        generation_method="timeline", model_id=None, artifact_ref="artifacts/old.srt", transform_id="old", status="valid"))
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
+    assert preview.status_code == 200, preview.text
+    result = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert result.status_code == 200, result.text
+    assert state.client.get(base).json()["subtitle_tracks"] == []
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"][0]["text"] == "被删除的字幕"
+
+
+def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    result = state.client.post(base + "/edits/exact", json={"operation_type":"SetClipLock", "clip_id":state.montage.clips[1].id, "locked":True})
+    assert result.status_code == 200, result.text
+    result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
+    assert result.status_code == 409 and "锁定" in result.text
+
+
+def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    clip = state.montage.clips[1]
+    seen_rates = []
+    def publish(*args, **kwargs):
+        seen_rates.append(main_module.clip_playback_rate(args[5]))
+        return SimpleNamespace(id=f"preview-{len(seen_rates)}", logical_ref=f"artifacts/preview-{len(seen_rates)}.mp4")
+    monkeypatch.setattr(main_module, "publish_color_preview", publish)
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为0.5倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
+    assert preview.status_code == 200, preview.text
+    assert seen_rates == [1, .5]
+    assert preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("preview-2")
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    after = state.client.get(base).json()
+    slowed = after["montage"]["clips"][1]
+    assert slowed["source_end_seconds"] - slowed["source_start_seconds"] == 2
+    assert after["montage"]["duration_seconds"] == 8
+    assert after["montage"]["cues"] == before["montage"]["cues"]
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    # A later non-speed edit must not silently restore 1x.
+    response = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCrop", "clip_id":clip.id, "fit_mode":"fit", "crop_x":.5,"crop_y":.5})
+    assert response.status_code == 200, response.text
+    assert state.client.get(base).json()["montage"]["clips"][1]["source_end_seconds"] == slowed["source_end_seconds"]
+    response = state.client.post(base + "/edits/exact", json={"operation_type":"SplitClip", "clip_id":clip.id, "split_time_seconds":6})
+    assert response.status_code == 200, response.text
+    pieces = state.client.get(base).json()["montage"]["clips"][1:]
+    assert [(c["source_start_seconds"], c["source_end_seconds"]) for c in pieces] == [(slowed["source_start_seconds"],slowed["source_start_seconds"]+1),(slowed["source_start_seconds"]+1,slowed["source_end_seconds"])]
+    response = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeClipSpeed", "clip_id":state.montage.clips[0].id,"playback_rate":.5})
+    assert response.status_code == 409 and "口型" in response.text
+    response = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为9倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
+    assert response.status_code == 422
+
+
+def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    published = []
+    def publish(*args, **kwargs):
+        published.append(kwargs["kind"])
+        return SimpleNamespace(id=f"preview-{len(published)}", logical_ref=f"artifacts/audio-{len(published)}.wav")
+    service = SimpleNamespace(source=lambda *args: main_module.Path("fixture.wav"), publish=publish, validate=lambda *args: None)
+    monkeypatch.setattr(main_module, "_task_audio", lambda: service)
+    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs: SimpleNamespace(id="visual-preview", logical_ref="artifacts/preview.mp4"))
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeLinkedSpeed", "clip_id":state.montage.clips[1].id,"playback_rate":2})
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert published == ["audio_source", "audio_preview", "audio_preview"]
+    count = len(published)
+    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert response.status_code == 200, response.text
+    assert len(published) == count  # Confirmation uses the audio the user previewed.
+    after = state.client.get(base).json()
+    assert after["montage"]["duration_seconds"] == 6
+    assert after["montage"]["audio_timeline"]["tracks"][0]["clips"][-1]["source_ref"] == "artifacts/audio-1.wav"
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+
+
+def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    zh = SubtitleTrack(id="batch-zh", workspace_id=state.workspace_id, task_id=state.task.id, timeline_version_id=version.id,
+        language="zh-CN", source_language=None, style={},
+        cues=[ProductionSubtitleCue(id="shared", source_cue_id=None, text="AI工具 AI记录", start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/zh.srt",transform_id="zh",status="valid")
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id="batch-en",language="en-US",source_language="zh-CN",
+        cues=[replace(zh.cues[0],text="AI tools and AI notes")],generation_method="translation"))
+    before = state.client.get(base).json()
+    single = state.client.post(base + "/edits/preview", json={"raw_command":"把这句字幕改成Local tools", "context_stage":"subtitle_cover",
+        "selected_object_refs":["cue:shared","subtitle-track:batch-en"]})
+    assert single.status_code == 200, single.text
+    assert single.json()["proposal"]["operation"]["payload"]["track_id"] == "batch-en"
+    preview = state.client.post(base + "/edits/preview", json={"raw_command":"全文把“AI”替换成“Local AI”", "context_stage":"subtitle_cover",
+        "selected_object_refs":["cue:shared","subtitle-track:batch-en"]})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["proposal"]["preview"]["text_changes"][0]["occurrences"] == 2
+    assert state.client.get(base).json()["subtitle_tracks"] == before["subtitle_tracks"]
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    assert {t["language"]:t["cues"][0]["text"] for t in after["subtitle_tracks"]} == {"zh-CN":"AI工具 AI记录","en-US":"Local AI tools and Local AI notes"}
+    assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+    assert after["montage"]["clips"] == before["montage"]["clips"]
+    assert after["narration"]["audio_reference"] == before["narration"]["audio_reference"]
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    current = state.client.get(base).json()
+    assert [t["cues"] for t in current["subtitle_tracks"]] == [t["cues"] for t in before["subtitle_tracks"]]
+    zh = next(t for t in current["subtitle_tracks"] if t["language"] == "zh-CN")
+    preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ReplaceSubtitleText","track_id":zh["id"],"find_text":"AI","replacement_text":"本地AI"})
+    assert preview.status_code == 200, preview.text
+    assert any("译文将失效" in x for x in preview.json()["proposal"]["external_effects"])
+    assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
+    assert [t["language"] for t in state.client.get(base).json()["subtitle_tracks"]] == ["zh-CN"]
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert len(state.client.get(base).json()["subtitle_tracks"]) == 2
+
+
+def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    track = SubtitleTrack(id="structure-en", workspace_id=state.workspace_id, task_id=state.task.id, timeline_version_id=version.id,
+        language="en-US", source_language=None, style={},
+        cues=[ProductionSubtitleCue(id="structure-cue", source_cue_id=None, text="Local video. Good sound.", start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/structure.srt",transform_id="structure-transform",status="valid")
+    state.production.create_subtitle_track(track)
+    before = state.client.get(base).json()
+    def preview_confirm(command, current):
+        selected = current["subtitle_tracks"][0]
+        preview = state.client.post(base + "/edits/preview", json={"raw_command":command, "context_stage":"subtitle_cover",
+            "selected_object_refs":[f"cue:{selected['cues'][0]['id']}", f"subtitle-track:{selected['id']}"]})
+        assert preview.status_code == 200, preview.text
+        assert state.client.get(base).json()["subtitle_tracks"] == current["subtitle_tracks"]
+        confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+        assert confirmed.status_code == 200, confirmed.text
+        assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
+        result = state.client.get(base).json()
+        assert result["montage"]["clips"] == before["montage"]["clips"]
+        assert result["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
+        assert result["narration"]["audio_reference"] == before["narration"]["audio_reference"]
+        return result
+    split = preview_confirm("当前字幕在第13字后2秒拆分", before)
+    assert [cue["text"] for cue in split["subtitle_tracks"][0]["cues"]] == ["Local video. ", "Good sound."]
+    merged = preview_confirm("当前字幕与下一条合并", split)
+    assert merged["subtitle_tracks"][0]["cues"][0]["text"] == track.cues[0].text
+    deleted = preview_confirm("删除当前字幕", merged)
+    assert deleted["subtitle_tracks"] == []
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == merged["subtitle_tracks"][0]["cues"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["subtitle_tracks"] == []
+
+    # Repeated undo/redo follows restored snapshots, including after a render.
+    for expected in (1, 2, 1):
+        response = state.client.post(base + "/timeline/undo", json={})
+        assert response.status_code == 200, response.text
+        assert len(state.client.get(base).json()["subtitle_tracks"][0]["cues"]) == expected
+    assert state.client.get(base).json()["task"]["can_undo"] is False
+    for expected in (2, 1, 0):
+        response = state.client.post(base + "/timeline/redo", json={})
+        assert response.status_code == 200, response.text
+        tracks = state.client.get(base).json()["subtitle_tracks"]
+        assert (len(tracks[0]["cues"]) if tracks else 0) == expected
+    assert state.client.get(base).json()["task"]["can_redo"] is False
+
+
+def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(person_render_edit_state):
+    state=person_render_edit_state
+    base=f"/api/creation-tasks/{state.task.id}"
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    track=SubtitleTrack(id="style-english",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"enabled":False},cues=[ProductionSubtitleCue(id="caption",source_cue_id=None,
+        text="Real local subtitles",start_seconds=0,end_seconds=4)],generation_method="timeline",model_id=None,
+        artifact_ref="artifacts/style.srt",transform_id="style-transform",status="valid")
+    state.production.create_subtitle_track(track)
+    before=state.client.get(base).json()
+    missing=state.client.post(base+'/edits/exact/preview',json={"operation_type":"ConfigureSubtitleTrack","style":{"font_family":"Missing Subtitle Family 123456"}})
+    assert missing.status_code==422,missing.text
+    preview=state.client.post(base+'/edits/preview',json={"context_stage":"subtitle_cover","raw_command":"字幕字号改成64","selected_object_refs":[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    image_url=preview.json()['proposal']['preview']['after']['image_url']
+    image=state.client.get(image_url)
+    assert image.status_code==200 and image.headers['content-type']=='image/png'
+    assert image.content.startswith(b'\x89PNG')
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['style']=={"enabled":False,"font_size":64}
+    assert after['subtitle_tracks'][0]['cues']==before['subtitle_tracks'][0]['cues']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['style']==track.style
+
+
+@pytest.mark.parametrize('ratio', ['16:9','1:1'])
+def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_edit_state,monkeypatch,ratio):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    seen=[]
+    def local_preview(*args,**kwargs):
+        seen.append(kwargs['aspect_ratio'])
+        return SimpleNamespace(id='canvas-preview',logical_ref='artifacts/canvas.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',local_preview)
+    from copy import deepcopy
+    locked=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    locked['clips'][0]['locked']=True
+    with monkeypatch.context() as local:
+        local.setattr(state.production,'get_creation_task_montage_plan',lambda *args:locked)
+        rejected=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio})
+        assert rejected.status_code==422 and '解锁' in rejected.text
+        assert seen==[]
+    preview=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio,'fit_mode':'fit'})
+    assert preview.status_code==200,preview.text
+    assert seen==['9:16',ratio]
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['montage']['aspect_ratio']==ratio
+    assert all(clip['fit_mode']=='fit' for clip in after['montage']['clips'])
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
+
+
+def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    selected=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(id='geometry',logical_ref='artifacts/geometry.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'context_stage':'montage','raw_command':'当前镜头缩小到0.8倍','selected_object_refs':[f"clip:{selected['id']}"]})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['proposal']['operation']['payload']['effects']['zoom']==.8
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    confirm=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirm.status_code==200,confirm.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][0]['visual_effects']['zoom']==.8
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+
+
+def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_state,monkeypatch):
+    from copy import deepcopy
+    state=person_render_edit_state
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    plan=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    plan['clips'][0]['source_start_seconds']=1
+    plan['clips'][0]['source_end_seconds']=3
+    monkeypatch.setattr(state.production,'get_creation_task_montage_plan',lambda *args:plan)
+    ranges=[]
+    def capture(*args,**kwargs):
+        target=args[5];ranges.append((target.source_start_seconds,target.source_end_seconds))
+        return SimpleNamespace(id='geometry-person',logical_ref='artifacts/geometry-person.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',capture)
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/visual/preview',json={
+        'base_version_id':version.id,'clip_ids':[plan['clips'][0]['id']],'effects':{'zoom':.8}})
+    assert response.status_code==200,response.text
+    assert ranges==[(1,3),(1,3)]
+
+
+def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    limits=[]
+    def publish(*args,**kwargs):
+        limits.append(kwargs['max_seconds'])
+        return SimpleNamespace(id='fade',logical_ref='artifacts/fade.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    invalid=state.client.post(base+'/visual/preview',json={'base_version_id':before['task']['current_timeline_version_id'],
+        'clip_ids':[c['id'] for c in before['montage']['clips']],'effects':{'fade_in_seconds':5,'fade_out_seconds':5}})
+    assert invalid.status_code==422 and not limits
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert preview.status_code==200,preview.text
+    assert limits==[None,None]
+    assert '完整区间' in preview.json()['proposal']['preview']['after']['detail']
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][0]['visual_effects']['fade_out_seconds']==.4
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+
+
+def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
+    frames=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
+    from app.schemas import CreationTaskMontageClipUpdateRequest
+    plan=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
+        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
+    assert plan.clips[0].visual_effects==plan.clips[1].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
+    assert plan.clips[0].fade_envelope_duration_frames==plan.clips[1].fade_envelope_duration_frames==frames
+    assert plan.clips[0].fade_envelope_offset_frames==0
+    assert plan.clips[1].fade_envelope_offset_frames==6
+
+
+def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();target=before['montage']['clips'][1]
+    calls=[]
+    def publish(*args,**kwargs):
+        calls.append(kwargs['parameters'])
+        return SimpleNamespace(id='transition',logical_ref='artifacts/transition.mp4')
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
+        publish=publish,validate_material_use=lambda *args:None))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头叠化0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{target['id']}"]})
+    assert result.status_code==200,result.text
+    assert len(calls)==2
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    result=state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm')
+    assert result.status_code==200,result.text
+    after=state.client.get(base).json()
+    assert after['montage']['clips'][1]['transition_in_seconds']==.4
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+    result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':0})
+    assert result.status_code==200,result.text
+    assert state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    state.client.post(base+'/edits/exact',json={'operation_type':'SetClipLock','clip_id':before['montage']['clips'][0]['id'],'locked':True})
+    count=len(calls)
+    result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':.4})
+    assert result.status_code==409 and len(calls)==count
+
+
+def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='title',logical_ref='artifacts/title.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加标题“本地 / Local”','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['montage']['graphic_overlays'][0]['text']=='本地 / Local'
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips']==before['montage']['clips']
+    assert [t['cues'] for t in after['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==after['montage']['graphic_overlays']
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'标题1删除','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+
+
+def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_state,monkeypatch,tmp_path):
+    import io
+    from PIL import Image
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    content=io.BytesIO();Image.new('RGBA',(80,40),(255,0,0,128)).save(content,format='PNG')
+    imported=state.client.post(base+'/graphics/import',files={'image':('logo.png',content.getvalue(),'image/png')})
+    assert imported.status_code==200,imported.text
+    source=imported.json()
+    assert source['width']==80 and source['height']==40
+    records=state.client.get(base+'/graphics/sources').json()
+    assert records[0]['source_ref']==source['source_ref']
+    read=state.client.get(base+'/graphics/source/'+source['artifact_id'])
+    assert read.status_code==200
+    assert Image.open(io.BytesIO(read.content)).getpixel((0,0))==(255,0,0,128)
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='image',logical_ref='artifacts/image.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加图片“logo.png”','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    result=state.client.get(base).json()['montage']['graphic_overlays'][0]
+    assert result['kind']=='image' and result['source_ref']==source['source_ref']
+    contextual=state.client.post(base+'/edits/preview',json={'raw_command':'当前图片不透明度改为50%','context_stage':'montage','selected_object_refs':[f"overlay:{result['id']}"]})
+    assert contextual.status_code==200,contextual.text
+    assert contextual.json()['proposal']['target_refs']==[f"overlay:{result['id']}"]
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+    invalid=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':'/etc/passwd'}})
+    assert invalid.status_code==422 and '当前任务' in invalid.text
+    foreign=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':'artifacts/other-task/private.png'}})
+    assert foreign.status_code==422
+    from app.production import CreationTask
+    from dataclasses import replace
+    other_plan=replace(state.production.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
+    other=CreationTask(id='other-image-task',workspace_id=state.workspace_id,
+        plan_id=other_plan.id,name='Other task',scenario=state.task.scenario)
+    state.production.confirm_creation_plan(other_plan,other)
+    other_import=state.client.post(f'/api/creation-tasks/{other.id}/graphics/import',files={'image':('other.png',content.getvalue(),'image/png')})
+    assert other_import.status_code==200,other_import.text
+    other_source=other_import.json()
+    assert state.client.get(base+'/graphics/source/'+other_source['artifact_id']).status_code==404
+    foreign=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
+        'graphic_overlay':{**result,'source_ref':other_source['source_ref']}})
+    assert foreign.status_code==422
+    assert state.client.post(base+'/graphics/import',files={'image':('bad.svg',b'<svg/>','image/svg+xml')}).status_code==422
+
+
+def test_graphic_import_corrects_photo_orientation_and_drops_metadata(person_render_edit_state,monkeypatch,tmp_path):
+    import io
+    from PIL import Image
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    image=Image.new('RGB',(20,10),(0,120,200));exif=Image.Exif();exif[274]=6
+    data=io.BytesIO();image.save(data,format='JPEG',exif=exif)
+    response=state.client.post(base+'/graphics/import',files={'image':('portrait.jpg',data.getvalue(),'image/jpeg')})
+    assert response.status_code==200,response.text
+    source=response.json();assert (source['width'],source['height'])==(10,20)
+    loaded=Image.open(io.BytesIO(state.client.get(base+'/graphics/source/'+source['artifact_id']).content))
+    assert loaded.size==(10,20) and not loaded.getexif()
+
+
+def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip_id=before['montage']['clips'][0]['id'];calls=[]
+    def publish(*args,**kwargs):
+        calls.append(True);return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f'clip:{clip_id}']})
+    assert preview('亮一点，加上闪电特效').status_code==422
+    assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    result=preview('当前镜头缩小到0.8倍，向右移动5%，曝光改为0.5，配音不变')
+    assert result.status_code==200,result.text
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/edits/'+result.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['task']['timeline_sequence']==before['task']['timeline_sequence']+1
+    effect=after['montage']['clips'][0]['visual_effects']
+    assert effect['zoom']==.8 and effect['offset_x']==.05 and effect['exposure']==.5
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+
+
+def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0];calls=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    def publish(*args,**kwargs):
+        calls.append(True);return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    bad=preview('当前镜头亮一点，同时配音小一点，然后增加闪电特效')
+    assert bad.status_code==422,bad.text
+    assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    result=preview('当前镜头亮一点，同时配音小一点')
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert proposal['operation']['operation_type']=='EditCompoundTimeline'
+    assert len(proposal['target_refs'])==2
+    stale=preview('当前镜头暗一点，同时配音大一点').json()['proposal']
+    assert state.client.post(base+'/edits/'+proposal['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['task']['timeline_sequence']==before['task']['timeline_sequence']+1
+    assert after['montage']['clips'][0]['visual_effects']['exposure']==.25
+    assert after['montage']['audio_timeline']['tracks'][0]['gain_db']==-3
+    assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
+    assert state.client.post(base+'/edits/'+stale['id']+'/confirm').status_code==409
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert restored['montage']['clips']==before['montage']['clips']
+    assert restored['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['audio_timeline']==after['montage']['audio_timeline']
+
+
+def test_cross_object_compiler_keeps_context_and_lock_boundaries(person_render_edit_state):
+    from copy import deepcopy
+    from app.compound_edits import compile_compound_edit
+    state=person_render_edit_state;plan=deepcopy(state.montage)
+    audio=main_module._effective_audio_timeline(plan);refs=[f'clip:{plan.clips[0].id}']
+    changed,steps=compile_compound_edit('当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒',plan,audio,refs,None,None)
+    assert changed.audio_timeline.tracks[0].clips[0].fade_out_ms==400
+    assert changed.clips[0].visual_effects.get('fade_out_seconds',0)==0
+    assert len(steps)==3 and steps[-1]['target_ref'].startswith('audio:')
+    assert compile_compound_edit('当前配音音量降低3分贝，然后淡出0.4秒',plan,audio,['audio:'+audio.tracks[0].clips[0].id],None,None) is None
+    with pytest.raises(ValueError,match='冲突'):
+        compile_compound_edit('当前镜头亮一点，同时配音小一点，配音不变',plan,audio,refs,None,None)
+    with pytest.raises(ValueError,match='没有音频'):
+        compile_compound_edit('当前镜头亮一点，同时音乐小一点',plan,audio,refs,None,None)
+    plan.clips[0].locked=True
+    with pytest.raises(ValueError,match='锁定'):
+        compile_compound_edit('配音小一点，同时当前镜头亮一点',plan,audio,refs,None,None)
+    assert audio.tracks[0].gain_db==0
+
+
+def test_compound_partial_selection_recompiles_from_base_and_preserves_context(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='partial',logical_ref='artifacts/partial.mp4'))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert result.status_code==200,result.text
+    first=result.json()['proposal'];route=base+'/edits/'+first['id']+'/selection/preview'
+    for invalid in ([],[99],[-1]):
+        assert state.client.post(route,json={'included_step_indices':invalid}).status_code==422
+    partial=state.client.post(route,json={'included_step_indices':[0,2]})
+    assert partial.status_code==200,partial.text
+    proposal=partial.json()['proposal'];data=proposal['operation']['payload']
+    assert [s['enabled'] for s in data['steps']]==[True,False,True]
+    assert data['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
+    assert data['audio_timeline']['tracks'][0]['clips'][0]['fade_out_ms']==400
+    assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    restored=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'raw_command':'恢复第2项'})
+    assert restored.status_code==200
+    assert restored.json()['proposal']['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==-3
+    assert state.client.post(base+'/edits/'+proposal['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['montage']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
+    assert state.client.post(route,json={'included_step_indices':[0]}).status_code==409
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['audio_timeline']==before['montage']['audio_timeline']
+
+
+@pytest.mark.parametrize("bilingual", [False, True])
+def test_local_subtitle_alignment_preview_confirm_undo(person_render_edit_state, monkeypatch, bilingual):
+    state=person_render_edit_state; base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="alignment-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="alignment-cue",source_cue_id=None,text="Local video.",start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/old.srt",transform_id="old",status="valid"))
+    if bilingual:
+        source=state.production.list_subtitle_tracks(state.workspace_id,state.task.id,timeline_version_id=version.id)[0]
+        state.production.create_subtitle_track(replace(source,id="alignment-translation",language="zh-CN",source_language="en-US",generation_method="translation",
+            cues=[ProductionSubtitleCue(id="translated-cue",source_cue_id="alignment-cue",text="本地视频。",start_seconds=0,end_seconds=4)]))
+    command='按配音校准双语字幕' if bilingual else '按配音校准英文字幕'
+    before=state.client.get(base).json();captured=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(publish=lambda *a,**k:SimpleNamespace(logical_ref='artifacts/analysis.wav')))
+    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[{"tokens":[
+        {"text":"Local", "offsets":{"from":400,"to":900},"p":.9},
+        {"text":" video", "offsets":{"from":1000,"to":2000},"p":.9}]}]})
+    def publish(workspace,task,version,plan,tracks,**kwargs):
+        captured.append(tracks);return SimpleNamespace(id='alignment-preview',logical_ref='artifacts/preview.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    main_module.settings.effective_temporary_root_path.mkdir(exist_ok=True)
+    monkeypatch.setattr(main_module.artifact_store, 'resolve_file', lambda ref: Path('/unused-analysis.wav'))
+    result=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]})
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert proposal['operation']['operation_type']=='AlignSubtitleTiming'
+    assert captured[-1][0].cues[0].start_seconds==.4
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    stale=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]}).json()['proposal']
+    confirm=state.client.post(base+'/edits/'+proposal['id']+'/confirm',json={})
+    assert confirm.status_code==200,confirm.text
+    assert state.client.post(base+'/edits/'+stale['id']+'/confirm',json={}).status_code==409
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
+    assert after['subtitle_tracks'][0]['cues'][0]['text']=='Local video.'
+    if bilingual:
+        translation=next(track for track in after['subtitle_tracks'] if track['source_language']=='en-US')
+        assert translation['cues'][0]['text']=='本地视频。'
+        assert translation['cues'][0]['start_seconds']==.4
+        assert len(proposal['target_refs'])==2
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert all(track['cues'][0]['start_seconds']==0 for track in state.client.get(base).json()['subtitle_tracks'])
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
+    current=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[]})
+    failed=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]})
+    assert failed.status_code==422
+    assert state.client.get(base).json()['task']['current_timeline_version_id']==current['task']['current_timeline_version_id']
+
+
+def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    state.production.create_subtitle_track(SubtitleTrack(id="compound-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="compound-cue",source_cue_id=None,text="Local video",start_seconds=0,end_seconds=4)],
+        generation_method="timeline",model_id=None,artifact_ref="artifacts/compound.srt",transform_id="compound-transform",status="valid"))
+    before=state.client.get(base).json();clip=before['montage']['clips'][0];captured=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    def publish(workspace,task,version,plan,tracks,**kwargs):
+        captured.append([track.style for track in tracks]);return SimpleNamespace(id='subtitle-compound',logical_ref='artifacts/compound.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时字幕字号改为64，配音小一点','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert result.status_code==200,result.text
+    proposal=result.json()['proposal'];assert captured[-1][0]['font_size']==64
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    selected=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'raw_command':'只保留字幕修改'})
+    assert selected.status_code==200,selected.text
+    partial=selected.json()['proposal'];assert partial['target_refs']==['subtitle:all']
+    assert state.client.post(base+'/edits/'+partial['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    assert after['subtitle_tracks'][0]['style']['font_size']==64
+    assert [track['cues'] for track in after['subtitle_tracks']]==[track['cues'] for track in before['subtitle_tracks']]
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert [track['style'] for track in restored['subtitle_tracks']]==[track['style'] for track in before['subtitle_tracks']]
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['subtitle_tracks'][0]['style']['font_size']==64
+
+
+def test_compound_caption_text_time_and_translation_boundary(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state;base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    zh=SubtitleTrack(id='compound-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},cues=[ProductionSubtitleCue(id='compound-source',source_cue_id=None,text='本地视频',start_seconds=0,end_seconds=4)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id='compound-en',language='en-US',source_language='zh-CN',
+        cues=[replace(zh.cues[0],id='compound-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='text-preview',logical_ref='artifacts/text-preview.mp4'))
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    assert preview('当前镜头亮一点，同时字幕1改成“歧义字幕”').status_code==422
+    assert preview('当前镜头亮一点，同时英文字幕1显示0到99秒').status_code==422
+    response=preview('当前镜头亮一点，同时英文字幕1改成“Local, 然后更清楚”，英文字幕1显示0.2到3.5秒')
+    assert response.status_code==200,response.text
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json();track=next(t for t in after['subtitle_tracks'] if t['language']=='en-US')
+    assert track['cues'][0]['text']=='Local, 然后更清楚'
+    assert track['cues'][0]['start_seconds']==.2 and track['cues'][0]['end_seconds']==3.5
+    assert track['artifact_ref']!='artifacts/source.srt'
+    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert [t['cues'] for t in state.client.get(base).json()['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
+    response=preview('当前镜头亮一点，同时中文字幕1改成“真实修改”')
+    assert response.status_code==200,response.text
+    assert any('英文翻译' in effect for effect in response.json()['proposal']['external_effects'])
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    assert [t['language'] for t in state.client.get(base).json()['subtitle_tracks']]==['zh-CN']
+
+
+@pytest.mark.parametrize('command', ['不要重新配音', '读慢一点，同时字幕变黄', '重新配音，开心一点', '读快一点，同时读慢一点'])
+def test_narration_preview_rejects_unexecutable_whole_request(person_render_edit_state, command):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    response = state.client.post(base + '/edits/preview', json={
+        'raw_command': command, 'context_stage': 'narration',
+        'selected_object_refs': [f'narration:{state.montage.cues[0].narration_segment_id}'],
+    })
+    assert response.status_code in (409, 422), response.text
+    assert state.client.get(base).json() == before
+
+
+def test_narration_preview_explains_actual_tempo(person_render_edit_state):
+    state = person_render_edit_state
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': '这句重新配音，同时读慢一点', 'context_stage': 'narration',
+        'selected_object_refs': [f'narration:{state.montage.cues[0].narration_segment_id}'],
+    })
+    assert response.status_code == 200, response.text
+    assert '0.9 倍速' in response.json()['proposal']['summary']
+
+
+@pytest.mark.parametrize('command', ['不要重做口型', '人物更自然', '重做口型，同时字幕变黄'])
+def test_person_preview_rejects_partial_or_negated_request(person_render_edit_state, command):
+    state = person_render_edit_state
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': command, 'context_stage': 'review',
+        'selected_object_refs': ['clip:clip-person-target'],
+    })
+    assert response.status_code in (409, 422), response.text
+    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.provider.output_cache_keys == []
+
+
+def test_person_generation_reads_narration_language(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    original_get = state.production.get_narration_segment
+    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
+    captured = []
+    class RequestCaptured(Exception):
+        pass
+    def capture(**kwargs):
+        captured.append(kwargs['language'])
+        raise RequestCaptured()
+    monkeypatch.setattr(state.production, 'resolve_avatar_lipsync_request', capture)
+    with pytest.raises(RequestCaptured):
+        main_module._generate_creation_task_person_render_record(state.workspace_id, state.task.id,
+            main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id,
+                person_version=state.old_render.person_version, motion='natural', expression='neutral'))
+    assert captured == ['en']
+    assert state.provider.output_cache_keys == []
+
+
+def test_person_preview_rejects_unsupported_narration_language(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    original_get = state.production.get_narration_segment
+    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
+    response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
+        'raw_command': '这里只重做口型', 'context_stage': 'review',
+        'selected_object_refs': ['clip:clip-person-target'],
+    })
+    assert response.status_code == 503, response.text
+    assert response.json()['detail']['error'] == 'language_unavailable'
+    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.provider.output_cache_keys == []
+
+
+def test_person_reuse_requires_current_audio_lineage(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f'/api/creation-tasks/{state.task.id}'
+    command = {'raw_command': '这一段换成当前人物出镜', 'context_stage': 'review',
+               'selected_object_refs': ['clip:clip-person-target']}
+    # A legacy output without generation lineage is not proof of current audio.
+    legacy = state.client.post(base + '/edits/preview', json=command)
+    assert legacy.status_code == 200, legacy.text
+    assert 'reuse_person_render_id' not in legacy.json()['proposal']['operation']['payload']
+    generated = main_module._generate_creation_task_person_render_record(
+        state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+            narration_segment_id=state.montage.cues[0].narration_segment_id,
+            person_profile_id=state.old_render.person_profile_id,
+            person_version=state.old_render.person_version, motion='natural', expression='neutral'),
+        regeneration_token='lineage-test')
+    preview = state.client.post(base + '/edits/preview', json=command)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()['proposal']
+    assert proposal['operation']['payload']['reuse_person_render_id'] == generated.id
+    original_get = state.production.get_narration_segment
+    before = state.client.get(base).json()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(state.production, 'get_narration_segment', lambda *args:
+                       replace(original_get(*args), audio_reference='narration://artifact/replacement'))
+        changed = state.client.post(base + '/edits/preview', json=command)
+        assert changed.status_code == 200, changed.text
+        assert 'reuse_person_render_id' not in changed.json()['proposal']['operation']['payload']
+        rejected = state.client.post(base + f"/edits/{proposal['id']}/confirm")
+        assert rejected.status_code == 409, rejected.text
+        assert '配音已改变' in rejected.text
+    assert state.client.get(base).json()['montage'] == before['montage']
+    assert len(state.provider.output_cache_keys) == 1
+
+
+def test_person_lineage_requires_matching_language_and_success(person_render_edit_state):
+    state = person_render_edit_state
+    segment = state.production.get_narration_segment(state.workspace_id, state.task.id,
+                                                      state.montage.cues[0].narration_segment_id)
+    render = replace(state.old_render, artifact_ref='artifacts/test/person.mp4')
+    transform = SimpleNamespace(transform_type='person_render', status='succeeded',
+        input_digest=render.cache_key, output_refs=[render.artifact_ref],
+        input_refs=[segment.audio_reference], parameters={'language': segment.language})
+    assert main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': 'en'}
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': segment.language}
+    transform.status = 'failed'
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+
+
+@pytest.mark.parametrize('start', [0,1])
+def test_person_replacement_maps_narration_instead_of_broll_source(person_render_edit_state, start):
+    state=person_render_edit_state
+    target=state.montage.clips[0]
+    target.person_render_id=None
+    target.role='b_roll'
+    target.source_start_seconds=4+start
+    target.source_end_seconds=8
+    target.timeline_start_seconds=start
+    if start:
+        state.montage.clips.insert(0,replace(target,id='earlier-split',
+            source_start_seconds=4,source_end_seconds=5,timeline_start_seconds=0,timeline_end_seconds=1))
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    before=state.client.get(base).json()
+    preview=state.client.post(base+'/edits/preview',json={
+        'raw_command':'这一段换成当前人物出镜','context_stage':'review',
+        'selected_object_refs':['clip:clip-person-target']})
+    assert preview.status_code==200,preview.text
+    proposal=preview.json()['proposal']
+    assert proposal['operation']['payload']['source_start_seconds']==start
+    assert proposal['operation']['payload']['source_end_seconds']==4
+    confirmed=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    clip=next(c for c in after['montage']['clips'] if c['id']==target.id)
+    assert (clip['source_start_seconds'],clip['source_end_seconds'])==(start,4)
+    assert (clip['timeline_start_seconds'],clip['timeline_end_seconds'])==(start,4)
+    stored=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
+    assert creation_task_montage_plan_from_payload(stored).narration_audio_path==state.montage.narration_audio_path
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    clip=next(c for c in restored['montage']['clips'] if c['id']==target.id)
+    assert (clip['source_start_seconds'],clip['source_end_seconds'])==(4+start,8)
+    assert clip['person_render_id'] is None
+
+
+def test_person_preview_respects_locked_clip_before_generation(person_render_edit_state):
+    state=person_render_edit_state
+    state.montage.clips[0].locked=True
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
+        'raw_command':'这里只重做口型','context_stage':'review',
+        'selected_object_refs':['clip:clip-person-target']})
+    assert response.status_code==409,response.text
+    assert '锁定' in response.text
+    assert state.provider.output_cache_keys==[]
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+@pytest.mark.parametrize("source_end", [4, 6])
+def test_extract_original_audio_real_media_preview_confirm_undo(person_render_edit_state, source_end):
+    import subprocess
+    import io
+    import wave
+    import array
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    clip.role='b_roll'
+    clip.source_start_seconds=2
+    clip.source_end_seconds=source_end
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
+        '-f','lavfi','-i','aevalsrc=if(lt(t\\,2)\\,0\\,0.2*sin(2*PI*660*t)):s=48000:d=8',
+        '-c:v','libx264','-c:a','aac','-shortest',str(source)],check=True)
+    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    command={'raw_command':'提取当前镜头原声','context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']}
+    preview=state.client.post(base+'/edits/preview',json=command)
+    assert preview.status_code==200,preview.text
+    proposal=preview.json()['proposal']
+    assert '混合' in proposal['summary']
+    response=state.client.get(proposal['preview']['after']['audio_url'])
+    assert response.status_code==200
+    with wave.open(io.BytesIO(response.content)) as audio:
+        audio.setpos(round(.25*audio.getframerate()))
+        values=array.array('h',audio.readframes(round(.5*audio.getframerate())))
+        assert max(abs(v) for v in values)>1000  # cropped first 2 seconds of silence away
+    before=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
+    assert creation_task_montage_plan_from_payload(before).audio_timeline is None
+    confirmed=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code==200,confirmed.text
+    updated=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    original=next(t for t in updated.audio_timeline.tracks if t.role=='original')
+    assert len(original.clips)==1
+    assert (original.clips[0].timeline_start_ms,original.clips[0].source_end_ms)==(0,4000)
+    assert updated.narration_audio_path==state.montage.narration_audio_path
+    duplicate=state.client.post(base+'/edits/preview',json=command)
+    assert duplicate.status_code==409 and '已有原声' in duplicate.text
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
+    assert not any(t.clips for t in main_module._effective_audio_timeline(restored).tracks if t.role=='original')
+
+
+def test_extract_original_audio_rejects_silent_video_without_timeline_change(person_render_edit_state):
+    import subprocess
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
+        '-an','-c:v','libx264',str(source)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    before=state.client.get(base).json()
+    response=state.client.post(base+'/edits/preview',json={'raw_command':'提取原声',
+        'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==422 and '没有可用音轨' in response.text
+    assert state.client.get(base).json()['montage']==before['montage']
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+@pytest.mark.parametrize('person,locked', [(True,False),(False,True)])
+def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_edit_state,person,locked):
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    if not person: clip.person_render_id=None
+    clip.locked=locked
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
+        'raw_command':'保留这个镜头的原声','context_stage':'review','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==409,response.text
+    assert ('生成口型' if person else '锁定') in response.text
+    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
+
+def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
+    import subprocess
+    state=person_render_edit_state
+    clip=state.montage.clips[0]
+    clip.person_render_id=None
+    clip.role='b_roll'
+    source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=blue:size=64x64:rate=30:duration=8',
+        '-an','-c:v','libx264',str(source)],check=True)
+    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+        'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    base=f'/api/creation-tasks/{state.task.id}'
+    response=state.client.post(base+'/edits/preview',json={'raw_command':'剪掉当前镜头停顿',
+        'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
+    assert response.status_code==200,response.text
+    proposal=response.json()['proposal']
+    assert proposal['operation']['operation_type']=='RemoveSilence'
+    cuts=proposal['operation']['payload']['removed_ranges_ms']
+    assert len(cuts)==1
+    for side in ('before','after'):
+        media=state.client.get(proposal['preview'][side]['video_url'])
+        assert media.status_code==200 and len(media.content)>1000
+        if side=='after':
+            preview_after=source.parent/'silence-preview.mp4'
+            preview_after.write_bytes(media.content)
+    before=state.client.get(base).json()
+    assert before['montage']['duration_seconds']==8
+    result=state.client.post(base+f"/edits/{proposal['id']}/confirm")
+    assert result.status_code==200,result.text
+    after=state.client.get(base).json()
+    expected=8-(cuts[0][1]-cuts[0][0])/1000
+    assert after['montage']['duration_seconds']==expected
+    assert len(after['montage']['clips'])==3
+    assert after['subtitle_tracks']==before['subtitle_tracks']==[]
+    rendered=state.client.post(base+'/montage/render',json={})
+    assert rendered.status_code==200,rendered.text
+    media=state.client.get(base+'/output')
+    assert media.status_code==200 and len(media.content)>1000
+    output=source.parent/'silence-result.mp4'
+    output.write_bytes(media.content)
+    import json
+    probe=json.loads(subprocess.run(['ffprobe','-v','error','-count_frames','-select_streams','v:0',
+        '-show_entries','stream=nb_read_frames','-of','json',str(output)],capture_output=True,text=True,check=True).stdout)
+    assert int(probe['streams'][0]['nb_read_frames'])==round(expected*30)
+    def pixels(path):
+        return subprocess.run(['ffmpeg','-v','error','-i',str(path),'-vf','scale=12:20:flags=area',
+            '-pix_fmt','rgb24','-f','rawvideo','-'],capture_output=True,check=True).stdout
+    assert pixels(preview_after)==pixels(output)
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert restored['montage']['duration_seconds']==8
+    assert restored['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['duration_seconds']==expected
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+
+
+@pytest.mark.parametrize('command,expected', [('这句字幕提前0.2秒', (.8,2.8)), ('当前字幕延后300毫秒', (1.3,3.3))])
+def test_relative_subtitle_shift_previews_confirms_and_undoes(person_render_edit_state, command, expected):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    track=SubtitleTrack(id='shift-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},
+        cues=[ProductionSubtitleCue(id='shift-cue',source_cue_id=None,text='移动字幕',start_seconds=1,end_seconds=3)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/shift.srt',transform_id='shift-fixture',status='valid')
+    state.production.create_subtitle_track(track)
+    before=state.client.get(base).json()
+    response=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'subtitle_cover',
+        'selected_object_refs':['cue:shift-cue','subtitle-track:shift-zh']})
+    assert response.status_code==200,response.text
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    confirmed=state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    after=state.client.get(base).json()
+    cue=after['subtitle_tracks'][0]['cues'][0]
+    assert (cue['start_seconds'],cue['end_seconds'])==expected
+    assert cue['text']=='移动字幕'
+    assert {k:v for k,v in after['narration'].items() if k != 'task'} == {k:v for k,v in before['narration'].items() if k != 'task'}
+    assert after['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert restored['subtitle_tracks'][0]['cues']==before['subtitle_tracks'][0]['cues']
+    current_track=restored['subtitle_tracks'][0]
+    for invalid in ['这句字幕提前2秒','这句字幕延后99秒']:
+        rejected=state.client.post(base+'/edits/preview',json={'raw_command':invalid,'context_stage':'subtitle_cover',
+            'selected_object_refs':[f"cue:{current_track['cues'][0]['id']}",f"subtitle-track:{current_track['id']}"]})
+        assert rejected.status_code==422,rejected.text
+    assert state.client.get(base).json()['task']['current_timeline_version_id']==restored['task']['current_timeline_version_id']
+    state.production.create_subtitle_track(replace(track,id='shift-en',language='en-US',source_language='zh-CN',
+        timeline_version_id=restored['task']['current_timeline_version_id'],generation_method='translation'))
+    ambiguous=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'subtitle_cover',
+        'selected_object_refs':['cue:shift-cue']})
+    assert ambiguous.status_code==409,ambiguous.text
+    assert '语言轨' in ambiguous.text
+
+
+def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    zh=SubtitleTrack(id='shift-compound-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},
+        cues=[ProductionSubtitleCue(id='shift-source',source_cue_id=None,text='本地视频',start_seconds=1,end_seconds=3)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id='shift-compound-en',language='en-US',source_language='zh-CN',
+        cues=[replace(zh.cues[0],id='shift-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
+    before=state.client.get(base).json();clip=before['montage']['clips'][0]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='shift-preview',logical_ref='artifacts/shift-preview.mp4'))
+    def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
+    for invalid in ['当前镜头亮一点，同时字幕1提前0.2秒','当前镜头亮一点，同时英文字幕1提前2秒']:
+        response=preview(invalid)
+        assert response.status_code==422,response.text
+        assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    response=preview('当前镜头亮一点，同时英文字幕1提前0.2秒，然后英文字幕1延后100毫秒')
+    assert response.status_code==200,response.text
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    proposal=response.json()['proposal']
+    selected=state.client.post(base+'/edits/'+proposal['id']+'/selection/preview',json={'included_step_indices':[0,2]})
+    assert selected.status_code==200,selected.text
+    assert state.client.post(base+'/edits/'+selected.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    english=next(t for t in after['subtitle_tracks'] if t['language']=='en-US')
+    assert (english['cues'][0]['start_seconds'],english['cues'][0]['end_seconds'])==(1.1,3.1)
+    chinese=next(t for t in after['subtitle_tracks'] if t['language']=='zh-CN')
+    assert chinese['cues']==next(t['cues'] for t in before['subtitle_tracks'] if t['language']=='zh-CN')
+    assert after['montage']['clips'][0]['visual_effects']!=before['montage']['clips'][0]['visual_effects']
+    assert after['narration']['audio_reference']==before['narration']['audio_reference']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    assert [t['cues'] for t in restored['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
+    assert restored['montage']['clips']==before['montage']['clips']
+
+
+@pytest.mark.parametrize('stage,command,expected',[
+    ('montage','英文字幕2延后300毫秒',(4.3,5.3,'Second cue')),
+    ('subtitle_cover','英文字幕 2 延后 300 毫秒',(4.3,5.3,'Second cue')),
+    ('review','英文字幕2改成“Keep spaces, and punctuation.”',(4,5,'Keep spaces, and punctuation.')),
+])
+def test_indexed_subtitle_without_selection_previews_confirms_and_undoes(person_render_edit_state,monkeypatch,stage,command,expected):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    zh=SubtitleTrack(id='indexed-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+        language='zh-CN',source_language=None,style={},
+        cues=[ProductionSubtitleCue(id='indexed-first',source_cue_id=None,text='第一句',start_seconds=1,end_seconds=3),
+              ProductionSubtitleCue(id='indexed-second',source_cue_id=None,text='第二句',start_seconds=4,end_seconds=5)],
+        generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
+    state.production.create_subtitle_track(zh)
+    state.production.create_subtitle_track(replace(zh,id='indexed-en',language='en-US',source_language='zh-CN',
+        cues=[replace(cue,id='en-'+cue.id,source_cue_id=cue.id,text=text) for cue,text in zip(zh.cues,['First cue','Second cue'])],generation_method='translation'))
+    before=state.client.get(base).json()
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args:None))
+    previews=[]
+    def publish(*args,**kwargs):
+        previews.append(args[4])
+        return SimpleNamespace(id='indexed-preview',logical_ref='artifacts/indexed-preview.mp4')
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    def preview(raw):return state.client.post(base+'/edits/preview',json={'raw_command':raw,'context_stage':stage,'selected_object_refs':[]})
+    for invalid in ['字幕2延后300毫秒','英文字幕99延后300毫秒','英文字幕2提前9秒','英文字幕2提前2秒','英文字幕2延后300毫秒，字幕不变']:
+        rejected=preview(invalid)
+        assert rejected.status_code==422,rejected.text
+        assert state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
+    response=preview(command)
+    assert response.status_code==200,response.text
+    assert len(previews)==2
+    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
+    preview_cue=next(t for t in previews[-1] if t.language=='en-US').cues[1]
+    assert (preview_cue.start_seconds,preview_cue.end_seconds,preview_cue.text)==expected
+    assert state.client.post(base+'/edits/'+response.json()['proposal']['id']+'/confirm').status_code==200
+    after=state.client.get(base).json()
+    english=next(t for t in after['subtitle_tracks'] if t['language']=='en-US')
+    cue=english['cues'][1]
+    assert (cue['start_seconds'],cue['end_seconds'],cue['text'])==expected
+    assert after['montage']['clips']==before['montage']['clips']
+    assert after['narration']['audio_reference']==before['narration']['audio_reference']
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    restored=state.client.get(base).json()
+    for language in ['zh-CN','en-US']:
+        assert next(t['cues'] for t in restored['subtitle_tracks'] if t['language']==language)==next(t['cues'] for t in before['subtitle_tracks'] if t['language']==language)
+
+
+@pytest.mark.parametrize('mode,notice',[('unavailable','未就绪'),('failed','计算失败'),('invalid_count','数量不符'),('missing_index','该片段缺少'),('ready',None)])
+def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notice):
+    from app.visual_semantics import VisualSemanticError
+    script=CreationTaskScript(id='diagnostic-script',workspace_id='workspace_a',task_id='diagnostic-task',run_id='run',topic_id='topic',
+        title='Retrieval diagnostic',language='en-US',selection_status='confirmed',sections=[CreationTaskScriptSection(
+            id='section',title='Intro',content='This is a narration.',visual_prompt='An underwater coral reef',evidence_reference_ids=[])])
+    asset=_asset(tmp_path)
+    segment=replace(asset.segments[0],description='A computer keyboard',transcript='',end_seconds=20)
+    def embed(texts):
+        if mode=='failed':raise VisualSemanticError('worker failed')
+        return [] if mode=='invalid_count' else [[1.0,0.0] for _ in texts]
+    provider=SimpleNamespace(ready=mode!='unavailable',model_id='test-local',embed_texts=embed)
+    planner=MontagePlanner(semantic_provider=provider,visual_feature_loader=lambda *_:None if mode=='missing_index' else [1.0,0.0])
+    plan=planner.build_for_creation_task(workspace_id='workspace_a',task_id='diagnostic-task',script=script,
+        profile=ProductionProfile(workspace_id='workspace_a'),assets=[replace(asset,segments=[segment])],
+        media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+    assert plan.clips[0].needs_confirmation is True
+    reasons=plan.clips[0].match_reasons
+    if notice:assert any(notice in reason and '仅按素材文字与时长推荐' in reason for reason in reasons)
+    else:assert not any('仅按素材文字与时长推荐' in reason for reason in reasons)
+
+
+@pytest.mark.parametrize('rights,brand',[(False,False),(False,True),(True,False)])
+def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,rights,brand):
+    script=CreationTaskScript(id='user-material-script',workspace_id='workspace_a',task_id='user-material-task',run_id='run',topic_id='topic',
+        title='User material',language='zh-CN',selection_status='confirmed',sections=[CreationTaskScriptSection(
+            id='section',title='演示',content='演示电脑操作。',visual_prompt='电脑打字画面',evidence_reference_ids=[])])
+    asset=_asset(tmp_path)
+    asset=replace(asset,segments=[replace(asset.segments[0],end_seconds=20)])
+    asset=ProductionRepository._asset_from_payload({**asdict(asset),"rights_confirmed":rights,"brand_safe":brand})
+    plan=MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+        profile=ProductionProfile(workspace_id='workspace_a'),assets=[asset],
+        media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+    assert plan.clips[0].asset_id==asset.id
+    # Removing obsolete proof flags must not remove explicit exclusion or review.
+    for excluded in [replace(asset,review_status='rejected'),replace(asset,usage_role='exclude',segments=[replace(asset.segments[0],usage_role='exclude')])]:
+        with pytest.raises(ValueError,match='可用素材库'):
+            MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+                profile=ProductionProfile(workspace_id='workspace_a'),assets=[excluded],
+                media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
+
+
+def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    monkeypatch.setattr(main_module.settings,'video_inbox_path',str(state.production.video_library_path),raising=False)
+    asset=state.production.list_assets(state.workspace_id)[0]
+    base=f'/api/production/materials/{asset.id}'
+    response=state.client.put(base+'/use-state',json={'use_state':'reference_only'})
+    assert response.status_code==200,response.text
+    assert response.json()['use_state']=='reference_only'
+    assert 'rights_confirmed' not in response.json() and 'brand_safe' not in response.json()
+    assert state.production.get_asset(state.workspace_id,asset.id).use_state=='reference_only'
+    state.montage.clips[0].person_render_id=None
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    blocked=state.client.post(f'/api/creation-tasks/{state.task.id}/montage/render',json={})
+    assert blocked.status_code==409,blocked.text
+    assert '使用状态' in blocked.text
+    assert state.client.put(base+'/use-state',json={'use_state':'unknown'}).status_code==422
+    assert state.client.put(base+'/review',json={'review_status':'approved','usage_role':'b_roll','rights_confirmed':True}).status_code==422
+    assert state.client.put(base+'/use-state',json={'use_state':'available'}).status_code==200

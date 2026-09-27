@@ -28,8 +28,8 @@ describe("PublishingWorkspace", () => {
     expect(screen.getAllByText("需要处理").length).toBeGreaterThan(0);
     expect(screen.getByText("暂时不能生成配音")).toBeInTheDocument();
     expect(screen.queryByText("缺少已授权声音")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /打开创作任务/ })).toHaveAttribute("href", "/tasks/task-1");
-    expect(screen.getByText(/不显示虚构播放量、点赞量或发布成功数/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /打开任务/ })).toHaveAttribute("href", "/tasks/task-1");
+    expect(screen.getByText(/暂不支持发布/)).toBeInTheDocument();
     expect(screen.queryByText("已发布", { exact: true })).not.toBeInTheDocument();
   });
 
@@ -39,5 +39,7 @@ describe("PublishingWorkspace", () => {
     await screen.findAllByText("新品讲解视频");
     fireEvent.click(screen.getByRole("button", { name: "成片就绪" }));
     expect(screen.getByText("当前筛选下没有记录")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /打开任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument();
   });
 });

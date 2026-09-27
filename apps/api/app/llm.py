@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, structured_completion_options
 from app.content_templates import ContentTemplate
 from app.creator_profile import get_creator_profile
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
@@ -199,6 +199,7 @@ class DeepSeekScriptGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
             "max_tokens": 2400,
+            **structured_completion_options(self._settings.effective_llm_model),
         }
         url = f"{self._settings.effective_llm_base_url}/chat/completions"
         headers = {}
@@ -258,6 +259,7 @@ class DeepSeekScriptGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
             "max_tokens": 900,
+            **structured_completion_options(self._settings.effective_llm_model),
         }
         url = f"{self._settings.effective_llm_base_url}/chat/completions"
         headers = {}

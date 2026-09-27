@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, structured_completion_options
 from app.content_templates import ContentTemplate
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
@@ -22,6 +22,7 @@ from app.product_hunt import (
     ProductHuntResponseError,
 )
 from app.sources import ObsidianVault, TopicSourceItem
+from app.speech_timing import estimate_speech_seconds, CHINESE_CHARACTERS_PER_SECOND, LATIN_WORDS_PER_SECOND
 
 
 class TopicGenerationConfigurationError(RuntimeError):
@@ -45,6 +46,8 @@ class CreationTaskTopicInput:
     goal: str
     language: str
     sources: tuple[CreationTaskTopicSource, ...]
+    style_instruction: str = ""
+    script_structure: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,8 @@ class OpenAICompatibleCreationTaskTopicGenerator:
                     "content": json.dumps(
                         {
                             "goal": input.goal.strip(),
+                            "style_instruction": input.style_instruction,
+                            "script_structure": list(input.script_structure),
                             "language": input.language.strip(),
                             "sources": [
                                 {
@@ -159,6 +164,7 @@ class OpenAICompatibleCreationTaskTopicGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.7,
             "max_tokens": 3200,
+            **structured_completion_options(self._model),
         }
         headers = (
             {"Authorization": f"Bearer {self._api_key}"}
@@ -505,6 +511,9 @@ class CreationTaskScriptInput:
     topic_audience: str
     topic_outline: tuple[str, ...]
     sources: tuple[CreationTaskTopicSource, ...]
+    style_instruction: str = ""
+    script_structure: tuple[str, ...] = ()
+    script_section_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -518,7 +527,7 @@ class CreationTaskGeneratedScriptSection:
 @dataclass(frozen=True)
 class CreationTaskGeneratedScript:
     title: str
-    language: Literal["zh-CN"]
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     sections: tuple[CreationTaskGeneratedScriptSection, ...]
 
 
@@ -572,12 +581,12 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             )
 
     def generate(self, input: CreationTaskScriptInput) -> CreationTaskGeneratedScript:
-        if input.language != "zh-CN":
+        if input.language not in {"zh-CN", "en-US", "zh-CN/en-US"}:
             raise self._failure(
                 code="language_unavailable",
-                reason="本地真成片 v0.1 只支持中文文案与中文声音克隆。",
+                reason="当前文案语言不在中文、英文或中英混合范围内。",
                 impact="未调用文字模型，未生成文案。",
-                repair_action="将创作方案语言改为简体中文后重试。",
+                repair_action="重新预检并选择中文、英文或中英混合。",
                 retryable=False,
             )
         if not 15 <= input.duration_target_seconds <= 600:
@@ -657,10 +666,21 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 {
                     "role": "system",
                     "content": (
-                        "你是短视频中文口播文案生成器。只返回单一 JSON object，不要 Markdown。"
+                        "你是短视频口播文案生成器。按指定语言写正文，只返回单一 JSON object，不要 Markdown。"
                         "顶层必须为 {\"script\": {title, language, sections}}。"
-                        "language 必须是 zh-CN。sections 每项必须包含 title、content、"
+                        f"language 必须是 {input.language}。sections 每项必须包含 title、content、"
                         "visual_prompt、evidence_reference_ids；证据只能引用输入 reference_id。"
+                        + (
+                            f"所选模板要求 sections 必须恰好有 {input.script_section_count} 项。"
+                            "选题提纲是内容要点，不是一项对应一个段落；须将要点整合进指定段数。"
+                            "同一段落可以包含多个短句，不要把每个句子单独拆成 sections 项。"
+                            if input.script_section_count is not None else ""
+                        )
+                        + f"全部口播正文总时长不能超过 {input.duration_target_seconds} 秒。"
+                        f"按中文每秒 {CHINESE_CHARACTERS_PER_SECOND:g} 字、英文每秒 {LATIN_WORDS_PER_SECOND:g} 词估算，混合时两部分相加。"
+                        f"为停顿留出余量：纯英文正文尽量不超过 {int(input.duration_target_seconds * LATIN_WORDS_PER_SECOND * .8)} 词，"
+                        f"纯中文尽量不超过 {int(input.duration_target_seconds * CHINESE_CHARACTERS_PER_SECOND * .8)} 字。"
+                        "只保留最重要的要点，不必逐项复述完整提纲；这些限制针对全部段落合计。"
                     ),
                 },
                 {
@@ -668,6 +688,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "content": json.dumps(
                         {
                             "goal": input.goal.strip(),
+                            "style_instruction": input.style_instruction,
+                            "script_structure": list(input.script_structure),
                             "duration_target_seconds": input.duration_target_seconds,
                             "confirmed_topic": {
                                 "title": input.topic_title.strip(),
@@ -677,8 +699,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             },
                             "sources": serialized_sources,
                             "requirements": {
-                                "spoken_chinese": True,
-                                "section_count": "1-20",
+                                "spoken_language": input.language,
+                                "section_count": input.script_section_count or "1-20",
                                 "every_section_requires_evidence": True,
                             },
                         },
@@ -689,6 +711,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.4,
             "max_tokens": 4800,
+            **structured_completion_options(self._model),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
@@ -724,17 +747,29 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="检查 OpenAI-compatible JSON 响应格式后重试。",
                 retryable=True,
             ) from exc
-        return self._validated_script(document, source_aliases)
+        script = self._validated_script(document, source_aliases, input.language)
+        if input.script_section_count and len(script.sections) != input.script_section_count:
+            raise self._schema_failure(
+                f"文字模型返回 {len(script.sections)} 段，模板要求 {input.script_section_count} 段；"
+                "段落数量不符合所选模板，请重新生成。"
+            )
+        estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in script.sections))
+        if estimated_seconds > input.duration_target_seconds:
+            raise self._schema_failure(
+                f"文案预计约 {estimated_seconds:.1f} 秒，超过方案 {input.duration_target_seconds} 秒上限；"
+                "请压缩文案后重新生成。"
+            )
+        return script
 
     def _validated_script(
-        self, document: object, allowed_reference_aliases: dict[str, str]
+        self, document: object, allowed_reference_aliases: dict[str, str], requested_language: str
     ) -> CreationTaskGeneratedScript:
         raw = document.get("script") if isinstance(document, dict) else None
         if not isinstance(raw, dict):
             raise self._schema_failure("文字模型内容缺少 script 对象。")
         title = self._text(raw.get("title"), "title", 160)
-        if raw.get("language") != "zh-CN":
-            raise self._schema_failure("文字模型返回了当前版本不支持的文案语言。")
+        if raw.get("language") != requested_language:
+            raise self._schema_failure("文字模型返回的文案语言与本次方案不一致。")
         raw_sections = raw.get("sections")
         if not isinstance(raw_sections, list) or not 1 <= len(raw_sections) <= 20:
             raise self._schema_failure("文字模型返回的文案段落数量无效。")
@@ -768,7 +803,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             )
         return CreationTaskGeneratedScript(
             title=title,
-            language="zh-CN",
+            language=requested_language,
             sections=tuple(sections),
         )
 
@@ -977,6 +1012,7 @@ class DeepSeekTopicGenerator:
             "response_format": {"type": "json_object"},
             "temperature": 0.75,
             "max_tokens": 3200,
+            **structured_completion_options(self._settings.effective_llm_model),
         }
         url = f"{self._settings.effective_llm_base_url}/chat/completions"
         headers = {}

@@ -7,14 +7,22 @@ import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import replace, asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
+from app.canvas import AspectRatio, canvas_size
+from app.visual_effects import clip_video_filters
+from app.transitions import extend_dissolve_sources, join_picture_filters
+from app.graphic_overlays import validate_overlays, write_graphic_overlay
+from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
+from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
     CreationTaskScript,
@@ -23,6 +31,7 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     effective_segment_usage_role,
+    material_allows_footage,
 )
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
@@ -55,6 +64,9 @@ class NarrationCue:
     text: str
     duration_seconds: float
     narration_segment_id: str = ""
+    subtitle_emphasis: list[str] = field(default_factory=list)
+    subtitle_style: dict[str, object] = field(default_factory=dict)
+    subtitle_emphasis_ranges: list[tuple[int, int]] | None = None
 
 
 @dataclass
@@ -75,6 +87,14 @@ class MontageClip:
     locked: bool = False
     manually_selected: bool = False
     person_render_id: str | None = None
+    fit_mode: Literal["fill", "fit"] = "fill"
+    crop_x: float = 0.5
+    crop_y: float = 0.5
+    visual_effects: dict[str, float] = field(default_factory=dict)
+    transition_in_seconds: float = 0
+    fade_envelope_rate: float = 1
+    fade_envelope_offset_frames: float = 0
+    fade_envelope_duration_frames: float | None = None
 
 
 @dataclass
@@ -109,10 +129,14 @@ class CreationTaskMontagePlan:
     clips: list[MontageClip]
     duration_seconds: float
     low_confidence_clip_count: int
+    presenter_share_target: int = 0
+    aspect_ratio: AspectRatio = "9:16"
     narration_audio_path: str | None = None
     output_path: str | None = None
     subtitle_path: str | None = None
     message: str = ""
+    graphic_overlays: list[dict] = field(default_factory=list)
+    audio_timeline: AudioTimeline | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -224,8 +248,7 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"
@@ -238,8 +261,7 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "a_roll"
@@ -252,7 +274,7 @@ class MontagePlanner:
             max_seconds=profile.target_duration_max_seconds,
             narration_duration_seconds=narration_duration_seconds,
         )
-        cue_vectors, segment_vectors = self._semantic_vectors(
+        cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
             workspace_id,
             cues,
             b_roll_candidates,
@@ -318,6 +340,8 @@ class MontagePlanner:
                 )
                 score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
                 role = "b_roll"
+            if role == "b_roll" and visual_score is None:
+                reasons.append(semantic_note or "该片段缺少可用的当前模型视觉向量，仅按素材文字与时长推荐")
             clip_duration = round(cue.duration_seconds, 3)
             semantic_confirmed = (
                 visual_score is not None
@@ -384,6 +408,8 @@ class MontagePlanner:
         narration_duration_seconds: float,
         narration_segment_ids_by_section: dict[str, str] | None = None,
         narration_segment_durations_by_section: dict[str, float] | None = None,
+        person_render_by_section: dict[str, tuple[str, float]] | None = None,
+        presenter_share_target: int = 0,
     ) -> CreationTaskMontagePlan:
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
@@ -396,25 +422,10 @@ class MontagePlanner:
             for asset in assets
             if asset.workspace_id == workspace_id
             and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
+            and material_allows_footage(asset)
             for segment in asset.segments
             if segment.review_status == "approved"
             and effective_segment_usage_role(asset, segment) == "b_roll"
-            and segment.end_seconds - segment.start_seconds >= 0.75
-        ]
-        if not b_roll_candidates:
-            raise ValueError("可用素材库中没有已审核的 B-roll 镜头")
-        a_roll_candidates = [
-            (asset, segment)
-            for asset in assets
-            if asset.workspace_id == workspace_id
-            and asset.review_status == "approved"
-            and asset.rights_confirmed
-            and asset.brand_safe
-            for segment in asset.segments
-            if segment.review_status == "approved"
-            and effective_segment_usage_role(asset, segment) == "a_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
         cues = _build_creation_task_cues(
@@ -425,66 +436,83 @@ class MontagePlanner:
             narration_segment_ids_by_section=narration_segment_ids_by_section,
             narration_segment_durations_by_section=narration_segment_durations_by_section,
         )
-        cue_vectors, segment_vectors = self._semantic_vectors(
-            workspace_id, cues, b_roll_candidates
+        person_render_by_section = person_render_by_section or {}
+        if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in cues):
+            raise ValueError("可用素材库中没有已审核的补充画面，无法覆盖未露脸的配音段落")
+        # Use the confirmed visual requirement for retrieval; narration remains
+        # unchanged for audio and subtitles. These projections are never persisted.
+        visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
+        retrieval_cues = {
+            cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
+            for cue in cues
+        }
+        cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
+            workspace_id, list(retrieval_cues.values()), b_roll_candidates
         )
         clips: list[MontageClip] = []
         segment_usage: dict[str, int] = {}
         asset_usage: dict[str, int] = {}
         timeline_cursor = 0.0
-        for cue_index, cue in enumerate(cues):
-            use_a_roll = bool(a_roll_candidates) and (
-                cue_index == 0 or cue_index == len(cues) - 1
-            )
-            if use_a_roll:
-                duration_candidates = [
-                    item
-                    for item in a_roll_candidates
-                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
-                ]
-                if not duration_candidates:
-                    raise ValueError("A-roll 镜头时长不足，无法完整覆盖对应旁白")
-                asset, segment = min(
-                    duration_candidates,
-                    key=lambda item: (
-                        asset_usage.get(item[0].id, 0),
-                        segment_usage.get(item[1].id, 0),
-                        item[1].start_seconds,
-                    ),
-                )
-                score = 1.0
-                lexical_score = 1.0
-                visual_score = None
-                reasons = ["人物主镜头作为叙事锚点", "片头或片尾保留人物出镜"]
-                role: Literal["a_roll", "b_roll"] = "a_roll"
-            else:
-                duration_candidates = [
-                    item
-                    for item in b_roll_candidates
-                    if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
-                ]
-                if not duration_candidates:
-                    raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
-                ranked = sorted(
-                    (
-                        _score_candidate(
-                            cue,
-                            asset,
-                            segment,
-                            segment_usage.get(segment.id, 0),
-                            asset_usage.get(asset.id, 0),
-                            visual_score=_cosine_similarity(
-                                cue_vectors.get(cue.id), segment_vectors.get(segment.id)
-                            ),
-                        )
-                        for asset, segment in duration_candidates
-                    ),
-                    key=lambda item: item[0],
-                    reverse=True,
-                )
-                score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
-                role = "b_roll"
+        person_source_cursor: dict[str, float] = {}
+        for cue in cues:
             clip_duration = round(cue.duration_seconds, 3)
+            if cue.source_section_id in person_render_by_section:
+                render_id, render_duration = person_render_by_section[cue.source_section_id]
+                source_start = person_source_cursor.get(cue.source_section_id, 0.0)
+                source_end = round(source_start + clip_duration, 3)
+                if source_end > render_duration + 1 / 30:
+                    raise ValueError("人物口型输出不足以覆盖露脸段落")
+                clips.append(MontageClip(
+                    id=f"clip_{uuid4().hex[:10]}", cue_id=cue.id,
+                    asset_id=f"person:{render_id}", segment_id=cue.narration_segment_id,
+                    source_path=f"person-render://{render_id}",
+                    source_start_seconds=round(source_start, 3),
+                    source_end_seconds=min(source_end, render_duration),
+                    timeline_start_seconds=round(timeline_cursor, 3),
+                    timeline_end_seconds=round(timeline_cursor + clip_duration, 3),
+                    match_score=1.0,
+                    match_reasons=["按当前配音生成口型", f"露脸目标 {presenter_share_target}%"],
+                    needs_confirmation=False, role="a_roll", person_render_id=render_id,
+                ))
+                person_source_cursor[cue.source_section_id] = source_end
+                timeline_cursor += clip_duration
+                continue
+            # Source talking-head footage is not aligned with generated narration.
+            duration_candidates = [
+                item for item in b_roll_candidates
+                if item[1].end_seconds - item[1].start_seconds >= cue.duration_seconds
+            ]
+            if not duration_candidates:
+                raise ValueError("B-roll 镜头时长不足，无法完整覆盖对应旁白")
+            ranked = sorted(
+                (_score_candidate(
+                    retrieval_cues[cue.id], asset, segment,
+                    segment_usage.get(segment.id, 0), asset_usage.get(asset.id, 0),
+                    visual_score=_cosine_similarity(cue_vectors.get(cue.id), segment_vectors.get(segment.id)),
+                    visual_only=True,
+                ) for asset, segment in duration_candidates),
+                key=lambda item: item[0], reverse=True,
+            )
+            score, lexical_score, visual_score, asset, segment, reasons = ranked[0]
+            reasons.insert(0, f"画面要求：{retrieval_cues[cue.id].text}")
+            observation = segment.understanding
+            if observation and observation.status == "ready":
+                actions = [fact for fact in observation.facts if fact["kind"] == "action"
+                    and len({time for time in fact["sample_times"]
+                        if segment.start_seconds <= time < segment.start_seconds + cue.duration_seconds}) >= 2]
+                reasons.extend(
+                    f"局部动作观察：{fact['text']}（原片 "
+                    + "、".join(f"{time:.2f}秒" for time in fact["sample_times"]
+                        if segment.start_seconds <= time < segment.start_seconds + cue.duration_seconds)
+                    + "）" for fact in actions)
+                if not actions:
+                    reasons.append("选取区间缺少多帧动作证据；物体相似不代表动作符合")
+                reasons.extend(f"画面未确认：{item}" for item in observation.unknowns)
+            else:
+                reasons.append("缺少本地多帧画面观察；尚未核验动作要求")
+            role: Literal["a_roll", "b_roll"] = "b_roll"
+            if role == "b_roll" and visual_score is None:
+                reasons.append(semantic_note or "该片段缺少可用的当前模型视觉向量，仅按素材文字与时长推荐")
             semantic_confirmed = (
                 visual_score is not None
                 and self.semantic_auto_confirm_threshold is not None
@@ -528,6 +556,7 @@ class MontagePlanner:
             clips=clips,
             duration_seconds=round(timeline_cursor, 3),
             low_confidence_clip_count=low_confidence_count,
+            presenter_share_target=presenter_share_target,
             narration_audio_path=narration_audio_path,
             message=(
                 "镜头均有文案或画面语义依据，可以进入渲染。"
@@ -541,17 +570,17 @@ class MontagePlanner:
         workspace_id: str,
         cues: list[NarrationCue],
         candidates: list[tuple[MaterialAsset, MaterialSegment]],
-    ) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
+    ) -> tuple[dict[str, list[float]], dict[str, list[float]], str]:
         provider = self.semantic_provider
         loader = self.visual_feature_loader
         if provider is None or loader is None or not provider.ready:
-            return {}, {}
+            return {}, {}, "本地视觉语义未就绪，本次仅按素材文字与时长推荐"
         try:
             text_vectors = provider.embed_texts([cue.text for cue in cues])
         except (OSError, ValueError, VisualSemanticError):
-            return {}, {}
+            return {}, {}, "本地视觉语义计算失败，本次仅按素材文字与时长推荐"
         if len(text_vectors) != len(cues):
-            return {}, {}
+            return {}, {}, "本地视觉语义结果数量不符，本次仅按素材文字与时长推荐"
         cue_vectors = {
             cue.id: vector for cue, vector in zip(cues, text_vectors, strict=True)
         }
@@ -560,7 +589,7 @@ class MontagePlanner:
             vector = loader(workspace_id, segment.id, provider.model_id)
             if vector:
                 segment_vectors[segment.id] = vector
-        return cue_vectors, segment_vectors
+        return cue_vectors, segment_vectors, ""
 
 
 class MontageRenderer:
@@ -587,6 +616,7 @@ class MontageRenderer:
         audio_path: str | Path,
         *,
         job_staging_path: str | Path | None = None,
+        subtitle_tracks=None,
     ) -> MontagePlan | CreationTaskMontagePlan:
         if plan.status != "ready":
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
@@ -594,6 +624,10 @@ class MontageRenderer:
             raise ValueError("混剪计划没有镜头")
         narration_path = self._validated_audio_path(audio_path)
         if isinstance(plan, CreationTaskMontagePlan):
+            narration_duration = self.audio_duration(narration_path)
+            # Allow encoder padding, but never let -shortest silently truncate a changed voice track.
+            if abs(narration_duration - plan.duration_seconds) > 0.25:
+                raise ValueError("配音与剪辑时长不一致，请按当前配音重新生成故事板后渲染。")
             if job_staging_path is None:
                 raise ValueError("CreationTask 渲染必须提供 job-scoped 暂存目录")
             render_root = Path(job_staging_path).expanduser().resolve()
@@ -610,7 +644,13 @@ class MontageRenderer:
             self.output_path.mkdir(parents=True, exist_ok=True)
             output_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}_preview.mp4"
             subtitle_path = self.output_path / f"{plan.batch_id}_{plan.episode_id}.srt"
-        subtitle_path.write_text(_plan_to_srt(plan), encoding="utf-8")
+        schedule = (subtitle_schedule(subtitle_tracks, plan.duration_seconds) if subtitle_tracks is not None
+                    else narration_schedule(plan.cues, plan.duration_seconds) if isinstance(plan, CreationTaskMontagePlan)
+                    else None)
+        sidecar_schedule = schedule
+        if subtitle_tracks and schedule == []:
+            sidecar_schedule = subtitle_schedule([replace(track, style={**track.style, "enabled": True}) for track in subtitle_tracks], plan.duration_seconds)
+        subtitle_path.write_text(schedule_srt(sidecar_schedule) if sidecar_schedule is not None else _plan_to_srt(plan), encoding="utf-8")
 
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)
@@ -619,19 +659,35 @@ class MontageRenderer:
                 prefix=".subtitle-overlays-",
                 dir=output_path.parent,
             ) as overlay_dir:
-                subtitle_overlays = _write_subtitle_overlays(
-                    plan,
-                    Path(overlay_dir),
-                )
+                if schedule is None:
+                    subtitle_overlays = _write_subtitle_overlays(plan,Path(overlay_dir))
+                else:
+                    subtitle_overlays=[]
+                    for index,cue in enumerate(schedule):
+                        path=Path(overlay_dir)/f"subtitle-{index:03}.png"
+                        _write_subtitle_image(cue,path, size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
+                        subtitle_overlays.append(path)
+                intervals=([(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else
+                    [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips])
+                if isinstance(plan, CreationTaskMontagePlan):
+                    graphics=validate_overlays(plan.graphic_overlays,plan.duration_seconds)
+                    graphic_paths=[]
+                    for index,graphic in enumerate(graphics):
+                        path=Path(overlay_dir)/f"graphic-{index}.png"
+                        write_graphic_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
+                        graphic_paths.append(path)
+                    subtitle_overlays=graphic_paths+subtitle_overlays
+                    intervals=[(item.start_seconds,item.end_seconds) for item in graphics]+intervals
                 self.runner(
                     self.build_command(
                         plan,
                         narration_path,
                         output_path,
                         subtitle_overlays,
+                        subtitle_intervals=intervals,
                     )
                 )
-            _validate_rendered_media(output_path)
+            _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
         except subprocess.CalledProcessError as exc:
             render_error = _render_error_from_process(exc)
             plan.status = "failed"
@@ -656,11 +712,14 @@ class MontageRenderer:
         audio_path: Path,
         output_path: Path,
         subtitle_overlays: list[Path],
+        subtitle_intervals: list[tuple[float,float]] | None = None,
     ) -> list[str]:
+        width,height = canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920)
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
         labels: list[str] = []
-        for index, clip in enumerate(plan.clips):
+        render_clips, transitions = extend_dissolve_sources(plan.clips)
+        for index, clip in enumerate(render_clips):
             source = Path(clip.source_path).expanduser().resolve()
             if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
                 raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
@@ -668,29 +727,27 @@ class MontageRenderer:
             command.extend(
                 ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
             )
-            filters.append(
-                f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920,fps=30,setpts=PTS-STARTPTS[v{index}]"
-            )
+            filters.append(f"[{index}:v]{clip_video_filters(clip, width=width, height=height)}[v{index}]")
             labels.append(f"[v{index}]")
 
         audio_index = len(plan.clips)
         command.extend(["-i", str(audio_path)])
         output_label = "[v0]"
-        if len(labels) > 1:
+        if any(transitions):
+            output_label = "[vbase]"
+            filters.extend(join_picture_filters(plan.clips, transitions))
+        elif len(labels) > 1:
             output_label = "[vbase]"
             filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
         for overlay_path in subtitle_overlays:
             command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
-        for index, (clip, _overlay_path) in enumerate(
-            zip(plan.clips, subtitle_overlays, strict=True)
-        ):
+        intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
+        for index, ((start,end), _overlay_path) in enumerate(zip(intervals,subtitle_overlays,strict=True)):
             overlay_input = audio_index + 1 + index
             next_label = f"[vsub{index}]"
             filters.append(
-                f"{output_label}[{overlay_input}:v]overlay=0:0:"
-                f"enable='between(t,{clip.timeline_start_seconds:.3f},"
-                f"{clip.timeline_end_seconds:.3f})'{next_label}"
+                f"{output_label}[{overlay_input}:v]overlay=0:0:shortest=1:"
+                f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
             )
             output_label = next_label
         command.extend(
@@ -701,8 +758,10 @@ class MontageRenderer:
                 output_label,
                 "-map",
                 f"{audio_index}:a:0",
-                "-af",
-                "loudnorm",
+                "-af", ",".join([
+                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["loudnorm", FINITE_LOUDNESS_FILTER]),
+                    f"apad=whole_dur={sum(round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30) for clip in plan.clips)/30:.10f}",
+                ]),
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -807,7 +866,7 @@ def _build_creation_task_cues(
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
         )
-    if narration_duration_seconds <= 0:
+    if not math.isfinite(narration_duration_seconds) or narration_duration_seconds <= 0:
         raise ValueError("旁白时长无效")
     entries: list[tuple[str, str, float]] = []
     for section in script.sections:
@@ -822,31 +881,42 @@ def _build_creation_task_cues(
     weights_by_section: dict[str, float] = {}
     for section_id, _text, weight in entries:
         weights_by_section[section_id] = weights_by_section.get(section_id, 0.0) + weight
+    if narration_segment_durations_by_section is not None:
+        durations = [narration_segment_durations_by_section.get(section_id) for section_id in weights_by_section]
+        if any(value is None or not math.isfinite(value) or value <= 0 for value in durations):
+            raise ValueError("每个文案段落必须有有效的真实配音时长")
+        if abs(sum(durations) - narration_duration_seconds) > 0.03:
+            raise ValueError("分段配音时长与完整旁白不一致，请重新生成配音")
     cues: list[NarrationCue] = []
+    cursor = 0.0
+    rounded_cursor = 0.0
     for section_id, text, weight in entries:
         section_duration = (
             narration_segment_durations_by_section.get(section_id)
             if narration_segment_durations_by_section
             else None
         )
-        scaled_duration = max(
-            0.75,
-            (
-                section_duration * weight / weights_by_section[section_id]
-                if section_duration is not None
-                else weight * scale
-            ),
+        scaled_duration = (
+            section_duration * weight / weights_by_section[section_id]
+            if section_duration is not None
+            else weight * scale
         )
         part_count = max(1, math.ceil(scaled_duration / 8.0))
         text_parts = _split_text_evenly(text, part_count)
         part_duration = scaled_duration / len(text_parts)
         for text_part in text_parts:
+            cursor += part_duration
+            rounded_end = round(cursor, 3)
+            cue_duration = round(rounded_end - rounded_cursor, 3)
+            if cue_duration <= 0:
+                raise ValueError("配音时长不足以为字幕分配有效时间区间")
+            rounded_cursor = rounded_end
             cues.append(
                 NarrationCue(
                     id=f"cue_{len(cues) + 1:03d}",
                     source_section_id=section_id,
                     text=text_part,
-                    duration_seconds=round(part_duration, 3),
+                    duration_seconds=cue_duration,
                     narration_segment_id=(
                         narration_segment_ids_by_section.get(section_id, "")
                         if narration_segment_ids_by_section
@@ -857,32 +927,80 @@ def _build_creation_task_cues(
     return cues
 
 
+def select_presenter_sections(
+    section_durations: list[tuple[str, float]], target_percent: int
+) -> list[str]:
+    """Choose complete narration sections so only visible speech needs lip sync."""
+    if target_percent not in {0, 20, 40, 60, 80, 100}:
+        raise ValueError("露脸占比必须选择 0%、20%、40%、60%、80% 或 100%")
+    if not section_durations or target_percent == 0:
+        return []
+    if target_percent == 100:
+        return [section_id for section_id, _ in section_durations]
+    total = sum(duration for _, duration in section_durations)
+    if total <= 0:
+        raise ValueError("配音段落时长无效")
+    target = total * target_percent / 100
+    # Intro and closing speech establish the speaker; retain script order in output.
+    priority = [section_durations[0], *section_durations[-1:], *section_durations[1:-1]]
+    chosen: set[str] = set()
+    covered = 0.0
+    while len(chosen) < len(section_durations):
+        remaining = [(section_id, duration) for section_id, duration in priority if section_id not in chosen]
+        section_id, duration = min(remaining, key=lambda item: abs(target - covered - item[1]))
+        if chosen and abs(target - (covered + duration)) >= abs(target - covered):
+            break
+        chosen.add(section_id)
+        covered += duration
+    return [section_id for section_id, _ in section_durations if section_id in chosen]
+
+
 def _split_narration(text: str) -> list[str]:
-    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])\s*", text) if item.strip()]
+    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?；;])\s*|(?<=\.)\s+(?=[A-Z])", text) if item.strip()]
     chunks: list[str] = []
     for sentence in sentences or [text.strip()]:
         while len(sentence) > 48:
-            split_at = max(sentence.rfind("，", 0, 49), sentence.rfind(",", 0, 49), 24)
-            chunks.append(sentence[: split_at + 1].strip())
-            sentence = sentence[split_at + 1 :].strip()
+            boundaries = _narration_text_boundaries(sentence)
+            if not boundaries:
+                break
+            before_limit = [position for position in boundaries if position <= 48]
+            comma_ends = [position for position in before_limit if sentence[position - 1] in "，,"]
+            split_at = max(comma_ends or before_limit) if before_limit else min(boundaries)
+            chunks.append(sentence[:split_at].strip())
+            sentence = sentence[split_at:].strip()
         if sentence:
             chunks.append(sentence)
     return chunks
 
 
+def _narration_text_boundaries(text: str) -> list[int]:
+    # Chinese can wrap between characters; English words, contractions and
+    # decimal/version numbers must remain intact across generated cues.
+    protected = set()
+    for word in re.finditer(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*", text):
+        protected.update(range(word.start() + 1, word.end()))
+    return [position for position in range(1, len(text))
+            if position not in protected and text[:position].strip() and text[position:].strip()
+            and text[position] not in "，,。.!?！？；;：:"]
+
+
 def _split_text_evenly(text: str, part_count: int) -> list[str]:
     if part_count <= 1 or len(text) <= 1:
         return [text]
-    parts = [part.strip() for part in re.findall(r"[^，,]+[，,]?", text) if part.strip()]
+    # Retain whitespace until all joins are finished, so merging does not
+    # concatenate neighbouring English words.
+    parts = [part for part in re.findall(r"[^，,]*[，,]|[^，,]+$", text) if part]
     while len(parts) < part_count:
-        index = max(range(len(parts)), key=lambda item: len(parts[item]))
-        value = parts[index]
-        if len(value) <= 2:
+        candidates = [(index, _narration_text_boundaries(value)) for index, value in enumerate(parts)]
+        candidates = [(index, boundaries) for index, boundaries in candidates if boundaries]
+        if not candidates:
             break
-        split_at = max(1, len(value) // 2)
+        index, boundaries = max(candidates, key=lambda item: len(parts[item[0]]))
+        value = parts[index]
+        split_at = min(boundaries, key=lambda position: abs(position - len(value) / 2))
         parts[index : index + 1] = [
-            value[:split_at].strip(),
-            value[split_at:].strip(),
+            value[:split_at],
+            value[split_at:],
         ]
     while len(parts) > part_count:
         index = min(
@@ -890,7 +1008,7 @@ def _split_text_evenly(text: str, part_count: int) -> list[str]:
             key=lambda item: len(parts[item]) + len(parts[item + 1]),
         )
         parts[index : index + 2] = [f"{parts[index]}{parts[index + 1]}"]
-    return [part for part in parts if part]
+    return [part.strip() for part in parts if part.strip()]
 
 
 def _score_candidate(
@@ -901,10 +1019,14 @@ def _score_candidate(
     asset_usage: int,
     *,
     visual_score: float | None = None,
+    visual_only: bool = False,
 ):
-    metadata = " ".join(
-        item for item in (segment.description, segment.transcript, Path(asset.file_name).stem) if item
-    )
+    automatic_description = segment.understanding.summary if segment.understanding and segment.understanding.status == "ready" else ""
+    metadata = " ".join(item for item in (
+        segment.description or automatic_description or Path(asset.file_name).stem,
+        (segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds))
+        if not visual_only else "",
+    ) if item)
     cue_tokens = _tokens(cue.text)
     metadata_tokens = _tokens(metadata)
     lexical_score = (
@@ -912,8 +1034,15 @@ def _score_candidate(
         if metadata_tokens
         else 0.0
     )
+    reviewed_tokens = _tokens(segment.description)
+    reviewed_lexical_score = len(cue_tokens & reviewed_tokens) / max(1, len(cue_tokens))
     available = segment.end_seconds - segment.start_seconds
-    duration_score = max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
+    # A long source can be trimmed without degrading duration coverage.
+    duration_score = (
+        min(1.0, available / max(cue.duration_seconds, 0.001))
+        if visual_only else
+        max(0.0, 1.0 - abs(available - cue.duration_seconds) / max(cue.duration_seconds, 1.0))
+    )
     if visual_score is None:
         score = lexical_score * 0.72 + duration_score * 0.2
     else:
@@ -923,9 +1052,15 @@ def _score_candidate(
     score -= min(0.36, segment_usage * 0.22 + asset_usage * 0.04)
     score -= min(0.3, segment.usage_count * 0.05)
     reasons = [
-        f"语义词重合 {round(lexical_score * 100)}%",
+        f"文字词重合 {round(lexical_score * 100)}%",
         f"镜头时长适配 {round(duration_score * 100)}%",
     ]
+    if lexical_score > reviewed_lexical_score:
+        reasons.append(
+            "自动画面观察命中相关内容；仍需核对原片"
+            if visual_only else
+            "自动观察命中相关内容；仍需核对画面，语音证据不能确认画面匹配"
+        )
     if visual_score is not None:
         reasons.insert(1, f"画面向量相似度 {round(visual_score * 100)}%")
     if segment_usage == 0:
@@ -934,7 +1069,7 @@ def _score_candidate(
         reasons.append("素材不足，存在重复使用")
     if segment.usage_count:
         reasons.append(f"历史成片已使用 {segment.usage_count} 次，降低重复优先级")
-    return score, lexical_score, visual_score, asset, segment, reasons
+    return score, reviewed_lexical_score, visual_score, asset, segment, reasons
 
 
 def _cosine_similarity(
@@ -953,10 +1088,13 @@ def _cosine_similarity(
 
 
 def _tokens(value: str) -> set[str]:
-    normalized = re.sub(r"\s+", "", value.lower())
+    normalized = value.lower()
     ascii_tokens = set(re.findall(r"[a-z0-9]{2,}", normalized))
-    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", normalized))
-    chinese_tokens = {chinese[index : index + 2] for index in range(max(0, len(chinese) - 1))}
+    chinese_tokens = {
+        phrase[index : index + 2]
+        for phrase in re.findall(r"[\u4e00-\u9fff]+", normalized)
+        for index in range(len(phrase) - 1)
+    }
     return ascii_tokens | chinese_tokens
 
 
@@ -984,54 +1122,214 @@ def _write_subtitle_overlays(
     overlays: list[Path] = []
     for index, clip in enumerate(plan.clips, start=1):
         cue = cue_by_id[clip.cue_id]
-        overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        font, lines = _subtitle_font_and_lines(cue.text)
-        stroke_width = 3
-        spacing = 10
-        line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
-        line_heights = [box[3] - box[1] for box in line_boxes]
-        block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
-        widest = max(box[2] - box[0] for box in line_boxes)
-        left = (1080 - widest) / 2 - 26
-        top = 1920 - 250 - block_height - 20
-        right = (1080 + widest) / 2 + 26
-        bottom = top + block_height + 40
-        draw.rounded_rectangle(
-            (left, top, right, bottom),
-            radius=18,
-            fill=(0, 0, 0, 158),
-        )
-        cursor_y = top + 20
-        for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
-            line_width = box[2] - box[0]
-            draw.text(
-                ((1080 - line_width) / 2, cursor_y),
-                line,
-                font=font,
-                fill=(255, 255, 255, 255),
-                stroke_width=stroke_width,
-                stroke_fill=(0, 0, 0, 230),
-            )
-            cursor_y += line_height + spacing
         path = output_dir / f"subtitle-{index:03}.png"
-        overlay.save(path)
+        _write_subtitle_image(cue,path)
         overlays.append(path)
     return overlays
 
 
+def _write_subtitle_image(cue, path: Path, *, size=(1080,1920)):
+    width,height = size
+    margin_y = round(height * 250 / 1920)
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font, lines = _subtitle_font_and_lines(cue.text, cue.subtitle_style, size=size)
+    stroke_width = cue.subtitle_style.get("stroke_width", 3)
+    spacing = 10
+    line_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
+    line_heights = [box[3] - box[1] for box in line_boxes]
+    block_height = sum(line_heights) + spacing * max(0, len(lines) - 1)
+    widest = max(box[2] - box[0] for box in line_boxes)
+    left = (width - widest) / 2 - 26
+    panel_height = block_height + 40
+    position = cue.subtitle_style.get("position", "bottom")
+    if position == "top":
+        top = margin_y
+    elif position == "middle":
+        top = (height - panel_height) / 2
+    elif position == "bottom":
+        top = height - margin_y - panel_height
+    else:
+        raise OSError(f"不支持的字幕位置：{position}；请选择 top、middle 或 bottom")
+    right = (width + widest) / 2 + 26
+    bottom = top + block_height + 40
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=18,
+        fill=(*_subtitle_color(cue.subtitle_style.get("background_color"), fallback=(0, 0, 0, 255))[:3],
+              round(cue.subtitle_style.get("background_opacity", 158 / 255) * 255)),
+    )
+    compact_text = re.sub(r"\s+", "", "".join(lines))
+    terms = sorted({re.sub(r"\s+", "", term) for term in cue.subtitle_emphasis} - {""}, key=len, reverse=True)
+    emphasized_indices: set[int] = set()
+    if cue.subtitle_emphasis_ranges is not None:
+        for start, end in cue.subtitle_emphasis_ranges:
+            emphasized_indices.update(range(start, end))
+    elif terms:
+        for match in re.finditer("|".join(re.escape(term) for term in terms), compact_text):
+            emphasized_indices.update(range(match.start(), match.end()))
+    text_offset = 0
+    cursor_y = top + 20
+    for line, box, line_height in zip(lines, line_boxes, line_heights, strict=True):
+        emphasis_mask = []
+        for character in line:
+            emphasis_mask.append(not character.isspace() and text_offset in emphasized_indices)
+            if not character.isspace():
+                text_offset += 1
+        line_width = box[2] - box[0]
+        _draw_subtitle_line(
+            draw,
+            line=line,
+            x=(width - line_width) / 2 - box[0],
+            y=cursor_y - box[1],
+            font=font,
+            primary_color=_subtitle_color(
+                cue.subtitle_style.get("primary_color"),
+                fallback=(255, 255, 255, 255),
+            ),
+            emphasis_mask=emphasis_mask,
+            emphasis_color=_subtitle_color(
+                cue.subtitle_style.get("emphasis_color"),
+                fallback=(255, 213, 79, 255),
+            ),
+            stroke_width=stroke_width,
+            stroke_color=_subtitle_color(cue.subtitle_style.get("stroke_color"), fallback=(0, 0, 0, 230)),
+        )
+        cursor_y += line_height + spacing
+    overlay.save(path)
+
+
+
+def _draw_subtitle_line(
+    draw: ImageDraw.ImageDraw,
+    *,
+    line: str,
+    x: float,
+    y: float,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    primary_color: tuple[int, int, int, int],
+    emphasis_mask: list[bool],
+    emphasis_color: tuple[int, int, int, int],
+    stroke_width: int,
+    stroke_color: tuple[int, int, int, int] = (0, 0, 0, 230),
+) -> None:
+    start = 0
+    while start < len(line):
+        end = start + 1
+        while end < len(line) and emphasis_mask[end] == emphasis_mask[start]:
+            end += 1
+        draw.text(
+            (x + draw.textlength(line[:start], font=font), y), line[start:end], font=font,
+            fill=emphasis_color if emphasis_mask[start] else primary_color,
+            stroke_width=stroke_width, stroke_fill=stroke_color,
+        )
+        start = end
+
+
+def _subtitle_color(
+    value: object,
+    *,
+    fallback: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return (
+            int(value[1:3], 16),
+            int(value[3:5], 16),
+            int(value[5:7], 16),
+            255,
+        )
+    return fallback
+
+
 def _subtitle_font_and_lines(
     text: str,
+    style: dict[str, object],
+    *, size=(1080,1920),
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
-    for size in range(58, 41, -2):
-        font = _subtitle_font(size)
-        lines = _wrap_subtitle_text(text, max_chars=max(12, 880 // size))
-        if len(lines) <= 2:
+    canvas_width, canvas_height = size
+    safe_width = canvas_width - 200
+    safe_height = canvas_height - 2 * round(canvas_height * 250 / 1920) - 40
+    size = style.get("font_size", 40)
+    if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 1920:
+        raise OSError("字幕字号必须是 1–1920 的整数；请调整字号后重试")
+    family = style.get("font_family")
+    font = _subtitle_font(size, family=family)
+    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    while size > 0:
+        lines: list[str] = []
+        for explicit_line in _wrap_subtitle_text(text, max_chars=max(1, len(text))):
+            remaining = explicit_line
+            while remaining:
+                low, high = 1, len(remaining)
+                while low < high:
+                    end = (low + high + 1) // 2
+                    box = draw.textbbox((0, 0), remaining[:end], font=font, stroke_width=style.get("stroke_width", 3))
+                    if box[2] - box[0] <= safe_width:
+                        low = end
+                    else:
+                        high = end - 1
+                line = _wrap_subtitle_text(remaining, max_chars=low)[0]
+                if len(line) > low:
+                    line = remaining[:low].rstrip()
+                lines.append(line)
+                remaining = remaining[len(line):].lstrip()
+            if not explicit_line:
+                lines.append("")
+        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=style.get("stroke_width", 3)) for line in lines]
+        height = sum(box[3] - box[1] for box in boxes) + 10 * max(0, len(lines) - 1)
+        if height <= safe_height and all(box[2] - box[0] <= safe_width for box in boxes):
             return font, lines
-    return _subtitle_font(40), _wrap_subtitle_text(text, max_chars=24)
+        size -= 1
+        font = _subtitle_font(size, family=family) if size else font
+    raise OSError("字幕无法放入画面安全区；请缩短字幕后重试")
 
 
-def _subtitle_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+@lru_cache(maxsize=32)
+def _resolve_subtitle_font(family: str) -> tuple[str, int]:
+    # Resolve the actual family, including TTC faces; never substitute a different
+    # installed font for a family the user explicitly confirmed.
+    roots = (
+        Path("/System/Library/Fonts"), Path("/Library/Fonts"),
+        Path.home() / "Library/Fonts", Path("/usr/share/fonts"),
+        Path("/usr/local/share/fonts"), Path.home() / ".local/share/fonts",
+        Path("C:/Windows/Fonts"),
+    )
+    candidates = sorted({
+        path for root in roots if root.is_dir() for path in root.rglob("*")
+        if path.suffix.lower() in {".ttf", ".ttc", ".otf"}
+    })
+    candidates.extend(sorted(Path("/System/Library/AssetsV2").glob(
+        "com_apple_MobileAsset_Font*/*.asset/AssetData/*.[to]t[fc]"
+    )))
+    matched: tuple[str, int] | None = None
+    for path in candidates:
+        index = 0
+        while True:
+            try:
+                font = ImageFont.truetype(str(path), size=40, index=index)
+            except OSError:
+                break  # End of a collection or a font Pillow cannot load.
+            actual_family, face = font.getname()
+            if actual_family.casefold() == family.casefold():
+                matched = (str(path), index)
+                if face.casefold() in {"regular", "normal", "book"}:
+                    return matched
+            if path.suffix.lower() != ".ttc":
+                break
+            index += 1
+    if matched is not None:
+        return matched
+    raise OSError(f"字幕字体“{family}”未安装或无法读取；请安装该字体或选择已安装字体后重试")
+
+
+def _subtitle_font(
+    size: int, *, family: object = None,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if family is not None:
+        if not isinstance(family, str) or not family.strip():
+            raise OSError("字幕字体名称无效；请选择已安装字体后重试")
+        path, index = _resolve_subtitle_font(family.strip())
+        return ImageFont.truetype(path, size=size, index=index)
     for candidate in (
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Medium.ttc",
@@ -1104,7 +1402,7 @@ def _probe_duration(path: Path) -> float:
     return float(completed.stdout.strip())
 
 
-def _validate_rendered_media(output_path: Path) -> None:
+def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920)) -> None:
     if not output_path.is_file() or output_path.stat().st_size <= 0:
         raise OSError("FFmpeg 未生成有效输出文件")
     completed = subprocess.run(
@@ -1143,8 +1441,8 @@ def _validate_rendered_media(output_path: Path) -> None:
         raise OSError("渲染输出缺少 H.264 视频轨")
     if audio_stream is None or audio_stream.get("codec_name") != "aac":
         raise OSError("渲染输出缺少 AAC 音频轨")
-    if video_stream.get("width") != 1080 or video_stream.get("height") != 1920:
-        raise OSError("渲染输出不是 1080×1920 竖版画幅")
+    if (video_stream.get("width"), video_stream.get("height")) != expected_size:
+        raise OSError(f"渲染输出画幅不符合 {expected_size[0]}×{expected_size[1]}")
 
 
 def _render_error_from_process(exc: subprocess.CalledProcessError) -> MontageRenderError:
@@ -1170,13 +1468,17 @@ def _json_default(value: object) -> str:
 def creation_task_montage_plan_to_payload(
     plan: CreationTaskMontagePlan,
 ) -> dict[str, object]:
-    return json.loads(json.dumps(asdict(plan), ensure_ascii=False, default=_json_default))
+    payload = asdict(plan)
+    payload["audio_timeline"] = plan.audio_timeline.model_dump() if plan.audio_timeline else None
+    return json.loads(json.dumps(payload, ensure_ascii=False, default=_json_default))
 
 
 def creation_task_montage_plan_from_payload(
     data: dict[str, object],
 ) -> CreationTaskMontagePlan:
     payload = dict(data)
+    if payload.get("audio_timeline") is not None:
+        payload["audio_timeline"] = AudioTimeline.model_validate(payload["audio_timeline"])
     cue_payloads = payload.pop("cues", [])
     clip_payloads = payload.pop("clips", [])
     for key in ("created_at", "updated_at"):

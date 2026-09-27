@@ -21,6 +21,7 @@ from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
     MODEL_SPECS,
     QWEN3_TTS_06B_BASE_8BIT,
+    QWEN3_VL_4B_4BIT,
     ModelCatalog,
     ModelSpec,
 )
@@ -39,6 +40,22 @@ class DownloadFile:
 
 
 MODEL_FILES: dict[str, tuple[DownloadFile, ...]] = {
+    QWEN3_VL_4B_4BIT.id: (
+        DownloadFile("added_tokens.json", 707),
+        DownloadFile("chat_template.jinja", 5292),
+        DownloadFile("chat_template.json", 5502),
+        DownloadFile("config.json", 7137),
+        DownloadFile("generation_config.json", 269),
+        DownloadFile("merges.txt", 1671853),
+        DownloadFile("model.safetensors", 3093767283),
+        DownloadFile("model.safetensors.index.json", 64742),
+        DownloadFile("preprocessor_config.json", 782),
+        DownloadFile("special_tokens_map.json", 613),
+        DownloadFile("tokenizer.json", 11422654),
+        DownloadFile("tokenizer_config.json", 5445),
+        DownloadFile("video_preprocessor_config.json", 817),
+        DownloadFile("vocab.json", 2776833),
+    ),
     CHINESE_CLIP_VIT_B16.id: (
         DownloadFile("config.json", 3_008),
         DownloadFile("preprocessor_config.json", 342),
@@ -62,6 +79,7 @@ MODEL_FILES: dict[str, tuple[DownloadFile, ...]] = {
 }
 
 MODEL_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    QWEN3_VL_4B_4BIT.id: ("mlx-vlm==0.7.0",),
     CHINESE_CLIP_VIT_B16.id: (
         "torch==2.13.0",
         "transformers==5.15.1",
@@ -155,8 +173,8 @@ class ModelInstaller:
         )
         runtime_reserve = (
             0
-            if self.catalog.runtime_python_path
-            and self.catalog.runtime_python_path.is_file()
+            if self.catalog.runtime_path(spec)
+            and self.catalog.runtime_path(spec).is_file()
             else _RUNTIME_RESERVE_BYTES
         )
         required = max(spec.approximate_download_bytes - downloaded, 0)
@@ -226,7 +244,7 @@ class ModelInstaller:
             )
 
     def _ensure_runtime(self, spec: ModelSpec) -> None:
-        runtime_python = self.catalog.runtime_python_path
+        runtime_python = self.catalog.runtime_path(spec)
         if runtime_python is None:
             raise ModelInstallError("未配置模型运行环境路径。")
         runtime_root = runtime_python.parent.parent
