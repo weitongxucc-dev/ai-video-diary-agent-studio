@@ -73,7 +73,8 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    CpuRenderGrantContext, CreationExecution, CreationExecutionActor, ExecutionStartRequest,
+    CpuRenderGrantContext, CreationExecution, CreationExecutionActor,
+    CreationJobUnitExecutor, ExecutionStartRequest,
     revision_digest, submit_creation_stage,
 )
 from app.creator_profile import (
@@ -9820,7 +9821,7 @@ def _render_creation_task_montage_for_workspace(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
-    if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered"}:
+    if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered", "failed"}:
         raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
@@ -12643,7 +12644,10 @@ def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
 _LEGACY_WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
 
 
-def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
+def _creation_render_is_valid(
+    workspace_id: str, task_id: str, *, verify_media: bool = True,
+    render_context: CpuRenderGrantContext | None = None,
+) -> bool:
     try:
         task = production_repo.get_creation_task(workspace_id, task_id)
         if not task.current_timeline_version_id:
@@ -12663,10 +12667,23 @@ def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
         )
         if registered is None or production_repo.get_job_run(workspace_id, registered.producer_job_id).status != "succeeded":
             return False
+        path = artifact_store.resolve_file(ref)
+        if not verify_media:
+            return path.stat().st_size == registered.size_bytes
+        if render_context is not None:
+            render_context.scheduler.assert_grant(render_context.grant)
         published = artifact_store.describe(ref)
         if published.sha256 != registered.sha256 or published.size_bytes != registered.size_bytes:
             return False
-        _validate_rendered_media(artifact_store.resolve_file(ref), expected_size=canvas_size(str(plan["aspect_ratio"])))
+        media_options = (
+            {"scheduler": render_context.scheduler, "grant": render_context.grant,
+             "cancel_event": render_context.cancel_event,
+             "deadline_monotonic": render_context.deadline_monotonic}
+            if render_context is not None else {}
+        )
+        _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),
+                                 expected_duration_seconds=float(plan["duration_seconds"]),
+                                 **media_options)
         return True
     except (KeyError, FileNotFoundError, ValueError, OSError):
         return False
@@ -12788,8 +12805,9 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
                     (workspace_id, "local-owner", job.id, job.input_digest),
                 ).fetchone()
             if row is not None:
-                if row["unit_key"] in {"narration", "montage_plan", "render"}:
-                    current_stage = row["unit_key"]
+                queued_stage = row["unit_key"].split(":", 1)[0]
+                if queued_stage in {"narration", "montage_plan", "render"}:
+                    current_stage = queued_stage
                 waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
                 if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
                     status_updated_at = row["updated_at"]
@@ -12800,7 +12818,8 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
         "current_stage": current_stage,
         "waiting_reason": waiting_reason,
         "status_updated_at": status_updated_at,
-        "video_ready": _creation_render_is_valid(workspace_id, task_id),
+        "video_ready": _creation_render_is_valid(
+            workspace_id, task_id, verify_media=creation_execution_mode != "scheduled"),
         "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
         "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
     }
@@ -12911,6 +12930,10 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
             ).fetchall()
         for row in rows:
             runtime.scheduler.cancel(row["id"], actor)
+            registration = runtime.registrations.get("creation_job")
+            executor = getattr(registration, "executor", None)
+            if isinstance(executor, CreationJobUnitExecutor):
+                executor.request_cancel(row["id"])
     return _creation_execution_status(workspace_id, task_id)
 
 
