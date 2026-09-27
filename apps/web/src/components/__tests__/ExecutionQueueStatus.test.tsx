@@ -11,6 +11,7 @@ describe("ExecutionQueueStatus", () => {
   it("shows unknown queue facts without inventing a stage, reason, or ETA", () => {
     render(<ExecutionQueueStatus status="queued" currentStage={null} waitingReason={null} statusUpdatedAt={null} />);
     const status = screen.getByLabelText("制作安排状态");
+    expect(within(status).getByText("等待执行")).toBeInTheDocument();
     expect(within(status).getByText("尚未开始")).toBeInTheDocument();
     expect(within(status).getByText("暂未提供等待原因")).toBeInTheDocument();
     expect(within(status).getByText("更新时间未知")).toBeInTheDocument();
@@ -20,16 +21,31 @@ describe("ExecutionQueueStatus", () => {
   it("shows a persisted running stage and its update time", () => {
     render(<ExecutionQueueStatus status="running" currentStage="montage_plan" waitingReason={null} statusUpdatedAt="2026-09-27T08:30:00Z" />);
     const status = screen.getByLabelText("制作安排状态");
+    expect(within(status).getByText("当前阶段")).toBeInTheDocument();
     expect(within(status).getByText("安排镜头与人物口型")).toBeInTheDocument();
     expect(status.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-27T08:30:00Z");
     expect(within(status).queryByText("等待原因")).not.toBeInTheDocument();
   });
 
-  it("shows a real queue reason and the last failed stage", () => {
+  it("shows a queue reason only while waiting and labels a failed stage as previous", () => {
     const { rerender } = render(<ExecutionQueueStatus status="queued" currentStage="render" waitingReason="等待设备空闲" statusUpdatedAt="2026-09-27T08:30:00Z" />);
     expect(screen.getByText("等待设备空闲")).toBeInTheDocument();
-    rerender(<ExecutionQueueStatus status="failed" currentStage="render" waitingReason={null} statusUpdatedAt={null} />);
+    rerender(<ExecutionQueueStatus status="running" currentStage="render" waitingReason="等待设备空闲" statusUpdatedAt={null} />);
+    expect(screen.queryByText("等待设备空闲")).not.toBeInTheDocument();
+    rerender(<ExecutionQueueStatus status="failed" currentStage="render" waitingReason="等待设备空闲" statusUpdatedAt={null} />);
+    expect(screen.getByText("上次停在")).toBeInTheDocument();
     expect(screen.getByText("生成成片和字幕")).toBeInTheDocument();
     expect(screen.queryByText("等待设备空闲")).not.toBeInTheDocument();
+    rerender(<ExecutionQueueStatus status="cancelled" currentStage="render" waitingReason="等待设备空闲" statusUpdatedAt={null} />);
+    expect(screen.getByText("上次停在")).toBeInTheDocument();
+    expect(screen.queryByText("等待设备空闲")).not.toBeInTheDocument();
+  });
+
+  it("does not mark an invalid timestamp as a time element", () => {
+    render(<ExecutionQueueStatus status="interrupted" currentStage="narration" waitingReason={null} statusUpdatedAt="invalid" />);
+    expect(screen.getByText("上次停在")).toBeInTheDocument();
+    expect(screen.getByText("暂未提供等待原因")).toBeInTheDocument();
+    expect(screen.getByText("更新时间未知")).toBeInTheDocument();
+    expect(screen.getByLabelText("制作安排状态").querySelector("time")).toBeNull();
   });
 });
