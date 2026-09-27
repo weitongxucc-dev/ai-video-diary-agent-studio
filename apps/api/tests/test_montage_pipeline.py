@@ -4198,7 +4198,10 @@ def test_person_preview_respects_locked_clip_before_generation(person_render_edi
 
 @pytest.mark.parametrize("source_end", [4, 6])
 def test_extract_original_audio_real_media_preview_confirm_undo(person_render_edit_state, source_end):
-    import subprocess, io, wave, array
+    import subprocess
+    import io
+    import wave
+    import array
     state=person_render_edit_state
     clip=state.montage.clips[0]
     clip.person_render_id=None

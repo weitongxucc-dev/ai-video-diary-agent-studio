@@ -4,7 +4,6 @@ import pytest
 
 from app.asr import (
     ASRAudioTooLargeError,
-    ASRTranscription,
     ASRTranscriptionError,
     asr_transcriber_from_settings,
     LocalWhisperTranscriber,

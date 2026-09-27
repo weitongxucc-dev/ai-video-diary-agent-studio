@@ -1,5 +1,3 @@
-from pathlib import Path
-from types import SimpleNamespace
 from PIL import Image
 import pytest
 from app.canvas import canvas_size,preview_size

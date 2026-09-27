@@ -1,5 +1,3 @@
-from dataclasses import replace
-from pathlib import Path
 import subprocess
 import pytest
 from app.graphic_overlays import TextOverlay, validate_overlays, write_text_overlay, splice_overlays, compile_overlay_command
