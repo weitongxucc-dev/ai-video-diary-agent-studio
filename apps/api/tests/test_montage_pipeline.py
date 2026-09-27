@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from PIL import Image
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
+from app.host_resource_probes import HostProcessProbe
 from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
 from app.models import (
     Episode,
@@ -1330,6 +1332,49 @@ def test_mixed_person_and_material_clips_render_with_continuous_narration(tmp_pa
     red, blue = sample_color(0.4), sample_color(1.4)
     assert red[0] > red[2] * 2
     assert blue[2] > blue[0] * 2
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg is not installed")
+def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path):
+    video = tmp_path / "source.mp4"
+    audio = tmp_path / "narration.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=blue:s=320x240:r=25:d=1", "-pix_fmt", "yuv420p", str(video)],
+                   check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", str(audio)], check=True, capture_output=True)
+    plan = CreationTaskMontagePlan(
+        id="granted-render", workspace_id="workspace_a", task_id="task-granted",
+        script_id="script-granted", script_title="短片", status="ready",
+        cues=[NarrationCue("cue", "section", "短片。", 1.0, "segment")],
+        clips=[MontageClip("clip", "cue", "asset", "segment", str(video),
+                           0.0, 1.0, 0.0, 1.0, 1.0, ["蓝色画面"], False)],
+        duration_seconds=1.0, low_confidence_clip_count=0,
+        presenter_share_target=0, narration_audio_path="narration://artifact/test",
+    )
+
+    class RecordingGrant:
+        processes = HostProcessProbe()
+
+        def __init__(self):
+            self.children = []
+
+        def assert_grant(self, grant):
+            assert grant == "one-render-grant"
+
+        def register_child(self, grant, child):
+            self.assert_grant(grant)
+            self.children.append(child)
+
+    scheduler = RecordingGrant()
+    rendered = MontageRenderer(tmp_path).render(
+        plan, audio, job_staging_path=tmp_path / "job", scheduler=scheduler,
+        grant="one-render-grant", deadline_monotonic=time.monotonic() + 90,
+        max_output_bytes=8 * 1024 * 1024, threads=1,
+    )
+    assert rendered.status == "rendered"
+    assert (tmp_path / "job" / "preview.mp4").stat().st_size <= 8 * 1024 * 1024
+    assert len(scheduler.children) == 3  # duration probe, encoder, output probe
 
 
 @pytest.mark.skipif(
