@@ -10350,6 +10350,19 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
 
 def _material_ingestion_for(repository: ProductionRepository):
     service = material_ingestion
+    if material_execution_mode == "scheduled":
+        runtime = device_runtime
+        if (
+            runtime is None
+            or not runtime.running
+            or runtime.last_error is not None
+            or service is None
+            or service.repository is not repository
+            or getattr(service, "execution_mode", None) != "scheduled"
+            or service.scheduler is not runtime.scheduler
+        ):
+            raise HTTPException(status_code=503, detail="整机调度尚未就绪，素材重活未启动。")
+        return service
     if service is None or service.repository is not repository:
         raise HTTPException(status_code=503, detail="素材扫描服务尚未就绪，请稍后重试。")
     return service
@@ -10396,6 +10409,8 @@ def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetRespo
     workspace_id = current_workspace_id(request)
     repository = production_repo
     service = _material_ingestion_for(repository)
+    if material_execution_mode == "scheduled":
+        raise HTTPException(status_code=503, detail="素材手动重试的调度授权尚未接通。")
     status = _material_binding_status(workspace_id, repository)
     if status.directory_state != "ready":
         raise HTTPException(status_code=409, detail=status.directory_message)
@@ -10522,7 +10537,10 @@ def stream_production_material(asset_id: str, request: Request) -> FileResponse:
 )
 def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
-    production_repo.scan_library(workspace_id)
+    if material_execution_mode == "scheduled":
+        _material_ingestion_for(production_repo).scan_once()
+    else:
+        production_repo.scan_library(workspace_id)
     assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
     return MaterialLibraryResponse(
         assets=[
@@ -10544,6 +10562,9 @@ def analyze_production_material(
     asset_id: str,
     request: Request,
 ) -> MaterialAssetResponse:
+    if material_execution_mode == "scheduled":
+        _material_ingestion_for(production_repo)
+        raise HTTPException(status_code=503, detail="素材手动分析的调度授权尚未接通。")
     try:
         asset = production_repo.analyze_asset(current_workspace_id(request), asset_id)
     except KeyError as exc:
@@ -12623,6 +12644,8 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
 creation_execution = _new_creation_execution()
 execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
 material_ingestion = None
+material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
+device_runtime = None
 
 
 def _new_material_ingestion():
