@@ -214,6 +214,7 @@ export function AppShell({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(true);
   const [quickSize, setQuickSize] = useState({ width: 400, height: 0, maxTop: 8 });
+  const [quickPreviewHeight, setQuickPreviewHeight] = useState<number | null>(null);
   const [quickPreviewOccluded, setQuickPreviewOccluded] = useState(false);
   const [quickPosition, setQuickPosition] = useState<{ left: number; top: number } | null>(null);
   const editorMainRef = useRef<HTMLElement>(null);
@@ -260,10 +261,13 @@ export function AppShell({
         const frameTop = playerRect.top + (playerRect.height - frameHeight) / 2;
         const floatLeft = mainRect.right - width - 8;
         const floatTop = mainRect.top + 8;
+        const availablePictureWidth = Math.max(0, floatLeft - playerRect.left - 8);
+        const nextPreviewHeight = Math.min(playerRect.height, availablePictureWidth / ratio);
+        setQuickPreviewHeight((current) => current === nextPreviewHeight ? current : nextPreviewHeight);
         const overlapWidth = Math.max(0, Math.min(floatLeft + width, frameLeft + frameWidth) - Math.max(floatLeft, frameLeft));
         const overlapHeight = Math.max(0, Math.min(floatTop + height, frameTop + frameHeight) - Math.max(floatTop, frameTop));
         previewOccluded = overlapWidth > 0 && overlapHeight > 0;
-      }
+      } else setQuickPreviewHeight(null);
       setQuickPreviewOccluded(previewOccluded);
       setQuickSize((current) => current.height === height && current.width === width && current.maxTop === maxTop ? current : { width, height, maxTop });
       setQuickPosition((current) => {
@@ -521,7 +525,7 @@ export function AppShell({
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className={`desktop-main-scroll${quickShown ? ` ${editorShell.quickPreviewBesideFloat}` : ""}`} data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+          <main className={`desktop-main-scroll${quickShown ? ` ${editorShell.quickPreviewBesideFloat}` : ""}`} data-scroll-region="main-y" ref={editorMainRef} style={quickShown && quickPreviewHeight !== null ? { "--quick-preview-height": `${quickPreviewHeight}px` } as CSSProperties : undefined} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
             {quickShown && quickInspector ? (
                 <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? 8, left: quickPosition?.left, right: quickPosition ? undefined : 8 }}>

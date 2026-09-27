@@ -230,6 +230,7 @@ describe("AppShell", () => {
       fireEvent.click(expand);
       const panel = await screen.findByRole("region", { name:"镜头 1 · 0:00–0:03" });
       expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
+      expect(Number.parseFloat(screen.getByRole("main").style.getPropertyValue("--quick-preview-height"))).toBeLessThan(464);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name:"收起镜头编辑" }));
       expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
