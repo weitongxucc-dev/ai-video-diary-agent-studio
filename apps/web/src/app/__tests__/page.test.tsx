@@ -1,24 +1,54 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask, ProductionFoundation } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({
+// Page-level test: render the REAL AppShell and HomeWorkspace; mock only the
+// Next.js navigation boundary and the API service boundaries. The AppShell
+// slot contract (conversation slot, panel behavior) is covered by
+// components/__tests__/AppShell.test.tsx and is not re-implemented here.
+
+let pathname = "/";
+
+const serverMocks = vi.hoisted(() => ({
   getProductionFoundation: vi.fn(),
   listCreationTasks: vi.fn(),
 }));
+const clientMocks = vi.hoisted(() => ({
+  listCreationTasks: vi.fn(),
+}));
+const routerPush = vi.fn();
 
 vi.mock("next/link", () => ({
-  default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
+  default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, creationTasks }: { children: React.ReactNode; creationTasks?: CreationTask[] }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><main>{children}</main></>,
+vi.mock("next/image", () => ({
+  default: ({ alt, ...props }: ImgHTMLAttributes<HTMLImageElement>) => <img alt={alt} {...props} />,
 }));
-vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: ({ task }: { task?: CreationTask | null }) => <div>{task ? `正在修改：${task.name}` : "目标输入"}</div> }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => pathname,
+  useRouter: () => ({ back: vi.fn(), refresh: vi.fn(), push: routerPush }),
+  useSearchParams: () => new URLSearchParams(""),
+}));
 vi.mock("@/lib/api.server", () => ({
-  getProductionFoundation: mocks.getProductionFoundation,
-  listCreationTasks: mocks.listCreationTasks,
+  getProductionFoundation: serverMocks.getProductionFoundation,
+  listCreationTasks: serverMocks.listCreationTasks,
 }));
+vi.mock("@/lib/api", () => ({
+  apiUrl: (path: string) => path,
+  confirmCreationPlan: vi.fn(),
+  confirmCreationTaskEdit: vi.fn(),
+  CreationPlanApiError: class CreationPlanApiError extends Error {},
+  getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: false } } }),
+  listCreationTasks: clientMocks.listCreationTasks,
+  previewCreationPlan: vi.fn(),
+  sendCreationTaskAssistantTurn: vi.fn(),
+  sendWorkspaceAssistantPlanTurn: vi.fn(),
+  undoCreationTaskTimeline: vi.fn(),
+}));
+vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
+vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
+vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
 
 import HomePage from "@/app/page";
 
@@ -64,30 +94,64 @@ const foundation = {
   eligible_episodes: [],
 } as unknown as ProductionFoundation;
 
-describe("HomePage three-zone workspace", () => {
-  it("shows real task execution beside chat and opens details only as a card", async () => {
-    mocks.getProductionFoundation.mockResolvedValue(foundation);
-    mocks.listCreationTasks.mockResolvedValue({
+describe("HomePage workspace overview", () => {
+  beforeEach(() => {
+    pathname = "/";
+    routerPush.mockReset();
+    serverMocks.getProductionFoundation.mockReset();
+    serverMocks.listCreationTasks.mockReset();
+    clientMocks.listCreationTasks.mockReset();
+    clientMocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }),
+    });
+  });
+
+  it("renders the real shell assistant region and overview stats", async () => {
+    serverMocks.getProductionFoundation.mockResolvedValue(foundation);
+    serverMocks.listCreationTasks.mockResolvedValue({
       items: (["not_started", "running", "waiting_for_user", "completed", "failed"] satisfies CreationTask["stage_status"][]).map(task),
       total_count: 5,
     });
 
     render(await HomePage({}));
 
-    expect(screen.getByRole("region", { name: "创作助手" })).toContainElement(screen.getByText("目标输入"));
-    const execution = within(screen.getByRole("region", { name: "任务执行" }));
-    expect(execution.getByText("任务执行")).toBeInTheDocument();
-    expect(execution.getByText("待处理").parentElement).toHaveTextContent("2待处理");
-    expect(execution.getByText("进行中").parentElement).toHaveTextContent("1进行中");
-    expect(execution.getAllByRole("button", { name: /任务/ })).toHaveLength(5);
+    // Real AppShell provides the assistant region; real composer is inside it.
+    const assistant = screen.getByRole("region", { name: "创作助手" });
+    expect(within(assistant).getByRole("textbox", { name: "制作指令" })).toHaveAttribute("placeholder", "想做什么视频？");
+
+    // Page-level stats area renders its five metrics (no dashboard data yet).
+    const metrics = screen.getByRole("region", { name: "工作空间五项概览" });
+    for (const label of ["可见素材", "分析可用", "待分析", "知识来源", "作品记录"]) {
+      expect(within(metrics).getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("opens task details as a card and issues real navigation from 对话修改", async () => {
+    serverMocks.getProductionFoundation.mockResolvedValue(foundation);
+    serverMocks.listCreationTasks.mockResolvedValue({
+      items: (["not_started", "running", "waiting_for_user", "completed", "failed"] satisfies CreationTask["stage_status"][]).map(task),
+      total_count: 5,
+    });
+
+    render(await HomePage({}));
+
+    const stageCard = screen.getByRole("heading", { name: "任务与处理阶段" }).closest("section");
+    expect(stageCard).not.toBeNull();
+    expect(within(stageCard as HTMLElement).getAllByRole("button", { name: /任务/ })).toHaveLength(5);
+
     expect(screen.queryByRole("dialog", { name: "任务卡片" })).not.toBeInTheDocument();
-    fireEvent.click(execution.getByRole("button", { name: /waiting_for_user 任务/ }));
+    fireEvent.click(within(stageCard as HTMLElement).getByRole("button", { name: /waiting_for_user 任务/ }));
+
     const card = within(screen.getByRole("dialog", { name: "任务卡片" }));
-    expect(card.getByRole("link", { name: "打开任务" })).toHaveAttribute("href", "/tasks/task-waiting_for_user");
+    expect(card.getByRole("link", { name: /打开任务/ })).toHaveAttribute("href", "/tasks/task-waiting_for_user");
+
+    // Real navigation intent from the real button, no fake page switch.
     fireEvent.click(card.getByRole("button", { name: "对话修改" }));
-    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("正在修改：waiting_for_user 任务");
-    fireEvent.click(screen.getByRole("button", { name: "新建视频" }));
-    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("目标输入");
+    expect(routerPush).toHaveBeenCalledWith("/tasks/task-waiting_for_user");
+
+    fireEvent.click(card.getByRole("button", { name: "关闭卡片" }));
     expect(screen.queryByRole("dialog", { name: "任务卡片" })).not.toBeInTheDocument();
   });
 });
