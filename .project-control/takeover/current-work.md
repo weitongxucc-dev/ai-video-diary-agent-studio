@@ -84,3 +84,11 @@ MAKE两项修复候选5ee08db已交，接手记录7c68f9c；工作树clean。作
 最新MAKE候选22f8dbb（说明bbb4f47）加入ctime_ns本机变化信号，作者等长改写负例通过，独立QA待复核；非内容hash保证，不覆盖特权/文件系统回滚或FFmpeg读取中并发改写，不在GET/准入无许可hash。保留当前HOLD直至QA结论。
 
 **最终MAKE QA：22f8dbb + SCHED dadc618在明确本地测试预算、真实HostResourceProbe下，三项原QA负例全部转绿，授权纯素材CPU子集PASS（27相关测试）。报告见evidence/make-22f8dbb-sched-dadc618-review.md。此前3aa/5ee HOLD记录为历史问题，针对22f8已解除；代码仍未集成，生产scheduled未开启，ctime能力限制与不支持组合保持。接手下一步是审核具体依赖并集成该限定候选，不重修已通过问题。**
+
+## 接手会话与最新派工
+
+用户指定待接手主控：cmux workspace:1 / pane:5 / surface:5；workspace UUID BE83C5BA-3D23-496F-8BDD-EF6E636F38B2，surface UUID 46676ED9-59B6-43EA-97DF-7A066A2C4973。核对时Claude Code glm-5.3 high，尚未正式切换主控。先只读ACK，不同时派单/集成。
+
+最新开发分支adff317：WIL-72（parent WIL-23）已授权MAKE本人录音保存/试听/旁白替换，精确范围见active-contract末节。WIL-69 UI正在修提交期间取消竞态；QA在审。WIL-70 a8fdc2b由Claude surface:2审核，WIL-71 c955130由Pi surface:1审核/补浏览器证据。它们尚未集成；不要因旧额度阻塞记录重新派同一任务。PR45 head8f8b131三项CI全部通过，对应c0ec4bc代码树；adff317只新增派工合同。
+
+接手会话先将读取确认、工具可用性、Git/Linear现况与未决项写到主控项目 external-agents/controller-handoff-ack.md。这是通信回执，不改变主控。现主控通过cmux read-screen及该文件读取；cmux发送后必须读屏确认执行。正式切换后唯一主控在active-contract登记，原主控停止新派单/集成。两边不同时操作集成分支。
