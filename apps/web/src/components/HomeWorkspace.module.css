@@ -20,14 +20,15 @@
 .range { display: flex; gap: 3px; }
 .range button { min-height: 26px; padding: 0 7px; border: 1px solid var(--border-1); border-radius: 5px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .range button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-1); }
-.card svg[role="img"] { display: block; width: 100%; height: 80px; margin-top: 8px; }
+.chart svg { display: block; width: 100%; height: 80px; margin-top: 8px; }
+.chartLabels { display: flex; justify-content: space-between; color: var(--text-2); font-size: 11px; }
 .cardEmpty { display: grid; min-height: 80px; place-items: center; padding: 8px; color: var(--text-2); font-size: 12px; text-align: center; }
 .donutLayout { display: flex; align-items: center; gap: 10px; padding-top: 8px; }
-.donut { position: relative; display: grid; width: 104px; height: 104px; flex: 0 0 auto; align-content: center; justify-items: center; border-radius: 50%; }
-.donut::before { position: absolute; inset: 16px; border-radius: 50%; background: var(--surface-1); content: ""; }
-.donut > * { position: relative; }
-.donut strong { font-size: 19px; font-weight: 500; }
-.donut small { text-align: center; }
+.donutInteractive { position: relative; width: 104px; height: 104px; flex: 0 0 auto; }
+.donut { display: block; width: 100%; height: 100%; }
+.donut circle[aria-hidden="true"] { cursor: pointer; }
+.donutHit { position: absolute; width: 26px; height: 26px; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.donutHit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .legend { display: grid; flex: 1; gap: 3px; }
 .legend button { display: flex; align-items: center; gap: 6px; min-height: 25px; padding: 2px; border: 0; border-radius: 4px; background: transparent; color: var(--text-1); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .legend button:hover, .legend button[aria-pressed="true"] { background: var(--surface-2); }
@@ -47,7 +48,12 @@ button.queueRow:hover { background: var(--surface-2); }
 .cloudField button { padding: 2px; border: 0; border-radius: 3px; background: transparent; color: var(--accent); font: inherit; line-height: 1.2; cursor: pointer; }
 .cloudField button:hover, .cloudField button[aria-pressed="true"] { background: var(--surface-2); text-decoration: underline; }
 .cloudField sup { margin-left: 2px; color: var(--text-2); font-size: 9px; }
-.filterNote { margin: 3px 0 0; color: var(--text-2); font-size: 11px; }
+.filterResults { display: grid; gap: 10px; min-width: 280px; }
+.filterResults > p { margin: 0; color: var(--text-2); font-size: 12px; }
+.filterResults > strong { font-size: 13px; font-weight: 500; }
+.filterResult { display: grid; gap: 3px; padding: 9px 0; border-top: 1px solid var(--border-1); }
+.filterResult span { font-size: 13px; }
+.filterResult small { color: var(--text-2); font-size: 11px; }
 .workRow { display: flex; align-items: center; gap: 8px; min-height: 47px; padding: 6px 0; border-top: 1px solid var(--border-1); color: var(--text-1); text-decoration: none; }
 .workRow:first-of-type { margin-top: 7px; }
 .workRow > span { display: grid; width: 36px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 4px; background: var(--surface-2); color: var(--accent); }

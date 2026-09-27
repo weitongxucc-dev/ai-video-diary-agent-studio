@@ -17,6 +17,7 @@ const task: CreationTask = {
   stage_impact: null, stage_repair_action: null, stage_retryable: null,
   created_at: "2026-09-27T08:00:00Z", updated_at: "2026-09-27T08:00:00Z",
 };
+const points = (count: number) => Array.from({ length: count }, (_, index) => ({ date: "2026-09-" + String(index + 1).padStart(2, "0"), count: index % 5 }));
 const sample: HomeDashboardExample = {
   scopeLabel: "主账号演示 · 本机与成员汇总", example: true,
   counts: [
@@ -24,9 +25,10 @@ const sample: HomeDashboardExample = {
     { label: "待分析", value: 3 }, { label: "知识来源", value: 4 },
     { label: "作品记录", value: 2 },
   ],
-  trend: { sevenDays: [1, 0, 3, 2, 1, 4, 1], thirtyDays: [4, 2, 1, 5, 3, 2, 6] },
+  trend: { sevenDays: points(7), thirtyDays: points(30) },
   industries: [{ label: "设备", count: 7 }, { label: "餐饮", count: 5 }],
   tags: [{ label: "门店", count: 4 }, { label: "操作", count: 2 }],
+  assets: Array.from({ length: 12 }, (_, index) => ({ id: "asset-" + index, title: "示例素材 " + (index + 1), industry: index < 7 ? "设备" : "餐饮", tags: index < 4 ? ["门店"] : index < 6 ? ["操作"] : [] })),
   queue: [{ id: "queue-one", title: "产品演示", stage: "制作中", detail: "示例队列" }],
   works: [{ id: "work-one", title: "门店介绍", status: "本地成片" }],
 };
@@ -60,7 +62,32 @@ describe("HomeWorkspace", () => {
     expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("12");
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+    const chart = screen.getByRole("img", { name: "示例素材接收趋势" });
+    const circles = chart.querySelectorAll("circle");
+    expect(circles).toHaveLength(30);
+    expect(Number(circles[0].getAttribute("cx"))).toBe(12);
+    expect(Number(circles[29].getAttribute("cx"))).toBe(274);
+    expect(screen.getByText("2026-09-30")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /门店4/ }));
-    expect(screen.getByText("示例已选择：门店")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "示例素材筛选" })).toHaveTextContent("4 条对应示例素材");
+    expect(screen.getByRole("dialog", { name: "示例素材筛选" })).toHaveTextContent("示例素材 1");
+    expect(screen.getByRole("dialog", { name: "示例素材筛选" })).not.toHaveTextContent("示例素材 12");
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "查看设备示例素材" }), { key: "Enter" });
+    expect(screen.getByRole("dialog", { name: "示例素材筛选" })).toHaveTextContent("7 条对应示例素材");
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
+    fireEvent.click(screen.getByRole("button", { name: /餐饮5/ }));
+    expect(screen.getByRole("dialog", { name: "示例素材筛选" })).toHaveTextContent("5 条对应示例素材");
+  });
+
+  it("keeps all 0, 1 and 7 trend points inside the chart", () => {
+    const zero = render(<HomeWorkspace foundation={null} tasks={[]} dashboard={{ ...sample, trend: { ...sample.trend, sevenDays: [] } }} />);
+    expect(screen.getByText("这段示例期间没有素材接收记录")).toBeInTheDocument();
+    zero.rerender(<HomeWorkspace foundation={null} tasks={[]} dashboard={{ ...sample, trend: { ...sample.trend, sevenDays: points(1) } }} />);
+    expect(screen.getByRole("img", { name: "示例素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
+    zero.rerender(<HomeWorkspace foundation={null} tasks={[]} dashboard={sample} />);
+    const circles = screen.getByRole("img", { name: "示例素材接收趋势" }).querySelectorAll("circle");
+    expect(circles).toHaveLength(7);
+    expect(Number(circles[6].getAttribute("cx"))).toBe(274);
   });
 });
