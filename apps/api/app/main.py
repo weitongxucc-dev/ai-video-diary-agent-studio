@@ -9128,11 +9128,17 @@ def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationT
     return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
 
 
-def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip) -> str:
+def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip, cue: NarrationCue) -> str:
     """Return an authorized source interval; browser playback does no media work."""
     if clip.person_render_id:
         render = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
-        if clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}":
+        if render.narration_segment_id != cue.narration_segment_id:
+            raise ValueError("人物口型镜头与当前配音段落不匹配")
+        synthetic_source = clip.asset_id == f"person:{render.id}" and clip.source_path == f"person-render://{render.id}"
+        legacy_source = clip.source_path == render.visual_reference and not clip.asset_id.startswith("person:")
+        if legacy_source:
+            production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        if not (synthetic_source or legacy_source):
             raise ValueError("人物口型镜头来源不匹配")
         path = _person_render_media_path(render)
         if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + .001:
@@ -9309,8 +9315,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     if payload.operation_type == "TrimClip":
         try:
             for side, target in (("before", before_clip), ("after", after_clip)):
-                media_previews[side] = {"video_url": _trim_clip_source_url(workspace_id, task_id, target)}
-        except (KeyError, ValueError, OSError) as exc:
+                cue = next(cue for cue in plan.cues if cue.id == target.cue_id)
+                media_previews[side] = {"video_url": _trim_clip_source_url(workspace_id, task_id, target, cue)}
+        except (KeyError, StopIteration, ValueError, OSError) as exc:
             raise HTTPException(status_code=422, detail="裁剪源片段不可播放，请检查素材或人物口型产物") from exc
         if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
             raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")

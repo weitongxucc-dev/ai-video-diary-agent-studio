@@ -769,6 +769,20 @@ def person_render_edit_state(tmp_path, monkeypatch):
     )
 
 
+def test_trim_person_preview_accepts_legacy_and_synthetic_sources_but_checks_render_owner(person_render_edit_state):
+    state = person_render_edit_state
+    clip = state.montage.clips[0]
+    cue = state.montage.cues[0]
+    expected = f"/api/creation-tasks/{state.task.id}/person-renders/{state.old_render.id}/media#t=0.000,4.000"
+    assert main_module._trim_clip_source_url(state.workspace_id, state.task.id, clip, cue) == expected
+    synthetic = replace(clip, asset_id=f"person:{state.old_render.id}", source_path=f"person-render://{state.old_render.id}")
+    assert main_module._trim_clip_source_url(state.workspace_id, state.task.id, synthetic, cue) == expected
+    with pytest.raises(ValueError, match="配音段落不匹配"):
+        main_module._trim_clip_source_url(state.workspace_id, state.task.id, clip, replace(cue, narration_segment_id="foreign"))
+    with pytest.raises(KeyError):
+        main_module._trim_clip_source_url(state.workspace_id, f"{state.task.id}-other", synthetic, cue)
+
+
 def test_planner_matches_approved_segments_with_traceable_reasons(tmp_path):
     plan = MontagePlanner().build(
         workspace_id="workspace_a",
