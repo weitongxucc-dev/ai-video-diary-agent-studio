@@ -2272,11 +2272,21 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     )
 
 
-def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path):
+def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypatch):
     database_path = tmp_path / "production-v5.sqlite3"
     migration_five = dict(_MIGRATIONS)[5]
     created_at = datetime.now(timezone.utc).isoformat()
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    # Real Production databases create the base material tables before applying
+    # numbered migrations. Preserve that order when constructing the v5 fixture.
+    with monkeypatch.context() as patch:
+        patch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+        ProductionRepository(database_path, library_path)
     with sqlite3.connect(database_path) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='material_ingestion_files'"
+        ).fetchone() == ("material_ingestion_files",)
         conn.executescript(migration_five)
         conn.execute(
             """
