@@ -65,3 +65,5 @@ SCHED7c9414e监测叶子QA通过；MAT d4519ed已补Limit终态/Unavailable延�
 MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作树已干净。说明见evidence/production-takeover-status.md。工作者专项15+39+18通过，主路径独立QA尚待；必须验证inner/outer检查点崩溃恢复不重复FFmpeg、取消竞争和多空间，不能引用旧montage叶子PASS替代。仅旁白+纯素材剪辑，生产scheduled未启用。
 
 **最新QA阻断（3aa2464）：** 已实证inner产物发布后、outer检查点前崩溃，重进执行会再次跑FFmpeg（调用1→2）。初判新增字幕轨道改变重算input_digest，使成功内层作业无法复用。QA隔离失败用例位于26aa/original/work/qa-011/output/make-3aa2464-sched-dadc618/apps/api/tests/test_creation_execution.py；已退回MAKE修复。该候选禁止按原专项通过直接集成，稳定输入绑定与真实版本变化都须覆盖。
+
+**同候选第二QA阻断：** assert_grant之后、claim_job_run之前API将JobRun取消，claim抛ValueError而permit遗留held。须在无活进程且状态核实后可靠释放，不能无条件finally放行。QA用例test_qa_cancel_between_initial_grant_check_and_claim_releases_permit已失败；第一重复渲染问题也在真实HostResourceProbe下复现。两项均已交MAKE，后续新SHA须复验。
