@@ -104,4 +104,3 @@ function KnowledgeInspector({ item, exampleMode }: { item: KnowledgeDisplayItem;
     <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? item.exampleIssue ?? "示例未标记问题" : "冲突检测与人工纠正保存尚未接入；请核对原始来源后再用于创作。"}</p><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></section>
   </div>;
 }
-
