@@ -71,3 +71,5 @@ MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作�
 MAKE两项修复候选5ee08db已交，接手记录7c68f9c；工作树clean。作者报恢复实际render1→1、源字节/独立版本变化拒绝旧许可、claim前取消释放通过。**独立QA尚未复验，不解除原HOLD。** 对应实现/验证说明见最新production-takeover-status.md；不挑入纯handoff提交亦可读取说明。
 
 5ee08db独立QA增量：旧重复渲染/claim取消两项已转绿；新源身份HOLD：等长改1byte并恢复mtime_ns（ctime变化）旧grant仍放行。当前stat元数据不是内容hash。已退回MAKE最小修复，内容重验必须受许可，不能在GET/准入里无许可全文件hash。独立版本变化仍待报告；候选整体仍未通过。
+
+最新MAKE候选22f8dbb（说明bbb4f47）加入ctime_ns本机变化信号，作者等长改写负例通过，独立QA待复核；非内容hash保证，不覆盖特权/文件系统回滚或FFmpeg读取中并发改写，不在GET/准入无许可hash。保留当前HOLD直至QA结论。
