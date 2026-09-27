@@ -1805,7 +1805,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
     monkeypatch.setattr(
-        main_module, "settings", SimpleNamespace(video_output_path=str(output_root), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp")
+        main_module, "settings", SimpleNamespace(video_output_path=str(output_root), video_inbox_path=str(tmp_path), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp")
     )
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
@@ -2075,16 +2075,10 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
     before_trim_version = production.get_creation_task(workspace_id, task.id).current_timeline_version_id
-    trim_candidates = []
-
-    def record_trim_preview(_workspace_id, _task, _base, candidate, _tracks, *, kind, parameters):
-        assert kind == "trim_preview"
-        trim_candidates.append((parameters["side"], candidate.clips[0].source_start_seconds))
-        return SimpleNamespace(id=f"trim-{parameters['side']}", logical_ref=f"artifacts/trim-{parameters['side']}.mp4")
-
     proposal_count = len(production.list_edit_proposals(workspace_id, task.id))
+    original_resolve = production.resolve_clip_media_reference
     monkeypatch.setattr(
-        main_module, "_publish_task_picture_preview",
+        production, "resolve_clip_media_reference",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("源素材已断开")),
     )
     unavailable_preview = client.post(
@@ -2094,7 +2088,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert unavailable_preview.status_code == 422
     assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
     assert len(production.list_edit_proposals(workspace_id, task.id)) == proposal_count
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", record_trim_preview)
+    monkeypatch.setattr(production, "resolve_clip_media_reference", original_resolve)
 
     trim_preview = client.post(
         f"/api/creation-tasks/{task.id}/edits/exact/preview",
@@ -2105,8 +2099,11 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         },
     )
     assert trim_preview.status_code == 200, trim_preview.text
-    assert trim_candidates == [("before", before_trim_start), ("after", before_trim_start + 0.5)]
-    assert trim_preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("/trim-after")
+    before_url = trim_preview.json()["proposal"]["preview"]["before"]["video_url"]
+    after_url = trim_preview.json()["proposal"]["preview"]["after"]["video_url"]
+    assert before_url.endswith(f"#t={before_trim_start:.3f},{rerendered_plan.clips[0].source_end_seconds:.3f}")
+    assert after_url.endswith(f"#t={before_trim_start + 0.5:.3f},{rerendered_plan.clips[0].source_end_seconds + 0.5:.3f}")
+    assert before_url.split("#")[0] == after_url.split("#")[0]
     assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
     exact_trim = client.post(f"/api/creation-tasks/{task.id}/edits/{trim_preview.json()['proposal']['id']}/confirm")
     assert exact_trim.status_code == 200, exact_trim.text
@@ -2897,6 +2894,9 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
     response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
     assert response.status_code == 200, response.text
+    versioned_task = state.production.get_creation_task(state.workspace_id, task.id)
+    assert versioned_task.current_timeline_version_id is not None
+    assert len(state.production.list_timeline_versions(state.workspace_id, task.id)) == 1
     montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
     assert montage.clips and all(clip.fit_mode == "fit" for clip in montage.clips)
     assert all(clip.visual_effects == (plan.template_settings.get("color_style") or {}) for clip in montage.clips)

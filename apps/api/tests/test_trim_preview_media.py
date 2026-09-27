@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,8 +29,9 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     subprocess.run([
         "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=640x360:d=1.2",
         "-f", "lavfi", "-i", "color=c=blue:s=640x360:d=1.2",
-        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]",
-        "-pix_fmt", "yuv420p", str(video),
+        "-f", "lavfi", "-i", "sine=frequency=660:duration=2.4",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2:a",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video),
     ], check=True, capture_output=True)
     subprocess.run([
         "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
@@ -90,22 +92,65 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "montage_renderer", MontageRenderer(tmp_path / "output"))
-    monkeypatch.setattr(main_module, "settings", SimpleNamespace(effective_temporary_root_path=tmp_path / "temp"))
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(
+        video_inbox_path=str(tmp_path), effective_temporary_root_path=tmp_path / "temp",
+    ))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
         repository, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
     )
 
     client = TestClient(main_module.app)
-    preview = client.post(f"/api/creation-tasks/{task_id}/edits/exact/preview", json={
+    route = f"/api/creation-tasks/{task_id}/edits/exact/preview"
+    initial = client.post(route, json={
         "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
     })
+    assert initial.status_code == 409
+    assert initial.json()["detail"]["error"] == "timeline_version_required"
+    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.list_job_runs(workspace_id, task_id) == []
+    initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize")
+    assert initialized.status_code == 200, initialized.text
+    assert initialized.json()["version_id"] == repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
+    assert repository.get_creation_task_montage_plan(workspace_id, task_id)["clips"][0]["source_start_seconds"] == 0
+    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+
+    original_resolve = repository.resolve_clip_media_reference
+    resolve_calls = 0
+
+    def unavailable_after(_workspace_id, _asset_id, _source_path):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        if resolve_calls == 2:
+            raise ValueError("裁剪后源片段不可用")
+        return original_resolve(_workspace_id, _asset_id, _source_path)
+
+    with monkeypatch.context() as missing_after:
+        missing_after.setattr(repository, "resolve_clip_media_reference", unavailable_after)
+        incomplete = client.post(route, json={
+            "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
+        })
+    assert incomplete.status_code == 422
+    assert repository.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.list_job_runs(workspace_id, task_id) == []
+
+    with monkeypatch.context() as no_media_work:
+        no_media_work.setattr(
+            main_module.subprocess, "run",
+            lambda *_args, **_kwargs: pytest.fail("TrimClip preview must not launch FFmpeg"),
+        )
+        preview = client.post(route, json={
+            "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
+        })
     assert preview.status_code == 200, preview.text
     version_after_preview = repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert version_after_preview is not None
-    for side, dominant in (("before", "red"), ("after", "blue")):
+    for side, dominant, start, end in (("before", "red", 0, 1), ("after", "blue", 1.2, 2.2)):
         url = preview.json()["proposal"]["preview"][side]["video_url"]
-        media = client.get(url)
+        fragment = urlsplit(url)
+        assert fragment.fragment == f"t={start:.3f},{end:.3f}"
+        media = client.get(fragment.path)
         assert media.status_code == 200 and media.headers["content-type"].startswith("video/mp4")
         output = tmp_path / f"{side}.mp4"
         output.write_bytes(media.content)
@@ -114,10 +159,10 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             "-of", "json", str(output),
         ], check=True, capture_output=True, text=True).stdout)
         assert {stream["codec_type"] for stream in probe["streams"]} == {"video", "audio"}
-        assert float(probe["format"]["duration"]) == pytest.approx(1, abs=0.15)
+        assert float(probe["format"]["duration"]) == pytest.approx(2.4, abs=0.15)
         frame = tmp_path / f"{side}.png"
         subprocess.run([
-            "ffmpeg", "-v", "error", "-y", "-ss", "0.5", "-i", str(output),
+            "ffmpeg", "-v", "error", "-y", "-ss", str(start + .5), "-i", str(output),
             "-frames:v", "1", str(frame),
         ], check=True, capture_output=True)
         with Image.open(frame) as image:
@@ -126,3 +171,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
 
     assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
     assert repository.list_edit_operations(workspace_id, task_id) == []
+    assert repository.list_job_runs(workspace_id, task_id) == []
+    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "another-workspace")
+    assert client.get(preview.json()["proposal"]["preview"]["after"]["video_url"].split("#")[0]).status_code == 404

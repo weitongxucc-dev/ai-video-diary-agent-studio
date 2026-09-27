@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -2978,7 +2978,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     _creation_task_or_404(workspace_id,task_id)
     try:
         record=production_repo.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "trim_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview", "silence_preview"}:
+        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview", "silence_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
@@ -5291,6 +5291,7 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
             montage.id,
             creation_task_montage_plan_to_payload(montage),
         )
+        _ensure_montage_base_version(workspace_id, task, montage)
     except (KeyError, MediaAuthorityError, ValueError, HTTPException) as exc:
         task = production_repo.fail_creation_task_stage(
             workspace_id,
@@ -5485,6 +5486,23 @@ def _ensure_montage_base_version(
         created_by_operation_id=None,
     )
     return production_repo.create_timeline_version(version)
+
+
+@app.post("/api/creation-tasks/{task_id}/timeline/initialize")
+def initialize_creation_task_timeline(task_id: str, request: Request) -> dict[str, str]:
+    """Explicitly snapshot a legacy storyboard before the user starts editing it."""
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.stage not in {"montage", "review"}:
+        raise HTTPException(status_code=409, detail="当前任务尚无可编辑的故事板")
+    plan = creation_task_montage_plan_from_payload(
+        production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+    )
+    _logical_montage_output_refs(plan)
+    version = _ensure_montage_base_version(workspace_id, task, plan)
+    if task.current_timeline_version_id is None:
+        version = production_repo.create_timeline_version(version)
+    return {"version_id": version.id}
 
 
 def _prepare_changed_montage(
@@ -9110,6 +9128,25 @@ def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationT
     return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
 
 
+def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip) -> str:
+    """Return an authorized source interval; browser playback does no media work."""
+    if clip.person_render_id:
+        render = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
+        if clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}":
+            raise ValueError("人物口型镜头来源不匹配")
+        path = _person_render_media_path(render)
+        if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + .001:
+            raise ValueError("人物口型源片段不可用")
+        route = f"/api/creation-tasks/{quote(task_id, safe='')}/person-renders/{quote(render.id, safe='')}/media"
+    else:
+        path = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        path.relative_to(Path(settings.video_inbox_path).expanduser().resolve())
+        route = f"/api/production/materials/{quote(clip.asset_id, safe='')}/media"
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError("镜头源片段不可用")
+    return f"{route}#t={clip.source_start_seconds:.3f},{clip.source_end_seconds:.3f}"
+
+
 def _preview_exact_montage_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
@@ -9133,6 +9170,15 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             repair_action="选择另一个片段，或调整裁剪起点。", retryable=True,
         )
     invalidated_refs = _logical_montage_output_refs(persisted_plan)
+    if payload.operation_type == "TrimClip" and task.current_timeline_version_id is None:
+        raise _topic_failure_response(
+            status_code=409,
+            error="timeline_version_required",
+            reason="当前故事板还没有可撤销的初始版本。",
+            impact="裁剪预览和有效时间线均未改变。",
+            repair_action="点击“保留当前故事板并建立版本”，再预览裁剪。",
+            retryable=True,
+        )
     base_version = _ensure_montage_base_version(workspace_id, task, persisted_plan)
     task = production_repo.get_creation_task(workspace_id, task_id)
     plan = creation_task_montage_plan_from_payload(
@@ -9261,34 +9307,11 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
             raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     if payload.operation_type == "TrimClip":
-        tracks = _current_subtitle_tracks(
-            workspace_id, task, current_version=base_version, montage=persisted_plan,
-        )
         try:
-            for side, candidate, target in (
-                ("before", persisted_plan, before_clip),
-                ("after", plan, after_clip),
-            ):
-                record = _publish_task_picture_preview(
-                    workspace_id, task, base_version, candidate, tracks,
-                    kind="trim_preview",
-                    parameters={
-                        "clip_id": payload.clip_id,
-                        "side": side,
-                        "source_start_seconds": target.source_start_seconds,
-                        "source_end_seconds": target.source_end_seconds,
-                    },
-                )
-                media_previews[side] = {
-                    "ref": record.logical_ref,
-                    "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}",
-                }
-        except (ValueError, OSError, subprocess.SubprocessError) as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=str(exc) if isinstance(exc, ValueError)
-                else "裁剪视听预览失败，请检查源素材、配音、FFmpeg 和外接盘",
-            ) from exc
+            for side, target in (("before", before_clip), ("after", after_clip)):
+                media_previews[side] = {"video_url": _trim_clip_source_url(workspace_id, task_id, target)}
+        except (KeyError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail="裁剪源片段不可播放，请检查素材或人物口型产物") from exc
         if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
             raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     before_label = "人物口播" if before_clip.person_render_id else production_repo.get_asset(workspace_id, before_clip.asset_id).file_name
@@ -9338,7 +9361,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                     **media_previews.get("after", {}),
                 },
             },
-            external_effects=(["已在本地生成完整时间线的裁剪前后视听对比；有效任务版本尚未改变。"]
+            external_effects=(["可播放裁剪前后的源片段区间；成片配音、字幕和画面效果以最终渲染为准。有效任务版本未改变。"]
                 if payload.operation_type == "TrimClip" else
                 ["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"]
                 if media_previews else ["只更新任务版本；重新渲染前不会执行媒体进程。"]),
