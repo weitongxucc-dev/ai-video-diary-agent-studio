@@ -2806,6 +2806,32 @@ def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile
     return {"source_ref": record.logical_ref, "name": Path(audio.filename or "音频").name[:120], "duration_ms": round(duration*1000)}
 
 
+@app.get("/api/creation-tasks/{task_id}/audio/recordings")
+def list_creation_task_recordings(task_id: str, request: Request):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if not task.confirmed_script_id or not task.montage_plan_id:
+        return {"items": []}
+    service = _task_audio()
+    plan = creation_task_montage_plan_from_payload(
+        production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    current_narration_refs = {clip.source_ref for track in _effective_audio_timeline(plan).tracks
+                              if track.role == "narration" for clip in track.clips}
+    items = []
+    for record in reversed(production_repo.list_artifact_records(workspace_id, task_id)):
+        if record.kind != "task_recording":
+            continue
+        try:
+            _, duration_ms = service.recording(workspace_id, task_id, record.logical_ref)
+        except (KeyError, ValueError, FileNotFoundError):
+            continue  # Failed or obsolete uploads are never offered as current narration.
+        items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
+                      "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
+                      "duration_ms": duration_ms, "created_at": record.created_at.isoformat(),
+                      "applied": record.logical_ref in current_narration_refs})
+    return {"items": items}
+
+
 @app.post("/api/creation-tasks/{task_id}/audio/recordings")
 def save_creation_task_recording(task_id: str, request: Request, audio: UploadFile = File(...)):
     workspace_id = current_workspace_id(request)

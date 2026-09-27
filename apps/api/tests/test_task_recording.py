@@ -105,6 +105,8 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     saved = uploaded.json()
     assert saved["applied"] is False and saved["duration_ms"] == 1000
     assert client.get(saved["audio_url"]).content == wav_bytes()
+    assert client.get(route + "/audio/recordings").json()["items"][0]["source_ref"] == saved["source_ref"]
+    assert client.get(route + "/audio/recordings").json()["items"][0]["applied"] is False
     assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
     assert repo.get_creation_task_montage_plan("local", task_id)["audio_timeline"] is None
 
@@ -125,6 +127,7 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     assert montage["audio_timeline"]["tracks"][0]["clips"] == [montage["audio_timeline"]["tracks"][0]["clips"][0]]
     assert montage["output_path"] is None and montage["status"] == "ready"
     assert repo.get_creation_task("local", task_id).narration_cache_key == "old_voice"
+    assert client.get(route + "/audio/recordings").json()["items"][0]["applied"] is True
 
 
 def test_recording_rejects_wrong_version_duration_and_container(recording_task):
@@ -209,6 +212,23 @@ def test_recording_proposal_cannot_apply_after_version_changes(recording_task):
     confirmed = client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={})
     assert confirmed.status_code == 409
     assert repo.get_creation_task_montage_plan("local", task_id)["audio_timeline"] is None
+
+
+def test_recordings_list_excludes_incomplete_and_other_workspace(recording_task, monkeypatch):
+    repo, task_id, _version, client = recording_task
+    route = f"/api/creation-tasks/{task_id}/audio/recordings"
+    first = client.post(route, files={"audio": ("first.wav", wav_bytes(), "audio/wav")}).json()
+    second = client.post(route, files={"audio": ("second.wav", wav_bytes(), "audio/wav")}).json()
+    assert [item["source_ref"] for item in client.get(route).json()["items"]] == [
+        second["source_ref"], first["source_ref"]]
+    transform_id = second["source_ref"].split("/")[-2].replace("job_", "transform_", 1)
+    with repo._connect() as conn:
+        conn.execute("UPDATE transform_runs SET status='failed' WHERE workspace_id=? AND id=?",
+                     ("local", transform_id))
+    assert [item["source_ref"] for item in client.get(route).json()["items"]] == [first["source_ref"]]
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "other_workspace")
+    assert client.get(route).status_code == 404
+    assert client.get(first["audio_url"]).status_code == 404
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
