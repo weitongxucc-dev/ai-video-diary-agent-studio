@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 7
+PRODUCTION_SCHEMA_VERSION = 8
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -400,6 +400,67 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
                 created_at ASC,
                 id ASC
             );
+        """,
+    ),
+    (
+        8,
+        """
+        CREATE TABLE device_work_requests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT,
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            work_class TEXT NOT NULL CHECK (work_class IN ('preview_dependency', 'normal_make', 'background')),
+            policy TEXT NOT NULL CHECK (policy IN ('asap', 'idle', 'scheduled')),
+            not_before_utc TEXT,
+            window_json TEXT,
+            first_ready_at_utc TEXT NOT NULL,
+            eligible_since_utc TEXT,
+            eligible_wait_seconds REAL NOT NULL DEFAULT 0,
+            state TEXT NOT NULL CHECK (state IN ('waiting', 'blocked', 'granted', 'yield_requested', 'done', 'cancelled')),
+            wait_reason TEXT,
+            checkpoint_ref TEXT,
+            resources_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, owner_type, owner_id, input_digest, unit_key)
+        );
+        CREATE INDEX idx_device_work_pending
+            ON device_work_requests(state, work_class, first_ready_at_utc, id);
+
+        CREATE TABLE device_permit (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            lock_key TEXT,
+            generation INTEGER NOT NULL DEFAULT 0,
+            request_id TEXT,
+            token_hash TEXT,
+            holder_json TEXT,
+            children_json TEXT NOT NULL DEFAULT '[]',
+            granted_at_utc TEXT,
+            heartbeat_at_utc TEXT,
+            state TEXT NOT NULL DEFAULT 'free' CHECK (state IN ('free', 'held', 'reconciling')),
+            last_groups_json TEXT NOT NULL DEFAULT '{}',
+            preview_burst INTEGER NOT NULL DEFAULT 0,
+            normal_burst INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO device_permit (id) VALUES (1);
+
+        CREATE TABLE device_session_activity (
+            session_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            last_heartbeat_at_utc TEXT NOT NULL,
+            last_interaction_at_utc TEXT NOT NULL,
+            playing INTEGER NOT NULL CHECK (playing IN (0, 1)),
+            recording INTEGER NOT NULL CHECK (recording IN (0, 1)),
+            editing INTEGER NOT NULL CHECK (editing IN (0, 1))
+        );
+        CREATE INDEX idx_device_session_heartbeat
+            ON device_session_activity(last_heartbeat_at_utc);
         """,
     ),
 )

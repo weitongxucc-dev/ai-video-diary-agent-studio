@@ -1,6 +1,6 @@
 # 0.11 整机重活调度：接线与验收提案
 
-状态：**待主控裁决的实现方案**，不是产品权威，也不是已实现功能。基线 `78ef479b0e80e6778a0a6e1807f69051f9e3d81f`；只依据当前 [PRD 12.1](../../docs/product-requirements.md#121-同一台主机的任务安排011)、[架构 3.12](../../docs/system-architecture.md#312-整机资源调度)、[领域 8.4](../../docs/domain-model.md#84-设备执行安排)、[设计 5.9.1](../../DESIGN.md#591-设备忙碌与执行时间) 和活动合同。硬件两档尚未决定，首版只准一个本地重活单元；性能、让出时间与五人可用性待同设备实测。
+状态：WIL-57 调度核心候选及后续接线说明，不是产品权威或端到端完成证明。最初方案基线 `78ef479b0e80e6778a0a6e1807f69051f9e3d81f`，当前需求基线 `eadb2ce008cb8f018ba6f38a12fd70ce0b9ed5b3`；以当前 [PRD 1.2](../../docs/product-requirements.md#12-主账号工作空间与整机视图)、[PRD 12.1](../../docs/product-requirements.md#121-同一台主机的任务安排011)、[架构 3.12](../../docs/system-architecture.md#312-整机资源调度)、[架构 9](../../docs/system-architecture.md#9-多空间知识召回与状态投影)、[认证 9](../../docs/auth-workspace-boundary.md#9-主账号邀请与共享授权) 和活动合同为准。硬件两档尚未决定，首版只准一个本地重活单元；性能、让出时间与五人可用性待同设备实测。
 
 ## 1. 基线风险和必须封住的入口
 
@@ -15,30 +15,33 @@
 
 以上是定向源码检查，不是动态覆盖率证明。后续用路由扫描、负向测试和运行时 instrumentation 核实最终候选。部分模型调用已有独立超时，不能因此推断其整个流程可抢占；`_vlm_execution_lock` 仅约束进程内 VLM，不能承担整机许可。
 
-## 2. 单一协调者和最小持久字段
+## 2. 单一协调者和当前候选接口
 
-在现有 Production SQLite 中新增 **调度元数据**，不创建第二个 CreationTask、素材任务或成片状态机。`JobRun/TaskEvent`、`material_ingestion_files/material_assets/material_segment_features` 仍是业务事实；调度行只引用它们。
+v8 迁移仅增加调度元数据，不创建第二个 CreationTask、素材任务或成片状态机。`device_work_requests` 按 `(workspace_id, owner_type, owner_id, input_digest, unit_key)` 去重，保存经服务端验证的请求成员、任务空间、原对象引用、类别、时间策略、等待年龄和检查点引用。`device_permit` 是业务库内的单行 fencing 事实；同机稳定锁路径及其持久账本跨不同业务库阻止双重许可。`device_session_activity` 只存经验证会话的活动布尔量及心跳。完整字段以 `database_migrations.py` 的 v8 为准。
 
-1. `device_work_requests`：`id`、`workspace_id`、`member_id NULL`（仅服务端已验 `AuthPrincipal.user_id`；后台为 NULL）、`owner_type` (`job_run`/`material_asset`/`media_preview`/其他已存在对象)、`owner_id`、`input_digest`、`unit_key`、`class` (`preview_dependency`/`normal_make`/`background`)、`policy` (`asap`/`idle`/`scheduled`)、`not_before_utc`、`window_spec_json`（IANA 时区、允许的本地起止时间，跨日也适用）、`first_ready_at_utc`、`eligible_since_utc`（当前单元开始合格等待的时间）、`state` (`waiting`/`granted`/`yield_requested`/`blocked`/`done`/`cancelled`)、`wait_reason`、`checkpoint_ref`、`requested_resources_json`、`created_at/updated_at`。唯一键 `(owner_type, owner_id, input_digest, unit_key)`；`member_id` 取服务器验证身份，用户跨工作区仍按同一成员轮转，NULL 后台按 workspace 分组。重试、改时段、重启均不得重置同一单元的 `first_ready_at_utc/eligible_since_utc`；成功运行后下一单元有自己的 `eligible_since_utc`，防止同一素材靠旧年龄连续插队。
-2. `device_permit` 单行 `id=1`：`generation` 单调递增、`request_id`、`token_hash`、`holder_host/boot_id/pid/process_start`、`child_group_id/child_process_start`、`granted_at/heartbeat_at`、`state` (`free`/`held`/`reconciling`)、`last_served_group_json`、`preview_burst/normal_burst`。它是**全设备一份**，由 `BEGIN IMMEDIATE` 下的唯一协调者事务修改；`generation+token` 是 fencing 身份，旧执行者不得写检查点或提交成功。首次单重活，不能通过其他 Python 进程的 Semaphore、VLM 锁或线程池再放行。
-3. `device_session_activity`：服务器生成的 `session_id`、`member_id`、`workspace_id`、`last_heartbeat_at`、`last_interaction_at`、`playing/recording/editing`，仅存调度状态而不存文字、媒体或路径。客户端必须来自已验证桌面会话；过期心跳不永久占用优先级，也不取消已提交作业。没有可靠活动上报前，`idle` 策略标不可用；可引导用户选择指定时间，不能猜测全机空闲。
-
-最小 Repository 接口（建议新增 `apps/api/app/device_scheduler.py` 承担选择/许可，SQLite DDL 由唯一持久化负责人放在 `database_migrations.py` 或 ProductionRepository 现有迁移入口；不可两处建表）：
+当前 `apps/api/app/device_scheduler.py` 暴露的接线接口：
 
 ```python
-submit(owner_ref, input_digest, unit_key, work_class, policy, principal_or_service,
-       not_before_utc=None, window=None, resources=None) -> DeviceWorkRequest
-next_admissible(now, device_sample) -> DeviceWorkRequest | None
-grant(request_id, coordinator_epoch) -> Grant(token, generation, unit_key)  # BEGIN IMMEDIATE + singleton CAS
-heartbeat(grant, holder_and_children, resource_sample) -> None
-request_yield(grant, reason) -> None
-checkpoint_and_release(grant, owner_checkpoint_write, next_unit=None) -> None  # same DB transaction
-fail_or_defer(grant, reason, retry_policy) -> None
-reconcile_on_startup() -> RecoveryVerdict
-view_for(principal, owner_ref=None) -> FilteredScheduleView
+scheduler = DeviceScheduler(database_path, device_lock_path,
+    owners=owner_verifier, resources=resource_probe, processes=process_probe,
+    activity_source_reliable=False)
+request = scheduler.submit(SubmissionIntent(workspace_id, owner_type, owner_id,
+    input_digest, unit_key, SchedulePolicy(...)), actor)
+grant = scheduler.pick_and_grant()  # Grant | None；一次只准入一个有界单元
+scheduler.assert_grant(grant)       # 紧邻实际模型或 FFmpeg 执行前调用
+scheduler.register_child(grant, child_identity)  # spawn 后、exec 前，取得 ACK
+scheduler.request_yield(grant, reason)
+scheduler.complete_unit(grant, checkpoint_database_path=database_path,
+    checkpoint_write=write_in_same_connection, next_intent=None, actor=None)
+scheduler.wake_existing(intent, actor)  # 手动素材入口仅唤醒已有自动请求
+scheduler.change_policy(request_id, policy, actor)
+scheduler.cancel(request_id, actor)
+scheduler.view_for(request_id, actor)
+scheduler.list_queue_for(actor)
+scheduler.heartbeat_session(heartbeat, actor)
 ```
 
-`submit` 与原业务对象的显式创建在同一事务，接口返回 `已安排` 而非 `正在渲染`。无当前已存在对象或来源身份不可信时拒绝提交。`owner_checkpoint_write` 是对应 MAT/MAKE 在**同一个 Repository 事务**内写业务结果、`TaskEvent` 与调度状态的回调/窄接口；产物文件先落临时路径、校验、原子改名，再落数据库引用。崩溃后的无引用文件当孤儿清理，不得当有效检查点；发生输入摘要、授权、模型版本变化时不复用旧检查点。
+`OwnerVerifier` 必须由既有业务对象和授权事实推导 `VerifiedWork`，不能信客户端填入的成员、类别或原对象空间。`check_current(request, conn)` 在准入、执行前和提交检查点时重查源摘要及共享授权；同库撤权在同一 SQLite 连接中核验，跨库授权未知则阻断。`ResourceProbe` 和 `ProcessProbe` 的未知结果也阻断准入或释放。`submit` 要求业务对象已存在，不与对象创建组成跨 API 事务；调用方负责先持久化对象。`complete_unit` 的回调在同一业务库事务内写业务结果，传入不同库路径会被拒绝。产物文件由 MAT/MAKE 先写临时路径并校验，再原子改名，最后在该回调中落引用；崩溃后无引用文件不得当有效检查点。
 
 ## 3. 准入、恢复与失败语义
 
@@ -56,12 +59,12 @@ view_for(principal, owner_ref=None) -> FilteredScheduleView
 
 “尽快”只意为普通队列尽早获得资源；“指定时间”是最早开始，不是完成保证。窗口由 IANA 时区和本地钟表达，例如用户**主动选** 22:00–07:00；跨午夜、夏令时与休眠后按下一有效窗口计算。窗口结束不再发新 grant，已运行不可中断单元到边界保存后退出。错过窗口等待下一次，不在白天私自补跑。后台文件发现继续低负载限速，但大范围目录遍历/全文件哈希也要分批和预算。主机开机、磁盘连接、模型可用是夜间执行的必要条件，调度器不改系统开机/休眠设置。
 
-对外只返回本人有权作业的细节；其他 workspace 的占用是汇总信息。调整安排/取消由已验证成员限定本人提交的请求，后台安排由有权操作绑定范围的人修改，管理员角色未定不加全局抢占。可信历史不足时只给排队原因、前方就绪数和更新时间，估时留空。计划可用 API：`POST /api/creation-tasks/{id}/execution/start` 增加时间策略、`PATCH .../execution/schedule`；素材绑定设置增整理策略；`GET .../execution` 与素材状态附过滤后的设备等待事实；桌面会话活动 `POST /api/device/activity` 仅写心跳与布尔状态。具体 URL/schema 由 MAKE/MAT/UI 现有文件负责人核定，主控裁决，不能在协调器里发明第二套业务状态。
+对外只返回有权查看作业的细节；其他空间的占用是匿名汇总。主账号可管理设备任务安排，但此权利不自动开放私人任务详情或原始素材。共享引用须分别验证请求成员、任务空间、原对象空间和当前共享授权；设备排队管理、共享读取、详情查看是三个独立检查。可信历史不足时只给排队原因、前方就绪数和更新时间，估时留空。计划可用 API：`POST /api/creation-tasks/{id}/execution/start` 增加时间策略、`PATCH .../execution/schedule`；素材绑定设置增整理策略；`GET .../execution` 与素材状态附过滤后的设备等待事实；桌面会话活动 `POST /api/device/activity` 仅写心跳与布尔状态。具体 URL/schema 由 MAKE/MAT/UI 现有文件负责人核定，主控裁决，不能在协调器里发明第二套业务状态。
 
 ## 5. 顺序、独占写入与最小验证
 
-1. **主控先裁决接口和归属**：确定新的协调器与迁移 DDL 唯一写者、既有 owner 表、跨工作区 member 权限、桌面活动来源、设备设置入口；冻结待退役的直接重活路径清单。此阶段不声称整机已可用。
-2. 调度负责人在新 `apps/api/app/device_scheduler.py` 和 `apps/api/tests/test_device_scheduler.py`（主控授权后）实现纯选择器、SQLite 请求/许可、进程恢复、设备采样边界；DDL 文件独占写者由主控指定。先用隔离 SQLite 测双进程抢许可、陈旧 token、子进程存活、崩溃重启、窗口跨夜、心跳过期、成员轮换与防饿死。未获文件所有权前不改生产代码。
+1. **主控先裁决接口和归属**：调度核心和 v8 DDL 由 SCHED 独占；既有 owner 表、跨工作区 member 权限、桌面活动来源、设备设置入口和待退役直通路径由接线负责人逐项确认。此阶段不声称整机已可用。
+2. 调度负责人实现 `apps/api/app/device_scheduler.py`、`apps/api/tests/test_device_scheduler.py` 和 v8 DDL；隔离 SQLite 测双进程抢许可、陈旧 token、子进程存活、崩溃重启、窗口跨夜、心跳过期、成员轮换与防饿死。当前代码尚未接生产路由、真实设备探针或媒体封装。
 3. MAT01 独占 `production.py/material_ingestion.py`，把轻量发现、预算内哈希、逐个实际认领、分批持久检查点和已有人工纠正合并接到 `Grant`；先缩短场景/语音不可中断范围，再做视觉与 CLIP 批次恢复。`material_speech.py`、`visual_understanding.py`、FFmpeg 子进程封装若需修改，主控另给**单一**媒体负责人，不由本任务越权写。
 4. MAKE01 独占 `main.py/creation_execution.py/schemas.py` 与其现有前端/Agent 文件，改 start/resume/recovery 只提交，按获准单元恢复 `JobRun`，阶段之间归还。逐项接单步、预览、重试及 Agent 工具；将媒体预览状态从“提交时 running”改为实际 grant 后 running，避免错误可见状态。其他 `narration.py/avatar_lipsync.py/montage.py/audio_*` 的子进程控制由主控定单一 owner。UI01 只接可见选择和事实状态，不改许可。
 5. QA01 做**同一候选**的路由负向表：自动/手动/重试/单步/Agent/GET 惰性重活没有 token 必须拒绝执行；隔离库故障注入验证恢复和来源边界。真机上五会话测输入/取消响应、播放和录音连续性、峰值 CPU/内存/磁盘、普通制作轮换、素材实际推进、断盘/重启/过期会话/跨夜。验收前先定响应和连续性门槛及空载基线；两档硬件未给出则性能 verdict 为未验证。
@@ -71,6 +74,6 @@ view_for(principal, owner_ref=None) -> FilteredScheduleView
 ### 待主控裁决
 
 - 设备设置的现有受权入口及两档目标硬件 profile；未知时严格单重活、关键测量缺失则阻断对应能力。
-- 共享 workspace 中“本人任务”的成员授权细则，尤其现有 `cancel` 仅以 workspace 查询的边界；本方案只用已验 `AuthPrincipal.user_id`，不创造管理员角色。
-- 哪个单一负责人写 `database_migrations.py` 和媒体子进程封装；MAT/MAKE 只改各自 owned files。
+- 共享空间中“本人任务”、主账号设备安排权及共享引用的生产验证适配，尤其现有 `cancel` 仅以 workspace 查询的边界；调度核心不创建身份数据库，也不从首次打开者推断历史任务主人。
+- MAT 检查点的后续迁移仍由 SCHED 串行追加；媒体子进程封装的单一负责人待主控指定。MAT/MAKE 只改各自 owned files。
 - `GET` 波形、旧 `/api/videos/process`、`/api/voice/transcribe` 与模型安装是否在 0.11 保留；凡可达且耗重资源，都需许可或明确退役，不能留下灰色绕行。
