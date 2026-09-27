@@ -28,6 +28,7 @@ def probe_payload(*, duration: str = "3.250", video: bool = True) -> bytes:
     streams = [{
         "index": 0, "codec_type": "video", "codec_name": "h264",
         "width": 640, "height": 360, "duration": "3.25",
+        "avg_frame_rate": "30000/1001", "r_frame_rate": "30000/1001",
     }] if video else []
     streams.append({
         "index": 1, "codec_type": "audio", "codec_name": "aac",
@@ -47,6 +48,8 @@ def test_probe_parser_keeps_typed_media_facts_and_ignores_extra_metadata() -> No
         ("video", "h264"), ("audio", "aac"),
     ]
     assert facts.streams[0].width == 640 and facts.streams[0].height == 360
+    assert facts.streams[0].avg_frame_rate_fps == 29.97
+    assert facts.streams[0].r_frame_rate_fps == 29.97
     assert facts.streams[1].sample_rate == 48000
     assert json.loads(facts.checkpoint_json())["duration_seconds"] == 3.25
     assert MaterialProbeFacts.from_checkpoint_json(facts.checkpoint_json()) == facts
@@ -56,6 +59,15 @@ def test_probe_parser_falls_back_to_stream_duration_but_rejects_audio_only() -> 
     assert parse_ffprobe_output(probe_payload(duration="N/A")).duration_seconds == 3.25
     with pytest.raises(ValueError, match="视频流"):
         parse_ffprobe_output(probe_payload(video=False))
+
+
+def test_probe_parser_marks_unknown_or_variable_reported_rate_unavailable() -> None:
+    payload = json.loads(probe_payload())
+    payload["streams"][0]["avg_frame_rate"] = "0/0"
+    payload["streams"][0]["r_frame_rate"] = "5/1"
+    stream = parse_ffprobe_output(json.dumps(payload).encode()).streams[0]
+    assert stream.avg_frame_rate_fps is None
+    assert stream.r_frame_rate_fps == 5.0
 
 
 def test_probe_parser_rejects_malformed_unbounded_or_invalid_duration() -> None:

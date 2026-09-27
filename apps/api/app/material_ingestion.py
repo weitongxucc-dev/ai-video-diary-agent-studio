@@ -19,6 +19,11 @@ from app.production import (
     MaterialAsset, ProductionRepository, material_probe_unit_key,
 )
 from app.material_probe import MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
+from app.material_scene import (
+    SCENE_MAX_SAMPLED_FRAMES, SCENE_MAX_WIDTH, SCENE_SAMPLE_FPS,
+    SCENE_STDERR_LIMIT_BYTES, SCENE_STDOUT_LIMIT_BYTES, SCENE_TIMEOUT_SECONDS,
+    parse_scene_showinfo, scene_command,
+)
 
 logger = logging.getLogger(__name__)
 PROBE_TIMEOUT_SECONDS = 20.0
@@ -34,7 +39,7 @@ class MaterialHashServiceActor:
 
 
 class MaterialHashOwnerVerifier:
-    """Hash owner and inert probe request checks for the host verifier."""
+    """Validate material hash, metadata, and scene windows against their source."""
 
     def __init__(self, repository: ProductionRepository) -> None:
         self.repository = repository
@@ -47,6 +52,7 @@ class MaterialHashOwnerVerifier:
         binding = self.repository.get_material_ingestion_binding()
         if binding != (actor.workspace_id, actor.library_path):
             raise PermissionError("素材后台绑定已失效")
+        candidate = None
         with self.repository._connect() as conn:
             if intent.unit_key.startswith("hash:v1:"):
                 verdict = self.repository.material_hash_verdict(
@@ -70,16 +76,40 @@ class MaterialHashOwnerVerifier:
                     "WHERE a.workspace_id=? AND a.id=? AND f.attempted_digest=?",
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
+            elif intent.unit_key.startswith("scene-window:v1:"):
+                candidate = self.repository.material_scene_candidate(
+                    intent.workspace_id, intent.owner_id, intent.input_digest,
+                    intent.unit_key, conn,
+                )
+                verdict = "ready" if candidate is not None else "stale"
+                row = None
             else:
                 raise PermissionError("素材阶段未注册")
-        if verdict != "ready" or row is None:
+        if verdict != "ready" or (row is None and candidate is None):
             raise PermissionError(f"素材阶段候选不可提交：{verdict}")
+        if intent.unit_key.startswith("scene-window:v1:"):
+            resources = {
+                "kind": "material_scene_window", "size_bytes": candidate.size_bytes,
+                "source_codec": candidate.video_codec,
+                "source_width_px": candidate.video_width_px,
+                "source_height_px": candidate.video_height_px,
+                "source_frame_rate_fps": candidate.source_frame_rate_fps,
+                "scan_seconds": candidate.window.scan_seconds,
+                "output_sample_fps": SCENE_SAMPLE_FPS,
+                "output_max_width_px": SCENE_MAX_WIDTH,
+                "output_max_frames": SCENE_MAX_SAMPLED_FRAMES,
+                "ffmpeg_threads": 1, "timeout_seconds": SCENE_TIMEOUT_SECONDS,
+            }
+        else:
+            resources = {
+                "kind": "material_hash" if intent.unit_key.startswith("hash:v1:")
+                else "material_probe_meta", "size_bytes": int(row["size_bytes"]),
+            }
         return VerifiedWork(
             workspace_id=intent.workspace_id, owner_type="material_asset",
             owner_id=intent.owner_id, input_digest=intent.input_digest,
             unit_key=intent.unit_key, member_id=None, work_class="background",
-            resources={"kind": "material_hash" if intent.unit_key.startswith("hash:v1:")
-                       else "material_probe_meta", "size_bytes": int(row["size_bytes"])},
+            resources=resources,
             stage_input_digest=intent.unit_key.rsplit(":", 1)[-1],
         )
 
@@ -103,6 +133,22 @@ class MaterialHashOwnerVerifier:
             ):
                 return "dependency"
             return verdict
+        if request.unit_key.startswith("scene-window:v1:"):
+            source_verdict = self.repository.material_probe_source_verdict(
+                request.workspace_id, request.owner_id, request.input_digest,
+                material_probe_unit_key(request.input_digest), conn,
+            )
+            if source_verdict != "ready":
+                return source_verdict
+            candidate = self.repository.material_scene_candidate(
+                request.workspace_id, request.owner_id, request.input_digest,
+                request.unit_key, conn,
+            )
+            if candidate is None:
+                return "stale"
+            if shutil.which("ffmpeg") is None or candidate.source_frame_rate_fps is None:
+                return "dependency"
+            return "ready"
         return "stale"
 
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
@@ -204,6 +250,7 @@ class MaterialIngestionService:
         request_ids: list[str] = []
         with self._scan_lock:
             self.submit_pending_probe_dependencies()
+            self.submit_pending_scene_windows()
             for candidate in self.repository.discover_material_hash_candidates(
                 stable_seconds=self.stable_seconds
             ):
@@ -248,6 +295,25 @@ class MaterialIngestionService:
             else:
                 request = self.scheduler.submit(intent, actor)
             request_ids.append(request.id)
+        return request_ids
+
+    def submit_pending_scene_windows(self) -> list[str]:
+        if self.execution_mode != "scheduled" or self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        binding = self.repository.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        actor = MaterialHashServiceActor(*binding)
+        request_ids = []
+        for candidate in self.repository.pending_material_scene_windows():
+            if candidate.workspace_id != binding[0]:
+                raise PermissionError("镜头检查点归属与素材绑定不一致")
+            intent = SubmissionIntent(
+                workspace_id=candidate.workspace_id, owner_type="material_asset",
+                owner_id=candidate.asset_id, input_digest=candidate.source_sha256,
+                unit_key=candidate.unit_key, policy=SchedulePolicy(),
+            )
+            request_ids.append(self.scheduler.submit(intent, actor).id)
         return request_ids
 
     def run_granted_hash(self, grant: Grant) -> str | None:
@@ -372,7 +438,113 @@ class MaterialIngestionService:
                 conn, active, candidate, facts,
             ),
         )
+        try:
+            self.submit_pending_scene_windows()
+        except (OSError, ValueError, PermissionError, RecoveryBlocked):
+            logger.exception("素材媒体信息已保存；镜头请求将在周期补扫时重试")
         return facts.checkpoint_json()
+
+    def run_granted_scene(self, grant: Grant) -> str | None:
+        """Analyze one bounded source-time window under the registered process permit."""
+        from app.granted_subprocess import (
+            GrantedCommandCancelled, GrantedCommandError, GrantedCommandOutputLimit,
+            GrantedCommandTimeout, run_granted_command,
+        )
+
+        if self.execution_mode != "scheduled" or self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        scheduler = self.scheduler
+        try:
+            scheduler.assert_grant(grant)
+            candidate = self.repository.material_scene_candidate_for_grant(grant)
+        except (OSError, ValueError, PermissionError):
+            if self._defer_stale_scene(grant):
+                return None
+            raise
+        try:
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                raise FileNotFoundError("ffmpeg is unavailable")
+            completed = run_granted_command(
+                scheduler, grant,
+                scene_command(ffmpeg, candidate.file_path,
+                              candidate.video_stream_index, candidate.window),
+                timeout_seconds=SCENE_TIMEOUT_SECONDS,
+                max_stdout_bytes=SCENE_STDOUT_LIMIT_BYTES,
+                max_stderr_bytes=SCENE_STDERR_LIMIT_BYTES,
+                cancel_event=self._stop,
+            )
+        except RecoveryBlocked:
+            raise
+        except GrantedCommandCancelled:
+            if self._defer_stale_scene(grant):
+                return None
+            scheduler.defer_unit(
+                grant, reason="worker_interrupted",
+                retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1),
+            )
+            return None
+        except (GrantedCommandTimeout, GrantedCommandOutputLimit) as error:
+            if self._defer_stale_scene(grant):
+                return None
+            reason = "scene_timeout" if isinstance(error, GrantedCommandTimeout) else "scene_output_limit"
+            scheduler.fail_unit(
+                grant, reason=reason,
+                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                    conn, active, candidate, reason,
+                ),
+            )
+            return None
+        except (OSError, ValueError, PermissionError, GrantedCommandError):
+            if self._defer_stale_scene(grant):
+                return None
+            scheduler.fail_unit(
+                grant, reason="scene_failed",
+                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                    conn, active, candidate, "scene_failed",
+                ),
+            )
+            return None
+        if self._defer_stale_scene(grant):
+            return None
+        try:
+            if completed.returncode != 0:
+                raise ValueError("ffmpeg returned nonzero")
+            facts = parse_scene_showinfo(completed.stderr, candidate.window)
+        except ValueError:
+            scheduler.fail_unit(
+                grant, reason="scene_failed",
+                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                    conn, active, candidate, "scene_failed",
+                ),
+            )
+            return None
+        scheduler.complete_unit(
+            grant, checkpoint_database_path=self.repository.database_path,
+            checkpoint_write=lambda conn, active: self.repository.commit_material_scene(
+                conn, active, candidate, facts,
+            ),
+        )
+        try:
+            self.submit_pending_scene_windows()
+        except (OSError, ValueError, PermissionError, RecoveryBlocked):
+            logger.exception("镜头窗口已保存；剩余窗口将在周期补扫时重试")
+        return facts.checkpoint_json()
+
+    def _defer_stale_scene(self, grant: Grant) -> bool:
+        if self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        verdict = self.repository.material_scene_verdict_for_grant(grant)
+        if verdict == "ready" and shutil.which("ffmpeg") is None:
+            verdict = "dependency"
+        if verdict == "ready":
+            return False
+        reason = {"dependency": "dependency_unavailable", "stale": "input_stale",
+                  "unauthorized": "authorization_lost"}.get(verdict, "transient_failure")
+        retry_at = (datetime.now(timezone.utc) + timedelta(minutes=1)
+                    if reason == "transient_failure" else None)
+        self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
+        return True
 
     def _defer_stale_probe(self, grant: Grant) -> bool:
         if self.scheduler is None:
@@ -400,7 +572,7 @@ class MaterialIngestionService:
 
 
 class MaterialHashUnitExecutor:
-    """Host runtime adapter; only hash grants can reach this implementation."""
+    """Host runtime adapter for the bounded material intake stages."""
 
     def __init__(self) -> None:
         self._service: MaterialIngestionService | None = None
@@ -418,5 +590,7 @@ class MaterialHashUnitExecutor:
             self._service.run_granted_hash(grant)
         elif grant.unit_key.startswith("probe-meta:v1:"):
             self._service.run_granted_probe(grant)
+        elif grant.unit_key.startswith("scene-window:v1:"):
+            self._service.run_granted_scene(grant)
         else:
             raise PermissionError("素材许可阶段没有已注册的执行器")

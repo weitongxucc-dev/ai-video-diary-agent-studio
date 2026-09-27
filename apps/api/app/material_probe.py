@@ -20,6 +20,8 @@ class MaterialMediaStream:
     width: int | None = None
     height: int | None = None
     sample_rate: int | None = None
+    avg_frame_rate_fps: float | None = None
+    r_frame_rate_fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class MaterialProbeFacts:
         for item in raw_streams:
             if not isinstance(item, dict) or set(item) != {
                 "index", "kind", "codec", "width", "height", "sample_rate",
+                "avg_frame_rate_fps", "r_frame_rate_fps",
             }:
                 raise ValueError("媒体检查点流结构无效")
             index, kind = item["index"], item["kind"]
@@ -66,9 +69,14 @@ class MaterialProbeFacts:
             if kind == "video":
                 if (_positive_int(item["width"]) != item["width"]
                         or _positive_int(item["height"]) != item["height"]
-                        or item["sample_rate"] is not None):
+                        or item["sample_rate"] is not None
+                        or any(rate is not None and _frame_rate(rate) != rate for rate in (
+                            item["avg_frame_rate_fps"], item["r_frame_rate_fps"]
+                        ))):
                     raise ValueError("媒体检查点视频流无效")
             elif (item["width"] is not None or item["height"] is not None
+                  or item["avg_frame_rate_fps"] is not None
+                  or item["r_frame_rate_fps"] is not None
                   or (item["sample_rate"] is not None
                       and _positive_int(item["sample_rate"]) != item["sample_rate"])):
                 raise ValueError("媒体检查点音频流无效")
@@ -88,7 +96,8 @@ def _positive_duration(value: object) -> float | None:
         duration = float(value)
     except ValueError:
         return None
-    return round(duration, 3) if math.isfinite(duration) and 0 < duration <= 7 * 86400 else None
+    rounded = round(duration, 3)
+    return rounded if math.isfinite(duration) and 0 < rounded <= 7 * 86400 else None
 
 
 def _bounded_text(value: object) -> str:
@@ -103,6 +112,20 @@ def _positive_int(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if 0 < number <= 1_000_000 else None
+
+
+def _frame_rate(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    try:
+        if isinstance(value, str) and "/" in value:
+            numerator, denominator = value.split("/", 1)
+            rate = float(numerator) / float(denominator)
+        else:
+            rate = float(value)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return round(rate, 3) if math.isfinite(rate) and 0 < rate <= 240 else None
 
 
 def parse_ffprobe_output(output: bytes) -> MaterialProbeFacts:
@@ -150,7 +173,11 @@ def parse_ffprobe_output(output: bytes) -> MaterialProbeFacts:
             width, height = _positive_int(item.get("width")), _positive_int(item.get("height"))
             if width is None or height is None:
                 raise ValueError("视频流尺寸无效")
-            streams.append(MaterialMediaStream(index, "video", codec, width=width, height=height))
+            streams.append(MaterialMediaStream(
+                index, "video", codec, width=width, height=height,
+                avg_frame_rate_fps=_frame_rate(item.get("avg_frame_rate")),
+                r_frame_rate_fps=_frame_rate(item.get("r_frame_rate")),
+            ))
         else:
             sample_rate = _positive_int(item.get("sample_rate"))
             streams.append(MaterialMediaStream(index, "audio", codec, sample_rate=sample_rate))
