@@ -252,6 +252,7 @@ afterEach(() => {
   mocks.showQuickInspector = false;
   vi.clearAllMocks();
   mocks.previewExecution.mockResolvedValue(null);
+  mocks.getExecution.mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
   mocks.getAssistantHistory.mockResolvedValue({ items: [] });
   Reflect.deleteProperty(window, "electronAPI");
 });
@@ -343,16 +344,22 @@ describe("CreationTaskWorkspace", () => {
     };
     mocks.previewExecution.mockResolvedValue(preview);
     mocks.getWorkspace.mockResolvedValue(initial);
-    mocks.startExecution.mockResolvedValue({ task_id: "task-1", job: {
+    const queuedExecution = { task_id: "task-1", job: {
       id: "job-1", kind: "creation_task_execution", status: "queued", progress: 0,
       failure_reason: null, impact: null, repair_action: null,
-    }, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
+    }, stages: [], current_stage: null, waiting_reason: "设备资源正在处理其他工作。",
+    status_updated_at: "2026-09-27T11:00:00+00:00",
+    video_ready: false, cover_status: "pending", cover_message: null };
+    mocks.startExecution.mockResolvedValue(queuedExecution);
+    mocks.getExecution.mockResolvedValueOnce({ task_id: "task-1", job: null, stages: [],
+      video_ready: false, cover_status: "pending", cover_message: null }).mockResolvedValue(queuedExecution);
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await waitFor(() => expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument());
     expect(screen.getByText(/露脸目标 20%/)).toBeInTheDocument();
     expect(mocks.startExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
     await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", preview));
+    expect(await screen.findByLabelText("制作安排状态")).toHaveTextContent("设备资源正在处理其他工作。");
     expect(mocks.generateNarration).not.toHaveBeenCalled();
   });
 

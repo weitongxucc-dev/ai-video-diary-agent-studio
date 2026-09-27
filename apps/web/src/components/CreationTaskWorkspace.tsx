@@ -1,5 +1,6 @@
 "use client";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
+import { ExecutionQueueStatus } from "./ExecutionQueueStatus";
 
 import Link from "next/link";
 import NextImage from "next/image";
@@ -423,7 +424,7 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
       {!preview.requirements.selected_voice ? <p role="status">请先在下方选择已授权声音，再开始制作。</p> : null}
       <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !preview.requirements.selected_voice} onClick={onStart} type="button">{preview.requirements.selected_voice ? "确认以上文案和要求，开始制作" : "请先选择授权声音"}</button></div>
     </> : null}
-    {job ? <div role="status"><p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p>
+    {job ? <div role="status"><ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null} /><p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p>
       <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
       {execution?.video_ready ? <p>成片可检查；{execution.cover_status === "ready" ? "封面已准备好。" : execution.cover_message}</p> : null}
       {active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">停止制作</button> : null}

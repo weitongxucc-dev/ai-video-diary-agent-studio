@@ -1446,6 +1446,9 @@ export type CreationExecutionStatus = {
     repair_action: string | null;
   } | null;
   stages: { stage: string; status: string; reason?: string; at: string }[];
+  current_stage: "narration" | "montage_plan" | "render" | "cover" | null;
+  waiting_reason: string | null;
+  status_updated_at: string | null;
   video_ready: boolean;
   cover_status: "ready" | "pending";
   cover_message: string | null;
