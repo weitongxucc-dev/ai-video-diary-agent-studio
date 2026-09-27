@@ -43,8 +43,8 @@
   cursor: pointer;
 }
 
-.iconButton:hover,
-.secondaryButton:hover,
+.iconButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
 .deviceButton:hover {
   background: var(--surface-2);
 }
@@ -169,6 +169,12 @@
 .primaryButton:disabled {
   cursor: wait;
   opacity: .7;
+}
+
+.iconButton:disabled,
+.secondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: .5;
 }
 
 .secondaryButton {

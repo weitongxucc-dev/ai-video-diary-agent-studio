@@ -120,7 +120,7 @@ describe("DesktopVoiceRecorder", () => {
     await screen.findByRole("button", { name: "停止录音" });
     fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
     fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("录音未能交给任务：任务未准备好");
+    expect(await screen.findByRole("alert")).toHaveTextContent("保存录音失败：任务未准备好");
     expect(screen.getByLabelText("试听本次录音")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "使用录音" })).toBeEnabled();
   });
@@ -158,5 +158,59 @@ describe("DesktopVoiceRecorder", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("录音意外中断");
     expect(screen.queryByLabelText("试听本次录音")).not.toBeInTheDocument();
     expect(trackStop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the panel open and disables both cancel controls until delayed save succeeds", async () => {
+    microphone();
+    let finishSave!: () => void;
+    const onRecorded = vi.fn(() => new Promise<void>((resolve) => { finishSave = resolve; }));
+    const onCancel = vi.fn();
+    render(<DesktopVoiceRecorder onRecorded={onRecorded} onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
+    await screen.findByRole("button", { name: "停止录音" });
+    fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
+    fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
+
+    expect(screen.getByText("正在保存录音，请等待结果…")).toBeInTheDocument();
+    const close = screen.getByRole("button", { name: "取消录音" });
+    const cancel = screen.getByRole("button", { name: "取消" });
+    expect(close).toBeDisabled();
+    expect(cancel).toBeDisabled();
+    fireEvent.click(close);
+    fireEvent.click(cancel);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    expect(trackStop).toHaveBeenCalledOnce();
+
+    await act(async () => { finishSave(); });
+    expect(screen.getByText("录音已交给当前任务，保存结果以任务提示为准。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-preview");
+  });
+
+  it("restores retry and cancel after a delayed save failure", async () => {
+    microphone();
+    let failSave!: (error: Error) => void;
+    const onRecorded = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { failSave = reject; }))
+      .mockResolvedValueOnce(undefined);
+    const onCancel = vi.fn();
+    render(<DesktopVoiceRecorder onRecorded={onRecorded} onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始录音" }));
+    await screen.findByRole("button", { name: "停止录音" });
+    fireEvent.click(screen.getByRole("button", { name: "停止录音" }));
+    fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
+    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+
+    await act(async () => { failSave(new Error("连接中断")); });
+    expect(screen.getByRole("alert")).toHaveTextContent("保存录音失败：连接中断");
+    expect(screen.getByRole("button", { name: "取消" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "使用录音" })).toBeEnabled();
+    expect(screen.getByLabelText("试听本次录音")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "使用录音" }));
+    await waitFor(() => expect(onRecorded).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("录音已交给当前任务，保存结果以任务提示为准。")).toBeInTheDocument();
   });
 });
