@@ -73,3 +73,5 @@ MAKE两项修复候选5ee08db已交，接手记录7c68f9c；工作树clean。作
 5ee08db独立QA增量：旧重复渲染/claim取消两项已转绿；新源身份HOLD：等长改1byte并恢复mtime_ns（ctime变化）旧grant仍放行。当前stat元数据不是内容hash。已退回MAKE最小修复，内容重验必须受许可，不能在GET/准入里无许可全文件hash。独立版本变化仍待报告；候选整体仍未通过。
 
 最新MAKE候选22f8dbb（说明bbb4f47）加入ctime_ns本机变化信号，作者等长改写负例通过，独立QA待复核；非内容hash保证，不覆盖特权/文件系统回滚或FFmpeg读取中并发改写，不在GET/准入无许可hash。保留当前HOLD直至QA结论。
+
+**最终MAKE QA：22f8dbb + SCHED dadc618在明确本地测试预算、真实HostResourceProbe下，三项原QA负例全部转绿，授权纯素材CPU子集PASS（27相关测试）。报告见evidence/make-22f8dbb-sched-dadc618-review.md。此前3aa/5ee HOLD记录为历史问题，针对22f8已解除；代码仍未集成，生产scheduled未开启，ctime能力限制与不支持组合保持。接手下一步是审核具体依赖并集成该限定候选，不重修已通过问题。**
