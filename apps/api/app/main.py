@@ -73,7 +73,7 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    CreationExecution, CreationExecutionActor, ExecutionStartRequest,
+    CpuRenderGrantContext, CreationExecution, CreationExecutionActor, ExecutionStartRequest,
     revision_digest, submit_creation_stage,
 )
 from app.creator_profile import (
@@ -9810,7 +9810,9 @@ def render_creation_task_montage(
     return _render_creation_task_montage_for_workspace(current_workspace_id(request), task_id)
 
 
-def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str) -> CreationTaskMontagePlanResponse:
+def _render_creation_task_montage_for_workspace(
+    workspace_id: str, task_id: str, *, render_context: CpuRenderGrantContext | None = None,
+) -> CreationTaskMontagePlanResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     try:
         plan = creation_task_montage_plan_from_payload(
@@ -9822,6 +9824,11 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
         raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
+    if render_context is not None and any(
+        clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
+        for clip in plan.clips
+    ):
+        raise HTTPException(status_code=409, detail="本机人像效果尚无受许可执行路径，请先移除该效果")
     try:
         _validate_montage_material_use(workspace_id,plan)
     except ValueError as exc:
@@ -10051,6 +10058,7 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
                         narration_path,
                         job_staging_path=Path(staging),
                         subtitle_tracks=active_subtitle_tracks if active_subtitle_tracks or explicit_subtitles else None,
+                        **({"render_context": render_context} if render_context is not None else {}),
                     )
                     rendered = plan
                     rendered.status = rendered_variant.status
@@ -10816,7 +10824,10 @@ def _render_montage_with_resolved_clip_sources(
     *,
     job_staging_path: Path | None = None,
     subtitle_tracks: list[SubtitleTrack] | None = None,
+    render_context: CpuRenderGrantContext | None = None,
 ):
+    if render_context is not None and job_staging_path is None:
+        raise ValueError("受许可成片必须写入任务暂存目录")
     original_references = [clip.source_path for clip in plan.clips]
     original_ranges = [
         (clip.source_start_seconds, clip.source_end_seconds) for clip in plan.clips
@@ -10865,6 +10876,8 @@ def _render_montage_with_resolved_clip_sources(
         for clip,handle_clip in zip(plan.clips,extended,strict=True):
             effects=VisualEffects.model_validate(clip.visual_effects)
             if effects.beauty_strength or effects.skin_exposure:
+                if render_context is not None:
+                    raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
                 processed,metadata=_portrait_processor(workspace_id).process(Path(clip.source_path),clip.source_start_seconds,
                     handle_clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
                 clip.source_path=str(processed)
@@ -10876,11 +10889,29 @@ def _render_montage_with_resolved_clip_sources(
         if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:
             mixed_audio = Path(job_staging_path) / "timeline-mix.wav"
             service = _task_audio()
+            audio_options = (
+                {"scheduler": render_context.scheduler, "grant": render_context.grant,
+                 "cancel_event": render_context.cancel_event,
+                 "deadline_monotonic": render_context.deadline_monotonic,
+                 "max_output_bytes": int(plan.duration_seconds * 192_000) + 4096,
+                 "threads": render_context.threads}
+                if render_context is not None else {}
+            )
             render_audio_mix(plan.audio_timeline, plan.duration_seconds,
-                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio)
+                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio,
+                **audio_options)
             narration_audio_path = mixed_audio
+        render_options = (
+            {"scheduler": render_context.scheduler, "grant": render_context.grant,
+             "cancel_event": render_context.cancel_event,
+             "deadline_monotonic": render_context.deadline_monotonic,
+             "max_output_bytes": render_context.max_output_bytes,
+             "threads": render_context.threads}
+            if render_context is not None else {}
+        )
         return montage_renderer.render(
-            plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks
+            plan, narration_audio_path, job_staging_path=job_staging_path,
+            subtitle_tracks=subtitle_tracks, **render_options,
         )
     finally:
         for clip, reference, source_range in zip(

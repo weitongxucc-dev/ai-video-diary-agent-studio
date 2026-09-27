@@ -20,6 +20,7 @@ from PIL import Image
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
+from app.creation_execution import CpuRenderGrantContext
 from app.host_resource_probes import HostProcessProbe
 from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
 from app.models import (
@@ -1588,14 +1589,19 @@ def test_creation_task_render_helper_restores_logical_media_references(
     )
 
     class MutatingRenderer:
-        def render(self, rendered_plan, resolved_audio_path):
+        def __init__(self):
+            self.options = []
+
+        def render(self, rendered_plan, resolved_audio_path, **options):
             assert Path(rendered_plan.clips[0].source_path).is_absolute()
             rendered_plan.narration_audio_path = str(resolved_audio_path)
             rendered_plan.status = "rendered"
+            self.options.append(options)
             return rendered_plan
 
+    renderer = MutatingRenderer()
     monkeypatch.setattr(main_module, "production_repo", production)
-    monkeypatch.setattr(main_module, "montage_renderer", MutatingRenderer())
+    monkeypatch.setattr(main_module, "montage_renderer", renderer)
 
     rendered = main_module._render_montage_with_resolved_clip_sources(
         workspace_id,
@@ -1604,6 +1610,24 @@ def test_creation_task_render_helper_restores_logical_media_references(
     )
 
     assert rendered.clips[0].source_path == logical_clip_reference
+    context = CpuRenderGrantContext(object(), object(), time.monotonic() + 30, 1_000_000, 1)
+    main_module._render_montage_with_resolved_clip_sources(
+        workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
+        render_context=context,
+    )
+    assert renderer.options[-1]["scheduler"] is context.scheduler
+    assert renderer.options[-1]["grant"] is context.grant
+    assert renderer.options[-1]["max_output_bytes"] == 1_000_000
+    assert plan.clips[0].source_path == logical_clip_reference
+    prior_calls = len(renderer.options)
+    plan.clips[0].visual_effects = {"beauty_strength": 0.3}
+    with pytest.raises(ValueError, match="人像效果"):
+        main_module._render_montage_with_resolved_clip_sources(
+            workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
+            render_context=context,
+        )
+    assert len(renderer.options) == prior_calls
+    assert plan.clips[0].source_path == logical_clip_reference
     assert rendered.narration_audio_path == logical_narration_reference
 
 

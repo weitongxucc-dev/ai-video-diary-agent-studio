@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
+from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
@@ -27,6 +28,16 @@ DEVICE_OWNER_TYPE = "creation_job"
 class CreationExecutionActor:
     workspace_id: str
     member_id: str
+
+
+@dataclass(frozen=True)
+class CpuRenderGrantContext:
+    scheduler: DeviceScheduler
+    grant: Grant
+    deadline_monotonic: float
+    max_output_bytes: int
+    threads: int
+    cancel_event: threading.Event | None = None
 
 
 class CreationJobOwnerVerifier:
