@@ -55,3 +55,7 @@ Codex可见线程（可用于现有主控收尾；新工具无法访问时以交
 - DESIGN 01a0d25f-5080-7991-9e9c-54efde64d4e9
 
 报告外部路径：`/Users/Zhuanz/Documents/Codex/2026-09-24/volumes-dujiangyan-vm-ai-repositories-bd25/external-agents/`。报告不包含secret或用户媒体；离机接手仅Git不含未推分支/dirty，请先保存候选并核需要的证据。不要声称交接包等于所有在途代码已推GitHub。
+
+## 后续增量：联合候选等待最终复验
+
+SCHED7c9414e监测叶子QA通过；MAT d4519ed已补Limit终态/Unavailable延期及真实探针测试。准确集成依赖：SCHED dadc618→2da0594→7c9414e，MAT279f492→49fa7b2→d4519ed。MAT工作树现分支codex/011-mat-scene-joint-check，其中SCHED等价挑入a055d1b不要重复集成。工作者报联合89通过，独立联合QA尚待结论。生产预算未配置，仍dependency。最新逐线程记录见evidence/material-takeover-status.md及scheduling-takeover-status.md。

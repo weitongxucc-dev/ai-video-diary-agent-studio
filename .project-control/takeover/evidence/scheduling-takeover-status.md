@@ -36,7 +36,7 @@ uv run --directory apps/api --locked pytest tests/test_host_resource_probes.py -
 
 ## 待办与阻断
 
-1. QA独立审核`7c9414e`及与MAT当前scene候选合成后的真实路径；QA此前对`2da0594`的HOLD不能仅凭本线程测试宣布解除。
-2. MAT需使用真实`HostResourceProbe`预算适配scene grant测试，并按上述两种资源异常分别失败/让出；无预算或未测codec/尺寸继续dependency，不写场景成功检查点。
+1. QA独立报告见 `/Users/Zhuanz/.codex/worktrees/26aa/original/work/qa-011/sched-scene-7c9414e-review.md`：`7c9414e`进程监测叶子PASS，43项通过；MAT `49fa7b2`+SCHED原联合选集64通过/1失败。唯一失败是MAT恢复测试仍注入always-true TestResources，新场景执行前门禁正确拒绝。QA-only副本换真实HostResourceProbe+160×90 MPEG4测试profile后该32秒FFmpeg恢复例通过。**联合消费者和产品准入仍HOLD**；测试profile不是生产校准。
+2. MAT需使用真实`HostResourceProbe`预算适配scene grant测试，并按上述两种资源异常分别失败/让出；QA发现当前`GrantedCommandResourceUnavailable`被泛捕后误写terminal `scene_failed`，需单独映射为资源等待并复验。无预算或未测codec/尺寸继续dependency，不写场景成功检查点。
 3. MAKE仍需落实render全字段、总阶段deadline及所有嵌套媒体叶子参数，之后才可考虑配置CPU render预算。没有真实两目标硬件压力与五会话验收，不宣称共享设备产品完成。
 4. 主控负责审查、按已审核具体SHA集成及必要复验；不自动推送main或开启scheduled。所有权移交前不得让另一执行者覆盖本分支。
