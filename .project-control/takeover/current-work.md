@@ -61,3 +61,5 @@ Codex可见线程（可用于现有主控收尾；新工具无法访问时以交
 SCHED7c9414e监测叶子QA通过；MAT d4519ed已补Limit终态/Unavailable延期及真实探针测试。准确集成依赖：SCHED dadc618→2da0594→7c9414e，MAT279f492→49fa7b2→d4519ed。MAT工作树现分支codex/011-mat-scene-joint-check，其中SCHED等价挑入a055d1b不要重复集成。工作者报联合89通过，独立联合QA尚待结论。生产预算未配置，仍dependency。最新逐线程记录见evidence/material-takeover-status.md及scheduling-takeover-status.md。
 
 最终独立QA：d4519ed限定测试profile的场景窗口联合集成PASS，89测试及真实32s长GOP恢复通过，报告见evidence/mat-sched-d4519ed-joint-review.md。这些候选仍未合入开发分支；生产SceneWindowBudget/硬件校准、失败probe人工重试与后续音画分析仍缺，不将父R10/R31标完成。
+
+MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作树已干净。说明见evidence/production-takeover-status.md。工作者专项15+39+18通过，主路径独立QA尚待；必须验证inner/outer检查点崩溃恢复不重复FFmpeg、取消竞争和多空间，不能引用旧montage叶子PASS替代。仅旁白+纯素材剪辑，生产scheduled未启用。
