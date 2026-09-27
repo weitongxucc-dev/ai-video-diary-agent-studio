@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -15,13 +19,19 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.creation_execution import (
-    CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier,
+    CpuRenderLimits, CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier,
+    CreationJobUnitExecutor,
     revision_digest, submit_creation_stage,
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity
-from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask, ProductionRepository
+from app.host_resource_probes import HostProcessProbe
+from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
+from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
+                            MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
+                            TimelineVersion)
 from app.artifact_store import ArtifactStore
 from app.config import Settings
+from app.video_jobs import VideoJobRunner
 
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True):
@@ -113,6 +123,218 @@ def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tm
     with pytest.raises(PermissionError, match="创建者"):
         execution.start("workspace_a", task_id, script_id, digest, member_id="member-b")
     scheduler.close()
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg tools unavailable")
+@pytest.mark.parametrize("source_change", [False, True])
+def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path, monkeypatch, source_change):
+    repo, task_id, script_id, digest = _seed(tmp_path)
+    audio = tmp_path / "voice.wav"
+    video = tmp_path / "library" / "source.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", str(audio)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=blue:s=320x240:r=25:d=1", "-pix_fmt", "yuv420p", str(video)],
+                   check=True, capture_output=True)
+    repo._save_asset(MaterialAsset(
+        id="asset_1", workspace_id="workspace_a", file_name=video.name, path=str(video),
+        size_bytes=video.stat().st_size, modified_at=datetime.now(timezone.utc),
+        duration_seconds=1, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
+                                  end_seconds=1, description="蓝色画面", review_status="approved")],
+    ))
+    repo.save_narration_artifact(NarrationArtifactRecord(
+        id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
+        script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
+        audio_path=str(audio), duration_seconds=1, sample_rate=44100, model_id="test",
+    ))
+    task = repo.get_creation_task("workspace_a", task_id)
+    task.narration_cache_key = "cache_1"
+    task.montage_plan_id = "montage_1"
+    task.stage = "montage"
+    task.stage_status = "waiting_for_user"
+    montage = CreationTaskMontagePlan(
+        id=task.montage_plan_id, workspace_id=task.workspace_id, task_id=task_id,
+        script_id=script_id, script_title="已确认文案", status="ready",
+        cues=[NarrationCue("cue_1", "section_1", "真实待制作文案", 1.0)],
+        clips=[MontageClip("clip_1", "cue_1", "asset_1", "segment_1", "workspace://source.mp4",
+                           0, 1, 0, 1, 1, ["已确认镜头"], False)],
+        duration_seconds=1, low_confidence_clip_count=0,
+        narration_audio_path="narration://artifact/cache_1",
+    )
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(task), default=str), task.workspace_id, task_id))
+        conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) "
+                     "VALUES (?,?,?,?,?)",
+                     (montage.id, task.workspace_id, task_id,
+                      json.dumps(creation_task_montage_plan_to_payload(montage)), datetime.now(timezone.utc).isoformat()))
+    execution = _execution(repo)
+    actor = CreationExecutionActor(task.workspace_id, "member-a")
+    job = execution.start(task.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
+    owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90))
+    scheduler = DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock", owners=owner,
+        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+                                  released=lambda _grant: True),
+        processes=HostProcessProbe(),
+    )
+    try:
+        portrait_payload = creation_task_montage_plan_to_payload(montage)
+        portrait_payload["clips"][0]["visual_effects"] = {"beauty_strength": 0.3}
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE workspace_id=? AND task_id=?",
+                         (json.dumps(portrait_payload), task.workspace_id, task_id))
+        with pytest.raises(ValueError, match="人像效果"):
+            submit_creation_stage(execution, scheduler, job, actor)
+        with repo._connect() as conn:
+            assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 0
+            conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE workspace_id=? AND task_id=?",
+                         (json.dumps(creation_task_montage_plan_to_payload(montage)), task.workspace_id, task_id))
+        request_id = submit_creation_stage(execution, scheduler, job, actor)
+        with repo._connect() as conn:
+            row = conn.execute("SELECT unit_key,resources_json FROM device_work_requests WHERE id=?",
+                               (request_id,)).fetchone()
+        resources = json.loads(row["resources_json"])
+        assert row["unit_key"].startswith("render:")
+        assert resources["kind"] == "creation_render"
+        assert resources["input_bytes"] == audio.stat().st_size + video.stat().st_size
+        assert resources["clip_count"] == resources["overlay_count"] == 1
+        assert submit_creation_stage(execution, scheduler, job, actor) == request_id
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        original_claim = repo.claim_job_run
+
+        def cancel_before_claim(workspace_id, job_id):
+            execution.cancel(workspace_id, task_id, member_id=actor.member_id)
+            return original_claim(workspace_id, job_id)
+
+        monkeypatch.setattr(repo, "claim_job_run", cancel_before_claim)
+        CreationJobUnitExecutor(
+            repo, render_action=lambda *_args: pytest.fail("cancelled job must not render"),
+            render_is_valid=lambda *_args: pytest.fail("cancelled job must not validate output"),
+        ).execute(grant, scheduler)
+        monkeypatch.setattr(repo, "claim_job_run", original_claim)
+        scheduler.assert_released(grant)
+        assert repo.get_job_run(task.workspace_id, job.id).status == "cancelled"
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "cancelled"
+
+        failed_attempt = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
+        failure_request_id = submit_creation_stage(execution, scheduler, failed_attempt, actor)
+        failure_grant = scheduler.pick_and_grant()
+        assert failure_grant is not None and failure_grant.request_id == failure_request_id
+        CreationJobUnitExecutor(
+            repo, render_action=lambda *_args: (_ for _ in ()).throw(ValueError("synthetic render failure")),
+            render_is_valid=lambda *_args: pytest.fail("failed render cannot validate output"),
+        ).execute(failure_grant, scheduler)
+        scheduler.assert_released(failure_grant)
+        assert repo.get_job_run(task.workspace_id, failed_attempt.id).status == "failed"
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (failure_request_id,)).fetchone()[0] == "failed"
+        resumed = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
+        retry_request_id = submit_creation_stage(execution, scheduler, resumed, actor)
+        retry_grant = scheduler.pick_and_grant()
+        assert retry_grant is not None and retry_grant.request_id == retry_request_id
+
+        output_store = ArtifactStore(tmp_path / "artifacts")
+        monkeypatch.setattr(main_module, "production_repo", repo)
+        monkeypatch.setattr(main_module, "artifact_store", output_store)
+        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+        monkeypatch.setattr(main_module, "settings", SimpleNamespace(
+            video_output_path=str(tmp_path / "outputs"), video_inbox_path=str(tmp_path / "library"),
+            effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
+        render_calls = []
+        original_render = main_module._render_montage_with_resolved_clip_sources
+
+        def counted_render(*args, **kwargs):
+            render_calls.append(1)
+            return original_render(*args, **kwargs)
+
+        monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", counted_render)
+        retry_executor = CreationJobUnitExecutor(
+            repo,
+            render_action=lambda workspace_id, current_task_id, context: (
+                main_module._render_creation_task_montage_for_workspace(
+                    workspace_id, current_task_id, render_context=context)),
+            render_is_valid=lambda workspace_id, current_task_id, context: (
+                main_module._creation_render_is_valid(
+                    workspace_id, current_task_id, render_context=context)),
+        )
+        real_checkpoint = retry_executor._checkpoint
+        crash_once = {"pending": True}
+
+        def crash_after_inner(conn, current_grant, *, status, output=None, reason=None):
+            if status == "succeeded" and crash_once["pending"]:
+                crash_once["pending"] = False
+                raise RuntimeError("simulated crash after inner publication")
+            return real_checkpoint(conn, current_grant, status=status, output=output, reason=reason)
+
+        retry_executor._checkpoint = crash_after_inner
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1]
+        published_task = repo.get_creation_task(task.workspace_id, task_id)
+        published_version = repo.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
+        inner_jobs = [item for item in repo.list_job_runs(task.workspace_id, task_id)
+                      if item.kind == "creation_task_montage_render"]
+        assert len(inner_jobs) == 1 and inner_jobs[0].status == "succeeded"
+
+        # A same-length write with restored mtime is still a new local source
+        # identity. Do not resume the old grant after this branch changes it.
+        if source_change:
+            source_stat = video.stat()
+            source_bytes = video.read_bytes()
+            time.sleep(0.01)
+            changed = bytearray(source_bytes)
+            changed[-1] ^= 1
+            video.write_bytes(changed)
+            os.utime(video, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+            changed_stat = video.stat()
+            assert changed_stat.st_size == source_stat.st_size
+            assert changed_stat.st_mtime_ns == source_stat.st_mtime_ns
+            assert changed_stat.st_ino == source_stat.st_ino
+            assert changed_stat.st_ctime_ns != source_stat.st_ctime_ns
+            with pytest.raises(PermissionError, match="失效"):
+                retry_executor.execute(retry_grant, scheduler)
+            assert render_calls == [1]
+            scheduler.defer_unit(retry_grant, reason="input_stale")
+            scheduler.assert_released(retry_grant)
+            return
+
+        # An independently edited timeline version also invalidates the grant.
+        repo.create_timeline_version(TimelineVersion(
+            id="timeline_independent_edit", workspace_id=task.workspace_id, task_id=task_id,
+            parent_version_id=published_version.id, sequence=published_version.sequence + 1,
+            snapshot=published_version.snapshot, created_by_operation_id="operation_independent_edit",
+        ))
+        with pytest.raises(PermissionError, match="失效"):
+            retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1]
+        restored_task = repo.get_creation_task(task.workspace_id, task_id)
+        restored_task.current_timeline_version_id = published_version.id
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                         (json.dumps(asdict(restored_task), default=str), task.workspace_id, task_id))
+
+        retry_executor._checkpoint = real_checkpoint
+        retry_executor.execute(retry_grant, scheduler)
+        assert render_calls == [1], "outer recovery must reuse its published inner render"
+        scheduler.assert_released(retry_grant)
+        finished = repo.get_job_run(task.workspace_id, resumed.id)
+        assert finished.status == "succeeded", finished.failure_reason
+        assert submit_creation_stage(execution, scheduler, repo.get_job_run(task.workspace_id, resumed.id), actor) is None
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (retry_request_id,)).fetchone()[0] == "done"
+            event = conn.execute("SELECT payload_json FROM task_events WHERE id=?",
+                                 (f"event_{resumed.id}_render_succeeded",)).fetchone()
+        output_identity = json.loads(event["payload_json"])["output"]
+        assert output_identity.startswith("timeline_job_")
+        assert output_identity.endswith("/preview.mp4")
+        output_ref = repo.get_creation_task_montage_plan(task.workspace_id, task_id)["output_path"]
+        assert output_store.resolve_file(output_ref).is_file()
+    finally:
+        scheduler.close()
 
 
 def test_draft_and_wrong_workspace_cannot_start(tmp_path, monkeypatch):
@@ -328,7 +550,7 @@ def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path
     published = store.publish_bytes("task/preview.mp4", b"invalid media")
     task = SimpleNamespace(current_timeline_version_id="version_1", confirmed_script_id="script_1")
     plan = {"status": "rendered", "script_id": "script_1", "output_path": published.logical_ref,
-            "aspect_ratio": "9:16"}
+            "aspect_ratio": "9:16", "duration_seconds": 1.0}
     record = SimpleNamespace(logical_ref=published.logical_ref, kind="rendered_video",
                              producer_job_id="render_1", sha256=published.sha256,
                              size_bytes=published.size_bytes)

@@ -67,6 +67,8 @@ UI01独占 `apps/web/src/app/knowledge/page.tsx`、必要时同步其 `loading.t
 | AUTH01 / WIL-67 | 新增apps/api/app/device_accounts.py、tests/test_device_accounts.py及独立Supabase新迁移；不写历史迁移、auth.py、source_repository.py、main或SQLiteDDL | 可信设备前提下邀请接受/撤销/过期/幂等和并发五人名额，owner占位，固定目标空间；隔离PG/RLS验证；真实设备注册根仍是交付缺口 |
 | MAT01 | 在原范围上新增material_scene.py及专项测试；复用源时间区间的有界场景分析 | 镜头变化小样、真实定位、检查点/重启恢复；不跑完整ASR/VLM，不提前标资产ready；资源字段先与SCHED对齐 |
 | UI01 | 新增DesktopVoiceRecorder.tsx、相邻module.css和组件测试 | 真实浏览器录音/停止/试听/重录/释放设备、诚实错误；onRecorded回调交MAKE接线，父层和API不跨写；摄像头/录屏不包含 |
+| cmux Pi / WIL-70 | TemplateLibraryWorkspace.tsx、其专项测试，必要时自身module.css | 名称搜索、按视图区分空态、断线无旧模板操作；版本路由保留，专项验证交主控 |
+| cmux Claude Code / WIL-71 | PublishingWorkspace.tsx及其专项测试 | 刷新失败与过期响应不展示假新状态，原因/下一步一致；不增加平台发布能力，专项验证交主控 |
 | QA01 | 原隔离证据范围；审核上述包 | 按具体候选做必要复验，区分组件/真实媒体/产品闭环；失败只阻断对应包 |
 
 cmux前一批生产叶子和测试规范清理已交付，旧临时写入许可结束；后续派包必须重新限定文件，不得继续沿历史消息写媒体文件。当前包基线由主控消息指定，不能从已结束批次推断。

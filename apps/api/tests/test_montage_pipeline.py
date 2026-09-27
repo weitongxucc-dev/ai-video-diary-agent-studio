@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -19,6 +20,8 @@ from PIL import Image
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
+from app.creation_execution import CpuRenderGrantContext
+from app.host_resource_probes import HostProcessProbe
 from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
 from app.models import (
     Episode,
@@ -42,6 +45,7 @@ from app.montage import (
     _subtitle_font,
     _subtitle_font_and_lines,
     _tokens,
+    _validate_rendered_media,
     _write_subtitle_overlays,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
@@ -1332,6 +1336,52 @@ def test_mixed_person_and_material_clips_render_with_continuous_narration(tmp_pa
     assert blue[2] > blue[0] * 2
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg is not installed")
+def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path):
+    video = tmp_path / "source.mp4"
+    audio = tmp_path / "narration.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=blue:s=320x240:r=25:d=1", "-pix_fmt", "yuv420p", str(video)],
+                   check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", str(audio)], check=True, capture_output=True)
+    plan = CreationTaskMontagePlan(
+        id="granted-render", workspace_id="workspace_a", task_id="task-granted",
+        script_id="script-granted", script_title="短片", status="ready",
+        cues=[NarrationCue("cue", "section", "短片。", 1.0, "segment")],
+        clips=[MontageClip("clip", "cue", "asset", "segment", str(video),
+                           0.0, 1.0, 0.0, 1.0, 1.0, ["蓝色画面"], False)],
+        duration_seconds=1.0, low_confidence_clip_count=0,
+        presenter_share_target=0, narration_audio_path="narration://artifact/test",
+    )
+
+    class RecordingGrant:
+        processes = HostProcessProbe()
+
+        def __init__(self):
+            self.children = []
+
+        def assert_grant(self, grant):
+            assert grant == "one-render-grant"
+
+        def register_child(self, grant, child):
+            self.assert_grant(grant)
+            self.children.append(child)
+
+    scheduler = RecordingGrant()
+    rendered = MontageRenderer(tmp_path).render(
+        plan, audio, job_staging_path=tmp_path / "job", scheduler=scheduler,
+        grant="one-render-grant", deadline_monotonic=time.monotonic() + 90,
+        max_output_bytes=8 * 1024 * 1024, threads=1,
+    )
+    assert rendered.status == "rendered"
+    assert (tmp_path / "job" / "preview.mp4").stat().st_size <= 8 * 1024 * 1024
+    assert len(scheduler.children) == 3  # duration probe, encoder, output probe
+    with pytest.raises(OSError, match="时长不足"):
+        _validate_rendered_media(tmp_path / "job" / "preview.mp4", expected_size=(1080, 1920),
+                                 expected_duration_seconds=5)
+
+
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg is not installed",
@@ -1539,14 +1589,19 @@ def test_creation_task_render_helper_restores_logical_media_references(
     )
 
     class MutatingRenderer:
-        def render(self, rendered_plan, resolved_audio_path):
+        def __init__(self):
+            self.options = []
+
+        def render(self, rendered_plan, resolved_audio_path, **options):
             assert Path(rendered_plan.clips[0].source_path).is_absolute()
             rendered_plan.narration_audio_path = str(resolved_audio_path)
             rendered_plan.status = "rendered"
+            self.options.append(options)
             return rendered_plan
 
+    renderer = MutatingRenderer()
     monkeypatch.setattr(main_module, "production_repo", production)
-    monkeypatch.setattr(main_module, "montage_renderer", MutatingRenderer())
+    monkeypatch.setattr(main_module, "montage_renderer", renderer)
 
     rendered = main_module._render_montage_with_resolved_clip_sources(
         workspace_id,
@@ -1555,6 +1610,24 @@ def test_creation_task_render_helper_restores_logical_media_references(
     )
 
     assert rendered.clips[0].source_path == logical_clip_reference
+    context = CpuRenderGrantContext(object(), object(), time.monotonic() + 30, 1_000_000, 1)
+    main_module._render_montage_with_resolved_clip_sources(
+        workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
+        render_context=context,
+    )
+    assert renderer.options[-1]["scheduler"] is context.scheduler
+    assert renderer.options[-1]["grant"] is context.grant
+    assert renderer.options[-1]["max_output_bytes"] == 1_000_000
+    assert plan.clips[0].source_path == logical_clip_reference
+    prior_calls = len(renderer.options)
+    plan.clips[0].visual_effects = {"beauty_strength": 0.3}
+    with pytest.raises(ValueError, match="人像效果"):
+        main_module._render_montage_with_resolved_clip_sources(
+            workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
+            render_context=context,
+        )
+    assert len(renderer.options) == prior_calls
+    assert plan.clips[0].source_path == logical_clip_reference
     assert rendered.narration_audio_path == logical_narration_reference
 
 

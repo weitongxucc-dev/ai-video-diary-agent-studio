@@ -73,7 +73,8 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    CreationExecution, CreationExecutionActor, ExecutionStartRequest,
+    CpuRenderGrantContext, CreationExecution, CreationExecutionActor,
+    CreationJobUnitExecutor, ExecutionStartRequest,
     revision_digest, submit_creation_stage,
 )
 from app.creator_profile import (
@@ -9810,7 +9811,9 @@ def render_creation_task_montage(
     return _render_creation_task_montage_for_workspace(current_workspace_id(request), task_id)
 
 
-def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str) -> CreationTaskMontagePlanResponse:
+def _render_creation_task_montage_for_workspace(
+    workspace_id: str, task_id: str, *, render_context: CpuRenderGrantContext | None = None,
+) -> CreationTaskMontagePlanResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     try:
         plan = creation_task_montage_plan_from_payload(
@@ -9818,10 +9821,15 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
-    if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered"}:
+    if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered", "failed"}:
         raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
+    if render_context is not None and any(
+        clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
+        for clip in plan.clips
+    ):
+        raise HTTPException(status_code=409, detail="本机人像效果尚无受许可执行路径，请先移除该效果")
     try:
         _validate_montage_material_use(workspace_id,plan)
     except ValueError as exc:
@@ -9883,6 +9891,47 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
     input_digest = hashlib.sha256(
         json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+    if (render_context is not None and active_version is not None
+            and active_version.snapshot.get("creation_render_request_id") == render_context.grant.request_id):
+        # The published version owns output subtitle tracks. They were not an
+        # input to this render, so bind recovery to the input captured before
+        # publication instead of hashing those newly generated tracks.
+        snapshot = active_version.snapshot
+        original_tracks = snapshot.get("render_input_subtitle_tracks")
+        original_visible = snapshot.get("render_input_subtitles_visible")
+        original_digest = snapshot.get("render_input_digest")
+        if not isinstance(original_tracks, list) or not isinstance(original_visible, bool):
+            raise ValueError("成片恢复缺少原始字幕输入")
+        plan_input["subtitle_tracks"] = original_tracks
+        plan_input["subtitles_visible"] = original_visible
+        input_digest = hashlib.sha256(
+            json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        transform_id = snapshot.get("transform_run_id")
+        if not isinstance(transform_id, str) or not transform_id.startswith("transform_job_"):
+            raise ValueError("成片恢复缺少内层渲染记录")
+        inner_id = transform_id.removeprefix("transform_")
+        inner_job = production_repo.get_job_run(workspace_id, inner_id)
+        transform = production_repo.get_transform_run(workspace_id, transform_id)
+        output_refs = [plan.output_path, plan.subtitle_path]
+        if (input_digest != original_digest or inner_job.task_id != task.id
+                or inner_job.kind != "creation_task_montage_render"
+                or inner_job.status != "succeeded" or inner_job.input_digest != input_digest
+                or inner_job.output_refs != output_refs
+                or transform.task_id != task.id or transform.job_id != inner_id
+                or transform.status != "succeeded" or transform.input_digest != input_digest
+                or transform.output_refs != output_refs
+                or plan.status != "rendered" or not all(isinstance(ref, str) and ref for ref in output_refs)
+                or snapshot.get("output_refs") != output_refs):
+            raise ValueError("成片恢复输入或已发布产物不匹配")
+        render_context.scheduler.assert_grant(render_context.grant)
+        subtitle_record = production_repo.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
+        published_subtitle = artifact_store.describe(plan.subtitle_path)
+        if (subtitle_record.producer_job_id != inner_id or subtitle_record.logical_ref != plan.subtitle_path
+                or subtitle_record.sha256 != published_subtitle.sha256
+                or subtitle_record.size_bytes != published_subtitle.size_bytes):
+            raise ValueError("成片恢复字幕产物校验失败")
+        return _creation_task_montage_response(plan)
     base_idempotency_key = f"montage-render:{task.id}:{input_digest}"
     matching_jobs = [
         existing
@@ -10051,6 +10100,7 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
                         narration_path,
                         job_staging_path=Path(staging),
                         subtitle_tracks=active_subtitle_tracks if active_subtitle_tracks or explicit_subtitles else None,
+                        **({"render_context": render_context} if render_context is not None else {}),
                     )
                     rendered = plan
                     rendered.status = rendered_variant.status
@@ -10171,6 +10221,12 @@ def _render_creation_task_montage_for_workspace(workspace_id: str, task_id: str)
                         **({"subtitle_track_ids": []} if explicit_subtitles and not active_subtitle_tracks else {}),
                         "output_refs": output_refs,
                         "transform_run_id": transform.id,
+                        **({
+                            "creation_render_request_id": render_context.grant.request_id,
+                            "render_input_digest": input_digest,
+                            "render_input_subtitle_tracks": plan_input["subtitle_tracks"],
+                            "render_input_subtitles_visible": subtitles_visible,
+                        } if render_context is not None else {}),
                         **({"cover_asset_id": f"cover_{version_id}"} if active_cover else {}),
                     },
                     created_by_operation_id=None,
@@ -10816,7 +10872,10 @@ def _render_montage_with_resolved_clip_sources(
     *,
     job_staging_path: Path | None = None,
     subtitle_tracks: list[SubtitleTrack] | None = None,
+    render_context: CpuRenderGrantContext | None = None,
 ):
+    if render_context is not None and job_staging_path is None:
+        raise ValueError("受许可成片必须写入任务暂存目录")
     original_references = [clip.source_path for clip in plan.clips]
     original_ranges = [
         (clip.source_start_seconds, clip.source_end_seconds) for clip in plan.clips
@@ -10865,6 +10924,8 @@ def _render_montage_with_resolved_clip_sources(
         for clip,handle_clip in zip(plan.clips,extended,strict=True):
             effects=VisualEffects.model_validate(clip.visual_effects)
             if effects.beauty_strength or effects.skin_exposure:
+                if render_context is not None:
+                    raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
                 processed,metadata=_portrait_processor(workspace_id).process(Path(clip.source_path),clip.source_start_seconds,
                     handle_clip.source_end_seconds,effects.beauty_strength,effects.skin_exposure)
                 clip.source_path=str(processed)
@@ -10876,11 +10937,29 @@ def _render_montage_with_resolved_clip_sources(
         if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:
             mixed_audio = Path(job_staging_path) / "timeline-mix.wav"
             service = _task_audio()
+            audio_options = (
+                {"scheduler": render_context.scheduler, "grant": render_context.grant,
+                 "cancel_event": render_context.cancel_event,
+                 "deadline_monotonic": render_context.deadline_monotonic,
+                 "max_output_bytes": int(plan.duration_seconds * 192_000) + 4096,
+                 "threads": render_context.threads}
+                if render_context is not None else {}
+            )
             render_audio_mix(plan.audio_timeline, plan.duration_seconds,
-                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio)
+                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio,
+                **audio_options)
             narration_audio_path = mixed_audio
+        render_options = (
+            {"scheduler": render_context.scheduler, "grant": render_context.grant,
+             "cancel_event": render_context.cancel_event,
+             "deadline_monotonic": render_context.deadline_monotonic,
+             "max_output_bytes": render_context.max_output_bytes,
+             "threads": render_context.threads}
+            if render_context is not None else {}
+        )
         return montage_renderer.render(
-            plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks
+            plan, narration_audio_path, job_staging_path=job_staging_path,
+            subtitle_tracks=subtitle_tracks, **render_options,
         )
     finally:
         for clip, reference, source_range in zip(
@@ -12612,7 +12691,10 @@ def get_episode_topic_evidence(episode_id: str) -> TopicEvidenceResponse:
 _LEGACY_WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
 
 
-def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
+def _creation_render_is_valid(
+    workspace_id: str, task_id: str, *, verify_media: bool = True,
+    render_context: CpuRenderGrantContext | None = None,
+) -> bool:
     try:
         task = production_repo.get_creation_task(workspace_id, task_id)
         if not task.current_timeline_version_id:
@@ -12632,10 +12714,23 @@ def _creation_render_is_valid(workspace_id: str, task_id: str) -> bool:
         )
         if registered is None or production_repo.get_job_run(workspace_id, registered.producer_job_id).status != "succeeded":
             return False
+        path = artifact_store.resolve_file(ref)
+        if not verify_media:
+            return path.stat().st_size == registered.size_bytes
+        if render_context is not None:
+            render_context.scheduler.assert_grant(render_context.grant)
         published = artifact_store.describe(ref)
         if published.sha256 != registered.sha256 or published.size_bytes != registered.size_bytes:
             return False
-        _validate_rendered_media(artifact_store.resolve_file(ref), expected_size=canvas_size(str(plan["aspect_ratio"])))
+        media_options = (
+            {"scheduler": render_context.scheduler, "grant": render_context.grant,
+             "cancel_event": render_context.cancel_event,
+             "deadline_monotonic": render_context.deadline_monotonic}
+            if render_context is not None else {}
+        )
+        _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),
+                                 expected_duration_seconds=float(plan["duration_seconds"]),
+                                 **media_options)
         return True
     except (KeyError, FileNotFoundError, ValueError, OSError):
         return False
@@ -12757,8 +12852,9 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
                     (workspace_id, "local-owner", job.id, job.input_digest),
                 ).fetchone()
             if row is not None:
-                if row["unit_key"] in {"narration", "montage_plan", "render"}:
-                    current_stage = row["unit_key"]
+                queued_stage = row["unit_key"].split(":", 1)[0]
+                if queued_stage in {"narration", "montage_plan", "render"}:
+                    current_stage = queued_stage
                 waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
                 if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
                     status_updated_at = row["updated_at"]
@@ -12769,7 +12865,8 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
         "current_stage": current_stage,
         "waiting_reason": waiting_reason,
         "status_updated_at": status_updated_at,
-        "video_ready": _creation_render_is_valid(workspace_id, task_id),
+        "video_ready": _creation_render_is_valid(
+            workspace_id, task_id, verify_media=creation_execution_mode != "scheduled"),
         "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
         "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
     }
@@ -12880,6 +12977,10 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
             ).fetchall()
         for row in rows:
             runtime.scheduler.cancel(row["id"], actor)
+            registration = runtime.registrations.get("creation_job")
+            executor = getattr(registration, "executor", None)
+            if isinstance(executor, CreationJobUnitExecutor):
+                executor.request_cancel(row["id"])
     return _creation_execution_status(workspace_id, task_id)
 
 

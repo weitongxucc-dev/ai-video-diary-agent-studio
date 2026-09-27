@@ -1,11 +1,13 @@
 import array
 import math
 import subprocess
+import time
 import wave
 
 import pytest
 
 from app.audio_timeline import AudioEditRequest, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, apply_audio_edit, compile_audio_command, render_audio_mix
+from app.host_resource_probes import HostProcessProbe
 
 
 def tone(path, frequency):
@@ -51,6 +53,39 @@ def test_actual_mix_preserves_both_tracks_and_solo_does_not_change_export(tmp_pa
     assert timeline.model_dump() == snapshot
     export = render_audio_mix(timeline, 4, resolver, tmp_path / "export.wav")
     assert samples(export, 1.2, 1.7) == both
+
+
+def test_audio_mix_probe_and_export_share_granted_process_runner(tmp_path):
+    source = tmp_path / "voice.wav"
+    tone(source, 440)
+    timeline = AudioTimeline(tracks=[TimelineAudioTrack(
+        id="voice", name="配音", role="narration", clips=[TimelineAudioClip(
+            id="clip", name="人声", source_ref="artifacts/voice", source_start_ms=0,
+            source_end_ms=1000, timeline_start_ms=0,
+        )],
+    )])
+
+    class RecordingGrant:
+        processes = HostProcessProbe()
+
+        def __init__(self):
+            self.children = []
+
+        def assert_grant(self, grant):
+            assert grant == "one-audio-grant"
+
+        def register_child(self, grant, child):
+            self.assert_grant(grant)
+            self.children.append(child)
+
+    scheduler = RecordingGrant()
+    output = render_audio_mix(
+        timeline, 1, lambda _ref: source, tmp_path / "mix.wav", scheduler=scheduler,
+        grant="one-audio-grant", deadline_monotonic=time.monotonic() + 30,
+        max_output_bytes=1024 * 1024, threads=1,
+    )
+    assert output.is_file()
+    assert len(scheduler.children) == 2  # source ffprobe and bounded FFmpeg mix
 
 
 def test_all_muted_tracks_produce_explicit_silence_with_requested_duration(tmp_path):

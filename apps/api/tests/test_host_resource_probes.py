@@ -4,18 +4,25 @@ import sys
 import threading
 import time
 import wave
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import psutil
 
 from app.granted_subprocess import (
     GrantedCommandCancelled,
     GrantedCommandOutputLimit,
+    GrantedCommandResourceLimit,
+    GrantedCommandResourceUnavailable,
     GrantedCommandTimeout,
     run_granted_command,
 )
-from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe
+from app.host_resource_probes import (
+    CpuRenderBudget, HostBudget, HostProcessProbe, HostResourceProbe, SceneWindowBudget,
+)
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork
 
@@ -58,6 +65,94 @@ def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):
     assert probe.admit(SimpleNamespace(resources={"kind": "material_probe_meta", "size_bytes": 10})) is True
     assert probe.admit(SimpleNamespace(resources={"kind": "creation_render", "size_bytes": 10})) is None
     assert probe.admit(SimpleNamespace(resources={"kind": "material_hash", "size_bytes": 1025})) is False
+
+
+def _render_resources():
+    return {"kind": "creation_render", "execution_mode": "cpu_ffmpeg",
+            "duration_seconds": 0.2, "width_px": 160, "height_px": 120,
+            "input_bytes": 1600, "clip_count": 1, "overlay_count": 0,
+            "max_output_bytes": 1_000_000, "threads": 1, "timeout_seconds": 3.0}
+
+
+def _render_budget():
+    return CpuRenderBudget(
+        max_duration_seconds=1, max_pixel_seconds=100_000,
+        max_width_px=320, max_height_px=240, max_input_bytes=10_000,
+        max_clip_count=2, max_overlay_count=4,
+        max_output_bytes=1_000_000, max_threads=1, max_timeout_seconds=5,
+        additional_memory_bytes=1, additional_disk_bytes=1,
+    )
+
+
+def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_path):
+    base = dict(max_cpu_percent=100, min_available_memory_bytes=0,
+                max_swap_used_bytes=2**63, min_free_disk_bytes=0,
+                max_disk_io_bytes_per_second=2**63, max_unit_input_bytes=1024,
+                sample_seconds=0.02)
+    unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                budget=HostBudget(**base))
+    resources = _render_resources()
+    assert unknown.admit(SimpleNamespace(resources=resources)) is None
+    measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                 budget=HostBudget(**base, cpu_render=_render_budget()))
+    assert measured.admit(SimpleNamespace(resources=resources)) is True
+    assert measured.admit(SimpleNamespace(resources={**resources, "execution_mode": "gpu"})) is None
+    assert measured.admit(SimpleNamespace(resources={k: v for k, v in resources.items()
+                                                     if k != "overlay_count"})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "duration_seconds": 2})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "overlay_count": 5})) is False
+
+
+def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
+    budget = HostBudget(100, 1, 2**63, 0, 2**63, 1024, 0.02,
+                        cpu_render=_render_budget())
+    probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
+    assert probe.admit(SimpleNamespace(resources=_render_resources())) is False
+
+
+def _scene_resources():
+    return {"kind": "material_scene_window", "source_codec": "mpeg4",
+            "source_width_px": 160, "source_height_px": 90,
+            "source_frame_rate_fps": 5.0, "size_bytes": 1_500_000,
+            "scan_seconds": 15.0, "output_sample_fps": 2,
+            "output_max_width_px": 320, "output_max_frames": 30,
+            "ffmpeg_threads": 1, "timeout_seconds": 12.0}
+
+
+def _scene_budget():
+    return SceneWindowBudget(
+        allowed_source_codecs=("mpeg4",), max_source_bytes=3_000_000,
+        max_source_width_px=160, max_source_height_px=90,
+        max_source_frame_rate_fps=120,
+        max_scan_seconds=15, max_output_sample_fps=2,
+        max_output_width_px=320, max_output_frames=30,
+        max_threads=1, max_timeout_seconds=12,
+        max_process_rss_bytes=64 * 1024 * 1024, max_process_threads=8,
+        runtime_sample_seconds=0.05,
+        additional_memory_bytes=128 * 1024 * 1024, additional_disk_bytes=1,
+    )
+
+
+def test_scene_window_requires_calibrated_input_decode_and_hard_timeout(tmp_path):
+    base = dict(max_cpu_percent=100, min_available_memory_bytes=1,
+                max_swap_used_bytes=2**63, min_free_disk_bytes=1,
+                max_disk_io_bytes_per_second=2**63, max_unit_input_bytes=1024,
+                sample_seconds=0.02)
+    resources = _scene_resources()
+    unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                budget=HostBudget(**base))
+    assert unknown.admit(SimpleNamespace(resources=resources)) is None
+    measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
+                                 budget=HostBudget(**base, scene_window=_scene_budget()))
+    assert measured.admit(SimpleNamespace(resources=resources)) is True
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_codec": "av1"})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": None})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_width_px": 3840})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": 240})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "scan_seconds": 16})) is False
+    assert measured.admit(SimpleNamespace(resources={**resources, "output_max_frames": 20})) is None
+    assert measured.admit(SimpleNamespace(resources={**resources, "timeout_seconds": 20})) is False
 
 
 def test_registration_ack_precedes_real_exec(tmp_path):
@@ -191,6 +286,127 @@ def test_real_scheduler_registers_child_before_exec_and_commits_after_release(tm
         assert '"pid"' in children
         scheduler.complete_unit(grant, checkpoint_database_path=database,
                                 checkpoint_write=lambda conn, current: "fixture-checkpoint")
+        scheduler.assert_released(grant)
+    finally:
+        scheduler.close()
+
+
+def test_isolated_cpu_ffmpeg_render_uses_measured_admission_and_real_grant(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg is not installed")
+    audio = tmp_path / "input.wav"
+    with wave.open(str(audio), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(b"\0\0" * 800)
+    resources = {**_render_resources(), "input_bytes": audio.stat().st_size}
+
+    class Owner:
+        def verify_submission(self, intent, actor):
+            assert actor == "member"
+            return VerifiedWork(intent.workspace_id, intent.owner_type, intent.owner_id,
+                                intent.input_digest, intent.unit_key, "member", "normal_make",
+                                resources)
+
+        def check_current(self, request, conn):
+            return "ready"
+
+    database = tmp_path / "production.sqlite"
+    with sqlite3.connect(database) as conn:
+        conn.execute("""CREATE TABLE material_ingestion_files (
+            workspace_id TEXT NOT NULL, file_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+            ctime_ns INTEGER NOT NULL DEFAULT 0, inode INTEGER NOT NULL DEFAULT 0,
+            observed_at REAL NOT NULL, completed_digest TEXT, attempted_digest TEXT,
+            state TEXT NOT NULL, PRIMARY KEY (workspace_id, file_path))""")
+        apply_production_migrations(conn)
+    probe = HostResourceProbe(
+        database, disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024, 0.02,
+                          cpu_render=_render_budget()),
+    )
+    scheduler = DeviceScheduler(database, tmp_path / "device.lock", owners=Owner(),
+                                resources=probe, processes=HostProcessProbe())
+    video = tmp_path / "output.mp4"
+    try:
+        scheduler.submit(SubmissionIntent("workspace", "creation_job", "job", "digest",
+                                          "render", SchedulePolicy()), "member")
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        result = run_granted_command(
+            scheduler, grant,
+            [ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "color=s=160x120:r=10",
+             "-i", str(audio), "-t", "0.2", "-c:v", "libx264", "-threads", "1",
+             "-filter_threads", "1", "-c:a", "aac", "-fs", "1000000", "-y", str(video)],
+            timeout_seconds=3, max_stdout_bytes=1024, max_stderr_bytes=4096,
+        )
+        assert result.returncode == 0 and 0 < video.stat().st_size <= 1_000_000
+        scheduler.complete_unit(grant, checkpoint_database_path=database,
+                                checkpoint_write=lambda conn, current: video.name)
+        scheduler.assert_released(grant)
+    finally:
+        scheduler.close()
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monkeypatch, unavailable):
+    resources = _scene_resources()
+
+    class Owner:
+        def verify_submission(self, intent, actor):
+            return VerifiedWork(intent.workspace_id, intent.owner_type, intent.owner_id,
+                                intent.input_digest, intent.unit_key, None, "background",
+                                resources, stage_input_digest="b" * 64)
+
+        def check_current(self, request, conn):
+            return "ready"
+
+    database = tmp_path / "production.sqlite"
+    with sqlite3.connect(database) as conn:
+        conn.execute("""CREATE TABLE material_ingestion_files (
+            workspace_id TEXT NOT NULL, file_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+            ctime_ns INTEGER NOT NULL DEFAULT 0, inode INTEGER NOT NULL DEFAULT 0,
+            observed_at REAL NOT NULL, completed_digest TEXT, attempted_digest TEXT,
+            state TEXT NOT NULL, PRIMARY KEY (workspace_id, file_path))""")
+        apply_production_migrations(conn)
+    scene_budget = replace(_scene_budget(), max_process_rss_bytes=24 * 1024 * 1024,
+                           additional_memory_bytes=24 * 1024 * 1024)
+    probe = HostResourceProbe(
+        database, disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024, 0.02,
+                          scene_window=scene_budget),
+    )
+    scheduler = DeviceScheduler(database, tmp_path / "device.lock", owners=Owner(),
+                                resources=probe, processes=HostProcessProbe())
+    try:
+        scheduler.submit(SubmissionIntent("workspace", "material_asset", "asset", "a" * 64,
+                                          "scene-window:v1:" + "b" * 64,
+                                          SchedulePolicy()), "service")
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        if unavailable:
+            def missing_memory(process):
+                raise psutil.AccessDenied(pid=process.pid)
+            monkeypatch.setattr(psutil.Process, "memory_info", missing_memory)
+        start = time.monotonic()
+        expected = GrantedCommandResourceUnavailable if unavailable else GrantedCommandResourceLimit
+        with pytest.raises(expected):
+            run_granted_command(
+                scheduler, grant,
+                [sys.executable, "-c", "import os,time; os.close(1); os.close(2); "
+                 "held=bytearray(80_000_000); time.sleep(5)"],
+                timeout_seconds=3, max_stdout_bytes=100, max_stderr_bytes=100,
+            )
+        assert time.monotonic() - start < 2
+        if unavailable:
+            scheduler.defer_unit(grant, reason="resource_pressure",
+                                 retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1))
+        else:
+            scheduler.fail_unit(grant, reason="scene_resource_limit",
+                                failure_write=lambda conn, current: None)
         scheduler.assert_released(grant)
     finally:
         scheduler.close()
