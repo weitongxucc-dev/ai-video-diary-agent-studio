@@ -432,15 +432,27 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
   </section>;
 }
 
-function PreviewVideo({ url, label, muted, pauseOthers }: {
+export function PreviewVideo({ url, label, muted, pauseOthers }: {
   url: string;
   label: string;
   muted: boolean;
   pauseOthers: (current: HTMLVideoElement) => void;
 }) {
   const frameRef = useRef<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previousUrlRef = useRef(url);
   const match = /#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(url);
   const range = match ? { start: Number(match[1]), end: Number(match[2]) } : null;
+  useEffect(() => {
+    if (previousUrlRef.current === url) return;
+    previousUrlRef.current = url;
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.pause();
+      if (range) videoRef.current.currentTime = range.start;
+    }
+  }, [url, range]);
   useEffect(() => () => {
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
   }, []);
@@ -462,6 +474,7 @@ function PreviewVideo({ url, label, muted, pauseOthers }: {
     frameRef.current = requestAnimationFrame(tick);
   };
   return <video
+    ref={videoRef}
     className={editorUi.effectPreview}
     aria-label={label}
     controls

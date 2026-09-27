@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CreationTaskWorkspace } from "../CreationTaskWorkspace";
+import { CreationTaskWorkspace, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 
 const mocks = vi.hoisted(() => {
@@ -254,6 +254,31 @@ afterEach(() => {
   mocks.previewExecution.mockResolvedValue(null);
   mocks.getAssistantHistory.mockResolvedValue({ items: [] });
   Reflect.deleteProperty(window, "electronAPI");
+});
+
+it("stops the old trim interval when a playing preview receives a new source URL", () => {
+  const frames: FrameRequestCallback[] = [];
+  const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+    frames.push(callback);
+    return frames.length;
+  });
+  const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  const props = { label: "裁剪画面", muted: false, pauseOthers: vi.fn() };
+  const { rerender } = render(<PreviewVideo {...props} url="/source.mp4#t=0.500,2.500" />);
+  const video = screen.getByLabelText("裁剪画面") as HTMLVideoElement;
+  fireEvent.play(video);
+  expect(frames).toHaveLength(1);
+  rerender(<PreviewVideo {...props} url="/source.mp4#t=3.000,4.000" />);
+  expect(screen.getByLabelText("裁剪画面")).toBe(video);
+  expect(cancelFrame).toHaveBeenCalledWith(1);
+  expect(pause).toHaveBeenCalled();
+  expect(video.currentTime).toBe(3);
+  fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(3);
+  pause.mockRestore();
+  cancelFrame.mockRestore();
+  animationFrame.mockRestore();
 });
 
 describe("CreationTaskWorkspace", () => {
