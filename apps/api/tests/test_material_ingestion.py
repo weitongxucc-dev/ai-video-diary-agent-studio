@@ -16,12 +16,13 @@ import pytest
 
 from app.device_scheduler import DeviceScheduler, ProcessIdentity, SchedulePolicy, SubmissionIntent
 from app.material_ingestion import (
-    MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialIngestionService,
+    MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialHashUnitExecutor,
+    MaterialIngestionService,
 )
 from app.production import (
     CreationPlan, CreationTask, CreationTaskScript, CreationTaskScriptSection,
     JobRun, MaterialProbeDependency, ProductionRepository, ScriptGenerationRun, TaskEvent,
-    _material_hash_candidate,
+    _material_hash_candidate, material_probe_unit_key,
 )
 
 
@@ -103,14 +104,29 @@ def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: P
 
         grant = scheduler.pick_and_grant()
         assert grant is not None and grant.request_id == request_ids[0]
-        digest = service.run_granted_hash(grant)
-        assert digest == hashlib.sha256(source.read_bytes()).hexdigest()
+        executor = MaterialHashUnitExecutor()
+        with pytest.raises(PermissionError, match="不属于"):
+            executor.execute(grant, scheduler)
+        executor.bind(service)
+        executor.execute(grant, scheduler)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute("SELECT attempted_digest, state FROM material_ingestion_files").fetchone() == (digest, "waiting")
             assert conn.execute("SELECT source_sha256, result_ref FROM material_analysis_checkpoints").fetchone() == (digest, f"sha256:{digest}")
+            assert conn.execute(
+                "SELECT input_digest, unit_key FROM device_work_requests "
+                "WHERE owner_type='material_asset' AND unit_key LIKE 'probe-scene:v1:%'"
+            ).fetchall() == [(digest, material_probe_unit_key(digest))]
         assert repo.get_asset("one", repo.list_assets("one")[0].id).analysis_status == "blocked"
         assert duration.call_count == 0  # Hash completion is not scene analysis or ready.
         assert service.discover_and_submit_hashes() == []
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (2,)
+        assert scheduler.pick_and_grant() is None
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute(
+                "SELECT state, wait_reason FROM device_work_requests WHERE unit_key LIKE 'probe-scene:v1:%'"
+            ).fetchone() == ("blocked", "dependency")
         with pytest.raises(PermissionError, match="不可提交"):
             scheduler.submit(
                 SubmissionIntent("one", "material_asset", asset_id,
@@ -142,8 +158,7 @@ def test_scheduled_hash_changed_source_defers_old_grant_and_keeps_workspace_owne
         grant = scheduler.pick_and_grant()
         assert grant is not None
         source.write_bytes(b"second version")
-        with pytest.raises(PermissionError, match="失效"):
-            service.run_granted_hash(grant)
+        assert service.run_granted_hash(grant) is None
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute("SELECT state, wait_reason FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone() == ("blocked", "input_stale")
             assert conn.execute("SELECT attempted_digest FROM material_ingestion_files").fetchone() == (None,)
@@ -171,13 +186,63 @@ def test_scheduled_hash_missing_library_defers_without_checkpoint(tmp_path: Path
         grant = scheduler.pick_and_grant()
         assert grant is not None
         library.rename(tmp_path / "disconnected")
-        with pytest.raises(PermissionError, match="失效"):
-            service.run_granted_hash(grant)
+        assert service.run_granted_hash(grant) is None
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
                 "SELECT state, wait_reason FROM device_work_requests WHERE id=?", (request_id,)
             ).fetchone() == ("blocked", "dependency_unavailable")
             assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints").fetchone() == (0,)
+    finally:
+        scheduler.close()
+
+
+def test_scheduled_hash_scan_repairs_checkpoint_to_probe_submit_gap(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    (library / "clip.mp4").write_bytes(b"source")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = hash_scheduler(repo, tmp_path)
+    service = MaterialIngestionService(
+        repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0,
+    )
+    try:
+        service.discover_and_submit_hashes()
+        service.discover_and_submit_hashes()
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        result = repo.hash_granted_material(grant, scheduler.assert_grant)
+        scheduler.complete_unit(
+            grant, checkpoint_database_path=repo.database_path,
+            checkpoint_write=lambda conn, active: repo.commit_material_hash(conn, active, result),
+        )
+        scheduler.close()
+        restarted_repo = ProductionRepository(repo.database_path, library)
+        scheduler = hash_scheduler(restarted_repo, tmp_path)
+        service = MaterialIngestionService(
+            restarted_repo, execution_mode="scheduled", scheduler=scheduler,
+            stable_seconds=0,
+        )
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (1,)
+            conn.execute(
+                "UPDATE material_analysis_checkpoints SET result_ref='sha256:invalid'"
+            )
+        assert service.discover_and_submit_hashes() == []
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (1,)
+            conn.execute(
+                "UPDATE material_analysis_checkpoints SET result_ref=?",
+                (f"sha256:{result.source_sha256}",),
+            )
+        assert service.discover_and_submit_hashes() == []
+        first_probe = service.submit_pending_probe_dependencies()
+        assert len(first_probe) == 1
+        assert service.discover_and_submit_hashes() == []
+        assert service.submit_pending_probe_dependencies() == first_probe
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (2,)
+            assert conn.execute(
+                "SELECT input_digest FROM device_work_requests WHERE id=?", (first_probe[0],),
+            ).fetchone() == (result.source_sha256,)
     finally:
         scheduler.close()
 

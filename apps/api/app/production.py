@@ -166,6 +166,18 @@ class MaterialProbeDependency:
     provisional_revision: str
 
 
+def material_probe_unit_key(source_sha256: str) -> str:
+    """Identity for a future bounded scene probe, never an executable probe permit."""
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        raise ValueError("素材源哈希无效")
+    stage_input = hashlib.sha256(json.dumps(
+        {"stage": "probe-scene:v1", "source_sha256": source_sha256,
+         "probe_contract": "bounded-window:v1"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    return f"probe-scene:v1:{stage_input}"
+
+
 def _material_hash_candidate(
     workspace_id: str, bound_path: str, path: Path, stat: os.stat_result, asset_id: str
 ) -> MaterialHashCandidate:
@@ -2741,8 +2753,11 @@ class ProductionRepository:
         if asset_row is None:
             return "stale"
         path = Path(str(asset_row["file_path"]))
-        if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
-            return "stale"
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
+                return "stale"
+        except OSError:
+            return "unknown"
         observation = conn.execute(
             "SELECT provisional_revision, state, attempted_digest FROM material_ingestion_files "
             "WHERE workspace_id=? AND file_path=?",
@@ -2920,8 +2935,7 @@ class ProductionRepository:
             return []
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT f.file_path, f.provisional_revision, f.attempted_digest,
-                          a.id AS asset_id
+                """SELECT f.provisional_revision, f.attempted_digest, a.id AS asset_id
                    FROM material_ingestion_files f
                    JOIN material_assets a ON a.workspace_id=f.workspace_id
                                          AND a.file_path=f.file_path
@@ -2931,35 +2945,84 @@ class ProductionRepository:
             ).fetchall()
             dependencies: list[MaterialProbeDependency] = []
             for row in rows:
-                path = Path(str(row["file_path"]))
+                source_sha256 = str(row["attempted_digest"])
                 try:
-                    if path.is_symlink() or not path.resolve().is_relative_to(self.video_library_path.resolve()):
-                        continue
-                    stat = path.stat()
-                except FileNotFoundError:
+                    unit_key = material_probe_unit_key(source_sha256)
+                except ValueError:
                     continue
-                candidate = _material_hash_candidate(
-                    workspace_id, bound_path, path, stat, str(row["asset_id"]),
-                )
-                if candidate.provisional_revision != row["provisional_revision"]:
-                    continue
-                checkpoint = conn.execute(
-                    """SELECT stage_input_digest, result_ref
-                       FROM material_analysis_checkpoints
-                       WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
-                         AND source_sha256=? AND unit_key=?""",
-                    (workspace_id, candidate.asset_id, candidate.provisional_revision,
-                     row["attempted_digest"], candidate.unit_key),
-                ).fetchone()
-                if (checkpoint is None
-                        or checkpoint["stage_input_digest"] != candidate.stage_input_digest
-                        or checkpoint["result_ref"] != f"sha256:{row['attempted_digest']}"):
+                if self.material_probe_source_verdict(
+                    workspace_id, str(row["asset_id"]), source_sha256, unit_key, conn,
+                ) != "ready":
                     continue
                 dependencies.append(MaterialProbeDependency(
-                    workspace_id, candidate.asset_id, str(row["attempted_digest"]),
-                    candidate.provisional_revision,
+                    workspace_id, str(row["asset_id"]), source_sha256,
+                    str(row["provisional_revision"]),
                 ))
         return dependencies
+
+    def material_probe_source_verdict(
+        self, workspace_id: str, asset_id: str, source_sha256: str,
+        unit_key: str, conn: sqlite3.Connection,
+    ) -> Literal["ready", "dependency", "stale", "unauthorized", "unknown"]:
+        """Check the committed hash fact; no probe execution is authorized here."""
+        binding = conn.execute(
+            "SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1"
+        ).fetchone()
+        if binding is None or binding["workspace_id"] != workspace_id:
+            return "unauthorized"
+        if not self._material_library_available():
+            return "dependency"
+        bound_path = str(self.video_library_path.resolve())
+        if binding["library_path"] != bound_path:
+            return "stale"
+        if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+            return "stale"
+        if unit_key != material_probe_unit_key(source_sha256):
+            return "stale"
+        asset = conn.execute(
+            "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+        if asset is None:
+            return "stale"
+        path = Path(str(asset["file_path"]))
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(Path(bound_path)):
+                return "stale"
+        except OSError:
+            return "unknown"
+        observation = conn.execute(
+            "SELECT provisional_revision, state, attempted_digest FROM material_ingestion_files "
+            "WHERE workspace_id=? AND file_path=?",
+            (workspace_id, str(path)),
+        ).fetchone()
+        if (observation is None or observation["state"] != "waiting"
+                or observation["attempted_digest"] != source_sha256):
+            return "stale"
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return "dependency"
+        except OSError:
+            return "unknown"
+        candidate = _material_hash_candidate(
+            workspace_id, bound_path, path, stat, asset_id,
+        )
+        if candidate.provisional_revision != observation["provisional_revision"]:
+            return "stale"
+        checkpoint = conn.execute(
+            """SELECT stage_input_digest, result_ref
+               FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND provisional_revision=?
+                 AND source_sha256=? AND unit_key=?""",
+            (workspace_id, asset_id, candidate.provisional_revision,
+             source_sha256, candidate.unit_key),
+        ).fetchone()
+        if (checkpoint is None
+                or checkpoint["stage_input_digest"] != candidate.stage_input_digest
+                or checkpoint["result_ref"] != f"sha256:{source_sha256}"):
+            return "stale"
+        return "ready"
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""

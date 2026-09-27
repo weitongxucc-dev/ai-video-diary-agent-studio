@@ -6,13 +6,16 @@ import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal
 
 from app.device_scheduler import (
     DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent,
     VerifiedWork, WorkRequest,
 )
-from app.production import MaterialAsset, ProductionRepository
+from app.production import (
+    MaterialAsset, ProductionRepository, material_probe_unit_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ class MaterialHashServiceActor:
 
 
 class MaterialHashOwnerVerifier:
-    """Narrow material owner checks for composition into the device verifier."""
+    """Hash owner and inert probe request checks for the host verifier."""
 
     def __init__(self, repository: ProductionRepository) -> None:
         self.repository = repository
@@ -40,22 +43,38 @@ class MaterialHashOwnerVerifier:
         if binding != (actor.workspace_id, actor.library_path):
             raise PermissionError("素材后台绑定已失效")
         with self.repository._connect() as conn:
-            verdict = self.repository.material_hash_verdict(
-                intent.workspace_id, intent.owner_id, intent.input_digest, intent.unit_key, conn
-            )
-            row = conn.execute(
-                "SELECT size_bytes FROM material_ingestion_files f "
-                "JOIN material_assets a ON a.workspace_id=f.workspace_id AND a.file_path=f.file_path "
-                "WHERE a.workspace_id=? AND a.id=? AND f.provisional_revision=?",
-                (intent.workspace_id, intent.owner_id, intent.input_digest),
-            ).fetchone()
+            if intent.unit_key.startswith("hash:v1:"):
+                verdict = self.repository.material_hash_verdict(
+                    intent.workspace_id, intent.owner_id, intent.input_digest,
+                    intent.unit_key, conn,
+                )
+                row = conn.execute(
+                    "SELECT size_bytes FROM material_ingestion_files f "
+                    "JOIN material_assets a ON a.workspace_id=f.workspace_id AND a.file_path=f.file_path "
+                    "WHERE a.workspace_id=? AND a.id=? AND f.provisional_revision=?",
+                    (intent.workspace_id, intent.owner_id, intent.input_digest),
+                ).fetchone()
+            elif intent.unit_key.startswith("probe-scene:v1:"):
+                verdict = self.repository.material_probe_source_verdict(
+                    intent.workspace_id, intent.owner_id, intent.input_digest,
+                    intent.unit_key, conn,
+                )
+                row = conn.execute(
+                    "SELECT size_bytes FROM material_ingestion_files f "
+                    "JOIN material_assets a ON a.workspace_id=f.workspace_id AND a.file_path=f.file_path "
+                    "WHERE a.workspace_id=? AND a.id=? AND f.attempted_digest=?",
+                    (intent.workspace_id, intent.owner_id, intent.input_digest),
+                ).fetchone()
+            else:
+                raise PermissionError("素材阶段未注册")
         if verdict != "ready" or row is None:
-            raise PermissionError(f"素材哈希候选不可提交：{verdict}")
+            raise PermissionError(f"素材阶段候选不可提交：{verdict}")
         return VerifiedWork(
             workspace_id=intent.workspace_id, owner_type="material_asset",
             owner_id=intent.owner_id, input_digest=intent.input_digest,
             unit_key=intent.unit_key, member_id=None, work_class="background",
-            resources={"kind": "material_hash", "size_bytes": int(row["size_bytes"])},
+            resources={"kind": "material_hash" if intent.unit_key.startswith("hash:v1:")
+                       else "material_probe_scene", "size_bytes": int(row["size_bytes"])},
             stage_input_digest=intent.unit_key.rsplit(":", 1)[-1],
         )
 
@@ -63,10 +82,19 @@ class MaterialHashOwnerVerifier:
         if (request.owner_type != "material_asset" or request.member_id is not None
                 or request.work_class != "background" or request.source_refs):
             return "unauthorized"
-        return self.repository.material_hash_verdict(
-            request.workspace_id, request.owner_id, request.input_digest,
-            request.unit_key, conn,
-        )
+        if request.unit_key.startswith("hash:v1:"):
+            return self.repository.material_hash_verdict(
+                request.workspace_id, request.owner_id, request.input_digest,
+                request.unit_key, conn,
+            )
+        if request.unit_key.startswith("probe-scene:v1:"):
+            verdict = self.repository.material_probe_source_verdict(
+                request.workspace_id, request.owner_id, request.input_digest,
+                request.unit_key, conn,
+            )
+            # The bounded probe executor is not installed; this unit must never grant.
+            return "dependency" if verdict == "ready" else verdict
+        return "stale"
 
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
         return False
@@ -103,6 +131,8 @@ class MaterialIngestionService:
             raise ValueError("素材执行模式无效")
         if (execution_mode == "scheduled") != (scheduler is not None):
             raise ValueError("调度素材模式必须显式注入整机协调器")
+        if scheduler is not None and Path(repository.database_path).resolve() != scheduler.database_path:
+            raise ValueError("素材库与设备协调器必须使用同一业务库")
         self.repository = repository
         self.scan_interval_seconds = scan_interval_seconds
         self.stable_seconds = stable_seconds
@@ -164,6 +194,7 @@ class MaterialIngestionService:
             raise RuntimeError("素材整机调度尚未启用")
         request_ids: list[str] = []
         with self._scan_lock:
+            self.submit_pending_probe_dependencies()
             for candidate in self.repository.discover_material_hash_candidates(
                 stable_seconds=self.stable_seconds
             ):
@@ -179,7 +210,28 @@ class MaterialIngestionService:
                 request_ids.append(self.scheduler.submit(intent, actor).id)
         return request_ids
 
-    def run_granted_hash(self, grant: Grant) -> str:
+    def submit_pending_probe_dependencies(self) -> list[str]:
+        """Replay committed hashes into idempotent, blocked probe requests."""
+        if self.execution_mode != "scheduled" or self.scheduler is None:
+            raise RuntimeError("素材整机调度尚未启用")
+        binding = self.repository.get_material_ingestion_binding()
+        if binding is None:
+            return []
+        actor = MaterialHashServiceActor(*binding)
+        request_ids: list[str] = []
+        for dependency in self.repository.pending_material_probe_dependencies():
+            if dependency.workspace_id != binding[0]:
+                raise PermissionError("素材哈希检查点归属与绑定不一致")
+            intent = SubmissionIntent(
+                workspace_id=dependency.workspace_id, owner_type="material_asset",
+                owner_id=dependency.asset_id, input_digest=dependency.source_sha256,
+                unit_key=material_probe_unit_key(dependency.source_sha256),
+                policy=SchedulePolicy(),
+            )
+            request_ids.append(self.scheduler.submit(intent, actor).id)
+        return request_ids
+
+    def run_granted_hash(self, grant: Grant) -> str | None:
         """Execute one hash grant; never choose or issue a host permit here."""
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
@@ -197,18 +249,23 @@ class MaterialIngestionService:
                 "resource_pressure", "transient_failure",
             } else None
             self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
-            raise
+            return None
         verdict = self.repository.material_hash_verdict_for_grant(grant)
         if verdict != "ready":
             reason = {"dependency": "dependency_unavailable", "stale": "input_stale",
                       "unauthorized": "authorization_lost"}.get(verdict, "transient_failure")
             retry_at = datetime.now(timezone.utc) + timedelta(minutes=1) if reason == "transient_failure" else None
             self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
-            raise ValueError(f"素材哈希输入已失效：{verdict}")
+            return None
         self.scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
             checkpoint_write=lambda conn, active: self.repository.commit_material_hash(conn, active, result),
         )
+        try:
+            self.submit_pending_probe_dependencies()
+        except (OSError, ValueError, PermissionError, RecoveryBlocked):
+            # The hash checkpoint is already committed; the next scan replays it.
+            logger.exception("素材哈希完成，但探测请求提交失败；周期补扫将重试")
         return result.source_sha256
 
     def _run(self) -> None:
@@ -219,3 +276,22 @@ class MaterialIngestionService:
                 logger.exception("Material ingestion cycle failed")
             self._wake.wait(self.scan_interval_seconds)
             self._wake.clear()
+
+
+class MaterialHashUnitExecutor:
+    """Host runtime adapter; only hash grants can reach this implementation."""
+
+    def __init__(self) -> None:
+        self._service: MaterialIngestionService | None = None
+
+    def bind(self, service: MaterialIngestionService) -> None:
+        """Bind once after the runtime has built its scheduler, before starting it."""
+        if self._service is not None or service.execution_mode != "scheduled" or service.scheduler is None:
+            raise ValueError("素材哈希执行器需要一次性绑定已调度的服务")
+        self._service = service
+
+    def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
+        if (self._service is None or scheduler is not self._service.scheduler
+                or not grant.unit_key.startswith("hash:v1:")):
+            raise PermissionError("素材许可不属于哈希执行器")
+        self._service.run_granted_hash(grant)
