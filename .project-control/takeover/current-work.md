@@ -69,3 +69,5 @@ MAKE最终交接增量：实现候选3aa2464，接管说明8d8050d，fc12工作�
 **同候选第二QA阻断：** assert_grant之后、claim_job_run之前API将JobRun取消，claim抛ValueError而permit遗留held。须在无活进程且状态核实后可靠释放，不能无条件finally放行。QA用例test_qa_cancel_between_initial_grant_check_and_claim_releases_permit已失败；第一重复渲染问题也在真实HostResourceProbe下复现。两项均已交MAKE，后续新SHA须复验。
 
 MAKE两项修复候选5ee08db已交，接手记录7c68f9c；工作树clean。作者报恢复实际render1→1、源字节/独立版本变化拒绝旧许可、claim前取消释放通过。**独立QA尚未复验，不解除原HOLD。** 对应实现/验证说明见最新production-takeover-status.md；不挑入纯handoff提交亦可读取说明。
+
+5ee08db独立QA增量：旧重复渲染/claim取消两项已转绿；新源身份HOLD：等长改1byte并恢复mtime_ns（ctime变化）旧grant仍放行。当前stat元数据不是内容hash。已退回MAKE最小修复，内容重验必须受许可，不能在GET/准入里无许可全文件hash。独立版本变化仍待报告；候选整体仍未通过。
