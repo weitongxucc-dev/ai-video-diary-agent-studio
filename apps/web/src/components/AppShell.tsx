@@ -240,7 +240,8 @@ export function AppShell({
       const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
       const player = main.querySelector<HTMLElement>("[data-editor-player]");
       const mainRect = main.getBoundingClientRect();
-      const anchorTop = transport?.getBoundingClientRect().top ?? player?.getBoundingClientRect().bottom ?? mainRect.bottom;
+      const anchorTop = transport?.getBoundingClientRect().top
+        ?? (player ? player.getBoundingClientRect().bottom - 48 : mainRect.bottom);
       const available = Math.floor(anchorTop - mainRect.top - 16);
       const height = Math.max(0, Math.min(400, available));
       const width = Math.min(480, Math.max(400, Math.round(mainRect.width * .62)), Math.max(0, Math.floor(mainRect.width - 16)));

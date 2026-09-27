@@ -265,7 +265,7 @@ describe("AppShell", () => {
     });
     try {
       render(<AppShell editorLayout quickInspectorKey="portrait-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div></AppShell>);
-      expect(await screen.findByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "441px", height: "400px" });
+      expect(await screen.findByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "441px", height: "355px" });
       expect(screen.getByRole("main").className).toContain("quickPreviewBesideFloat");
       fireEvent.click(screen.getByRole("button", { name: "收起镜头编辑" }));
       expect(screen.getByRole("main").className).not.toContain("quickPreviewBesideFloat");
