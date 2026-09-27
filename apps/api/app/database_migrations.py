@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 8
+PRODUCTION_SCHEMA_VERSION = 9
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -461,6 +461,68 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         CREATE INDEX idx_device_session_heartbeat
             ON device_session_activity(last_heartbeat_at_utc);
+        """,
+    ),
+    (
+        9,
+        """
+        ALTER TABLE device_work_requests RENAME TO device_work_requests_v8;
+        CREATE TABLE device_work_requests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT,
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            unit_key TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            work_class TEXT NOT NULL CHECK (work_class IN ('preview_dependency', 'normal_make', 'background')),
+            policy TEXT NOT NULL CHECK (policy IN ('asap', 'idle', 'scheduled')),
+            not_before_utc TEXT,
+            window_json TEXT,
+            first_ready_at_utc TEXT NOT NULL,
+            eligible_since_utc TEXT,
+            eligible_wait_seconds REAL NOT NULL DEFAULT 0,
+            state TEXT NOT NULL CHECK (state IN ('waiting', 'blocked', 'granted', 'yield_requested', 'done', 'cancelled', 'failed')),
+            wait_reason TEXT,
+            checkpoint_ref TEXT,
+            resources_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number >= 1),
+            retry_not_before_utc TEXT,
+            last_failure_reason TEXT,
+            last_grant_generation INTEGER,
+            UNIQUE(workspace_id, owner_type, owner_id, input_digest, unit_key)
+        );
+        INSERT INTO device_work_requests
+            (id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+             source_refs_json, work_class, policy, not_before_utc, window_json,
+             first_ready_at_utc, eligible_since_utc, eligible_wait_seconds, state,
+             wait_reason, checkpoint_ref, resources_json, created_at, updated_at)
+        SELECT id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+               source_refs_json, work_class, policy, not_before_utc, window_json,
+               first_ready_at_utc, eligible_since_utc, eligible_wait_seconds, state,
+               wait_reason, checkpoint_ref, resources_json, created_at, updated_at
+        FROM device_work_requests_v8;
+        DROP TABLE device_work_requests_v8;
+        CREATE INDEX idx_device_work_pending
+            ON device_work_requests(state, work_class, first_ready_at_utc, id);
+
+        CREATE TABLE device_request_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            permit_generation INTEGER,
+            event_type TEXT NOT NULL CHECK (event_type IN ('deferred', 'failed', 'retried')),
+            reason TEXT NOT NULL,
+            actor_id TEXT,
+            prior_state TEXT NOT NULL,
+            prior_checkpoint_ref TEXT,
+            created_at_utc TEXT NOT NULL
+        );
+        CREATE INDEX idx_device_request_events_request
+            ON device_request_events(request_id, id);
         """,
     ),
 )

@@ -17,7 +17,7 @@
 
 ## 2. 单一协调者和当前候选接口
 
-v8 迁移仅增加调度元数据，不创建第二个 CreationTask、素材任务或成片状态机。`device_work_requests` 按 `(workspace_id, owner_type, owner_id, input_digest, unit_key)` 去重，保存经服务端验证的请求成员、任务空间、原对象引用、类别、时间策略、等待年龄和检查点引用。`device_permit` 是业务库内的单行 fencing 事实；同机稳定锁路径及其持久账本跨不同业务库阻止双重许可。`device_session_activity` 只存经验证会话的活动布尔量及心跳。完整字段以 `database_migrations.py` 的 v8 为准。
+v8 迁移仅增加调度元数据，不创建第二个 CreationTask、素材任务或成片状态机。`device_work_requests` 按 `(workspace_id, owner_type, owner_id, input_digest, unit_key)` 去重，保存经服务端验证的请求成员、任务空间、原对象引用、类别、时间策略、等待年龄和检查点引用。v9 另增失败终态、重试次数、最早重试时间及事件审计；不改已提交 v8。`device_permit` 是业务库内的单行 fencing 事实；同机稳定锁路径及其持久账本跨不同业务库阻止双重许可。`device_session_activity` 只存经验证会话的活动布尔量及心跳。完整字段以 `database_migrations.py` 为准。
 
 当前 `apps/api/app/device_scheduler.py` 暴露的接线接口：
 
@@ -31,9 +31,12 @@ grant = scheduler.pick_and_grant()  # Grant | None；一次只准入一个有界
 scheduler.assert_grant(grant)       # 紧邻实际模型或 FFmpeg 执行前调用
 scheduler.register_child(grant, child_identity)  # spawn 后、exec 前，取得 ACK
 scheduler.request_yield(grant, reason)
+scheduler.defer_unit(grant, reason="dependency_unavailable", retry_not_before_utc=None)
+scheduler.fail_unit(grant, reason="model_failed", failure_write=write_failure_in_same_connection)
 scheduler.complete_unit(grant, checkpoint_database_path=database_path,
     checkpoint_write=write_in_same_connection, next_intent=None, actor=None)
 scheduler.wake_existing(intent, actor)  # 手动素材入口仅唤醒已有自动请求
+scheduler.retry_existing(request_id, actor, reason="failed")  # 显式受权重开终态
 scheduler.change_policy(request_id, policy, actor)
 scheduler.cancel(request_id, actor)
 scheduler.view_for(request_id, actor)
@@ -41,7 +44,7 @@ scheduler.list_queue_for(actor)
 scheduler.heartbeat_session(heartbeat, actor)
 ```
 
-`OwnerVerifier` 必须由既有业务对象和授权事实推导 `VerifiedWork`，不能信客户端填入的成员、类别或原对象空间。`check_current(request, conn)` 在准入、执行前和提交检查点时重查源摘要及共享授权；同库撤权在同一 SQLite 连接中核验，跨库授权未知则阻断。`ResourceProbe` 和 `ProcessProbe` 的未知结果也阻断准入或释放。`submit` 要求业务对象已存在，不与对象创建组成跨 API 事务；调用方负责先持久化对象。`complete_unit` 的回调在同一业务库事务内写业务结果，传入不同库路径会被拒绝。产物文件由 MAT/MAKE 先写临时路径并校验，再原子改名，最后在该回调中落引用；崩溃后无引用文件不得当有效检查点。
+`OwnerVerifier` 必须由既有业务对象和授权事实推导 `VerifiedWork`，不能信客户端填入的成员、类别或原对象空间。素材 hash 单元的 `input_digest` 是服务端核验的 provisional revision、`unit_key=hash:v1`；下游以真 SHA 为 `input_digest`，用 `material_stage_unit_key(stage, stage_input_digest)` 把**完整 64 位阶段输入摘要**纳入 `unit_key`，并由 `VerifiedWork.stage_input_digest` 验证。阶段摘要覆盖源 SHA、区间/边界、算法、模型、参数和批号；源或阶段输入变化产生新键，普通重复 `submit` 不会重跑终态。`check_current(request, conn)` 在准入、执行前和提交检查点时重查这些输入及共享授权，分别返回 `ready/dependency/stale/unauthorized/unknown`；同库撤权在同一 SQLite 连接中核验，跨库授权未知则阻断。`verify_retry(request, actor, reason, conn)` 是独立权限入口，`result_invalid` 必须验证业务结果引用确实失效，不能信用户传入的原因。`ResourceProbe` 和 `ProcessProbe` 的未知结果也阻断准入或释放。`submit` 要求业务对象已存在，不与对象创建组成跨 API 事务；调用方负责先持久化对象。`complete_unit` 和 `fail_unit` 的回调在同一业务库事务内写业务结果；失败回调异常时许可仍持有。`defer_unit` 在确认子进程和常驻资源释放后，将单元记为 `blocked` 并归还许可；再次准入仍须重新通过当前授权、依赖、资源及最早重试时间。产物文件由 MAT/MAKE 先写临时路径并校验，再原子改名，最后在回调中落引用；崩溃后无引用文件不得当有效检查点。
 
 ## 3. 准入、恢复与失败语义
 

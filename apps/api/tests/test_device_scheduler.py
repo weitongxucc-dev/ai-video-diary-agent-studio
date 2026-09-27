@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.database_migrations import PRODUCTION_SCHEMA_VERSION, apply_production_migrations
+from app.database_migrations import PRODUCTION_SCHEMA_VERSION, _MIGRATIONS, apply_production_migrations
 from app.device_scheduler import (
     DeviceScheduler,
     ProcessIdentity,
@@ -24,6 +24,7 @@ from app.device_scheduler import (
     VerifiedSession,
     VerifiedWork,
     Window,
+    material_stage_unit_key,
 )
 
 
@@ -53,10 +54,12 @@ class Owners:
         kind = "background" if actor == "service" else ("preview_dependency" if intent.owner_type == "preview" else "normal_make")
         return VerifiedWork(intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest,
                             intent.unit_key, None if actor == "service" else actor, kind,
-                            {"cpu_threads": 2}, self.references)
+                            {"cpu_threads": 2}, self.references,
+                            intent.unit_key.rsplit(":", 1)[-1]
+                            if intent.owner_type == "material_asset" and intent.unit_key != "hash:v1" else None)
 
     def check_current(self, request, conn):
-        return "stale" if self.revoked else "ready"
+        return "unauthorized" if self.revoked else "ready"
 
     def can_manage(self, request, actor):
         return actor == "main" or actor == request.member_id
@@ -74,6 +77,15 @@ class Owners:
 
     def can_view_device_summary(self, actor):
         return actor in {"main", "member-a", "member-b"}
+
+    def verify_retry(self, request, actor, reason, conn):
+        if actor not in {"main", "member-a"} or request.workspace_id != "private-a":
+            raise PermissionError("cannot retry")
+        if reason == "result_invalid":
+            valid = conn.execute("SELECT valid FROM checkpoint_validity WHERE request_id=?", (request.id,)).fetchone()
+            if valid is None or valid[0]:
+                raise PermissionError("checkpoint still valid")
+        return actor
 
 
 class Resources:
@@ -122,7 +134,10 @@ def _db(path):
 
 
 def _intent(owner_id, *, workspace="private-a", owner_type="job_run", unit="narration", policy=None):
-    return SubmissionIntent(workspace, owner_type, owner_id, "sha256:one", unit, policy or SchedulePolicy())
+    if owner_type == "material_asset" and unit == "narration":
+        unit = "hash:v1"
+    digest = "provisional:stat-and-bound-root" if unit == "hash:v1" else "sha256:one"
+    return SubmissionIntent(workspace, owner_type, owner_id, digest, unit, policy or SchedulePolicy())
 
 
 def _scheduler(tmp_path, *, db_name="business.sqlite", lock_name="device.lock", clock=None,
@@ -369,7 +384,7 @@ def test_unknown_resources_and_reused_request_age_do_not_fake_readiness(tmp_path
 def test_material_hash_provisional_revision_then_real_sha_and_manual_wake_is_idempotent(tmp_path):
     scheduler = _scheduler(tmp_path)
     hash_unit = SubmissionIntent("private-a", "material_asset", "asset-1",
-                                 "provisional:stat-and-bound-root", "material.hash:0", SchedulePolicy())
+                                 "provisional:stat-and-bound-root", "hash:v1", SchedulePolicy())
     with pytest.raises(KeyError):
         scheduler.wake_existing(hash_unit, "member-a")
     with pytest.raises(PermissionError):
@@ -398,7 +413,7 @@ def test_material_hash_provisional_revision_then_real_sha_and_manual_wake_is_ide
     # If the process stops here, the next scan reads this durable digest and
     # idempotently submits the next unit; no cross-digest continuation is made.
     next_unit = SubmissionIntent("private-a", "material_asset", "asset-1",
-                                 f"sha256:{real_sha}", "material.probe:0", SchedulePolicy())
+                                 f"sha256:{real_sha}", material_stage_unit_key("probe:v1", "b" * 64), SchedulePolicy())
     first_next = scheduler.submit(next_unit, "service")
     assert scheduler.submit(next_unit, "service").id == first_next.id
     with sqlite3.connect(scheduler.database_path) as conn:
@@ -411,7 +426,7 @@ def test_same_database_authorization_rechecked_before_execution_and_checkpoint(t
         def check_current(self, request, conn):
             # The scheduler passes its exact permit transaction connection.
             allowed = conn.execute("SELECT allowed FROM source_grants WHERE id=1").fetchone()[0]
-            return "ready" if allowed else "stale"
+            return "ready" if allowed else "unauthorized"
 
     owners = DatabaseOwners()
     scheduler = _scheduler(tmp_path, owners=owners)
@@ -439,3 +454,166 @@ def test_same_database_authorization_rechecked_before_execution_and_checkpoint(t
         scheduler.assert_grant(grant)
     scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                             checkpoint_write=lambda conn, current: None, cancelled=True)
+
+
+def test_v8_to_v9_preserves_requests_and_rebuilds_index(tmp_path):
+    database = tmp_path / "old.sqlite"
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+        for version, sql in _MIGRATIONS:
+            if version == 9:
+                break
+            conn.executescript(sql)
+            conn.execute("INSERT INTO production_schema_migrations(version) VALUES (?)", (version,))
+        conn.execute(
+            """INSERT INTO device_work_requests
+            (id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key,
+             source_refs_json, work_class, policy, window_json, first_ready_at_utc,
+             eligible_since_utc, eligible_wait_seconds, state, resources_json, created_at, updated_at)
+            VALUES ('old', 'private-a', 'member-a', 'job_run', 'job', 'sha:old', 'narration',
+                    '[]', 'normal_make', 'asap', 'null', '2026-09-01T00:00:00+00:00',
+                    '2026-09-02T00:00:00+00:00', 91, 'blocked', '{}',
+                    '2026-09-01T00:00:00+00:00', '2026-09-02T00:00:00+00:00')"""
+        )
+        conn.commit()
+        apply_production_migrations(conn)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM device_work_requests WHERE id='old'").fetchone()
+        assert (row["member_id"], row["first_ready_at_utc"], row["eligible_wait_seconds"],
+                row["attempt_number"], row["state"]) == (
+                    "member-a", "2026-09-01T00:00:00+00:00", 91, 1, "blocked")
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 9
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_device_work_pending'").fetchone()
+
+
+def test_material_stage_digest_is_in_idempotency_key(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    with pytest.raises(ValueError, match="阶段输入摘要"):
+        scheduler.submit(SubmissionIntent("private-a", "material_asset", "asset", "sha256:one",
+                                          "probe:v1", SchedulePolicy()), "service")
+    first = SubmissionIntent("private-a", "material_asset", "asset", "sha256:one",
+                             material_stage_unit_key("probe:v1", "a" * 64), SchedulePolicy())
+    first_row = scheduler.submit(first, "service")
+    _complete(scheduler, scheduler.pick_and_grant())
+    assert scheduler.submit(first, "service").id == first_row.id
+    assert scheduler._get(first_row.id).state == "done"
+    changed = replace(first, unit_key=material_stage_unit_key("probe:v1", "b" * 64))
+    assert scheduler.submit(changed, "service").id != first_row.id
+
+
+def test_defer_releases_only_after_resources_and_rechecks_eligibility(tmp_path):
+    clock = Clock(datetime(2026, 9, 27, 12, tzinfo=timezone.utc))
+    owners, resources = Owners(), Resources()
+    scheduler = _scheduler(tmp_path, clock=clock, owners=owners, resources=resources)
+    request = scheduler.submit(_intent("job"), "member-a")
+    grant = scheduler.pick_and_grant()
+    resources.release_value = None
+    with pytest.raises(RecoveryBlocked):
+        scheduler.defer_unit(grant, reason="authorization_lost")
+    with sqlite3.connect(scheduler.database_path) as conn:
+        assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
+    resources.release_value = True
+    owners.revoked = True
+    scheduler.defer_unit(grant, reason="authorization_lost")
+    assert scheduler._get(request.id).state == "blocked"
+    assert scheduler.pick_and_grant() is None
+    owners.revoked = False
+    resumed = scheduler.pick_and_grant()
+    assert resumed and resumed.generation > grant.generation
+    with pytest.raises(PermissionError):
+        scheduler.assert_grant(grant)
+    _complete(scheduler, resumed)
+
+    second = scheduler.submit(_intent("another"), "member-a")
+    grant = scheduler.pick_and_grant()
+    with pytest.raises(ValueError, match="未来"):
+        scheduler.defer_unit(grant, reason="resource_pressure")
+    scheduler.defer_unit(grant, reason="resource_pressure", retry_not_before_utc=clock.value + timedelta(minutes=2))
+    assert scheduler.pick_and_grant() is None
+    clock.advance(minutes=3)
+    resumed = scheduler.pick_and_grant()
+    assert resumed and resumed.request_id == second.id
+    _complete(scheduler, resumed)
+
+
+def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    request = scheduler.submit(_intent("job"), "member-a")
+    grant = scheduler.pick_and_grant()
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("CREATE TABLE owner_failure (reason TEXT)")
+        conn.execute("CREATE TABLE checkpoint_validity (request_id TEXT PRIMARY KEY, valid INTEGER NOT NULL)")
+    def broken_write(conn, current):
+        conn.execute("INSERT INTO owner_failure VALUES ('rolled back')")
+        raise RuntimeError("owner write failed")
+
+    with pytest.raises(RuntimeError):
+        scheduler.fail_unit(grant, reason="model_failed", failure_write=broken_write)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM owner_failure").fetchone()[0] == 0
+        assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
+    scheduler.fail_unit(grant, reason="model_failed",
+                        failure_write=lambda conn, current: conn.execute("INSERT INTO owner_failure VALUES ('model_failed')"))
+    assert scheduler._get(request.id).state == "failed"
+    assert scheduler.submit(_intent("job"), "member-a").state == "failed"
+    with pytest.raises(PermissionError):
+        scheduler.retry_existing(request.id, "member-b", reason="failed")
+    scheduler.retry_existing(request.id, "member-a", reason="failed")
+    retry = scheduler._get(request.id)
+    assert retry.attempt_number == 2 and retry.member_id == "member-a"
+    assert retry.first_ready_at_utc == request.first_ready_at_utc
+    with pytest.raises(PermissionError):
+        scheduler.assert_grant(grant)
+    second_grant = scheduler.pick_and_grant()
+    assert second_grant.attempt_number == 2 and second_grant.generation > grant.generation
+    _complete(scheduler, second_grant)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("INSERT INTO checkpoint_validity VALUES (?, 1)", (request.id,))
+    with pytest.raises(PermissionError, match="valid"):
+        scheduler.retry_existing(request.id, "member-a", reason="result_invalid")
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("UPDATE checkpoint_validity SET valid=0 WHERE request_id=?", (request.id,))
+    scheduler.retry_existing(request.id, "member-a", reason="result_invalid")
+    assert scheduler._get(request.id).attempt_number == 3
+    with sqlite3.connect(scheduler.database_path) as conn:
+        events = conn.execute("SELECT event_type, reason, actor_id, prior_state FROM device_request_events WHERE request_id=? ORDER BY id", (request.id,)).fetchall()
+    assert events == [("failed", "model_failed", None, "granted"),
+                      ("retried", "failed", "member-a", "failed"),
+                      ("retried", "result_invalid", "member-a", "done")]
+
+
+def test_cancelled_request_retries_only_by_explicit_authorized_call(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    original = scheduler.submit(_intent("job"), "member-a")
+    scheduler.cancel(original.id, "member-a")
+    assert scheduler.submit(_intent("job"), "member-a").state == "cancelled"
+    with pytest.raises(ValueError, match="终态"):
+        scheduler.retry_existing(original.id, "member-a", reason="failed")
+    scheduler.retry_existing(original.id, "member-a", reason="cancelled")
+    reopened = scheduler._get(original.id)
+    assert reopened.attempt_number == 2
+    assert reopened.first_ready_at_utc == original.first_ready_at_utc
+    assert reopened.member_id == original.member_id
+
+
+def test_defer_keeps_permit_while_registered_child_is_alive(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    scheduler.submit(_intent("job"), "member-a")
+    grant = scheduler.pick_and_grant()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+    try:
+        scheduler.register_child(grant, ProcessIdentity(child.pid, "child-start", "test-boot"))
+        with pytest.raises(RecoveryBlocked, match="子进程"):
+            scheduler.defer_unit(grant, reason="worker_interrupted",
+                                 retry_not_before_utc=datetime(2026, 9, 27, 12, 1, tzinfo=timezone.utc))
+        with sqlite3.connect(scheduler.database_path) as conn:
+            assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
+            assert conn.execute("SELECT count(*) FROM device_request_events").fetchone()[0] == 0
+        child.terminate()
+        child.wait(timeout=5)
+        scheduler.defer_unit(grant, reason="worker_interrupted",
+                             retry_not_before_utc=datetime(2026, 9, 27, 12, 1, tzinfo=timezone.utc))
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=5)

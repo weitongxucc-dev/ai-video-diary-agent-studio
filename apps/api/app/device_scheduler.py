@@ -11,6 +11,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -23,8 +24,10 @@ from zoneinfo import ZoneInfo
 
 WorkClass = Literal["preview_dependency", "normal_make", "background"]
 PolicyMode = Literal["asap", "idle", "scheduled"]
-Verdict = Literal["ready", "dependency", "stale", "unknown"]
+Verdict = Literal["ready", "dependency", "stale", "unauthorized", "unknown"]
 RecoveryState = Literal["released", "active", "unknown"]
+RetryReason = Literal["failed", "cancelled", "result_invalid"]
+DeferReason = Literal["dependency_unavailable", "input_stale", "authorization_lost", "resource_pressure", "window_closed", "device_active", "worker_interrupted", "transient_failure"]
 
 
 class RecoveryBlocked(RuntimeError):
@@ -94,6 +97,7 @@ class VerifiedWork:
     work_class: WorkClass
     resources: dict[str, object]
     source_refs: tuple[SourceRef, ...] = ()
+    stage_input_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +118,9 @@ class WorkRequest:
     wait_reason: str | None
     resources: dict[str, object]
     source_refs: tuple[SourceRef, ...]
+    attempt_number: int
+    retry_not_before_utc: datetime | None
+    last_grant_generation: int | None
 
 
 @dataclass(frozen=True)
@@ -129,6 +136,7 @@ class Grant:
     workspace_id: str
     unit_key: str
     input_digest: str
+    attempt_number: int
     generation: int
     token: str
     database_path: Path
@@ -154,8 +162,11 @@ class VerifiedSession:
 class OwnerVerifier(Protocol):
     """Production adapter derives identity from the saved owner and sharing grants.
 
-    check_current must recheck input digest, owner access and every referenced
-    source's current sharing right. It receives the permit's SQLite connection
+    check_current must recheck input digest, material stage input digest,
+    owner access and every referenced source's current sharing right.
+    verify_retry must prove the actor's current right and, for result_invalid,
+    verify the referenced business result is actually invalid. These checks
+    receive the permit's SQLite connection
     so same-database revocation and checkpoint use one transaction. For an
     external authorization store, unknown or unavailable must return unknown;
     this module cannot promise a cross-database atomic revocation boundary.
@@ -170,6 +181,7 @@ class OwnerVerifier(Protocol):
     def verify_session(self, heartbeat: SessionHeartbeat, actor: object) -> VerifiedSession: ...
     def can_view_detail(self, request: WorkRequest, actor: object) -> bool: ...
     def can_view_device_summary(self, actor: object) -> bool: ...
+    def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason, conn: sqlite3.Connection) -> str: ...
 
 
 class ResourceProbe(Protocol):
@@ -185,6 +197,7 @@ class ProcessProbe(Protocol):
 
 
 CheckpointWrite = Callable[[sqlite3.Connection, Grant], str | None]
+FailureWrite = Callable[[sqlite3.Connection, Grant], None]
 
 
 def _utc(value: datetime) -> datetime:
@@ -217,6 +230,15 @@ def _identity_json(identity: ProcessIdentity) -> dict[str, object]:
 
 def _identity_from(data: dict[str, object]) -> ProcessIdentity:
     return ProcessIdentity(int(data["pid"]), str(data["start_token"]), str(data["boot_id"]))
+
+
+def material_stage_unit_key(stage: str, stage_input_digest: str) -> str:
+    """A material stage's full input digest is part of its idempotency key."""
+    if not stage or not re.fullmatch(r"[a-z0-9][a-z0-9:._-]*", stage):
+        raise ValueError("素材阶段名称无效")
+    if not re.fullmatch(r"[0-9a-f]{64}", stage_input_digest):
+        raise ValueError("素材阶段输入摘要必须是完整 SHA256")
+    return f"{stage}:{stage_input_digest}"
 
 
 class DeviceScheduler:
@@ -258,6 +280,17 @@ class DeviceScheduler:
     def _now(self) -> datetime:
         return _utc(self.clock())
 
+    @staticmethod
+    def _assert_material_stage_key(trusted: VerifiedWork) -> None:
+        if trusted.owner_type != "material_asset":
+            return
+        if trusted.unit_key == "hash:v1":
+            if trusted.stage_input_digest is not None:
+                raise ValueError("素材哈希单元使用独立的 provisional 输入摘要")
+        elif (trusted.stage_input_digest is None or
+              trusted.unit_key != material_stage_unit_key(trusted.unit_key.rsplit(":", 1)[0], trusted.stage_input_digest)):
+            raise ValueError("素材阶段单元键必须包含完整阶段输入摘要")
+
     def submit(self, intent: SubmissionIntent, actor: object) -> WorkRequest:
         trusted = self.owners.verify_submission(intent, actor)
         actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
@@ -270,6 +303,7 @@ class DeviceScheduler:
             raise PermissionError("前台成员或后台归属无效")
         if trusted.owner_type == "material_asset" and (trusted.work_class != "background" or trusted.member_id is not None):
             raise PermissionError("素材自动单元只能由服务端后台身份创建")
+        self._assert_material_stage_key(trusted)
         if any(not all(vars(ref).values()) for ref in trusted.source_refs):
             raise ValueError("引用对象身份不完整")
         now = _stamp(self._now())
@@ -345,6 +379,8 @@ class DeviceScheduler:
             eligible_wait_seconds=float(row["eligible_wait_seconds"]), state=row["state"],
             wait_reason=row["wait_reason"], resources=json.loads(row["resources_json"]),
             source_refs=tuple(SourceRef(**ref) for ref in json.loads(row["source_refs_json"])),
+            attempt_number=int(row["attempt_number"]), retry_not_before_utc=_parse(row["retry_not_before_utc"]),
+            last_grant_generation=row["last_grant_generation"],
         )
 
     def view_for(self, request_id: str, actor: object) -> dict[str, object]:
@@ -356,6 +392,8 @@ class DeviceScheduler:
                 "workspace_id": request.workspace_id, "owner_type": request.owner_type,
                 "owner_id": request.owner_id, "unit_key": request.unit_key,
                 "first_ready_at": _stamp(request.first_ready_at_utc),
+                "attempt_number": request.attempt_number,
+                "retry_not_before_at": _stamp(request.retry_not_before_utc) if request.retry_not_before_utc else None,
             }
         if self.owners.can_view_device_summary(actor):
             return {"state": request.state, "wait_reason": request.wait_reason,
@@ -533,11 +571,17 @@ class DeviceScheduler:
         if owner_state == "stale":
             self._update_wait(conn, row, now, "input_stale")
             return False
+        if owner_state == "unauthorized":
+            self._update_wait(conn, row, now, "authorization_lost")
+            return False
         if owner_state != "ready":
             self._update_wait(conn, row, now, "dependency" if owner_state == "dependency" else "owner_unknown")
             return False
         if request.policy.not_before_utc and now < request.policy.not_before_utc:
             self._update_wait(conn, row, now, "scheduled_time")
+            return False
+        if request.retry_not_before_utc and now < request.retry_not_before_utc:
+            self._update_wait(conn, row, now, "retry_not_before")
             return False
         if request.policy.window and not request.policy.window.contains(now):
             self._update_wait(conn, row, now, "outside_window")
@@ -615,7 +659,7 @@ class DeviceScheduler:
                 token_hash = hashlib.sha256(token.encode()).hexdigest()
                 generation = int(data["generation"]) + 1
                 grant = Grant(chosen["id"], chosen["workspace_id"], chosen["unit_key"],
-                              chosen["input_digest"], generation, token, self.database_path)
+                              chosen["input_digest"], int(chosen["attempt_number"]), generation, token, self.database_path)
                 held_data = {"state": "held", "generation": generation, "database_path": str(self.database_path),
                              "request_id": chosen["id"], "token_hash": token_hash,
                              "holder": _identity_json(identity), "children": []}
@@ -627,8 +671,9 @@ class DeviceScheduler:
                 preview_burst = int(permit["preview_burst"]) + 1 if kind == "preview_dependency" else 0
                 normal_burst = int(permit["normal_burst"]) + 1 if kind == "normal_make" else (0 if kind == "background" else int(permit["normal_burst"]))
                 conn.execute("""UPDATE device_work_requests SET state='granted', wait_reason=NULL,
-                    eligible_since_utc=NULL, eligible_wait_seconds=0, updated_at=? WHERE id=?""",
-                    (_stamp(now), chosen["id"]),
+                    eligible_since_utc=NULL, eligible_wait_seconds=0, retry_not_before_utc=NULL,
+                    last_grant_generation=?, updated_at=? WHERE id=?""",
+                    (generation, _stamp(now), chosen["id"]),
                 )
                 conn.execute(
                     """UPDATE device_permit SET lock_key=?, generation=?, request_id=?, token_hash=?, holder_json=?,
@@ -668,9 +713,10 @@ class DeviceScheduler:
             raise PermissionError("设备许可已失效")
         if permit is None or (permit["state"], permit["request_id"], permit["generation"], permit["token_hash"]) != ("held", grant.request_id, grant.generation, expected_hash):
             raise PermissionError("业务库设备许可已失效")
-        request = conn.execute("SELECT workspace_id, unit_key, input_digest, state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+        request = conn.execute("SELECT workspace_id, unit_key, input_digest, attempt_number, state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
         if (request is None or (request["workspace_id"], request["unit_key"], request["input_digest"])
                 != (grant.workspace_id, grant.unit_key, grant.input_digest)
+                or request["attempt_number"] != grant.attempt_number
                 or request["state"] not in {"granted", "yield_requested"}):
             raise PermissionError("设备许可与执行单元不匹配")
         return data
@@ -713,6 +759,39 @@ class DeviceScheduler:
             conn.execute("UPDATE device_work_requests SET state='yield_requested', wait_reason=?, updated_at=? WHERE id=?", (reason, _stamp(self._now()), grant.request_id))
             conn.commit()
 
+    def _released_for_commit(self, conn: sqlite3.Connection, grant: Grant) -> dict[str, object]:
+        """Check fencing and all descendants while holding the permit transaction."""
+        data = self._assert_grant(conn, grant)
+        try:
+            children = tuple(_identity_from(item) for item in data.get("children", []))
+        except (TypeError, ValueError, KeyError) as exc:
+            raise RecoveryBlocked("已登记子进程身份不可核查") from exc
+        if self.processes.children_released(children) is not True:
+            raise RecoveryBlocked("已登记子进程仍运行或状态未知")
+        if self.resources.released(grant) is not True:
+            raise RecoveryBlocked("子进程或常驻资源未确认释放")
+        return data
+
+    @staticmethod
+    def _record_event(conn: sqlite3.Connection, row: sqlite3.Row, event: str, reason: str,
+                      actor_id: str | None, now: str) -> None:
+        conn.execute(
+            """INSERT INTO device_request_events
+            (request_id, attempt_number, permit_generation, event_type, reason,
+             actor_id, prior_state, prior_checkpoint_ref, created_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row["id"], row["attempt_number"], row["last_grant_generation"], event,
+             reason, actor_id, row["state"], row["checkpoint_ref"], now),
+        )
+
+    def _finish_host_release(self, data: dict[str, object]) -> None:
+        data["state"] = "free"
+        for field in ("holder", "children", "request_id", "token_hash"):
+            data.pop(field, None)
+        self._write_ledger(data)
+        fd, self._held_fd = self._held_fd, None
+        self._unlock(fd)
+
     def complete_unit(
         self,
         grant: Grant,
@@ -732,18 +811,12 @@ class DeviceScheduler:
         if Path(checkpoint_database_path).expanduser().resolve() != self.database_path:
             raise ValueError("业务检查点与设备许可必须在同一 Production SQLite 库")
         continuation = self.owners.verify_submission(next_intent, actor) if next_intent else None
-        with self._connect() as conn:
-            self._assert_grant(conn, grant)
-        live_ledger = self._read_ledger(True)
-        children = tuple(_identity_from(item) for item in live_ledger.get("children", []))
-        if self.processes.children_released(children) is not True:
-            raise RecoveryBlocked("已登记子进程仍运行或状态未知")
-        if self.resources.released(grant) is not True:
-            raise RecoveryBlocked("子进程或常驻资源未确认释放")
+        if continuation is not None:
+            self._assert_material_stage_key(continuation)
         now = self._now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            data = self._assert_grant(conn, grant)
+            data = self._released_for_commit(conn, grant)
             if not cancelled:
                 self._assert_current(conn, grant)
             request_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
@@ -777,13 +850,97 @@ class DeviceScheduler:
                 )
             conn.execute("UPDATE device_permit SET state='free', request_id=NULL, token_hash=NULL, holder_json=NULL, children_json='[]', granted_at_utc=NULL, heartbeat_at_utc=NULL WHERE id=1")
             conn.commit()
-        data["state"] = "free"
-        for field in ("holder", "children", "request_id", "token_hash"):
-            data.pop(field, None)
-        self._write_ledger(data)
-        fd, self._held_fd = self._held_fd, None
-        self._unlock(fd)
+        self._finish_host_release(data)
         return checkpoint_ref
+
+    def defer_unit(self, grant: Grant, *, reason: DeferReason,
+                   retry_not_before_utc: datetime | None = None) -> None:
+        """Return a released unit to the queue without claiming work completed."""
+        allowed: set[str] = {"dependency_unavailable", "input_stale", "authorization_lost",
+                             "resource_pressure", "window_closed", "device_active",
+                             "worker_interrupted", "transient_failure"}
+        if reason not in allowed:
+            raise ValueError("等待原因无效")
+        now = self._now()
+        retry_at = _utc(retry_not_before_utc) if retry_not_before_utc else None
+        if reason in {"resource_pressure", "device_active", "worker_interrupted", "transient_failure"}:
+            if retry_at is None or retry_at <= now:
+                raise ValueError("该等待原因必须指定未来的最早重试时间")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            data = self._released_for_commit(conn, grant)
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            request = self._request(row)
+            verdict = self.owners.check_current(request, conn)
+            if ((reason == "authorization_lost" and verdict != "unauthorized")
+                    or (reason == "input_stale" and verdict != "stale")
+                    or (reason == "dependency_unavailable" and verdict != "dependency")
+                    or (reason == "window_closed" and
+                        (request.policy.window is None or request.policy.window.contains(now)))):
+                raise ValueError("等待原因与当前业务状态不符")
+            stamp = _stamp(now)
+            self._record_event(conn, row, "deferred", reason, None, stamp)
+            conn.execute(
+                """UPDATE device_work_requests SET state='blocked', wait_reason=?,
+                retry_not_before_utc=?, updated_at=? WHERE id=?""",
+                (reason, _stamp(retry_at) if retry_at else None, stamp, grant.request_id),
+            )
+            conn.execute("UPDATE device_permit SET state='free', request_id=NULL, token_hash=NULL, holder_json=NULL, children_json='[]', granted_at_utc=NULL, heartbeat_at_utc=NULL WHERE id=1")
+            conn.commit()
+        self._finish_host_release(data)
+
+    def fail_unit(self, grant: Grant, *, reason: str, failure_write: FailureWrite) -> None:
+        """Commit an owner failure and terminal scheduler state in one transaction."""
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason):
+            raise ValueError("失败原因必须是可公开的短代码")
+        now = _stamp(self._now())
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            data = self._released_for_commit(conn, grant)
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            failure_write(conn, grant)
+            self._record_event(conn, row, "failed", reason, None, now)
+            conn.execute(
+                """UPDATE device_work_requests SET state='failed', wait_reason=?,
+                last_failure_reason=?, checkpoint_ref=NULL, retry_not_before_utc=NULL,
+                updated_at=? WHERE id=?""",
+                (reason, reason, now, grant.request_id),
+            )
+            conn.execute("UPDATE device_permit SET state='free', request_id=NULL, token_hash=NULL, holder_json=NULL, children_json='[]', granted_at_utc=NULL, heartbeat_at_utc=NULL WHERE id=1")
+            conn.commit()
+        self._finish_host_release(data)
+
+    def retry_existing(self, request_id: str, actor: object, *, reason: RetryReason) -> dict[str, object]:
+        """Explicitly reopen a terminal request after trusted business validation."""
+        if reason not in {"failed", "cancelled", "result_invalid"}:
+            raise ValueError("重试原因无效")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            expected_state = "done" if reason == "result_invalid" else reason
+            if row["state"] != expected_state:
+                raise ValueError("只有匹配的终态请求可以显式重试")
+            request = self._request(row)
+            actor_id = self.owners.verify_retry(request, actor, reason, conn)
+            if not actor_id:
+                raise PermissionError("重试身份未通过服务端验证")
+            if self.owners.check_current(request, conn) != "ready":
+                raise PermissionError("输入版本或共享授权未恢复")
+            permit = conn.execute("SELECT request_id FROM device_permit WHERE id=1").fetchone()
+            if permit is None or permit["request_id"] == request_id:
+                raise RecoveryBlocked("请求仍有关联的设备许可")
+            now = _stamp(self._now())
+            self._record_event(conn, row, "retried", reason, actor_id, now)
+            conn.execute(
+                """UPDATE device_work_requests SET state='waiting', wait_reason=NULL,
+                checkpoint_ref=NULL, last_failure_reason=NULL, retry_not_before_utc=NULL,
+                attempt_number=attempt_number+1, updated_at=? WHERE id=?""",
+                (now, request_id),
+            )
+            conn.commit()
+        return self.view_for(request_id, actor)
 
     def change_policy(self, request_id: str, policy: SchedulePolicy, actor: object) -> dict[str, object]:
         with self._connect() as conn:
