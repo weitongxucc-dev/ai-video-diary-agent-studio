@@ -2074,8 +2074,28 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
-
     before_trim_version = production.get_creation_task(workspace_id, task.id).current_timeline_version_id
+    trim_candidates = []
+
+    def record_trim_preview(_workspace_id, _task, _base, candidate, _tracks, *, kind, parameters):
+        assert kind == "trim_preview"
+        trim_candidates.append((parameters["side"], candidate.clips[0].source_start_seconds))
+        return SimpleNamespace(id=f"trim-{parameters['side']}", logical_ref=f"artifacts/trim-{parameters['side']}.mp4")
+
+    proposal_count = len(production.list_edit_proposals(workspace_id, task.id))
+    monkeypatch.setattr(
+        main_module, "_publish_task_picture_preview",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("源素材已断开")),
+    )
+    unavailable_preview = client.post(
+        f"/api/creation-tasks/{task.id}/edits/exact/preview",
+        json={"operation_type": "TrimClip", "clip_id": "clip-route", "source_start_seconds": before_trim_start + 0.5},
+    )
+    assert unavailable_preview.status_code == 422
+    assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
+    assert len(production.list_edit_proposals(workspace_id, task.id)) == proposal_count
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", record_trim_preview)
+
     trim_preview = client.post(
         f"/api/creation-tasks/{task.id}/edits/exact/preview",
         json={
@@ -2085,6 +2105,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         },
     )
     assert trim_preview.status_code == 200, trim_preview.text
+    assert trim_candidates == [("before", before_trim_start), ("after", before_trim_start + 0.5)]
+    assert trim_preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("/trim-after")
     assert production.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
     exact_trim = client.post(f"/api/creation-tasks/{task.id}/edits/{trim_preview.json()['proposal']['id']}/confirm")
     assert exact_trim.status_code == 200, exact_trim.text
