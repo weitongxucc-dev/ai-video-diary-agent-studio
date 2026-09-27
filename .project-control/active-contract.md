@@ -99,3 +99,9 @@ SCHED01（曜核 0.11｜整机调度，01a0d29d-226b-7460-8ba6-76f14dc8c56a）�
 UI01独占本包的 `apps/web/src/components/AppShell.tsx`、`EditorShell.module.css`、`HomeWorkspace.tsx`、新增 `HomeWorkspace.module.css`、`useEditorPanels.ts` 及对应AppShell/HomeWorkspace/useEditorPanels专项测试。布局hook仅为v4默认导航188px、助手280px及必要最小宽度、拖动/收起/恢复一致性调整；已有用户手动保存宽度不得静默重置。浮卡修正与首页改动分开提交。不得写MAKE的任务父组件、API/types或后端。
 
 首页按v4组合看板实现，可信现有数据可用，缺聚合接口保留对应结构与诚实空态；隔离组件展示可用显著标注的示例供两身份三尺寸验收。角色未接真实服务不得伪造管理权限。MAKE先提供同源聚合和九阶段接口提案，知识库、模板及其他页面后续逐包指派，不因本包未包含而从范围删除。
+
+### UI-V4 第二实施包：知识库页面
+
+UI01独占 `apps/web/src/app/knowledge/page.tsx`、必要时同步其 `loading.tsx`、新增 `KnowledgeWorkspace.module.css` 及该目录 `__tests__/page.test.tsx`。按v4分类入口、来源封面网格及可操作详情实施；保留现有搜索、来源信息、原文和真实读端。用途分类不能从文件格式擅自推断，缺分类数据需明确未分类；没有真实引用/版本/纠正接口的操作不得伪造成功。原文及摘要只显示已有事实，不能编造解析、主题关系或问答出处。隔离示例可用于完整布局验收并明确标注。
+
+本包不写 `modern-overrides.css`、API/types、后端或其他页面；旧全局选择器如确实阻断，先提交具体冲突选择器与局部解决证据。第一包与本包分开提交；知识库页面改造不代表知识解析、召回及权限业务完成。
