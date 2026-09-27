@@ -68,6 +68,11 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
     assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
     assert commands[0][commands[0].index("--session-id") + 1] != commands[2][commands[2].index("--session-id") + 1]
     assert commands[0][commands[0].index("--tools") + 1] == "read_current_task,find_knowledge,preview_script_draft"
+    _, edit_preview = run_task_turn(settings, workspace_id="workspace-one", task_id="task-one",
+                                    message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
+    assert edit_preview is None
+    assert commands[3][commands[3].index("--session-id") + 1] != commands[0][commands[0].index("--session-id") + 1]
+    assert commands[3][commands[3].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_edit"
 
 
 def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatch, tmp_path):
@@ -124,6 +129,8 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
     monkeypatch.setattr(main_module, "current_workspace_id",
                         lambda request: request.headers.get("x-test-workspace", "workspace-a"))
     monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
+    monkeypatch.setattr(main_module, "_assistant_turn_scope",
+                        lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)

@@ -129,6 +129,7 @@ def run_task_turn(
         tool_names=("read_current_task,find_knowledge,preview_script_draft"
                     if script_turn else "read_current_task,find_knowledge,find_materials,preview_edit"),
         preview_kind="script_draft" if script_turn else "edit_preview",
+        session_key=f"task:{task_id}:{'script' if script_turn else 'edit'}",
     )
 
 

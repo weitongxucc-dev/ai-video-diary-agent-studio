@@ -38,12 +38,94 @@ def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monk
     ])
     monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(AssertionError("Pi must not be called")))
+    client = TestClient(main_module.app)
+    for stage in ("topic", "narration", "montage", "review", "subtitle_cover", "script"):
+        response = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+            "message": "请写开头", "context_stage": stage, "selected_object_refs": [],
+        })
+        assert response.status_code == 409, stage
+        if stage == "script":
+            assert response.json()["detail"]["reason"] == "content_sources_missing"
+    foreign = client.post("/api/creation-tasks/foreign-task/assistant/turn", json={
+        "message": "请写开头", "context_stage": "montage", "selected_object_refs": [],
+    })
+    assert foreign.status_code == 404
+    assert repo.list_task_events("local", "task-one") == []
+
+
+def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeypatch):
+    repo = _script_task(tmp_path)
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+        SimpleNamespace(id="topic-one"),
+    ])
+    def stale_sources(*_args, **_kwargs):
+        raise main_module._CreationTaskTopicPreflightError(
+            reason="knowledge_reference_stale", impact="来源版本已变化，未调用模型。",
+            repair_action="重新确认来源。", retryable=True,
+        )
+    monkeypatch.setattr(main_module, "_creation_task_topic_inputs", stale_sources)
+    monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("Pi must not be called")))
     response = TestClient(main_module.app).post("/api/creation-tasks/task-one/assistant/turn", json={
         "message": "请写开头", "context_stage": "script", "selected_object_refs": [],
     })
     assert response.status_code == 409
-    assert response.json()["detail"]["reason"] == "content_sources_missing"
+    assert response.json()["detail"]["reason"] == "knowledge_reference_stale"
     assert repo.list_task_events("local", "task-one") == []
+
+
+def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(monkeypatch):
+    events = []
+    calls = []
+    task = SimpleNamespace(id="task-one", stage="review", confirmed_script_id="script-one",
+                           narration_cache_key="narration-one", current_timeline_version_id=None,
+                           montage_plan_id="plan-one")
+    montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
+                              status="rendered", output_path="rendered-video", duration_seconds=30,
+                              clips=[SimpleNamespace(id="clip-current")], graphic_overlays=[])
+    repo = SimpleNamespace(
+        get_narration_artifact=lambda workspace_id, key: SimpleNamespace(
+            task_id=task.id, script_id=task.confirmed_script_id,
+        ),
+        list_narration_segments=lambda workspace_id, task_id, script_id: [
+            SimpleNamespace(id="segment-current", status="ready"),
+        ],
+        get_creation_task_montage_plan=lambda workspace_id, task_id: {},
+        append_task_event=events.append,
+    )
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "_creation_task_or_404", lambda workspace_id, task_id: task
+                        if workspace_id == "local" and task_id == task.id else
+                        (_ for _ in ()).throw(HTTPException(status_code=404, detail="task not found")))
+    monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
+    monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
+    monkeypatch.setattr(main_module, "run_task_turn", lambda _settings, **kwargs:
+                        (calls.append(kwargs) or ("请检查修改。", None)))
+    client = TestClient(main_module.app)
+    for stage, ref in (("montage", "clip:clip-current"), ("review", "narration:segment-current")):
+        response = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+            "message": "请检查当前片段", "context_stage": stage, "selected_object_refs": [ref],
+        })
+        assert response.status_code == 200, response.text
+    for ref in ("clip:clip-from-other-task", "clip:clip-removed"):
+        response = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+            "message": "请检查旧镜头", "context_stage": "montage", "selected_object_refs": [ref],
+        })
+        assert response.status_code == 422
+    foreign = client.post("/api/creation-tasks/foreign-task/assistant/turn", json={
+        "message": "请检查当前片段", "context_stage": "montage", "selected_object_refs": [],
+    })
+    assert foreign.status_code == 404
+    task.stage = "narration"
+    premature = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+        "message": "请检查旧镜头", "context_stage": "montage", "selected_object_refs": [],
+    })
+    assert premature.status_code == 409
+    assert [(call["stage"], call["selected_refs"]) for call in calls] == [
+        ("montage", ["clip:clip-current"]), ("review", ["narration:segment-current"]),
+    ]
+    assert len(events) == 4
 
 
 def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_path, monkeypatch):
@@ -115,8 +197,9 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     repo.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections)
     assert client.post(base + "/script-draft", json=body).status_code == 409
-    assert client.post(base + "/turn", json={
-        "message": "继续修改", "context_stage": "script", "selected_object_refs": [],
-    }).status_code == 409
+    for stage in ("script", "topic", "narration", "montage", "review", "subtitle_cover"):
+        assert client.post(base + "/turn", json={
+            "message": "继续修改", "context_stage": stage, "selected_object_refs": [],
+        }).status_code == 409, stage
     assert len(repo.list_task_events("local", "task-one")) == 2
     assert repo.get_creation_task("local", "task-one").confirmed_script_id == script_id
