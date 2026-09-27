@@ -70,24 +70,24 @@ export type AppShellCreationTask = CreationTask;
 const primaryNav: NavItem[] = [
   { href: "/", label: "首页", icon: Home },
   { href: "/library", label: "素材库", icon: Library },
-  { href: "/knowledge", label: "内容资料", icon: BookOpen },
-  { href: "/profiles", label: "人物声音", icon: UserRound },
+  { href: "/knowledge", label: "知识库", icon: BookOpen },
+  { href: "/profiles", label: "人物与声音", icon: UserRound },
   { href: "/templates", label: "视频模板", icon: FileStack },
   { href: "/production?view=automations", label: "定时任务", icon: Sparkles, activePath: "/automations" },
-  { href: "/history", label: "发布记录", icon: Activity },
+  { href: "/history", label: "发布与数据", icon: Activity },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
   { href: "/production", label: "创作任务" },
   { href: "/tasks", label: "创作任务" },
-  { href: "/sources", label: "内容资料" },
-  { href: "/history", label: "发布反馈" },
+  { href: "/sources", label: "知识库" },
+  { href: "/history", label: "发布与数据" },
   { href: "/health", label: "运行情况" },
   { href: "/settings", label: "设置" },
   { href: "/onboarding", label: "启动检查" },
   { href: "/profile", label: "创作者画像" },
-  { href: "/profiles", label: "人物声音" },
+  { href: "/profiles", label: "人物与声音" },
 ];
 
 export type AppShellWorkspaceStatus = {

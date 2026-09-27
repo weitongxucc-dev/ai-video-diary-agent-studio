@@ -92,15 +92,28 @@ describe("AppShell", () => {
     const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     const divider = screen.getByRole("separator", { name: "调整导航栏宽度" });
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "240");
+    expect(divider).toHaveAttribute("aria-valuenow", "204");
     for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "192");
+    expect(divider).toHaveAttribute("aria-valuenow", "188");
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
     first.unmount();
     render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     expect(screen.queryByRole("separator", { name: "调整导航栏宽度" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "192");
+    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "188");
+    localStorage.clear();
+  });
+
+  it("uses v4 widths for a fresh workspace and keeps a previously saved layout", () => {
+    localStorage.clear();
+    const first = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "188px", "--editor-right": "280px" });
+    first.unmount();
+    localStorage.setItem("video-editor-left-width", "224");
+    localStorage.setItem("video-workspace-chat-width", "350");
+    const saved = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    expect(saved.container.firstElementChild).toHaveStyle({ "--editor-left": "224px", "--editor-right": "350px" });
+    saved.unmount();
     localStorage.clear();
   });
 
@@ -117,10 +130,10 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    for (const label of ["首页", "素材库", "内容资料", "人物声音", "视频模板", "定时任务", "发布记录"]) {
+    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "定时任务", "发布与数据"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("link", { name: "人物声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
     expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
@@ -183,7 +196,7 @@ describe("AppShell", () => {
     search = "view=automations";
     render(<AppShell><p>页面内容</p></AppShell>);
     expect(screen.getByRole("link", { name: "定时任务" })).toHaveClass("is-active");
-    expect(screen.getByRole("link", { name: "发布记录" })).not.toHaveClass("is-active");
+    expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
   });
 
   it("turns both search affordances into one real page and task command palette", () => {
