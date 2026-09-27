@@ -70,12 +70,14 @@ def recording_task(tmp_path, monkeypatch):
     task.stage_status = "waiting_for_user"
     montage = CreationTaskMontagePlan(
         id=task.montage_plan_id, workspace_id=workspace_id, task_id=task_id,
-        script_id=script_id, script_title="录音文案", status="ready",
+        script_id=script_id, script_title="录音文案", status="rendered",
         cues=[NarrationCue("cue_1", "section_1", "真实待制作文案", 1.0)],
         clips=[MontageClip("clip_1", "cue_1", "asset_1", "segment_1", "workspace://source.mp4",
                            0, 1, 0, 1, 1, ["已确认镜头"], False)],
         duration_seconds=1, low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/old_voice",
+        output_path="artifacts/task_recording/old.mp4",
+        subtitle_path="artifacts/task_recording/old.srt",
     )
     montage_payload = creation_task_montage_plan_to_payload(montage)
     with repo._connect() as conn:
@@ -117,6 +119,7 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     assert preview.status_code == 200, preview.text
     proposal = preview.json()["proposal"]
     assert proposal["preview"]["after"]["audio_url"] == saved["audio_url"]
+    assert proposal["invalidated_refs"] == ["artifacts/task_recording/old.mp4", "artifacts/task_recording/old.srt"]
     assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
     confirmed = client.post(route + f"/edits/{proposal['id']}/confirm", json={})
     assert confirmed.status_code == 200, confirmed.text
