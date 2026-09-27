@@ -134,6 +134,8 @@ class ProcessIdentity:
 class Grant:
     request_id: str
     workspace_id: str
+    owner_type: str
+    owner_id: str
     unit_key: str
     input_digest: str
     attempt_number: int
@@ -279,6 +281,7 @@ class DeviceScheduler:
         self.owners, self.resources, self.processes = owners, resources, processes
         self.clock, self.activity_source_reliable, self.session_ttl = clock, activity_source_reliable, session_ttl
         self._held_fd: int | None = None
+        self._last_issued_grant: Grant | None = None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path, timeout=5, isolation_level=None)
@@ -670,8 +673,9 @@ class DeviceScheduler:
                 token = uuid.uuid4().hex
                 token_hash = hashlib.sha256(token.encode()).hexdigest()
                 generation = int(data["generation"]) + 1
-                grant = Grant(chosen["id"], chosen["workspace_id"], chosen["unit_key"],
-                              chosen["input_digest"], int(chosen["attempt_number"]), generation, token, self.database_path)
+                grant = Grant(chosen["id"], chosen["workspace_id"], chosen["owner_type"],
+                              chosen["owner_id"], chosen["unit_key"], chosen["input_digest"],
+                              int(chosen["attempt_number"]), generation, token, self.database_path)
                 held_data = {"state": "held", "generation": generation, "database_path": str(self.database_path),
                              "request_id": chosen["id"], "token_hash": token_hash,
                              "holder": _identity_json(identity), "children": []}
@@ -697,6 +701,7 @@ class DeviceScheduler:
                 conn.commit()
                 committed = True
             self._held_fd = fd
+            self._last_issued_grant = grant
             return grant
         except Exception:
             if not committed:
@@ -725,9 +730,10 @@ class DeviceScheduler:
             raise PermissionError("设备许可已失效")
         if permit is None or (permit["state"], permit["request_id"], permit["generation"], permit["token_hash"]) != ("held", grant.request_id, grant.generation, expected_hash):
             raise PermissionError("业务库设备许可已失效")
-        request = conn.execute("SELECT workspace_id, unit_key, input_digest, attempt_number, state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
-        if (request is None or (request["workspace_id"], request["unit_key"], request["input_digest"])
-                != (grant.workspace_id, grant.unit_key, grant.input_digest)
+        request = conn.execute("SELECT workspace_id, owner_type, owner_id, unit_key, input_digest, attempt_number, state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+        if (request is None or (request["workspace_id"], request["owner_type"], request["owner_id"],
+                                request["unit_key"], request["input_digest"])
+                != (grant.workspace_id, grant.owner_type, grant.owner_id, grant.unit_key, grant.input_digest)
                 or request["attempt_number"] != grant.attempt_number
                 or request["state"] not in {"granted", "yield_requested"}):
             raise PermissionError("设备许可与执行单元不匹配")
@@ -747,6 +753,27 @@ class DeviceScheduler:
             self._assert_current(conn, grant)
             if self.resources.continue_unit(grant) is not True:
                 raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
+
+    def assert_released(self, grant: Grant) -> None:
+        """Verify this coordinator's exact grant no longer owns the host or DB."""
+        if grant != self._last_issued_grant or grant.database_path != self.database_path:
+            raise PermissionError("释放核验的许可不是当前协调者派发的许可")
+        if self._held_fd is not None:
+            raise RecoveryBlocked("执行单元返回时仍持有全机许可")
+        ledger = self._read_ledger(True)
+        ledger_generation = int(ledger["generation"])
+        if (ledger_generation < grant.generation or
+                (ledger_generation == grant.generation and
+                 (ledger["state"] != "free" or ledger.get("request_id") is not None
+                  or ledger.get("token_hash") is not None))):
+            raise RecoveryBlocked("全机许可账本尚未释放")
+        with self._connect() as conn:
+            permit = conn.execute("SELECT state, generation, request_id, token_hash FROM device_permit WHERE id=1").fetchone()
+        if (permit is None or permit["generation"] < grant.generation or
+                (permit["generation"] == grant.generation and
+                 (permit["state"] != "free" or permit["request_id"] is not None
+                  or permit["token_hash"] is not None))):
+            raise RecoveryBlocked("业务库许可尚未释放")
 
     def register_child(self, grant: Grant, child: ProcessIdentity) -> None:
         """A future process wrapper must register and receive ACK before exec."""

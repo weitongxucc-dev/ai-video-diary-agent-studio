@@ -212,6 +212,12 @@ def test_fencing_checkpoint_atomicity_and_different_database_rejection(tmp_path)
     assert grant
     with pytest.raises(PermissionError, match="不匹配"):
         scheduler.assert_grant(replace(grant, input_digest="sha256:forged"))
+    with pytest.raises(PermissionError, match="不匹配"):
+        scheduler.assert_grant(replace(grant, owner_type="material_asset"))
+    with pytest.raises(PermissionError, match="不匹配"):
+        scheduler.assert_grant(replace(grant, owner_id="forged-owner"))
+    with pytest.raises(RecoveryBlocked):
+        scheduler.assert_released(grant)
     with pytest.raises(ValueError, match="同一 Production"):
         scheduler.complete_unit(grant, checkpoint_database_path=tmp_path / "other.sqlite",
                                 checkpoint_write=lambda conn, current: None)
@@ -229,6 +235,9 @@ def test_fencing_checkpoint_atomicity_and_different_database_rejection(tmp_path)
         assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
     scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                             checkpoint_write=lambda conn, current: conn.execute("INSERT INTO checkpoint_test VALUES ('valid')") and "valid")
+    scheduler.assert_released(grant)
+    with pytest.raises(PermissionError):
+        scheduler.assert_released(replace(grant, token="forged"))
     scheduler.submit(_intent("next"), "member-a")
     new = scheduler.pick_and_grant()
     assert new and new.generation > grant.generation
