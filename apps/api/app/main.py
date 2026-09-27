@@ -10360,6 +10360,9 @@ def _material_ingestion_for(repository: ProductionRepository):
             or service.repository is not repository
             or getattr(service, "execution_mode", None) != "scheduled"
             or service.scheduler is not runtime.scheduler
+            or not isinstance(getattr(runtime.scheduler, "database_path", None), (str, Path))
+            or Path(runtime.scheduler.database_path).expanduser().resolve()
+            != Path(repository.database_path).expanduser().resolve()
         ):
             raise HTTPException(status_code=503, detail="整机调度尚未就绪，素材重活未启动。")
         return service

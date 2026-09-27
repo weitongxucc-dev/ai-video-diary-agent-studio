@@ -13,8 +13,9 @@ def _request() -> Request:
     return Request({"type": "http", "method": "POST", "path": "/api/production/materials"})
 
 
-def _material_routes(monkeypatch: pytest.MonkeyPatch) -> Mock:
+def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Mock:
     repository = Mock()
+    repository.database_path = database_path
     repository.list_assets_page.return_value = ([], 0)
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "workspace-one")
@@ -49,9 +50,9 @@ def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monke
     repository.retry_material_ingestion.assert_not_called()
 
 
-def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    repository = _material_routes(monkeypatch)
-    scheduler = object()
+def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    repository = _material_routes(monkeypatch, tmp_path / "task.sqlite")
+    scheduler = SimpleNamespace(database_path=tmp_path / "task.sqlite")
     service = SimpleNamespace(
         repository=repository,
         execution_mode="scheduled",
@@ -76,3 +77,22 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
         assert error.value.status_code == 503
     repository.retry_material_ingestion.assert_not_called()
     repository.analyze_asset.assert_not_called()
+
+
+def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    repository = _material_routes(monkeypatch, tmp_path / "task.sqlite")
+    scheduler = SimpleNamespace(database_path=tmp_path / "other.sqlite")
+    service = SimpleNamespace(
+        repository=repository,
+        execution_mode="scheduled",
+        scheduler=scheduler,
+        scan_once=Mock(return_value=[]),
+    )
+    monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(scheduler=scheduler, running=True, last_error=None))
+    monkeypatch.setattr(main_module, "material_ingestion", service)
+
+    with pytest.raises(HTTPException) as error:
+        main_module.scan_production_materials(_request())
+    assert error.value.status_code == 503
+    service.scan_once.assert_not_called()
+    repository.scan_library.assert_not_called()
