@@ -94,9 +94,9 @@
   --danger: #c33d35;
   --focus: #4d83e6;
   --shadow-float: 0 12px 36px rgb(25 25 23 / 12%), 0 2px 8px rgb(25 25 23 / 7%);
-  --radius-sm: 7px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 9px;
   --sidebar-width: 220px;
   --inspector-width: 320px;
   --retro-canvas: var(--app-bg);
@@ -146,7 +146,7 @@ body {
   color: var(--text-1);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.42;
   -webkit-font-smoothing: antialiased;
 }
 

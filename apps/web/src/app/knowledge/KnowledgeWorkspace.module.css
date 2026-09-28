@@ -44,7 +44,7 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 .inspector { display: grid; gap: 12px; min-width: 0; color: var(--text-1); }
 .inspector header { display: grid; gap: 4px; }
-.inspector header strong { font-size: 16px; font-weight: 500; }
+.inspector header strong { font-size: 14px; font-weight: 500; }
 .inspector header small { color: var(--text-2); font-size: 12px; }
 .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .compare section, .detailSection { min-width: 0; padding: 11px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); }
