@@ -61,6 +61,7 @@ from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeli
 from app.task_audio import TaskAudio
 from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
+from app.local_members import LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -444,6 +445,7 @@ production_repo = ProductionRepository(
     visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
 )
 montage_repo = MontageRepository(settings.database_path)
+local_members_service = LocalMemberService(settings.database_path)
 montage_planner = MontagePlanner(
     semantic_provider=visual_semantic_provider,
     visual_feature_loader=production_repo.get_visual_feature,
@@ -700,6 +702,107 @@ async def accept_device_invite(request: Request, payload: DeviceInviteAcceptRequ
         member_count=acceptance.member_count,
         already_accepted=acceptance.already_accepted,
     )
+
+
+LOCAL_MEMBERS_ERROR_STATUS: dict[str, int] = {
+    "invalid": 400,
+    "not_found": 404,
+    "conflict": 409,
+}
+
+
+class MemberResponse(BaseModel):
+    member_id: str
+    name: str
+    role: str
+    created_at: str
+
+
+class MemberListResponse(BaseModel):
+    members: list[MemberResponse]
+
+
+class AddMemberRequest(BaseModel):
+    name: str
+    role: str = "member"
+
+
+class SetMemberRoleRequest(BaseModel):
+    role: str
+
+
+class JoinMemberRequest(BaseModel):
+    code: str
+    name: str
+
+
+class InviteCodeResponse(BaseModel):
+    invite_code: str
+
+
+def _member_response(member) -> MemberResponse:
+    return MemberResponse(
+        member_id=member.member_id,
+        name=member.name,
+        role=member.role,
+        created_at=member.created_at,
+    )
+
+
+def _local_members_error_response(exc: LocalMembersError) -> JSONResponse:
+    status = LOCAL_MEMBERS_ERROR_STATUS.get(exc.kind, 500)
+    return JSONResponse(
+        status_code=status,
+        content={"error": exc.kind, "detail": str(exc)},
+    )
+
+
+@app.get("/api/members")
+def list_local_members() -> MemberListResponse:
+    return MemberListResponse(
+        members=[_member_response(m) for m in local_members_service.list_members()]
+    )
+
+
+@app.post("/api/members")
+def add_local_member(payload: AddMemberRequest):
+    try:
+        member = local_members_service.add_member(payload.name, payload.role)
+    except LocalMembersError as exc:
+        return _local_members_error_response(exc)
+    return _member_response(member)
+
+
+@app.delete("/api/members/{member_id}")
+def remove_local_member(member_id: str):
+    try:
+        local_members_service.remove_member(member_id)
+    except LocalMembersError as exc:
+        return _local_members_error_response(exc)
+    return {"deleted": member_id}
+
+
+@app.patch("/api/members/{member_id}")
+def set_local_member_role(member_id: str, payload: SetMemberRoleRequest):
+    try:
+        member = local_members_service.set_role(member_id, payload.role)
+    except LocalMembersError as exc:
+        return _local_members_error_response(exc)
+    return _member_response(member)
+
+
+@app.post("/api/members/invite-code")
+def create_local_invite_code() -> InviteCodeResponse:
+    return InviteCodeResponse(invite_code=local_members_service.create_invite_code())
+
+
+@app.post("/api/members/join")
+def join_local_member(payload: JoinMemberRequest):
+    try:
+        member = local_members_service.join(payload.code, payload.name)
+    except LocalMembersError as exc:
+        return _local_members_error_response(exc)
+    return _member_response(member)
 
 
 def get_episode_or_404(episode_id: str) -> Episode:

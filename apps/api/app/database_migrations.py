@@ -3,7 +3,31 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 10
+PRODUCTION_SCHEMA_VERSION = 11
+
+
+# The local_members schema is also self-provisioned by app.local_members so a
+# fresh (test) database can use the service without running the full migration
+# chain, which is not idempotent on an empty file (migration 10 alters a table
+# created outside the migration list). Keep both sources in sync here.
+LOCAL_MEMBERS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS local_members (
+    member_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+    created_at TEXT NOT NULL
+);
+"""
+
+LOCAL_MEMBERS_SEED_DDL = """
+INSERT OR IGNORE INTO local_members (member_id, name, role, created_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    '本机创作者',
+    'owner',
+    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+);
+"""
 
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -546,6 +570,10 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX idx_material_analysis_checkpoint_source
             ON material_analysis_checkpoints(workspace_id, asset_id, source_sha256, unit_key);
         """,
+    ),
+    (
+        11,
+        LOCAL_MEMBERS_TABLE_DDL + "\n" + LOCAL_MEMBERS_SEED_DDL,
     ),
 )
 
