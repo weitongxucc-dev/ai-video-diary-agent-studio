@@ -41,6 +41,7 @@ import {
   getCreationTaskMontageClipCandidates,
   getCreationTaskTopics,
   getCreationTaskWorkspace,
+  getProductionMaterials,
   initializeCreationTaskTimeline,
   getCreationExecution,
   getCreationTaskAssistantHistory,
@@ -71,6 +72,8 @@ import type {
   CreationExecutionPreview,
   CreationExecutionStatus,
   CreationTaskAssistantHistory,
+  MaterialAsset,
+  MaterialSegmentMatch,
   MontageClipCandidate,
 } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
@@ -89,7 +92,7 @@ type Props = {
 
 type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "narration" | "person-render" | "plan" | "clip" | "render" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 
-type WorkspaceView = CreationTask["stage"] | "subtitle_cover";
+type WorkspaceView = CreationTask["stage"] | "subtitle_cover" | "prepare" | "publish";
 
 type SelectedEditContext = {
   kind: "narration" | "cue" | "clip" | "cover" | "audio" | "overlay";
@@ -108,15 +111,18 @@ const productStages = [
   { id: "montage", label: "剪辑", title: "视频剪辑" },
   { id: "subtitle_cover", label: "字幕封面", title: "字幕与封面" },
   { id: "review", label: "输出", title: "检查与输出" },
+  { id: "publish", label: "发布", title: "发布" },
 ] as const;
 
 const stageLabels = {
+  prepare: "资料",
   topic: "选题",
   script: "文案",
   narration: "配音",
   montage: "视频剪辑",
   subtitle_cover: "字幕与封面",
   review: "检查成片",
+  publish: "发布",
 };
 
 function stageIndex(stage: WorkspaceView) {
@@ -140,6 +146,7 @@ function productStageState(
   subtitleCoverComplete: boolean,
 ): { state: ProductStageState; detail: string } {
   if (stageId === "prepare") return { state: "done", detail: "已完成" };
+  if (stageId === "publish") return { state: "upcoming", detail: "未接入" };
 
   if (task.stage === "review" && stageId === "subtitle_cover" && !subtitleCoverComplete) {
     return { state: "current", detail: "待补封面" };
@@ -172,7 +179,7 @@ function errorDetails(cause: unknown) {
   };
 }
 
-function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, selectedContext }: { activeView: CreationTask["stage"]; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
+function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, selectedContext }: { activeView: WorkspaceView; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
   const { task, plan, selected_topic: topic, narration, montage } = workspace;
   const latestScript = workspace.scripts[0] ?? null;
   const viewingCurrentStage = activeView === task.stage;
@@ -215,6 +222,8 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
       {activeView === "script" ? <section><span className={styles.eyebrow}>文案版本</span><dl><div><dt>标题</dt><dd>{latestScript?.title ?? "尚未生成"}</dd></div><div><dt>段落</dt><dd>{latestScript?.sections.length ?? 0} 段</dd></div><div><dt>状态</dt><dd>{latestScript?.selection_status === "confirmed" ? "已确认" : "等待确认"}</dd></div></dl></section> : null}
       {activeView === "narration" ? <section><span className={styles.eyebrow}>声音与授权</span><dl><div><dt>声音版本</dt><dd>{plan.selected_voice?.version ?? "未选择"}</dd></div><div><dt>语言</dt><dd>中文</dd></div><div><dt>模型</dt><dd>{narration?.model_id ?? plan.selected_voice?.model_id ?? "未就绪"}</dd></div><div><dt>授权</dt><dd>{plan.selected_voice ? "已纳入方案" : "缺失"}</dd></div></dl></section> : null}
       {(activeView === "montage" || activeView === "review") && montage ? <section><span className={styles.eyebrow}>剪辑证据</span><dl><div><dt>镜头</dt><dd>{montage.clips.length} 个</dd></div><div><dt>露脸</dt><dd>目标 {montage.presenter_share_target ?? 0}% · 实际 {montage.presenter_share_actual ?? 0}%</dd></div><div><dt>需要确认</dt><dd>{montage.low_confidence_clip_count} 个</dd></div><div><dt>时长</dt><dd>{montage.duration_seconds.toFixed(1)} 秒</dd></div></dl></section> : null}
+      {activeView === "prepare" ? <section><span className={styles.eyebrow}>本次素材</span><dl><div><dt>方案匹配</dt><dd>{plan.material_matches.length} 个片段</dd></div><div><dt>已审核素材</dt><dd>{plan.approved_asset_count} 个</dd></div><div><dt>已审核镜头</dt><dd>{plan.approved_clip_count} 个</dd></div></dl></section> : null}
+      {activeView === "publish" ? <section><span className={styles.eyebrow}>发布能力</span><dl><div><dt>平台发布</dt><dd>未接入</dd></div><div><dt>定时发布</dt><dd>未接入</dd></div><div><dt>发布后监控</dt><dd>未接入</dd></div></dl></section> : null}
     </div>
   );
 }
@@ -886,6 +895,109 @@ function SubtitleCoverView({
   );
 }
 
+function materialAnalysisLabel(status: MaterialAsset["analysis_status"]) {
+  if (status === "ready") return "已解析";
+  if (status === "pending") return "待解析";
+  if (status === "blocked") return "未解析";
+  return "解析失败";
+}
+
+function materialReviewLabel(status: MaterialAsset["review_status"]) {
+  if (status === "approved") return "已通过";
+  if (status === "rejected") return "已拒绝";
+  return "未审核";
+}
+
+function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
+  const [materials, setMaterials] = useState<MaterialAsset[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  useEffect(() => {
+    let active = true;
+    getProductionMaterials({ limit: 200 })
+      .then((library) => {
+        if (!active) return;
+        setMaterials(library.assets);
+        setHasMore(library.has_more);
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setLoadError(cause instanceof Error ? cause.message : "素材读取失败");
+      });
+    return () => { active = false; };
+  }, []);
+  const matchesByAsset = useMemo(() => {
+    const map = new Map<string, MaterialSegmentMatch>();
+    for (const match of workspace.plan.material_matches) {
+      const id = match.asset_ref.startsWith("asset:") ? match.asset_ref.slice("asset:".length) : match.asset_ref;
+      map.set(id, match);
+    }
+    return map;
+  }, [workspace.plan.material_matches]);
+  const matchedAssets = useMemo(
+    () => (materials ?? []).filter((asset) => matchesByAsset.has(asset.id)),
+    [materials, matchesByAsset],
+  );
+  return (
+    <section className={styles.workSection}>
+      <div className={styles.sectionHeading}>
+        <div>
+          <span>资料</span>
+          <h2>本次任务素材</h2>
+          <p>只读回看方案匹配到的素材，不会在这里改动素材或重新跑匹配。</p>
+        </div>
+        <span className={styles.artifactStatus}><CheckCircle2 size={15} />资料就绪</span>
+      </div>
+      <div className={styles.artifactGrid}>
+        <section><strong>方案匹配</strong><p>{workspace.plan.material_matches.length} 个素材片段匹配当前目标{workspace.plan.material_rule_summary ? ` · ${workspace.plan.material_rule_summary}` : ""}</p></section>
+        <section><strong>审核进度</strong><p>已审核素材 {workspace.plan.approved_asset_count} 个 · 已审核镜头 {workspace.plan.approved_clip_count} 个</p></section>
+      </div>
+      {loadError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>素材读取失败：{loadError}</span></div> : null}
+      <div className={styles.evidenceList}>
+        <strong>本次素材列表</strong>
+        {materials === null && !loadError ? <p>正在读取素材…</p> : null}
+        {materials !== null && matchedAssets.length === 0 ? <p>暂无：方案尚未匹配到可用素材，或素材解析状态缺失。</p> : null}
+        {matchedAssets.map((asset) => {
+          const match = matchesByAsset.get(asset.id);
+          const tags = asset.user_tags ?? [];
+          return (
+            <article key={asset.id}>
+              <span>{match ? `匹配 ${Math.round(match.score * 100)}%` : "未匹配"}</span>
+              <div>
+                <strong>{asset.file_name}</strong>
+                <small>{materialAnalysisLabel(asset.analysis_status)}{asset.duration_seconds !== null ? ` · ${asset.duration_seconds.toFixed(1)} 秒` : " · 时长未解析"} · {materialReviewLabel(asset.review_status)}</small>
+                <small>{tags.length ? tags.join(" · ") : "暂无标签"}{asset.analysis_message ? ` · ${asset.analysis_message}` : ""}</small>
+              </div>
+            </article>
+          );
+        })}
+        {hasMore ? <p>素材较多，此处只展示前 200 条匹配片段。</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function PublishStageView({ workspace, onOpenReview }: { workspace: WorkspaceState; onOpenReview: () => void }) {
+  const ready = Boolean(workspace.montage?.output_url);
+  return (
+    <section className={styles.workSection}>
+      <div className={styles.sectionHeading}>
+        <div>
+          <span>发布</span>
+          <h2>发布</h2>
+          <p>真实发布依赖平台接口，尚未接入；本页不会把本地成片计为已发布。</p>
+        </div>
+      </div>
+      <div className={styles.emptyAction}>
+        <AlertCircle size={28} />
+        <h2>平台发布能力未接入</h2>
+        <p>平台发布、定时发布和发布后监控尚未接入。{ready ? "成片已生成，可以先保存到本地，再到平台上传。" : "完成“检查与输出”后，成片会出现在这里。"}</p>
+        {ready ? <button className="modern-primary-button" onClick={onOpenReview} type="button">回到检查与输出</button> : null}
+      </div>
+    </section>
+  );
+}
+
 export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initialTasks }: Props) {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [workspace, setWorkspace] = useState(initialWorkspace);
@@ -1480,18 +1592,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       : { kind: "connected" as const, label: task.stage_status === "running" ? "正在处理" : "本地任务" };
 
   function stageView(stageId: typeof productStages[number]["id"]): WorkspaceView | null {
-    return stageId === "prepare" ? null : stageId;
+    return stageId;
   }
 
   function canOpenStage(view: WorkspaceView | null): view is WorkspaceView {
     if (!view) return false;
     if (view === task.stage) return true;
+    if (view === "prepare") return true;
     if (view === "topic") return Boolean(workspace.selected_topic);
     if (view === "script") return Boolean(latestScript);
     if (view === "narration") return Boolean(workspace.narration);
     if (view === "montage") return Boolean(workspace.montage);
     if (view === "subtitle_cover") return Boolean(workspace.montage?.output_url && workspace.subtitle_tracks.length);
-    return view === "review" && Boolean(workspace.montage?.output_url);
+    return (view === "review" || view === "publish") && Boolean(workspace.montage?.output_url);
   }
 
   const isEditor = activeView === "montage";
@@ -1574,6 +1687,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>画面、声音和尺寸检查已通过。</p></div></div></section> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
+        {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
+        {activeView === "publish" ? <PublishStageView workspace={workspace} onOpenReview={() => openView("review")} /> : null}
         {recordingOpen ? <div className="home-card-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRecordingOpen(false); }}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></div> : null}
 
 

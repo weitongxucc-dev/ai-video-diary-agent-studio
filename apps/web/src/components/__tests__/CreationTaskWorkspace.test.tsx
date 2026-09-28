@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
     redoTimeline: vi.fn(),
     saveRecording: vi.fn(),
     previewAudioEdit: vi.fn(),
+    getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
   };
 });
 
@@ -93,6 +94,7 @@ vi.mock("@/lib/api", () => ({
   redoCreationTaskTimeline: mocks.redoTimeline,
   saveCreationTaskRecording: mocks.saveRecording,
   previewCreationTaskAudio: mocks.previewAudioEdit,
+  getProductionMaterials: mocks.getProductionMaterials,
 }));
 
 const baseTask: CreationTask = {
@@ -1697,6 +1699,55 @@ describe("CreationTaskWorkspace", () => {
     expect(await screen.findByLabelText("变更预览")).toHaveTextContent("与现有音轨混合");
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     expect(mocks.exactEdit).not.toHaveBeenCalled();
+  });
+
+  it("shows a read-only materials list when the prepare stage is opened", async () => {
+    mocks.getProductionMaterials.mockResolvedValue({
+      assets: [
+        {
+          id: "asset-1",
+          workspace_id: "local",
+          file_name: "外景口播.mp4",
+          path: "/materials/外景口播.mp4",
+          size_bytes: 1024,
+          modified_at: "2026-08-30T00:00:00Z",
+          duration_seconds: 12.5,
+          usage_role: "b_roll",
+          suggested_usage_role: "b_roll",
+          usage_role_confidence: 1,
+          usage_role_reason: "已审核",
+          review_status: "approved",
+          use_state: "available",
+          analysis_status: "ready",
+          analysis_message: "",
+          user_tags: ["外景", "口播"],
+          segments: [],
+          created_at: "2026-08-30T00:00:00Z",
+          updated_at: "2026-08-30T00:00:00Z",
+        },
+      ],
+      total_count: 1,
+      limit: 200,
+      offset: 0,
+      has_more: false,
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspace(baseTask)} />);
+    fireEvent.click(screen.getByRole("button", { name: "资料准备：已完成" }));
+    expect(await screen.findByRole("heading", { name: "本次任务素材" })).toBeInTheDocument();
+    expect(screen.getByText("外景口播.mp4")).toBeInTheDocument();
+    expect(screen.getByText(/已解析/)).toBeInTheDocument();
+    expect(screen.getByText(/已通过/)).toBeInTheDocument();
+    expect(mocks.getProductionMaterials).toHaveBeenCalledWith({ limit: 200 });
+  });
+
+  it("shows an honest publish placeholder and does not claim the video is published", async () => {
+    const initial = subtitleCoverWorkspace();
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "发布：未接入" }));
+    expect(screen.getByRole("heading", { name: "平台发布能力未接入" })).toBeInTheDocument();
+    expect(screen.getByText(/本页不会把本地成片计为已发布/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "回到检查与输出" })).toBeInTheDocument();
+    expect(screen.getAllByText("未接入")).toHaveLength(3);
   });
 
 });
