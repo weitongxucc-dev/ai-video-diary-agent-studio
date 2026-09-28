@@ -55,6 +55,17 @@
 .detailSection dt { color: var(--text-2); }
 .detailSection dd { overflow-wrap: anywhere; margin: 0; }
 .detailSection a { display: inline-flex; gap: 4px; margin-top: 10px; color: var(--accent); font-size: 12px; text-decoration: none; }
+.correctionGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.correctionField { display: grid; gap: 5px; min-width: 0; }
+.correctionField span { color: var(--text-2); font-size: 11px; }
+.correctionField textarea { min-width: 0; min-height: 62px; padding: 7px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; line-height: 1.5; resize: vertical; }
+.correctionField textarea:disabled { background: var(--surface-2); color: var(--text-2); cursor: not-allowed; }
+.detailActions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 10px; }
+.detailActions button { display: inline-flex; min-height: 30px; align-items: center; gap: 4px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; cursor: pointer; }
+.detailActions button:hover:not(:disabled) { border-color: var(--accent); }
+.detailActions button:disabled { color: var(--text-2); opacity: .6; cursor: not-allowed; }
+.detailActions a { margin-top: 0; }
+.notWired { margin: 8px 0 0; color: var(--text-2); font-size: 11px; }
 @media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .columns { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .top { flex-direction: column; } .actions { justify-content: flex-end; } .category { padding: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }

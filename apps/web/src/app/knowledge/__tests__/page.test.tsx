@@ -28,7 +28,7 @@ describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
     render(<KnowledgePage />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
-    expect(screen.getAllByText(/用途未分类/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/未分类/)).not.toHaveLength(0);
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
@@ -58,6 +58,26 @@ describe("KnowledgePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("请求失败：502");
     expect(screen.getByText(/读取失败 · 选来源查看内容/)).toBeInTheDocument();
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
+  });
+
+  it("renders correction and task-reference actions honestly while interfaces are absent", async () => {
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    expect(detail).toHaveTextContent("纠正保存与任务引用接口尚未接入");
+    expect(screen.getByRole("button", { name: "保存纠正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "用于当前任务" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "摘要纠正" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "参数纠正" })).toBeDisabled();
+  });
+
+  it("shows example correction and task-reference actions in example mode", () => {
+    render(<KnowledgeWorkspace error={null} exampleMode items={[{ ...item, exampleCategory: "产品知识", exampleSummary: "先检查电源。", exampleParameters: "额定功率示例", exampleIssue: "待核对" }]} loading={false} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    expect(screen.getByRole("button", { name: /保存纠正 · 示例/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /用于当前任务 · 示例/ })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "摘要纠正" })).toHaveValue("先检查电源。");
+    expect(screen.getByRole("textbox", { name: "参数纠正" })).toHaveValue("额定功率示例");
   });
 
   it("keeps category and summary examples isolated from production data", () => {
