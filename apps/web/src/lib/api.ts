@@ -868,3 +868,53 @@ export function setScheduledTaskEnabled(taskId: string, enabled: boolean): Promi
 export async function deleteScheduledTask(taskId: string): Promise<void> {
   await creationPlanRequest<ScheduledTask | null>(`/api/scheduled-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
+
+export type LocalMember = {
+  member_id: string;
+  name: string;
+  role: "owner" | "member";
+  created_at: string;
+};
+
+export type LocalMemberListResponse = { members: LocalMember[] };
+
+/**
+ * Local member commands fail with a JSON body `{"error": kind, "detail": message}`;
+ * surface the human-readable `detail` instead of the raw body.
+ */
+export function membersErrorMessage(cause: unknown): string {
+  if (cause instanceof Error && cause.message) {
+    try {
+      const payload = JSON.parse(cause.message) as { detail?: unknown };
+      if (payload && typeof payload.detail === "string") return payload.detail;
+    } catch {
+      // not a JSON error body; fall through to the raw message
+    }
+    return cause.message;
+  }
+  return "成员操作失败";
+}
+
+export function listLocalMembers(): Promise<LocalMemberListResponse> {
+  return request<LocalMemberListResponse>("/api/members");
+}
+
+export function addLocalMember(input: { name: string; role?: "owner" | "member" }): Promise<LocalMember> {
+  return request<LocalMember>("/api/members", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function removeLocalMember(memberId: string): Promise<{ deleted: string }> {
+  return request<{ deleted: string }>(`/api/members/${encodeURIComponent(memberId)}`, { method: "DELETE" });
+}
+
+export function setLocalMemberRole(memberId: string, role: "owner" | "member"): Promise<LocalMember> {
+  return request<LocalMember>(`/api/members/${encodeURIComponent(memberId)}`, { method: "PATCH", body: JSON.stringify({ role }) });
+}
+
+export function createLocalInviteCode(): Promise<{ invite_code: string }> {
+  return request<{ invite_code: string }>("/api/members/invite-code", { method: "POST" });
+}
+
+export function joinLocalMember(input: { code: string; name: string }): Promise<LocalMember> {
+  return request<LocalMember>("/api/members/join", { method: "POST", body: JSON.stringify(input) });
+}

@@ -1,0 +1,54 @@
+.page { width: min(100%, 960px); margin: 0 auto; padding: 0 0 24px; }
+.viewBar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border-1); }
+.viewBar h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
+.primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
+.secondaryButton:disabled, .primaryButton:disabled { cursor: not-allowed; opacity: .5; }
+
+.notice { margin: 12px 0 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border-1)); border-radius: 8px; background: color-mix(in srgb, var(--success) 5%, var(--surface-1)); color: var(--success); font-size: 12px; }
+.error { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 12px 0 0; padding: 13px; border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border-1)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 4%, var(--surface-1)); color: var(--danger); }
+.error strong { font-size: 13px; font-weight: 500; }
+.error p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
+.error button, .serviceEmpty button { min-height: 34px; padding: 0 11px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
+.loading, .serviceEmpty { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 10px; color: var(--text-2); }
+.serviceEmpty > div { max-width: 520px; }
+.serviceEmpty strong { display: block; color: var(--text-1); font-size: 15px; font-weight: 500; }
+.serviceEmpty p { margin: 4px 0 0; font-size: 13px; }
+
+.panel { margin-top: 14px; padding: 16px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.sectionHeader span { color: var(--text-3); font-size: 12px; font-weight: 500; }
+.sectionHeader h2 { margin: 4px 0 0; font-size: 16px; font-weight: 500; }
+.sectionHeader p { margin: 6px 0 0; color: var(--text-2); font-size: 12px; }
+
+.memberList { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.memberRow { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border-1); border-radius: 8px; }
+.memberIcon { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
+.memberMeta { display: grid; min-width: 0; flex: 1; }
+.memberMeta strong { font-size: 13px; font-weight: 500; }
+.memberMeta small { color: var(--text-3); font-size: 11px; }
+.badge { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.ownerBadge { background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
+.memberBadge { background: var(--surface-2); color: var(--text-2); }
+.memberActions { display: flex; flex: 0 0 auto; gap: 6px; }
+.memberActions button { min-height: 28px; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); cursor: pointer; font-size: 12px; }
+.memberActions button:disabled { cursor: not-allowed; opacity: .5; }
+
+.inlineForm { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 14px; }
+.inlineForm label { display: grid; gap: 4px; }
+.inlineForm label span { color: var(--text-2); font-size: 12px; }
+.inlineForm input { min-height: 34px; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
+
+.inviteRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-1); }
+.inviteCode { display: grid; gap: 3px; }
+.inviteCode span { color: var(--text-3); font-size: 11px; }
+.inviteCode code { font-size: 15px; letter-spacing: 1px; }
+.inviteCode small { color: var(--text-3); font-size: 11px; }
+.hint { margin: 0; color: var(--text-2); font-size: 12px; }
+
+.empty { display: flex; gap: 10px; margin-top: 14px; padding: 16px; border: 1px dashed var(--border-1); border-radius: 8px; color: var(--text-2); }
+.empty strong { display: block; color: var(--text-1); font-size: 13px; font-weight: 500; }
+.empty p { margin: 4px 0 0; font-size: 12px; }
+
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

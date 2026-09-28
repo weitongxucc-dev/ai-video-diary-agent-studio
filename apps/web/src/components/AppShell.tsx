@@ -22,6 +22,7 @@ import {
   Sparkles,
   Sun,
   UserRound,
+  Users,
 } from "lucide-react";
 import {
   useEffect,
@@ -75,6 +76,7 @@ const primaryNav: NavItem[] = [
   { href: "/templates", label: "视频模板", icon: FileStack },
   { href: "/production?view=automations", label: "定时任务", icon: Sparkles, activePath: "/automations" },
   { href: "/history", label: "发布与数据", icon: Activity },
+  { href: "/members", label: "成员与空间", icon: Users },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
