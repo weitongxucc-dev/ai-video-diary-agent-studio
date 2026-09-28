@@ -96,6 +96,6 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 四线程默认开发池（用户裁定，工作区已重命名）**：账号·接口（workspace:5/surface:16，Claude，后端 auth/main.py 路由/device_accounts）；pi·实现（workspace:4/surface:23，pi 通用实现）；调度·渲染（workspace:2/surface:12，Claude，后端 device_*/montage/creation）；分析·复核（workspace:6/surface:6，OpenCode 只读分析）。原 surface:2（录音接父层，卡草稿）与 surface:10（pi，已移除）退出默认池；其未完成派单改派上表线程。
 
-**2026-09-28 四线程当前派工**：账号·接口/WIL-67 窄入口（main.py 路由，进行中）；调度·渲染/creation_execution 准入统一（creation-admission-unify 工作树，cff2d4d 基线）；pi·实现/录音接父层（recording-parent 工作树，改派自 surface:2）；分析·复核/3 孤儿执行队列提交只读复核（b800b89/68eefe6/743ac02）。
+**2026-09-28 四线程当前派工**：账号·接口/已收口 WIL-67 窄入口（9213556→c0255fd），现派 device-credential-injection（native runtime 注入 DEVICE_ID/DEVICE_PROOF，工作树 device-credential，基线 c0255fd）；调度·渲染/creation_execution 准入统一（creation-unify 工作树，cff2d4d 基线）；pi·实现/录音接父层（recording-parent 工作树，改派自 surface:2）；分析·复核/3 孤儿执行队列提交只读复核（b800b89/68eefe6/743ac02）。
 
 **跨包待裁定（不阻断，供 WIL-65 接线前对齐）**：WIL-66 注册表 mat_scene_probe 上限 max_source_duration_s≤1800/wall_clock_s≤3600，而 WIL-68 SceneProbeBudget 默认 3600/3630——MAT 默认预算会被 SCHED 上限拒绝；字段名已一致，接线包须统一默认值或上限。另 ui-v4-integration 分支尚有 3 个未集成提交（b800b89/68eefe6/743ac02 执行队列事实功能 ExecutionQueueStatus），属另一功能、未经 WIL-69 复核，待单独审。
