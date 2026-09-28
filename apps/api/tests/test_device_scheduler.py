@@ -595,7 +595,7 @@ def test_v8_to_v10_preserves_requests_and_rebuilds_index(tmp_path):
         assert (row["member_id"], row["first_ready_at_utc"], row["eligible_wait_seconds"],
                 row["attempt_number"], row["state"]) == (
                     "member-a", "2026-09-01T00:00:00+00:00", 91, 1, "blocked")
-        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == PRODUCTION_SCHEMA_VERSION
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_device_work_pending'").fetchone()
 
 
@@ -641,7 +641,7 @@ def test_v10_material_checkpoint_upgrade_is_idempotent_and_transactional(tmp_pat
         conn.rollback()
         apply_production_migrations(conn)
         assert conn.execute("SELECT count(*) FROM material_analysis_checkpoints").fetchone()[0] == 1
-        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == PRODUCTION_SCHEMA_VERSION
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE material_ingestion_files SET attempted_digest='uncommitted' WHERE file_path='/library/a.mp4'")
         conn.execute("""INSERT INTO material_analysis_checkpoints
