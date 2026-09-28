@@ -87,3 +87,5 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 复用任务音频持久化与既有编辑提案/确认/版本事务；服务端检查真实容器/时长、成员与任务归属、旧版本、锁定和时长约束。上传仅产生未应用素材，明确确认才替换旁白；不得add叠播冒充替换。人物口型、已分割旁白及无法同步的组合明确不可用。旧视频/依赖预览失效，失败不改变有效版本。探测/转换不得新增绕过统一许可的重活路径；scheduled无许可/预算时保持dependency，不开启生产。新录音进入生成路径后，预览/导出同源验证仍是父范围完成条件，本包不靠保存成功声称成片闭环。
 
 **2026-09-28 增补**：本包执行者由 MAKE（Codex 线程，额度耗尽）改派 cmux Claude Code（surface:2），文件范围与全部门禁不变。当前基线 f70daa8 遭 QA 双 HOLD（① 媒体身份绑定：等长改样本仍 200 应用，禁 GET 无许可全文件 hash 掩盖；② 换旁白后受影响字幕须标复核/失效并处理 artifact_ref，保留人工文字、不误伤音量编辑），修复经独立复验通过前不可集成。
+
+**2026-09-28 集成收口**：双 HOLD 修复候选 bdf686b（surface:2 交付）经主控 diff 亲审 + 干净树隔离复验（15 passed，含四具名证据测试）后已整链 cherry-pick 集成 dev（96af469→8de8641 … bdf686b→4d04d25，零冲突）并推送，WIL-72 转 In Review。遗留如实记录：unavailable 字幕轨前端呈现属 UI 包；真实用户闭环待"录音接父层"包。自本登记起 main.py 不再被本包独占，可派后续窄入口包（WIL-67 接线第 2 步，路由签名以 surface:7 报告的接口建议为准）。WIL-69 候选 6a107b2 经 surface:1 独立复核判可集成，附一行必修测试断言竞态（getByText→findByText），已派 surface:2 于 ui-v4-integration 工作树修复（派发契约 external-agents/dispatch/WIL-69-test-fix.md），新 SHA 到后主控集成。
