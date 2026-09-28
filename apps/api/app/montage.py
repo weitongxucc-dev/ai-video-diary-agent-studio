@@ -20,6 +20,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
+from app.host_resource_probes import (
+    HostCapacity,
+    ResourceAdmission,
+    ResourceAdmissionRejected,
+    ResourceSamplingUnavailable,
+    admit_resource,
+    sample_host_capacity,
+)
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.transitions import extend_dissolve_sources, join_picture_filters
@@ -595,6 +603,28 @@ class MontagePlanner:
         return cue_vectors, segment_vectors, ""
 
 
+def admit_creation_render(*, source_duration_s: float, input_count: int,
+                          cpu_threads: int, wall_clock_s: float,
+                          capacity: HostCapacity | None = None) -> ResourceAdmission:
+    """Admit a bounded CPU render through the SCHED ``creation_render`` registry.
+
+    The declared dimensions use the registry's field semantics: source duration,
+    input clip count, requested encoder threads, and the wall-clock budget. An
+    undeclared field, an over-limit value, a type mismatch, or a missing field
+    raises :class:`ResourceAdmissionRejected` with a readable reason; a host
+    sample that cannot complete raises :class:`ResourceSamplingUnavailable`
+    instead of fabricating a budget.
+    """
+    if capacity is None:
+        capacity = sample_host_capacity()
+    return admit_resource("creation_render", {
+        "source_duration_s": source_duration_s,
+        "input_count": input_count,
+        "cpu_threads": cpu_threads,
+        "wall_clock_s": wall_clock_s,
+    }, capacity=capacity)
+
+
 class MontageRenderer:
     def __init__(
         self,
@@ -640,6 +670,18 @@ class MontageRenderer:
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
         if not plan.clips:
             raise ValueError("混剪计划没有镜头")
+        if grant is not None:
+            try:
+                admit_creation_render(
+                    source_duration_s=plan.duration_seconds,
+                    input_count=len(plan.clips),
+                    cpu_threads=threads,
+                    wall_clock_s=deadline_monotonic - time.monotonic(),
+                )
+            except (ResourceAdmissionRejected, ResourceSamplingUnavailable) as exc:
+                plan.status = "failed"
+                plan.message = f"CPU 成片资源准入未通过：{exc}"
+                raise
         narration_path = self._validated_audio_path(audio_path)
         if isinstance(plan, CreationTaskMontagePlan):
             narration_duration = self.audio_duration(narration_path, scheduler=scheduler, grant=grant,
