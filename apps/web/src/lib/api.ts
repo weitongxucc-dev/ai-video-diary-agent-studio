@@ -829,3 +829,42 @@ export async function importCreationTaskGraphic(taskId:string,file:File):Promise
 export function getCreationTaskGraphicSources(taskId:string):Promise<import("./types").GraphicSource[]> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`);
 }
+
+// 定时任务：任务定义管理（创建/启停/删除）。到点真实执行属后续接线，本页不触发任何自动运行。
+export type ScheduledTaskType = "material_analysis" | "creation_render";
+export type ScheduledTaskTriggerMode = "idle" | "scheduled";
+export type ScheduledTask = {
+  id: string;
+  workspace_id: string;
+  task_type: string;
+  trigger_mode: string;
+  target_ref: string;
+  not_before_utc: string | null;
+  window: Record<string, unknown> | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export type ScheduledTasksResponse = { tasks: ScheduledTask[]; total_count: number };
+export type ScheduledTaskCreateInput = {
+  task_type: ScheduledTaskType;
+  trigger_mode: ScheduledTaskTriggerMode;
+  target_ref: string;
+  not_before_utc?: string | null;
+  window?: Record<string, unknown> | null;
+};
+export function listScheduledTasks(): Promise<ScheduledTasksResponse> {
+  return creationPlanRequest("/api/scheduled-tasks");
+}
+export function createScheduledTask(input: ScheduledTaskCreateInput): Promise<ScheduledTask> {
+  return creationPlanRequest("/api/scheduled-tasks", { method: "POST", body: JSON.stringify(input) });
+}
+export function setScheduledTaskEnabled(taskId: string, enabled: boolean): Promise<ScheduledTask> {
+  return creationPlanRequest(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
+}
+export async function deleteScheduledTask(taskId: string): Promise<void> {
+  await creationPlanRequest<ScheduledTask | null>(`/api/scheduled-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
