@@ -786,10 +786,33 @@ class CreationPlanBlockerResponse(BaseModel):
 
 
 class MaterialSegmentMatchResponse(BaseModel):
+    """一条候选素材及其可核对的依据。
+
+    前四个字段是原有形状。后面这些是「凭什么说这条候选对」的证据，缺一个
+    用户就只能盲选。字段名与 production.MaterialSegmentMatch 一一对应。
+
+    几乎全部可选：检索会从「文字整段命中」降级到「分词命中」再到「仅按结构化
+    条件返回」，降级路径产出的证据天然更少。要求它们必填会把一条本来能正常
+    返回的候选变成 422 —— 那比少几个字段糟得多。
+    """
+
     asset_ref: str
     segment_ref: str
+    # 不加上界：production 侧对 score 没有截断，多个标签条件（每条 +0.15）叠加
+    # 多条文字命中（+0.45 + 每条理由 +0.1）可以合法地超过 1.0。写 le=1.0 会把
+    # 合法结果挡成 422。
     score: float = Field(ge=0)
     reasons: list[str]
+    rank: int = 0
+    match_tier: str = "structural"
+    matched_terms: list[str] = Field(default_factory=list)
+    matched_conditions: list[str] = Field(default_factory=list)
+    asset_file_name: str = ""
+    start_seconds: float = 0.0
+    end_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    time_range: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
 class CreationTaskResponse(BaseModel):

@@ -12,13 +12,23 @@ const fakePi = { registerTool: (t) => { tools[t.name] = t; } };
 const mod = await import(EXT);
 mod.default(fakePi);
 
+let requestedUrls = [];
+
 function installFetchStub(routes) {
   globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
     const key = Object.keys(routes).find((k) => String(url).includes(k));
     if (key === undefined) {
       return new Response(JSON.stringify({ detail: "no stub for " + url }), { status: 404, headers: { "Content-Type": "application/json" } });
     }
-    return new Response(JSON.stringify(routes[key]), { status: 200, headers: { "Content-Type": "application/json" } });
+    const value = routes[key];
+    // 路由值可以写成 { __status: 404, detail: "..." } 来模拟非 2xx（例如素材不属于
+    // 当前工作区时后端就抛 404）。默认仍按 200 返回。
+    if (value && typeof value === "object" && !Array.isArray(value) && "__status" in value) {
+      const { __status, ...body } = value;
+      return new Response(JSON.stringify(body), { status: __status, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   };
 }
 
@@ -31,10 +41,13 @@ for await (const line of rl) {
       process.stdout.write(JSON.stringify({ ok: true, tools: Object.keys(tools) }) + "\n");
     } else if (cmd.op === "call") {
       installFetchStub(cmd.routes || {});
+      requestedUrls = [];
       const tool = tools[cmd.tool];
       if (!tool) throw new Error("no such tool: " + cmd.tool);
       const result = await tool.execute("id", cmd.params || {});
-      process.stdout.write(JSON.stringify({ ok: true, result: (result && result.details) ?? result }) + "\n");
+      // requests 只是附带信息，供测试断言工具实际请求了什么 URL（例如分页
+      // limit 是否越界）；call() 仍只读 result。
+      process.stdout.write(JSON.stringify({ ok: true, result: (result && result.details) ?? result, requests: requestedUrls }) + "\n");
     } else {
       process.stdout.write(JSON.stringify({ ok: false, error: "unknown op" }) + "\n");
     }
