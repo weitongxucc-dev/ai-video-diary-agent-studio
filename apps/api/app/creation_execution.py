@@ -16,8 +16,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
+from app.host_resource_probes import admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
@@ -115,7 +115,6 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         if not source.is_file() or source.stat().st_size <= 0:
             raise ValueError("当前镜头源文件不可用")
         sources.append(source)
-    width, height = canvas_size(montage.aspect_ratio)
     source_facts = []
     for path in sources:
         stat = path.stat()
@@ -136,11 +135,11 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                                        default=str).encode("utf-8")).hexdigest()
     resources = {
         "kind": "creation_render", "execution_mode": "cpu_ffmpeg",
-        "duration_seconds": montage.duration_seconds, "width_px": width, "height_px": height,
-        "input_bytes": sum(item["size"] for item in manifest["sources"]),
-        "clip_count": len(montage.clips), "overlay_count": len(montage.cues),
-        "max_output_bytes": limits.max_output_bytes, "threads": limits.threads,
-        "timeout_seconds": limits.timeout_seconds,
+        "source_duration_s": montage.duration_seconds,
+        "input_count": len(montage.clips),
+        "cpu_threads": limits.threads,
+        "wall_clock_s": limits.timeout_seconds,
+        "max_output_bytes": limits.max_output_bytes,
     }
     return f"render:{digest}", resources
 
@@ -383,7 +382,7 @@ class CreationJobUnitExecutor:
         if resources.get("kind") != "creation_render" or resources.get("execution_mode") != "cpu_ffmpeg":
             raise PermissionError("CPU 成片资源事实不匹配")
         elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
-        deadline = time.monotonic() + float(resources["timeout_seconds"]) - elapsed
+        deadline = time.monotonic() + float(resources["wall_clock_s"]) - elapsed
         cancellation = threading.Event()
         with self._cancellation_lock:
             self._cancellations[grant.request_id] = cancellation
@@ -409,11 +408,17 @@ class CreationJobUnitExecutor:
                 return
             context = CpuRenderGrantContext(
                 scheduler, grant, deadline, int(resources["max_output_bytes"]),
-                int(resources["threads"]), cancellation,
+                int(resources["cpu_threads"]), cancellation,
             )
             try:
                 if deadline <= time.monotonic():
                     raise GrantedCommandTimeout("CPU 成片阶段已超出总时限")
+                admit_resource("creation_render", {
+                    "source_duration_s": float(resources["source_duration_s"]),
+                    "input_count": int(resources["input_count"]),
+                    "cpu_threads": int(resources["cpu_threads"]),
+                    "wall_clock_s": deadline - time.monotonic(),
+                }, capacity=sample_host_capacity())
                 self.render_action(job.workspace_id, job.task_id, context)
                 if not cancellation.is_set() and self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
                     if not self.render_is_valid(job.workspace_id, job.task_id, context):

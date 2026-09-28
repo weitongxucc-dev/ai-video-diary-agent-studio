@@ -198,8 +198,10 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         resources = json.loads(row["resources_json"])
         assert row["unit_key"].startswith("render:")
         assert resources["kind"] == "creation_render"
-        assert resources["input_bytes"] == audio.stat().st_size + video.stat().st_size
-        assert resources["clip_count"] == resources["overlay_count"] == 1
+        assert resources["source_duration_s"] == 1
+        assert resources["input_count"] == 1
+        assert resources["cpu_threads"] == 1
+        assert resources["wall_clock_s"] == 90
         assert submit_creation_stage(execution, scheduler, job, actor) == request_id
         grant = scheduler.pick_and_grant()
         assert grant is not None
