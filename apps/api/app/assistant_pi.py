@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -9,11 +10,139 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
-from app.config import Settings
+from app.config import Settings, record_llm_service_verification
+
+# ── 失败分类（0.11 B04）────────────────────────────────────────────────────
+# 以前非零退出和不完整回复一律压成一句「请检查模型连接」。这里按日志里**真的**
+# 出现过的痕迹分类；查不到就说查不到，不编一个体面的理由。
+FAILURE_KEY_REJECTED = "key_rejected"              # 密钥被拒
+FAILURE_ADDRESS_UNREACHABLE = "address_unreachable"  # 服务地址不通
+FAILURE_TIMEOUT = "timeout"                        # 超时
+FAILURE_RUNTIME_MISSING = "runtime_missing"        # 运行环境缺失
+FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
+FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
+
+# service_contacted=True 的只有三种：它们都真的向模型服务发过请求，结论可以写进
+# 服务状态。业务工具失败和「拿不到原因」不写——本地工具坏掉或日志缺失都不能
+# 拿来证明密钥是好的或坏的。
+_FAILURES: dict[str, dict[str, object]] = {
+    FAILURE_KEY_REJECTED: {
+        "service_contacted": True,
+        "explanation": "模型服务拒绝了这把密钥——这一次是真的连到了服务，是密钥没通过。",
+        "next_step": "在服务商控制台重新复制 API Key 粘贴到设置页，别带上空格和换行，保存后再试一次。",
+    },
+    FAILURE_ADDRESS_UNREACHABLE: {
+        "service_contacted": True,
+        "explanation": "连不上设置里的服务地址，还没走到鉴权那一步，所以不是密钥的问题。",
+        "next_step": "在设置页核对服务地址是否完整（要含 https:// 和 /v1），并确认当前网络能访问该服务后重试。",
+    },
+    FAILURE_TIMEOUT: {
+        "service_contacted": True,
+        "explanation": "等模型回复超时，这一轮没有拿到回复；任务和时间线没有因此改变。",
+        "next_step": "先重试一次；仍然超时就核对服务地址是否可达，或换用响应更快的模型。",
+    },
+    FAILURE_RUNTIME_MISSING: {
+        "service_contacted": False,
+        "explanation": "对话没能在本机跑起来，所以这一轮根本没碰到密钥和网络。",
+        "next_step": "在终端执行 npm i -g @pi/cli 后重新打开应用；桌面版安装包目前不自带 Pi。",
+    },
+    FAILURE_TOOL_FAILED: {
+        "service_contacted": False,
+        "explanation": "对话本身通了，但业务工具执行失败，助手拿不到任务数据。",
+        "next_step": "打开设置页的运行时体检，按标红那一项给的修复提示处理后重试。",
+    },
+    FAILURE_UNKNOWN: {
+        "service_contacted": False,
+        "explanation": "这一轮没有完成，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
+        "next_step": "重试一次；仍然失败请打开设置页的运行时体检，看服务状态。",
+    },
+}
+
+# 文本匹配是启发式的，只能说「日志里出现过这句话」，不等于服务端真的这么判。
+_KEY_REJECTED_PATTERNS = (
+    "invalid api key", "invalid_api_key", "incorrect api key", "incorrect_api_key",
+    "unauthorized", "authentication_error", "authentication failed",
+    "invalid authentication", "invalid bearer", "no auth credentials",
+)
+_ADDRESS_PATTERNS = (
+    "enotfound", "econnrefused", "ehostunreach", "enetunreach", "eai_again",
+    "getaddrinfo", "connection refused", "name resolution", "name or service not known",
+    "could not resolve host", "proxyerror",
+)
+_TIMEOUT_PATTERNS = ("timeout", "timed out", "etimedout", "deadline exceeded", "read timeout")
+_TOOL_ERROR_PATTERNS = ("tool_execution_end", "tool call failed", "tool_error", "isError")
 
 
 class AssistantUnavailable(RuntimeError):
-    pass
+    """A conversation failure the user can read.
+
+    `cause` is the class actually observed this round; `service_contacted`
+    says whether a request really reached the external model service, which
+    is the only thing that may be written back into the service state.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: str = FAILURE_UNKNOWN,
+        service_contacted: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.service_contacted = service_contacted
+
+
+def _fail(cause: str, *, explanation: str | None = None) -> AssistantUnavailable:
+    """Build the user-facing failure text: what happened, then what to do.
+
+    The text is assembled from fixed copy only — never from the process log,
+    which can hold the key or the whole session.
+    """
+    copy = _FAILURES[cause]
+    headline = explanation or str(copy["explanation"])
+    return AssistantUnavailable(
+        f"{headline} 下一步：{copy['next_step']}",
+        cause=cause,
+        service_contacted=bool(copy["service_contacted"]),
+    )
+
+
+def _tool_error_seen(output: str) -> bool:
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "tool_execution_end" and event.get("isError"):
+            return True
+    return False
+
+
+def _classify_output(stdout: str, stderr: str = "") -> str:
+    """Read one Pi run's logs and name the failure class, or admit we can't."""
+    text = f"{stdout}\n{stderr}".lower()
+    if any(pattern in text for pattern in _KEY_REJECTED_PATTERNS) or re.search(r"\b401\b", text):
+        return FAILURE_KEY_REJECTED
+    if any(pattern in text for pattern in _TIMEOUT_PATTERNS):
+        return FAILURE_TIMEOUT
+    if any(pattern in text for pattern in _ADDRESS_PATTERNS):
+        return FAILURE_ADDRESS_UNREACHABLE
+    if _tool_error_seen(stdout) or any(pattern in stdout for pattern in _TOOL_ERROR_PATTERNS):
+        return FAILURE_TOOL_FAILED
+    return FAILURE_UNKNOWN
+
+
+def _record_service(settings: Settings, *, ok: bool, cause: str) -> None:
+    """Write an observation into the service state — but only a real one.
+
+    A failure that never reached the provider (Pi 没装、业务工具坏、日志读不懂)
+    对密钥好坏什么都证明不了，写进去就是把猜测当事实。只有 `ok=True`（真的拿到
+    了回复）和 `service_contacted=True` 的失败才写。
+    """
+    if not ok and not bool(_FAILURES.get(cause, {}).get("service_contacted")):
+        return
+    record_llm_service_verification(settings, ok=ok, cause=cause)
 
 
 _session_locks: dict[str, threading.Lock] = {}
@@ -48,9 +177,9 @@ SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每
 def _agent_root(settings: Settings) -> Path:
     parent = Path(settings.model_root_path).expanduser().parent
     if len(parent.parts) >= 3 and parent.parts[1] == "Volumes" and not Path(*parent.parts[:3]).is_mount():
-        raise AssistantUnavailable("素材与模型盘未连接，无法保存对话上下文。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
     if not parent.is_dir():
-        raise AssistantUnavailable("素材与模型盘未连接，无法保存对话上下文。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
     root = parent / "agent"
     root.mkdir(mode=0o700, exist_ok=True)
     (root / "sessions").mkdir(mode=0o700, exist_ok=True)
@@ -60,10 +189,10 @@ def _agent_root(settings: Settings) -> Path:
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
     endpoint = urlsplit(settings.effective_llm_base_url)
     if endpoint.scheme != "https" or not endpoint.hostname or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
-        raise AssistantUnavailable("对话须选择外部文字模型；请在模型设置中选择 MiniMax 或 DeepSeek。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="对话须选择外部文字模型，请先在设置里选 MiniMax 或 DeepSeek。")
     key = settings.effective_llm_api_key
     if not key:
-        raise AssistantUnavailable("外部文字模型尚未配置 API Key。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="外部文字模型的 API Key 还没填，所以这一轮对话没有开始。")
     return settings.effective_llm_base_url, settings.effective_llm_model, key
 
 
@@ -87,7 +216,10 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise AssistantUnavailable("Pi 返回了无法读取的对话事件。") from exc
+            raise _fail(
+                FAILURE_UNKNOWN,
+                explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
+            ) from exc
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_edit", "preview_creation_plan", "preview_script_draft"}:
             if not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
@@ -104,7 +236,14 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         if event.get("type") == "agent_settled":
             settled = True
     if not settled or not answer:
-        raise AssistantUnavailable("对话没有得到完整回复，请检查所选模型连接。")
+        cause = _classify_output(output)
+        if cause == FAILURE_UNKNOWN:
+            # 保留「完整回复」这个说法：用户能认出是没答完，而不是笼统报错。
+            raise _fail(
+                cause,
+                explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
+            )
+        raise _fail(cause)
     return answer, preview
 
 
@@ -169,10 +308,13 @@ def _run_turn(
 ) -> tuple[str, dict | None]:
     pi_executable = _pi_executable()
     if not pi_executable:
-        raise AssistantUnavailable("Pi 未安装或桌面版尚未包含 Pi，当前无法使用对话助手。")
+        raise _fail(FAILURE_RUNTIME_MISSING)
     extension = Path(os.getenv("AI_VIDEO_DIARY_PI_EXTENSION") or Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts")
     if not extension.is_file():
-        raise AssistantUnavailable("对话业务工具缺失，请修复桌面应用。")
+        raise _fail(
+            FAILURE_RUNTIME_MISSING,
+            explanation="对话的业务工具文件不在安装包里，助手没法读取任务数据。",
+        )
     base_url, model, key = _configured_model(settings)
     root = _agent_root(settings)
     session_id = uuid5(NAMESPACE_URL, f"ai-video-diary:{workspace_id}:{session_key or task_id}")
@@ -212,18 +354,36 @@ def _run_turn(
     with _session_locks_guard:
         session_lock = _session_locks.setdefault(str(session_id), threading.Lock())
     if not session_lock.acquire(blocking=False):
-        raise AssistantUnavailable("当前任务还有一条对话正在处理，请等待完成。")
+        raise _fail(
+            FAILURE_UNKNOWN,
+            explanation="同一个任务还有一条对话正在处理，这一轮没有开始，也没有碰过服务。",
+        )
     try:
         result = subprocess.run(
             cmd, input=message, text=True, capture_output=True, timeout=180,
             env=env, cwd=runtime_root, check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise AssistantUnavailable("对话超时，任务和时间线没有因此改变。") from exc
+        # 请求已经发出去了，所以这是关于服务的一次真实观察。
+        _record_service(settings, ok=False, cause=FAILURE_TIMEOUT)
+        raise _fail(FAILURE_TIMEOUT) from exc
     except OSError as exc:
-        raise AssistantUnavailable("无法启动 Pi，请检查安装路径和运行权限。") from exc
+        raise _fail(
+            FAILURE_RUNTIME_MISSING,
+            explanation="启动不了本机的对话程序，助手根本没跑起来，所以没碰到密钥和网络。",
+        ) from exc
     finally:
         session_lock.release()
     if result.returncode:
-        raise AssistantUnavailable("Pi 对话未完成，请检查模型服务和 Pi 运行状态。")
-    return _last_answer_and_preview(result.stdout, preview_kind)
+        failure = _fail(_classify_output(result.stdout, result.stderr or ""))
+        _record_service(settings, ok=False, cause=failure.cause)
+        raise failure
+    try:
+        answer, preview = _last_answer_and_preview(result.stdout, preview_kind)
+    except AssistantUnavailable as exc:
+        # 不完整回复也可能是密钥被拒或超时打回来的，日志里能看出来就照实记。
+        _record_service(settings, ok=False, cause=exc.cause)
+        raise
+    # 走到这里说明这一轮真的连了服务、也真的拿到了回复。
+    _record_service(settings, ok=True, cause="verified")
+    return answer, preview
