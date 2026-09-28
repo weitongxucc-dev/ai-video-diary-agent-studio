@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
   isLocalAuthMode,
-  isOnboardingSupportApiPath,
   isOnboardingSupportPath,
   isPublicApiPath,
   isPublicAuthPath,
+  shouldBlockOnboarding,
   signInRedirectUrl,
   trustedApiHeaders,
 } from "@/lib/auth/routing";
@@ -74,9 +74,12 @@ export async function middleware(request: NextRequest) {
 
     const session = await refreshSession(request);
     if (
-      session.userId &&
-      !session.onboardingComplete &&
-      !isOnboardingSupportApiPath(pathname)
+      shouldBlockOnboarding(
+        session.userId,
+        session.onboardingComplete,
+        request.method,
+        pathname,
+      )
     ) {
       return NextResponse.json(
         { error: "onboarding_required", detail: "Complete onboarding first." },

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  isDeviceInviteAcceptApiPath,
   isLocalAuthMode,
   isOnboardingSupportApiPath,
   isOnboardingSupportPath,
   isPublicAuthPath,
   isPublicApiPath,
   sanitizeNextPath,
+  shouldBlockOnboarding,
   signInRedirectUrl,
   trustedApiHeaders,
 } from "../routing";
@@ -81,5 +83,45 @@ describe("auth routing", () => {
     );
     expect(target.pathname).toBe("/signin");
     expect(target.searchParams.get("next")).toBe("/tasks/task-1?view=video");
+  });
+
+  it("passes through the device-invite accept path for a not-yet-onboarded identity", () => {
+    expect(
+      isDeviceInviteAcceptApiPath("POST", "/api/device-invites/accept"),
+    ).toBe(true);
+    expect(
+      shouldBlockOnboarding("user-1", false, "POST", "/api/device-invites/accept"),
+    ).toBe(false);
+  });
+
+  it("keeps the onboarding gate on every other path and method", () => {
+    expect(
+      shouldBlockOnboarding("user-1", false, "POST", "/api/creation-tasks/task-1"),
+    ).toBe(true);
+    expect(
+      shouldBlockOnboarding("user-1", false, "GET", "/api/device-invites/accept"),
+    ).toBe(true);
+    expect(
+      shouldBlockOnboarding("user-1", false, "POST", "/api/device-invites/accept/extra"),
+    ).toBe(true);
+    expect(
+      shouldBlockOnboarding("user-1", false, "POST", "/api/device-invites"),
+    ).toBe(true);
+  });
+
+  it("never treats the invite-accept path as public, so a JWT is still required", () => {
+    expect(isPublicApiPath("/api/device-invites/accept")).toBe(false);
+    expect(isDeviceInviteAcceptApiPath("GET", "/api/device-invites/accept")).toBe(
+      false,
+    );
+    expect(isDeviceInviteAcceptApiPath("POST", "/api/device-invites/accept/extra")).toBe(
+      false,
+    );
+  });
+
+  it("does not block a JWT-less request at the web layer; the API re-verifies", () => {
+    expect(
+      shouldBlockOnboarding(null, false, "POST", "/api/device-invites/accept"),
+    ).toBe(false);
   });
 });
