@@ -106,6 +106,8 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 第四批派工（全线程已空后重排）**：分析·复核/WIL-56 v4 缺口清单（只读，对照 owner.html vs 现有组件，供 pi 后续按单修正）；调度·渲染/verify_retry 受权调整接口（SCHED，让素材手动重试接通可信授权，verify-retry-auth 工作树）。pi·实现待 WIL-56 清单出后按单修 v4 缺口；账号·接口代码侧已完，剩余端到端 Supabase RPC 真机连通属用户验收。
 
+**2026-09-28 第四批收口（核验类零代码 + 缺口清单）**：调度·渲染核验 SCHED 受权接口已存在（OwnerVerifier/retry_existing/wake_existing/change_policy 均在 dev，38 passed）→ 无新代码，WIL-60 缺口①更正为"接口已存在，剩余是 material owner+AUTH+MAKE"；分析·复核产出 WIL-56 v4 缺口清单（P0 六项：发布阶段缺失/箭头 overlay 缺失/资料阶段无视图/成员与空间缺失/权限模型缺失/定时任务 stub；P1/P2 详列；依赖风险标注）。pi·实现已派 WIL-56 阶段缺口（§1.1 资料视图 + §1.8 发布结构，CreationTaskWorkspace.tsx）。剩余 P0 后端依赖项（§1.5A 箭头后端、§1.8 发布后端、§4/§5 权限多成员、§6 定时任务）需后端规划，其中 §5 权限/多成员为单用户→多成员架构级变更，需主控/用户先定方向。
+
 **2026-09-28 第三批收口（含核验类零代码交付）**：调度·渲染核验 WIL-60 最小闭环已由先前 MAT 线程在 dev（e7e077a→c8cdc2a→11e77f4→cff3522→4169682 均祖先，135 passed）→ WIL-60 In Review，剩余 verify_retry 需 SCHED 受权接口等跨包缺口如实记录；分析·复核核验 WIL-12 核心能力真闭环（9 能力全 ✅，122 passed）→ WIL-12 In Review，仅 scheduled 整机启动未接线属下一代边界；账号·接口 web 放行（f00b109→a13fbae）集成 → WIL-67 设备邀请链路三块齐（后端路由+凭据注入+web 放行）。pi·实现 WIL-55 UI-FLOAT 方案已确认（只做内容层 VideoClipQuickEditor，不碰 AppShell），实施中。
 
 **跨包待裁定（不阻断，供 WIL-65 接线前对齐）**：WIL-66 注册表 mat_scene_probe 上限 max_source_duration_s≤1800/wall_clock_s≤3600，而 WIL-68 SceneProbeBudget 默认 3600/3630——MAT 默认预算会被 SCHED 上限拒绝；字段名已一致，接线包须统一默认值或上限。另 ui-v4-integration 分支尚有 3 个未集成提交（b800b89/68eefe6/743ac02 执行队列事实功能 ExecutionQueueStatus），属另一功能、未经 WIL-69 复核，待单独审。
