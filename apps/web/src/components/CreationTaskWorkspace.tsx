@@ -1131,8 +1131,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const selectedOverlayIndex = workspace.montage?.graphic_overlays?.findIndex(item=>item.id===selectedOverlayId) ?? -1;
   const selectedOverlay = selectedOverlayIndex>=0 ? workspace.montage!.graphic_overlays![selectedOverlayIndex] : null;
   const selectedEditContext = activeView === "montage" && selectedOverlay
-    ? {kind:"overlay" as const,id:selectedOverlay.id,label:`${selectedOverlay.kind==="image"?"图片":"标题"}${selectedOverlayIndex+1}`,
-       placeholder:selectedOverlay.kind==="image"?"例如：当前图片不透明度改为50%":"例如：当前标题字号改为96",ref:`overlay:${selectedOverlay.id}`}
+    ? {kind:"overlay" as const,id:selectedOverlay.id,label:`${selectedOverlay.kind==="image"?"图片":selectedOverlay.kind==="arrow"?"箭头":"标题"}${selectedOverlayIndex+1}`,
+       placeholder:selectedOverlay.kind==="image"?"例如：当前图片不透明度改为50%":selectedOverlay.kind==="arrow"?"例如：当前箭头颜色改为红":"例如：当前标题字号改为96",ref:`overlay:${selectedOverlay.id}`}
     : activeView === "montage" && selectedAudioTrack
     ? { kind: "audio" as const, id: selectedAudioId!, label: selectedAudioClip?.name ?? selectedAudioTrack.name,
         placeholder: "例如：音量小一点，或指定淡出秒数", ref: `audio:${selectedAudioId}` }

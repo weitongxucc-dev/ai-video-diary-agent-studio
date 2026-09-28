@@ -1802,4 +1802,30 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText("成片可预览；请按上方清单逐项确认。")).toBeInTheDocument();
   });
 
+  // WIL-56 遗留：箭头叠加层选中后，编辑上下文芯片不能叫「标题」。
+  it("labels a selected arrow overlay as 箭头, not 标题", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    initial.montage!.graphic_overlays = [{
+      kind: "arrow", id: "overlay-arrow", x: 0.3, y: 0.4, name: "指向数据",
+      purpose: "指出关键数字", start_seconds: 1, end_seconds: 3,
+      position: "right-top", color: "#FFDD00",
+    }];
+    mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "EditGraphicOverlay"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^视频剪辑：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "箭头1 · 指向数据" }));
+    // 右侧面板标题用的是同一个编辑上下文标签
+    expect(screen.getByRole("complementary", { name: "箭头1" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "标题1" })).not.toBeInTheDocument();
+    // 指令栏里选中的芯片也要叫「箭头1」
+    expect(screen.getByText(/已选中箭头1 ·/)).toBeInTheDocument();
+  });
+
 });
