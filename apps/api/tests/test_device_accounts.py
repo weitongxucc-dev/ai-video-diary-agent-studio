@@ -55,19 +55,32 @@ def pg():
             text=True,
         )
 
-        def run(sql: str, *, actor: str | None = None, check: bool = True):
+        def run(
+            sql: str,
+            *,
+            actor: str | None = None,
+            check: bool = True,
+            verbosity: str | None = None,
+        ):
             identity = ""
             if actor is not None:
                 identity = (
                     "SET ROLE authenticated;\n"
                     f"SET request.jwt.claim.sub = {_sql_string(actor)};\n"
                 )
+            args = [
+                "psql", "-X", "-A", "-t", "-F", "|",
+                "-v", "ON_ERROR_STOP=1",
+                "-h", pg_dir, "-p", str(port), "-U", "postgres", "-d", "postgres",
+            ]
+            if verbosity is not None:
+                # Per-call only: psql renders the error text in the server
+                # locale, so assertions on the wording break under a non-English
+                # PostgreSQL. "sqlstate" keeps the localized prefix but always
+                # prints the locale-independent SQLSTATE code.
+                args += ["-v", f"VERBOSITY={verbosity}"]
             result = subprocess.run(
-                [
-                    "psql", "-X", "-A", "-t", "-F", "|",
-                    "-v", "ON_ERROR_STOP=1",
-                    "-h", pg_dir, "-p", str(port), "-U", "postgres", "-d", "postgres",
-                ],
+                args,
                 input=identity + sql,
                 text=True,
                 capture_output=True,
@@ -171,16 +184,22 @@ def test_owner_seat_target_transfer_idempotency_and_private_rls(pg):
         "SELECT workspace_id FROM public.bootstrap_personal_workspace('重复登录');",
         actor=owner,
     )) == personal
-    assert "duplicate key value violates unique constraint" in pg(
+    # The unique index name is catalog text, never localized by PostgreSQL, so
+    # this pins *which* one-per-owner guard rejected the second row instead of
+    # pinning the English wording of the error class.
+    assert "workspaces_one_personal_per_owner" in pg(
         "INSERT INTO public.workspaces(owner_id,name) VALUES "
         f"({_sql_string(owner)},'重复个人空间');",
         check=False,
     ).stderr
-    assert "row-level security policy" in pg(
+    # RLS rejections are raised by PostgreSQL itself, not by our RPC, so the
+    # message text is localized; 42501 (insufficient_privilege) is not.
+    assert "42501" in pg(
         "INSERT INTO public.onboarding_states(workspace_id,user_id,identity_complete) "
         f"VALUES ({_sql_string(target)},{_sql_string(owner)},true);",
         actor=owner,
         check=False,
+        verbosity="sqlstate",
     ).stderr
     assert "ready workspace membership required" in pg(
         f"SELECT public.complete_own_onboarding({_sql_string(target)});",
@@ -250,11 +269,14 @@ def test_revoked_expired_wrong_device_and_direct_table_writes_fail(pg):
     assert "device authorization required" in _accept(
         pg, member, device, token, OTHER_PROOF, check=False
     ).stderr
-    assert "permission denied" in pg(
+    # 42501 is insufficient_privilege. A privilege denial names no catalog
+    # object, so the SQLSTATE class is the only locale-independent handle.
+    assert "42501" in pg(
         "INSERT INTO public.device_members(device_id,user_id,role,status) VALUES "
         f"({_sql_string(other_device)},{_sql_string(member)},'member','active');",
         actor=other_owner,
         check=False,
+        verbosity="sqlstate",
     ).stderr
     assert _last(pg(
         "SELECT has_function_privilege('anon', "
