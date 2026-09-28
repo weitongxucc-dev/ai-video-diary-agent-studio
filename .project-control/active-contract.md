@@ -100,4 +100,6 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 第二批集成收口**：调度·渲染 creation_execution 统一（369fd94→5230301，legacy _sample→admit_resource 字段重命名，16 passed）；pi·实现 录音接父层（3765f16→41b9e20，CreationTaskWorkspace 接线 onRecorded，api.ts 无需改——端点已存在，39/41 passed）；pi 知识库页（0c66e73→1268d2f，可操作详情 UI 骨架+未分类一致化，6 passed）。分析·复核判定 3 孤儿执行队列提交（b800b89/68eefe6/743ac02）经合并 #44 已内容等价进主线，**无需集成按重复丢弃**；并警示 codex/011-ui-intake-contract 分支 tip 落后 HEAD，**不得整支合并**（会回退 docs/design/supabase 迁移等）。WIL-65 端到端 admission 已闭环（montage + creation_execution 均走 admit_resource）。
 
+**2026-09-28 第三批派工（用户裁定 UI 基准 = owner.html）**：pi·实现/WIL-55 UI-FLOAT 浮卡+三尺寸（wil55-float 工作树，先回文件清单确认再改）；调度·渲染/WIL-60 MAT 统一许可接入（wil60-mat-license 工作树，承接 9e2ebef，依赖 WIL-57 已 Done）；分析·复核/WIL-12 素材接收只读核验。账号·接口仍在 device-credential 注入。WIL-56（DESIGN-V5）按用户裁定：v4 owner.html 为唯一基准，仅修 v4 已确认缺口、不另起布局。
+
 **跨包待裁定（不阻断，供 WIL-65 接线前对齐）**：WIL-66 注册表 mat_scene_probe 上限 max_source_duration_s≤1800/wall_clock_s≤3600，而 WIL-68 SceneProbeBudget 默认 3600/3630——MAT 默认预算会被 SCHED 上限拒绝；字段名已一致，接线包须统一默认值或上限。另 ui-v4-integration 分支尚有 3 个未集成提交（b800b89/68eefe6/743ac02 执行队列事实功能 ExecutionQueueStatus），属另一功能、未经 WIL-69 复核，待单独审。
