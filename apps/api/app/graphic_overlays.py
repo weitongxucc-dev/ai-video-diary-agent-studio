@@ -50,11 +50,37 @@ class ImageOverlay(BaseModel):
         return self
 
 
+class ArrowOverlay(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    kind: Literal['arrow']='arrow'
+    id: str=Field(default_factory=lambda:f'overlay_{uuid4().hex[:12]}',min_length=1,max_length=80)
+    x: float=Field(ge=0,le=1,allow_inf_nan=False)
+    y: float=Field(ge=0,le=1,allow_inf_nan=False)
+    name: str=Field(min_length=1,max_length=24)
+    purpose: str=Field(default='',min_length=0,max_length=64)
+    start_seconds: float=Field(ge=0,allow_inf_nan=False)
+    end_seconds: float=Field(gt=0,allow_inf_nan=False)
+    position: Literal['left-top','right-top','right-bottom','left-bottom']='right-top'
+    color: str=Field(default='#FFFFFF',pattern=r'^#[0-9a-fA-F]{6}$')
+    @model_validator(mode='after')
+    def valid_interval(self):
+        if self.end_seconds-self.start_seconds<.04:
+            raise ValueError('箭头显示时间至少0.04秒')
+        return self
+
+
 def parse_overlay(value):
-    return (ImageOverlay if value.get('kind')=='image' else TextOverlay).model_validate(value)
+    kind=value.get('kind')
+    if kind=='image':
+        return ImageOverlay.model_validate(value)
+    if kind=='arrow':
+        return ArrowOverlay.model_validate(value)
+    return TextOverlay.model_validate(value)
 
 
 def write_graphic_overlay(value,output,size):
+    if value.get('kind')=='arrow':
+        return write_arrow_overlay(value,output,size)
     if value.get('kind')!='image':
         return write_text_overlay(value,output,size)
     overlay=ImageOverlay.model_validate(value)
@@ -111,6 +137,39 @@ def write_text_overlay(value, output: Path, size):
         raise ValueError('标题排版超出画幅，请缩小字号、调整位置或减少文字')
     draw.multiline_text((left-bounds[0],top-bounds[1]),text,font=font,fill=overlay.color,stroke_width=2,
         stroke_fill='#000000',align='center',spacing=8)
+    image.save(output)
+
+
+def write_arrow_overlay(value, output: Path, size):
+    from app.montage import _subtitle_font
+    overlay=ArrowOverlay.model_validate(value)
+    width,height=size
+    target=(round(width*overlay.x),round(height*overlay.y))
+    margin=max(8,round(min(width,height)*0.04))
+    corner={
+        'left-top':(margin,margin),
+        'right-top':(width-margin,margin),
+        'right-bottom':(width-margin,height-margin),
+        'left-bottom':(margin,height-margin),
+    }[overlay.position]
+    image=Image.new('RGBA',size,(0,0,0,0))
+    draw=ImageDraw.Draw(image)
+    draw.line([corner,target],fill=overlay.color,width=3)
+    dx,dy=target[0]-corner[0],target[1]-corner[1]
+    length=(dx*dx+dy*dy)**0.5
+    if length>1:
+        ux,uy=dx/length,dy/length
+        head=max(6,min(18,length*.25))
+        base=(target[0]-ux*head,target[1]-uy*head)
+        px,py=-uy,ux
+        wing=head*.5
+        draw.polygon([target,(base[0]+px*wing,base[1]+py*wing),
+                      (base[0]-px*wing,base[1]-py*wing)],fill=overlay.color)
+    label=overlay.name if not overlay.purpose else f'{overlay.name}\n{overlay.purpose}'
+    anchor=('l' if overlay.position.startswith('left') else 'r')+('a' if overlay.position.endswith('top') else 'd')
+    label_y=corner[1]+(margin if overlay.position.endswith('top') else -margin)
+    draw.multiline_text((corner[0],label_y),label,font=_subtitle_font(32),fill=overlay.color,
+        stroke_width=2,stroke_fill='#000000',anchor=anchor,spacing=4)
     image.save(output)
 
 

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
-from app.graphic_overlays import TextOverlay, ImageOverlay
+from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -1105,7 +1105,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskMontagePlanResponse(BaseModel):
-    graphic_overlays: list[TextOverlay | ImageOverlay] = Field(default_factory=list)
+    graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     presenter_share_actual: float = Field(default=0, ge=0, le=100)
@@ -1149,7 +1149,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 class CreationTaskExactEditRequest(BaseModel):
     overlay_action: Literal["add","update","delete"] | None = None
-    graphic_overlay: TextOverlay | ImageOverlay | None = None
+    graphic_overlay: TextOverlay | ImageOverlay | ArrowOverlay | None = None
     overlay_id: str | None = None
     transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
     fit_mode: Literal["fill", "fit"] | None = None

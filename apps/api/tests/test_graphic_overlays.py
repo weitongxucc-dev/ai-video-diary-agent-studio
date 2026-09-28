@@ -127,3 +127,42 @@ def test_overlay_context_is_bound_to_identity_and_type():
             compile_overlay_command('当前图片删除',[image,title],selected_refs=refs)
     with pytest.raises(ValueError,match='类型不符'):
         compile_overlay_command('当前标题删除',[image],selected_refs=[ref])
+
+
+def test_arrow_overlay_parse_defaults_and_validation():
+    from app.graphic_overlays import ArrowOverlay, parse_overlay
+    value=ArrowOverlay(x=.46,y=.35,name='进料口',purpose='原料从这里进入',start_seconds=.2,end_seconds=1.2)
+    dump=value.model_dump()
+    assert dump['kind']=='arrow'
+    assert dump['position']=='right-top' and dump['color']=='#FFFFFF'
+    assert dump['id'].startswith('overlay_')
+    assert isinstance(parse_overlay(dump),ArrowOverlay)
+    with pytest.raises(ValueError,match='至少0.04'):
+        ArrowOverlay(x=.5,y=.5,name='a',start_seconds=1,end_seconds=1.01)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=1.5,y=.5,name='a',start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=-.1,name='a',start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='a',start_seconds=0,end_seconds=1,color='red')
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='x'*25,start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='',start_seconds=0,end_seconds=1)
+
+
+def test_arrow_overlay_rasterizes_and_dispatches_without_breaking_others(tmp_path):
+    from PIL import Image
+    from app.graphic_overlays import ArrowOverlay, write_arrow_overlay, write_graphic_overlay, validate_overlays
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',purpose='原料从这里进入',start_seconds=0,end_seconds=1).model_dump()
+    output=tmp_path/'arrow.png'
+    write_arrow_overlay(arrow,output,(1080,1920))
+    image=Image.open(output)
+    assert image.size==(1080,1920) and image.getbbox() is not None
+    dispatched=tmp_path/'dispatched.png'
+    write_graphic_overlay(arrow,dispatched,(1080,1920))
+    assert Image.open(dispatched).getbbox() is not None
+    # Arrow parses through the shared validate_overlays entry without breaking text.
+    title=TextOverlay(text='本地',start_seconds=0,end_seconds=1).model_dump()
+    overlays=validate_overlays([title,arrow],2)
+    assert [item.kind for item in overlays]==['text','arrow']
