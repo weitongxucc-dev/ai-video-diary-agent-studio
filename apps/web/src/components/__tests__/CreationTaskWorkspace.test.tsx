@@ -40,12 +40,23 @@ const mocks = vi.hoisted(() => {
     selectVoice: vi.fn(),
     undoTimeline: vi.fn(),
     redoTimeline: vi.fn(),
+    saveRecording: vi.fn(),
+    previewAudioEdit: vi.fn(),
   };
 });
 
 vi.mock("@/components/AppShell", () => ({
   AppShell: ({ children, conversation, inspector, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; quickInspector?: (openDetails: () => void) => React.ReactNode; quickInspectorLabel?: string; inspectorTitle?: string }) => (
     <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
+  ),
+}));
+
+vi.mock("../DesktopVoiceRecorder", () => ({
+  DesktopVoiceRecorder: ({ onRecorded, onCancel }: { onRecorded: (blob: Blob) => void | Promise<void>; onCancel: () => void }) => (
+    <div data-testid="voice-recorder">
+      <button onClick={() => void Promise.resolve(onRecorded(new Blob(["audio"], { type: "audio/webm" }))).catch(() => undefined)} type="button">提交录音</button>
+      <button onClick={onCancel} type="button">取消录音</button>
+    </div>
   ),
 }));
 
@@ -80,6 +91,8 @@ vi.mock("@/lib/api", () => ({
   selectCreationTaskNarrationVoice: mocks.selectVoice,
   undoCreationTaskTimeline: mocks.undoTimeline,
   redoCreationTaskTimeline: mocks.redoTimeline,
+  saveCreationTaskRecording: mocks.saveRecording,
+  previewCreationTaskAudio: mocks.previewAudioEdit,
 }));
 
 const baseTask: CreationTask = {
@@ -1068,6 +1081,81 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
     }));
+  });
+
+  it("wires a desktop voice recording into a narration replacement proposal without applying it", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+      current_timeline_version_id: "timeline-version-2",
+      timeline_sequence: 2,
+      can_undo: true,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [{ id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 }],
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9, match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      audio_timeline: { format_version: 1 as const, tracks: [{ id: "audio-narration", name: "旁白", role: "narration" as const, gain_db: 0, muted: false, locked: false, duck_under_voice: false, clips: [] }] },
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.saveRecording.mockResolvedValue({ source_ref: "recording:rec-1", artifact_id: "artifact-rec-1", audio_url: "/api/recordings/rec-1.wav", duration_ms: 3000, applied: false });
+    mocks.previewAudioEdit.mockResolvedValue({
+      intent: { id: "intent-audio", workspace_id: "local", task_id: task.id, raw_command: "用本机录音替换整条旁白", context_stage: "montage", selected_object_refs: [], playhead_ms: null, intent_type: "audio_edit", scope: {}, constraints: {}, confidence: 1, status: "compiled", created_at: task.created_at },
+      proposal: { id: "proposal-replace-narration", workspace_id: "local", task_id: task.id, intent_id: "intent-audio", summary: "用本机录音替换整条旁白", target_refs: ["timeline:timeline-version-2"], operation: { operation_type: "EditAudioTimeline", payload: {} }, invalidated_refs: ["artifact:audio:v2"], preview: { before: { ref: "timeline:timeline-version-2", label: "当前版本", detail: "已保存" }, after: { ref: "timeline:proposal", label: "待确认版本", detail: "替换旁白" } }, external_effects: ["未确认前不写入时间线。"], status: "proposed" as const, created_at: task.created_at, updated_at: task.updated_at },
+    });
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "电脑录音替换旁白" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
+
+    await waitFor(() => expect(mocks.saveRecording).toHaveBeenCalledWith("task-1", expect.any(Blob)));
+    await waitFor(() => expect(mocks.previewAudioEdit).toHaveBeenCalledWith("task-1", {
+      base_version_id: "timeline-version-2",
+      action: "replace_narration",
+      target_id: "audio-narration",
+      values: { source_ref: "recording:rec-1" },
+      raw_command: "用本机录音替换整条旁白",
+    }));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "确认修改" })).toBeInTheDocument();
+  });
+
+  it("surfaces an honest recording error and never previews when the upload fails", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+      current_timeline_version_id: "timeline-version-2",
+      timeline_sequence: 2,
+      can_undo: true,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const, cues: [], clips: [], duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.saveRecording.mockRejectedValue(new mocks.MockCreationPlanApiError(409, "stage_invalid", "当前任务阶段无法保存录音", null, "请回到剪辑阶段再重试。"));
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "电脑录音替换旁白" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("当前任务阶段无法保存录音");
+    expect(alert).toHaveTextContent("请回到剪辑阶段再重试");
+    expect(mocks.previewAudioEdit).not.toHaveBeenCalled();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("keeps each clip's quick draft through selection and a failed preview", async () => {
