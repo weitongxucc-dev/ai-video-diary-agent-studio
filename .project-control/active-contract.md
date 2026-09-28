@@ -108,6 +108,8 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 本地多成员（用户裁定：本地 SQLite 建表，不联网不用 Supabase，保持简单）**：三步——① 建地基（local_members 表 + 成员 CRUD + 本地邀请码，账号·接口已派，local-members 工作树）；② 建页面（成员与空间页 + 邀请加入，pi 待①完成）；③ 加过滤（内容加 visibility 私有/共享字段 + 按角色过滤）。现有 Supabase 多用户路径（auth.py/device_accounts.py/迁移）保留不删、不激活。角色就 owner/member 两档、可见度就 private/shared 两档，不搞复杂权限。
 
+**2026-09-28 第五批派工（WIL-56 缺口继续 + 本地多成员并行）**：pi·实现/WIL-56 P1 小修（选题编辑标题 §1.2 + 检查逐项清单 §1.7，WIL-79，wil56-p1-tweaks 工作树）；调度·渲染/定时任务后端第一片（scheduled_tasks 表 + CRUD 不接执行，WIL-80，scheduled-tasks-backend 工作树）；分析·复核/箭头 overlay 接线 + 密度对齐走查（只读，WIL-81）。账号·接口仍在本地多成员地基（WIL-73）。WIL-56 阶段缺口（§1.1+§1.8）已交付 8b2c618→a5639b9 集成、WIL-78 In Review。
+
 **2026-09-28 第四批收口（核验类零代码 + 缺口清单）**：调度·渲染核验 SCHED 受权接口已存在（OwnerVerifier/retry_existing/wake_existing/change_policy 均在 dev，38 passed）→ 无新代码，WIL-60 缺口①更正为"接口已存在，剩余是 material owner+AUTH+MAKE"；分析·复核产出 WIL-56 v4 缺口清单（P0 六项：发布阶段缺失/箭头 overlay 缺失/资料阶段无视图/成员与空间缺失/权限模型缺失/定时任务 stub；P1/P2 详列；依赖风险标注）。pi·实现已派 WIL-56 阶段缺口（§1.1 资料视图 + §1.8 发布结构，CreationTaskWorkspace.tsx）。剩余 P0 后端依赖项（§1.5A 箭头后端、§1.8 发布后端、§4/§5 权限多成员、§6 定时任务）需后端规划，其中 §5 权限/多成员为单用户→多成员架构级变更，需主控/用户先定方向。
 
 **2026-09-28 第三批收口（含核验类零代码交付）**：调度·渲染核验 WIL-60 最小闭环已由先前 MAT 线程在 dev（e7e077a→c8cdc2a→11e77f4→cff3522→4169682 均祖先，135 passed）→ WIL-60 In Review，剩余 verify_retry 需 SCHED 受权接口等跨包缺口如实记录；分析·复核核验 WIL-12 核心能力真闭环（9 能力全 ✅，122 passed）→ WIL-12 In Review，仅 scheduled 整机启动未接线属下一代边界；账号·接口 web 放行（f00b109→a13fbae）集成 → WIL-67 设备邀请链路三块齐（后端路由+凭据注入+web 放行）。pi·实现 WIL-55 UI-FLOAT 方案已确认（只做内容层 VideoClipQuickEditor，不碰 AppShell），实施中。
