@@ -94,6 +94,8 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 四包集成收口（WIL-66/67/68/69）**：五个无主/待修线程全部交付，主控已整链 cherry-pick 集成 dev 并推送、同步 Linear In Review。WIL-68（surface:10/pi，e3d132e→6a389a5，material_scene.py+test 纯增量，19 passed）；WIL-69（surface:2，46e7a90..29834db→70f50d6..8998875，DesktopVoiceRecorder 四提交，12/12，真人麦克风未验如实记录）；WIL-67（surface:7，d10f52d→a6e033b，auth.py 纯追加 authenticate_identity，10 passed；device_accounts 核心前波已在 dev，剩 main.py 路由窄入口包）；WIL-66（surface:9，e73c919→aed6644，host_resource_probes 注册表+真实采样+准入，61 passed）。WIL-55（surface:6）纯分析 v4-page-mapping.md，无代码集成。**WIL-65 补收口（surface:12，b257cd6→d53aa84）**：montage/audio_timeline/local_portrait 本已完整（非桩），本包补唯一缺口 `admit_creation_render` 准入接线（montage.py+42 + test_render_admission.py，179 passed）→ In Review。**遗留跨包项**：creation_execution.py 的 cpu_render_facts 仍走 legacy `_sample` 准入、与新注册表 admit_resource 并存，端到端统一接线待后续 MAKE 编排包（creation_execution.py 非本包范围）。
 
+**派工确认通道（主控裁定，2026-09-28）**：pi/OpenCode 不登记在 cmux 会话表，主控读不到其终端。故派工中凡「需主控确认/裁决/回文件清单」的点，执行者**必须写到 `external-agents/<issue>/` 下的 md 文件**，不得只发终端；主控巡检时读该目录新文件（不只读最终报告）。主控主动确认后执行者再继续实施。
+
 **2026-09-28 四线程默认开发池（用户裁定，工作区已重命名）**：账号·接口（workspace:5/surface:16，Claude，后端 auth/main.py 路由/device_accounts）；pi·实现（workspace:4/surface:23，pi 通用实现）；调度·渲染（workspace:2/surface:12，Claude，后端 device_*/montage/creation）；分析·复核（workspace:6/surface:6，OpenCode 只读分析）。原 surface:2（录音接父层，卡草稿）与 surface:10（pi，已移除）退出默认池；其未完成派单改派上表线程。
 
 **2026-09-28 四线程当前派工**：账号·接口/已收口 WIL-67 窄入口（9213556→c0255fd），现派 device-credential-injection（native runtime 注入 DEVICE_ID/DEVICE_PROOF，工作树 device-credential，基线 c0255fd）；调度·渲染/creation_execution 准入统一（creation-unify 工作树，cff2d4d 基线）；pi·实现/录音接父层（recording-parent 工作树，改派自 surface:2）；分析·复核/3 孤儿执行队列提交只读复核（b800b89/68eefe6/743ac02）。
