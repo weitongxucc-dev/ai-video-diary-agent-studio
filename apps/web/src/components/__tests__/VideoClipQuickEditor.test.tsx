@@ -50,3 +50,36 @@ it("opens the full editor with the same crop draft", () => {
   fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" }), { target:{ value:"2" } });
   expect(onDraftStateChange).toHaveBeenLastCalledWith({ start:2, mode:"fit", x:.5, y:.5 });
 });
+
+it("labels the float card draft state honestly and never fakes a replacement preview", () => {
+  const onPreview = vi.fn();
+  const onOpenDetails = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(createVideoClipDraft(clip));
+    return <VideoClipQuickEditor clip={clip} index={0} busy={false} draft={draft} onDraftStateChange={setDraft} onDraftChange={() => {}} onPreview={onPreview} onOpenDetails={onOpenDetails} />;
+  }
+  render(<Harness />);
+  // 裁剪 tab 未改：已保存
+  expect(screen.getByText("当前设置已保存")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" }), { target:{ value:"1.5" } });
+  expect(screen.getByText("修改尚未应用")).toBeInTheDocument();
+  // 换素材 tab：诚实委托详情，不伪造“预览修改”
+  fireEvent.click(screen.getByRole("button", { name:"换素材" }));
+  expect(screen.getByText("需在详情选择候选")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name:"预览修改" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:"查看候选" }));
+  expect(onOpenDetails).toHaveBeenCalledTimes(1);
+  expect(onPreview).not.toHaveBeenCalled();
+});
+
+it("disables every fine-edit control for a locked clip", () => {
+  const lockedClip = { ...clip, locked: true };
+  function Harness() {
+    const [draft, setDraft] = useState(createVideoClipDraft(lockedClip));
+    return <VideoClipQuickEditor clip={lockedClip} index={0} busy={false} draft={draft} onDraftStateChange={setDraft} onDraftChange={() => {}} onPreview={vi.fn()} onOpenDetails={vi.fn()} />;
+  }
+  render(<Harness />);
+  expect(screen.getByText("镜头已锁定")).toBeInTheDocument();
+  expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toBeDisabled();
+  expect(screen.getByRole("button", { name:"预览修改" })).toBeDisabled();
+});
