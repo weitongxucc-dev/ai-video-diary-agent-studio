@@ -21,7 +21,19 @@ from app.granted_subprocess import (
     run_granted_command,
 )
 from app.host_resource_probes import (
-    CpuRenderBudget, HostBudget, HostProcessProbe, HostResourceProbe, SceneWindowBudget,
+    CREATION_RENDER_CPU_THREADS_MAX,
+    CREATION_RENDER_SOURCE_DURATION_S_MAX,
+    CpuRenderBudget,
+    HostBudget,
+    HostCapacity,
+    HostProcessProbe,
+    HostResourceProbe,
+    ResourceAdmissionRejected,
+    ResourceSamplingUnavailable,
+    SceneWindowBudget,
+    admit_resource,
+    resource_kinds,
+    sample_host_capacity,
 )
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork
@@ -410,3 +422,104 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
         scheduler.assert_released(grant)
     finally:
         scheduler.close()
+
+
+def _capacity(*, ceiling=8, cpu_count=16, memory=2**33, load=0.5):
+    return HostCapacity(cpu_count=cpu_count, cpu_threads_ceiling=ceiling,
+                        available_memory_bytes=memory, load_avg_1m=load)
+
+
+def _render_declared():
+    return {"source_duration_s": 12.5, "input_count": 3, "cpu_threads": 4, "wall_clock_s": 120.0}
+
+
+def test_registry_declares_expected_kinds_and_fields():
+    kinds = resource_kinds()
+    assert {"creation_render", "mat_scene_probe"} <= set(kinds)
+    render = {field.name: field for field in kinds["creation_render"].fields}
+    assert set(render) == {"source_duration_s", "input_count", "cpu_threads", "wall_clock_s"}
+    assert render["cpu_threads"].value_type is int
+    assert render["input_count"].value_type is int
+    assert render["source_duration_s"].value_type is float
+    assert render["wall_clock_s"].value_type is float
+    scene = {field.name: field for field in kinds["mat_scene_probe"].fields}
+    # Cross-package contract: MAT's SceneProbeBudget(cpu_threads, max_source_duration_s, sampling_fps).
+    assert {"cpu_threads", "max_source_duration_s", "sampling_fps"} <= set(scene)
+    assert scene["cpu_threads"].value_type is int
+    assert scene["max_source_duration_s"].value_type is float
+    assert scene["sampling_fps"].value_type is float
+
+
+def test_admit_resource_legal_returns_deterministic_budget():
+    capacity = _capacity()
+    first = admit_resource("creation_render", _render_declared(), capacity=capacity)
+    second = admit_resource("creation_render", _render_declared(), capacity=capacity)
+    assert first == second
+    assert first.granted == _render_declared()
+    assert first.kind == "creation_render"
+    assert first.cpu_threads_ceiling == capacity.cpu_threads_ceiling
+    assert first.available_memory_bytes == capacity.available_memory_bytes
+
+
+def test_admit_resource_mat_scene_probe_legal():
+    request = {"cpu_threads": 4, "wall_clock_s": 300.0,
+               "max_source_duration_s": 600.0, "sampling_fps": 2.0}
+    admission = admit_resource("mat_scene_probe", request, capacity=_capacity())
+    assert admission.granted == request
+
+
+def test_admit_resource_rejects_undeclared_field():
+    with pytest.raises(ResourceAdmissionRejected, match="undeclared field"):
+        admit_resource("creation_render", {**_render_declared(), "bogus_field": 1},
+                       capacity=_capacity())
+    with pytest.raises(ResourceAdmissionRejected, match="unknown resource kind"):
+        admit_resource("no_such_kind", _render_declared(), capacity=_capacity())
+    with pytest.raises(ResourceAdmissionRejected, match="missing required field"):
+        admit_resource("creation_render", {"source_duration_s": 1.0}, capacity=_capacity())
+
+
+def test_admit_resource_rejects_over_limit():
+    with pytest.raises(ResourceAdmissionRejected, match="source_duration_s"):
+        admit_resource("creation_render",
+                       {**_render_declared(),
+                        "source_duration_s": CREATION_RENDER_SOURCE_DURATION_S_MAX + 1},
+                       capacity=_capacity())
+    with pytest.raises(ResourceAdmissionRejected, match="cpu_threads"):
+        admit_resource("creation_render",
+                       {**_render_declared(), "cpu_threads": CREATION_RENDER_CPU_THREADS_MAX + 1},
+                       capacity=_capacity())
+    # A sampled ceiling below the static cap still rejects conservatively.
+    with pytest.raises(ResourceAdmissionRejected, match="sampled host ceiling"):
+        admit_resource("creation_render", _render_declared(), capacity=_capacity(ceiling=2))
+
+
+def test_admit_resource_rejects_type_mismatch():
+    with pytest.raises(ResourceAdmissionRejected, match="integer"):
+        admit_resource("creation_render", {**_render_declared(), "cpu_threads": 4.0},
+                       capacity=_capacity())
+    with pytest.raises(ResourceAdmissionRejected, match="finite number"):
+        admit_resource("creation_render", {**_render_declared(), "wall_clock_s": "120"},
+                       capacity=_capacity())
+    with pytest.raises(ResourceAdmissionRejected, match="finite number"):
+        admit_resource("creation_render", {**_render_declared(), "wall_clock_s": float("nan")},
+                       capacity=_capacity())
+
+
+def test_admit_resource_rejects_when_host_load_saturated():
+    request = {"cpu_threads": 2, "wall_clock_s": 60.0,
+               "max_source_duration_s": 60.0, "sampling_fps": 2.0}
+    with pytest.raises(ResourceAdmissionRejected, match="saturates"):
+        admit_resource("mat_scene_probe", request, capacity=_capacity(load=16.0, cpu_count=16))
+
+
+def test_sample_host_capacity_real_derives_conservative_ceiling():
+    capacity = sample_host_capacity()
+    assert capacity.cpu_count >= 1
+    assert 1 <= capacity.cpu_threads_ceiling <= capacity.cpu_count
+    assert capacity.available_memory_bytes >= 0
+
+
+def test_sample_host_capacity_unavailable_fails_explicitly(monkeypatch):
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: None)
+    with pytest.raises(ResourceSamplingUnavailable):
+        sample_host_capacity()

@@ -14,6 +14,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 from urllib.parse import quote
 
 import psutil
@@ -130,6 +131,163 @@ class HostBudget:
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
         ):
             raise ValueError("Scene decode requires explicit host memory and disk headroom")
+
+
+# Per-kind static caps. These are the device-calibrated upper bounds a declared
+# resource kind may request; the live sampled ceiling (see sample_host_capacity)
+# can only lower them, never raise them.
+CREATION_RENDER_SOURCE_DURATION_S_MAX = 3600.0
+CREATION_RENDER_INPUT_COUNT_MAX = 64
+CREATION_RENDER_CPU_THREADS_MAX = 16
+CREATION_RENDER_WALL_CLOCK_S_MAX = 7200.0
+MAT_SCENE_PROBE_CPU_THREADS_MAX = 8
+MAT_SCENE_PROBE_WALL_CLOCK_S_MAX = 3600.0
+MAT_SCENE_PROBE_MAX_SOURCE_DURATION_S_MAX = 1800.0
+MAT_SCENE_PROBE_SAMPLING_FPS_MAX = 30.0
+
+
+class ResourceSamplingUnavailable(RuntimeError):
+    """Real host sampling could not complete; no budget is fabricated."""
+
+
+class ResourceAdmissionRejected(ValueError):
+    """A declared resource request was rejected; the reason is user-readable."""
+
+
+@dataclass(frozen=True)
+class ResourceField:
+    """One declared input dimension with its inclusive value range."""
+
+    name: str
+    value_type: type  # int or float
+    min_value: int | float
+    max_value: int | float
+
+
+@dataclass(frozen=True)
+class ResourceKindSpec:
+    """Declared dimensions and per-item caps for one resource kind."""
+
+    name: str
+    fields: tuple[ResourceField, ...]
+
+
+@dataclass(frozen=True)
+class HostCapacity:
+    """A conservative snapshot of the live host, derived from real sampling."""
+
+    cpu_count: int
+    cpu_threads_ceiling: int
+    available_memory_bytes: int
+    load_avg_1m: float | None
+
+
+@dataclass(frozen=True)
+class ResourceAdmission:
+    """The deterministic budget handed back for a legal declared request."""
+
+    kind: str
+    granted: dict[str, int | float]
+    cpu_threads_ceiling: int
+    available_memory_bytes: int
+    load_avg_1m: float | None
+
+
+_RESOURCE_KINDS: Mapping[str, ResourceKindSpec] = {
+    "creation_render": ResourceKindSpec("creation_render", (
+        ResourceField("source_duration_s", float, 0.0, CREATION_RENDER_SOURCE_DURATION_S_MAX),
+        ResourceField("input_count", int, 1, CREATION_RENDER_INPUT_COUNT_MAX),
+        ResourceField("cpu_threads", int, 1, CREATION_RENDER_CPU_THREADS_MAX),
+        ResourceField("wall_clock_s", float, 0.0, CREATION_RENDER_WALL_CLOCK_S_MAX),
+    )),
+    "mat_scene_probe": ResourceKindSpec("mat_scene_probe", (
+        ResourceField("cpu_threads", int, 1, MAT_SCENE_PROBE_CPU_THREADS_MAX),
+        ResourceField("wall_clock_s", float, 0.0, MAT_SCENE_PROBE_WALL_CLOCK_S_MAX),
+        ResourceField("max_source_duration_s", float, 0.0, MAT_SCENE_PROBE_MAX_SOURCE_DURATION_S_MAX),
+        ResourceField("sampling_fps", float, 0.0, MAT_SCENE_PROBE_SAMPLING_FPS_MAX),
+    )),
+}
+
+
+def resource_kinds() -> Mapping[str, ResourceKindSpec]:
+    """The declared resource kind registry (creation_render, mat_scene_probe)."""
+    return _RESOURCE_KINDS
+
+
+def sample_host_capacity(*, thread_margin: int = 1) -> HostCapacity:
+    """Sample the real host and derive a conservative thread ceiling.
+
+    ``cpu_threads_ceiling`` is ``cpu_count - thread_margin`` (minimum 1), leaving
+    headroom for the host itself. Sampling that cannot complete raises
+    :class:`ResourceSamplingUnavailable` rather than fabricating a budget.
+    """
+    if thread_margin < 0:
+        raise ValueError("thread margin must be nonnegative")
+    try:
+        cores = psutil.cpu_count(logical=True)
+        memory = psutil.virtual_memory()
+    except (OSError, psutil.Error, AttributeError) as exc:
+        raise ResourceSamplingUnavailable("host CPU/memory sampling is unavailable") from exc
+    if not isinstance(cores, int) or cores <= 0 or memory is None:
+        raise ResourceSamplingUnavailable("host CPU/memory sampling returned no usable values")
+    try:
+        load = os.getloadavg()[0] if hasattr(os, "getloadavg") else None
+    except (OSError, AttributeError):
+        load = None
+    return HostCapacity(
+        cpu_count=cores,
+        cpu_threads_ceiling=max(1, cores - thread_margin),
+        available_memory_bytes=int(memory.available),
+        load_avg_1m=load,
+    )
+
+
+def admit_resource(kind: str, request: Mapping[str, object],
+                   *, capacity: HostCapacity) -> ResourceAdmission:
+    """Admit a declared resource request; reject with a readable reason otherwise.
+
+    A legal request returns a deterministic :class:`ResourceAdmission`. Nothing
+    is silently truncated: an undeclared field, an over-limit value, a type
+    mismatch, or a missing field raises :class:`ResourceAdmissionRejected`.
+    """
+    spec = _RESOURCE_KINDS.get(kind)
+    if spec is None:
+        raise ResourceAdmissionRejected(f"unknown resource kind: {kind!r}")
+    declared = {field.name for field in spec.fields}
+    unknown = sorted(set(request) - declared)
+    if unknown:
+        raise ResourceAdmissionRejected(f"undeclared field(s): {', '.join(unknown)}")
+    granted: dict[str, int | float] = {}
+    for field in spec.fields:
+        if field.name not in request:
+            raise ResourceAdmissionRejected(f"missing required field: {field.name}")
+        value = request[field.name]
+        if field.value_type is int:
+            if type(value) is not int:
+                raise ResourceAdmissionRejected(
+                    f"field {field.name} must be an integer, got {type(value).__name__}")
+        else:
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ResourceAdmissionRejected(
+                    f"field {field.name} must be a finite number, got {value!r}")
+        if not (field.min_value <= value <= field.max_value):
+            raise ResourceAdmissionRejected(
+                f"field {field.name}={value} outside [{field.min_value}, {field.max_value}]")
+        granted[field.name] = value
+    threads = int(granted["cpu_threads"])
+    if threads > capacity.cpu_threads_ceiling:
+        raise ResourceAdmissionRejected(
+            f"cpu_threads={threads} exceeds sampled host ceiling {capacity.cpu_threads_ceiling}")
+    if capacity.load_avg_1m is not None and capacity.load_avg_1m >= capacity.cpu_count:
+        raise ResourceAdmissionRejected(
+            f"host load average {capacity.load_avg_1m:.2f} saturates {capacity.cpu_count} cores")
+    return ResourceAdmission(
+        kind=kind,
+        granted=granted,
+        cpu_threads_ceiling=capacity.cpu_threads_ceiling,
+        available_memory_bytes=capacity.available_memory_bytes,
+        load_avg_1m=capacity.load_avg_1m,
+    )
 
 
 class HostResourceProbe:

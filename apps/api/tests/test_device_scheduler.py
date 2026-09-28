@@ -204,6 +204,22 @@ def test_two_processes_share_one_host_permit_even_with_different_business_databa
             second.pick_and_grant()  # first DB's untouched request must be checked
 
 
+def test_same_kind_second_request_waits_until_permit_released(tmp_path):
+    # One host permit is held until a unit completes. A second request of the
+    # same kind stays queued (pick_and_grant returns None) rather than gaining
+    # a second license in flight; it is granted only after the first releases.
+    scheduler = _scheduler(tmp_path)
+    scheduler.submit(_intent("first"), "member-a")
+    scheduler.submit(_intent("second"), "member-a")
+    first = scheduler.pick_and_grant()
+    assert first is not None
+    assert scheduler.pick_and_grant() is None  # single permit still held
+    _complete(scheduler, first)
+    second = scheduler.pick_and_grant()
+    assert second is not None and second.request_id != first.request_id
+    _complete(scheduler, second)
+
+
 def test_fencing_checkpoint_atomicity_and_different_database_rejection(tmp_path):
     scheduler = _scheduler(tmp_path)
     scheduler.submit(_intent("job"), "member-a")
