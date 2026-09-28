@@ -166,3 +166,39 @@ def test_arrow_overlay_rasterizes_and_dispatches_without_breaking_others(tmp_pat
     title=TextOverlay(text='本地',start_seconds=0,end_seconds=1).model_dump()
     overlays=validate_overlays([title,arrow],2)
     assert [item.kind for item in overlays]==['text','arrow']
+
+
+def test_arrow_nl_numbered_commands_update_and_delete():
+    from app.graphic_overlays import ArrowOverlay, compile_overlay_command
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
+    action,changed,identity=compile_overlay_command('箭头1移到左下角',[arrow])
+    assert action=='update' and changed['position']=='left-bottom' and identity==arrow['id']
+    assert compile_overlay_command('把箭头1移到右上角',[arrow])[1]['position']=='right-top'
+    assert compile_overlay_command('箭头1颜色改为#FF8800',[arrow])[1]['color']=='#FF8800'
+    assert compile_overlay_command('箭头1显示1到3秒',[arrow])[1]['end_seconds']==3
+    action,value,identity=compile_overlay_command('箭头1删除',[arrow])
+    assert action=='delete' and value is None and identity==arrow['id']
+
+
+def test_arrow_nl_contextual_and_failure_paths():
+    from app.graphic_overlays import ArrowOverlay, TextOverlay, compile_overlay_command
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
+    ref=f"overlay:{arrow['id']}"
+    action,value,identity=compile_overlay_command('把当前箭头移到右上角',[arrow],selected_refs=[ref])
+    assert action=='update' and value['position']=='right-top' and identity==arrow['id']
+    # 指令序号越界。
+    with pytest.raises(ValueError,match='不存在'):
+        compile_overlay_command('箭头2删除',[arrow])
+    # 序号指向非箭头叠加层。
+    title=TextOverlay(text='标题',start_seconds=0,end_seconds=1).model_dump()
+    with pytest.raises(ValueError,match='不存在'):
+        compile_overlay_command('箭头1删除',[title])
+    # 当前选中对象与指令类型不符。
+    with pytest.raises(ValueError,match='类型不符'):
+        compile_overlay_command('当前标题删除',[arrow],selected_refs=[ref])
+    # 区间过短沿用后端校验。
+    with pytest.raises(ValueError,match='至少0.04'):
+        compile_overlay_command('箭头1显示1到1.01秒',[arrow])
+    # 缺坐标的加箭头指令不得造默认坐标，引导用编辑表单。
+    with pytest.raises(ValueError,match='表单'):
+        compile_overlay_command('前3秒加箭头“进料口”',[])

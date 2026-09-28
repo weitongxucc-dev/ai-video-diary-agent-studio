@@ -190,14 +190,14 @@ def splice_overlays(values, intervals):
 
 def compile_overlay_command(command, values, sources=(), selected_refs=()):
     text=command.strip().rstrip('。！')
-    contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识)',text)
+    contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识|箭头)',text)
     if contextual:
         refs=[ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]
         matches=[(index,value) for index,value in enumerate(values) if value['id'] in refs]
         if len(refs)!=1 or len(matches)!=1:
-            raise ValueError('请先选择一个当前版本的标题或图片')
+            raise ValueError('请先选择一个当前版本的标题、图片或箭头')
         index,value=matches[0]
-        if (contextual[1]=='标题') == (value.get('kind')=='image'):
+        if value.get('kind')!={'标题':'text','图片':'image','标识':'image','箭头':'arrow'}[contextual[1]]:
             raise ValueError('当前选中对象与指令类型不符，请重新选择')
         text=f'{contextual[1]}{index+1}'+text[contextual.end():]
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)(?:图片|标识)[“「](.+)[”」]',text)
@@ -230,6 +230,25 @@ def compile_overlay_command(command, values, sources=(), selected_refs=()):
             times=re.findall(r'\d+(?:\.\d+)?',action)
             value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
         return 'update',ImageOverlay.model_validate(value).model_dump(),value['id']
+    match=re.fullmatch(r'(?:把)?箭头(\d+)(删除|移到左上角|移到右上角|移到左下角|移到右下角|颜色改为#[0-9a-fA-F]{6}|显示\d+(?:\.\d+)?到\d+(?:\.\d+)?秒)',text)
+    if match:
+        index=int(match[1])-1
+        if not 0<=index<len(values) or values[index].get('kind')!='arrow':
+            raise ValueError('所选箭头不存在，请按叠加层列表序号操作')
+        value=dict(values[index])
+        action=match[2]
+        if action=='删除':
+            return 'delete',None,value['id']
+        if action.startswith('移到'):
+            value['position']={'移到左上角':'left-top','移到右上角':'right-top','移到左下角':'left-bottom','移到右下角':'right-bottom'}[action]
+        elif action.startswith('颜色改为'):
+            value['color']=action.removeprefix('颜色改为')
+        else:
+            times=re.findall(r'\d+(?:\.\d+)?',action)
+            value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
+        return 'update',ArrowOverlay.model_validate(value).model_dump(),value['id']
+    if re.search(r'(?:加|添加)箭头',text):
+        raise ValueError('新增箭头需要在编辑表单指定指向位置，暂不支持纯文字指令添加箭头')
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)标题[“「](.+)[”」]',text)
     if match:
         return 'add',TextOverlay(text=match[2],start_seconds=0,end_seconds=float(match[1])).model_dump(),None
