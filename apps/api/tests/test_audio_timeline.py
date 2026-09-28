@@ -160,7 +160,7 @@ def test_audio_artifact_cannot_cross_workspace_or_task_boundaries(tmp_path):
     for workspace,task_id in (("a","task-a"),("a","task-other"),("b","task-b")):
         task=CreationTask(id=task_id,workspace_id=workspace,plan_id=f"plan-{task_id}",name="音频边界测试",scenario="test")
         with repo._connect() as conn:
-            conn.execute("INSERT INTO creation_tasks VALUES (?,?,?,?,?)",(task.id,workspace,task.plan_id,json.dumps(asdict(task),default=str),str(task.updated_at)))
+            conn.execute("INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?,?,?,?,?)",(task.id,workspace,task.plan_id,json.dumps(asdict(task),default=str),str(task.updated_at)))
     service=TaskAudio(repo,ArtifactStore(tmp_path/"output"),tmp_path/"temp")
     artifact=service.publish("a","task-a",kind="audio_source",parameters={},input_refs=[],produce=lambda path:tone(path,440))
     assert service.source("a","task-a",artifact.logical_ref).is_file()
@@ -301,7 +301,7 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     repo = ProductionRepository(tmp_path/'db.sqlite', tmp_path/'library')
     task = CreationTask(id='task', workspace_id='workspace', plan_id='plan', name='原声', scenario='test')
     with repo._connect() as conn:
-        conn.execute('INSERT INTO creation_tasks VALUES (?,?,?,?,?)',
+        conn.execute('INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?,?,?,?,?)',
             (task.id, task.workspace_id, task.plan_id, json.dumps(asdict(task), default=str), str(task.updated_at)))
     source = repo.video_library_path/'source.wav'
     source.parent.mkdir(parents=True)
