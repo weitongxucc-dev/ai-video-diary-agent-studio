@@ -6,6 +6,8 @@ ACTIVE。本文件只保留当前协作边界；已结束批次的指令和旧�
 
 - **主控切换登记（2026-09-28 08:03）**：用户明确指令"由你担任主控"，唯一主控改为 cmux workspace:1 / surface:5 的 Claude Code 会话（glm-5.3 high）。原 Codex 主控因额度耗尽停止派单/集成；其额度恢复后不自动恢复主控权，如回归仅作普通执行者。实施执行者现为 cmux Pi（surface:1）与 cmux Claude Code（surface:2）；下表 Codex 线程为历史登记，按包逐步改派并在本文件同步，改派前既有候选 SHA 与文件独占仍有效。WIL-72 阶段包自本登记起改派 surface:2 Claude Code：接手前先核 fc12 工作树未提交改动（main.py/task_audio.py/测试，+90/−9，为原 MAKE 针对两项 QA HOLD 的未完修复），先审后续，不得未审丢弃。
 
+**2026-09-28 08:20 增派登记**：用户增开两线程。surface:6（OpenCode/DeepSeek V4 Flash）派只读分析包：v4 原型与现有组件逐页映射差距清单（WIL-55 范围梳理），唯一写入口为主控项目 `external-agents/WIL-55/v4-page-mapping.md`，不改仓库任何文件、不建分支。surface:7（Claude Code/glm-5.1）派 WIL-67 后端身份切片包：按 `work/invite-first-identity-wiring.md` 第 1 条，在 auth.py 增加仅验证 Bearer JWT 的身份方法并新增专项测试；新工作树 `~/.codex/worktrees/auth-identity/original`，分支 `codex/011-auth-first-identity`，基线 60cd74e。auth.py 于本包期间由 surface:7 独占；main.py 窄入口与 web 放行路径待 WIL-72 交还 main.py 后另派，本包只交接口建议。派发契约存 `external-agents/dispatch/WIL-67-auth-identity-slice.md`；Claude Code 终端长消息会丢行，后续派发统一走 dispatch 文件+短指令。
+
 - 主控只负责共享文档、派工、审核、集成与开发分支推送，不编写产品代码。
 - 实施使用用户授权的侧边栏可见 Codex 线程及 cmux Pi/Kimi、Claude Code/GLM，不派内部子智能体。保留现有模型配置。
 - 集成仓库：`/Volumes/Dujiangyan-VM/AI视频日记/repositories/bd25`；分支 `codex/0.11-development`。每包基线由主控按实际 Git 给出；仅吸收审核通过的具体依赖。开发分支可推送，不自动合并 main。
