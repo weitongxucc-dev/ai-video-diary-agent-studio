@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace, PreviewVideo } from "../CreationTaskWorkspace";
-import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import type { CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import { confirmCreationTaskTopic } from "@/lib/api";
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -1748,6 +1749,57 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/本页不会把本地成片计为已发布/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "回到检查与输出" })).toBeInTheDocument();
     expect(screen.getAllByText("未接入")).toHaveLength(3);
+  });
+
+  it("edits the topic title, requires a non-empty title, and confirms the selected topic", async () => {
+    const topicTask: CreationTask = {
+      ...baseTask,
+      stage: "topic",
+      stage_status: "waiting_for_user",
+      status: "waiting_for_user",
+      progress: 5,
+      recovery_point: "",
+      stage_reason: null,
+      stage_impact: null,
+      stage_repair_action: null,
+    };
+    const topics: CreationTaskTopicsResponse = {
+      task: topicTask,
+      candidates: [
+        { id: "topic-1", run_id: "run-1", title: "用三件小事讲清断舍离", angle: "从生活场景切入", audience: "想整理生活的人", outline: ["开场", "三件事", "收尾"], score: 92, selection_status: "unselected", created_at: topicTask.created_at },
+        { id: "topic-2", run_id: "run-1", title: "一分钟复盘我的周计划", angle: "效率视角", audience: "职场人", outline: ["开场", "复盘", "收尾"], score: 88, selection_status: "unselected", created_at: topicTask.created_at },
+      ],
+      evidence_references: [],
+      selected_topic_id: "topic-1",
+      latest_run: null,
+      route_preflight: { provider_kind: "minimax", execution_location: "cloud", model_id: "MiniMax-M3", endpoint_identity: "ep", connection_version: "1", availability: "succeeded", checked_at: topicTask.created_at },
+      egress_preflight: { cloud_egress: true, source_count: 1, text_excerpt_count: 1, reason: null, impact: null, repair_action: null },
+    };
+    const initial = workspace(topicTask);
+    mocks.getWorkspace.mockResolvedValue({ ...initial, task: { ...topicTask, stage: "script" as const } });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={topics} initialWorkspace={initial} />);
+    const input = screen.getByRole("textbox", { name: "编辑标题" });
+    expect(input).toHaveValue("用三件小事讲清断舍离");
+    fireEvent.change(input, { target: { value: "我的新标题" } });
+    expect(input).toHaveValue("我的新标题");
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(screen.getByRole("button", { name: "确认选题" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "我的新标题" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
+    await waitFor(() => expect(confirmCreationTaskTopic).toHaveBeenCalledWith("task-1", "topic-1"));
+    expect(await screen.findByText(/选题「我的新标题」已确认/)).toBeInTheDocument();
+  });
+
+  it("shows an honest read-only review checklist and drops the blanket pass claim", () => {
+    const initial = workspaceWithCover();
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByText("检查清单 · 2/3 项已就绪")).toBeInTheDocument();
+    expect(screen.getByText("中文轨已就绪")).toBeInTheDocument();
+    expect(screen.getByText("讲解与音乐音量")).toBeInTheDocument();
+    expect(screen.getByText("需人工试听确认，当前无自动音量校验")).toBeInTheDocument();
+    expect(screen.getAllByText("已就绪")).toHaveLength(2);
+    expect(screen.queryByText("画面、声音和尺寸检查已通过。")).not.toBeInTheDocument();
+    expect(screen.getByText("成片可预览；请按上方清单逐项确认。")).toBeInTheDocument();
   });
 
 });
