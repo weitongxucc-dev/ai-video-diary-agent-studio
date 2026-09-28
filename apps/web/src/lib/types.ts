@@ -222,6 +222,23 @@ export type EpisodeHistory = {
   items: EpisodeHistoryItem[];
 };
 
+/**
+ * 外部文字模型服务的四档状态。抄自后端 `app/config.py` 的
+ * `LLM_SERVICE_MISSING / UNVERIFIED / AVAILABLE / FAILED`（dev `add94df`）。
+ *
+ * 注意 `SystemStatus.llm.configured` 只是「字段填了没有」，与这四档无关：
+ * `configured === true` 绝不能被显示成「可用」。B03 立的线就是这两件事。
+ *
+ * 后端目前只通过 `/api/settings/runtime` 的 `LLM_SERVICE_STATE` 行把
+ * `label`（中文）送到前端；`cause` / `detail` / `observed_at` 没有落到任何
+ * 接口上，所以前端拿不到失败的具体原因——拿不到就说拿不到，不许编。
+ */
+export type LlmServiceState =
+  | "missing"
+  | "unverified"
+  | "available"
+  | "failed";
+
 export type SystemStatus = {
   llm: {
     provider: string;

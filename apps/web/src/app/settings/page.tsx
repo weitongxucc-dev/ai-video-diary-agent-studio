@@ -18,12 +18,15 @@ import {
 } from "@/lib/api.server";
 import type {
   LocalModelStatus,
+  LlmServiceState,
   ProductionFoundation,
   RuntimeSettingItem,
   RuntimeSettings,
   SystemStatus,
   VoiceProfile,
 } from "@/lib/types";
+
+import styles from "./llm-service-state.module.css";
 
 export const dynamic = "force-dynamic";
 
@@ -95,8 +98,12 @@ function statusTone(configured: boolean): "green" | "red" {
   return configured ? "green" : "red";
 }
 
+/**
+ * 密钥类字段的徽章只说明「这一格填了没有」——这些服务（腾讯云、Product Hunt）
+ * 没有服务状态线，任何「已配置」都只等于字段非空。这里不说「可用」。
+ */
 function statusLabel(configured: boolean): string {
-  return configured ? "已配置" : "未配置";
+  return configured ? "已填写" : "未填写";
 }
 
 function getSetting(
@@ -104,6 +111,111 @@ function getSetting(
   name: string,
 ): RuntimeSettingItem | null {
   return settings.find((entry) => entry.name === name) ?? null;
+}
+
+// ── 外部文字模型服务四档徽章（B03 前端）──────────────────────────────────
+// 数据只来自后端 `/api/settings/runtime` 的 `LLM_SERVICE_STATE` 行。这个行
+// 的 value 就是后端 `app/config.py` 的 `llm_service_status()["label"]`，也就是
+// `_LLM_SERVICE_LABELS` 里那四个中文。这里按字面认，认不出就说认不出。
+//
+// 明确不做的事：
+// · 不用 `status.llm.configured` 硬凑四档。填了密钥只是「已填写，未验证」。
+// · 不显示失败的具体原因。后端没把 `cause` / `detail` 送到任何接口上，
+//   这里就写「拿不到更具体的原因」，不编一个像样的理由。
+// · 任何一档都不显示密钥本身。
+const LLM_SERVICE_STATE_BY_LABEL: Record<string, LlmServiceState> = {
+  "未填写": "missing",
+  "已填写，未验证": "unverified",
+  "可用": "available",
+  "失败": "failed",
+};
+
+const LLM_SERVICE_VIEWS: Record<
+  LlmServiceState,
+  { label: string; detail: string; nextStep: string; tone: string }
+> = {
+  missing: {
+    label: "未填写",
+    detail:
+      "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。",
+    nextStep: "下一步：在下面填齐服务商、连接地址、模型和 API Key 后保存。",
+    tone: "missing",
+  },
+  unverified: {
+    label: "已填写，未验证",
+    detail:
+      "地址、模型和密钥都填了，但还没有真的连过一次服务；这把密钥能不能被认，要等下一次真实对话或写稿才知道。",
+    nextStep:
+      "下一步：保存后发起一次对话或写稿，再回到这一页看它有没有变成「可用」。",
+    tone: "unverified",
+  },
+  available: {
+    label: "可用",
+    detail:
+      "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。",
+    nextStep:
+      "下一步：保持现状即可。改动地址、模型或密钥之后，这一档会退回「已填写，未验证」，需要重新验证一次。",
+    tone: "available",
+  },
+  failed: {
+    label: "失败",
+    detail:
+      "上一次真实调用没有成功。当前状态接口没有返回失败原因，所以这里拿不到更具体的原因，不替它猜一个。",
+    nextStep:
+      "下一步：到对话里看那一次失败提示写的原因和修复办法；或先核对服务地址与 API Key，保存后重试一次。",
+    tone: "failed",
+  },
+};
+
+const LLM_SERVICE_UNKNOWN_VIEW = {
+  label: "拿不到服务状态",
+  detail:
+    "这一页没有取到后端的服务状态行，所以不知道现在是可用还是失败。字段填了也不等于服务认得它。",
+  nextStep:
+    "下一步：刷新这一页再试。如果仍然拿不到，说明本地服务还没提供四档状态接口。",
+  tone: "unknown",
+} as const;
+
+type LlmServiceView = {
+  state: LlmServiceState | "unknown";
+  label: string;
+  detail: string;
+  nextStep: string;
+  tone: string;
+};
+
+function llmServiceView(settings: RuntimeSettingItem[]): LlmServiceView {
+  const label = getSetting(settings, "LLM_SERVICE_STATE")?.value ?? "";
+  const state = LLM_SERVICE_STATE_BY_LABEL[label];
+  if (!state) {
+    return { state: "unknown", ...LLM_SERVICE_UNKNOWN_VIEW };
+  }
+  return { state, ...LLM_SERVICE_VIEWS[state] };
+}
+
+function LlmServiceBadge({ settings }: { settings: RuntimeSettingItem[] }) {
+  const view = llmServiceView(settings);
+  return (
+    <span
+      className={`settings-connection-state ${styles[view.tone]} ${
+        view.state === "available" ? "is-ready" : ""
+      }`}
+      data-llm-service-state={view.state}
+      data-testid="llm-service-badge"
+      title={view.detail}
+    >
+      {view.label}
+    </span>
+  );
+}
+
+function LlmServiceDetail({ settings }: { settings: RuntimeSettingItem[] }) {
+  const view = llmServiceView(settings);
+  return (
+    <p className={styles.detail} data-testid="llm-service-detail">
+      {view.detail} {view.nextStep}
+    </p>
+  );
 }
 
 function buildFields(
@@ -208,7 +320,7 @@ function buildFields(
         helper: "腾讯云访问凭证 SecretId。",
         kind: "secret",
         placeholder: configuredOf("TENCENTCLOUD_SECRET_ID")
-          ? "已配置 · 留空不修改"
+          ? "已填写 · 留空不修改"
           : "粘贴 SecretId",
         configured: configuredOf("TENCENTCLOUD_SECRET_ID"),
       },
@@ -218,7 +330,7 @@ function buildFields(
         helper: "腾讯云访问凭证 SecretKey。",
         kind: "secret",
         placeholder: configuredOf("TENCENTCLOUD_SECRET_KEY")
-          ? "已配置 · 留空不修改"
+          ? "已填写 · 留空不修改"
           : "粘贴 SecretKey",
         configured: configuredOf("TENCENTCLOUD_SECRET_KEY"),
       },
@@ -273,7 +385,7 @@ function buildFields(
         helper: "可选；不填则跳过 Product Hunt 来源。",
         kind: "secret",
         placeholder: configuredOf("PRODUCT_HUNT_TOKEN")
-          ? "已配置 · 留空不修改"
+          ? "已填写 · 留空不修改"
           : "粘贴 Product Hunt Token",
         configured: configuredOf("PRODUCT_HUNT_TOKEN"),
       },
@@ -451,8 +563,8 @@ export default async function SettingsPage({
               <dt>对话与文字模型</dt>
               <dd>
                 {status?.llm.configured
-                  ? `${status.llm.provider} / ${status.llm.model}`
-                  : "未连接"}
+                  ? `${llmServiceView(settingItems).label} · ${status.llm.provider} / ${status.llm.model}`
+                  : llmServiceView(settingItems).label}
               </dd>
             </div>
             <div>
@@ -474,7 +586,7 @@ export default async function SettingsPage({
               <dd>{status?.storage.database_exists ? "已创建" : "未创建"}</dd>
             </div>
           </dl>
-          <p>密钥只显示是否已配置，不会返回原文。</p>
+          <p>密钥只显示是否已填写，不会返回原文。</p>
         </div>
       }
       inspectorTitle="设置状态"
@@ -517,12 +629,13 @@ export default async function SettingsPage({
                     仅发送相关文字，不发送原视频。
                   </p>
                 </div>
-                <span
-                  className={`settings-connection-state ${status?.llm.configured ? "is-ready" : ""}`}
-                >
-                  {status?.llm.configured ? "已配置" : "待连接"}
-                </span>
+                <LlmServiceBadge settings={settingItems} />
               </div>
+              <LlmServiceDetail settings={settingItems} />
+              {/* 这三处 `status?.llm.configured` 只是回填表单的兵底，不是状态显示。
+                  未配置时后端把 llm.base_url / model / provider 换成占位值
+                  （"local" / "source-grounded-v1" / "local-extractive"），
+                  那些不能当成用户的真实配置填回去。状态看上面的四档徽章。 */}
               <LlmProviderFields
                 apiKeyConfigured={Boolean(
                   getSetting(settingItems, "LLM_API_KEY")?.configured,
