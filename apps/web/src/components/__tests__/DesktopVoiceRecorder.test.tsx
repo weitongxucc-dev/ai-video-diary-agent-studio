@@ -82,7 +82,7 @@ describe("DesktopVoiceRecorder", () => {
     const [blob, metadata] = onRecorded.mock.calls[0];
     expect(blob).toBeInstanceOf(Blob);
     expect(metadata).toEqual({ mimeType: "audio/webm", durationMs: 2400, deviceLabel: "桌面麦克风" });
-    expect(screen.getByText("录音已交给当前任务，保存结果以任务提示为准。")).toBeInTheDocument();
+    expect(await screen.findByText("录音已交给当前任务，保存结果以任务提示为准。")).toBeInTheDocument();
     now.mockRestore();
   });
 
