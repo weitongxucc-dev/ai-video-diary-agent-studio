@@ -1331,7 +1331,8 @@ export type VisualEditInput = { base_version_id: string | null; clip_ids: string
 export type TextOverlay = {kind?:"text";id:string;text:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;font_size:number;font_family:string;color:string};
 
 export type ImageOverlay = {kind:"image";id:string;source_ref:string;name:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;opacity:number};
-export type GraphicOverlay = TextOverlay | ImageOverlay;
+export type ArrowOverlay = {kind:"arrow";id:string;x:number;y:number;name:string;purpose:string;start_seconds:number;end_seconds:number;position:"left-top"|"right-top"|"right-bottom"|"left-bottom";color:string};
+export type GraphicOverlay = TextOverlay | ImageOverlay | ArrowOverlay;
 export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number};
 
 export type CreationTaskMontageClip = {
@@ -1491,7 +1492,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
-  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id">) & {id?:string}; overlay_id?:string }
+  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id"> | Omit<ArrowOverlay,"id">) & {id?:string}; overlay_id?:string }
   | { operation_type: "SetClipTransition"; clip_id: string; transition_seconds: number }
   | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }

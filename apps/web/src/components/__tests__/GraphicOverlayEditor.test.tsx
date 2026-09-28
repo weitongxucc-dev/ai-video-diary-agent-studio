@@ -31,3 +31,63 @@ it("imports an image before proposing its opacity and timing",async()=>{
  expect(preview).toHaveBeenCalledWith(expect.objectContaining({operation_type:"EditGraphicOverlay",overlay_action:"add",
   graphic_overlay:expect.objectContaining({kind:"image",source_ref:"artifacts/task/source.png",opacity:.5,start_seconds:0,end_seconds:3})}));
 });
+
+it("starts an arrow draft with contract defaults and submits kind arrow",()=>{
+ const preview=vi.fn();
+ render(<GraphicOverlayEditor taskId="task" items={[]} duration={6} busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"新建箭头标注",hidden:true}));
+ expect(screen.getByLabelText("箭头名称")).toHaveValue("");
+ expect(screen.getByLabelText("箭头作用说明")).toHaveValue("");
+ expect(screen.getByLabelText("标注角")).toHaveValue("right-top");
+ expect(screen.getByLabelText("箭头颜色（#RRGGBB）")).toHaveValue("#FFFFFF");
+ expect((screen.getByLabelText("指向 X（0–1）") as HTMLInputElement).value).toBe("");
+ fireEvent.change(screen.getByLabelText("箭头名称"),{target:{value:"电源按钮"}});
+ fireEvent.change(screen.getByLabelText("指向 X（0–1）"),{target:{value:"0.3"}});
+ fireEvent.change(screen.getByLabelText("指向 Y（0–1）"),{target:{value:"0.4"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(preview).toHaveBeenLastCalledWith(expect.objectContaining({operation_type:"EditGraphicOverlay",overlay_action:"add",
+  graphic_overlay:expect.objectContaining({kind:"arrow",name:"电源按钮",purpose:"",x:.3,y:.4,position:"right-top",color:"#FFFFFF",start_seconds:0,end_seconds:3})}));
+});
+
+it("blocks arrow submission while coordinates are missing",()=>{
+ const preview=vi.fn();
+ render(<GraphicOverlayEditor taskId="task" items={[]} duration={6} busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"新建箭头标注",hidden:true}));
+ fireEvent.change(screen.getByLabelText("箭头名称"),{target:{value:"电源按钮"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(screen.getByRole("alert")).toHaveTextContent("箭头指向坐标");
+ expect(preview).not.toHaveBeenCalled();
+});
+
+it("blocks arrow submission when the name is too long or the interval is under 0.04s",()=>{
+ const preview=vi.fn();
+ render(<GraphicOverlayEditor taskId="task" items={[]} duration={6} busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"新建箭头标注",hidden:true}));
+ fireEvent.change(screen.getByLabelText("箭头名称"),{target:{value:"超".repeat(25)}});
+ fireEvent.change(screen.getByLabelText("指向 X（0–1）"),{target:{value:"0.3"}});
+ fireEvent.change(screen.getByLabelText("指向 Y（0–1）"),{target:{value:"0.4"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(screen.getByRole("alert")).toHaveTextContent("1–24");
+ expect(preview).not.toHaveBeenCalled();
+ fireEvent.change(screen.getByLabelText("箭头名称"),{target:{value:"电源按钮"}});
+ fireEvent.change(screen.getByLabelText("开始（秒）"),{target:{value:"1"}});
+ fireEvent.change(screen.getByLabelText("结束（秒）"),{target:{value:"1.02"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(screen.getByRole("alert")).toHaveTextContent("0.04");
+ expect(preview).not.toHaveBeenCalled();
+ fireEvent.change(screen.getByLabelText("结束（秒）"),{target:{value:"1.2"}});
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(preview).toHaveBeenCalledTimes(1);
+});
+
+it("selects an existing arrow overlay for editing and updates it",()=>{
+ const preview=vi.fn();
+ render(<GraphicOverlayEditor taskId="task" items={[{kind:"arrow",id:"arrow-1",x:.6,y:.7,name:"电源按钮",purpose:"指示开机键",start_seconds:0,end_seconds:2,position:"left-top",color:"#00FF00"}]} duration={6} busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"箭头1 · 电源按钮",hidden:true}));
+ expect(screen.getByLabelText("标注角")).toHaveValue("left-top");
+ expect(screen.getByLabelText("箭头颜色（#RRGGBB）")).toHaveValue("#00FF00");
+ fireEvent.click(screen.getByRole("button",{name:"预览箭头修改",hidden:true}));
+ expect(preview).toHaveBeenLastCalledWith(expect.objectContaining({operation_type:"EditGraphicOverlay",overlay_action:"update",overlay_id:"arrow-1",
+  graphic_overlay:expect.objectContaining({kind:"arrow",x:.6,y:.7,name:"电源按钮",purpose:"指示开机键",position:"left-top",color:"#00FF00"})}));
+});
+
