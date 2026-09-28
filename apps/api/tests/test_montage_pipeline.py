@@ -3858,6 +3858,25 @@ def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
 
 
+def test_pure_arrow_nl_command_reaches_overlay_compiler(person_render_edit_state,monkeypatch):
+    from app.graphic_overlays import ArrowOverlay
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
+    state.montage.graphic_overlays.append(arrow)
+    state.production.save_creation_task_montage_plan(
+        state.workspace_id,state.task.id,state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage),
+    )
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='arrow',logical_ref='artifacts/arrow.mp4'))
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'箭头1删除','context_stage':'montage','selected_object_refs':[]})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['proposal']['target_refs']==[f"overlay:{arrow['id']}"]
+    assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+
+
 def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_state,monkeypatch,tmp_path):
     import io
     from PIL import Image

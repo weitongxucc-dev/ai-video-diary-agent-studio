@@ -6830,7 +6830,7 @@ def preview_creation_task_edit(
             return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(
                 operation_type="ConfigureSubtitleTrack", style=style_patch))
 
-    if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识")):
+    if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识","箭头")):
         try:
             overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
             edit=compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else (),payload.selected_object_refs)
