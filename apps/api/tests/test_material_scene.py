@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import sqlite3
@@ -13,8 +14,11 @@ from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
 )
 from app.material_scene import (
-    SceneWindow, SceneWindowFacts, parse_scene_showinfo, scene_command,
-    scene_unit_key, scene_window_for_key, scene_windows,
+    CompletedSceneSegment, SceneProbeBudget, SceneProbeCheckpoint, SceneSegment,
+    SceneWindow, SceneWindowFacts, detect_scene_segments, frame_difference,
+    parse_scene_showinfo, run_scene_probe, scene_command, scene_probe_resource_spec,
+    scene_probe_segments, scene_unit_key, scene_window_for_key, scene_windows,
+    validate_scene_probe_window,
 )
 from app.production import MaterialSegment, ProductionRepository, _segment_id
 
@@ -266,3 +270,242 @@ def test_scene_timeout_or_resource_stop_never_commits_a_checkpoint(
         scheduler.assert_released(scene_grant)
     finally:
         scheduler.close()
+
+
+# ---------------------------------------------------------------------------
+# WIL-68: bounded scene probe (SceneProbeBudget / frame differencing / resume).
+# ---------------------------------------------------------------------------
+
+def _dark_frame() -> bytes:
+    return b"\x00" * 16
+
+
+def _bright_frame() -> bytes:
+    return b"\xff" * 16
+
+
+def test_scene_probe_budget_rejects_invalid_and_reports_wall_clock() -> None:
+    with pytest.raises(ValueError, match="cpu_threads"):
+        SceneProbeBudget(cpu_threads=0)
+    with pytest.raises(ValueError, match="cpu_threads"):
+        SceneProbeBudget(cpu_threads=-1)
+    with pytest.raises(ValueError):
+        SceneProbeBudget(cpu_threads=1.5)
+    with pytest.raises(ValueError):
+        SceneProbeBudget(max_source_duration_s=0.0)
+    with pytest.raises(ValueError):
+        SceneProbeBudget(sampling_fps=0.0)
+    budget = SceneProbeBudget()
+    assert budget.cpu_threads == 1
+    assert budget.max_source_duration_s == 3600.0
+    assert budget.sampling_fps == 2.0
+    assert budget.wall_clock_s == 3630.0
+
+
+def test_scene_probe_window_rejects_over_duration() -> None:
+    budget = SceneProbeBudget(cpu_threads=1, max_source_duration_s=10.0, sampling_fps=2.0)
+    validate_scene_probe_window(0.0, 10.0, budget)  # exact boundary is allowed
+    with pytest.raises(ValueError, match="超过预算上限"):
+        validate_scene_probe_window(0.0, 10.1, budget)
+    with pytest.raises(ValueError, match="源时间区间无效"):
+        validate_scene_probe_window(5.0, 5.0, budget)
+    with pytest.raises(ValueError, match="源时间区间无效"):
+        validate_scene_probe_window(5.0, 3.0, budget)
+
+
+def test_frame_difference_normalized_and_rejects_mismatch() -> None:
+    dark = _dark_frame()
+    bright = _bright_frame()
+    assert frame_difference(dark, bright) == 1.0
+    assert frame_difference(dark, dark) == 0.0
+    half = b"\x80" * 16
+    assert frame_difference(dark, half) == pytest.approx(128 / 255)
+    with pytest.raises(ValueError):
+        frame_difference(dark, b"")
+    with pytest.raises(ValueError):
+        frame_difference(dark, b"\x00" * 8)
+    with pytest.raises(ValueError):
+        frame_difference("not bytes", dark)  # type: ignore[arg-type]
+
+
+def test_detect_scene_segments_finds_known_cuts() -> None:
+    dark = _dark_frame()
+    bright = _bright_frame()
+    # 6 frames at 2 fps (0.5s apart): cuts between frames 1-2 (t=1.0) and 3-4 (t=2.0).
+    frames = [dark, dark, bright, bright, dark, dark]
+    segments = detect_scene_segments(frames, window_start_seconds=0.0, sampling_fps=2.0)
+    assert segments == (
+        SceneSegment(0.0, 1.0, 1.0),
+        SceneSegment(1.0, 2.0, 1.0),
+        SceneSegment(2.0, 2.5, 1.0),
+    )
+
+
+def test_detect_scene_segments_confidence_reflects_cut_strength() -> None:
+    dark = _dark_frame()
+    weak = b"\x40" * 16  # ~0.25 difference
+    strong = _bright_frame()
+    weak_segments = detect_scene_segments(
+        [dark, weak, weak], window_start_seconds=0.0, sampling_fps=2.0, threshold=0.25,
+    )
+    strong_segments = detect_scene_segments(
+        [dark, strong, strong], window_start_seconds=0.0, sampling_fps=2.0, threshold=0.25,
+    )
+    assert strong_segments[0].confidence == 1.0
+    assert 0.5 <= weak_segments[0].confidence < strong_segments[0].confidence
+
+
+def test_detect_scene_segments_rejects_bad_inputs() -> None:
+    with pytest.raises(ValueError):
+        detect_scene_segments([], window_start_seconds=-1.0, sampling_fps=2.0)
+    with pytest.raises(ValueError):
+        detect_scene_segments([], window_start_seconds=0.0, sampling_fps=0.0)
+    with pytest.raises(ValueError):
+        detect_scene_segments([], window_start_seconds=0.0, sampling_fps=2.0, threshold=1.0)
+    with pytest.raises(ValueError):
+        detect_scene_segments([_dark_frame(), b""], window_start_seconds=0.0, sampling_fps=2.0)
+    assert detect_scene_segments([], window_start_seconds=0.0, sampling_fps=2.0) == ()
+
+
+def test_scene_probe_segments_tile_window_exactly() -> None:
+    segments = scene_probe_segments(0.0, 32.4, 14.0)
+    assert [segment.index for segment in segments] == [0, 1, 2]
+    assert segments[0].start_seconds == 0.0
+    assert segments[-1].end_seconds == pytest.approx(32.4)
+    for left, right in zip(segments, segments[1:]):
+        assert left.end_seconds == right.start_seconds
+    total = sum(segment.end_seconds - segment.start_seconds for segment in segments)
+    assert total == pytest.approx(32.4)
+    # the declared window is never exceeded
+    assert max(segment.end_seconds for segment in segments) <= 32.4
+
+
+def test_detect_scene_segments_stays_within_declared_window() -> None:
+    dark = _dark_frame()
+    bright = _bright_frame()
+    frames = [dark, bright, bright]
+    window_start = 10.0
+    segments = detect_scene_segments(
+        frames, window_start_seconds=window_start, sampling_fps=2.0,
+    )
+    assert segments
+    assert all(seg.start_seconds >= window_start for seg in segments)
+    ceiling = window_start + (len(frames) - 1) / 2.0
+    assert all(seg.end_seconds <= ceiling for seg in segments)
+
+
+def test_scene_probe_checkpoint_roundtrip_and_rejects_corrupt() -> None:
+    dark = _dark_frame()
+    bright = _bright_frame()
+    scenes = detect_scene_segments(
+        [dark, bright, bright], window_start_seconds=0.0, sampling_fps=2.0,
+    )
+    checkpoint = SceneProbeCheckpoint(
+        0.0, 6.0, 2.0, 2.0, 0.25, (CompletedSceneSegment(0, scenes),),
+    )
+    encoded = checkpoint.to_json()
+    assert SceneProbeCheckpoint.from_json(encoded) == checkpoint
+    with pytest.raises(ValueError):
+        SceneProbeCheckpoint.from_json(encoded[:-2])
+    with pytest.raises(ValueError):
+        SceneProbeCheckpoint.from_json('{"bogus": 1}')
+    with pytest.raises(ValueError):
+        # duplicate segment indices are rejected
+        SceneProbeCheckpoint(
+            0.0, 6.0, 2.0, 2.0, 0.25,
+            (CompletedSceneSegment(0, scenes), CompletedSceneSegment(0, scenes)),
+        )
+
+
+def test_scene_probe_output_has_no_ready_or_available_marking() -> None:
+    dark = _dark_frame()
+    bright = _bright_frame()
+    segments = detect_scene_segments(
+        [dark, dark, bright, bright, dark, dark], window_start_seconds=0.0, sampling_fps=2.0,
+    )
+    checkpoint = SceneProbeCheckpoint(
+        0.0, 2.5, 14.0, 2.0, 0.25, (CompletedSceneSegment(0, segments),),
+    )
+    text = checkpoint.to_json()
+    assert "ready" not in text
+    assert "available" not in text
+    assert [field.name for field in dataclasses.fields(SceneSegment)] == [
+        "start_seconds", "end_seconds", "confidence",
+    ]
+    assert [field.name for field in dataclasses.fields(SceneProbeBudget)] == [
+        "cpu_threads", "max_source_duration_s", "sampling_fps",
+    ]
+
+
+def test_scene_probe_resource_spec_matches_sched_registry() -> None:
+    budget = SceneProbeBudget(cpu_threads=3, max_source_duration_s=120.0, sampling_fps=4.0)
+    spec = scene_probe_resource_spec(budget)
+    assert spec == {"cpu_threads": 3, "wall_clock_s": 150.0}
+    assert type(spec["cpu_threads"]) is int
+    assert isinstance(spec["wall_clock_s"], float)
+
+
+def test_scene_probe_resume_skips_completed_segments(tmp_path: Path) -> None:
+    budget = SceneProbeBudget(cpu_threads=1, max_source_duration_s=3600.0, sampling_fps=2.0)
+    window_start, window_end = 0.0, 6.0
+    segment_seconds = 2.0
+    checkpoint_path = tmp_path / "checkpoint.json"
+
+    def make_frames(segment: object) -> list[bytes]:
+        # 2s segment at 2fps -> 4 frames with one interior cut at t=start+1.0.
+        del segment
+        return [_dark_frame(), _dark_frame(), _bright_frame(), _bright_frame()]
+
+    calls: dict[int, int] = {}
+
+    def crashing_loader(segment: object) -> list[bytes]:
+        index = segment.index  # type: ignore[attr-defined]
+        calls[index] = calls.get(index, 0) + 1
+        if index == 1 and calls[index] == 1:
+            raise RuntimeError("simulated crash mid-run")
+        return make_frames(segment)
+
+    with pytest.raises(RuntimeError):
+        run_scene_probe(
+            window_start_seconds=window_start, window_end_seconds=window_end,
+            budget=budget, frame_loader=crashing_loader,
+            checkpoint_path=checkpoint_path, segment_seconds=segment_seconds,
+        )
+
+    # After the crash only segment 0 is checkpointed; segment 1 is not.
+    assert checkpoint_path.exists()
+    saved = checkpoint_path.read_text(encoding="utf-8")
+    checkpoint = SceneProbeCheckpoint.from_json(saved)
+    assert checkpoint.has_segment(0)
+    assert not checkpoint.has_segment(1)
+
+    def resume_loader(segment: object) -> list[bytes]:
+        index = segment.index  # type: ignore[attr-defined]
+        calls[index] = calls.get(index, 0) + 1
+        return make_frames(segment)
+
+    result = run_scene_probe(
+        window_start_seconds=window_start, window_end_seconds=window_end,
+        budget=budget, frame_loader=resume_loader,
+        checkpoint_path=checkpoint_path, segment_seconds=segment_seconds,
+    )
+
+    # Completed segment 0 was skipped on resume; the crashed segment 1 reloaded once.
+    assert calls == {0: 1, 1: 2, 2: 1}
+
+    # A clean run from scratch yields identical scenes.
+    clean_calls: dict[int, int] = {}
+
+    def clean_loader(segment: object) -> list[bytes]:
+        index = segment.index  # type: ignore[attr-defined]
+        clean_calls[index] = clean_calls.get(index, 0) + 1
+        return make_frames(segment)
+
+    clean = run_scene_probe(
+        window_start_seconds=window_start, window_end_seconds=window_end,
+        budget=budget, frame_loader=clean_loader,
+        checkpoint_path=tmp_path / "clean.json", segment_seconds=segment_seconds,
+    )
+    assert clean_calls == {0: 1, 1: 1, 2: 1}
+    assert result == clean
+    assert len(result) == 6  # 3 segments * 2 scenes each
