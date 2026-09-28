@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from app.assistant_pi import AssistantUnavailable, run_plan_turn, run_task_turn
 
@@ -52,6 +54,7 @@ from app.auth import (
     SupabaseAuthContext,
     UnauthorizedError,
 )
+from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
 from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
@@ -488,6 +491,11 @@ PUBLIC_AUTH_PATHS: set[str] = {
     "/api/content-templates",
 }
 
+# The single identity-only entry: a first-time invitee accepts a device invite
+# before holding any workspace membership. This exact path (POST only) is
+# authenticated by identity without workspace resolution (see the middleware).
+DEVICE_INVITE_ACCEPT_PATH = "/api/device-invites/accept"
+
 # Authenticated users who have not completed onboarding may only use these
 # repair endpoints.  The same trusted Python boundary enforces this rule for
 # direct localhost requests, not just Next.js-proxied browser traffic.
@@ -587,13 +595,20 @@ async def auth_boundary_middleware(request: Request, call_next):
     queries stay inside the caller's partition.
     """
     path = request.url.path
+    is_device_accept = request.method == "POST" and path == DEVICE_INVITE_ACCEPT_PATH
     if (
         path in PUBLIC_AUTH_PATHS
         or request.method == "OPTIONS"
-        or not auth_context.enabled
+        or (not auth_context.enabled and not is_device_accept)
     ):
         return await call_next(request)
     try:
+        if is_device_accept:
+            # Identity-only entry: a first-time invitee has no workspace yet,
+            # so membership resolution, the onboarding gate and the workspace
+            # context are all skipped. Any token failure is a 401.
+            request.state.principal = auth_context.authenticate_identity(request)
+            return await call_next(request)
         request.state.principal = auth_context.authenticate(request)
         principal = request.state.principal
         if (
@@ -621,6 +636,70 @@ async def auth_boundary_middleware(request: Request, call_next):
         return await call_next(request)
     finally:
         reset_workspace_context(token)
+
+
+DEVICE_ACCOUNT_ERROR_STATUS: dict[str, int] = {
+    "forbidden": 403,
+    "conflict": 409,
+    "invalid": 400,
+    "unavailable": 503,
+}
+
+
+def trusted_device_credential() -> DeviceCredential:
+    """Return the pre-provisioned device credential from the trusted runtime.
+
+    The Electron main process spawns this API subprocess and injects the device
+    identity through environment variables — the same trusted channel as
+    ``distributionAuthEnv()`` for the Supabase credentials. The renderer can
+    never observe this process environment, so it cannot forge a credential. A
+    missing or malformed credential means the native runtime did not provision
+    this instance: an operational outage (503), not a client error.
+    """
+    device_id = os.environ.get("DEVICE_ID")
+    proof = os.environ.get("DEVICE_PROOF")
+    if not device_id or not proof:
+        raise DeviceAccountError("unavailable", "trusted device credential is not provisioned")
+    try:
+        return DeviceCredential(device_id, proof)
+    except ValueError as exc:
+        raise DeviceAccountError("unavailable", "trusted device credential is malformed") from exc
+
+
+class DeviceInviteAcceptRequest(BaseModel):
+    invite_token: str
+
+
+class DeviceInviteAcceptResponse(BaseModel):
+    target_workspace_id: str
+    member_count: int
+    already_accepted: bool
+
+
+@app.post("/api/device-invites/accept")
+async def accept_device_invite(request: Request, payload: DeviceInviteAcceptRequest):
+    """Accept a device invite for the verified identity (no workspace required).
+
+    The middleware already authenticated the request's identity only
+    (``authenticate_identity``) and attached a workspaceless principal. The
+    trusted native runtime supplies the DeviceCredential; the Supabase RPC
+    re-checks ``auth.uid()``, the device proof and the invite token.
+    """
+    principal = request.state.principal
+    try:
+        service = DeviceAccountService(settings, trusted_device_credential())
+        acceptance = service.accept_invite(principal, payload.invite_token)
+    except DeviceAccountError as exc:
+        status = DEVICE_ACCOUNT_ERROR_STATUS.get(exc.kind, 500)
+        return JSONResponse(
+            status_code=status,
+            content={"error": exc.kind, "detail": str(exc)},
+        )
+    return DeviceInviteAcceptResponse(
+        target_workspace_id=acceptance.target_workspace_id,
+        member_count=acceptance.member_count,
+        already_accepted=acceptance.already_accepted,
+    )
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
