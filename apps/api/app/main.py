@@ -749,12 +749,35 @@ class InviteCodeResponse(BaseModel):
     invite_code: str
 
 
+class MemberWithTokenResponse(MemberResponse):
+    """Join/whoami response: the only places a member's bearer token is exposed."""
+
+    member_token: str
+
+
+LOCAL_MEMBER_TOKEN_HEADER = "X-Local-Member-Token"
+
+
+def _local_member_token(request: Request) -> str:
+    return request.headers.get(LOCAL_MEMBER_TOKEN_HEADER, "").strip()
+
+
 def _member_response(member) -> MemberResponse:
     return MemberResponse(
         member_id=member.member_id,
         name=member.name,
         role=member.role,
         created_at=member.created_at,
+    )
+
+
+def _member_with_token_response(member, token: str) -> MemberWithTokenResponse:
+    return MemberWithTokenResponse(
+        member_id=member.member_id,
+        name=member.name,
+        role=member.role,
+        created_at=member.created_at,
+        member_token=token,
     )
 
 
@@ -766,6 +789,53 @@ def _local_members_error_response(exc: LocalMembersError) -> JSONResponse:
     )
 
 
+def _local_member_write_guard(request: Request) -> JSONResponse | None:
+    """Owner check for member-management write routes.
+
+    方案 A transitional rule: anonymous callers (no header) pass through
+    unchanged — the single-user zero-config compatibility state whose bypass
+    face is a documented, accepted boundary. Callers presenting a valid member
+    token must be owners; an unknown token is a 401.
+    """
+    token = _local_member_token(request)
+    if not token:
+        return None
+    try:
+        member = local_members_service.resolve_member(token)
+    except LocalMembersError as exc:
+        # An unknown token is a credential failure, not a malformed request:
+        # 401 regardless of the underlying "invalid" kind.
+        return JSONResponse(
+            status_code=401,
+            content={"error": exc.kind, "detail": str(exc)},
+        )
+    assert member is not None  # a present, valid token always resolves
+    if member.role != "owner":
+        return JSONResponse(
+            status_code=403,
+            content={"error": "forbidden", "detail": "仅所有者可执行此操作"},
+        )
+    return None
+
+
+def _content_include_private(request: Request) -> bool:
+    """Member visibility for content list routes.
+
+    Anonymous and owner callers see everything; a valid member token sees only
+    shared content. An unknown token is a 401 in the content routes' own
+    HTTPException style.
+    """
+    token = _local_member_token(request)
+    if not token:
+        return True
+    try:
+        member = local_members_service.resolve_member(token)
+    except LocalMembersError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    assert member is not None  # a present, valid token always resolves
+    return member.role == "owner"
+
+
 @app.get("/api/members")
 def list_local_members() -> MemberListResponse:
     return MemberListResponse(
@@ -774,7 +844,10 @@ def list_local_members() -> MemberListResponse:
 
 
 @app.post("/api/members")
-def add_local_member(payload: AddMemberRequest):
+def add_local_member(request: Request, payload: AddMemberRequest):
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
     try:
         member = local_members_service.add_member(payload.name, payload.role)
     except LocalMembersError as exc:
@@ -783,7 +856,10 @@ def add_local_member(payload: AddMemberRequest):
 
 
 @app.delete("/api/members/{member_id}")
-def remove_local_member(member_id: str):
+def remove_local_member(member_id: str, request: Request):
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
     try:
         local_members_service.remove_member(member_id)
     except LocalMembersError as exc:
@@ -792,7 +868,10 @@ def remove_local_member(member_id: str):
 
 
 @app.patch("/api/members/{member_id}")
-def set_local_member_role(member_id: str, payload: SetMemberRoleRequest):
+def set_local_member_role(member_id: str, request: Request, payload: SetMemberRoleRequest):
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
     try:
         member = local_members_service.set_role(member_id, payload.role)
     except LocalMembersError as exc:
@@ -801,17 +880,31 @@ def set_local_member_role(member_id: str, payload: SetMemberRoleRequest):
 
 
 @app.post("/api/members/invite-code")
-def create_local_invite_code() -> InviteCodeResponse:
+def create_local_invite_code(request: Request) -> InviteCodeResponse:
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
     return InviteCodeResponse(invite_code=local_members_service.create_invite_code())
 
 
 @app.post("/api/members/join")
 def join_local_member(payload: JoinMemberRequest):
     try:
-        member = local_members_service.join(payload.code, payload.name)
+        member, token = local_members_service.join(payload.code, payload.name)
     except LocalMembersError as exc:
         return _local_members_error_response(exc)
-    return _member_response(member)
+    return _member_with_token_response(member, token)
+
+
+@app.get("/api/members/whoami")
+def whoami_local_member(request: Request):
+    try:
+        member, token = local_members_service.whoami(
+            _local_member_token(request) or None
+        )
+    except LocalMembersError as exc:
+        return _local_members_error_response(exc)
+    return _member_with_token_response(member, token)
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
@@ -4036,7 +4129,10 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
 
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
 def list_creation_tasks(request: Request) -> CreationTasksResponse:
-    tasks = production_repo.list_creation_tasks(current_workspace_id(request))
+    tasks = production_repo.list_creation_tasks(
+        current_workspace_id(request),
+        include_private=_content_include_private(request),
+    )
     return CreationTasksResponse(
         items=[item.__dict__ for item in tasks],
         total_count=len(tasks),
@@ -10839,6 +10935,7 @@ def list_production_materials(
         offset=offset,
         query=q,
         review_status=review_status,
+        include_private=_content_include_private(request),
     )
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],

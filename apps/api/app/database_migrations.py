@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 12
+PRODUCTION_SCHEMA_VERSION = 13
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -593,6 +593,21 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX idx_scheduled_tasks_workspace
             ON scheduled_tasks(workspace_id, enabled, created_at);
         """,
+    ),
+    # Version 13 marks the members-auth visibility change. Neither the member
+    # token column nor the content visibility columns live in static SQL here:
+    # both target tables that are created outside the migration list (the
+    # members table is self-provisioned by app.local_members; creation_tasks and
+    # material_assets are provisioned by ProductionRepository._init_database),
+    # and the migration chain is also applied standalone (see test_device_runtime)
+    # against a bare database lacking those tables. SQLite has no ADD COLUMN IF
+    # NOT EXISTS and static SQL cannot PRAGMA-guard, so a plain ALTER here would
+    # collide on a re-open or crash the standalone chain. The columns are added
+    # by PRAGMA-guarded ensures in app.local_members._ensure_token_column and in
+    # ProductionRepository._init_database instead.
+    (
+        13,
+        "",
     ),
 )
 

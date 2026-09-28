@@ -1539,6 +1539,20 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
+            # Migration 13 adds the member visibility columns; these guarded
+            # ensures mirror the ctime_ns/inode pattern for databases whose
+            # version row reached 13 without the columns. Content defaults to
+            # 'shared' so existing owner content stays member-visible.
+            for table in ("creation_tasks", "material_assets"):
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                if "visibility" not in columns:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN "
+                        "visibility TEXT NOT NULL DEFAULT 'shared'"
+                    )
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -3892,12 +3906,18 @@ class ProductionRepository:
             rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
         return [json.loads(str(row["payload"])) for row in rows]
 
-    def list_assets(self, workspace_id: str) -> list[MaterialAsset]:
+    def list_assets(
+        self,
+        workspace_id: str,
+        *,
+        include_private: bool = True,
+    ) -> list[MaterialAsset]:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
-                """
+                f"""
                 SELECT payload FROM material_assets
-                WHERE workspace_id = ? ORDER BY updated_at DESC
+                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
@@ -3911,9 +3931,12 @@ class ProductionRepository:
         offset: int,
         query: str | None = None,
         review_status: str | None = None,
+        include_private: bool = True,
     ) -> tuple[list[MaterialAsset], int]:
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
+        if not include_private:
+            clauses.append("visibility = 'shared'")
         if query:
             clauses.append("""(
                 LOWER(json_extract(payload, '$.file_name')) LIKE ?
@@ -4488,12 +4511,19 @@ class ProductionRepository:
             raise KeyError(plan_id)
         return self._creation_plan_from_payload(json.loads(str(row["payload"])))
 
-    def get_creation_task(self, workspace_id: str, task_id: str) -> CreationTask:
+    def get_creation_task(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        include_private: bool = True,
+    ) -> CreationTask:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             row = conn.execute(
-                """
+                f"""
                 SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
+                WHERE workspace_id = ? AND id = ?{visibility_clause}
                 """,
                 (workspace_id, task_id),
             ).fetchone()
@@ -4501,12 +4531,18 @@ class ProductionRepository:
             raise KeyError(task_id)
         return self._creation_task_from_payload(json.loads(str(row["payload"])))
 
-    def list_creation_tasks(self, workspace_id: str) -> list[CreationTask]:
+    def list_creation_tasks(
+        self,
+        workspace_id: str,
+        *,
+        include_private: bool = True,
+    ) -> list[CreationTask]:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
-                """
+                f"""
                 SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? ORDER BY updated_at DESC
+                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
