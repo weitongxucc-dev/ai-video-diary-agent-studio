@@ -2977,12 +2977,14 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
         service = _task_audio()
         edit = payload
         if payload.action == "replace_narration":
+            if creation_execution_mode == "scheduled":
+                raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
             if set(payload.values) != {"source_ref"} or any(clip.person_render_id for clip in plan.clips):
                 raise ValueError("人物口型或附加参数不能随整条旁白录音替换保留")
             source_ref = payload.values["source_ref"]
             if not isinstance(source_ref, str):
                 raise ValueError("请选择当前任务已保存的电脑录音")
-            recording, measured_ms = service.recording(workspace_id, task_id, source_ref)
+            recording, measured_ms = service.recording(workspace_id, task_id, source_ref, verify_digest=True)
             duration_ms = round(plan.duration_seconds * 1000)
             if not duration_ms - 20 <= measured_ms <= duration_ms + 250:
                 raise ValueError("录音时长与当前画面不符，请重录到接近整片时长")
@@ -3039,7 +3041,8 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
         task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
         operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
             "edit": edit.model_dump(), "expected_audio_timeline": before.model_dump(),
-            **({"recording_duration_ms": measured_ms} if payload.action == "replace_narration" else {})}},
+            **({"recording_duration_ms": measured_ms, "recording_sha256": recording.sha256}
+               if payload.action == "replace_narration" else {})}},
         invalidated_refs=_logical_montage_output_refs(plan),
         preview=preview_media,
         external_effects=(["新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。"]
@@ -5679,6 +5682,13 @@ def _persist_typed_montage_edit(
     carried_tracks = [_clone_subtitle_track(track, timeline_version_id=operation.result_version_id)
         for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else
             _current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
+    audio_edit = operation_payload.get("edit") if operation_type == "EditAudioTimeline" else None
+    if isinstance(audio_edit, dict) and audio_edit.get("action") == "replace_narration":
+        carried_tracks = [replace(track, status="unavailable", artifact_ref=None, transform_id=None,
+            failure_reason="整条旁白已更换，旧字幕时间尚未复核。",
+            impact="原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。",
+            repair_action="逐条检查字幕文字和时间，确认后重新生成字幕与成片。")
+            for track in carried_tracks]
     if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
@@ -7483,14 +7493,18 @@ def confirm_creation_task_edit(
             updated_audio = AudioTimeline.model_validate(operation_payload["audio_timeline"])
             edit = AudioEditRequest.model_validate(operation_payload["edit"])
             if edit.action == "replace_narration":
+                if creation_execution_mode == "scheduled":
+                    raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
                 if any(clip.person_render_id for clip in montage.clips):
                     raise ValueError("当前人物口型依赖旧配音，请先移除或重做口型")
                 source_ref = edit.values.get("source_ref")
                 if not isinstance(source_ref, str):
                     raise ValueError("录音引用无效")
-                _recording, measured_ms = _task_audio().recording(workspace_id, task_id, source_ref)
+                recording, measured_ms = _task_audio().recording(
+                    workspace_id, task_id, source_ref, verify_digest=True)
                 duration_ms = round(montage.duration_seconds * 1000)
-                if (measured_ms != operation_payload.get("recording_duration_ms")
+                if (recording.sha256 != operation_payload.get("recording_sha256")
+                        or measured_ms != operation_payload.get("recording_duration_ms")
                         or not duration_ms - 20 <= measured_ms <= duration_ms + 250
                         or apply_audio_edit(current_audio, edit, duration_ms).model_dump() != updated_audio.model_dump()):
                     raise ValueError("录音或旁白替换提案已变化，请重新预览")

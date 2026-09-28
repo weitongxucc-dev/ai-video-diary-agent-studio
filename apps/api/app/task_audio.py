@@ -31,7 +31,8 @@ class TaskAudio:
             raise ValueError("音频产物不属于当前任务")
         return self.artifact_store.resolve_file(reference)
 
-    def recording(self, workspace_id: str, task_id: str, reference: str) -> tuple[ArtifactRecord, int]:
+    def recording(self, workspace_id: str, task_id: str, reference: str,
+                  *, verify_digest: bool = False) -> tuple[ArtifactRecord, int]:
         """Return a persisted recording and its server-measured duration."""
         record = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
                        if item.logical_ref == reference and item.kind == "task_recording"), None)
@@ -49,8 +50,16 @@ class TaskAudio:
                 or transform.parameters.get("montage_plan_id") != task.montage_plan_id
                 or type(duration_ms) is not int or duration_ms <= 0):
             raise ValueError("电脑录音尚未完整保存")
-        if self.source(workspace_id, task_id, reference).stat().st_size != record.size_bytes:
+        path = self.source(workspace_id, task_id, reference)
+        if path.stat().st_size != record.size_bytes:
             raise ValueError("电脑录音文件已变化")
+        if verify_digest:
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != record.sha256:
+                raise ValueError("电脑录音文件已变化")
         return record, duration_ms
 
     def validate_material_use(self, workspace_id: str, task_id: str, reference: str) -> None:

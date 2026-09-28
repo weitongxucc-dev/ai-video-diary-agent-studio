@@ -18,7 +18,7 @@ from app.artifact_store import ArtifactStore
 from app.audio_timeline import AudioEditRequest, apply_audio_edit, narration_audio_timeline
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            NarrationArtifactRecord, ProductionRepository, TimelineVersion)
+                            NarrationArtifactRecord, ProductionRepository, SubtitleCue, SubtitleTrack, TimelineVersion)
 
 
 def wav_bytes(seconds: float = 1) -> bytes:
@@ -98,7 +98,7 @@ def recording_task(tmp_path, monkeypatch):
     return repo, task_id, version.id, TestClient(main_module.app)
 
 
-def test_recording_upload_preview_and_confirm_replace_one_narration_track(recording_task):
+def test_recording_upload_preview_and_confirm_replace_one_narration_track(recording_task, tmp_path):
     repo, task_id, version_id, client = recording_task
     route = f"/api/creation-tasks/{task_id}"
     uploaded = client.post(route + "/audio/recordings",
@@ -131,6 +131,8 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     assert montage["output_path"] is None and montage["status"] == "ready"
     assert repo.get_creation_task("local", task_id).narration_cache_key == "old_voice"
     assert client.get(route + "/audio/recordings").json()["items"][0]["applied"] is True
+    assert (tmp_path / "old.wav").read_bytes() == wav_bytes()
+    assert client.get(saved["audio_url"]).content == wav_bytes()
 
 
 def test_recording_rejects_wrong_version_duration_and_container(recording_task):
@@ -151,11 +153,24 @@ def test_recording_rejects_wrong_version_duration_and_container(recording_task):
 
 
 def test_recording_stays_blocked_in_scheduled_mode(recording_task, monkeypatch):
-    _repo, task_id, _version, client = recording_task
+    repo, task_id, version_id, client = recording_task
+    saved = client.post(f"/api/creation-tasks/{task_id}/audio/recordings",
+                        files={"audio": ("voice.wav", wav_bytes(), "audio/wav")}).json()
+    preview = client.post(f"/api/creation-tasks/{task_id}/audio/preview", json={
+        "base_version_id": version_id, "action": "replace_narration",
+        "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()["proposal"]["id"]
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     response = client.post(f"/api/creation-tasks/{task_id}/audio/recordings",
                            files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
     assert response.status_code == 503
+    assert client.post(f"/api/creation-tasks/{task_id}/audio/preview", json={
+        "base_version_id": version_id, "action": "replace_narration",
+        "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}}).status_code == 503
+    assert client.post(f"/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm",
+                       json={}).status_code == 503
+    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
 
 
 @pytest.mark.parametrize("change", ["track_locked", "clip_locked", "split", "moved", "same_source"])
@@ -229,9 +244,86 @@ def test_recordings_list_excludes_incomplete_and_other_workspace(recording_task,
         conn.execute("UPDATE transform_runs SET status='failed' WHERE workspace_id=? AND id=?",
                      ("local", transform_id))
     assert [item["source_ref"] for item in client.get(route).json()["items"]] == [first["source_ref"]]
+    main_module.artifact_store.resolve_file(first["source_ref"]).unlink()
+    assert client.get(route).json()["items"] == []
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "other_workspace")
     assert client.get(route).status_code == 404
     assert client.get(first["audio_url"]).status_code == 404
+
+
+def test_equal_size_recording_change_rejects_old_proposal(recording_task):
+    repo, task_id, version_id, client = recording_task
+    route = f"/api/creation-tasks/{task_id}"
+    saved = client.post(route + "/audio/recordings",
+                        files={"audio": ("voice.wav", wav_bytes(), "audio/wav")}).json()
+    edit = {"base_version_id": version_id, "action": "replace_narration",
+            "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}}
+    preview = client.post(route + "/audio/preview", json=edit)
+    assert preview.status_code == 200, preview.text
+    path = main_module.artifact_store.resolve_file(saved["source_ref"])
+    changed = bytearray(path.read_bytes())
+    changed[-1] ^= 1
+    path.write_bytes(changed)
+    assert path.stat().st_size == len(wav_bytes())
+    assert client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={}).status_code == 409
+    assert client.post(route + "/audio/preview", json=edit).status_code == 422
+    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == "artifacts/task_recording/old.mp4"
+
+
+def test_replacing_narration_preserves_subtitle_text_but_requires_review(recording_task):
+    repo, task_id, version_id, client = recording_task
+    original = repo.create_subtitle_track(SubtitleTrack(
+        id="caption_recording_old", workspace_id="local", task_id=task_id,
+        timeline_version_id=version_id, language="zh-CN", source_language=None,
+        style={"font_size": 40},
+        cues=[SubtitleCue(id="caption_1", source_cue_id=None, text="用户改过的字幕", start_seconds=0,
+                          end_seconds=1)], generation_method="timeline", model_id=None,
+        artifact_ref="artifacts/task_recording/old.srt", transform_id="transform_caption_old",
+        status="valid"))
+    route = f"/api/creation-tasks/{task_id}"
+    saved = client.post(route + "/audio/recordings",
+                        files={"audio": ("voice.wav", wav_bytes(), "audio/wav")}).json()
+    preview = client.post(route + "/audio/preview", json={
+        "base_version_id": version_id, "action": "replace_narration",
+        "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}})
+    assert preview.status_code == 200, preview.text
+    confirmed = client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={})
+    assert confirmed.status_code == 200, confirmed.text
+    current_version = repo.get_creation_task("local", task_id).current_timeline_version_id
+    tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
+    assert len(tracks) == 1
+    assert tracks[0].status == "unavailable"
+    assert tracks[0].artifact_ref is None and tracks[0].transform_id is None
+    assert tracks[0].cues == original.cues and tracks[0].style == original.style
+    assert tracks[0].repair_action
+    assert repo.list_subtitle_tracks("local", task_id, timeline_version_id=version_id)[0].status == "valid"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
+def test_volume_edit_keeps_subtitle_track_valid(recording_task):
+    repo, task_id, version_id, client = recording_task
+    original = repo.create_subtitle_track(SubtitleTrack(
+        id="caption_recording_old", workspace_id="local", task_id=task_id,
+        timeline_version_id=version_id, language="zh-CN", source_language=None,
+        style={"font_size": 40},
+        cues=[SubtitleCue(id="caption_1", source_cue_id=None, text="用户改过的字幕", start_seconds=0,
+                          end_seconds=1)], generation_method="timeline", model_id=None,
+        artifact_ref="artifacts/task_recording/old.srt", transform_id="transform_caption_old",
+        status="valid"))
+    preview = client.post(f"/api/creation-tasks/{task_id}/audio/preview", json={
+        "base_version_id": version_id, "action": "update",
+        "target_id": "audio-narration-main", "values": {"gain_db": -6}})
+    assert preview.status_code == 200, preview.text
+    confirmed = client.post(f"/api/creation-tasks/{task_id}/edits/{preview.json()['proposal']['id']}/confirm",
+                            json={})
+    assert confirmed.status_code == 200, confirmed.text
+    current_version = repo.get_creation_task("local", task_id).current_timeline_version_id
+    tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
+    assert len(tracks) == 1
+    assert tracks[0].status == "valid"
+    assert tracks[0].artifact_ref == original.artifact_ref and tracks[0].transform_id == original.transform_id
+    assert tracks[0].cues == original.cues and tracks[0].style == original.style
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
