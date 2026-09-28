@@ -110,6 +110,8 @@ MAKE在现有main.py、schemas.py、audio_timeline.py、CreationTaskWorkspace.ts
 
 **2026-09-28 第五批收口**：调度·渲染定时任务后端（e95085b→d575266，scheduled_tasks 表+CRUD，迁移 12，8 passed）；pi·实现 WIL-56 P1 小修（bedf068→cce1a78，选题编辑标题+检查清单，45 passed）；分析·复核箭头/密度分析（arrow-density-analysis.md，只读）。**迁移冲突已解**：本地多成员（迁移 11）与定时任务（迁移 11）撞版本，主控裁定本地多成员=11、定时任务=12、PRODUCTION_SCHEMA_VERSION=12，67 passed 验证通过。WIL-79/80 In Review。
 
+**2026-09-28 第六批派工**：调度·渲染/箭头 overlay 后端（ArrowOverlay 模型 + PIL 渲染，WIL-82，arrow-overlay-backend 工作树，前端后续接）；pi·实现/密度对齐（v4 紧凑令牌，WIL-83，density-align 工作树）；账号·接口/本地多成员第②步成员与空间页面（WIL-84，members-page 工作树）。分析·复核留空（刚交完箭头/密度分析）。
+
 **2026-09-28 第五批派工（WIL-56 缺口继续 + 本地多成员并行）**：pi·实现/WIL-56 P1 小修（选题编辑标题 §1.2 + 检查逐项清单 §1.7，WIL-79，wil56-p1-tweaks 工作树）；调度·渲染/定时任务后端第一片（scheduled_tasks 表 + CRUD 不接执行，WIL-80，scheduled-tasks-backend 工作树）；分析·复核/箭头 overlay 接线 + 密度对齐走查（只读，WIL-81）。账号·接口仍在本地多成员地基（WIL-73）。WIL-56 阶段缺口（§1.1+§1.8）已交付 8b2c618→a5639b9 集成、WIL-78 In Review。
 
 **2026-09-28 第四批收口（核验类零代码 + 缺口清单）**：调度·渲染核验 SCHED 受权接口已存在（OwnerVerifier/retry_existing/wake_existing/change_policy 均在 dev，38 passed）→ 无新代码，WIL-60 缺口①更正为"接口已存在，剩余是 material owner+AUTH+MAKE"；分析·复核产出 WIL-56 v4 缺口清单（P0 六项：发布阶段缺失/箭头 overlay 缺失/资料阶段无视图/成员与空间缺失/权限模型缺失/定时任务 stub；P1/P2 详列；依赖风险标注）。pi·实现已派 WIL-56 阶段缺口（§1.1 资料视图 + §1.8 发布结构，CreationTaskWorkspace.tsx）。剩余 P0 后端依赖项（§1.5A 箭头后端、§1.8 发布后端、§4/§5 权限多成员、§6 定时任务）需后端规划，其中 §5 权限/多成员为单用户→多成员架构级变更，需主控/用户先定方向。
