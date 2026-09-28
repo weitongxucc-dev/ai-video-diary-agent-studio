@@ -1,4 +1,5 @@
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
+import { localMemberTokenHeader } from "./local-member-auth";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -87,6 +88,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
       ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+      // 无令牌时 localMemberTokenHeader() 返回 {}，保持 header 缺席 = 后端方案 A 匿名放行。
+      ...localMemberTokenHeader(),
     },
     cache: "no-store",
   });
@@ -150,6 +153,8 @@ async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
         ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+        // 无令牌时不注入，缺席即匿名放行（方案 A）。
+        ...localMemberTokenHeader(),
       },
       cache: "no-store",
     });
@@ -798,7 +803,7 @@ export async function saveCreationTaskRecording(taskId: string, recording: Blob)
   const body = new FormData();
   body.append("audio", recording, `本机录音.${suffix}`);
   const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`),
-    { method: "POST", body, cache: "no-store" });
+    { method: "POST", body, cache: "no-store", headers: { ...localMemberTokenHeader() } });
   const payload = await response.json();
   if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "电脑录音未保存");
   return payload as CreationTaskRecording;
@@ -808,7 +813,7 @@ export function listenCreationTaskAudio(taskId: string, input: { base_version_id
 }
 export async function importCreationTaskAudio(taskId: string, file: File): Promise<{ source_ref: string; name: string; duration_ms: number }> {
   const body = new FormData(); body.append("audio", file);
-  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body });
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body, headers: { ...localMemberTokenHeader() } });
   const payload = await response.json();
   if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
   return payload;
@@ -821,7 +826,7 @@ export function previewCreationTaskVisual(taskId: string, input: import("./types
 
 export async function importCreationTaskGraphic(taskId:string,file:File):Promise<import("./types").GraphicSource> {
   const body=new FormData();body.append("image",file);
-  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body});
+  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body,headers:{...localMemberTokenHeader()}});
   const payload=await response.json();
   if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:"图片导入失败");
   return payload;

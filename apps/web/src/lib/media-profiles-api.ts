@@ -1,3 +1,5 @@
+import { localMemberTokenHeader } from "./local-member-auth";
+
 export type MediaAuthorization = {
   id: string; workspace_id: string; version: string; rights_holder: string;
   content_types: string[]; usage_scopes: string[]; effective_from: string;
@@ -60,7 +62,7 @@ function json(value: string): unknown { try { return JSON.parse(value); } catch 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   const formUpload = typeof FormData !== "undefined" && init?.body instanceof FormData;
-  try { response = await fetch(path, { ...init, headers: { ...(init?.body && !formUpload ? { "Content-Type": "application/json" } : {}), ...init?.headers }, cache: "no-store" }); }
+  try { response = await fetch(path, { ...init, headers: { ...(init?.body && !formUpload ? { "Content-Type": "application/json" } : {}), ...init?.headers, ...localMemberTokenHeader() }, cache: "no-store" }); }
   catch { throw new MediaProfilesApiError(0, "本地服务未接通。"); }
   const text = await response.text(); const payload = text ? json(text) : null;
   if (!response.ok) {

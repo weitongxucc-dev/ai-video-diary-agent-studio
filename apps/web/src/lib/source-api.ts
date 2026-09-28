@@ -1,3 +1,5 @@
+import { localMemberTokenHeader } from "./local-member-auth";
+
 export type SourceConnector = {
   id: string;
   workspace_id: string;
@@ -100,6 +102,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...init?.headers,
+        // 无令牌时为空对象，保持 header 缺席 = 后端方案 A 匿名放行。
+        ...localMemberTokenHeader(),
       },
       cache: "no-store",
     });

@@ -143,14 +143,14 @@ function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, 
     .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
 }
 
-function NavigationRows({ pathname }: { pathname: string }) {
+function NavigationRows({ pathname, showMembers }: { pathname: string; showMembers: boolean }) {
   const searchParams = useSearchParams();
-  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} />;
+  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} showMembers={showMembers} />;
 }
 
-function NavigationRowsContent({ pathname, searchParams }: { pathname: string; searchParams?: Pick<URLSearchParams, "get"> }) {
+function NavigationRowsContent({ pathname, searchParams, showMembers = true }: { pathname: string; searchParams?: Pick<URLSearchParams, "get">; showMembers?: boolean }) {
   return <>
-    {primaryNav.map((item) => {
+    {primaryNav.filter((item) => showMembers || item.href !== "/members").map((item) => {
       const ItemIcon = item.icon;
       const active = isActive(pathname, item.href, item.activePath, searchParams);
       return (
@@ -193,6 +193,8 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.dataset.themeMode = mode;
 }
 
+import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
+
 export function AppShell({
   children,
   creationTasks,
@@ -210,6 +212,10 @@ export function AppShell({
   toolbarActions,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
+  // 身份引导：挂载时拉一次 whoami 并把令牌写进 localStorage（hook 内完成）。
+  // 角色未知（加载中）时先显示“成员与空间”，避免 owner 首屏看不到自己的页面。
+  const { role: localMemberRole } = useLocalMemberIdentity();
+  const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
   const router = useRouter();
@@ -345,7 +351,7 @@ export function AppShell({
   const ThemeIcon = themeMode === "dark" ? Moon : Sun;
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
     { id: "new-production", label: "新建视频", description: "说说想法", href: "/?new=1", icon: Plus },
-    ...primaryNav.map((item) => ({
+    ...primaryNav.filter((item) => showMembersNav || item.href !== "/members").map((item) => ({
       id: `nav-${item.href}`,
       label: item.label,
       description: item.label === "首页" ? "查看任务、阻断和通知" : `打开${item.label}`,
@@ -361,7 +367,7 @@ export function AppShell({
     })),
     { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
-  ], [recentTasks]);
+  ], [recentTasks, showMembersNav]);
 
   function collapseQuick() {
     quickManualRef.current = true;
@@ -441,8 +447,8 @@ export function AppShell({
           </Link>
 
           <div className="desktop-nav-group">
-            <Suspense fallback={<NavigationRowsContent pathname={pathname} />}>
-              <NavigationRows pathname={pathname} />
+            <Suspense fallback={<NavigationRowsContent pathname={pathname} showMembers={showMembersNav} />}>
+              <NavigationRows pathname={pathname} showMembers={showMembersNav} />
             </Suspense>
           </div>
 
