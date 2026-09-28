@@ -7,6 +7,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
 const { autoUpdater } = require('electron-updater');
+const { loadOrCreateIdentity } = require('./device-identity');
 
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
@@ -220,6 +221,17 @@ function distributionAuthEnv() {
   }
 }
 
+// First launch generates and persists the device identity; a malformed file is
+// an operational fault (throws, never regenerated) and will surface as the API's
+// 503 unavailable downstream.
+function deviceIdentityEnv() {
+  const identity = loadOrCreateIdentity(app.getPath('userData'));
+  return {
+    DEVICE_ID: identity.device_id,
+    DEVICE_PROOF: identity.proof,
+  };
+}
+
 // ── API Process Management ─────────────────────────────
 function findApiBinary() {
   if (isDev) return null;
@@ -270,6 +282,7 @@ async function startApiServer() {
   const env = {
     ...process.env,
     ...distributionAuthEnv(),
+    ...deviceIdentityEnv(),
     ...localModelEnv(),
     API_PORT: String(apiPort),
     API_HOST: '127.0.0.1',
