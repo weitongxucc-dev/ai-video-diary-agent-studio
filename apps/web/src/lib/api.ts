@@ -920,6 +920,12 @@ export function createLocalInviteCode(): Promise<{ invite_code: string }> {
   return request<{ invite_code: string }>("/api/members/invite-code", { method: "POST" });
 }
 
-export function joinLocalMember(input: { code: string; name: string }): Promise<LocalMember> {
-  return request<LocalMember>("/api/members/join", { method: "POST", body: JSON.stringify(input) });
+/**
+ * 加入空间。后端 `POST /api/members/join` 返回 `MemberWithTokenResponse`，其
+ * `member_token` 是调用方唯一能拿到本人令牌的时机（main.py 的注释：token 只在
+ * join 与 whoami 两处暴露）。所以这里如实返回带令牌的类型，调用方必须立刻落盘，
+ * 否则后续请求会一直匿名（方案 A 下按 owner 放行，多成员形同虚设）。
+ */
+export function joinLocalMember(input: { code: string; name: string }): Promise<LocalMember & { member_token: string }> {
+  return request<LocalMember & { member_token: string }>("/api/members/join", { method: "POST", body: JSON.stringify(input) });
 }

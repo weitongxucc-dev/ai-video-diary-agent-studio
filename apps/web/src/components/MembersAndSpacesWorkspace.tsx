@@ -9,6 +9,8 @@ import {
   addLocalMember, createLocalInviteCode, joinLocalMember, listLocalMembers,
   membersErrorMessage, removeLocalMember, setLocalMemberRole, type LocalMember,
 } from "@/lib/api";
+import { storeLocalMemberToken } from "@/lib/local-member-auth";
+import { requestLocalMemberIdentityRefresh } from "@/hooks/useLocalMemberIdentity";
 import styles from "./MembersAndSpacesWorkspace.module.css";
 
 type Role = "owner" | "member";
@@ -72,8 +74,22 @@ export function MembersAndSpacesWorkspace({ role = "owner" }: { role?: Role }) {
     const code = String(data.get("code") ?? "").trim();
     const name = String(data.get("name") ?? "").trim();
     if (!code || !name) return;
-    setBusy(true); setNotice(null);
-    try { const joined = await joinLocalMember({ code, name }); setNotice(`${joined.name} 已加入空间。`); event.currentTarget.reset(); await refresh(); }
+    setBusy(true); setNotice(null); setError(null);
+    try {
+      const joined = await joinLocalMember({ code, name });
+      // 令牌必须在 join 这一刻落盘：它是唯一能拿到本人 token 的时机。不存的话，
+      // 后续请求全部匿名，方案 A 下按 owner 放行——「加了人但没生效」。
+      const token = typeof joined.member_token === "string" ? joined.member_token.trim() : "";
+      if (!token) {
+        // 后端已建成员却没回 token：不能假装成功，如实报出来。当前仍是匿名(owner)。
+        setError("已加入空间，但本地服务没有返回成员令牌，当前仍以匿名(所有者)身份访问。请重启本机服务后重试。");
+        return;
+      }
+      storeLocalMemberToken(token);
+      requestLocalMemberIdentityRefresh(); // 令牌刚落盘，让权限显示收敛
+      setNotice(`${joined.name} 已加入空间。`);
+      event.currentTarget.reset(); await refresh();
+    }
     catch (cause) { setError(membersErrorMessage(cause)); }
     finally { setBusy(false); }
   }
