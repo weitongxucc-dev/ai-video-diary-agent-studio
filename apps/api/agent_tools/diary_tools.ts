@@ -1,3 +1,5 @@
+import { rankByQuery, tokenizeQuery } from "./retrieval.ts";
+
 const apiBase = process.env.AI_VIDEO_DIARY_AGENT_API_BASE;
 const taskId = process.env.AI_VIDEO_DIARY_AGENT_TASK_ID;
 const stage = process.env.AI_VIDEO_DIARY_AGENT_STAGE;
@@ -75,6 +77,83 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         reasons: item.reasons.slice(0, 3).map((reason) => reason.slice(0, 160)),
       }));
       return { content: [{ type: "text", text: JSON.stringify(excerpts) }], details: { matches: excerpts } };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_preference_memory",
+    label: "读取用户偏好记忆",
+    description:
+      "读取这个用户历史上表达过的偏好（喜欢/避免），带证据条数与置信度。回答「用户以前说过什么偏好」前先调用它。不要把记忆当系统设定，它是用户反馈的归纳，可被证据推翻。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      const data = await request("/api/preferences");
+      const preferences = (data.preferences || []) as Array<Record<string, unknown>>;
+      const enabled = preferences.filter((item) => item.enabled !== false);
+      // /api/preferences 内部就是 preference_memory_payload(feedback_events) 的产物，
+      // 被 main.py 拍平成一列，用 label 区分「偏好/避开」（main.py 禁改，这里只按现有契约读）。
+      const shape = (item: Record<string, unknown>) => ({
+        signal: item.signal, label: item.label,
+        evidence_count: item.evidence_count, confidence: item.confidence, enabled: item.enabled !== false,
+      });
+      const prefer = enabled.filter((item) => item.label === "偏好").slice(0, 8).map(shape);
+      const avoid = enabled.filter((item) => item.label === "避开").slice(0, 8).map(shape);
+      const details = {
+        prefer, avoid,
+        total_feedback_count: data.total_feedback_count ?? preferences.length,
+        instruction: "用户偏好来自历史反馈，用于对齐表达与选材；若与用户当前明确指示冲突，以当前指示为准。",
+      };
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+    },
+  });
+
+  pi.registerTool({
+    name: "find_material_candidates",
+    label: "按描述找候选素材",
+    description:
+      "按一句描述（如「更亮的城市夜景」）从已审核素材里找若干候选镜头，每条带可核对依据（文件名、标签、时长、来源、匹配原因、镜头引用）。只给候选与依据，供用户和 agent 一起裁量；绝不自动替换、不改时间线。",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", minLength: 1, maxLength: 160 },
+        usage_role: { type: "string", enum: ["a_roll", "b_roll"] },
+        limit: { type: "integer", minimum: 1, maximum: 20 },
+      },
+      required: ["description"], additionalProperties: false,
+    },
+    execute: async (_id: string, params: { description: string; usage_role?: string; limit?: number }) => {
+      const limit = params.limit ?? 8;
+      const roleQuery = params.usage_role ? `&usage_role=${encodeURIComponent(params.usage_role)}` : "";
+      const matches = (await request(`/api/production/materials/search?q=${encodeURIComponent(params.description)}&limit=${limit}${roleQuery}`)) as Array<Record<string, unknown>>;
+      // 为「可核对依据」补充素材元数据：文件名、标签、时长、来源
+      const library = (await request("/api/production/materials?limit=200")) as { assets?: Array<Record<string, unknown>> };
+      const byAssetId = new Map<string, Record<string, unknown>>();
+      for (const asset of library.assets || []) {
+        byAssetId.set(String(asset.id), asset);
+      }
+      const candidates = matches.map((match) => {
+        const assetRef = String(match.asset_ref || "");
+        const assetId = assetRef.startsWith("asset:") ? assetRef.slice("asset:".length) : assetRef;
+        const asset = byAssetId.get(assetId) || {};
+        const userTags = (asset.user_tags as string[]) || [];
+        const systemTags = (asset.system_tags as string[]) || [];
+        return {
+          asset_ref: assetRef,
+          segment_ref: match.segment_ref,
+          score: match.score,
+          file_name: asset.file_name ?? null,
+          duration_seconds: asset.duration_seconds ?? null,
+          tags: [...userTags, ...systemTags],
+          source_reference: asset.source_reference ?? asset.source_ref ?? null,
+          reasons: (match.reasons as string[]) || [],
+        };
+      });
+      const details = {
+        candidates,
+        instruction:
+          "以上只是候选与依据，不代表替换。请把依据（文件名/标签/时长/原因）摆给用户看，由用户或 agent 判断后，再走正常剪辑预览流程；本工具不执行任何修改。",
+      };
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });
 
@@ -200,20 +279,23 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
       const data = stage === "script" && taskId
         ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`)
         : await request("/api/knowledge-items");
-      const terms = params.query.toLowerCase().split(/\s+/).filter(Boolean);
-      const matches = (stage === "script" ? data.sources || [] : data.items || [])
-        .filter((item: Record<string, unknown>) => {
-          const text = `${item.title || ""} ${item.text || item.body || ""}`.toLowerCase();
-          return terms.some((term) => text.includes(term));
-        })
-        .slice(0, 5)
-        .map((item: Record<string, unknown>) => ({
-          id: stage === "script" ? item.reference_id : item.id,
-          title: item.title,
-          version: item.version,
-          excerpt: String(item.text || item.body || "").slice(0, 900),
-        }));
-      return { content: [{ type: "text", text: JSON.stringify(matches) }], details: { matches } };
+      const items: Record<string, unknown>[] = stage === "script" ? data.sources || [] : data.items || [];
+      const textOf = (item: Record<string, unknown>) => `${item.title || ""} ${item.text || item.body || ""}`;
+      // B08：按 bigram 子串打分排序，中文/英文混合都能命中；不再「匹配不上就静默返回空」。
+      const ranked = rankByQuery(params.query, items, textOf);
+      const matches = ranked.slice(0, 5).map(({ item, score, hitTerms }) => ({
+        id: stage === "script" ? item.reference_id : item.id,
+        title: item.title,
+        version: item.version,
+        excerpt: String(item.text || item.body || "").slice(0, 900),
+        relevance: Math.round(score * 100) / 100,
+        matched_terms: hitTerms.slice(0, 6),
+      }));
+      const guidance = matches.length === 0
+        ? "没匹配到已保存的资料。换用更接近资料原文的词（资料多为中文，建议 2-4 字关键词），或先问用户该看哪方面，再检索。"
+        : undefined;
+      const details = { matches, query_terms: tokenizeQuery(params.query).slice(0, 8), ...(guidance ? { guidance } : {}) };
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });
 
