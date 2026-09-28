@@ -123,6 +123,14 @@ from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewSer
 from app.preference_memory import PreferenceState, build_preference_memory
 from app.preflight import setup_preflight
 from app.product_hunt import ProductHuntClient
+from app.scheduled_tasks import (
+    ScheduledTaskCreateRequest,
+    ScheduledTaskEnableRequest,
+    ScheduledTaskResponse,
+    ScheduledTasksResponse,
+    ScheduledTaskService,
+    ScheduledTaskUpdateRequest,
+)
 from app.production import (
     ArtifactRecord,
     CreationPlan,
@@ -474,6 +482,7 @@ video_job_runner = VideoJobRunner(production_repo)
 # explicit recoverable state; it must never be interpreted as a success.
 video_job_runner.recover_after_restart()
 production_repo.interrupt_running_person_renders()
+scheduled_task_service = ScheduledTaskService(settings.database_path)
 edit_plan_apply_runner = None
 source_tracker = SourceTracker(video_inbox)
 auth_context = SupabaseAuthContext(settings)
@@ -871,6 +880,50 @@ def get_workflow_status() -> WorkflowStatusResponse:
         node_names=workflow.node_names(),
         human_review_nodes=workflow.human_review_nodes(),
     )
+
+
+@app.get("/api/scheduled-tasks", response_model=ScheduledTasksResponse)
+def list_scheduled_tasks(request: Request) -> ScheduledTasksResponse:
+    tasks = scheduled_task_service.list_tasks(current_workspace_id(request))
+    return ScheduledTasksResponse(tasks=tasks, total_count=len(tasks))
+
+
+@app.post(
+    "/api/scheduled-tasks",
+    response_model=ScheduledTaskResponse,
+    status_code=201,
+)
+def create_scheduled_task(request: Request, payload: ScheduledTaskCreateRequest) -> ScheduledTaskResponse:
+    try:
+        return scheduled_task_service.create_task(current_workspace_id(request), payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/scheduled-tasks/{task_id}", response_model=ScheduledTaskResponse)
+def update_scheduled_task(request: Request, task_id: str, payload: ScheduledTaskUpdateRequest) -> ScheduledTaskResponse:
+    try:
+        return scheduled_task_service.update_task(current_workspace_id(request), task_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="定时任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/scheduled-tasks/{task_id}/enabled", response_model=ScheduledTaskResponse)
+def set_scheduled_task_enabled(request: Request, task_id: str, payload: ScheduledTaskEnableRequest) -> ScheduledTaskResponse:
+    try:
+        return scheduled_task_service.set_enabled(current_workspace_id(request), task_id, payload.enabled)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="定时任务不存在") from exc
+
+
+@app.delete("/api/scheduled-tasks/{task_id}", status_code=204)
+def delete_scheduled_task(request: Request, task_id: str) -> None:
+    try:
+        scheduled_task_service.delete_task(current_workspace_id(request), task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="定时任务不存在") from exc
 
 
 @app.get("/api/content-templates", response_model=ContentTemplatesResponse)

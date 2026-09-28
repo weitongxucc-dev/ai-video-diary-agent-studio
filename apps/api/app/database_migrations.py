@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 11
+PRODUCTION_SCHEMA_VERSION = 12
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -574,6 +574,25 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
         11,
         LOCAL_MEMBERS_TABLE_DDL + "\n" + LOCAL_MEMBERS_SEED_DDL,
+    ),
+    (
+        12,
+        """
+        CREATE TABLE scheduled_tasks (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_type TEXT NOT NULL CHECK (task_type IN ('material_analysis', 'creation_render')),
+            trigger_mode TEXT NOT NULL CHECK (trigger_mode IN ('idle', 'scheduled')),
+            target_ref TEXT NOT NULL,
+            not_before_utc TEXT,
+            window_json TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_scheduled_tasks_workspace
+            ON scheduled_tasks(workspace_id, enabled, created_at);
+        """,
     ),
 )
 
