@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, Clock3, Film, LoaderCircle, RefreshCw, Send, Signal } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, Clock3, Film, LoaderCircle, QrCode, RefreshCw, Send, Signal, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { listCreationTasks } from "@/lib/api";
@@ -40,6 +40,49 @@ function taskNextStep(task: CreationTask): string {
   return `继续${stageLabels[task.stage]}`;
 }
 
+// ── 发布账号授权（WIL-113）──────────────────────────────────────────────
+// 本段是「只做授权、不发内容」的授权连接层入口。后端路由尚未接线（归 WIL-112），
+// 故前端用 in-browser mock 走通流程；真实 token 交换由后续平台接入包替换。
+// 能力表与 apps/api/app/platform_auth/capabilities.py 逐字对齐。
+
+type PublishPlatformKey = "douyin" | "wechat" | "xiaohongshu";
+type BoundAccount = { platform: PublishPlatformKey; accountRef: string; boundAt: string; revoked: boolean };
+
+const PLATFORM_AUTH_CAPS: Array<{ platform: PublishPlatformKey; label: string; scanOauth: boolean; note: string }> = [
+  { platform: "douyin", label: "抖音", scanOauth: true, note: "支持扫码授权 + 长期 token（视频发布权限另审）" },
+  { platform: "wechat", label: "微信视频号", scanOauth: false, note: "微信登录 OAuth 仅身份；视频号无第三方发布短视频 API" },
+  { platform: "xiaohongshu", label: "小红书", scanOauth: false, note: "未查证" },
+];
+
+const MOCK_STORAGE_KEY = "ai-video-diary-publish-accounts-mock";
+const MOCK_DRAFT_KEY = "ai-video-diary-publish-drafts-mock";
+
+function loadMockAccounts(): BoundAccount[] {
+  try {
+    const raw = localStorage.getItem(MOCK_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as BoundAccount[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+type DraftRecord = { platform: PublishPlatformKey; draftId: string; title: string; hashtags: string[]; createdAt: string };
+
+function loadMockDrafts(): DraftRecord[] {
+  try {
+    const raw = localStorage.getItem(MOCK_DRAFT_KEY);
+    return raw ? (JSON.parse(raw) as DraftRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+const DRAFT_TITLE_MAX = 30;
+const DRAFT_DESC_MAX = 1000;
+const DRAFT_TAG_MAX = 20;
+
+
+
 export function PublishingWorkspace() {
   const [tasks, setTasks] = useState<CreationTask[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
@@ -49,6 +92,58 @@ export function PublishingWorkspace() {
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const latestRequest = useRef(0);
+
+  // 授权连接层（mock）：账号持久化到 localStorage，证明「二次进入不需重新登录」
+  const [accounts, setAccounts] = useState<BoundAccount[]>([]);
+  const [authPlatform, setAuthPlatform] = useState<PublishPlatformKey | null>(null);
+  useEffect(() => { setAccounts(loadMockAccounts()); }, []);
+
+  function bindAccount(platform: PublishPlatformKey) {
+    const account: BoundAccount = {
+      platform,
+      accountRef: `openid_mock_${platform}_${Math.random().toString(16).slice(2, 8)}`,
+      boundAt: new Date().toISOString(),
+      revoked: false,
+    };
+    const next = [...accounts.filter((item) => item.platform !== platform), account];
+    setAccounts(next);
+    try { localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(next)); } catch { /* 存储不可用不阻断 */ }
+    setAuthPlatform(null);
+  }
+
+  function simulateRevoke(platform: PublishPlatformKey) {
+    const next = accounts.map((item) => (item.platform === platform ? { ...item, revoked: true } : item));
+    setAccounts(next);
+    try { localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(next)); } catch { /* noop */ }
+  }
+
+  // 文案三件套 + 存草稿（mock，只到草稿为止，绝不触发发布）
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftHashtags, setDraftHashtags] = useState("");
+  const [drafts, setDrafts] = useState<DraftRecord[]>([]);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  useEffect(() => { setDrafts(loadMockDrafts()); }, []);
+
+  function saveDraft(platform: PublishPlatformKey) {
+    const title = draftTitle.trim();
+    const description = draftDescription.trim();
+    const hashtags = draftHashtags.split(/[,\n]/).map((t) => t.trim().replace(/^#/, "")).filter(Boolean);
+    if (!title) { setDraftNotice("请填写标题"); return; }
+    if (title.length > DRAFT_TITLE_MAX) { setDraftNotice(`标题超过 ${DRAFT_TITLE_MAX} 字`); return; }
+    if (description.length > DRAFT_DESC_MAX) { setDraftNotice(`描述超过 ${DRAFT_DESC_MAX} 字`); return; }
+    if (hashtags.length > DRAFT_TAG_MAX) { setDraftNotice(`话题标签超过 ${DRAFT_TAG_MAX} 个`); return; }
+    const record: DraftRecord = {
+      platform, draftId: `draft_mock_${Math.random().toString(16).slice(2, 8)}`,
+      title, hashtags, createdAt: new Date().toISOString(),
+    };
+    const next = [record, ...drafts];
+    setDrafts(next);
+    try { localStorage.setItem(MOCK_DRAFT_KEY, JSON.stringify(next)); } catch { /* noop */ }
+    setDraftNotice(`已存入草稿箱（演示，${hashtags.length} 个话题）`);
+  }
+
+
 
   async function refresh() {
     const requestId = ++latestRequest.current;
@@ -95,6 +190,68 @@ export function PublishingWorkspace() {
   return (
     <AppShell creationTasks={tasks} inspector={inspector} inspectorTitle="记录详情">
       <div className={styles.page}>
+        <section className={styles.sectionHeading} style={{ marginTop: 4 }}><div><span>发布账号授权 · 演示</span><h2>绑定你的发布账号</h2><p>每个成员各自绑定自己的账号；授权一次、长期有效。本段为 mock 演示，真实 token 交换尚未接入。</p></div></section>
+        <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+          {PLATFORM_AUTH_CAPS.map((cap) => {
+            const bound = accounts.find((item) => item.platform === cap.platform);
+            const status = bound ? (bound.revoked ? "需重新授权" : "已授权") : (cap.scanOauth ? "未授权" : "该平台无此能力");
+            return (
+              <div key={cap.platform} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", border: "1px solid var(--border-1)", borderRadius: 8, background: "var(--surface-1)" }}>
+                <UserRound size={18} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <strong style={{ fontSize: 13 }}>{cap.label}</strong>
+                  <small style={{ display: "block", color: "var(--text-3)", fontSize: 12 }}>{cap.note}</small>
+                </div>
+                <span style={{ color: status === "已授权" ? "var(--success)" : status === "需重新授权" ? "var(--warning)" : "var(--text-3)", fontSize: 12 }}>{status}</span>
+                {cap.scanOauth ? (
+                  bound ? (
+                    <button className={styles.secondaryButton} type="button" onClick={() => simulateRevoke(cap.platform)}>{bound.revoked ? "模拟重新授权" : "模拟令牌失效"}</button>
+                  ) : (
+                    <button className={styles.primaryButton} type="button" onClick={() => setAuthPlatform(cap.platform)}><QrCode size={14} />扫码授权</button>
+                  )
+                ) : <button className={styles.secondaryButton} type="button" disabled>无此能力</button>}
+              </div>
+            );
+          })}
+        </div>
+        {accounts.length ? (
+          <section className={styles.inspectorMuted}><strong>已绑定账号</strong>
+            {accounts.map((item) => <p key={item.platform}>{PLATFORM_AUTH_CAPS.find((c) => c.platform === item.platform)?.label ?? item.platform} · {item.accountRef}{item.revoked ? " · 需重新授权" : " · 已授权"}</p>)}
+          </section>
+        ) : null}
+        {accounts.some((a) => a.platform === "douyin" && !a.revoked) ? (
+          <section style={{ padding: "10px 12px", border: "1px solid var(--border-1)", borderRadius: 8, background: "var(--surface-1)", marginBottom: 12 }}>
+            <strong style={{ fontSize: 13 }}>填写视频文案（演示）</strong>
+            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)" }}>标题<input style={{ width: "100%", marginTop: 3, padding: "6px 8px", border: "1px solid var(--border-1)", borderRadius: 6 }} value={draftTitle} maxLength={DRAFT_TITLE_MAX} onChange={(e) => setDraftTitle(e.target.value)} placeholder={`标题（≤${DRAFT_TITLE_MAX} 字）`} /></label>
+              <label style={{ fontSize: 12, color: "var(--text-2)" }}>描述<textarea style={{ width: "100%", marginTop: 3, padding: "6px 8px", border: "1px solid var(--border-1)", borderRadius: 6, minHeight: 60 }} value={draftDescription} maxLength={DRAFT_DESC_MAX} onChange={(e) => setDraftDescription(e.target.value)} placeholder={`描述（≤${DRAFT_DESC_MAX} 字）`} /></label>
+              <label style={{ fontSize: 12, color: "var(--text-2)" }}>话题标签（逗号/换行分隔，≤{DRAFT_TAG_MAX} 个）<input style={{ width: "100%", marginTop: 3, padding: "6px 8px", border: "1px solid var(--border-1)", borderRadius: 6 }} value={draftHashtags} onChange={(e) => setDraftHashtags(e.target.value)} placeholder="产品, 教程" /></label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button className={styles.primaryButton} type="button" onClick={() => saveDraft("douyin")}>存草稿（演示）</button>
+                {draftNotice ? <span style={{ fontSize: 12, color: "var(--text-2)" }}>{draftNotice}</span> : null}
+              </div>
+            </div>
+            {drafts.length ? (
+              <div style={{ marginTop: 10 }}>
+                <strong style={{ fontSize: 12 }}>草稿箱（演示）</strong>
+                {drafts.map((d) => <p key={d.draftId} style={{ fontSize: 12, color: "var(--text-2)", margin: "4px 0" }}>#{d.draftId} · {d.title}{d.hashtags.length ? ` · 话题 ${d.hashtags.join("、")}` : ""}</p>)}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        {authPlatform ? (
+          <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "grid", placeItems: "center", background: "rgba(0,0,0,.3)" }} role="dialog" aria-label="扫码授权">
+            <div style={{ width: 320, padding: 20, borderRadius: 10, background: "var(--surface-1)", border: "1px solid var(--border-1)", boxShadow: "var(--shadow-float)" }}>
+              <strong style={{ fontSize: 14 }}>{PLATFORM_AUTH_CAPS.find((c) => c.platform === authPlatform)?.label} · 扫码授权（演示二维码）</strong>
+              <div style={{ display: "grid", placeItems: "center", height: 160, margin: "12px 0", background: "var(--surface-2)", borderRadius: 8 }} aria-hidden="true"><QrCode size={96} /></div>
+              <p style={{ fontSize: 12, color: "var(--text-2)" }}>这是 mock 二维码，不连接真实平台。点击下方完成模拟授权。</p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button className={styles.secondaryButton} type="button" onClick={() => setAuthPlatform(null)}>取消</button>
+                <button className={styles.primaryButton} type="button" onClick={() => bindAccount(authPlatform)}>模拟扫码完成</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <section className={styles.capabilityBanner}><span><Signal size={18} /></span><div><strong>暂不支持发布</strong><p>可以先保存成片，再到平台上传。</p></div><Link href="/health">运行情况 <ArrowRight size={14} /></Link></section>
         {error && tasks.length ? (
           <section aria-label="读取失败提示" className={styles.inspectorNotice} role="status">
