@@ -11,7 +11,6 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -19,9 +18,11 @@ from urllib.parse import quote
 
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
+    MODEL_FILES,
     MODEL_SPECS,
     QWEN3_TTS_06B_BASE_8BIT,
     QWEN3_VL_4B_4BIT,
+    DownloadFile,
     ModelCatalog,
     ModelSpec,
 )
@@ -32,51 +33,6 @@ _SAFETY_FREE_BYTES = 2 * 1024**3
 _RUNTIME_RESERVE_BYTES = 8 * 1024**3
 _CHUNK_BYTES = 4 * 1024**2
 
-
-@dataclass(frozen=True)
-class DownloadFile:
-    path: str
-    size: int
-
-
-MODEL_FILES: dict[str, tuple[DownloadFile, ...]] = {
-    QWEN3_VL_4B_4BIT.id: (
-        DownloadFile("added_tokens.json", 707),
-        DownloadFile("chat_template.jinja", 5292),
-        DownloadFile("chat_template.json", 5502),
-        DownloadFile("config.json", 7137),
-        DownloadFile("generation_config.json", 269),
-        DownloadFile("merges.txt", 1671853),
-        DownloadFile("model.safetensors", 3093767283),
-        DownloadFile("model.safetensors.index.json", 64742),
-        DownloadFile("preprocessor_config.json", 782),
-        DownloadFile("special_tokens_map.json", 613),
-        DownloadFile("tokenizer.json", 11422654),
-        DownloadFile("tokenizer_config.json", 5445),
-        DownloadFile("video_preprocessor_config.json", 817),
-        DownloadFile("vocab.json", 2776833),
-    ),
-    CHINESE_CLIP_VIT_B16.id: (
-        DownloadFile("config.json", 3_008),
-        DownloadFile("preprocessor_config.json", 342),
-        DownloadFile("pytorch_model.bin", 753_177_983),
-        DownloadFile("vocab.txt", 109_540),
-    ),
-    QWEN3_TTS_06B_BASE_8BIT.id: (
-        DownloadFile("config.json", 5_522),
-        DownloadFile("generation_config.json", 245),
-        DownloadFile("merges.txt", 1_671_839),
-        DownloadFile("model.safetensors", 1_304_461_214),
-        DownloadFile("model.safetensors.index.json", 77_731),
-        DownloadFile("preprocessor_config.json", 127),
-        DownloadFile("speech_tokenizer/config.json", 2_336),
-        DownloadFile("speech_tokenizer/configuration.json", 76),
-        DownloadFile("speech_tokenizer/model.safetensors", 682_293_092),
-        DownloadFile("speech_tokenizer/preprocessor_config.json", 234),
-        DownloadFile("tokenizer_config.json", 7_344),
-        DownloadFile("vocab.json", 2_776_833),
-    ),
-}
 
 MODEL_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     QWEN3_VL_4B_4BIT.id: ("mlx-vlm==0.7.0",),

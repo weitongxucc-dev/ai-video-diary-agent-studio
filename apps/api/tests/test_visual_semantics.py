@@ -159,7 +159,7 @@ def test_evidence_timestamps_never_diverge_from_the_worker(tmp_path):
 
 
 def test_missing_model_never_degrades_into_empty_or_fake_labels(tmp_path):
-    """空环境必须说「未安装」，不许返回空标签或假向量。
+    """空环境必须说「未找到」，不许返回空标签或假向量。
 
     这是验收判据 (a)：整条链路的降级都要可见、可测，不许假装成功。
     """
@@ -168,7 +168,7 @@ def test_missing_model_never_degrades_into_empty_or_fake_labels(tmp_path):
     provider = visual_semantic_provider_from_catalog(catalog)
 
     assert provider.ready is False
-    assert "未安装" in provider.message
+    assert "未找到" in provider.message
     assert "权重未下载" in provider.message
     assert "处置：" in provider.message
 
@@ -177,9 +177,9 @@ def test_missing_model_never_degrades_into_empty_or_fake_labels(tmp_path):
     segments = [SegmentWindow("segment_1", 0.0, 4.0)]
 
     # 两个入口都必须抛错，而不是悄悄返回空结果。
-    with pytest.raises(VisualSemanticError, match="未安装"):
+    with pytest.raises(VisualSemanticError, match="未找到"):
         provider.embed_segments(video, segments)
-    with pytest.raises(VisualSemanticError, match="未安装"):
+    with pytest.raises(VisualSemanticError, match="未找到"):
         provider.embed_texts(["城市夜景"])
 
 

@@ -310,20 +310,16 @@ def _local_model_item(
 ) -> dict[str, Any]:
     """Map a model's readiness onto the four statuses this module already uses.
 
-    The label comes from the *weight* state, because that is the decision the
-    user has to make: no weights is a download, a broken install is a reinstall,
-    and weights that are present but unusable means the environment around them
-    is at fault — repairable without spending another multi-gigabyte download.
+    The severity comes from the *weight* state, because that is the decision the
+    user has to make: no weights is a download, a broken or half-present install
+    is a reinstall, and weights that are present but unusable means the
+    environment around them is at fault — repairable without spending another
+    multi-gigabyte download. It is read as a field rather than matched against
+    the Chinese label so that rewording a message can never silently drop a model
+    into ``degraded``.
     """
     readiness: ModelReadiness = catalog.readiness(spec)
-    if readiness.available:
-        status = "ready"
-    elif readiness.label == "未安装":
-        status = "missing"
-    elif readiness.label == "安装不完整":
-        status = "invalid"
-    else:
-        status = "degraded"
+    status = readiness.severity
     return _health_item(
         item_id=item_id,
         label=f"{label}（{spec.display_name}）",
