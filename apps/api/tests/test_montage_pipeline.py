@@ -13,14 +13,12 @@ from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
-import app.production as production_module
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CpuRenderGrantContext
 from app.host_resource_probes import HostProcessProbe
@@ -3492,17 +3490,11 @@ def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_sta
     assert result.status_code == 409 and "锁定" in result.text
 
 
-def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_render_edit_state, monkeypatch):
+def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_render_edit_state):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     anchor, later = state.montage.clips[0], state.montage.clips[1]
     before = state.client.get(base).json()
-    # 这两行代替 app/production.py 里 EditOperationType 与 SUPPORTED_EDIT_OPERATION_TYPES
-    # 尚未加入的 "InsertClip"；补上后删掉本段即可。
-    monkeypatch.setattr(production_module, "EditOperationType",
-        Literal[*production_module.EditOperationType.__args__, "InsertClip"])
-    monkeypatch.setattr(production_module, "SUPPORTED_EDIT_OPERATION_TYPES",
-        {*production_module.SUPPORTED_EDIT_OPERATION_TYPES, "InsertClip"})
     payload = {"operation_type": "InsertClip", "clip_id": anchor.id, "asset_id": "asset_1",
                "segment_id": "segment_1", "source_start_seconds": 10}
     preview = state.client.post(base + "/edits/exact/preview", json=payload)
@@ -3510,6 +3502,10 @@ def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_re
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
     confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert confirmed.status_code == 200, confirmed.text
+    # 白名单真的生效：操作确实存进了 edit_operations，而不是被冻结集合挡在门外。
+    recorded = state.production.list_edit_operations(state.workspace_id, state.task.id)
+    assert [operation.operation_type for operation in recorded] == ["InsertClip"]
+    assert recorded[0].status == "applied"
     edited = state.client.get(base).json()["montage"]
     # 没有时长参数：插入的镜头就是素材从10秒到片段末尾16秒的那6秒。
     assert edited["duration_seconds"] == 14
