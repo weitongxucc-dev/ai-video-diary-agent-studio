@@ -91,6 +91,8 @@ class BaseBrowserAdapter:
     desc_selector: str = ""
     topics_selector: str = ""
     draft_button_selector: str = ""
+    # 登录态证据元素：已登录才有的元素（用户名/头像）；空 = 无证据可判 → logged_in=False
+    login_evidence_selector: str = ""
 
     def __init__(self, driver: BrowserDriver | None = None) -> None:
         self._driver = driver
@@ -101,10 +103,25 @@ class BaseBrowserAdapter:
         return self._driver
 
     async def login(self) -> LoginState:
-        driver = self._require_driver()
-        await driver.goto(self.publish_url)
-        # 扫码/登录态由外部 profile 建立；此处只返回驱动能力范围内的登录态。
-        return LoginState(logged_in=True, platform=self.platform, detail="依赖已登录 profile（未验证）")
+        # 不许默认 True：真去读登录态证据；判不出来就 logged_in=False，不冒充已登录。
+        if self._driver is None:
+            return LoginState(
+                logged_in=False, platform=self.platform, detail="无浏览器驱动，无法判定登录态"
+            )
+        await self._driver.goto(self.publish_url)
+        evidence = ""
+        if self.login_evidence_selector:
+            try:
+                evidence = (await self._driver.read_text(self.login_evidence_selector)).strip()
+            except Exception:
+                evidence = ""
+        if evidence:
+            return LoginState(
+                logged_in=True, platform=self.platform, detail=f"已登录：{evidence}"
+            )
+        return LoginState(
+            logged_in=False, platform=self.platform, detail="无法判定登录态（无已登录证据）"
+        )
 
     async def upload_video(self, path: str) -> UploadHandle:
         driver = self._require_driver()
