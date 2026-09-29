@@ -15,7 +15,7 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 
 长期规则从 [文档路由](../docs/README.md) 逐步读取；完整需求追踪见 [开发台账](0.11-development-plan.md)。0.11 桌面与 0.12 手机分开，追踪总表不是本轮全部必交付。
 
-1. **Linear 改名未获批准**：Claude 仅继续完成用户要求的只读审批材料，候选文件 `/tmp/wil-audit/final-approval-2026-09-29-v2.md`。不执行批量改名、描述修改或状态整理；交接登记可写项目讨论，不改任何 issue 字段。WIL-121 为新增工作项，不自动加入原116条命名审批范围。
+1. **Linear 协作试点已批准**：用户在本主控对话明确同意“对齐在制状态、整理三个查看入口、跑通 Insert 功能试点”。允许主控依据现有证据修正活动 issue 的项目归属、状态、标签、关系与失效描述；保留原编号、历史交付及原需求索引，不执行原批量改名清单，不重审所有历史 Done。先建立功能进展、执行安排、需要用户决定/验收三个入口。旧只读命名审批材料不再是本轮执行依据，也不授予旧主控新的写权。
 2. **成员可见性 HOLD**：WIL-110 / WIL-112 / WIL-116 及相关施工保持暂停，不因主控切换或命名整理恢复。候选 `5fcb8ac` 保留、不合入；`sources.py`、`source_repository.py`、`production.py` 和相关可见性迁移/测试不转派。用户已记录的新建 private / 存量 shared 与旧派单新建 shared 相冲突，须按明确暂停要求完成口径澄清、权威同步及重新绑定后恢复。
 3. 本地多成员沿用户指定的本地 SQLite 方案核验；既有 Supabase 路径不删除、不自动激活。当前身份绕过面和读写授权缺口不得表述为安全隔离已完成；也不得借交接自行重设计身份架构。安全稳定规则仍见 [认证边界](../docs/auth-workspace-boundary.md)。
 4. scheduled 生产运行仍关闭。WIL-92 是只读施工计划，不授予 main.py 写权。启动互斥阻断不等于准入门，OwnerRegistration、CPU预算、真实重试授权和端到端释放须分别核实。不得因接口/测试存在宣称 scheduled 已可用。
@@ -30,23 +30,29 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 | --- | --- | --- |
 | workspace:9 / surface:26，前端 Pi | WIL-90，`~/.codex/worktrees/insert-frontend-ui/original` | `apps/web/src/lib/types.ts`、`VideoEditor.tsx`、`CreationTaskWorkspace.tsx` 及其专项测试；继续原已授权 Insert 可见验收，不中断、不重派、不写后端 |
 | workspace:4 / surface:23，Pi | WIL-116，`~/.codex/worktrees/agent-recall-memory/original`，候选 `5fcb8ac` | 可见性相关 `sources.py`、`source_repository.py`、`production.py` 及专项测试保留归属；HOLD，禁止新增修改/提交/集成 |
-| workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；已交付待审，不扩权或继续产品写入 |
-| workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；已交付待审，不把独立检测函数称为自动检查流程已接通 |
-| workspace:10 / surface:27，Claude | WIL-121 / WIL-97，`~/.codex/worktrees/wil97/original`，候选 `4302197` | `apps/web/src/components/AudioTimelineEditor.tsx`；已交付待审，产品文件保留归属；降噪试听、原声保护、静态检查等未验项不自动关闭 |
+| workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；审核退回并 HOLD，不扩权或继续产品写入 |
+| workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；审核退回并 HOLD，不把独立检测函数称为自动检查流程已接通 |
+| workspace:10 / surface:27，Claude | WIL-121 / WIL-97，`~/.codex/worktrees/wil97/original`，候选 `4302197` | `apps/web/src/components/AudioTimelineEditor.tsx`；审核退回并 HOLD，产品文件保留归属；降噪试听、原声保护、静态检查等未验项不自动关闭 |
 | workspace:6 / surface:6，OpenCode | WIL-113 / WIL-115 既有交付，当前可接只读审核 | 无新产品写权；发布相关文件不因既有交付而获得继续施工许可 |
 | workspace:3 / surface:11，原 Claude 主控 | 只读命名审批材料 | 只写其已有审批材料；不全局派单、不集成、不写共享合同、不执行 Linear 改名 |
 | 本 Codex 主控 | 本合同、派单和审核 | 共享文档唯一写者；main.py、schemas.py、DDL 等未明确移交文件不默认开放；依赖复核后逐包授予 |
 
 后端省略前缀的文件位于 `apps/api/app/`，前端组件位于 `apps/web/src/components/`。本表不授予新的产品实现任务。交叉审核者只能读候选，在自己的报告路径写证据，不成为候选文件写者。
 
-## 下一批：现有候选交叉审核
+## 当前试点：功能卡到 Insert 实际验收
 
-三包互不写产品文件；共同基线 dev `93e8182`，审核具体候选，不整支合并。精确契约为 `external-agents/dispatch/controller-20260929-review-*.md`。
+用户批准的是现有工作接续，不是重做产品或全量迁移看板。主控负责 Linear 功能卡、在制事实对齐、证据回填和集成；surface:26 保持 WIL-90 前端及 UI 验证唯一负责人。若需修产品代码，只在其原 owned files 内实施；后端或领域语义新增变更先报主控。最小用户链路：真实任务页面选中镜头 → 添加片段 → 预览 → 确认 → 顺序与版本正确 → 撤销/重做 → 预览和导出对应；三尺寸验证新增交互。测试只用隔离库与短合成素材，禁止真实库、付费模型、真实发布。现有创建入口先查 `POST /api/creation-plans/confirm`，不能依 WIL-120 的错误推断另造入口。
+
+一个功能卡持续承载用户结果，WIL-89/90 作为施工交付关联或子项；R25/WIL-29 保留范围索引。子项 Done 不自动关闭功能卡。候选/集成、组件/API、真实页面、输出媒体、桌面包分别登记；缺证据就保留未验，不把 HTTP 200 或截图存在提升为产品验收。工具可选，沿用 DESIGN.md §5.10，UI 不强制经过 Stitch。
+
+## 已交付候选：审核收口边界
+
+三份交叉审核均已落盘并给出 HOLD；主控把具名问题和证据回填对应 Linear。它们不是本轮 Insert 试点的自动返工授权；不合入，不开启新产品写入，保留作者归属。原审核共同基线 dev `93e8182`，具体报告如下。
 
 - surface:12 审模型外接盘候选 `a59fe1f`，写 `external-agents/review-20260929/model-paths.md`。
 - surface:16 审质量检测候选 `eb7b5a7`，写 `external-agents/review-20260929/quality-checks.md`。
 - surface:6 审音量包络线候选 `4302197`，写 `external-agents/review-20260929/audio-envelope.md`。
-- surface:26 保留当前可见验收；surface:27 保留候选等待审核；surface:23 保持 HOLD。
+- surface:26 保留当前可见验收；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
 
 主控先核独占、diff、依赖与失败语义，再选择最小复验。不把执行者自称“独立复现”当成独立审核；未审候选不集成，不按报告的全量绿灯关闭父项。
 
@@ -54,7 +60,7 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 - UI 基线是 [DESIGN.md](../DESIGN.md) §5.10 的 workspace-dual-v4 主账号/成员原型：三栏、可拖动收起、右上精细修改浮卡、紧凑中文；旧 product-ui-v2 不恢复，未经确认不另起整体布局。原型示例不进入生产事实。
 - 三尺寸1440×900、1180×800、1024×768分别观察；截图、组件、真实API、媒体输出、桌面安装包和产品闭环分别验收。
-- 当前 WIL-120「完全没有任务创建入口」的判断有反证：`main.py` 的 `POST /api/creation-plans/confirm` 创建并持久化 CreationTask，HomeCommandComposer/CreateProductionTaskForm 已有调用。现有路径须先复核，不能据缺少 `POST /api/creation-tasks` 新造入口；完整桌面创建到 Insert 流程仍未验收。对应 issue 暂不修改，证据交回命名审批材料负责人。
+- 当前 WIL-120「完全没有任务创建入口」的判断有反证：`main.py` 的 `POST /api/creation-plans/confirm` 创建并持久化 CreationTask，HomeCommandComposer/CreateProductionTaskForm 已有调用。主控本轮纠正 issue 的错误前提，保留追溯；完整桌面创建到 Insert 流程仍须真实验收，不能据缺少 `POST /api/creation-tasks` 新造入口。
 - 当前 PR45 的旧 head CI 不能证明本轮候选；集成完成后按同一候选实际检查，不沿用旧绿灯。main 不自动合并。
 - 取消请求不等于进程退出；释放许可、检查点、媒体产物和失效状态遵循现有架构/领域契约。模型配置、元信息探测、mock成功或保存记录均不等于真实制作完成。legacy 与 scheduled 不得同时启动重活驱动；所有重活沿同一许可、授权和资源预算，不能借 hash/probe 绕行。旧旁白替换后的字幕失效、人工文字保留和成片同源仍须符合领域契约。
 
