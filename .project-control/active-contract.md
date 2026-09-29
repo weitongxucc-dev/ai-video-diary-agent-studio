@@ -28,7 +28,7 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 | 执行者（2026-09-29现场定位） | 当前包与工作树 | 保留的产品文件归属及退出条件 |
 | --- | --- | --- |
-| workspace:9 / surface:26，前端 Pi | WIL-90，`~/.codex/worktrees/insert-frontend-ui/original` | `apps/web/src/lib/types.ts`、`VideoEditor.tsx`、`CreationTaskWorkspace.tsx` 及其专项测试；继续原已授权 Insert 可见验收，不中断、不重派、不写后端 |
+| workspace:9 / surface:26，前端 Pi | WIL-90，`~/.codex/worktrees/insert-frontend-ui/original` | `apps/web/src/lib/types.ts`、`VideoEditor.tsx`、`CreationTaskWorkspace.tsx` 及其专项测试；保留前端归属；本轮因无效验收夹具及 provider_unavailable 暂停，不反复截图、不重派、不写后端 |
 | workspace:4 / surface:23，Pi | WIL-116，`~/.codex/worktrees/agent-recall-memory/original`，候选 `5fcb8ac` | 可见性相关 `sources.py`、`source_repository.py`、`production.py` 及专项测试保留归属；HOLD，禁止新增修改/提交/集成 |
 | workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；审核退回并 HOLD，不扩权或继续产品写入 |
 | workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；审核退回并 HOLD，不把独立检测函数称为自动检查流程已接通 |
@@ -42,6 +42,8 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 ## 当前试点：功能卡到 Insert 实际验收
 
 用户批准的是现有工作接续，不是重做产品或全量迁移看板。主控负责 Linear 功能卡、在制事实对齐、证据回填和集成；surface:26 保持 WIL-90 前端及 UI 验证唯一负责人。若需修产品代码，只在其原 owned files 内实施；后端或领域语义新增变更先报主控。最小用户链路：真实任务页面选中镜头 → 添加片段 → 预览 → 确认 → 顺序与版本正确 → 撤销/重做 → 预览和导出对应；三尺寸验证新增交互。测试只用隔离库与短合成素材，禁止真实库、付费模型、真实发布。现有创建入口先查 `POST /api/creation-plans/confirm`，不能依 WIL-120 的错误推断另造入口。
+
+当前验收阻断：主控在真实 `/tasks/wil90-demo-task` 页复核为 404；隔离 API 暴露测试夹具字段不匹配，`/tmp/wil90-demo/library/a.mp4` 被 ffprobe 判为无效 MP4。前端执行者连续两次 provider_unavailable，已停止新增施工及反复截图；允许在原报告更正证据，不恢复后台长命令。WIL-90 / WIL-122 为 Todo + 暂停，未进入用户验收。恢复时先以当前模型和有效短合成媒体修复隔离环境，再继续逐项验证；不得更改产品契约迁就旧夹具。
 
 一个功能卡持续承载用户结果，WIL-89/90 作为施工交付关联或子项；R25/WIL-29 保留范围索引。子项 Done 不自动关闭功能卡。候选/集成、组件/API、真实页面、输出媒体、桌面包分别登记；缺证据就保留未验，不把 HTTP 200 或截图存在提升为产品验收。工具可选，沿用 DESIGN.md §5.10，UI 不强制经过 Stitch。
 
