@@ -53,6 +53,16 @@ def call_with_requests(tool: str, params: dict, routes: dict) -> tuple[dict, lis
     return result["result"], result.get("requests", [])
 
 
+def probe(url: str, routes: dict | None = None, options: dict | None = None) -> dict:
+    """不经工具、直接拿桩去请求一个 URL。
+
+    返回原始 runner 结果：{ok, status, body} 或 {ok:False, error}。
+    故意不 assert ok —— 「用例声明的参数不匹配时桩报错」本身就是被测行为之一。
+    """
+    [result] = run_ops({"op": "probe", "url": url, "routes": routes or {}, "options": options or {}})
+    return result
+
+
 @pytest.mark.skipif(
     not (AGENT_TOOLS / "_test_runner.mjs").exists(),
     reason="node runner not available",
@@ -356,6 +366,66 @@ class TestEvidenceSurvivesLargeLibrary:
         assert first["matched_terms"] == ["城市", "夜景"]
         assert first["match_tier"] == "text"
         assert first["rank"] == 1
+
+
+@pytest.mark.skipif(
+    not (AGENT_TOOLS / "_test_runner.mjs").exists(),
+    reason="node runner not available",
+)
+class TestStubValidatesQueryParams:
+    """桩必须像真后端一样校验查询参数。
+
+    上一包的洞：工具写 ?limit=200，真后端会 422，桩却回 200，于是 bug 在全绿
+    测试下溜过去。堵上之后，任何越界/非法枚举的入参都必须被桩抓出来。
+    """
+
+    LIST_ROUTE = {
+        "/api/production/materials": {
+            "__expect_query": {"limit": "100"},
+            "assets": [], "total_count": 0, "has_more": False,
+        },
+    }
+
+    def test_stub_rejects_limit_over_100(self):
+        """上一包真实踩到的洞：limit>100 真后端 422，桩也必须 422。"""
+        result = probe("http://stub/api/production/materials?limit=200", self.LIST_ROUTE)
+        assert result.get("status") == 422, f"limit=200 应被桩拒掉（真后端会 422），桩却回了 {result}"
+
+    def test_stub_accepts_limit_within_range(self):
+        result = probe("http://stub/api/production/materials?limit=100", self.LIST_ROUTE)
+        assert result.get("status") == 200, f"limit=100 是合法的，桩不该拒：{result}"
+
+    def test_stub_rejects_invalid_usage_role_enum(self):
+        result = probe(
+            "http://stub/api/production/materials/search?q=x&usage_role=bogus",
+            {"/api/production/materials/search": []},
+        )
+        assert result.get("status") == 422, f"非法 usage_role 应被桩拒掉，桩却回了 {result}"
+
+    def test_stub_accepts_valid_usage_role(self):
+        result = probe(
+            "http://stub/api/production/materials/search?q=x&usage_role=b_roll",
+            {"/api/production/materials/search": []},
+        )
+        assert result.get("status") == 200, f"合法 usage_role 不该被拒：{result}"
+
+    def test_case_declared_query_expectation_is_enforced(self):
+        """用例声明期望参数后，不匹配就报错——不再静默通过。"""
+        result = probe(
+            "http://stub/api/production/materials?limit=50",
+            self.LIST_ROUTE,
+            options={"strictQuery": True},
+        )
+        assert result.get("ok") is False, f"声明的参数不匹配时桩应报错，实际：{result}"
+        assert "mismatch" in str(result.get("error", "")), f"报错信息应指明参数不匹配：{result}"
+
+    def test_case_declared_query_expectation_passes_when_matched(self):
+        result = probe(
+            "http://stub/api/production/materials?limit=100",
+            self.LIST_ROUTE,
+            options={"strictQuery": True},
+        )
+        assert result.get("status") == 200, f"参数匹配时不该报错：{result}"
 
 
 @pytest.mark.skipif(
