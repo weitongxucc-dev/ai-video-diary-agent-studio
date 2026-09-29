@@ -114,6 +114,34 @@ def remove_time_ranges(plan, tracks, audio, ranges):
     return _splice_plan(plan, tracks, audio, intervals, at)
 
 
+def insert_clip(plan, tracks, audio, clip_id: str, new_clip):
+    """Insert a whole shot built from material right after ``clip_id``.
+
+    The added shot keeps the span of the source segment it was cut from, the
+    same way a duplicate keeps the span of the shot it copies, and everything
+    from the anchor's end onwards moves later by exactly that much.
+    """
+    if plan.status == "rendering":
+        raise ValueError("正在渲染，不能修改时间线")
+    selected = next((clip for clip in plan.clips if clip.id == clip_id), None)
+    if selected is None:
+        raise ValueError("所选镜头不存在")
+    length = round((new_clip.source_end_seconds - new_clip.source_start_seconds) * 1000)
+    if length < 40:
+        raise ValueError("插入的镜头至少需要0.04秒素材")
+    duration = round(plan.duration_seconds * 1000)
+    at = min(max(round(selected.timeline_end_seconds * 1000), 0), duration)
+    intervals = [(a, b, c) for a, b, c in
+        [(0, at, 0), (at, duration, at + length)] if a < b]
+    result, moved = _splice_plan(plan, tracks, audio, intervals, duration + length)
+    result.clips = sorted([*result.clips, replace(new_clip,
+        # A shot inserted next to the anchor narrates the anchor's own segment.
+        cue_id=selected.cue_id,
+        timeline_start_seconds=at/1000, timeline_end_seconds=(at+length)/1000)],
+        key=lambda clip: clip.timeline_start_seconds)
+    return result, moved
+
+
 def _splice_plan(plan, tracks, audio, intervals, new_duration_ms):
     result = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
     clips = []

@@ -13,12 +13,14 @@ from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
+import app.production as production_module
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CpuRenderGrantContext
 from app.host_resource_probes import HostProcessProbe
@@ -3488,6 +3490,77 @@ def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_sta
     assert result.status_code == 200, result.text
     result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
     assert result.status_code == 409 and "锁定" in result.text
+
+
+def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    anchor, later = state.montage.clips[0], state.montage.clips[1]
+    before = state.client.get(base).json()
+    # 这两行代替 app/production.py 里 EditOperationType 与 SUPPORTED_EDIT_OPERATION_TYPES
+    # 尚未加入的 "InsertClip"；补上后删掉本段即可。
+    monkeypatch.setattr(production_module, "EditOperationType",
+        Literal[*production_module.EditOperationType.__args__, "InsertClip"])
+    monkeypatch.setattr(production_module, "SUPPORTED_EDIT_OPERATION_TYPES",
+        {*production_module.SUPPORTED_EDIT_OPERATION_TYPES, "InsertClip"})
+    payload = {"operation_type": "InsertClip", "clip_id": anchor.id, "asset_id": "asset_1",
+               "segment_id": "segment_1", "source_start_seconds": 10}
+    preview = state.client.post(base + "/edits/exact/preview", json=payload)
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    edited = state.client.get(base).json()["montage"]
+    # 没有时长参数：插入的镜头就是素材从10秒到片段末尾16秒的那6秒。
+    assert edited["duration_seconds"] == 14
+    added = next(clip for clip in edited["clips"] if clip["id"] not in {c["id"] for c in before["montage"]["clips"]})
+    assert (added["timeline_start_seconds"], added["timeline_end_seconds"]) == (4, 10)
+    assert (added["source_start_seconds"], added["source_end_seconds"]) == (10, 16)
+    assert added["manually_selected"] is True
+    kept = next(clip for clip in edited["clips"] if clip["id"] == anchor.id)
+    assert (kept["timeline_start_seconds"], kept["timeline_end_seconds"]) == (0, 4)
+    moved = next(clip for clip in edited["clips"] if clip["id"] == later.id)
+    assert (moved["timeline_start_seconds"], moved["timeline_end_seconds"]) == (10, 14)
+    # 插入画面不等于复制声音：配音不重播，插入的6秒没有配音，原声整体后移。
+    clips = edited["audio_timeline"]["tracks"][0]["clips"]
+    assert [(c["timeline_start_ms"], c["source_end_ms"] - c["source_start_ms"]) for c in clips] == [
+        (0, 4000), (10000, 4000)]
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.get(base).json()["montage"]["audio_timeline"] == edited["audio_timeline"]
+
+
+def test_insert_clip_rejects_shifting_locked_later_shot(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    result = state.client.post(base + "/edits/exact", json={"operation_type":"SetClipLock", "clip_id":state.montage.clips[1].id, "locked":True})
+    assert result.status_code == 200, result.text
+    result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"InsertClip",
+        "clip_id":state.montage.clips[0].id, "asset_id":"asset_1", "segment_id":"segment_1"})
+    assert result.status_code == 409 and "锁定" in result.text
+
+
+def test_insert_clip_refuses_to_move_anything_without_usable_material(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    before = state.client.get(base).json()
+    def preview(**extra):
+        return state.client.post(base + "/edits/exact/preview", json={
+            "operation_type": "InsertClip", "clip_id": state.montage.clips[0].id, **extra})
+    assert preview().status_code == 422 and "素材片段" in preview().text
+    assert preview(asset_id="asset_1", segment_id="segment_9").status_code == 404
+    # 起点落在片段末尾之外，就没有可插入的长度。
+    assert preview(asset_id="asset_1", segment_id="segment_1", source_start_seconds=16).status_code == 400
+    assert state.client.get(base).json()["montage"] == before["montage"]
+
+
+def test_insert_clip_command_says_which_material_is_missing(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    result = state.client.post(base + "/edits/preview", json={"raw_command": "插入镜头",
+        "context_stage": "montage", "selected_object_refs": [f"clip:{state.montage.clips[0].id}"]})
+    assert result.status_code == 422 and "素材片段" in result.text
 
 
 def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_render_edit_state, monkeypatch):

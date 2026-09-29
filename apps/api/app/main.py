@@ -31,7 +31,7 @@ from app.graphic_sources import import_graphic_source, graphic_sources, resolve_
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.speech_timing import estimate_speech_seconds
-from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges
+from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, insert_clip
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
@@ -6020,7 +6020,7 @@ def _persist_typed_montage_edit(
             impact="原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。",
             repair_action="逐条检查字幕文字和时间，确认后重新生成字幕与成片。")
             for track in carried_tracks]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "InsertClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -7058,9 +7058,14 @@ def preview_creation_task_edit(
                 CreationTaskExactEditRequest(operation_type="ChangeClipSpeed",
                     clip_id=selected_ref.removeprefix("clip:"), playback_rate=float(speed_match.group(1))))
         linked_commands = {"删除这个镜头": "DeleteClip", "删除当前镜头": "DeleteClip",
-            "删掉这个镜头，把后面接上": "DeleteClip", "复制这个镜头": "DuplicateClip", "复制当前镜头": "DuplicateClip"}
+            "删掉这个镜头，把后面接上": "DeleteClip", "复制这个镜头": "DuplicateClip", "复制当前镜头": "DuplicateClip",
+            #插入还需要一段素材，语音里给不出来，交给 _preview_insert 说明缺什么。
+            "插入镜头": "InsertClip", "插入当前镜头": "InsertClip", "在这个镜头后插入镜头": "InsertClip"}
         linked_type = linked_commands.get(command.rstrip("。！"))
         if linked_type:
+            if linked_type == "InsertClip":
+                return _preview_insert(task_id, request,
+                    CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix("clip:")))
             return _preview_linked_clip_edit(task_id, request,
                 CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix("clip:")))
         split_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:在|从)\s*(\d+(?:\.\d+)?)\s*秒(?:处)?(?:分割|切开)[。！]?", command)
@@ -8611,6 +8616,31 @@ def confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=updated, operation_type=operation_type,
             operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+    if operation_type == "InsertClip" and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
+            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览插入镜头")
+        required = ("clip_id", "asset_id", "segment_id")
+        if any(not isinstance(operation_payload.get(key), str) or not operation_payload.get(key) for key in required):
+            raise HTTPException(status_code=409, detail="invalid creation task insert operation")
+        source_start = operation_payload.get("source_start_seconds")
+        if source_start is not None and (isinstance(source_start, bool) or not isinstance(source_start, (int, float))):
+            raise HTTPException(status_code=409, detail="invalid creation task insert operation")
+        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        new_clip = _creation_task_insert_clip(workspace_id, CreationTaskExactEditRequest(
+            operation_type="InsertClip", clip_id=operation_payload["clip_id"],
+            asset_id=operation_payload["asset_id"], segment_id=operation_payload["segment_id"],
+            source_start_seconds=float(source_start) if source_start is not None else None))
+        try:
+            updated, tracks = insert_clip(plan, tracks, _effective_audio_timeline(plan),
+                operation_payload["clip_id"], new_clip)
+            _prepare_changed_montage(updated, message="镜头及关联音轨、字幕已更新，请重新渲染。")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
+            base_version=base, updated_plan=updated, operation_type=operation_type,
+            operation_payload=operation_payload, edited_subtitle_tracks=tracks)
     if operation_draft.get("operation_type") not in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ChangeClipSpeed", "ReorderClip", "SetClipLock", "ConfirmClip"} or not isinstance(operation_payload, dict):
         raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
     required_strings = {
@@ -8704,6 +8734,8 @@ def preview_creation_task_exact_edit(
         return _preview_linked_speed(task_id, request, payload)
     if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
         return _preview_linked_clip_edit(task_id, request, payload)
+    if payload.operation_type == "InsertClip":
+        return _preview_insert(task_id, request, payload)
     if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ChangeClipSpeed", "ReorderClip", "SetClipLock", "ConfirmClip"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
@@ -9606,6 +9638,85 @@ def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationT
         invalidated_refs=[*_logical_montage_output_refs(plan), *(t.artifact_ref for t in tracks if t.artifact_ref)],
         preview={"before": {"ref": f"timeline:{base.id}", "label": "当前时间线", "detail": f"{len(plan.clips)} 个镜头 · {plan.duration_seconds:.3f} 秒"},
                  "after": {"ref": f"clip:{clip.id}", "label": "关联编辑后", "detail": f"{len(edited.clips)} 个镜头 · {edited.duration_seconds:.3f} 秒；{summary}"}},
+        external_effects=["原始素材和声音文件保留；确认后可撤销，需要重新渲染。"],
+        status="proposed", created_at=now, updated_at=now))
+    return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
+
+
+def _creation_task_insert_clip(workspace_id: str, payload: CreationTaskExactEditRequest) -> MontageClip:
+    """Build the shot an InsertClip adds, picking material the way ReplaceClip does."""
+    if not payload.asset_id or not payload.segment_id:
+        raise HTTPException(status_code=422, detail="插入镜头需要指定素材片段")
+    try:
+        asset = production_repo.get_asset(workspace_id, payload.asset_id)
+        segment = next(item for item in asset.segments if item.id == payload.segment_id)
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(status_code=404, detail="material segment not found") from exc
+    if (
+        asset.review_status != "approved"
+        or not material_allows_footage(asset)
+        or segment.review_status != "approved"
+        or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
+    ):
+        raise HTTPException(status_code=409, detail="material segment has not passed review")
+    source_min, source_max = segment.start_seconds, segment.end_seconds
+    source_start = payload.source_start_seconds if payload.source_start_seconds is not None else source_min
+    # 插入没有时长参数：镜头长度就是这段素材从起点到片段末尾还剩多少。
+    if source_start < source_min - 1e-6 or source_start >= source_max - 1e-6:
+        raise HTTPException(status_code=400, detail=f"插入起点须在 {source_min:.1f}–{max(source_min, source_max - 0.04):.1f} 秒之间。")
+    return MontageClip(
+        id=f"clip_{uuid4().hex[:12]}",
+        cue_id="",
+        asset_id=asset.id,
+        segment_id=segment.id,
+        source_path=production_repo.workspace_media_reference_for_asset(workspace_id, asset.id),
+        source_start_seconds=round(source_start, 3),
+        source_end_seconds=round(source_max, 3),
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=0.0,
+        match_score=1.0,
+        match_reasons=["由用户插入", "当前工作区可用素材"],
+        needs_confirmation=False,
+        role="a_roll" if effective_segment_usage_role(asset, segment) == "a_roll" else "b_roll",
+        manually_selected=True,
+    )
+
+
+def _preview_insert(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if not payload.clip_id or payload.model_fields_set - {
+        "operation_type", "clip_id", "asset_id", "segment_id", "source_start_seconds",
+    }:
+        raise HTTPException(status_code=422, detail="插入镜头只接受一个插入位置和一段素材，不混入其他修改")
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    new_clip = _creation_task_insert_clip(workspace_id, payload)
+    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    base = _ensure_montage_base_version(workspace_id, task, plan)
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+    try:
+        edited, _ = insert_clip(plan, tracks, _effective_audio_timeline(plan), payload.clip_id, new_clip)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    anchor = next(clip for clip in plan.clips if clip.id == payload.clip_id)
+    added = next(clip for clip in edited.clips if clip.id == new_clip.id)
+    length = added.timeline_end_seconds - added.timeline_start_seconds
+    summary = f"在当前镜头后插入 {length:.3f} 秒素材，后续镜头、配音、音乐、音效和字幕整体后移 {length:.3f} 秒。"
+    now = utc_now()
+    intent = production_repo.create_edit_intent(EditIntent(
+        id=f"intent_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
+        raw_command="插入镜头", context_stage="montage", selected_object_refs=[f"clip:{anchor.id}"],
+        playhead_ms=round(added.timeline_start_seconds * 1000), intent_type="linked_timeline_edit",
+        scope={"kind": "time_range", "start_seconds": added.timeline_start_seconds, "end_seconds": added.timeline_end_seconds},
+        constraints={"linked_tracks": True}, confidence=1.0, status="interpreted", created_at=now))
+    proposal = production_repo.create_edit_proposal(EditProposal(
+        id=f"proposal_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id, intent_id=intent.id,
+        summary=summary, target_refs=[f"clip:{anchor.id}"],
+        operation={"operation_type": payload.operation_type, "payload": {
+            "clip_id": anchor.id, "asset_id": payload.asset_id, "segment_id": payload.segment_id,
+            "source_start_seconds": payload.source_start_seconds, "base_version_id": base.id}},
+        invalidated_refs=[*_logical_montage_output_refs(plan), *(t.artifact_ref for t in tracks if t.artifact_ref)],
+        preview={"before": {"ref": f"timeline:{base.id}", "label": "当前时间线", "detail": f"{len(plan.clips)} 个镜头 · {plan.duration_seconds:.3f} 秒"},
+                 "after": {"ref": f"clip:{added.id}", "label": "关联编辑后", "detail": f"{len(edited.clips)} 个镜头 · {edited.duration_seconds:.3f} 秒；{summary}"}},
         external_effects=["原始素材和声音文件保留；确认后可撤销，需要重新渲染。"],
         status="proposed", created_at=now, updated_at=now))
     return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
