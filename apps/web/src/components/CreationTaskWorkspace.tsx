@@ -1282,8 +1282,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 不针对既有
-  // 镜头，落点走请求里的 playhead_ms，所以这里以当前选中镜头作为取候选的上下文。
+  // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 的锚点就是
+  // 当前选中镜头（clip_id），落点是「插在它之后」；后端 _preview_exact_montage_edit
+  // 对每个操作都要求 clip_id，缺了直接 409。
   async function showInsertCandidates(clipId: string) {
     setBusy("clip");
     setError(null);

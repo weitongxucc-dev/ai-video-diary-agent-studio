@@ -1499,10 +1499,13 @@ export type CreationTaskEditIntent = {
 export type CreationTaskExactEditInput =
   | { operation_type: "ChangeCrop"; clip_id: string; fit_mode: "fill" | "fit"; crop_x: number; crop_y: number }
   | { operation_type: "ReplaceClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
-  // InsertClip 在主轨 playhead 处插入一个片段。不带 clip_id：插入不针对既有镜头，
-  // 落点由请求里的 playhead_ms 决定。不带 duration：既有 25 个操作都没有该参数，
-  // 时长继承源片段 span。字面量名必须与后端 schemas.py 的三处 Literal 逐字一致。
-  | { operation_type: "InsertClip"; asset_id: string; segment_id: string; source_start_seconds: number }
+  // InsertClip 在锚点镜头之后插入一个片段。clip_id 是锚点，必填：后端
+  // _preview_exact_montage_edit 对每个操作都要求 clip_id，缺了直接 409。
+  // 不带 duration：既有 25 个操作都没有该参数，时长继承源片段 span。
+  // 落点不是播放头——既有 SplitClip 就是 plan.clips.insert(index + 1, ...)，
+  // 插在锚点后面是这个编辑器一贯的做法。字面量名与后端 schemas.py 的三处
+  // Literal 逐字一致，拼错即 422。
+  | { operation_type: "InsertClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
   | { operation_type: "DeleteClip" | "DuplicateClip"; clip_id: string }
   | { operation_type: "ChangeClipSpeed" | "ChangeLinkedSpeed"; clip_id: string; playback_rate: number }
   | { operation_type: "SplitClip"; clip_id: string; split_time_seconds: number }

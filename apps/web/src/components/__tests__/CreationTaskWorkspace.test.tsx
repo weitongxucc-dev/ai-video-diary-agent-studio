@@ -1323,17 +1323,19 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled());
 
-    // WIL-90：主轨 Insert —— 落点在播放头，不针对既有镜头，所以 payload 里没有
-    // clip_id；也不带 duration（时长继承源片段 span）。
+    // WIL-90：主轨 Insert —— clip_id 是锚点镜头，插在它之后。后端对每个操作都要求
+    // clip_id，缺了直接 409，所以 payload 必须带且等于当前选中镜头。
+    // 仍不带 duration（时长继承源片段 span）。
     mocks.exactPreview.mockResolvedValue(exactPreview(task, "InsertClip"));
     fireEvent.click(screen.getAllByRole("button", { name: "添加片段" })[0]);
     await waitFor(() => expect(mocks.getCandidates).toHaveBeenCalledWith("task-1", "clip-1"));
-    fireEvent.change(await screen.findByLabelText("插入到播放头位置"), { target: { value: "asset-3:segment-3" } });
+    fireEvent.change(await screen.findByLabelText("插在当前镜头之后"), { target: { value: "asset-3:segment-3" } });
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
-      operation_type: "InsertClip", asset_id: "asset-3", segment_id: "segment-3", source_start_seconds: 5,
+      operation_type: "InsertClip", clip_id: "clip-1", asset_id: "asset-3", segment_id: "segment-3", source_start_seconds: 5,
     }));
     const insertCall = mocks.exactPreview.mock.calls.at(-1)?.[1];
-    expect(insertCall).not.toHaveProperty("clip_id");
+    // 锚点必填：等于当前选中镜头 id，否则后端 409
+    expect(insertCall?.clip_id).toBe("clip-1");
     expect(insertCall).not.toHaveProperty("duration_seconds");
     expect(mocks.exactEdit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
