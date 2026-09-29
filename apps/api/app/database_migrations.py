@@ -611,6 +611,90 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
 )
 
+# 版本 14 标记「内容可见性」的地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
+# 与 version 13 同一原因：这三张表都在迁移链之外创建（knowledge_items 由
+# SourceRepository._init_database，creation_plans / video_templates 由
+# ProductionRepository._init_database），迁移链本身也会被独立应用到裸库
+# （见 test_device_runtime）。SQLite 没有 ADD COLUMN IF NOT EXISTS，静态 SQL
+# 也无法 PRAGMA 守卫，所以这里不放静态 ALTER，改由下列 PRAGMA 守卫的 ensure
+# 在各自 Repository 打开时幂等执行：表不存在就跳过（裸库安全），列已存在就
+# 不重复加（重开安全）。
+#
+# 存量行回填 shared（不改动已有数据的语义）；表结构的 DEFAULT 是 private，
+# 两者是不同的事，迁移回填不会把新建行的默认改回 shared。
+CONTENT_VISIBILITY_TABLES = ("knowledge_items", "creation_plans", "video_templates")
+CONTENT_VISIBILITY_LEGACY = "shared"
+CONTENT_VISIBILITY_DEFAULT = "private"
+
+
+def ensure_content_visibility_columns(conn: sqlite3.Connection) -> None:
+    """给三张内容表补 visibility 列，幂等、可重复执行、裸库安全。
+
+    - 表不存在：跳过（迁移链可在缺少这些表的裸库上独立运行）。
+    - 列已存在：不重复 ALTER（SQLite 无 ADD COLUMN IF NOT EXISTS）。
+    - 存量行：NULL 回填为 shared，保持「已有内容语义不变」。
+    - 新建行：依赖建表 DDL 的 DEFAULT 'private'，本函数不改默认值。
+    """
+    for table in CONTENT_VISIBILITY_TABLES:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists is None:
+            continue
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "visibility" not in columns:
+            # 关键：不带 DEFAULT 加列。SQLite 在 ADD COLUMN 带 DEFAULT 时会用该
+            # 默认值回填所有存量行，那样老行会直接变成 private，与「存量行保持
+            # shared」相反。所以先加一个无默认值的可空列，让老行保持 NULL，
+            # 下面再把 NULL 显式回填为 shared。
+            #
+            # 新建行的 private 由两处承担：建表 DDL 的 DEFAULT 'private'
+            # （fresh 库）与仓储层 INSERT 的显式赋值（升级库）。
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN visibility TEXT")
+        # 存量行回填 shared：只动 NULL 的，不覆盖已显式写过的值。
+        conn.execute(
+            f"UPDATE {table} SET visibility = ? WHERE visibility IS NULL",
+            (CONTENT_VISIBILITY_LEGACY,),
+        )
+
+
+def rollback_content_visibility_columns(conn: sqlite3.Connection) -> list[str]:
+    """回滚路径：删掉三张表上由本迁移新增的 visibility 列。
+
+    SQLite 3.35+ 支持 DROP COLUMN；更老的版本自动回退到「重建表」路线。
+    正常路径不应调用它——列是 CREATE TABLE 的一部分，删列会让依赖它的写入路径
+    立刻失败。提供它是为了满足「可逆迁移」：迁移确实可以被撤销。
+    """
+    removed: list[str] = []
+    for table in CONTENT_VISIBILITY_TABLES:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists is None:
+            continue
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "visibility" not in columns:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN visibility")
+        except sqlite3.OperationalError:
+            # 老版本 SQLite：把不含 visibility 的定义重建回去。
+            _rebuild_table_without_visibility(conn, table)
+        removed.append(table)
+    conn.commit()
+    return removed
+
+
+def _rebuild_table_without_visibility(conn: sqlite3.Connection, table: str) -> None:
+    """老版本 SQLite 的回滚兜底：按当前列定义重建表并去掉 visibility。"""
+    columns = [str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")]
+    keep = [name for name in columns if name != "visibility"]
+    joined = ", ".join(keep)
+    conn.execute(f"ALTER TABLE {table} RENAME TO {table}_visibility_rollback")
+    conn.execute(f"CREATE TABLE {table} ({joined})")
+    conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {table}_visibility_rollback")
+    conn.execute(f"DROP TABLE {table}_visibility_rollback")
+
 
 def apply_production_migrations(conn: sqlite3.Connection) -> None:
     """Apply this repository's schema changes to the existing shared database."""
