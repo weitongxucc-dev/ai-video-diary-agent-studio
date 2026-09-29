@@ -29,7 +29,7 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 | 执行者（2026-09-29现场定位） | 当前包与工作树 | 保留的产品文件归属及退出条件 |
 | --- | --- | --- |
 | workspace:9 / surface:26，前端 Pi | 原 WIL-90 执行者，服务错误停机，工作树已核干净 | 本轮写权撤回；不再修改产品或验收夹具。既有交付保留，后续只作历史证据 |
-| workspace:2 / surface:12，Claude | WIL-90 / WIL-122 接续，`~/.codex/worktrees/insert-frontend-ui/original` | 独占原前端 owned files 与专项测试，以及本轮隔离验收夹具；先修环境，主控执行浏览器交互。不得改后端或解除其 WIL-119 HOLD |
+| workspace:2 / surface:12，Claude | WIL-90 / WIL-122 接续，`~/.codex/worktrees/insert-frontend-ui/original` | 独占原前端 owned files 与专项测试；网关响应失败后不再执行环境写入。主控接手独立临时夹具和浏览器验证。不得改后端或解除其 WIL-119 HOLD |
 | workspace:4 / surface:23，Pi | WIL-116，`~/.codex/worktrees/agent-recall-memory/original`，候选 `5fcb8ac` | 可见性相关 `sources.py`、`source_repository.py`、`production.py` 及专项测试保留归属；HOLD，禁止新增修改/提交/集成 |
 | workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；审核退回并 HOLD，不扩权或继续产品写入 |
 | workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；审核退回并 HOLD，不把独立检测函数称为自动检查流程已接通 |
@@ -42,9 +42,11 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 ## 当前试点：功能卡到 Insert 实际验收
 
-用户批准的是现有工作接续，不是重做产品或全量迁移看板。主控负责 Linear 功能卡、在制事实对齐、证据回填和集成；用户再次批准执行下一步后，surface:12 接手 WIL-90 前端与隔离环境，主控负责独立浏览器验收；原 surface:26 已停在 provider 错误，工作树干净、无相关子进程，不保留写权。若需修产品代码，只在其原 owned files 内实施；后端或领域语义新增变更先报主控。最小用户链路：真实任务页面选中镜头 → 添加片段 → 预览 → 确认 → 顺序与版本正确 → 撤销/重做 → 预览和导出对应；三尺寸验证新增交互。测试只用隔离库与短合成素材，禁止真实库、付费模型、真实发布。现有创建入口先查 `POST /api/creation-plans/confirm`，不能依 WIL-120 的错误推断另造入口。
+用户批准的是现有工作接续，不是重做产品或全量迁移看板。主控负责 Linear 功能卡、在制事实对齐、证据回填和集成；用户再次批准执行下一步后，surface:12 接手 WIL-90 前端；随后该线程也遇到网关错误，主控接手隔离验收环境和浏览器验证，不编写产品代码；原 surface:26 已停在 provider 错误，工作树干净、无相关子进程，不保留写权。若需修产品代码，只在其原 owned files 内实施；后端或领域语义新增变更先报主控。最小用户链路：真实任务页面选中镜头 → 添加片段 → 预览 → 确认 → 顺序与版本正确 → 撤销/重做 → 预览和导出对应；三尺寸验证新增交互。测试只用隔离库与短合成素材，禁止真实库、付费模型、真实发布。现有创建入口先查 `POST /api/creation-plans/confirm`，不能依 WIL-120 的错误推断另造入口。
 
-本轮恢复授权：用户明确“可以的，你执行吧”，已覆盖技术排障与必要执行者移交。上一轮任务页 404、无效夹具和无效 MP4 是修复起点，不再作为停止整个试点的理由。产品基线 93e8182、当前集成 e3049f8（后续仅文档）；禁止为迁就测试数据更改产品模型。新执行者读取指定合同并 ACK 后继续，使用当前数据模型和短合成有效视频，不调用外部模型；主控逐条跑真实页面。所有可见性、发布、质量/模型/包络线其他 HOLD 原样保留。
+本轮恢复授权：用户明确“可以的，你执行吧”，已覆盖技术排障与必要执行者移交。上一轮任务页 404、无效夹具和无效 MP4 是修复起点，不再作为停止整个试点的理由。产品基线 93e8182，后续集成提交仅文档（验收时 a384d10）；禁止为迁就测试数据更改产品模型。新执行者读取指定合同并 ACK 后继续，使用当前数据模型和短合成有效视频，不调用外部模型；主控逐条跑真实页面。当前环境位于 `/tmp/wil122-verify`，使用独立数据库和真实短合成视频/测试音；任务 `wil122-real-media`，Web 4400 / API 4401。当前验收库为 `/tmp/wil122-verify/verified.sqlite3`；不得重新执行种子脚本覆盖用户正在体验的任务。旧 `/tmp/wil90-demo` 原样保留，不能恢复旧无效夹具。所有可见性、发布、质量/模型/包络线其他 HOLD 原样保留。
+
+用户体验期间保持本机隔离服务可用，停止重活测试和新增派工；产品体验反馈由 WIL-122 收口，具体运行证据见 `external-agents/controller-linear-pilot/insert-runtime-20260929.md`，不在本合同复制完成度。已交付施工不因待用户验收而循环重跑；需要修改时先核原文件负责人及最新授权。
 
 一个功能卡持续承载用户结果，WIL-89/90 作为施工交付关联或子项；R25/WIL-29 保留范围索引。子项 Done 不自动关闭功能卡。候选/集成、组件/API、真实页面、输出媒体、桌面包分别登记；缺证据就保留未验，不把 HTTP 200 或截图存在提升为产品验收。工具可选，沿用 DESIGN.md §5.10，UI 不强制经过 Stitch。
 
@@ -55,7 +57,7 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 - surface:12 审模型外接盘候选 `a59fe1f`，写 `external-agents/review-20260929/model-paths.md`。
 - surface:16 审质量检测候选 `eb7b5a7`，写 `external-agents/review-20260929/quality-checks.md`。
 - surface:6 审音量包络线候选 `4302197`，写 `external-agents/review-20260929/audio-envelope.md`。
-- surface:12 接手 Insert 实施与环境，主控执行可见验收；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
+- surface:12 保留 Insert 前端产品归属，主控接手临时环境并执行可见验收；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
 
 主控先核独占、diff、依赖与失败语义，再选择最小复验。不把执行者自称“独立复现”当成独立审核；未审候选不集成，不按报告的全量绿灯关闭父项。
 
