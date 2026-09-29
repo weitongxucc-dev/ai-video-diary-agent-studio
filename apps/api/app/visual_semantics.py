@@ -17,6 +17,9 @@ class VisualSemanticError(RuntimeError):
     pass
 
 
+MAX_SAMPLE_FRAMES = 3
+
+
 @dataclass(frozen=True)
 class SegmentWindow:
     segment_id: str
@@ -25,10 +28,28 @@ class SegmentWindow:
 
 
 @dataclass(frozen=True)
+class FrameEvidence:
+    """One sampled frame that a segment vector was actually computed from.
+
+    ``confidence`` is *not* a model-reported score — Chinese-CLIP exposes none,
+    and inventing one would be the exact lie this evidence is meant to remove.
+    It is the frame's share of the mean-pooled vector, ``1 / sample_count``,
+    which is exactly what the worker does with it. One frame therefore reads
+    1.0 and three frames read 0.333 each: full agreement between the samples
+    lowers every individual weight, which is the honest reading.
+    """
+
+    timestamp_seconds: float
+    source: str
+    confidence: float
+
+
+@dataclass(frozen=True)
 class VisualEmbedding:
     segment_id: str
     vector: list[float]
     sample_count: int
+    evidence: tuple[FrameEvidence, ...] = ()
 
 
 class VisualSemanticProvider(Protocol):
@@ -91,20 +112,24 @@ class ChineseClipSubprocessProvider:
         self._runner = runner or self._run_command
 
     @property
+    def readiness_problems(self) -> tuple[str, ...]:
+        problems: list[str] = []
+        if not self.runtime_python_path.is_file():
+            problems.append(f"运行环境缺失：{self.runtime_python_path}")
+        if not self.worker_path.is_file():
+            problems.append(f"工作进程缺失：{self.worker_path}")
+        if not (self.model_path / "manifest.json").is_file():
+            problems.append(f"权重未下载：{self.model_path}")
+        return tuple(problems)
+
+    @property
     def ready(self) -> bool:
-        return (
-            self.runtime_python_path.is_file()
-            and self.worker_path.is_file()
-            and (self.model_path / "manifest.json").is_file()
-        )
+        return not self.readiness_problems
 
     @property
     def message(self) -> str:
-        return (
-            "中文画面语义模型已就绪。"
-            if self.ready
-            else "中文画面语义模型运行环境不完整。"
-        )
+        problems = self.readiness_problems
+        return "中文画面语义模型已就绪。" if not problems else "中文画面语义模型未就绪：" + "；".join(problems) + "。"
 
     def embed_segments(
         self,
@@ -215,16 +240,36 @@ class ChineseClipSubprocessProvider:
             )
 
 
+def evidence_timestamps(start_seconds: float, end_seconds: float) -> list[float]:
+    """The exact seconds a segment's frames are sampled from.
+
+    This mirrors ``model_workers.chinese_clip_worker._sample_timestamps``, which
+    extracts each frame with ``ffmpeg -ss <timestamp>`` and then reports only a
+    count back to us. Re-deriving the rule here is safe because that function
+    is pure and takes no hidden state, and ``test_visual_semantics.py`` asserts
+    the two stay identical — so a drift on either side fails a test instead of
+    silently pointing evidence at the wrong second.
+    """
+    duration = end_seconds - start_seconds
+    if duration < 1.5:
+        return [round(start_seconds + duration * 0.5, 3)]
+    return [round(start_seconds + duration * fraction, 3) for fraction in (0.25, 0.5, 0.75)]
+
+
 def visual_semantic_provider_from_catalog(
     catalog: ModelCatalog,
 ) -> VisualSemanticProvider:
+    readiness = catalog.readiness(CHINESE_CLIP_VIT_B16)
     status = catalog.status(CHINESE_CLIP_VIT_B16)
-    if not status.ready or not status.runtime_python_path or not status.worker_path:
-        return UnavailableVisualSemanticProvider(status.message)
-    return ChineseClipSubprocessProvider(
-        runtime_python_path=status.runtime_python_path,
-        worker_path=status.worker_path,
-        model_path=status.model_path,
+    if readiness.available and status.runtime_python_path and status.worker_path:
+        return ChineseClipSubprocessProvider(
+            runtime_python_path=status.runtime_python_path,
+            worker_path=status.worker_path,
+            model_path=status.model_path,
+        )
+    return UnavailableVisualSemanticProvider(
+        f"中文画面语义模型 {readiness.label}：{'；'.join(readiness.problems)}。"
+        f"处置：{readiness.repair_action}"
     )
 
 
@@ -240,6 +285,7 @@ def _parse_embeddings(
     if not isinstance(raw_items, list):
         raise ValueError("响应缺少向量")  # noqa: TRY004 - protocol validation
     expected_ids = {item.segment_id for item in requested_segments}
+    windows = {item.segment_id: item for item in requested_segments}
     results: list[VisualEmbedding] = []
     dimensions: set[int] = set()
     for item in raw_items:
@@ -255,7 +301,7 @@ def _parse_embeddings(
         vector = [float(value) for value in raw_vector]
         if not all(math.isfinite(value) for value in vector):
             raise ValueError("向量包含非有限值")
-        if not isinstance(sample_count, int) or not 1 <= sample_count <= 3:
+        if not isinstance(sample_count, int) or not 1 <= sample_count <= MAX_SAMPLE_FRAMES:
             raise ValueError("抽帧数量无效")
         dimensions.add(len(vector))
         results.append(
@@ -263,6 +309,7 @@ def _parse_embeddings(
                 segment_id=segment_id,
                 vector=vector,
                 sample_count=sample_count,
+                evidence=_frame_evidence(windows[segment_id], sample_count),
             )
         )
     if {item.segment_id for item in results} != expected_ids:
@@ -270,6 +317,31 @@ def _parse_embeddings(
     if len(dimensions) != 1:
         raise ValueError("向量维度不一致")
     return results
+
+
+def _frame_evidence(window: SegmentWindow, sample_count: int) -> tuple[FrameEvidence, ...]:
+    timestamps = evidence_timestamps(window.start_seconds, window.end_seconds)
+    if len(timestamps) != sample_count:
+        raise ValueError(
+            f"抽帧数量与采样规则不符：规则给出 {len(timestamps)} 帧，响应报告 {sample_count} 帧"
+        )
+    # Round-to-3 can push a timestamp a hair outside the window on sub-millisecond
+    # segments, so the bound check carries half a millisecond of tolerance.
+    tolerance = 5e-4
+    if any(
+        not window.start_seconds - tolerance <= value <= window.end_seconds + tolerance
+        for value in timestamps
+    ):
+        raise ValueError("证据帧时间戳超出片段范围")
+    source = f"{CHINESE_CLIP_VIT_B16.id}（model_workers/chinese_clip_worker.py，ffmpeg -ss 抽帧）"
+    return tuple(
+        FrameEvidence(
+            timestamp_seconds=value,
+            source=source,
+            confidence=1.0 / sample_count,
+        )
+        for value in timestamps
+    )
 
 
 def _parse_text_embeddings(payload: object, expected_count: int) -> list[list[float]]:

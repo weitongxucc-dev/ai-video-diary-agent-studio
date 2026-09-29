@@ -7,12 +7,58 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from app.config import Settings
+from app.model_runtime import (
+    CHINESE_CLIP_VIT_B16,
+    QWEN3_VL_4B_4BIT,
+    ModelCatalog,
+    ModelReadiness,
+    ModelSpec,
+)
 from app.models import utc_now
 
 
-def _feature_gates(settings: Settings) -> list[dict[str, Any]]:
+def model_catalog_from_settings(settings: Settings) -> ModelCatalog:
+    """Same wiring as the application's catalog, so health and runtime agree.
+
+    ``main.py`` builds its own catalog from these same settings; it cannot pass
+    that instance in without a change to a file outside this task's scope, so
+    the wiring is repeated here and pinned by a test.
+    """
+    return ModelCatalog(
+        settings.model_root_path,
+        settings.model_runtime_python_path,
+        settings.visual_model_worker_path,
+        settings.voice_model_worker_path,
+        understanding_runtime_python_path=settings.understanding_runtime_python_path,
+        understanding_worker_path=settings.understanding_worker_path,
+    )
+
+
+# (feature key, spec, health item id, health label, impact when unavailable)
+_LOCAL_MODEL_FEATURES: tuple[tuple[str, ModelSpec, str, str, str], ...] = (
+    (
+        "material-visual-understanding",
+        QWEN3_VL_4B_4BIT,
+        "local_vlm",
+        "本地画面理解模型",
+        "影响逐镜头画面描述、事实与时间证据、画面文字（OCR）检索；没有它时相关字段留空并标注未就绪，不会用推测内容填充。",
+    ),
+    (
+        "material-visual-semantics",
+        CHINESE_CLIP_VIT_B16,
+        "local_visual_semantics",
+        "本地画面语义模型",
+        "影响按画面内容找候选镜头；没有它时只按素材文字与时长推荐，并在结果里写明语义未参与。",
+    ),
+)
+
+
+def _feature_gates(
+    settings: Settings,
+    catalog: ModelCatalog,
+) -> list[dict[str, Any]]:
     ffmpeg_available = shutil.which("ffmpeg") is not None
-    return [
+    gates = [
         {
             "feature": "generate-topics",
             "available": True,
@@ -41,15 +87,30 @@ def _feature_gates(settings: Settings) -> list[dict[str, Any]]:
             else "",
         },
     ]
+    for _feature, spec, _item_id, _label, _impact in _LOCAL_MODEL_FEATURES:
+        readiness = catalog.readiness(spec)
+        gates.append(
+            {
+                "feature": _feature,
+                "available": readiness.available,
+                "reason": "" if readiness.available else readiness.message,
+            }
+        )
+    return gates
 
 
 def runtime_health(settings: Settings) -> dict[str, Any]:
     checked_at = utc_now()
+    catalog = model_catalog_from_settings(settings)
     items = [
         _deepseek_item(settings, checked_at),
         _obsidian_item(settings, checked_at),
         _ffmpeg_item(checked_at),
         _local_whisper_item(settings, checked_at),
+        *(
+            _local_model_item(catalog, spec, item_id, label, impact, checked_at)
+            for _feature, spec, item_id, label, impact in _LOCAL_MODEL_FEATURES
+        ),
         _video_directory_item(
             "video_inbox",
             "视频待处理目录",
@@ -83,7 +144,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
     counts = {"ready": 0, "missing": 0, "degraded": 0, "invalid": 0}
     for item in items:
         counts[str(item["status"])] += 1
-    gates = _feature_gates(settings)
+    gates = _feature_gates(settings, catalog)
     return {
         "summary": {
             "total": len(items),
@@ -235,6 +296,42 @@ def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
         impact="影响本地转写、重复录制检测和字幕对齐。",
         repair_action=repair_action,
         fix_command=fix_command,
+        checked_at=checked_at,
+    )
+
+
+def _local_model_item(
+    catalog: ModelCatalog,
+    spec: ModelSpec,
+    item_id: str,
+    label: str,
+    impact: str,
+    checked_at,
+) -> dict[str, Any]:
+    """Map a model's readiness onto the four statuses this module already uses.
+
+    The label comes from the *weight* state, because that is the decision the
+    user has to make: no weights is a download, a broken install is a reinstall,
+    and weights that are present but unusable means the environment around them
+    is at fault — repairable without spending another multi-gigabyte download.
+    """
+    readiness: ModelReadiness = catalog.readiness(spec)
+    if readiness.available:
+        status = "ready"
+    elif readiness.label == "未安装":
+        status = "missing"
+    elif readiness.label == "安装不完整":
+        status = "invalid"
+    else:
+        status = "degraded"
+    return _health_item(
+        item_id=item_id,
+        label=f"{label}（{spec.display_name}）",
+        status=status,
+        reason=readiness.message,
+        impact="无影响。" if readiness.available else impact,
+        repair_action=readiness.repair_action,
+        fix_command="在应用内「设置 → 模型管理」中下载" if status == "missing" else None,
         checked_at=checked_at,
     )
 

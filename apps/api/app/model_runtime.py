@@ -25,6 +25,8 @@ class ModelSpec:
     license_name: str
     license_url: str
     approximate_download_bytes: int
+    parameter_scale: str
+    quantization: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,27 @@ class ModelRuntimeStatus:
         return payload
 
 
+@dataclass(frozen=True)
+class ModelReadiness:
+    """A single answer to 「本地现在有没有可用的这个模型」that lists every gap.
+
+    ``status()`` is a state machine: it stops at the first missing prerequisite
+    so a caller gets one actionable state. That is correct for driving a UI
+    button, but it hides the rest of the truth — on a machine with neither the
+    runtime nor the weights it reports only the runtime, and the user never
+    learns a multi-gigabyte download is also outstanding. Readiness collects all
+    unmet prerequisites instead, and derives the single label from the weight
+    state because that is the one the user has to act on.
+    """
+
+    model: ModelSpec
+    available: bool
+    label: str
+    problems: tuple[str, ...]
+    repair_action: str
+    message: str
+
+
 CHINESE_CLIP_VIT_B16 = ModelSpec(
     id="chinese-clip-vit-base-patch16",
     capability="visual_embedding_zh",
@@ -55,6 +78,8 @@ CHINESE_CLIP_VIT_B16 = ModelSpec(
     license_name="MIT",
     license_url="https://github.com/OFA-Sys/Chinese-CLIP",
     approximate_download_bytes=753_290_873,
+    parameter_scale="ViT-B/16 骨干（双塔总参数量未实测，见报告）",
+    quantization="上游发布为 fp32 权重，无量化版本",
 )
 
 QWEN3_TTS_06B_BASE_8BIT = ModelSpec(
@@ -66,6 +91,8 @@ QWEN3_TTS_06B_BASE_8BIT = ModelSpec(
     license_name="Apache-2.0",
     license_url="https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
     approximate_download_bytes=1_991_296_593,
+    parameter_scale="0.6B（取自仓库名 Qwen3-TTS-12Hz-0.6B）",
+    quantization="8-bit（取自仓库名 8bit）",
 )
 
 QWEN3_VL_4B_4BIT = ModelSpec(
@@ -77,6 +104,8 @@ QWEN3_VL_4B_4BIT = ModelSpec(
     license_name="Apache-2.0",
     license_url="https://huggingface.co/mlx-community/Qwen3-VL-4B-Instruct-4bit",
     approximate_download_bytes=3_110_000_000,
+    parameter_scale="4B（取自模型标识 Qwen3-VL-4B）",
+    quantization="4-bit（取自模型标识 4bit）",
 )
 
 
@@ -161,8 +190,66 @@ class ModelCatalog:
             )
         return ModelRuntimeStatus(
             state="ready",
-            message=f"{spec.display_name} 已就绪。",
+            message=_ready_message(spec),
             **common,
+        )
+
+    def readiness(self, spec: ModelSpec) -> ModelReadiness:
+        """Report every unmet prerequisite, not just the first one.
+
+        Both this and ``status()`` answer the same question from the same
+        primitives (``runtime_path``, ``_worker_path``, ``model_path`` and the
+        manifest validators); they differ only in what they are allowed to hide.
+        """
+        model_path = self.model_path(spec)
+        runtime_python_path = self.runtime_path(spec)
+        worker_path = self._worker_path(spec)
+        problems: list[str] = []
+        actions: list[str] = []
+        if runtime_python_path is None or not runtime_python_path.is_file():
+            problems.append(f"运行环境缺失：{runtime_python_path or '未配置模型运行环境路径'}")
+            actions.append("准备该模型的独立运行环境")
+        if worker_path is None or not worker_path.is_file():
+            problems.append(f"工作进程缺失：{worker_path or '未配置工作进程路径'}")
+            actions.append("修复应用安装以恢复工作进程")
+        manifest_path = model_path / "manifest.json"
+        weight_state: str | None = None
+        if not manifest_path.is_file():
+            weight_state = "not_installed"
+            problems.append(f"权重未下载：{model_path}")
+            actions.append(_download_hint(spec))
+        else:
+            try:
+                _validate_manifest(
+                    spec,
+                    model_path,
+                    _read_manifest(manifest_path),
+                    verify_checksums=False,
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                weight_state = "invalid"
+                problems.append(f"安装不完整：{exc}")
+                actions.append("删除该模型目录后重新下载")
+        if not problems:
+            return ModelReadiness(
+                model=spec,
+                available=True,
+                label="可用",
+                problems=(),
+                repair_action="无需处理。",
+                message=_ready_message(spec),
+            )
+        label = {
+            "not_installed": "未安装",
+            "invalid": "安装不完整",
+        }.get(weight_state, "运行环境不完整")
+        return ModelReadiness(
+            model=spec,
+            available=False,
+            label=label,
+            problems=tuple(problems),
+            repair_action="；".join(actions) + "。",
+            message=f"{spec.display_name} {label}：" + "；".join(problems) + "。",
         )
 
     def verify(self, spec: ModelSpec) -> ModelRuntimeStatus:
@@ -198,6 +285,26 @@ class ModelCatalog:
         if spec.capability == "voice_clone_zh":
             return self.voice_worker_path
         return self.visual_worker_path
+
+
+def _gib(size: int) -> str:
+    return f"{size / 1024 ** 3:.1f} GiB"
+
+
+def _ready_message(spec: ModelSpec) -> str:
+    return (
+        f"{spec.display_name} 已就绪：参数规模 {spec.parameter_scale}；"
+        f"量化 {spec.quantization}；权重常驻下限约 {_gib(spec.approximate_download_bytes)}"
+        "（等于安装包体积；激活值、KV 缓存与图像缓存等运行时额外占用未实测）。"
+    )
+
+
+def _download_hint(spec: ModelSpec) -> str:
+    return (
+        f"在设置页的模型管理中下载 {spec.display_name}"
+        f"（{spec.repository}@{spec.revision[:8]}，约 {_gib(spec.approximate_download_bytes)}，"
+        f"许可 {spec.license_name}）"
+    )
 
 
 def _read_manifest(path: Path) -> dict[str, object]:
