@@ -1018,6 +1018,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   );
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
+  const [inserting, setInserting] = useState(false);
   const [editorDraft, setEditorDraft] = useState(false);
   const [clipDrafts, setClipDrafts] = useState<Record<string, VideoClipDraft>>({});
   const [audioPlayhead, setAudioPlayhead] = useState(0);
@@ -1281,6 +1282,24 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 不针对既有
+  // 镜头，落点走请求里的 playhead_ms，所以这里以当前选中镜头作为取候选的上下文。
+  async function showInsertCandidates(clipId: string) {
+    setBusy("clip");
+    setError(null);
+    try {
+      const clip = workspace.montage?.clips.find((item) => item.id === clipId);
+      const candidates = await getCreationTaskMontageClipCandidates(task.id, clipId);
+      // 「添加片段」是增加，不是替换：当前镜头自己也在候选里，要排除掉。
+      setReplacementCandidates(candidates.filter((candidate) => candidate.asset_id !== clip?.asset_id || candidate.segment_id !== clip?.segment_id));
+      setInserting(true);
+    } catch (cause) {
+      setError(errorDetails(cause));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function showReplacementCandidates(clipId: string) {
     setBusy("clip");
     setError(null);
@@ -1307,6 +1326,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if(selectedOverlayId){setEditorDraft(false);invalidateEditPreview();}
     setSelectedOverlayId(null);
     setSelectedAudioId(null);
+    setInserting(false);
     if (selectedClipId !== clipId || selectedCueId || selectedNarrationSegmentId || selectedAudioId) { setEditorDraft(false); invalidateEditPreview(); }
     setSelectedClipId(clipId);
     setSelectedCueId(null);
@@ -1651,7 +1671,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const inspector = isEditor
     ? selectedOverlay ? <GraphicOverlayEditor key={`${task.current_timeline_version_id}:${selectedOverlay.id}`} taskId={task.id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
     : selectedAudioTrack ? <AudioTimelineInspector key={`${task.current_timeline_version_id}:${selectedAudioId}`} track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => void showReplacementCandidates(selectedClip.id)} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
+    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => { setInserting(false); void showReplacementCandidates(selectedClip.id); }} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onAddSegment={() => { setReplacementClipId(null); void showInsertCandidates(selectedClip.id); }} inserting={inserting} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} workspace={workspace} />
