@@ -1260,7 +1260,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       // 保存失败必须同时给普通人三件能判断的事：没保存成、为什么、接下来怎么做。
       // 桌面端返回的原始报错保留在 details.message 里，不被通用文案吞掉。
       setError(saver
-        ? { ...details, message: `成片没有保存到本地。${details.message}`, repairAction: "请确认所选位置可以写入（例如外接盘仍已连接、目录还有剩余空间），然后再次点击「保存到本地」。" }
+        ? { ...details, message: `成片没有保存到本地。${details.message}`, repairAction: "请先检查当前成片和本地服务是否可用（成片是否还在、本地服务是否已停止或返回错误），再检查保存位置是否可写（例如外接盘仍已连接、目录还有剩余空间）；问题恢复后再次点击「保存到本地」。" }
         : { ...details, message: `成片没有保存到本地。${details.message}` });
     } finally {
       setBusy(null);

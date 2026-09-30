@@ -209,6 +209,33 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("成片缺失等服务侧失败时，提示不会只让用户去查磁盘", async () => {
+    // 真实 API 错误形状（HTTP 404 + 业务 code），不是磁盘写失败。
+    // 若下一步只写「检查保存位置」，用户会对着完好的外接盘反复重试，永远查不到真正原因。
+    const saveRenderedVideo = vi.fn().mockRejectedValue(
+      new mocks.MockCreationPlanApiError(
+        404,
+        "output_missing",
+        "成片文件已不存在：/api/creation-tasks/task-1/output",
+        "无法保存这个任务的成片。",
+        "重新生成成片后再保存。",
+      ),
+    );
+    useElectronSave(saveRenderedVideo);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/没有保存到本地/);
+    // 服务端返回的原始原因必须保留
+    expect(alert).toHaveTextContent("成片文件已不存在");
+    // 下一步必须同时覆盖「当前成片/本地服务」和「保存位置」，不能只归因磁盘
+    expect(alert).toHaveTextContent(/当前成片和本地服务/);
+    expect(alert).toHaveTextContent(/保存位置是否可写/);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("用户取消保存时保持安静，既不报成功也不报失败", async () => {
     const saveRenderedVideo = vi.fn().mockResolvedValue({ saved: false, canceled: true });
     useElectronSave(saveRenderedVideo);
