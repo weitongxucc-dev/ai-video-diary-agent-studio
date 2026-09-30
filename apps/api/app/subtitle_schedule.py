@@ -14,6 +14,35 @@ class TimedCaption:
     subtitle_emphasis_ranges: list[tuple[int,int]] | None = None
 
 
+def new_subtitle_gap_intervals(before_track, after_track, duration_seconds: float) -> list[tuple[float, float]]:
+    """Return previously covered intervals left blank by a same-track edit.
+
+    Call after timing validation, with the original and final candidate of one
+    valid language track. Visibility settings and other languages do not affect
+    this track's coverage. Existing blank intervals are never reported.
+    """
+    if before_track.status != "valid" or after_track.status != "valid":
+        return []
+    if before_track.language != after_track.language:
+        raise ValueError("新增空白须比较同一语言轨")
+    boundaries = sorted({0.0, duration_seconds, *(
+        min(duration_seconds, max(0.0, time))
+        for track in (before_track, after_track)
+        for cue in track.cues
+        for time in (cue.start_seconds, cue.end_seconds)
+    )})
+    gaps = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        covered_before = any(cue.start_seconds <= start and cue.end_seconds >= end for cue in before_track.cues)
+        covered_after = any(cue.start_seconds <= start and cue.end_seconds >= end for cue in after_track.cues)
+        if covered_before and not covered_after:
+            if gaps and gaps[-1][1] == start:
+                gaps[-1] = (gaps[-1][0], end)
+            else:
+                gaps.append((start, end))
+    return gaps
+
+
 def subtitle_schedule(tracks, duration_seconds: float) -> list[TimedCaption]:
     if any(type(track.style.get("enabled", True)) is not bool for track in tracks):
         raise ValueError("字幕显示设置必须为布尔值")
