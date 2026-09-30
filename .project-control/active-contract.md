@@ -154,3 +154,5 @@ WIL179已审集成268a55b，原15停止该树写入，改只读审WIL177核心di
 原13的WIL180产品修改已交付，停写；原20使用干净wil95-evidence-wording/original树的codex/wil180-visible-review、5bbff86进行只读GUI，旧WIL152基线不得当作当前候选。原19仍是桌面导入及字幕HTTP超时的唯一写者，d7370e8及b0d97f2已审集成，原生导入验收仍待完成；原15最终差异审核已交付停工，不扩大审查或重复测试。任何子包Done均不自动关闭父功能或解除HOLD。
 
 原19原生验收启动链重复失败后，主控收回其GUI与服务启动权，候选保留并停写。原18接WIL177只读独立原生收尾，复用干净wil175-save-feedback/original的新codex/wil177-native-review分支、集成候选2f59ac4；普通按钮到原生选文件、完整复制、真实接收，精确派单WIL-177/native-review-dispatch.md。原19只保存交接，不再占8000/3000；原18不覆盖作者证据，旧WIL176候选身份不随树切换改写。
+
+本批验收收尾后，原13/14/15/18/19/20的本批临时产品写权与GUI时段全部结束；仅保留各自报告整理权，不自动开下一项或恢复旧派单。原18已释放WIL177自有Electron/API/Web及8000/3000，原20、14的自有服务也已释放。交付状态、集成SHA与具体验收证据以Linear及本批controller-acceptance.md为准；此收尾不解除前述具名HOLD，不关闭父功能，不授权main或Release。
