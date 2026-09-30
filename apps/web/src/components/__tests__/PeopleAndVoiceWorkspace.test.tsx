@@ -68,8 +68,12 @@ describe("PeopleAndVoiceWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "声音" }));
     fireEvent.click(screen.getByRole("button", { name: "登记声音" }));
     const form = screen.getByRole("button", { name: "保存声音" }).closest("form")!;
+    expect(screen.getByText("声音文件", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/声音声音文件/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("选择已授权 WAV"), { target: { files: [new File(["wav"], "owner.wav", { type: "audio/wav" })] } });
     await screen.findByText("WAV 已安全导入 · 1.0 秒");
+    expect(screen.getByText("声音文件已保存到当前工作区；请继续填写参考文字和授权信息。")).toBeInTheDocument();
+    expect(screen.queryByText(/声音声音文件/)).not.toBeInTheDocument();
     fireEvent.change(form.querySelector('input[name="version"]')!, { target: { value: "v2" } });
     fireEvent.change(form.querySelector('textarea[name="reference_text"]')!, { target: { value: "这是授权参考文字" } });
     fireEvent.change(form.querySelector('input[name="voice_rights_holder"]')!, { target: { value: "本人" } });

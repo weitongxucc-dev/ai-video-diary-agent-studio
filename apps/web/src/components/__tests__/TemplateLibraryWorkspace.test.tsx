@@ -12,6 +12,20 @@ const colorTemplate: VideoTemplate = {
   settings: { ...template.settings, aspect_ratio: "16:9", color_style: { exposure: .5, contrast: 1.1, saturation: .8, temperature: .2 } },
 };
 describe("TemplateLibraryWorkspace", () => {
+  it.each([
+    { profile_id: "voice_1", version: "v1" },
+    { profile_id: "voice_missing", version: "missing-version" },
+  ])("reports that the original voice name is unreadable without exposing or replacing $profile_id", (voice) => {
+    render(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, settings: { ...template.settings, voice } }]} />);
+    expect(screen.getByText("无法读取原声音名称")).toBeInTheDocument();
+    expect(screen.queryByText(`${voice.profile_id} · ${voice.version}`)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
+  });
+  it("still requires a voice selection when the template has no voice configuration", () => {
+    render(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
+    expect(screen.getByText("制作前选择可用声音")).toBeInTheDocument();
+    expect(screen.queryByText("无法读取原声音名称")).not.toBeInTheDocument();
+  });
   it("shows saved color parameters and distinguishes mixed and legacy templates", () => {
     const { rerender } = render(<TemplateLibraryWorkspace offline={false} templates={[colorTemplate]} />);
     expect(screen.getByText("曝光 0.5 · 对比度 1.1 · 饱和度 0.8 · 冷暖 0.2")).toBeInTheDocument();

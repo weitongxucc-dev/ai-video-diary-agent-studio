@@ -101,7 +101,6 @@ export function MembersAndSpacesWorkspace({ role = "owner" }: { role?: Role }) {
         {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
 
         <div className={styles.viewBar}>
-          <h2>成员与空间</h2>
           <button className={styles.secondaryButton} disabled={loading || busy} onClick={() => void refresh()} type="button"><RefreshCw size={15}/>刷新</button>
         </div>
 

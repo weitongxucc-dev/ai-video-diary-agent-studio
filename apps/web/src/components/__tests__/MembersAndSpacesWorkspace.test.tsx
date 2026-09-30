@@ -23,6 +23,14 @@ const member = { member_id: "m-2", name: "小王", role: "member" as const, crea
 afterEach(() => { vi.clearAllMocks(); });
 
 describe("MembersAndSpacesWorkspace", () => {
+  it.each(["owner", "member"] as const)("leaves the page title to AppShell for %s and keeps refresh available", async (role) => {
+    api.listLocalMembers.mockResolvedValue({ members: [owner, member] });
+    render(<MembersAndSpacesWorkspace role={role} />);
+    await screen.findByText("小王");
+    expect(screen.queryByText("成员与空间")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(api.listLocalMembers).toHaveBeenCalledTimes(2));
+  });
   it("lists members with name and role badges", async () => {
     api.listLocalMembers.mockResolvedValue({ members: [owner, member] });
     render(<MembersAndSpacesWorkspace />);

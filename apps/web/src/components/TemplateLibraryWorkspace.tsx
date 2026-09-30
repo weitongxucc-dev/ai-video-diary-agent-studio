@@ -56,7 +56,7 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
       <div><dt>来源</dt><dd>{selected.source_task_id ? <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原片</Link> : "内置制作结构"}</dd></div>
       <div><dt>文案风格</dt><dd>{settings.style_instruction || "未指定额外风格"}</dd></div>
       <div><dt>文案结构</dt><dd>{settings.script_structure?.join(" → ") || (settings.script_section_count ? `${settings.script_section_count} 段，按新主题重新撰写` : "按新主题生成")}</dd></div>
-      <div><dt>声音</dt><dd>{settings.voice ? `${settings.voice.profile_id} · ${settings.voice.version}` : "制作前选择可用声音"}</dd></div>
+      <div><dt>声音</dt><dd>{settings.voice ? "无法读取原声音名称" : "制作前选择可用声音"}</dd></div>
       <div><dt>画幅与时长</dt><dd>{settings.aspect_ratio} · {settings.duration_target_seconds} 秒 · {settings.language === "zh-CN" ? "中文" : settings.language}</dd></div>
       <div><dt>画面适配</dt><dd>{settings.fit_mode === "fit" ? "完整显示（可能留边）" : "填满画面（居中裁切）"}</dd></div>
       <div><dt>调色</dt><dd>{settings.color_style ? `曝光 ${settings.color_style.exposure} · 对比度 ${settings.color_style.contrast} · 饱和度 ${settings.color_style.saturation} · 冷暖 ${settings.color_style.temperature}` : settings.color_style === null ? "原镜头调色不同，不统一复用" : "未保存调色，使用新素材原色"}</dd></div>
