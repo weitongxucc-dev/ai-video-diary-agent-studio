@@ -181,6 +181,39 @@ def compile_compound_selection(command,steps):
     return sorted(chosen)
 
 
+def synchronize_linked_subtitle_cue(tracks, original, updated, cue_id, duration_seconds,
+                                     *, invalidate_all_english_on_text_change=False):
+    """Apply one source cue edit and keep a uniquely linked translation on its clock."""
+    before=next(cue for cue in original.cues if cue.id==cue_id)
+    after=next(cue for cue in updated.cues if cue.id==cue_id)
+    text_changed=original.language=='zh-CN' and after.text!=before.text
+    result=[updated if item.id==original.id else item for item in tracks
+            if not(text_changed and item.language=='en-US' and
+                   (invalidate_all_english_on_text_change or item.source_language=='zh-CN'))]
+    timing_changed=(after.start_seconds,after.end_seconds)!=(before.start_seconds,before.end_seconds)
+    if original.language!='zh-CN' or text_changed or not timing_changed:
+        return result
+    translations=[item for item in result if item.status=='valid' and item.language=='en-US'
+                  and item.source_language=='zh-CN']
+    if len(translations)>1:
+        raise ValueError('存在多个关联英文字幕轨，请先检查译文来源关联；两轨时间未改动')
+    if not translations:
+        return result
+    translation=translations[0]
+    source_ids=[item.id for item in updated.cues]
+    references=[item.source_cue_id for item in translation.cues]
+    if (len(source_ids)!=len(set(source_ids)) or not references
+        or any(reference is None or reference not in source_ids for reference in references)
+        or len(references)!=len(set(references)) or references.count(cue_id)!=1):
+        raise ValueError('译文与原字幕的对应关系缺失或有歧义，请先检查；两轨时间未改动')
+    synchronized=replace(translation,cues=[replace(item,
+        start_seconds=after.start_seconds,end_seconds=after.end_seconds)
+        if item.source_cue_id==cue_id else item for item in translation.cues],
+        artifact_ref=None,transform_id=None)
+    subtitle_schedule([replace(synchronized,style={**synchronized.style,'enabled':True})],duration_seconds)
+    return [synchronized if item.id==translation.id else item for item in result]
+
+
 def apply_compound_subtitles(tracks,steps,duration_seconds):
     result=list(tracks)
     for step in steps:
@@ -208,29 +241,7 @@ def apply_compound_subtitles(tracks,steps,duration_seconds):
                 end_seconds=round(cue.end_seconds+values['offset_seconds'],3))
         updated=update_subtitle_cue(track,cue.id,**changes)
         subtitle_schedule([replace(updated,style={**updated.style,'enabled':True})],duration_seconds)
-        invalidate_translation=track.language=='zh-CN' and 'text' in values and values['text']!=cue.text
-        result=[updated if item.id==track.id else item for item in result if not(invalidate_translation and item.language=='en-US' and item.source_language=='zh-CN')]
-        changed_cue=next(item for item in updated.cues if item.id==cue.id)
-        timing_changed=(changed_cue.start_seconds,changed_cue.end_seconds)!=(cue.start_seconds,cue.end_seconds)
-        if track.language=='zh-CN' and timing_changed and not invalidate_translation:
-            translations=[item for item in result if item.status=='valid' and item.language=='en-US'
-                          and item.source_language=='zh-CN']
-            if len(translations)>1:
-                raise ValueError('存在多个关联英文字幕轨，请先检查译文来源关联；两轨时间未改动')
-            if translations:
-                translation=translations[0]
-                source_ids=[item.id for item in updated.cues]
-                references=[item.source_cue_id for item in translation.cues]
-                if (len(source_ids)!=len(set(source_ids)) or not references
-                    or any(reference is None or reference not in source_ids for reference in references)
-                    or len(references)!=len(set(references)) or references.count(cue.id)!=1):
-                    raise ValueError('译文与原字幕的对应关系缺失或有歧义，请先检查；两轨时间未改动')
-                synchronized=replace(translation,cues=[replace(item,
-                    start_seconds=changed_cue.start_seconds,end_seconds=changed_cue.end_seconds)
-                    if item.source_cue_id==cue.id else item for item in translation.cues],
-                    artifact_ref=None,transform_id=None)
-                subtitle_schedule([replace(synchronized,style={**synchronized.style,'enabled':True})],duration_seconds)
-                result=[synchronized if item.id==translation.id else item for item in result]
+        result=synchronize_linked_subtitle_cue(result,track,updated,cue.id,duration_seconds)
     return result
 
 

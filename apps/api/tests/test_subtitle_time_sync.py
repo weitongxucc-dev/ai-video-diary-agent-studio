@@ -76,8 +76,43 @@ def test_chinese_text_change_keeps_existing_translation_invalidation():
     assert [track.language for track in result] == ["zh-CN"]
 
 
+@pytest.mark.parametrize("english_source_language", ["zh-CN", None])
+def test_exact_chinese_text_change_preserves_all_english_invalidation(
+        person_render_edit_state, monkeypatch, english_source_language):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    source, translation = tracks()
+    english = replace(translation, source_language=english_source_language,
+                      generation_method="translation" if english_source_language else "timeline")
+    for track in (source, english):
+        state.production.create_subtitle_track(replace(
+            track, workspace_id=state.workspace_id, task_id=state.task.id,
+            timeline_version_id=version.id, style={"enabled": True}))
+    before = state.client.get(base).json()
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
+                        SimpleNamespace(id="text-preview", logical_ref="artifacts/text-preview.mp4"))
+    preview = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": source.id, "cue_id": source.cues[0].id,
+        "text": "改过的第一句",
+    })
+    assert preview.status_code == 200, preview.text
+    assert state.client.get(base).json()["subtitle_tracks"] == before["subtitle_tracks"]
+    confirmed = state.client.post(base + "/edits/" + preview.json()["proposal"]["id"] + "/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    assert [track["language"] for track in after["subtitle_tracks"]] == ["zh-CN"]
+    assert after["subtitle_tracks"][0]["cues"][0]["text"] == "改过的第一句"
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    restored = state.client.get(base).json()
+    assert {track["language"]: track["cues"] for track in restored["subtitle_tracks"]} == {
+        track["language"]: track["cues"] for track in before["subtitle_tracks"]}
+
+
+@pytest.mark.parametrize("entry", ["compound", "exact"])
 def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
-        person_render_edit_state, monkeypatch, tmp_path):
+        person_render_edit_state, monkeypatch, tmp_path, entry):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
@@ -92,10 +127,13 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
                         SimpleNamespace(id="timing-preview", logical_ref="artifacts/timing-preview.mp4"))
-    preview = state.client.post(base + "/edits/preview", json={
+    preview = (state.client.post(base + "/edits/preview", json={
         "raw_command": "中文字幕1显示0到1.8秒", "context_stage": "subtitle_cover",
         "selected_object_refs": [],
-    })
+    }) if entry == "compound" else state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": source.id, "cue_id": source.cues[0].id,
+        "text": source.cues[0].text, "end_seconds": 1.8,
+    }))
     assert preview.status_code == 200, preview.text
     assert state.client.get(base).json()["subtitle_tracks"] == before["subtitle_tracks"]
     confirmed = state.client.post(base + "/edits/" + preview.json()["proposal"]["id"] + "/confirm")
@@ -124,9 +162,10 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
     assert restored["narration"]["audio_reference"] == before["narration"]["audio_reference"]
 
 
+@pytest.mark.parametrize("entry", ["compound", "exact"])
 @pytest.mark.parametrize("references", [(None, "zh-2"), ("zh-1", "zh-1")])
 def test_broken_link_rejects_preview_without_persisting_any_track(
-        person_render_edit_state, monkeypatch, references):
+        person_render_edit_state, monkeypatch, references, entry):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
@@ -137,10 +176,13 @@ def test_broken_link_rejects_preview_without_persisting_any_track(
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
-    rejected = state.client.post(base + "/edits/preview", json={
+    rejected = (state.client.post(base + "/edits/preview", json={
         "raw_command": "中文字幕1显示0到1.8秒", "context_stage": "subtitle_cover",
         "selected_object_refs": [],
-    })
+    }) if entry == "compound" else state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": source.id, "cue_id": source.cues[0].id,
+        "text": source.cues[0].text, "end_seconds": 1.8,
+    }))
     assert rejected.status_code == 422, rejected.text
     after = state.client.get(base).json()
     assert after["task"]["current_timeline_version_id"] == before["task"]["current_timeline_version_id"]

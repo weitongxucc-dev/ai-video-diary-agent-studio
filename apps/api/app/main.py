@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from app.assistant_pi import AssistantUnavailable, run_plan_turn, run_task_turn
 
 from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
-from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command
+from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
 from app.graphic_overlays import validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
 from app.transitions import dissolve_frames, extend_dissolve_sources
@@ -8255,6 +8255,9 @@ def confirm_creation_task_edit(
             raise HTTPException(status_code=409, detail="invalid subtitle style")
         try:
             subtitle_schedule([replace(track, status="valid", style={**updated_style, "enabled": True}, cues=updated_cues)], montage.duration_seconds)
+            linked_tracks = synchronize_linked_subtitle_cue(
+                current_tracks, track, updated_track, cue.id, montage.duration_seconds,
+                invalidate_all_english_on_text_change=True)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         result_version_id = f"timeline_{uuid4().hex}"
@@ -8282,13 +8285,27 @@ def confirm_creation_task_edit(
             artifact_ref=subtitle_ref,
             transform_id=transform_id,
         )
-        retained = [
-            _clone_subtitle_track(item, timeline_version_id=result_version_id)
-            for item in current_tracks
-            if item.id != track.id and not (
-                track.language == "zh-CN" and item.language == "en-US" and str(text) != expected_text
-            )
-        ]
+        retained = []
+        previous_tracks = {item.id: item for item in current_tracks}
+        for item in linked_tracks:
+            if item.id == track.id:
+                continue
+            previous = previous_tracks[item.id]
+            if item.cues != previous.cues:
+                linked_ref, linked_transform_id = _publish_subtitle_text(
+                    workspace_id=workspace_id,
+                    task_id=task.id,
+                    proposal_id=proposal.id,
+                    kind="subtitle_linked_timing_update",
+                    input_refs=[previous.artifact_ref or f"subtitle-track:{previous.id}"],
+                    content=render_srt(_execution_subtitle_track(item)),
+                    engine="subtitle-srt/v1",
+                    parameters={"track_id":item.id,"source_track_id":track.id,"cue_id":cue.id},
+                )
+                retained.append(_clone_subtitle_track(item, timeline_version_id=result_version_id,
+                    artifact_ref=linked_ref, transform_id=linked_transform_id))
+            else:
+                retained.append(_clone_subtitle_track(item, timeline_version_id=result_version_id))
         if track.source_language is None:
             montage_cue = next((item for item in montage.cues if item.id == cue.id), None)
             if montage_cue is not None:
@@ -8840,10 +8857,13 @@ def preview_creation_task_exact_edit(
         )
         start = payload.start_seconds if payload.start_seconds is not None else cue.start_seconds
         end = payload.end_seconds if payload.end_seconds is not None else cue.end_seconds
-        candidate = replace(cue, start_seconds=start, end_seconds=end)
+        candidate = replace(cue, text=normalized_text, start_seconds=start, end_seconds=end)
+        candidate_track = replace(track, cues=[candidate if item.id == cue.id else item for item in track.cues])
         try:
             subtitle_schedule([replace(track, status="valid", style={**track.style, "enabled": True},
                 cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
+            synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds,
+                                            invalidate_all_english_on_text_change=True)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         changed = (
