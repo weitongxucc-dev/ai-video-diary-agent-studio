@@ -38,11 +38,11 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 
 | 执行者（当前/原） | 任务与边界 | 交付与验收 |
 | --- | --- | --- |
-| workspace4 / 原14 | WIL-109实施：仅GraphicOverlayEditor.tsx、CreationTaskWorkspace.tsx的选中对象名称及对应现有测试。复用wil56-visible-fixes树，独占以上文件；不改编辑行为、字号、API、权限。 | 箭头显示实际名称，切换字幕/镜头/标注不串名；定向测试、候选SHA、三尺寸真实入口证据。GUI未分配，先准备可运行环境并回报。 |
-| workspace6 / 原20 | WIL-181字幕新增空白提示实施；复用wil95-evidence-wording树50209dd。现仅独占subtitle_schedule.py及test_subtitle_schedule.py。main.py由WIL144独占，接线尚未移交。 | 先完成新增空白差异纯函数和边界专项；仅同轨有效字幕、本次新增区间、复合最终候选；不改英文同步/保存/门禁。主控移交main.py后接入exact/compound预览，再做真实提示与重叠拒绝验收。 |
-| workspace2 / 原13 | WIL-144裁剪对话缺口实施；复用wil126-intake-review树50209dd。独占main.py的preview_creation_task_edit内裁剪接线、visual_effects.py裁剪解析和test_visual_effects.py/test_montage_pipeline.py本包专项用例；不改其他main逻辑。 | 对明确适配/位置参数生成ChangeCrop并复用exact同链；未指定轴及模式沿当前值，含糊数量返回可操作澄清，不猜测“裁一点”的量、不把改画幅当裁剪。预览不写、确认/过期/锁定/撤销专项；真实GUI另分配。 |
-| workspace3 / 原19 | WIL-100新增说明受production.py HOLD限制；先独占MaterialLibraryWorkspace.test.tsx一文件，核报告中的刷新串条反例。主组件仍只读。 | 现有满页刷新会保留选中项，不得误报；以选中项确实消失的条件证明保存请求目标及草稿归属，证伪则纠正报告。仅单条回归，不以此算整条素材说明完成；已ACK PRD§7外部确认规则。 |
+| workspace4 / 原14 | WIL-109源码与专项核对后，现修复自有隔离样本的8秒音轨/4秒WAV不一致；不改旧证据或产品门禁。 | 可在新夹具用标准wave生成真实8秒合成WAV并一致登记，明确只证UI不证真人配音。准备后排队GUI；原时段已释放，不重复调查。 |
+| workspace6 / 原20 | WIL-181继续：已有148ad7d；现移交main.py的UpdateSubtitleCue及_preview_compound_edit预览影响说明、对应导入与test_subtitle_time_sync.py，独占main.py。 | 接入exact/compound共用空白计算，预览无修改；不改英文同步/确认/保存/门禁。相关专项后交候选，GUI排WIL37之后。 |
+| workspace2 / 原13 | WIL-144已交15c4c24，main.py写权退役移交6；保留visual_effects.py及两专项测试仅用于本候选审查退回的局部修正。 | 主控/5审提交；GUI另分配，不写main.py。词语同义表达属于本包实现细节，不需新增产品决策。 |
+| workspace3 / 原19 | WIL-100前置纠错：刷新串条已用A/B/C反例证实，现独占MaterialLibraryWorkspace.tsx及其现有专项测试，修复草稿与保存目标绑定；不写production.py或新增整条说明存储。 | 选中素材/片段消失后不得把旧草稿保存到回退对象；保留可恢复草稿或明确要求重选，正常主动切换须同步草稿。把记录错误行为的测试改为正确结果断言，不运行全量；本修复不代表整条说明完成。 |
 | workspace5 / 原15 | WIL-107准备结论纠正后，只读交叉审WIL144裁剪候选；不写产品。 | 模板规则不可退化为固定说明或旧镜头复制，WIL178旧写权已退役。144交付后审明确参数/未指定轴保留、含糊拒绝、锁定/过期与共用链，写WIL144/crop-cross-review.md；不轮询空树或跑测试。 |
-| workspace1 / 原18 | WIL-56及WIL-37收尾审核后，接WIL126新规则只读施工准备；只读bd25当前候选和指定报告。 | 收尾最小结论；再按已更新PRD§7核三个扫描入口、确认事实持久化/幂等、WIL177复用及旧自动猜完成路径退役，交WIL126/next-wave.md，不写产品。 |
+| workspace1 / 原18 | WIL37优先收口：只读cc882f2开发候选，复用自身干净树及既有真实短媒体；具名GUI时段。WIL126准备已交付，未授产品写权。 | 先比对保存消费者是否变化以复用既有失败/取消证据；只补同一任务/版本的普通入口视频/SRT/封面保存与独立打开。准备健康再启动GUI，不重建完整制作流程；不写产品、不启模型，不据核验关闭父项。 |
 
-准备包仅可写原批次对应issue目录的next-wave.md及独立/tmp夹具；它们不是实施完成，不据此关闭issue。实施者先REBASE_ACK再写，主控审查准备结果后直接授予不冲突的精确写权，不再向用户询问是否继续。GUI现独占分配workspace4的WIL109，须自测及隔离服务健康后才开始交互，其他线程不得启动GUI；禁模型、用户库、发布、全量测试与依赖安装。连续两次同根失败改方法或换人，不反复补环境。报告须区分产品缺陷、环境故障、证据缺口、非阻断项，并给操作、预期、实际和下一步。
+准备包仅可写原批次对应issue目录的next-wave.md及独立/tmp夹具；它们不是实施完成，不据此关闭issue。实施者先REBASE_ACK再写，主控审查准备结果后直接授予不冲突的精确写权，不再向用户询问是否继续。GUI现独占分配workspace1的WIL37，workspace4已释放；须隔离服务健康后才开始交互，其他线程不得启动GUI。禁模型、用户库、发布、全量测试与依赖安装。连续两次同根失败改方法或换人，不反复补环境。报告须区分产品缺陷、环境故障、证据缺口、非阻断项，并给操作、预期、实际和下一步。
