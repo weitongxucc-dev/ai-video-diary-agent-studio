@@ -776,6 +776,7 @@ function SubtitleCoverView({
   onSelectCue,
   onSelectTrack,
   onSaveCover,
+  onSaveSubtitle,
   onUndo,
   selectedCover,
   selectedCueId,
@@ -789,6 +790,7 @@ function SubtitleCoverView({
   onSelectCue: (cueId: string) => void;
   onSelectTrack: (trackId: string) => void;
   onSaveCover: () => void;
+  onSaveSubtitle: (mode: "zh" | "en" | "zh-en") => void;
   onUndo: () => void;
   selectedCover: boolean;
   selectedCueId: string | null;
@@ -801,9 +803,15 @@ function SubtitleCoverView({
   const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
+  const [saveSubtitleMode, setSaveSubtitleMode] = useState<"zh" | "en" | "zh-en">(
+    activeTrack.language === "en-US" ? "en" : "zh",
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
   const chineseVisible = sourceTrack.language === "zh-CN" && sourceTrack.style.enabled !== false;
   const englishVisible = translationTrack?.status === "valid" && translationTrack.style.enabled !== false;
+  const chineseSavable = tracks.some((track) => track.language === "zh-CN" && track.status === "valid" && track.cues.length > 0);
+  const englishSavable = tracks.some((track) => track.language === "en-US" && track.status === "valid" && track.cues.length > 0);
+  const selectedSavable = saveSubtitleMode === "zh" ? chineseSavable : saveSubtitleMode === "en" ? englishSavable : chineseSavable && englishSavable;
   const displayMode = chineseVisible ? englishVisible ? "zh-en" : "zh" : englishVisible ? "en" : "none";
   const duration = montage?.duration_seconds ?? 0;
   const translationCapability = workspace.subtitle_translation_capability;
@@ -842,8 +850,17 @@ function SubtitleCoverView({
           {translationTrack?.status !== "valid" ? <button type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15} />生成英文字幕</button> : null}
         </div>
         <button className={styles.secondaryButton} disabled={busy || !workspace.task.can_undo} onClick={onUndo} type="button">撤销</button>
+        <label>保存字幕语言
+          <select aria-label="保存字幕语言" disabled={busy} value={saveSubtitleMode} onChange={(event) => setSaveSubtitleMode(event.target.value as "zh" | "en" | "zh-en")}>
+            <option value="zh">中文 SRT</option>
+            <option value="en">英文 SRT</option>
+            <option value="zh-en">中英双语 SRT（一个文件，中文在前）</option>
+          </select>
+        </label>
+        <button className={styles.secondaryButton} disabled={busy || !selectedSavable} onClick={() => onSaveSubtitle(saveSubtitleMode)} type="button"><Save size={15} />保存字幕</button>
       </div>
 
+      {!selectedSavable ? <p className={styles.capabilityLine}>所选语言暂无有效字幕轨，请先检查或生成字幕。</p> : null}
       {!translationCapability.available && !translationTrack ? <p className={styles.capabilityLine} role="status"><AlertCircle size={15} />中英双语暂不可用：{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p> : null}
       <SubtitleStyleEditor key={sourceTrack.timeline_version_id} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact} />
 
@@ -1287,6 +1304,49 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  async function saveSubtitle(mode: "zh" | "en" | "zh-en") {
+    setBusy("save");
+    setError(null);
+    setNotice(null);
+    try {
+      const versionId = workspace.task.current_timeline_version_id;
+      const usableTrack = (language: "zh-CN" | "en-US") =>
+        [activeSubtitleTrack, ...workspace.subtitle_tracks].find(
+          (track) => track?.language === language && track.status === "valid" && track.cues.length > 0,
+        );
+      const chinese = usableTrack("zh-CN");
+      const english = usableTrack("en-US");
+      if (!versionId || (mode !== "en" && !chinese) || (mode !== "zh" && !english)) {
+        throw new Error("当前版本缺少所选语言的有效字幕，请先检查或生成字幕。");
+      }
+      const saver = window.electronAPI?.saveSubtitleFile;
+      if (!saver) throw new Error("请在桌面客户端中保存字幕；浏览器预览不支持本地保存。");
+      const result = await saver({
+        taskId: task.id,
+        expectedVersionId: versionId,
+        mode,
+        ...(mode !== "en" ? { zhTrackId: chinese!.id } : {}),
+        ...(mode !== "zh" ? { enTrackId: english!.id } : {}),
+      });
+      if (result.error) throw new Error(result.error);
+      if (result.saved) setNotice(`字幕已保存${result.fileName ? `：${result.fileName}` : "到所选位置"}`);
+    } catch (cause) {
+      const details = errorDetails(cause);
+      let refreshed = false;
+      try {
+        await refresh(true);
+        refreshed = true;
+      } catch {
+        // Keep the original save failure visible when the workspace cannot refresh.
+      }
+      setError({ ...details, message: `字幕没有保存到本地。${details.message}`, repairAction: refreshed
+        ? "已重新读取当前任务。请检查字幕和保存位置后，重新选择语言并再次点击「保存字幕」。"
+        : "请先刷新任务并检查本地服务和保存位置，再重新选择语言保存字幕。" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 的锚点就是
   // 当前选中镜头（clip_id），落点是「插在它之后」；后端 _preview_exact_montage_edit
   // 对每个操作都要求 clip_id，缺了直接 409。
@@ -1722,7 +1782,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>生成混剪故事板</h2><p>露脸目标 {workspace.plan.presenter_share_target ?? 0}%；只为露脸段制作口型，其余段落从已审核素材选镜头。</p><button className={execution?.job ? styles.secondaryButton : "modern-primary-button"} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running"} onClick={() => run("plan", () => createCreationTaskMontagePlan(task.id), "故事板已生成。") } type="button">{busy === "plan" ? <LoaderCircle className="is-spinning" size={16} /> : <Clapperboard size={16} />}{execution?.job ? "单步生成故事板" : "生成故事板"}</button></div></section> : null}
         {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={<button className={editPreview || editorDraft ? editorUi.button : editorUi.primary} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running" || workspace.montage.status === "waiting_for_user" || (workspace.montage.status === "rendered" && Boolean(task.current_timeline_version_id))} onClick={() => void run("render", () => renderCreationTaskMontage(task.id), "成片已生成。")} type="button">{busy === "render" ? "制作中" : "生成成片"}</button>} /> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}

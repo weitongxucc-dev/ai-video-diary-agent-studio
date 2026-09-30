@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   saveRenderedVideo: (taskId) => ipcRenderer.invoke('save-rendered-video', taskId),
   saveCoverImage: (taskId, coverId) => ipcRenderer.invoke('save-cover-image', taskId, coverId),
+  saveSubtitleFile: (selection) => ipcRenderer.invoke('save-subtitle-file', selection),
 
   // Help
   onOpenHelp: (callback) => ipcRenderer.on('open-help', callback),

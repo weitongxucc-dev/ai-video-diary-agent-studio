@@ -77,6 +77,48 @@ from app.production import (
 from app.video_jobs import VideoJobRunner
 
 
+def test_subtitle_export_uses_selected_current_tracks_and_fixed_chinese_first(monkeypatch):
+    task = SimpleNamespace(id="task_export", current_timeline_version_id="version_2")
+    source = SubtitleTrack(
+        id="subtitle_zh", workspace_id="workspace_export", task_id=task.id,
+        timeline_version_id="version_2", language="zh-CN", source_language=None,
+        style={"bilingual_order": "translation_then_source"},
+        cues=[ProductionSubtitleCue(id="cue_zh", source_cue_id=None, text="新中文",
+                                    start_seconds=0.4, end_seconds=2.8)],
+        generation_method="timeline", model_id=None, artifact_ref=None,
+        transform_id=None, status="valid",
+    )
+    translation = replace(
+        source, id="subtitle_en", language="en-US", source_language="zh-CN",
+        cues=[ProductionSubtitleCue(id="cue_en", source_cue_id="cue_zh",
+                                    text="New English", start_seconds=0.4, end_seconds=2.8)],
+        generation_method="translation",
+    )
+    tracks = [source, translation]
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace_export")
+    monkeypatch.setattr(main_module, "_creation_task_or_404", lambda _workspace, _task: task)
+    monkeypatch.setattr(main_module, "_current_subtitle_tracks", lambda _workspace, _task: tracks)
+    client = TestClient(main_module.app)
+    url = f"/api/creation-tasks/{task.id}/output/selected-subtitles"
+    params = {
+        "expected_version_id": "version_2", "mode": "zh-en",
+        "zh_track_id": source.id, "en_track_id": translation.id,
+    }
+    result = client.get(url, params=params)
+    assert result.status_code == 200, result.text
+    assert result.headers["content-type"].startswith("application/x-subrip")
+    assert "00:00:00,400 --> 00:00:02,800\n新中文\nNew English" in result.text
+    assert client.get(url, params={**params, "mode": "zh", "en_track_id": None}).status_code == 200
+    assert client.get(url, params={**params, "expected_version_id": "version_1"}).status_code == 409
+    assert client.get(url, params={**params, "zh_track_id": "another_task_track"}).status_code == 409
+    tracks[1] = replace(translation, status="unavailable")
+    assert client.get(url, params=params).status_code == 409
+    tracks[1] = replace(translation, cues=[replace(translation.cues[0], source_cue_id="missing")])
+    assert client.get(url, params=params).status_code == 409
+    tracks.clear()
+    assert client.get(url, params=params).status_code == 409
+
+
 @pytest.mark.parametrize("text", [
     "Check subtitle text and timing. Listen to the audio mix. Preview changes before confirming, then export your video.",
     "Don't split English words or version 0.11 when creating captions for a video.",

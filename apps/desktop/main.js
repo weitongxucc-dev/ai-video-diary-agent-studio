@@ -555,6 +555,47 @@ async function downloadCreationTaskOutput(taskId, temporaryPath, coverId = null)
   }
 }
 
+async function downloadSelectedSubtitles(selection, temporaryPath) {
+  if (!Number.isInteger(apiPort) || apiPort <= 0 || serviceStates.api.state !== 'ready') {
+    throw new Error('本地视频服务尚未就绪，请等待服务恢复后重试。');
+  }
+  const params = new URLSearchParams({
+    expected_version_id: selection.expectedVersionId,
+    mode: selection.mode,
+  });
+  if (selection.zhTrackId) params.set('zh_track_id', selection.zhTrackId);
+  if (selection.enTrackId) params.set('en_track_id', selection.enTrackId);
+  const requestPath = `/api/creation-tasks/${encodeURIComponent(selection.taskId)}/output/selected-subtitles?${params}`;
+  await new Promise((resolve, reject) => {
+    const request = http.get({
+      hostname: '127.0.0.1',
+      port: apiPort,
+      path: requestPath,
+      headers: { Accept: 'application/x-subrip' },
+    }, (response) => {
+      const contentType = String(response.headers['content-type'] || '').split(';')[0].trim();
+      if (response.statusCode !== 200 || contentType !== 'application/x-subrip') {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => {
+          let reason = '';
+          try { reason = JSON.parse(Buffer.concat(chunks).toString('utf8')).detail || ''; } catch {}
+          reject(new Error(reason || `本地服务没有返回可保存的字幕（HTTP ${response.statusCode || 0}）。`));
+        });
+        response.on('error', reject);
+        return;
+      }
+      const output = fs.createWriteStream(temporaryPath, { flags: 'wx' });
+      pipeline(response, output).then(resolve, reject);
+    });
+    request.on('error', reject);
+  });
+  const stats = await fs.promises.stat(temporaryPath);
+  if (!stats.isFile() || stats.size <= 0) {
+    throw new Error('本地服务返回了空的字幕文件。');
+  }
+}
+
 // ── IPC Handlers ───────────────────────────────────────
 function registerIpcHandlers() {
   ipcMain.handle('get-api-port', () => {
@@ -627,6 +668,39 @@ function registerIpcHandlers() {
       await fs.promises.unlink(temporaryPath).catch(() => undefined);
       recordLifecycle('cover-image-save-failed', { taskId, coverId, errorCode: error.code || error.name || 'unknown' });
       return { saved: false, error: error.message || '封面保存失败。' };
+    }
+  });
+
+  ipcMain.handle('save-subtitle-file', async (_event, selection) => {
+    const idPattern = /^[a-zA-Z0-9_-]{1,120}$/;
+    const taskPattern = /^task_[a-zA-Z0-9_-]{1,80}$/;
+    if (!selection || typeof selection !== 'object'
+        || !taskPattern.test(selection.taskId)
+        || typeof selection.expectedVersionId !== 'string' || !idPattern.test(selection.expectedVersionId)
+        || !['zh', 'en', 'zh-en'].includes(selection.mode)
+        || (selection.mode !== 'en' && (typeof selection.zhTrackId !== 'string' || !idPattern.test(selection.zhTrackId)))
+        || (selection.mode !== 'zh' && (typeof selection.enTrackId !== 'string' || !idPattern.test(selection.enTrackId)))
+        || (selection.mode === 'zh' && selection.enTrackId)
+        || (selection.mode === 'en' && selection.zhTrackId)) {
+      return { saved: false, error: '字幕保存选择无效，请重新选择语言和当前字幕轨。' };
+    }
+    const suffix = { zh: 'zh', en: 'en', 'zh-en': 'zh-en' }[selection.mode];
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '保存字幕',
+      defaultPath: path.join(app.getPath('videos'), `${selection.taskId}-${suffix}.srt`),
+      filters: [{ name: 'SRT 字幕', extensions: ['srt'] }],
+    });
+    if (result.canceled || !result.filePath) return { saved: false, canceled: true };
+    const temporaryPath = `${result.filePath}.partial-${crypto.randomUUID()}`;
+    try {
+      await downloadSelectedSubtitles(selection, temporaryPath);
+      await fs.promises.rename(temporaryPath, result.filePath);
+      recordLifecycle('subtitle-file-saved', { taskId: selection.taskId, mode: selection.mode, fileName: path.basename(result.filePath) });
+      return { saved: true, fileName: path.basename(result.filePath) };
+    } catch (error) {
+      await fs.promises.unlink(temporaryPath).catch(() => undefined);
+      recordLifecycle('subtitle-file-save-failed', { taskId: selection.taskId, mode: selection.mode, errorCode: error.code || error.name || 'unknown' });
+      return { saved: false, error: error.message || '字幕保存失败。' };
     }
   });
 

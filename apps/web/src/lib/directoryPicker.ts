@@ -26,6 +26,18 @@ declare global {
         fileName?: string;
         error?: string;
       }>;
+      saveSubtitleFile?: (selection: {
+        taskId: string;
+        expectedVersionId: string;
+        mode: "zh" | "en" | "zh-en";
+        zhTrackId?: string;
+        enTrackId?: string;
+      }) => Promise<{
+        saved: boolean;
+        canceled?: boolean;
+        fileName?: string;
+        error?: string;
+      }>;
     };
   }
 }

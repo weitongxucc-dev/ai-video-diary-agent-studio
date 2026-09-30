@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from app.assistant_pi import AssistantUnavailable, run_plan_turn, run_task_turn
@@ -175,6 +175,7 @@ from app.subtitle_tracks import (
     SubtitleStyle as SubtitleExecutionStyle,
     SubtitleTrack as SubtitleExecutionTrack,
     SubtitleTranslationService,
+    render_bilingual_srt,
     render_srt,
     subtitle_translation_provider_from_settings,
 )
@@ -10977,6 +10978,50 @@ def get_creation_task_subtitles(task_id: str, request: Request) -> FileResponse:
         current_workspace_id(request), task_id, subtitle=True
     )
     return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
+
+
+@app.get("/api/creation-tasks/{task_id}/output/selected-subtitles")
+def get_creation_task_selected_subtitles(
+    task_id: str,
+    request: Request,
+    expected_version_id: str,
+    mode: Literal["zh", "en", "zh-en"],
+    zh_track_id: str | None = None,
+    en_track_id: str | None = None,
+) -> Response:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if not task.current_timeline_version_id or task.current_timeline_version_id != expected_version_id:
+        raise HTTPException(status_code=409, detail="当前字幕版本已变化，请重新选择后保存。")
+    required = {"zh": ("zh-CN",), "en": ("en-US",), "zh-en": ("zh-CN", "en-US")}[mode]
+    requested = {"zh-CN": zh_track_id, "en-US": en_track_id}
+    if any(not requested[language] for language in required):
+        raise HTTPException(status_code=422, detail="请选择要保存的字幕轨。")
+    if any(requested[language] for language in {"zh-CN", "en-US"} - set(required)):
+        raise HTTPException(status_code=422, detail="字幕语言与所选保存方式不一致。")
+    tracks = _current_subtitle_tracks(workspace_id, task)
+    selected = {}
+    for language in required:
+        track = next((item for item in tracks if item.id == requested[language]), None)
+        if track is None or track.language != language or track.task_id != task_id or track.timeline_version_id != expected_version_id:
+            raise HTTPException(status_code=409, detail="所选字幕轨已变化，请重新选择后保存。")
+        if track.status != "valid" or not track.cues:
+            raise HTTPException(status_code=409, detail="所选字幕轨目前不可保存，请先检查或重新生成字幕。")
+        selected[language] = _execution_subtitle_track(track)
+    try:
+        if mode == "zh-en":
+            chinese = selected["zh-CN"]
+            if selected["en-US"].source_language != "zh-CN":
+                raise ValueError("英文字幕与当前中文字幕没有来源关联")
+            chinese = replace(chinese, style=replace(chinese.style, bilingual_order="source_then_translation"))
+            content = render_bilingual_srt(chinese, selected["en-US"])
+        else:
+            content = render_srt(selected[required[0]])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"字幕内容或时间无法保存：{exc}") from exc
+    if not content.strip():
+        raise HTTPException(status_code=409, detail="当前字幕文件为空，请检查字幕后重试。")
+    return Response(content=content, media_type="application/x-subrip; charset=utf-8")
 
 
 @app.get("/api/creation-tasks/{task_id}/covers/{cover_id}/image")

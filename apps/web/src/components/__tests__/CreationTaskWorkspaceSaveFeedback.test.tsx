@@ -281,3 +281,54 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
+
+function subtitleWorkspace(): WorkspaceState {
+  const workspace = reviewWorkspace();
+  workspace.subtitle_tracks = [
+    {
+      id: "subtitle_zh", workspace_id: "local", task_id: workspace.task.id,
+      timeline_version_id: "timeline-version-1", language: "zh-CN", source_language: null,
+      style: { name: "default", font_family: "PingFang SC", font_size: 40, primary_color: "#fff", emphasis_color: "#ff0", position: "bottom", bilingual_order: "translation_then_source" },
+      cues: [{ id: "cue_zh", source_cue_id: null, text: "新中文", start_seconds: 0.4, end_seconds: 2.8, speaker: null, line_breaks: [], emphasis: [] }],
+      generation_method: "timeline", model_id: null, artifact_ref: null, transform_id: null,
+      status: "valid", failure_reason: null, impact: null, repair_action: null,
+      created_at: workspace.task.created_at, updated_at: workspace.task.updated_at,
+    },
+    {
+      id: "subtitle_en", workspace_id: "local", task_id: workspace.task.id,
+      timeline_version_id: "timeline-version-1", language: "en-US", source_language: "zh-CN",
+      style: { name: "default", font_family: "PingFang SC", font_size: 40, primary_color: "#fff", emphasis_color: "#ff0", position: "bottom", bilingual_order: "translation_then_source" },
+      cues: [{ id: "cue_en", source_cue_id: "cue_zh", text: "New English", start_seconds: 0.4, end_seconds: 2.8, speaker: null, line_breaks: [], emphasis: [] }],
+      generation_method: "translation", model_id: null, artifact_ref: null, transform_id: null,
+      status: "valid", failure_reason: null, impact: null, repair_action: null,
+      created_at: workspace.task.created_at, updated_at: workspace.task.updated_at,
+    },
+  ];
+  return workspace;
+}
+
+describe("CreationTaskWorkspace 字幕保存", () => {
+  it("显式选择双语后传当前版本和两轨，取消无成功提示，失败可重试", async () => {
+    const saveSubtitleFile = vi.fn()
+      .mockResolvedValueOnce({ saved: false, canceled: true })
+      .mockResolvedValueOnce({ saved: false, error: "当前字幕版本已变化" })
+      .mockResolvedValueOnce({ saved: true, fileName: "task-1-zh-en.srt" });
+    Object.defineProperty(window, "electronAPI", { configurable: true, value: { saveSubtitleFile } });
+    const workspace = subtitleWorkspace();
+    mocks.getWorkspace.mockResolvedValue(workspace);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspace} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "保存字幕语言" }), { target: { value: "zh-en" } });
+    const save = screen.getByRole("button", { name: "保存字幕" });
+    fireEvent.click(save);
+    await waitFor(() => expect(saveSubtitleFile).toHaveBeenCalledWith({
+      taskId: "task-1", expectedVersionId: "timeline-version-1", mode: "zh-en",
+      zhTrackId: "subtitle_zh", enTrackId: "subtitle_en",
+    }));
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(screen.queryByText(/字幕已保存/)).not.toBeInTheDocument();
+    fireEvent.click(save);
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前字幕版本已变化");
+    fireEvent.click(save);
+    expect(await screen.findByText(/字幕已保存：task-1-zh-en.srt/)).toBeInTheDocument();
+  });
+});
