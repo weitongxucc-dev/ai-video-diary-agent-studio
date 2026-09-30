@@ -62,6 +62,14 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 保护旧体验环境/tmp/wil122-verify、/tmp/wil90-demo和本轮前批/tmp/wil99-20260930，只能定向只读或复制到新包tmp。不打开真实用户库。无模型下载/新增付费推理/真实平台动作，验收夹具不改变产品事实。
 
+## 2026-09-30 字幕批次：当前派工
+
+用户明确批准安排并行会话。workspace19 在执行前遇到服务商402余额不足，未ACK且未获得产品写权；已退出本包，由新建workspace20 Codex默认配置接替，只写本包核验报告。源码基线 `5bb1ebd1f5f969ca994a5e0ff02e64253ecd7422`；主控继续单写 Linear、合同、集成。派单目录 `/Users/Zhuanz/Documents/Codex/2026-09-24/volumes-dujiangyan-vm-ai-repositories-bd25/external-agents/batch-20260930-subtitles`。
+
+- workspace18 / UUID 44AB3DDA-CA90-47BD-97D7-274ACFBE29FA：WIL176。复用 `~/.codex/worktrees/wil175-save-feedback/original`，分支 `codex/wil176-subtitle-save`。准备完成，双语规则已写入PRD §11；按 WIL-176/dispatch.md 的“主控实施授权”精确集合授予工作台组件、directoryPicker、desktop main/preload、API main仅本包字幕导出端点及三处专项测试写权。REBASE_ACK后直接实施，其他共享热点和HOLD不变。
+- workspace20 / UUID 359F31E4-128E-47EB-8767-4E64729BAECF：WIL152。复用 `~/.codex/worktrees/wil95-evidence-wording/original`，分支 `codex/wil152-subtitle-review`。固定基线独立核验，只写该包报告及 /tmp/wil152-20260930 隔离证据。产品完全只读；导出缺口沿WIL176，编辑核验独立推进。
+- 旧workspace13/14/15保持停写；此前两工作树的产品归属已退役，现由上述新会话依新派单读取。无旧HOLD解除。图形与重型运行串行申请；4400/4401保护不动。
+
 ## 已交付候选：审核收口边界
 
 三份交叉审核均已落盘并给出 HOLD；主控把具名问题和证据回填对应 Linear。它们不是本轮 Insert 试点的自动返工授权；不合入，不开启新产品写入，保留作者归属。原审核共同基线 dev `93e8182`，具体报告如下。
