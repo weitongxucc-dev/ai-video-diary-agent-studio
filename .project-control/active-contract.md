@@ -22,144 +22,19 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 5. 真实发布不排期、不执行。发布授权和草稿的本地 mock、真实浏览器本地页、真实平台登录、真实草稿、真实发送分别报告，不能互相替代。平台集合的既有选择不构成账号操作授权。
 6. 用户要求测试尽量最短、最小、串行、立即释放资源；不为更稳重复批量跑模型、不并发加载大模型。本轮交叉审核不调用外部模型、不下载模型。
 
-## 当前执行者与独占文件
+## 仍保留的候选与边界
 
-cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`external-agents` 下文均指上述完整外部协作目录。交付、阻断及要求主控裁决的信息必须落文件，不能只在终端显示。
-
-| 执行者（2026-09-29现场定位） | 当前包与工作树 | 保留的产品文件归属及退出条件 |
-| --- | --- | --- |
-| workspace:9 / surface:26，前端 Pi | 原 WIL-90 执行者，服务错误停机，工作树已核干净 | 本轮写权撤回；不再修改产品或验收夹具。既有交付保留，后续只作历史证据 |
-| workspace:2 / surface:12，Claude | WIL-90 / WIL-122 接续，`~/.codex/worktrees/insert-frontend-ui/original` | 原前端任务已验收；当前cmux清单已无此窗口，原工作树产品干净。原前端写权撤回，本轮精确移交下表；保留其后端 WIL-119 HOLD |
-| workspace:4 / surface:23，Pi | WIL-116，`~/.codex/worktrees/agent-recall-memory/original`，候选 `5fcb8ac` | 可见性相关 `sources.py`、`source_repository.py`、`production.py` 及专项测试保留归属；HOLD，禁止新增修改/提交/集成 |
-| workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；审核退回并 HOLD，不扩权或继续产品写入 |
-| workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；审核退回并 HOLD，不把独立检测函数称为自动检查流程已接通 |
-| workspace:10 / surface:27，Claude | WIL-121 / WIL-97，`~/.codex/worktrees/wil97/original`，候选 `4302197` | `apps/web/src/components/AudioTimelineEditor.tsx`；审核退回并 HOLD，产品文件保留归属；降噪试听、原声保护、静态检查等未验项不自动关闭 |
-| workspace:6 / surface:6，OpenCode | WIL-113 / WIL-115 既有交付，当前可接只读审核 | 无新产品写权；发布相关文件不因既有交付而获得继续施工许可 |
-| workspace:3 / surface:11，原 Claude 主控 | 只读命名审批材料 | 只写其已有审批材料；不全局派单、不集成、不写共享合同、不执行 Linear 改名 |
-| 本 Codex 主控 | 本合同、派单和审核 | 共享文档唯一写者；main.py、schemas.py、DDL 等未明确移交文件不默认开放；依赖复核后逐包授予 |
-
-后端省略前缀的文件位于 `apps/api/app/`，前端组件位于 `apps/web/src/components/`。本表不授予新的产品实现任务。交叉审核者只能读候选，在自己的报告路径写证据，不成为候选文件写者。
-
-## 已验收的参照流程与本轮看板重构
-
-用户已验收 Insert 并认可开发过程可读。WIL-122 保存产品验收结论，WIL-89/90 保存工程交付，WIL-29 保存视频剪辑的其余范围；具体证据见 Linear 和 `external-agents/controller-linear-pilot/insert-runtime-20260929.md`。本合同不复制完成度。
-
-用户随后明确要求按0.11需求重构整个Linear。现行入口为项目文档「从这里开始｜开发进度、待决定与待验收」和「0.11 工作地图与原需求索引」；后者原为“试点通过后的下一轮安排”，已原位替代待审迁移提案。功能卡承载验收，子工作包分别承载实施、方案和核验；未来储备包在Backlog，进入具体安排后再进入执行视图。Linear主控单写，具体状态与依赖以实时issue为准。
-
-2026-09-30 用户提供三个新 cmux 窗口并明确“可以，你安排吧”，授权下表实施和核验。主控按[开发流程](../docs/development-workflow.md)绑定候选、线程、文件集合和真实验收；原产品文件归属及HOLD保持。同一共享文件只授予一个写者。UI可以直接实现或使用Stitch辅助，按DESIGN.md §5.10验收真实页面。
-
-### 2026-09-30 第二批：布局、保存反馈与输出核验
-
-用户已明确批准前述4项开发、2项独立核验。本批源码基线7c7101f36252e04b5fae2ddfc173104659c25d91，派单唯一入口 `external-agents/batch-20260930-next/` 的下列 dispatch.md。主控审核、集成、推送开发分支，不写产品代码。原前端窗口已不在当前cmux树，原工作树干净；撤回旧前端写权，按精确文件集合移交。WIL119及其他HOLD保持。
-
-| 可见执行者 | 工作与写权 | 验收/退出 |
-| --- | --- | --- |
-| workspace13 / surface737EB193-23B8-422A-9DC1-8E8F0EB3D1A5 | WIL174/172已交付；173写权撤回。主控因反复上下文整理中断其运行，现场核实产品树干净，未有173产品改动；不得恢复旧派单 | 3002测试服务与布局工作树移交workspace14；证据保留。主控现场交接记录见layout/controller-review.md |
-| workspace15 / surface70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F | WIL175 已交付停写；~/.codex/worktrees/wil175-save-feedback/original；本包产品写权退役，交付及主控审核见WIL-175目录 | 原生核验已收口；不得按旧派单继续修改或重启服务 |
-| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | 原输出核验、WIL173及WIL172独立收起补修均已交付；布局工作树产品写权退役，报告layout/WIL-173-report.md，主控审核layout/controller-review.md | 自有3002/4402服务及具名进程已退出；证据保留，不重启、不按旧派单继续写入 |
-
-仅主控写Linear与共享合同。前批95/55/99已交付停写，旧报告和证据保留，99最终收尾落盘差异由原执行者核对补齐，不重复测试。新任务不得按旧派单恢复写入。文件排队不设成产品阻塞。实际核验失败仍可交付核验工作，但父功能不自动Done。
-
-保护旧体验环境/tmp/wil122-verify、/tmp/wil90-demo和本轮前批/tmp/wil99-20260930，只能定向只读或复制到新包tmp。不打开真实用户库。无模型下载/新增付费推理/真实平台动作，验收夹具不改变产品事实。
-
-## 2026-09-30 字幕批次：当前派工
-
-用户明确批准安排并行会话。workspace19 在执行前遇到服务商402余额不足，未ACK且未获得产品写权；已退出本包，由新建workspace20 Codex默认配置接替，只写本包核验报告。源码基线 `5bb1ebd1f5f969ca994a5e0ff02e64253ecd7422`；主控继续单写 Linear、合同、集成。派单目录 `/Users/Zhuanz/Documents/Codex/2026-09-24/volumes-dujiangyan-vm-ai-repositories-bd25/external-agents/batch-20260930-subtitles`。
-
-- workspace18 / UUID 44AB3DDA-CA90-47BD-97D7-274ACFBE29FA：WIL176。复用 `~/.codex/worktrees/wil175-save-feedback/original`，分支 `codex/wil176-subtitle-save`。准备完成，双语规则已写入PRD §11；按 WIL-176/dispatch.md 的“主控实施授权”精确集合授予工作台组件、directoryPicker、desktop main/preload、API main仅本包字幕导出端点及三处专项测试写权。REBASE_ACK后直接实施，其他共享热点和HOLD不变。
-- workspace20 / UUID 359F31E4-128E-47EB-8767-4E64729BAECF：WIL152。复用 `~/.codex/worktrees/wil95-evidence-wording/original`，分支 `codex/wil152-subtitle-review`。固定基线独立核验，只写该包报告及 /tmp/wil152-20260930 隔离证据。产品完全只读；导出缺口沿WIL176，编辑核验独立推进。
-- 旧workspace13/14/15保持停写；此前两工作树的产品归属已退役，现由上述新会话依新派单读取。无旧HOLD解除。图形与重型运行串行申请；4400/4401保护不动。
-
-### 恢复后的第三条核验线
-
-用户确认workspace19已恢复并要求派单。原WIL152仍由workspace20独占核验；workspace19 / UUID 5C0460AF-A90A-402B-A3CB-CC3306F1AD13 改接WIL126素材接收入库和重启补扫独立核验。固定源码基线61ae26e6fc35029d6df3037497f64390860b878f；工作树 `~/.codex/worktrees/wil126-intake-review/original`。产品完全只读，只写上述派单目录WIL-126下报告和 /tmp/wil126-20260930 隔离证据。按WIL-126/dispatch.md执行，不运行模型、不启用scheduled生产、不解除可见性HOLD；服务及重型测试先向主控申请时段。
-
-## 已交付候选：审核收口边界
-
-### 用户批准复用空闲会话的三项只读派工
-
-2026-09-30 用户明确要求继续派单并允许旧会话自动压缩。workspace13 / E051DDB2-85DB-4DDF-9173-587449769B02 接WIL87方案；workspace14 / D2F9B4F8-5D74-4DA1-AC15-4A9736E36B88 接WIL56界面核验；workspace15 / E843B088-FA09-43DC-99F0-4DA81D82C38B 接WIL92方案。三者均无产品写权，旧任务写权保持退役。按当前派单目录各issue/dispatch.md执行，只写各自报告和隔离证据。
-
-固定只读源码共用 `~/.codex/worktrees/wil126-intake-review/original` 的61ae26e6fc35029d6df3037497f64390860b878f，不切分支或写缓存，不使用已移交workspace18/20的旧工作树。WIL56先整理矩阵，图形时段由主控协调，当前排在workspace18之后。WIL87/WIL92不启动服务、不执行模型或生产任务；方案不授权后续施工。所有HOLD保留。
-
-三份交叉审核均已落盘并给出 HOLD；主控把具名问题和证据回填对应 Linear。它们不是本轮 Insert 试点的自动返工授权；不合入，不开启新产品写入，保留作者归属。原审核共同基线 dev `93e8182`，具体报告如下。
-
-- surface:12 审模型外接盘候选 `a59fe1f`，写 `external-agents/review-20260929/model-paths.md`。
-- surface:16 审质量检测候选 `eb7b5a7`，写 `external-agents/review-20260929/quality-checks.md`。
-- surface:6 审音量包络线候选 `4302197`，写 `external-agents/review-20260929/audio-envelope.md`。
-- surface:12 的原前端写权已按第二批精确移交；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
-
-主控先核独占、diff、依赖与失败语义，再选择最小复验。不把执行者自称“独立复现”当成独立审核；未审候选不集成，不按报告的全量绿灯关闭父项。
-
-## 可见与运行验收
-
-2026-09-30 停滞纠偏：workspace20连续现场检查没有新工具进展，指令仍排队；不得记为已恢复，现撤回其GUI时段，恢复后先回报阻断而不执行旧GUI指令。workspace18不再等待20，立即按自身隔离8000/3000及Electron计划验收；20的4403/3003与证据保留，不由其他线程停机。18须复现或证伪cross-review.md的F1（中文字幕时间修改后双语保存409），不因审查报告直接扩权修改compound_edits.py。workspace14可先准备独立/tmp/wil56-20260930运行副本和隔离数据，GUI排在18之后。以上更新替代前文20优先的时段安排，不改变产品写权或既有HOLD。
-
-2026-09-30 加强验收：workspace15除WIL92只读方案外，增加WIL176候选88f175e的独立代码审阅，产品只读，唯一新增报告路径为本批 WIL-176/cross-review.md，不与作者文件并写；不得启动GUI或修改产品。workspace18可先在自身隔离目录准备和启动无冲突8000/3000服务，原生GUI时段现已转交workspace18。具体主控证据和未通过项见本批controller-acceptance.md；未经真实验收与主控审阅不关闭功能。
-
-- UI 基线是 [DESIGN.md](../DESIGN.md) §5.10 的 workspace-dual-v4 主账号/成员原型：三栏、可拖动收起、右上精细修改浮卡、紧凑中文；旧 product-ui-v2 不恢复，未经确认不另起整体布局。原型示例不进入生产事实。
-- 三尺寸1440×900、1180×800、1024×768分别观察；截图、组件、真实API、媒体输出、桌面安装包和产品闭环分别验收。
-- 当前 WIL-120「完全没有任务创建入口」的判断有反证：`main.py` 的 `POST /api/creation-plans/confirm` 创建并持久化 CreationTask，HomeCommandComposer/CreateProductionTaskForm 已有调用。主控本轮纠正 issue 的错误前提，保留追溯；完整桌面创建到 Insert 流程仍须真实验收，不能据缺少 `POST /api/creation-tasks` 新造入口。
-- 当前 PR45 的旧 head CI 不能证明本轮候选；集成完成后按同一候选实际检查，不沿用旧绿灯。main 不自动合并。
-- 取消请求不等于进程退出；释放许可、检查点、媒体产物和失效状态遵循现有架构/领域契约。模型配置、元信息探测、mock成功或保存记录均不等于真实制作完成。legacy 与 scheduled 不得同时启动重活驱动；所有重活沿同一许可、授权和资源预算，不能借 hash/probe 绕行。旧旁白替换后的字幕失效、人工文字保留和成片同源仍须符合领域契约。
-
-## 完成和恢复
-
-本轮看板重构完成条件：原需求索引可追溯、活动工作都有功能归属和类型化完成判据、真实依赖无循环、旧描述退出执行且HOLD保留、功能与执行视图可读。管理重构不代表0.11完成；后续施工仅按上表具体授权进行。剩余关键路径按真实用户旅程和审查结果推进，不把 Linear 子单 Done 自动传播到父范围。
-
-## 2026-09-30 主控验收纠偏与后续只读工作
-
-WIL87方案已由主控裁决：不重复建设共用确认链，本轮保留 /edits/exact，外部消费者未核清前不退役。workspace13 转本批 WIL-144/dispatch.md，只读同一61ae26e树，写WIL144报告和/tmp/wil144-20260930；允许无模型、无FFmpeg的少量隔离TestClient/纯函数复验，禁止写产品、仓库测试与缓存，单次120秒内，不启动常驻服务或GUI。WIL144未获产品写权。
-
-workspace19按本批 WIL-126/controller-followup.md补完成信号方案，新增缺陷WIL177；产品不通过，原写权不扩大。workspace15按 WIL-92/controller-followup.md修订相互矛盾的施工建议与未批准缩范围表述。workspace14停止继续复制依赖，既有验收准备保留；GUI仍排18之后。用户已明确批准18本次Electron会话的Computer Use授权，18继续当前验收；不视为其他工具或动作的泛化批准。
-
-## 关机后恢复（2026-09-30）
-
-用户要求检查并重派。六个workspace UUID仍在，短编号已重排为1—6；旧18/15/20的Agent进程已退出，恢复原会话而非另开工作区。恢复增量唯一入口为本批 `recovery-20260930.md`。原报告与干净候选保留，/tmp夹具与服务已消失，不沿用旧PID或证据存在假设。当前GUI先给原14 WIL56重建隔离环境并核验，原20 WIL152只准备后续环境；原18仅交持久化证据盘点及F1建议，不恢复已完成GUI或扩产品写权。原13补WIL144需求差异，原19/15确认交付后待主控裁决。所有既有HOLD保持。
-
-恢复实测修正：原13/19遇服务商402余额不足，未ACK，不算在制；补交付核对由主控处理。原15目录信任确认未获批准，保持待恢复，现有报告供主控审阅。原18/20已恢复原Codex会话并读取指令，原14继续Pi。未新开窗口、未改模型或服务商配置。
-
-## 反馈后时段与复验更新
-
-WIL56已交28张持久化浏览器证据并释放自有服务，现场端口检查无监听。GUI时段转原20 WIL152；允许按本批next-after-feedback.md串行生成小型合成测试媒体并做真实字幕交互，不扩产品写权。原13 WIL144允许该文件指定的一条共同转场操作专项测试，不宣称真实转场媒体通过。原18/19等待已提交用户的字幕同步/导入方式决定；原14/15交付后待主控审核，不重复调查。旧402阻断已解除，按实际回执完成，不恢复旧GUI排队。
-
-## 用户确认的两项规则与写权
-
-用户明确批准中文仅调时同步关联英文时间保留译文，以及新增应用负责复制完成的导入入口。领域§6.4与PRD§7已更新。原18按本批WIL-176/f1-approved-fix.md重读REBASE_ACK后修复，88f175e上继续，原8路径加compound_edits.py字幕时间逻辑与新增test_subtitle_time_sync.py独占写权，其他HOLD不变；GUI仍归原20。原19按WIL-177/dispatch.md只读准备准确施工边界，产品写权尚未转移，外部监控判据仍待定。
-
-## WIL56验收问题进入修复
-
-原14现workspace4接WIL178，独立托管树wil56-visible-fixes/original、基线abf961e，写PeopleAndVoiceWorkspace.tsx、TemplateLibraryWorkspace.tsx、MembersAndSpacesWorkspace.tsx及这些组件现有专项测试，必要时templates/page.tsx接线；不得动共享AppShell/权限/API/后端。本批WIL-178/dispatch.md为精确边界。GUI仍归原20，修复后安排可见复验；WIL56证据保留不重新扩大矩阵。
-
-## WIL92方案后续资源修复
-
-WIL92仅方案审核Done，原15现workspace5接WIL179，在creation-resource-contract/original的abf961e独立基线修复creation_execution.py资源字段及test_creation_execution.py/必要新增test_creation_resource_contract.py。host_resource_probes/montage/main/调度器/DB无写权，不启动scheduled或缩减PRD，精确派单见本批WIL-179/dispatch.md。
-
-## 桌面文件移交与应用内导入施工
-
-原18的desktop-release.md已确认main.js/preload.js/directoryPicker.ts与88f175e一致并停写，现将三文件独占移交原19。原19使用托管树wil177-managed-import/original的88f175e基线，按WIL-177/dispatch.md实施授权施工，附MaterialLibraryWorkspace及专项测试写权；同文件中的WIL176字幕HTTP有界失败修正由19一并负责、交付单列。18只继续F1 API与测试及只读运行验收。GUI仍归20。所有HOLD保持，外部直接投放判据未决，导入完成不等于分析完成。
-
-## 当前GUI与字幕确认空白修复
-
-20已完成WIL152本轮GUI并释放4403/3003，仅整理报告；GUI现转18复验c7d9961。WIL152真实确认后空白有截图与API前后证据，另建具名实施WIL180交原13，复用已干净且无运行依赖的wil126-intake-review/original，从a00863f创建codex/wil180-subtitle-view-recovery。旧61ae26e核验已结束，不再作为这棵树当前身份。只授CreationTaskWorkspace.tsx及现有相关专项测试写权；原18这两路径经主控核干净后撤回写权，继续原候选只读GUI。按本批WIL-180/dispatch.md修确认后视图可用性，不改阶段门禁/后端/API，不放开重渲染前字幕页；其他包独占与HOLD保持。
-
-WIL179已审集成268a55b，原15停止该树写入，改只读审WIL177核心diff，只写本批WIL-177/cross-review.md，不运行测试或GUI。在制diff审核不等于最终候选通过；主控提供最终SHA后再确认变化。19继续唯一产品写者，不因审核自动失去已授权范围。
-
-18原生手动UpdateSubtitleCue发现c7d9961仅修对话/复合路径，exact确认后仍中3.8/英4.0；WIL176不通过。18获main.py中该手动字幕预览/确认继承路径的精确补修授权，沿领域§6.4复用同步规则，补两入口专项，不触碰其他main内容。18先保存失败证据并释放GUI给14，随后继续API修复；前端/桌面写权不收回。无需新的产品决定。
-
-## 当前验收队列与收尾边界
-
-本节替代前文已过期的GUI时段安排。原14已释放自有GUI/4404/3004/9334，文案候选6c78202已集成；原18已完成db29dee同步与普通按钮原生保存并释放，原20已完成WIL180候选5bbff86可见确认/撤销并释放；当前GUI及空闲8000/3000正式交原19核验WIL177原生导入。GUI交接须等前一执行者释放记录；独立小型环境准备无需等待，模型/真实用户盘/生产库仍禁止。
-
-原13的WIL180产品修改已交付，停写；原20使用干净wil95-evidence-wording/original树的codex/wil180-visible-review、5bbff86进行只读GUI，旧WIL152基线不得当作当前候选。原19仍是桌面导入及字幕HTTP超时的唯一写者，d7370e8及b0d97f2已审集成，原生导入验收仍待完成；原15最终差异审核已交付停工，不扩大审查或重复测试。任何子包Done均不自动关闭父功能或解除HOLD。
-
-原19原生验收启动链重复失败后，主控收回其GUI与服务启动权，候选保留并停写。原18接WIL177只读独立原生收尾，复用干净wil175-save-feedback/original的新codex/wil177-native-review分支、集成候选2f59ac4；普通按钮到原生选文件、完整复制、真实接收，精确派单WIL-177/native-review-dispatch.md。原19只保存交接，不再占8000/3000；原18不覆盖作者证据，旧WIL176候选身份不随树切换改写。
-
-本批验收收尾后，原13/14/15/18/19/20的本批临时产品写权与GUI时段全部结束；仅保留各自报告整理权，不自动开下一项或恢复旧派单。原18已释放WIL177自有Electron/API/Web及8000/3000，原20、14的自有服务也已释放。交付状态、集成SHA与具体验收证据以Linear及本批controller-acceptance.md为准；此收尾不解除前述具名HOLD，不关闭父功能，不授权main或Release。
+- WIL118：a59fe1f，wil96/original；model_runtime.py、model_installer.py、runtime_health.py、visual_semantics.py及原包测试保持HOLD，不恢复写入或集成。
+- WIL119：eb7b5a7，insert-backend-splice/original；quality_checks.py及专项测试保持HOLD。
+- WIL121/WIL97：4302197，wil97/original；AudioTimelineEditor.tsx及原包关联范围保持HOLD。
+- WIL110/112/116：5fcb8ac，agent-recall-memory/original，按上文成员可见性HOLD执行。准备工作不得借其他issue改动所保留文件。
+- 旧候选报告位于external-agents/review-20260929/；只按具体问题读取，旧workspace编号不是当前执行者身份。
+- 真实可见验收沿DESIGN §5.10 workspace-dual-v4；模型配置、mock、结构分析和成功保存记录不等于真实制作或产品验收。保留现有exact端点，不自行退役外部消费者。
+- 只释放本次明确归属的进程，旧/tmp/wil122-verify、/tmp/wil90-demo及历史证据不删除。GUI及重型验证串行，轻量独立准备可并行。
 
 ## 下一批：先收口，再补齐明确功能（2026-09-30）
 
-用户授权加速剩余工作。本节是当前派工入口，替代上文已结束的派工与GUI安排，旧条目仅保留追溯。共同候选为50209dd9b356621d43e902afa20840ebb60e449b；长久规则仍由docs/README.md路由。先核身份、脏树和旧服务；干净、无运行消费者才可在既有树新建codex分支指向此提交，不重置旧分支，不删stash。当前不新开窗口、不改模型，所有具名HOLD保持。
+用户授权加速剩余工作。本节是当前唯一派工入口；已结束派单从活动文档退役，由Git和Linear追溯。共同候选为50209dd9b356621d43e902afa20840ebb60e449b；长久规则仍由docs/README.md路由。先核身份、脏树和旧服务；干净、无运行消费者才可在既有树新建codex分支指向此提交，不重置旧分支，不删stash。当前不新开窗口、不改模型，所有具名HOLD保持。
 
 | 执行者（当前/原） | 任务与边界 | 交付与验收 |
 | --- | --- | --- |
