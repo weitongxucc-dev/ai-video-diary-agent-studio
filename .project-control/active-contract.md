@@ -29,7 +29,7 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 | 执行者（2026-09-29现场定位） | 当前包与工作树 | 保留的产品文件归属及退出条件 |
 | --- | --- | --- |
 | workspace:9 / surface:26，前端 Pi | 原 WIL-90 执行者，服务错误停机，工作树已核干净 | 本轮写权撤回；不再修改产品或验收夹具。既有交付保留，后续只作历史证据 |
-| workspace:2 / surface:12，Claude | WIL-90 / WIL-122 接续，`~/.codex/worktrees/insert-frontend-ui/original` | 独占原前端 owned files 与专项测试；网关响应失败后不再执行环境写入。主控接手独立临时夹具和浏览器验证。不得改后端或解除其 WIL-119 HOLD |
+| workspace:2 / surface:12，Claude | WIL-90 / WIL-122 接续，`~/.codex/worktrees/insert-frontend-ui/original` | 原前端任务已验收；当前cmux清单已无此窗口，原工作树产品干净。原前端写权撤回，本轮精确移交下表；保留其后端 WIL-119 HOLD |
 | workspace:4 / surface:23，Pi | WIL-116，`~/.codex/worktrees/agent-recall-memory/original`，候选 `5fcb8ac` | 可见性相关 `sources.py`、`source_repository.py`、`production.py` 及专项测试保留归属；HOLD，禁止新增修改/提交/集成 |
 | workspace:5 / surface:16，Claude | WIL-118，`~/.codex/worktrees/wil96/original`，候选 `a59fe1f` | `model_runtime.py`、`model_installer.py`、`runtime_health.py`、`visual_semantics.py` 及原包专项测试；审核退回并 HOLD，不扩权或继续产品写入 |
 | workspace:2 / surface:12，Claude | WIL-119，`~/.codex/worktrees/insert-backend-splice/original`，候选 `eb7b5a7` | `apps/api/app/quality_checks.py`、`apps/api/tests/test_quality_checks.py`；审核退回并 HOLD，不把独立检测函数称为自动检查流程已接通 |
@@ -48,19 +48,19 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 2026-09-30 用户提供三个新 cmux 窗口并明确“可以，你安排吧”，授权下表实施和核验。主控按[开发流程](../docs/development-workflow.md)绑定候选、线程、文件集合和真实验收；原产品文件归属及HOLD保持。同一共享文件只授予一个写者。UI可以直接实现或使用Stitch辅助，按DESIGN.md §5.10验收真实页面。
 
-### 2026-09-30 当前批次
+### 2026-09-30 第二批：布局、保存反馈与输出核验
 
-产品基线 `91a12f4fa608ab093b372645bc5f998b855c4310`。每包具体派单与报告位于 `external-agents/batch-20260930/WIL-编号/`，相对于本文前述完整外部协作目录；派单限定范围，报告不成为产品权威。Linear 由主控单写，工作包完成不自动关闭父功能。
+用户已明确批准前述4项开发、2项独立核验。本批源码基线7c7101f36252e04b5fae2ddfc173104659c25d91，派单唯一入口 `external-agents/batch-20260930-next/` 的下列 dispatch.md。主控审核、集成、推送开发分支，不写产品代码。原前端窗口已不在当前cmux树，原工作树干净；撤回旧前端写权，按精确文件集合移交。WIL119及其他HOLD保持。
 
-| 包 / 可见执行者 | 工作目录与独占范围 | 验收边界 |
+| 可见执行者 | 工作与写权 | 验收/退出 |
 | --- | --- | --- |
-| WIL-99 / workspace:14 Pi恢复响应；surface UUID `EABE9E01-E2D9-4F69-BC8D-93927990BCEE`，解除本次模型故障HOLD | bd25产品只读；只写本包报告与 `/tmp/wil99-20260930/`。主控核实PID95310是PPID1、无客户连接、仅打开旧wil84隔离库的遗留测试服务后已用SIGTERM停止，旧DB原样保留；允许本包自有隔离服务使用8000/3000 | 正式创建task_隔离任务，原生保存/取消/失败重试、真实MP4播放；不得用dialog桩或假MP4。可按已审核方案在临时目录物化同源码Web/缓存，以启动器只隔离Electron userData/logs/videos，不改main/preload与网络/保存行为。结束关闭本包进程；不重启旧孤儿服务 |
+| workspace13 / surface737EB193-23B8-422A-9DC1-8E8F0EB3D1A5 | WIL174→172→173；复用 ~/.codex/worktrees/wil95-evidence-wording/original；AppShell.tsx、useEditorPanels.ts、EditorShell.module.css、VideoEditor.module.css、AppShell.test.tsx和必要新useEditorPanels.test.tsx；完整路径及范围见layout/dispatch.md | 三尺寸真实页面/视频与草稿保持；逐项commit，整组交付后停写；Web3002 |
+| workspace15 / surface70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F | WIL175；~/.codex/worktrees/wil175-save-feedback/original；CreationTaskWorkspace.tsx、对应现有测试及必要新SaveFeedback专项；见WIL-175/dispatch.md | 专项失败可见回归、候选，主控协助原生核验；不改布局文件；Web3003 |
+| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | WIL161→162；产品只读，只写报告及/tmp/wil-output-20260930；见output-verification/dispatch.md | 字幕/封面真实保存，缺入口只报证据；8000/3000独占隔离服务；本包进程结束释放 |
 
-此批不授予验证者产品修复写权；发现超出派单的产品或环境问题先向主控报告。只有受影响步骤停止，独立工作继续。无新增外部模型调用、模型下载或真实平台动作。验证完成立即释放本包启动的进程。
+仅主控写Linear与共享合同。前批95/55/99已交付停写，旧报告和证据保留，99最终收尾落盘差异由原执行者核对补齐，不重复测试。新任务不得按旧派单恢复写入。文件排队不设成产品阻塞。实际核验失败仍可交付核验工作，但父功能不自动Done。
 
-WIL-95 与 WIL-55 已交付，workspace:13 / workspace:15 停写并退出本轮执行归属；候选、核验结论和证据留在 Linear 与各包报告。WIL-172 / WIL-173 / WIL-174 是核验发现的待修复包，尚未派工，不授予前端写权。工作树和隔离证据保留，不因工作包 Done 自动验收父功能。
-
-已交给用户体验的隔离环境 `/tmp/wil122-verify/verified.sqlite3` 和旧 `/tmp/wil90-demo` 原样保留，不重复播种或清理。旧演示任务 `wil122-real-media` 不符合桌面原生保存所需的 `task_` ID约束；下一次WIL-99核验用已有 `POST /api/creation-plans/confirm` 创建隔离任务和有效短媒体，不为夹具修改产品模型。此前端口记录4400/4401仅供定位，开始下一包先核实时服务。
+保护旧体验环境/tmp/wil122-verify、/tmp/wil90-demo和本轮前批/tmp/wil99-20260930，只能定向只读或复制到新包tmp。不打开真实用户库。无模型下载/新增付费推理/真实平台动作，验收夹具不改变产品事实。
 
 ## 已交付候选：审核收口边界
 
@@ -69,7 +69,7 @@ WIL-95 与 WIL-55 已交付，workspace:13 / workspace:15 停写并退出本轮�
 - surface:12 审模型外接盘候选 `a59fe1f`，写 `external-agents/review-20260929/model-paths.md`。
 - surface:16 审质量检测候选 `eb7b5a7`，写 `external-agents/review-20260929/quality-checks.md`。
 - surface:6 审音量包络线候选 `4302197`，写 `external-agents/review-20260929/audio-envelope.md`。
-- surface:12 保留 Insert 前端产品归属，主控接手临时环境并执行可见验收；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
+- surface:12 的原前端写权已按第二批精确移交；surface:27 保留被退回候选，不自动返工；surface:23 保持 HOLD。
 
 主控先核独占、diff、依赖与失败语义，再选择最小复验。不把执行者自称“独立复现”当成独立审核；未审候选不集成，不按报告的全量绿灯关闭父项。
 
