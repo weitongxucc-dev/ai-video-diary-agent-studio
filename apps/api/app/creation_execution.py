@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.host_resource_probes import admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload
@@ -133,13 +134,21 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     }
     digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
                                        default=str).encode("utf-8")).hexdigest()
+    # These are the exact fields HostResourceProbe reads back to budget the unit.
+    # A set that is not decidable there blocks the render, so the canvas comes
+    # from the shared aspect-ratio authority the renderer itself uses, not from
+    # the input media, and the byte total is the already-measured source set.
+    output_width, output_height = canvas_size(montage.aspect_ratio)
     resources = {
         "kind": "creation_render", "execution_mode": "cpu_ffmpeg",
-        "source_duration_s": montage.duration_seconds,
-        "input_count": len(montage.clips),
-        "cpu_threads": limits.threads,
-        "wall_clock_s": limits.timeout_seconds,
+        "duration_seconds": montage.duration_seconds,
+        "timeout_seconds": limits.timeout_seconds,
+        "width_px": output_width, "height_px": output_height,
+        "input_bytes": sum(int(fact["size"]) for fact in source_facts),
+        "clip_count": len(montage.clips),
+        "overlay_count": len(montage.graphic_overlays),
         "max_output_bytes": limits.max_output_bytes,
+        "threads": limits.threads,
     }
     return f"render:{digest}", resources
 
@@ -382,7 +391,7 @@ class CreationJobUnitExecutor:
         if resources.get("kind") != "creation_render" or resources.get("execution_mode") != "cpu_ffmpeg":
             raise PermissionError("CPU 成片资源事实不匹配")
         elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
-        deadline = time.monotonic() + float(resources["wall_clock_s"]) - elapsed
+        deadline = time.monotonic() + float(resources["timeout_seconds"]) - elapsed
         cancellation = threading.Event()
         with self._cancellation_lock:
             self._cancellations[grant.request_id] = cancellation
@@ -408,15 +417,15 @@ class CreationJobUnitExecutor:
                 return
             context = CpuRenderGrantContext(
                 scheduler, grant, deadline, int(resources["max_output_bytes"]),
-                int(resources["cpu_threads"]), cancellation,
+                int(resources["threads"]), cancellation,
             )
             try:
                 if deadline <= time.monotonic():
                     raise GrantedCommandTimeout("CPU 成片阶段已超出总时限")
                 admit_resource("creation_render", {
-                    "source_duration_s": float(resources["source_duration_s"]),
-                    "input_count": int(resources["input_count"]),
-                    "cpu_threads": int(resources["cpu_threads"]),
+                    "source_duration_s": float(resources["duration_seconds"]),
+                    "input_count": int(resources["clip_count"]),
+                    "cpu_threads": int(resources["threads"]),
                     "wall_clock_s": deadline - time.monotonic(),
                 }, capacity=sample_host_capacity())
                 self.render_action(job.workspace_id, job.task_id, context)

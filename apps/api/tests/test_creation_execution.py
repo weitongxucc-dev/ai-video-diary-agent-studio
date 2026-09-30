@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.canvas import canvas_size
 from app.creation_execution import (
     CpuRenderLimits, CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier,
     CreationJobUnitExecutor,
@@ -198,10 +199,14 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         resources = json.loads(row["resources_json"])
         assert row["unit_key"].startswith("render:")
         assert resources["kind"] == "creation_render"
-        assert resources["source_duration_s"] == 1
-        assert resources["input_count"] == 1
-        assert resources["cpu_threads"] == 1
-        assert resources["wall_clock_s"] == 90
+        assert resources["duration_seconds"] == 1
+        assert resources["clip_count"] == 1
+        assert resources["threads"] == 1
+        assert resources["timeout_seconds"] == 90
+        assert resources["overlay_count"] == 0
+        assert resources["max_output_bytes"] == 8_000_000
+        assert (resources["width_px"], resources["height_px"]) == canvas_size("9:16")
+        assert resources["input_bytes"] > 0
         assert submit_creation_stage(execution, scheduler, job, actor) == request_id
         grant = scheduler.pick_and_grant()
         assert grant is not None
