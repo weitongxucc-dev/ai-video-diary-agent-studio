@@ -37,7 +37,8 @@
 .shell :global(.desktop-creation-task__copy) { gap: 2px; }
 @media (prefers-reduced-motion: reduce) { .shell :global(.desktop-nav-row), .shell :global(.shell-icon-button) { transition: none; } }
 .contentGrid { display: grid; grid-template-columns: var(--editor-right) minmax(0, 1fr); min-height: 0; min-width: 0; gap: 0; padding: 0; }
-.conversation { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface-1); border: 0; border-right: 1px solid var(--border-1); border-radius: 0; }
+.contentGrid > :global(.desktop-main-scroll) { grid-column: 2; grid-row: 1; }
+.conversation { grid-column: 1; grid-row: 1; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface-1); border: 0; border-right: 1px solid var(--border-1); border-radius: 0; }
 .conversationHeader { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-1); }
 .conversationHeader span { display: flex; align-items: center; gap: 9px; font-weight: 500; }
 .conversationHeader small { color: var(--success); font-size: 12px; }

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +77,12 @@ beforeEach(() => {
 });
 
 describe("AppShell", () => {
+  it("pins both columns even when a collapsed sibling stops participating in grid placement", () => {
+    const css = readFileSync(new URL("../EditorShell.module.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.conversation \{[^}]*grid-column: 1; grid-row: 1;/);
+    expect(css).toContain(".contentGrid > :global(.desktop-main-scroll) { grid-column: 2; grid-row: 1; }");
+  });
+
   it("keeps conversation visible and opens object details only in a dismissible card", () => {
     const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
     expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
