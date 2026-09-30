@@ -93,6 +93,8 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 ## 可见与运行验收
 
+2026-09-30 加强验收：workspace15除WIL92只读方案外，增加WIL176候选88f175e的独立代码审阅，产品只读，唯一新增报告路径为本批 WIL-176/cross-review.md，不与作者文件并写；不得启动GUI或修改产品。workspace18可先在自身隔离目录准备和启动无冲突8000/3000服务，原生GUI仍排在workspace20之后。具体主控证据和未通过项见本批controller-acceptance.md；未经真实验收与主控审阅不关闭功能。
+
 - UI 基线是 [DESIGN.md](../DESIGN.md) §5.10 的 workspace-dual-v4 主账号/成员原型：三栏、可拖动收起、右上精细修改浮卡、紧凑中文；旧 product-ui-v2 不恢复，未经确认不另起整体布局。原型示例不进入生产事实。
 - 三尺寸1440×900、1180×800、1024×768分别观察；截图、组件、真实API、媒体输出、桌面安装包和产品闭环分别验收。
 - 当前 WIL-120「完全没有任务创建入口」的判断有反证：`main.py` 的 `POST /api/creation-plans/confirm` 创建并持久化 CreationTask，HomeCommandComposer/CreateProductionTaskForm 已有调用。主控本轮纠正 issue 的错误前提，保留追溯；完整桌面创建到 Insert 流程仍须真实验收，不能据缺少 `POST /api/creation-tasks` 新造入口。
