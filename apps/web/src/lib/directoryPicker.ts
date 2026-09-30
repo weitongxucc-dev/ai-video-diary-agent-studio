@@ -14,6 +14,7 @@ declare global {
     electronAPI?: {
       openDirectory?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;
+      importMaterials?: () => Promise<MaterialImportResult>;
       saveRenderedVideo?: (taskId: string) => Promise<{
         saved: boolean;
         canceled?: boolean;
@@ -46,6 +47,41 @@ export type DirectoryPickResult =
   | { kind: "picked"; path: string }
   | { kind: "canceled" }
   | { kind: "unavailable" };
+
+export type MaterialImportFailure = { sourceName: string; error: string };
+
+export type MaterialImportResult = {
+  canceled?: boolean;
+  copied?: { sourceName: string; fileName: string }[];
+  skipped?: string[];
+  failures?: MaterialImportFailure[];
+  error?: string;
+  warning?: string;
+};
+
+export function hasMaterialImporter(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.electronAPI?.importMaterials === "function"
+  );
+}
+
+/**
+ * Ask the desktop shell to import local material. The renderer passes no path:
+ * the shell reads the controlled intake binding and returns only what it copied.
+ */
+export async function importLocalMaterials(): Promise<
+  MaterialImportResult | { kind: "unavailable" }
+> {
+  if (!hasMaterialImporter()) {
+    return { kind: "unavailable" };
+  }
+  try {
+    return (await window.electronAPI?.importMaterials?.()) ?? { canceled: true };
+  } catch {
+    return { error: "导入失败，源文件保持不变。" };
+  }
+}
 
 export function hasDirectoryPicker(): boolean {
   return (
