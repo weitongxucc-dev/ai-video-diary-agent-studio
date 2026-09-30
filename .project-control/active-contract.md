@@ -54,9 +54,9 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 | 可见执行者 | 工作与写权 | 验收/退出 |
 | --- | --- | --- |
-| workspace13 / surface737EB193-23B8-422A-9DC1-8E8F0EB3D1A5 | WIL174→172→173；复用 ~/.codex/worktrees/wil95-evidence-wording/original；AppShell.tsx、useEditorPanels.ts、EditorShell.module.css、VideoEditor.module.css、AppShell.test.tsx和必要新useEditorPanels.test.tsx；完整路径及范围见layout/dispatch.md | 三尺寸真实页面/视频与草稿保持；逐项commit，整组交付后停写；Web3002 |
+| workspace13 / surface737EB193-23B8-422A-9DC1-8E8F0EB3D1A5 | WIL174/172已交付；173写权撤回。主控因反复上下文整理中断其运行，现场核实产品树干净，未有173产品改动；不得恢复旧派单 | 3002测试服务与布局工作树移交workspace14；证据保留。主控现场交接记录见layout/controller-review.md |
 | workspace15 / surface70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F | WIL175 已交付停写；~/.codex/worktrees/wil175-save-feedback/original；本包产品写权退役，交付及主控审核见WIL-175目录 | 原生核验已收口；不得按旧派单继续修改或重启服务 |
-| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | WIL161→162 及 WIL175 补充核验已交付停写；产品始终只读，报告见output-verification目录 | 自有Electron/API/Web及子进程已退出，8000/3000释放；夹具与证据保留，不重启、不覆盖 |
+| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | 原输出核验已退役；现在唯一接续WIL173，复用 ~/.codex/worktrees/wil95-evidence-wording/original，HEAD57ef24a；只写AppShell.tsx、EditorShell.module.css、VideoEditor.module.css、AppShell.test.tsx；派单layout/WIL-173-takeover.md | 接管自有Web3002，可在本包tmp起隔离API4402；不得写原输出核验目录或4401旧库；候选+真实三尺寸横竖视频核验后交主控，结束释放 |
 
 仅主控写Linear与共享合同。前批95/55/99已交付停写，旧报告和证据保留，99最终收尾落盘差异由原执行者核对补齐，不重复测试。新任务不得按旧派单恢复写入。文件排队不设成产品阻塞。实际核验失败仍可交付核验工作，但父功能不自动Done。
 
