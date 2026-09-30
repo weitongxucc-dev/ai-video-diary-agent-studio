@@ -4812,3 +4812,85 @@ def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_rend
     assert state.client.put(base+'/use-state',json={'use_state':'unknown'}).status_code==422
     assert state.client.put(base+'/review',json={'review_status':'approved','usage_role':'b_roll','rights_confirmed':True}).status_code==422
     assert state.client.put(base+'/use-state',json={'use_state':'available'}).status_code==200
+
+
+def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and_expiry(person_render_edit_state,monkeypatch):
+    state=person_render_edit_state
+    base=f'/api/creation-tasks/{state.task.id}'
+    main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
+    before=state.client.get(base).json()
+    target=before['montage']['clips'][1]
+    original_fit,original_x,original_y=target['fit_mode'],target['crop_x'],target['crop_y']
+    publishes=[]
+    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
+        publish=lambda *args,**kwargs:publishes.append(kwargs.get('kind')) or
+        SimpleNamespace(id='crop-preview',logical_ref='artifacts/crop-preview.mp4'),
+        validate_material_use=lambda *args:None))
+
+    # 明确单轴指令：产 ChangeCrop 提案，预览不写、不产媒体、不动另一轴和原 fit_mode
+    preview=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 20%','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert preview.status_code==200,preview.text
+    proposal=preview.json()['proposal']
+    assert proposal['operation']['operation_type']=='ChangeCrop'
+    assert proposal['operation']['payload']['crop_x']==.2
+    assert proposal['operation']['payload']['crop_y']==original_y
+    assert proposal['operation']['payload']['fit_mode']==original_fit
+    assert '水平 20%' in proposal['preview']['after']['detail']
+    assert publishes==[]
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+
+    confirmed=state.client.post(base+'/edits/'+proposal['id']+'/confirm')
+    assert confirmed.status_code==200,confirmed.text
+    cropped=state.client.get(base).json()
+    assert cropped['montage']['clips'][1]['crop_x']==.2
+    assert cropped['montage']['clips'][1]['crop_y']==original_y
+    assert cropped['montage']['clips'][1]['fit_mode']==original_fit
+    assert cropped['montage']['clips'][0]==before['montage']['clips'][0]
+    assert cropped['montage']['clips'][2:]==before['montage']['clips'][2:]
+    assert cropped['montage']['audio_timeline']==before['montage']['audio_timeline']
+
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['clips']==cropped['montage']['clips']
+
+    # 只说模式：沿用当前两轴，不把已裁好的位置重置
+    mode=state.client.post(base+'/edits/preview',json={'raw_command':'完整显示','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert mode.status_code==200,mode.text
+    mode_proposal=mode.json()['proposal']
+    assert mode_proposal['operation']['payload']=={**mode_proposal['operation']['payload'],'fit_mode':'fit','crop_x':.2,'crop_y':original_y}
+    assert state.client.post(base+'/edits/'+mode_proposal['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['clips'][1]['fit_mode']=='fit'
+
+    # 含糊数量不猜步长：返回需补参数的提示，不产生任何修改
+    vague=state.client.post(base+'/edits/preview',json={'raw_command':'裁剪一下','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert vague.status_code==422,vague.text
+    assert '缺少可执行参数' in vague.json()['detail']
+
+    # 改画幅仍走 ChangeCanvas 既有链路，不被编成裁剪
+    canvas=state.client.post(base+'/edits/preview',json={'raw_command':'改成竖屏','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert canvas.status_code!=200 or canvas.json()['proposal']['operation']['operation_type']!='ChangeCrop',canvas.text
+
+    # 时间线在预览后变化：旧提案确认被拒
+    stale=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 40%','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert stale.status_code==200,stale.text
+    stale_proposal=stale.json()['proposal']
+    assert state.client.post(base+'/edits/exact',json={'operation_type':'SetClipLock',
+        'clip_id':before['montage']['clips'][0]['id'],'locked':True}).status_code==200
+    expired=state.client.post(base+'/edits/'+stale_proposal['id']+'/confirm')
+    assert expired.status_code==409,expired.text
+    assert state.client.get(base).json()['montage']['clips'][1]['crop_x']==.2
+
+    # 锁定镜头仍要求先解锁
+    assert state.client.post(base+'/edits/exact',json={'operation_type':'SetClipLock',
+        'clip_id':target['id'],'locked':True}).status_code==200
+    locked=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 30%','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert locked.status_code==409,locked.text
+    assert '请先解锁' in locked.json()['detail']
+    assert publishes==[]

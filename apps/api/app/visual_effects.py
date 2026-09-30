@@ -2,6 +2,7 @@
 from app.canvas import preview_size
 from pathlib import Path
 from typing import Literal
+import re
 import subprocess
 import math
 from pydantic import BaseModel, ConfigDict, Field
@@ -300,3 +301,98 @@ def compile_visual_command(command: str, current: dict) -> VisualEffects | None:
     if unknown and (applied or any(re.search(r"曝光|对比度|饱和度|美颜|磨皮|亮一点|淡入|淡出|缩放|旋转",part) for part in unknown)):
         raise ValueError("这条指令包含尚未支持的限制或操作："+"；".join(unknown)+"。没有应用任何修改，请调整后重新预览")
     return effects if applied else None
+
+
+_CROP_KEYWORDS=re.compile(r"裁剪|裁切|裁|适配|完整画面|完整显示|填满|铺满|满屏")
+_CROP_MODE=re.compile(r"(?:(?:画面|视频|镜头)(?:的)?)?(?:(?:显示)?完整(?:显示|画面)?|(?:填|铺)满(?:画面)?)")
+_CROP_AXIS=re.compile(r"(?:(?:画面|视频|镜头)(?:的)?)?(?:裁剪|裁切|裁)?\s*(?:到|为|是)?\s*(水平|横向|左右|垂直|纵向|上下)\s*"
+    # A signed value is still an explicit position, so it is read and refused as out of range
+    # rather than mistaken for a clause that is missing its amount.
+    r"(?:裁剪|裁切|裁|位置|焦点)?\s*(?:调到|设为|改为|移动到|到|为|是)?\s*(-?\d+(?:\.\d+)?)\s*[%％]")
+_CROP_MOVE=re.compile(r"(?:裁剪|裁切|裁)?\s*(?:到)?\s*(?:往|向)\s*(左|右|上|下)\s*(?:移动|移|挪|裁|调)\s*(\d+(?:\.\d+)?)\s*[%％]")
+_CROP_FOREIGN=re.compile(r"声音|配音|字幕|口型|美颜|磨皮|曝光|对比度|饱和度|亮度|色调|缩放|旋转|淡入|淡出|转场|叠化|速度|删除|替换")
+_CROP_AXIS_WORDS={"水平":"x","横向":"x","左右":"x","垂直":"y","纵向":"y","上下":"y"}
+_CROP_SAFE_CLAUSES={"其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变"}
+_CROP_LEAD=re.compile(r"^(?:请|帮我|麻烦|把|将|给|让|需要|想)?(?:(?:当前|这个|该)?(?:镜头|画面|视频))?(?:的)?")
+# 整条只有一个方向、又没有给量：既可能是裁剪也可能要求画面位移，落到裁剪侧只为了回参数提示，
+# 带上百分比或夹带别的子句时仍留给既有画面位移与视觉词表。
+_CROP_BARE_DIRECTION=re.compile(r"(?:往|向)(?:左|右|上|下)(?:移动|移|挪|裁|调)?(?:一点|点|一些)?$")
+_CROP_CLARIFY=("这条裁剪要求还缺少可执行参数：可以说“填满画面”“完整显示”，或给出明确位置，"
+    "例如“水平裁剪到 40%”“垂直裁剪到 60%”。没有应用任何修改，请补充后重新预览")
+
+
+def _strip_crop_lead(text):
+    for _ in range(3):
+        stripped=_CROP_LEAD.sub("",text,count=1)
+        if stripped==text:
+            return text
+        text=stripped
+    return text
+
+
+def _crop_percent(text):
+    """An explicit percentage is either honoured exactly or refused, never silently trimmed."""
+    value=float(text)
+    if not 0<=value<=100:
+        raise ValueError(f"裁剪位置要用 0% 到 100% 之间的数值，收到 {text}%。没有应用任何修改，请修改后重新预览")
+    return round(value/100,6)
+
+
+def _compile_crop_clause(text,state):
+    """Resolve one clause into the fields it alone changes; the rest keep their current value."""
+    if _CROP_MODE.fullmatch(text):
+        return {"fit_mode":"fit" if ("完整" in text) else "fill"}
+    axis=_CROP_AXIS.fullmatch(text)
+    if axis:
+        return {f"crop_{_CROP_AXIS_WORDS[axis[1]]}":_crop_percent(axis[2])}
+    move=_CROP_MOVE.fullmatch(text)
+    if move:
+        # crop_x/crop_y place the crop window inside the overflow (0 = source left/top edge),
+        # so a left/up move decreases the same axis a picture offset would.
+        side,amount=move.groups()
+        key="crop_x" if side in {"左","右"} else "crop_y"
+        value=round(state[key]+_crop_percent(amount)*(1 if side in {"右","下"} else -1),6)
+        if not 0<=value<=1:
+            raise ValueError(f"这个裁剪位置会让画面超出可移动范围（{side}移动 {amount}%）。没有应用任何修改，请给出 0% 到 100% 之间的位置")
+        return {key:value}
+    return None
+
+
+def compile_crop_command(command,current):
+    """Compile an explicit fit/fill or crop position into one ChangeCrop payload.
+
+    Returns None when the command is not a crop request. Every clause is applied in order and
+    one unrecognized clause rejects the whole command, so a partly-understood request is never
+    reported as an executed change. A missing mode or amount is refused with an actionable
+    prompt instead of a guessed step.
+    """
+    raw=command.strip().casefold().rstrip("。！")
+    if not _CROP_KEYWORDS.search(raw) and not _CROP_BARE_DIRECTION.fullmatch(_strip_crop_lead(raw)):
+        return None
+    fit_mode=current.get("fit_mode")
+    crop_x=current.get("crop_x")
+    crop_y=current.get("crop_y")
+    if fit_mode not in {"fit","fill"} or crop_x is None or crop_y is None:
+        raise ValueError("当前镜头的裁剪位置不可用，请先在右侧控件调整后再试")
+    state={"fit_mode":fit_mode,"crop_x":crop_x,"crop_y":crop_y}
+    applied=False
+    unknown=[]
+    for part in re.split(r"[，,；;]|(?:并且|同时|然后)",raw):
+        part=_strip_crop_lead(part.strip())
+        if not part or part in _CROP_SAFE_CLAUSES:
+            continue
+        change=_compile_crop_clause(part,state)
+        if change is None:
+            unknown.append(part)
+            continue
+        state.update(change)
+        applied=True
+    if unknown:
+        # A crop-shaped clause that resolved to nothing is missing a parameter and needs the
+        # parameter prompt; a clause naming another operation is refused as out of scope.
+        if not any(_CROP_FOREIGN.search(part) for part in unknown):
+            raise ValueError(_CROP_CLARIFY)
+        raise ValueError("这条指令包含尚未支持的裁剪限制或操作："+"；".join(unknown)+"。没有应用任何修改，请调整后重新预览")
+    if not applied:
+        raise ValueError(_CROP_CLARIFY)
+    return state

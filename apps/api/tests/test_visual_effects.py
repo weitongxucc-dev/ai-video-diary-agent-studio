@@ -4,7 +4,7 @@ import subprocess
 from PIL import Image
 import pytest
 from app.montage import MontageRenderer
-from app.visual_effects import VisualEffects, clip_video_filters, compile_visual_command, render_color_preview, reusable_color_settings
+from app.visual_effects import VisualEffects, clip_video_filters, compile_crop_command, compile_visual_command, render_color_preview, reusable_color_settings
 
 
 def frame(path):
@@ -271,3 +271,62 @@ def test_compound_visual_edit_compiles_all_clauses_in_order_or_rejects_all():
         with pytest.raises(ValueError):
             compile_visual_command(command,original)
     assert compile_visual_command('美颜一下，轻一点，配音不变',{}).beauty_strength==.2
+
+
+def test_crop_command_only_touches_what_it_was_asked_and_never_guesses_a_step():
+    current={"fit_mode":"fill","crop_x":.3,"crop_y":.7}
+
+    # 一个模式词只改模式，两个轴沿用当前值
+    assert compile_crop_command("完整显示",current)=={"fit_mode":"fit","crop_x":.3,"crop_y":.7}
+    assert compile_crop_command("填满画面",current)=={"fit_mode":"fill","crop_x":.3,"crop_y":.7}
+
+    # 单轴指令保留原 fit_mode 与另一轴
+    assert compile_crop_command("水平裁剪到 40%",current)=={"fit_mode":"fill","crop_x":.4,"crop_y":.7}
+    assert compile_crop_command("垂直裁剪到 60%",current)=={"fit_mode":"fill","crop_x":.3,"crop_y":.6}
+
+    # 多个已支持子句按顺序全部应用，不是只取第一句
+    assert compile_crop_command("完整显示，水平裁剪到 20%，垂直裁剪到 80%",current)=={"fit_mode":"fit","crop_x":.2,"crop_y":.8}
+    assert compile_crop_command("填满画面，同时水平裁剪到 20%",{"fit_mode":"fit","crop_x":.9,"crop_y":.1})=={
+        "fit_mode":"fill","crop_x":.2,"crop_y":.1}
+
+    # 相对量沿既有 crop 坐标语义：右/下增大，左/上减小
+    assert compile_crop_command("裁剪向右移动 10%",current)["crop_x"]==.4
+    assert compile_crop_command("裁剪向左移动 10%",current)["crop_x"]==.2
+    assert compile_crop_command("裁剪向下移动 20%",current)["crop_y"]==.9
+    assert compile_crop_command("裁剪向上移动 20%",current)["crop_y"]==.5
+
+    # 澄清提示里给出的示例必须真的可达
+    for command in ("填满画面","完整显示","水平裁剪到 40%","垂直裁剪到 60%"):
+        assert compile_crop_command(command,current) is not None
+
+    # 明确越界要拒绝，不能静默截断成用户没要求的 100%
+    with pytest.raises(ValueError,match="0% 到 100%"):
+        compile_crop_command("水平裁剪到 120%",current)
+    with pytest.raises(ValueError,match="0% 到 100%"):
+        compile_crop_command("水平裁剪到 -10%",current)
+    with pytest.raises(ValueError,match="超出可移动范围"):
+        compile_crop_command("裁剪向右移动 80%",current)
+    with pytest.raises(ValueError,match="超出可移动范围"):
+        compile_crop_command("裁剪向左移动 50%",current)
+
+    # 未定义的量不猜步长，返回需要补参数的提示而不是假装已执行
+    for command in ("裁剪一下","往左一点","裁剪一点点"):
+        with pytest.raises(ValueError,match="缺少可执行参数"):
+            compile_crop_command(command,current)
+
+    # 模式子串不能吞掉额外限制：整条拒绝，不只执行 fit
+    with pytest.raises(ValueError,match="尚未支持的裁剪限制或操作"):
+        compile_crop_command("完整显示并把声音关掉",current)
+    with pytest.raises(ValueError,match="尚未支持的裁剪限制或操作"):
+        compile_crop_command("填满画面，水平裁剪到 30%，把字幕改一下",current)
+
+    # 提示里的「其他不要动」这类不改变画面的说法不构成未知子句
+    assert compile_crop_command("填满画面，其他不要动",current)["fit_mode"]=="fill"
+
+    # 非裁剪指令保持原有行为（含改画幅不误编为裁剪）
+    for command in ("改成竖屏","往左移动 10%","替换这个镜头","亮一点","往左一点，同时亮一点"):
+        assert compile_crop_command(command,current) is None
+
+    # 当前镜头的裁剪位置不可用时如实报错
+    with pytest.raises(ValueError,match="裁剪位置不可用"):
+        compile_crop_command("完整显示",{"fit_mode":None,"crop_x":None,"crop_y":None})

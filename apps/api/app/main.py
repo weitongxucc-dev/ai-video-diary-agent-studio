@@ -59,7 +59,7 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
 from app.task_audio import TaskAudio
-from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_visual_command, fade_filters, with_visual_effects
+from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
@@ -6869,6 +6869,11 @@ def preview_creation_task_edit(
         try:
             visual_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
             selected_clip=next(clip for clip in visual_plan.clips if clip.id==selected_ref.removeprefix("clip:"))
+            crop=compile_crop_command(command,{"fit_mode":selected_clip.fit_mode,"crop_x":selected_clip.crop_x,"crop_y":selected_clip.crop_y})
+            if crop is not None:
+                _task,_base,_plan,intent,proposal=_preview_exact_montage_edit(task_id,request,CreationTaskExactEditRequest(
+                    operation_type="ChangeCrop",clip_id=selected_clip.id,**crop))
+                return _edit_preview_response(intent,proposal)
             effects=compile_visual_command(command,selected_clip.visual_effects)
         except (ValueError,KeyError,StopIteration) as exc:
             raise HTTPException(status_code=422,detail=str(exc) or "当前镜头不可用") from exc
