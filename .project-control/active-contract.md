@@ -76,6 +76,12 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 ## 已交付候选：审核收口边界
 
+### 用户批准复用空闲会话的三项只读派工
+
+2026-09-30 用户明确要求继续派单并允许旧会话自动压缩。workspace13 / E051DDB2-85DB-4DDF-9173-587449769B02 接WIL87方案；workspace14 / D2F9B4F8-5D74-4DA1-AC15-4A9736E36B88 接WIL56界面核验；workspace15 / E843B088-FA09-43DC-99F0-4DA81D82C38B 接WIL92方案。三者均无产品写权，旧任务写权保持退役。按当前派单目录各issue/dispatch.md执行，只写各自报告和隔离证据。
+
+固定只读源码共用 `~/.codex/worktrees/wil126-intake-review/original` 的61ae26e6fc35029d6df3037497f64390860b878f，不切分支或写缓存，不使用已移交workspace18/20的旧工作树。WIL56先整理矩阵，图形时段由主控协调，不争用workspace20环境。WIL87/WIL92不启动服务、不执行模型或生产任务；方案不授权后续施工。所有HOLD保留。
+
 三份交叉审核均已落盘并给出 HOLD；主控把具名问题和证据回填对应 Linear。它们不是本轮 Insert 试点的自动返工授权；不合入，不开启新产品写入，保留作者归属。原审核共同基线 dev `93e8182`，具体报告如下。
 
 - surface:12 审模型外接盘候选 `a59fe1f`，写 `external-agents/review-20260929/model-paths.md`。
