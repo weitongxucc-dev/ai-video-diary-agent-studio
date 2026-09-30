@@ -210,6 +210,27 @@ def apply_compound_subtitles(tracks,steps,duration_seconds):
         subtitle_schedule([replace(updated,style={**updated.style,'enabled':True})],duration_seconds)
         invalidate_translation=track.language=='zh-CN' and 'text' in values and values['text']!=cue.text
         result=[updated if item.id==track.id else item for item in result if not(invalidate_translation and item.language=='en-US' and item.source_language=='zh-CN')]
+        changed_cue=next(item for item in updated.cues if item.id==cue.id)
+        timing_changed=(changed_cue.start_seconds,changed_cue.end_seconds)!=(cue.start_seconds,cue.end_seconds)
+        if track.language=='zh-CN' and timing_changed and not invalidate_translation:
+            translations=[item for item in result if item.status=='valid' and item.language=='en-US'
+                          and item.source_language=='zh-CN']
+            if len(translations)>1:
+                raise ValueError('存在多个关联英文字幕轨，请先检查译文来源关联；两轨时间未改动')
+            if translations:
+                translation=translations[0]
+                source_ids=[item.id for item in updated.cues]
+                references=[item.source_cue_id for item in translation.cues]
+                if (len(source_ids)!=len(set(source_ids)) or not references
+                    or any(reference is None or reference not in source_ids for reference in references)
+                    or len(references)!=len(set(references)) or references.count(cue.id)!=1):
+                    raise ValueError('译文与原字幕的对应关系缺失或有歧义，请先检查；两轨时间未改动')
+                synchronized=replace(translation,cues=[replace(item,
+                    start_seconds=changed_cue.start_seconds,end_seconds=changed_cue.end_seconds)
+                    if item.source_cue_id==cue.id else item for item in translation.cues],
+                    artifact_ref=None,transform_id=None)
+                subtitle_schedule([replace(synchronized,style={**synchronized.style,'enabled':True})],duration_seconds)
+                result=[synchronized if item.id==translation.id else item for item in result]
     return result
 
 
