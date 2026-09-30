@@ -138,3 +138,7 @@ WIL92仅方案审核Done，原15现workspace5接WIL179，在creation-resource-co
 ## 桌面文件移交与应用内导入施工
 
 原18的desktop-release.md已确认main.js/preload.js/directoryPicker.ts与88f175e一致并停写，现将三文件独占移交原19。原19使用托管树wil177-managed-import/original的88f175e基线，按WIL-177/dispatch.md实施授权施工，附MaterialLibraryWorkspace及专项测试写权；同文件中的WIL176字幕HTTP有界失败修正由19一并负责、交付单列。18只继续F1 API与测试及只读运行验收。GUI仍归20。所有HOLD保持，外部直接投放判据未决，导入完成不等于分析完成。
+
+## 当前GUI与字幕确认空白修复
+
+20已完成WIL152本轮GUI并释放4403/3003，仅整理报告；GUI现转18复验c7d9961。WIL152真实确认后空白有截图与API前后证据，另建具名实施WIL180交原13，复用已干净且无运行依赖的wil126-intake-review/original，从a00863f创建codex/wil180-subtitle-view-recovery。旧61ae26e核验已结束，不再作为这棵树当前身份。只授CreationTaskWorkspace.tsx及现有相关专项测试写权；原18这两路径经主控核干净后撤回写权，继续原候选只读GUI。按本批WIL-180/dispatch.md修确认后视图可用性，不改阶段门禁/后端/API，不放开重渲染前字幕页；其他包独占与HOLD保持。
