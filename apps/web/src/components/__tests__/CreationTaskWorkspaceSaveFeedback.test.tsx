@@ -10,7 +10,8 @@ import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/li
 // 由 CreationTaskWorkspace.test.tsx 覆盖，本文件不重复。
 
 const mocks = vi.hoisted(() => {
-  // 与真实 lib/api 保持同名同形：errorDetails() 用 instanceof 判定，测试必须能构造它。
+  // 与真实 lib/api 保持同名同形：errorDetails() 无条件执行 `cause instanceof CreationPlanApiError`，
+  // 该符号若是 undefined 会直接抛 TypeError，因此即使没有用例构造它也必须存在。
   class MockCreationPlanApiError extends Error {
     constructor(
       public readonly status: number,
@@ -209,18 +210,14 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("成片缺失等服务侧失败时，提示不会只让用户去查磁盘", async () => {
-    // 真实 API 错误形状（HTTP 404 + 业务 code），不是磁盘写失败。
+  it("本地服务没返回成片时，提示不会只让用户去查磁盘", async () => {
+    // 真实 IPC 返回形状：main.js 的 save-rendered-video 是 resolve {saved, error}，
+    // 不会 reject、也不会把 API 的 body/code 结构化传回，error 就是一句人话字符串。
     // 若下一步只写「检查保存位置」，用户会对着完好的外接盘反复重试，永远查不到真正原因。
-    const saveRenderedVideo = vi.fn().mockRejectedValue(
-      new mocks.MockCreationPlanApiError(
-        404,
-        "output_missing",
-        "成片文件已不存在：/api/creation-tasks/task-1/output",
-        "无法保存这个任务的成片。",
-        "重新生成成片后再保存。",
-      ),
-    );
+    const saveRenderedVideo = vi.fn().mockResolvedValue({
+      saved: false,
+      error: "本地服务没有返回可保存的 MP4（HTTP 404）。",
+    });
     useElectronSave(saveRenderedVideo);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
@@ -228,8 +225,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/没有保存到本地/);
-    // 服务端返回的原始原因必须保留
-    expect(alert).toHaveTextContent("成片文件已不存在");
+    // 桌面端返回的原始原因必须原样保留
+    expect(alert).toHaveTextContent("本地服务没有返回可保存的 MP4");
     // 下一步必须同时覆盖「当前成片/本地服务」和「保存位置」，不能只归因磁盘
     expect(alert).toHaveTextContent(/当前成片和本地服务/);
     expect(alert).toHaveTextContent(/保存位置是否可写/);
