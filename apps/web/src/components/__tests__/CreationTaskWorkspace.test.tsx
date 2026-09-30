@@ -758,6 +758,100 @@ describe("CreationTaskWorkspace", () => {
     }));
   });
 
+  // WIL-180 专项：字幕确认后服务端把任务退回 montage 并作废旧成片
+  // （stage:"montage"、output_ready:false、output_url:null，见 WIL-152/evidence/02-replaced.json），
+  // 字幕轨仍是 1 条 valid、can_undo:true。此时字幕页按既有门禁已不可呈现
+  // （canOpenStage("subtitle_cover") 要求 output_url），但 confirmEdit 的 refresh(true) 仍保留它，
+  // 结果主区没有任何视图命中 → 空白、撤销入口一起消失。
+  // 正确表现是按既有可用/默认规则回到 montage 剪辑页，撤销入口可见。
+  it("falls back to the default montage page with undo after a confirm that invalidates output_url", async () => {
+    const initial = subtitleCoverWorkspace();
+    const confirmed = subtitleCoverWorkspace();
+    confirmed.task = {
+      ...confirmed.task,
+      stage: "montage" as const,
+      progress: 75,
+      current_timeline_version_id: "timeline-version-7",
+      can_undo: true,
+      can_redo: false,
+      output_ready: false,
+    };
+    confirmed.montage = {
+      ...confirmed.montage!,
+      output_url: null,
+      subtitle_url: null,
+      message: "字幕修改已保存，配音未改；请重新渲染。",
+    };
+    confirmed.subtitle_tracks = [{
+      ...confirmed.subtitle_tracks[0],
+      timeline_version_id: "timeline-version-7",
+      cues: [{ ...confirmed.subtitle_tracks[0].cues[0], text: "真实运行\n不是口号" }],
+    }];
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    mocks.confirmEdit.mockResolvedValue({ operation: { id: "operation-subtitle" }, montage: confirmed.montage });
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择中文字幕 1" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "真实运行\n不是口号" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-UpdateSubtitleCue"));
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
+
+    // 1) 视图失效后按既有默认规则回落到可操作的剪辑页，而不是留一片空白
+    await waitFor(() => expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument());
+    // 2) 撤销入口必须可见且可用（can_undo=true）
+    const undo = await screen.findByRole("button", { name: "撤销" });
+    expect(undo).toBeEnabled();
+    // 3) 不放开重渲染前的字幕页：output_url 已空，字幕页门禁原样保留
+    expect(screen.queryByLabelText("字幕与封面工作区")).not.toBeInTheDocument();
+    // 4) 不把旧成片当新成片：剪辑页如实显示未出片，不渲染指向旧成片的播放器
+    expect(screen.getByText("未出片")).toBeInTheDocument();
+    expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+  });
+
+  // 对照用例：成片仍有效（output_url 保留）时，refresh(true) 仍保留字幕页，不得乱跳。
+  // 字段改动与既有用例一致，确保单跑也能产出合法精确预览。
+  it("does not jump away from a still-valid view when output_url is present", async () => {
+    const initial = subtitleCoverWorkspace();
+    const confirmed = subtitleCoverWorkspace();
+    confirmed.task = { ...confirmed.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 };
+    confirmed.subtitle_tracks = [{
+      ...confirmed.subtitle_tracks[0],
+      timeline_version_id: "timeline-version-7",
+      cues: [{ ...confirmed.subtitle_tracks[0].cues[0], text: "真实运行\n不是口号" }],
+    }];
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    mocks.confirmEdit.mockResolvedValue({ operation: { id: "operation-subtitle" }, montage: confirmed.montage });
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择中文字幕 1" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "真实运行\n不是口号" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
+
+    // 成片仍有效时不得乱跳：仍停在字幕与封面页，预览器照旧
+    await waitFor(() => expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument());
+    expect(screen.getByLabelText("字幕成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output");
+  });
+
   it("previews the selected cut dissolve without immediately applying it", async () => {
     const initial=subtitleCoverWorkspace();
     const clip={id:"clip-1",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",

@@ -1206,7 +1206,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setEditorDraft(false);
     setSelectedOverlayId(current=>next.montage?.graphic_overlays?.some(item=>item.id===current)?current:null);
     setWorkspace(next);
-    if (!preserveActiveView) setActiveView(defaultWorkspaceView(next));
+    // 保留原视图只在该视图按既有门禁仍可呈现时成立。字幕确认会作废 output_url，
+    // 使 subtitle_cover 不可呈现；此时保留它会让主区没有任何视图命中（空白且丢失撤销入口）。
+    // 这里按既有可用/默认规则回落，不新增视图、不放开任何门禁。
+    setActiveView(preserveActiveView && canOpenStage(activeView, next) ? activeView : defaultWorkspaceView(next));
     setSelectedClipId((current) => next.montage?.clips.some((clip) => clip.id === current) ? current : null);
     setSelectedAudioId(current => next.montage?.audio_timeline?.tracks.some(track => track.id === current || track.clips.some(clip => clip.id === current)) ? current : null);
     setActiveSubtitleTrackId((current) => next.subtitle_tracks.some((track) => track.id === current)
@@ -1694,16 +1697,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return stageId;
   }
 
-  function canOpenStage(view: WorkspaceView | null): view is WorkspaceView {
+  // state 默认取当前闭包的 workspace；refresh 需要按刷新后的 next 事实判断，
+  // 所以这里显式接受状态参数，而不是读刷新前的旧闭包。
+  function canOpenStage(view: WorkspaceView | null, state: WorkspaceState = workspace): view is WorkspaceView {
     if (!view) return false;
-    if (view === task.stage) return true;
+    if (view === state.task.stage) return true;
     if (view === "prepare") return true;
-    if (view === "topic") return Boolean(workspace.selected_topic);
-    if (view === "script") return Boolean(latestScript);
-    if (view === "narration") return Boolean(workspace.narration);
-    if (view === "montage") return Boolean(workspace.montage);
-    if (view === "subtitle_cover") return Boolean(workspace.montage?.output_url && workspace.subtitle_tracks.length);
-    return (view === "review" || view === "publish") && Boolean(workspace.montage?.output_url);
+    if (view === "topic") return Boolean(state.selected_topic);
+    if (view === "script") return Boolean(state.scripts[0]);
+    if (view === "narration") return Boolean(state.narration);
+    if (view === "montage") return Boolean(state.montage);
+    if (view === "subtitle_cover") return Boolean(state.montage?.output_url && state.subtitle_tracks.length);
+    return (view === "review" || view === "publish") && Boolean(state.montage?.output_url);
   }
 
   const isEditor = activeView === "montage";
