@@ -41,8 +41,8 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 | workspace4 / 原14 | WIL-109实施：仅GraphicOverlayEditor.tsx、CreationTaskWorkspace.tsx的选中对象名称及对应现有测试。复用wil56-visible-fixes树，独占以上文件；不改编辑行为、字号、API、权限。 | 箭头显示实际名称，切换字幕/镜头/标注不串名；定向测试、候选SHA、三尺寸真实入口证据。GUI未分配，先准备可运行环境并回报。 |
 | workspace6 / 原20 | WIL-181字幕新增空白提示实施；复用wil95-evidence-wording树50209dd。现仅独占subtitle_schedule.py及test_subtitle_schedule.py。main.py由WIL144独占，接线尚未移交。 | 先完成新增空白差异纯函数和边界专项；仅同轨有效字幕、本次新增区间、复合最终候选；不改英文同步/保存/门禁。主控移交main.py后接入exact/compound预览，再做真实提示与重叠拒绝验收。 |
 | workspace2 / 原13 | WIL-144裁剪对话缺口实施；复用wil126-intake-review树50209dd。独占main.py的preview_creation_task_edit内裁剪接线、visual_effects.py裁剪解析和test_visual_effects.py/test_montage_pipeline.py本包专项用例；不改其他main逻辑。 | 对明确适配/位置参数生成ChangeCrop并复用exact同链；未指定轴及模式沿当前值，含糊数量返回可操作澄清，不猜测“裁一点”的量、不把改画幅当裁剪。预览不写、确认/过期/锁定/撤销专项；真实GUI另分配。 |
-| workspace3 / 原19 | WIL-100素材逐条说明施工准备，只读当前候选；复用wil177-managed-import树。 | 以三条素材、不同说明、公共背景、刷新不串条为纵向样本，先查已实现部分和HOLD冲突，列最小差异及精确路径；不再重建原生环境。 |
-| workspace5 / 原15 | WIL-107模板保存施工准备，只读当前候选；复用creation-resource-contract树。 | 查当前保存入口、名称/版本/素材声音要求的落库和列表结果；列已有能力、缺口、精确写权建议，不抢CreationTaskWorkspace写权。 |
+| workspace3 / 原19 | WIL-100新增说明受production.py HOLD限制；先独占MaterialLibraryWorkspace.test.tsx一文件，核报告中的刷新串条反例。主组件仍只读。 | 现有满页刷新会保留选中项，不得误报；以选中项确实消失的条件证明保存请求目标及草稿归属，证伪则纠正报告。仅单条回归，不以此算整条素材说明完成；已ACK PRD§7外部确认规则。 |
+| workspace5 / 原15 | WIL-107准备结论纠正后，只读交叉审WIL144裁剪候选；不写产品。 | 模板规则不可退化为固定说明或旧镜头复制，WIL178旧写权已退役。144交付后审明确参数/未指定轴保留、含糊拒绝、锁定/过期与共用链，写WIL144/crop-cross-review.md；不轮询空树或跑测试。 |
 | workspace1 / 原18 | WIL-56及WIL-37收尾审核后，接WIL126新规则只读施工准备；只读bd25当前候选和指定报告。 | 收尾最小结论；再按已更新PRD§7核三个扫描入口、确认事实持久化/幂等、WIL177复用及旧自动猜完成路径退役，交WIL126/next-wave.md，不写产品。 |
 
-准备包仅可写原批次对应issue目录的next-wave.md及独立/tmp夹具；它们不是实施完成，不据此关闭issue。实施者先REBASE_ACK再写，主控审查准备结果后直接授予不冲突的精确写权，不再向用户询问是否继续。GUI暂空闲，环境就绪后分配一名所有者；禁模型、用户库、发布、全量测试与依赖安装。连续两次同根失败改方法或换人，不反复补环境。报告须区分产品缺陷、环境故障、证据缺口、非阻断项，并给操作、预期、实际和下一步。
+准备包仅可写原批次对应issue目录的next-wave.md及独立/tmp夹具；它们不是实施完成，不据此关闭issue。实施者先REBASE_ACK再写，主控审查准备结果后直接授予不冲突的精确写权，不再向用户询问是否继续。GUI现独占分配workspace4的WIL109，须自测及隔离服务健康后才开始交互，其他线程不得启动GUI；禁模型、用户库、发布、全量测试与依赖安装。连续两次同根失败改方法或换人，不反复补环境。报告须区分产品缺陷、环境故障、证据缺口、非阻断项，并给操作、预期、实际和下一步。
