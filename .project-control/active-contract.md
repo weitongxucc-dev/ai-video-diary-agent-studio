@@ -70,6 +70,10 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 - workspace20 / UUID 359F31E4-128E-47EB-8767-4E64729BAECF：WIL152。复用 `~/.codex/worktrees/wil95-evidence-wording/original`，分支 `codex/wil152-subtitle-review`。固定基线独立核验，只写该包报告及 /tmp/wil152-20260930 隔离证据。产品完全只读；导出缺口沿WIL176，编辑核验独立推进。
 - 旧workspace13/14/15保持停写；此前两工作树的产品归属已退役，现由上述新会话依新派单读取。无旧HOLD解除。图形与重型运行串行申请；4400/4401保护不动。
 
+### 恢复后的第三条核验线
+
+用户确认workspace19已恢复并要求派单。原WIL152仍由workspace20独占核验；workspace19 / UUID 5C0460AF-A90A-402B-A3CB-CC3306F1AD13 改接WIL126素材接收入库和重启补扫独立核验。固定源码基线61ae26e6fc35029d6df3037497f64390860b878f；工作树 `~/.codex/worktrees/wil126-intake-review/original`。产品完全只读，只写上述派单目录WIL-126下报告和 /tmp/wil126-20260930 隔离证据。按WIL-126/dispatch.md执行，不运行模型、不启用scheduled生产、不解除可见性HOLD；服务及重型测试先向主控申请时段。
+
 ## 已交付候选：审核收口边界
 
 三份交叉审核均已落盘并给出 HOLD；主控把具名问题和证据回填对应 Linear。它们不是本轮 Insert 试点的自动返工授权；不合入，不开启新产品写入，保留作者归属。原审核共同基线 dev `93e8182`，具体报告如下。
