@@ -204,7 +204,8 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         ? (hasMore && totalCount !== null
             ? `素材库共 ${totalCount} 条，本次只读了第一页，但每条候选的依据都已按 asset 精确取回。`
             : "每条候选的依据都已取回。")
-        : `依据不全：有 ${missingEvidence.length} 条候选的素材元数据取不到（不属于当前工作区或已被删除），这些候选的 file_name/tags/duration 为空。`;
+        : `依据不全：素材 ${missingEvidence.join("、")} 的元数据取不到，读取失败的具体原因未确定（本次没有拿到可判定的原因，不据此断定素材已删除或不属于当前工作区）。` +
+          `上面点名的候选的 file_name/tags 若有值，只来自检索响应、未经本工作区元数据复核，不等于归属或内容已核实；duration_seconds 与 source_reference 本次取不到，就是空。`;
 
       const details = {
         candidates,
@@ -214,7 +215,7 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         library_has_more: hasMore,
         instruction:
           "以上只是候选与依据，不代表替换。请把依据（文件名/时间点/标签/时长/匹配原因/排第几）摆给用户看，由用户或 agent 判断后，再走正常剪辑预览流程；本工具不执行任何修改。" +
-          (evidenceComplete ? "" : " 注意：本次有候选的依据不全，必须向用户说明这一点，不要把空字段说成已知。"),
+          (evidenceComplete ? "" : ` 注意：必须向用户说明哪些候选的依据没取全（本次是：${missingEvidence.join("、")}），且只针对这些候选说依据不全——没取到的字段就说没取到，不要当成已知；这些候选的 file_name/tags 若有值只来自检索响应，未经本工作区元数据复核，不等于归属或内容已核实。`),
       };
       return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
