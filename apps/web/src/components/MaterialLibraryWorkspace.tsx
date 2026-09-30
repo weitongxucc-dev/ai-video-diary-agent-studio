@@ -194,12 +194,30 @@ export function MaterialLibraryWorkspace({
   const lastSearch = useRef({ filter, query });
   const assetWriteRevision = useRef(0);
 
-  const selected =
-    assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
-  const selectedSegment =
-    selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
-    selected?.segments[0] ??
-    null;
+  // A background refresh can drop whatever is selected: the material was
+  // removed or re-indexed, or the current search no longer returns it. Falling
+  // back to assets[0] put one material's name above another material's
+  // description draft, and 保存片段修改 then wrote that draft onto the wrong
+  // item. Treat the loss as its own state instead. The typed draft stays in
+  // component state so a later pick can restore context, the inspector closes
+  // so nothing can be saved under the wrong name, and picking again re-seeds
+  // from the newly selected item.
+  const selectionLost =
+    Boolean(selectedId) && !assets.some((asset) => asset.id === selectedId);
+  const selected = selectionLost
+    ? null
+    : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
+  // The same applies one level down: re-analysis can replace a segment's list,
+  // and the drafts in the textarea still belong to the segment that left.
+  const segmentLost =
+    Boolean(selectedSegmentId) &&
+    selected !== null &&
+    !selected.segments.some((segment) => segment.id === selectedSegmentId);
+  const selectedSegment = segmentLost
+    ? null
+    : selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
+      selected?.segments[0] ??
+      null;
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
   const tagDraft = tagDrafts[tagScope] ?? "";
   const tagError = tagErrors[tagScope] ?? "";
@@ -251,11 +269,7 @@ export function MaterialLibraryWorkspace({
         }
         if (active && revision === assetWriteRevision.current) {
           const refreshed = libraries.flatMap((page) => page.assets);
-          setAssets((current) => {
-            const retained = current.find((asset) => asset.id === selectedId);
-            if (retained && refreshed.length >= loadedCount && !refreshed.some((asset) => asset.id === retained.id)) refreshed.push(retained);
-            return refreshed;
-          });
+          setAssets(refreshed);
           setTotalCount(libraries[0]?.total_count ?? 0);
           setHasMore(refreshed.length < (libraries[0]?.total_count ?? 0));
         }
@@ -1007,6 +1021,15 @@ export function MaterialLibraryWorkspace({
           <div className="library-error" role="alert">
             <AlertCircle size={15} />
             {error}
+          </div>
+        ) : null}
+
+        {selectionLost || segmentLost ? (
+          <div className="library-error" role="alert">
+            <AlertCircle size={15} />
+            {selectionLost
+              ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
+              : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
           </div>
         ) : null}
 

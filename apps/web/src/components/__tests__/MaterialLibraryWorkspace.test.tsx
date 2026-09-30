@@ -357,3 +357,177 @@ it("surfaces a cleanup warning without turning a completed copy into a failure",
   expect(status).toHaveTextContent("未能自动清理");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
+
+// The 15s poll used to re-seed `assets` while silently falling back to
+// assets[0], so a material that left the library left its description draft
+// under another material's name and 保存片段修改 wrote that draft onto the
+// wrong item. These pin the corrected behaviour: the loss is reported, nothing
+// is savable while it stands, and picking a material again re-seeds from that
+// material rather than restoring the stale draft.
+const dropPoll = (
+  render_: () => void,
+  answer: (dropped: boolean) => typeof twoAssetLibrary,
+) => {
+  let drop = false;
+  vi.mocked(getProductionMaterials).mockImplementation(async () => answer(drop));
+  render_();
+  return {
+    startDropping: () => { drop = true; },
+    async tick() {
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    },
+  };
+};
+
+const withBoundIntake = async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+};
+
+it("stops editing when a refresh drops the selected material instead of saving its draft elsewhere", async () => {
+  await withBoundIntake();
+  try {
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [otherAsset], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "A的说明" } });
+
+    poll.startDropping();
+    await poll.tick();
+
+    // The material is gone from the list, editing has stopped, and the reason is
+    // stated rather than the panel quietly showing a different material.
+    expect(screen.queryByRole("button", { name: /local\.mp4/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("片段描述")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+
+    // Re-selecting is the way out, and it must seed from B, not restore A's text.
+    fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+    expect(screen.getByLabelText("片段描述")).not.toHaveValue("A的说明");
+    fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+    await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith(
+      "asset-b",
+      "segment-b",
+      expect.not.objectContaining({ description: "A的说明" }),
+    ));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A full page of results is exactly the case the old `retained` push was meant
+// to cover. It must not keep a removed material alive: doing so would hide the
+// loss behind a stale entry that still looks editable.
+it("does not keep a removed material listed just because the refreshed page is full", async () => {
+  await withBoundIntake();
+  try {
+    const thirdSegment = { ...otherSegment, id: "segment-c", asset_id: "asset-c" };
+    const thirdAsset = { ...otherAsset, id: "asset-c", file_name: "自造素材C.mp4", segments: [thirdSegment] };
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={{ ...twoAssetLibrary, limit: 1 }}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { assets: [otherAsset, thirdAsset], total_count: 2, limit: 2, offset: 0, has_more: false }
+        : { ...twoAssetLibrary, limit: 1 }),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    poll.startDropping();
+    await poll.tick();
+
+    expect(screen.queryByRole("button", { name: /local\.mp4/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Losing the selection is a durable state, not a one-tick flicker. Repeated
+// refreshes must not oscillate back into an editable panel for a material that
+// is gone.
+it("keeps the selection reported as lost across repeated refreshes", async () => {
+  await withBoundIntake();
+  try {
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [otherAsset], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    poll.startDropping();
+    await poll.tick();
+    await poll.tick();
+    await poll.tick();
+
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+    expect(updateProductionMaterialSegment).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// The same loss one level down: the material survives, but re-analysis replaced
+// the segment the draft was typed against. Falling back to segments[0] would
+// put that draft on a different segment of the same file.
+it("stops editing when the selected segment disappears from a material that stays", async () => {
+  await withBoundIntake();
+  try {
+    const resegmented = { ...taggedAsset, segments: [{ ...segment, id: "segment-new", description: "重新分段后的说明" }] };
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [resegmented], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "A的说明" } });
+
+    poll.startDropping();
+    await poll.tick();
+
+    // The material is still listed and still selected; only its segment moved on.
+    expect(screen.getByRole("button", { name: /local\.mp4/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("片段描述")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的片段已不在该素材中");
+  } finally {
+    vi.useRealTimers();
+  }
+});
