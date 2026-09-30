@@ -1249,14 +1249,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("save");
     setError(null);
     setNotice(null);
+    const saver = window.electronAPI?.saveRenderedVideo;
     try {
-      const saver = window.electronAPI?.saveRenderedVideo;
       if (!saver) throw new Error("请在桌面客户端中使用原生保存功能。浏览器预览不会接收文件路径。");
       const result = await saver(task.id);
       if (result.error) throw new Error(result.error);
       if (result.saved) setNotice(`已保存${result.fileName ? `：${result.fileName}` : "到所选位置"}`);
     } catch (cause) {
-      setError(errorDetails(cause));
+      const details = errorDetails(cause);
+      // 保存失败必须同时给普通人三件能判断的事：没保存成、为什么、接下来怎么做。
+      // 桌面端返回的原始报错保留在 details.message 里，不被通用文案吞掉。
+      setError(saver
+        ? { ...details, message: `成片没有保存到本地。${details.message}`, repairAction: "请确认所选位置可以写入（例如外接盘仍已连接、目录还有剩余空间），然后再次点击「保存到本地」。" }
+        : { ...details, message: `成片没有保存到本地。${details.message}` });
     } finally {
       setBusy(null);
     }
@@ -1699,7 +1704,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           </li>;
         })}</ol></nav>
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
-        {error && (isEditor || activeView === "subtitle_cover") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
+        {error && (isEditor || activeView === "subtitle_cover" || activeView === "review") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
         {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span></div> : null}
         {task.confirmed_script_id && (executionPreview || execution?.job) && (activeView === "script" || activeView === "narration") ? <CreationExecutionPanel preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} /> : null}
         {execution?.job && activeView !== "script" && activeView !== "narration" ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? "成片已生成" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
