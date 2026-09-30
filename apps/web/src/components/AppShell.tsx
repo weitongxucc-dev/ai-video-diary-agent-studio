@@ -10,12 +10,14 @@ import {
   ChevronDown,
   CircleHelp,
   Clapperboard,
+  Columns2,
   FileStack,
   Home,
   Library,
   Menu,
   Moon,
   PanelLeft,
+  PanelRight,
   Plus,
   Search,
   Settings,
@@ -499,6 +501,8 @@ export function AppShell({
               <Menu size={17} />
             </button>
             {<button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={17} /></button>}
+            {<button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={17} /></button>}
+            {<button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={17} /></button>}
             {!editorLayout ? <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
             </button> : null}
@@ -525,7 +529,7 @@ export function AppShell({
           </div>
         </header>
 
-        <div className={editorShell.contentGrid}>
+        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`}>
           <section aria-label="创作助手" className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small></header>
             <div className={editorShell.conversationBody}>

@@ -104,6 +104,64 @@ describe("AppShell", () => {
     localStorage.clear();
   });
 
+  it("collapses and restores all three columns, and keeps the collapsed panels mounted", () => {
+    localStorage.clear();
+    const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
+    const shell = view.container.firstElementChild as HTMLElement;
+    const grid = view.container.querySelector('[class*="contentGrid"]') as HTMLElement;
+    expect(shell).toHaveStyle({ "--editor-left": "188px", "--editor-right": "280px" });
+    fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
+    expect(shell).toHaveStyle({ "--editor-left": "64px" });
+    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    expect(shell).toHaveStyle({ "--editor-right": "0px" });
+    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
+    fireEvent.click(screen.getByRole("button", { name: "收起工作区" }));
+    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
+    // 三栏全收起后仍能逐个找回，且收起不卸载组件
+    expect(screen.getByRole("button", { name: "展开导航栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开工作区" })).toBeInTheDocument();
+    expect(screen.getByText("剪辑")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开工作区" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开对话栏" }));
+    expect(shell).toHaveStyle({ "--editor-right": "280px" });
+    expect(grid.className).not.toContain("chatCollapsed");
+    fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
+    expect(shell).toHaveStyle({ "--editor-left": "188px" });
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "280");
+    view.unmount();
+    localStorage.clear();
+  });
+
+  it("restores the conversation width that was set before collapsing", () => {
+    localStorage.clear();
+    const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
+    const shell = view.container.firstElementChild as HTMLElement;
+    fireEvent.keyDown(screen.getByRole("separator", { name: "调整对话栏宽度" }), { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    expect(shell).toHaveStyle({ "--editor-right": "0px" });
+    fireEvent.click(screen.getByRole("button", { name: "展开对话栏" }));
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "296");
+    view.unmount();
+    localStorage.clear();
+  });
+
+  it("keeps the conversation and workspace collapse state after remount", () => {
+    localStorage.clear();
+    const first = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
+    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起工作区" }));
+    first.unmount();
+    const second = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
+    expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开工作区" })).toBeInTheDocument();
+    const grid = second.container.querySelector('[class*="contentGrid"]') as HTMLElement;
+    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
+    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
+    second.unmount();
+    localStorage.clear();
+  });
+
   it("uses v4 widths for a fresh workspace and keeps a previously saved layout", () => {
     localStorage.clear();
     const first = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
