@@ -54,11 +54,11 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 
 | 包 / 可见执行者 | 工作目录与独占范围 | 验收边界 |
 | --- | --- | --- |
-| WIL-95 / workspace:13 Claude恢复响应；surface UUID `737EB193-23B8-422A-9DC1-8E8F0EB3D1A5`，恢复唯一写权；workspace:15接续安排撤销 | `/Users/Zhuanz/.codex/worktrees/wil95-evidence-wording/original`；仅 `apps/api/agent_tools/diary_tools.ts`、新专项 `apps/api/tests/test_agent_material_evidence.py`，及本包报告/临时夹具；保留原未提交diff | 修正元数据失败时的证据说明；最小相关测试、实际HTTP输出；不改变权限与字段契约。先读本包controller-review.md。候选交付后停写，由主控审核、集成及推送开发分支 |
 | WIL-99 / workspace:14 Pi恢复响应；surface UUID `EABE9E01-E2D9-4F69-BC8D-93927990BCEE`，解除本次模型故障HOLD | bd25产品只读；只写本包报告与 `/tmp/wil99-20260930/`。主控核实PID95310是PPID1、无客户连接、仅打开旧wil84隔离库的遗留测试服务后已用SIGTERM停止，旧DB原样保留；允许本包自有隔离服务使用8000/3000 | 正式创建task_隔离任务，原生保存/取消/失败重试、真实MP4播放；不得用dialog桩或假MP4。可按已审核方案在临时目录物化同源码Web/缓存，以启动器只隔离Electron userData/logs/videos，不改main/preload与网络/保存行为。结束关闭本包进程；不重启旧孤儿服务 |
-| WIL-55 / workspace:15 Claude；surface UUID `70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F` | bd25产品只读；只写本包报告与 `/tmp/wil55-20260930/` | 独立浏览器三尺寸拖动/记忆/收起恢复/右上编辑浮卡；可改浏览器布局和未提交草稿，不改既有验收任务、夹具或服务。发现失败只报证据 |
 
 此批不授予验证者产品修复写权；发现超出派单的产品或环境问题先向主控报告。只有受影响步骤停止，独立工作继续。无新增外部模型调用、模型下载或真实平台动作。验证完成立即释放本包启动的进程。
+
+WIL-95 与 WIL-55 已交付，workspace:13 / workspace:15 停写并退出本轮执行归属；候选、核验结论和证据留在 Linear 与各包报告。WIL-172 / WIL-173 / WIL-174 是核验发现的待修复包，尚未派工，不授予前端写权。工作树和隔离证据保留，不因工作包 Done 自动验收父功能。
 
 已交给用户体验的隔离环境 `/tmp/wil122-verify/verified.sqlite3` 和旧 `/tmp/wil90-demo` 原样保留，不重复播种或清理。旧演示任务 `wil122-real-media` 不符合桌面原生保存所需的 `task_` ID约束；下一次WIL-99核验用已有 `POST /api/creation-plans/confirm` 创建隔离任务和有效短媒体，不为夹具修改产品模型。此前端口记录4400/4401仅供定位，开始下一包先核实时服务。
 
