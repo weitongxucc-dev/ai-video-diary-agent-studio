@@ -743,8 +743,11 @@ function resolveTrustedMaterialDirectory(binding) {
 // "this disk does not support the required atomic commit". Every other failure
 // is a different problem and must be described as such, otherwise a full disk or
 // a permission error would be misreported as an unsupported filesystem.
+// Codes that name the filesystem as the reason. EPERM is deliberately absent:
+// it is what a permission problem looks like too, so it is reported separately
+// rather than blamed on the volume.
 const MATERIAL_HARD_LINK_UNSUPPORTED = new Set([
-  'EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV',
+  'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV',
 ]);
 
 function isMissingPath(error) {
@@ -790,6 +793,13 @@ async function assertHardLinkSupported(runDirectory) {
     } catch (error) {
       if (MATERIAL_HARD_LINK_UNSUPPORTED.has(error.code)) {
         throw materialImportError('该素材盘的文件系统不支持本导入入口所需的原子提交方式，本次未导入，源文件保持不变。');
+      }
+      if (error.code === 'EPERM') {
+        // EPERM is not evidence about the filesystem. It is what a permission
+        // problem looks like just as often as what a link-hostile volume looks
+        // like, and the two need different fixes. The message states what was
+        // observed and what it might mean, and stops there.
+        throw materialImportError('当前目录无法创建硬链接（EPERM，可能是权限或文件系统限制），本次未导入，源文件保持不变。');
       }
       if (error.code === 'ENOENT') {
         throw materialImportError('已接入的素材目录在导入过程中消失，本次未导入，源文件保持不变。');
@@ -1568,4 +1578,3 @@ if (!gotLock) {
     }
   });
 }
-

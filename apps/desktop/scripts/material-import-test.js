@@ -46,7 +46,7 @@ function buildContext(section, overrides = {}) {
     MATERIAL_IMPORT_EXTENSIONS: new Set(['.mp4', '.mov', '.m4v']),
     MATERIAL_STAGING_SEGMENTS: ['_已处理', '.import-staging'],
     MATERIAL_NAME_ATTEMPTS: 200,
-    MATERIAL_HARD_LINK_UNSUPPORTED: new Set(['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV']),
+    MATERIAL_HARD_LINK_UNSUPPORTED: new Set(['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV']),
     MATERIAL_BINDING_TIMEOUT_MS: 8000,
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
     mainWindow: null,
@@ -404,8 +404,8 @@ async function main() {
       }
     });
 
-    await check('a failing link is reported as an unsupported filesystem, with probe files cleaned up', async () => {
-      const runDirectory = path.join(boundDir, '_已处理', '.import-staging', 'probe-fail');
+    await check('a link refused with EPERM is reported neutrally, not blamed on the disk', async () => {
+      const runDirectory = path.join(boundDir, '_已处理', '.import-staging', 'probe-eperm');
       fs.mkdirSync(runDirectory, { recursive: true });
       const failingFs = {
         ...fs,
@@ -422,9 +422,46 @@ async function main() {
       try {
         await assert.rejects(
           failingContext.api.assertHardLinkSupported(runDirectory),
-          /不支持本导入入口所需的原子提交方式/,
+          (error) => {
+            // EPERM is equally consistent with a permission problem, so the
+            // message offers both and asserts neither as the cause.
+            assert.match(error.message, /EPERM/);
+            assert.match(error.message, /权限或文件系统限制/);
+            assert.doesNotMatch(
+              error.message,
+              /不支持本导入入口所需的原子提交方式/,
+              'the volume is not blamed for a code that does not name the filesystem',
+            );
+            return true;
+          },
         );
         assert.deepEqual(fs.readdirSync(runDirectory), [], 'probe source removed even on failure');
+      } finally {
+        fs.rmSync(runDirectory, { recursive: true, force: true });
+      }
+    });
+
+    await check('a link unsupported by the filesystem is still named as such', async () => {
+      const runDirectory = path.join(boundDir, '_已处理', '.import-staging', 'probe-unsupported');
+      fs.mkdirSync(runDirectory, { recursive: true });
+      const failingFs = {
+        ...fs,
+        promises: {
+          ...fs.promises,
+          link: async () => {
+            const error = new Error('operation not supported');
+            error.code = 'ENOTSUP';
+            throw error;
+          },
+        },
+      };
+      const failingContext = buildContext(section, { fs: failingFs });
+      try {
+        await assert.rejects(
+          failingContext.api.assertHardLinkSupported(runDirectory),
+          /不支持本导入入口所需的原子提交方式/,
+        );
+        assert.deepEqual(fs.readdirSync(runDirectory), [], 'probe files cleaned up');
       } finally {
         fs.rmSync(runDirectory, { recursive: true, force: true });
       }
