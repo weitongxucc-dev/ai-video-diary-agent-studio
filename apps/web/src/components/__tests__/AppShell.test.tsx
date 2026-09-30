@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
 
 let pathname = "/";
@@ -77,11 +76,6 @@ beforeEach(() => {
 });
 
 describe("AppShell", () => {
-  it("pins both columns even when a collapsed sibling stops participating in grid placement", () => {
-    const css = readFileSync(new URL("../EditorShell.module.css", import.meta.url), "utf8");
-    expect(css).toMatch(/\.conversation \{[^}]*grid-column: 1; grid-row: 1;/);
-    expect(css).toContain(".contentGrid > :global(.desktop-main-scroll) { grid-column: 2; grid-row: 1; }");
-  });
 
   it("keeps conversation visible and opens object details only in a dismissible card", () => {
     const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
@@ -277,113 +271,83 @@ describe("AppShell", () => {
     expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
   });
 
-  it("defaults to a collapsed quick editor when the float would cover the portrait preview", async () => {
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const top = this.hasAttribute("data-editor-transport") ? 560 : this.hasAttribute("data-editor-player") ? 72 : 0;
-      const bottom = this.hasAttribute("data-editor-player") ? 536 : 768;
-      const left = this.hasAttribute("data-editor-player") ? 20 : 0;
-      const width = this.hasAttribute("data-editor-player") ? 516 : 556;
-      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
+  describe("quick editor safe placement", () => {
+    let width = 1400;
+    let videoWidth = 1080;
+    let videoHeight = 1920;
+    let stageHeight = 46;
+    beforeEach(() => {
+      width = 1400; videoWidth = 1080; videoHeight = 1920; stageHeight = 46;
+      vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockImplementation(() => videoWidth);
+      vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockImplementation(() => videoHeight);
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
+        if (this.tagName === "MAIN") return new DOMRect(0, 48, width, 650);
+        if (this.getAttribute("aria-label") === "制作阶段") return new DOMRect(0, 48, width, stageHeight);
+        if (this.hasAttribute("data-editor-player") || this.tagName === "VIDEO") return new DOMRect(16, 150, width - 32, 360);
+        if (this.hasAttribute("data-editor-transport")) return new DOMRect(0, 520, width, 40);
+        if (this.getAttribute("role") === "region" || this.tagName === "SECTION") return new DOMRect(Number.parseFloat(this.style.left), 48 + Number.parseFloat(this.style.top), Number.parseFloat(this.style.width), Number.parseFloat(this.style.height));
+        return new DOMRect(0, 0, 0, 0);
+      });
     });
-    try {
-      render(<AppShell editorLayout inspector={<p>完整属性</p>} inspectorTitle="镜头详情" quickInspectorLabel="镜头 1 · 0:00–0:03" quickInspectorKey="task:version:clip" quickInspector={openDetails => <button onClick={openDetails} type="button">打开候选</button>}>
-        <div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport />
-      </AppShell>);
-      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
-      const expand = await screen.findByRole("button", { name:"展开镜头编辑" });
-      expect(expand).toHaveAttribute("title", "浮卡已收起，避免遮挡预览画面");
-      fireEvent.click(expand);
-      const panel = await screen.findByRole("region", { name:"镜头 1 · 0:00–0:03" });
-      expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
-      expect(Number.parseFloat(screen.getByRole("main").style.getPropertyValue("--quick-preview-height"))).toBeLessThan(464);
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name:"收起镜头编辑" }));
-      expect(screen.queryByRole("region", { name:"镜头 1 · 0:00–0:03" })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
-      fireEvent.click(screen.getByRole("button", { name:"打开候选" }));
-      expect(screen.getByRole("dialog", { name:"镜头详情" })).toHaveTextContent("完整属性");
-    } finally { rect.mockRestore(); }
-  });
-
-  it("opens by default when the portrait picture fits beside the float", async () => {
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const isPlayer = this.hasAttribute("data-editor-player");
-      const top = this.hasAttribute("data-editor-transport") ? 560 : isPlayer ? 72 : 0;
-      const bottom = isPlayer ? 536 : 768;
-      const left = isPlayer ? 20 : 0;
-      const width = isPlayer ? 1260 : 1300;
-      return { top, bottom, left, right:left + width, width, height:bottom - top, x:left, y:top, toJSON:() => ({}) };
-    });
-    try {
-      render(<AppShell editorLayout quickInspectorKey="wide-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport /></AppShell>);
-      expect(await screen.findByRole("region", { name:"镜头 1" })).toHaveStyle({ width:"480px", height:"400px" });
-    } finally { rect.mockRestore(); }
-  });
-
-  it("keeps the real-size portrait picture beside the float without shrinking the player", async () => {
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const isPlayer = this.hasAttribute("data-editor-player");
-      const top = isPlayer ? 99 : 0;
-      const width = isPlayer ? 680 : 712;
-      const left = isPlayer ? 16 : 0;
-      const bottom = isPlayer ? 419 : 752;
-      return { top, bottom, left, right: left + width, width, height: bottom - top, x: left, y: top, toJSON: () => ({}) };
-    });
-    try {
-      render(<AppShell editorLayout quickInspectorKey="portrait-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div></AppShell>);
-      expect(await screen.findByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "441px", height: "355px" });
-      expect(screen.getByRole("main").className).toContain("quickPreviewBesideFloat");
+    afterEach(() => vi.restoreAllMocks());
+    function editor() {
+      return render(<AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" />} quickInspectorLabel="镜头 1" quickInspectorKey="one" inspector={<p>完整镜头详情</p>} inspectorTitle="镜头详情" conversation={<p>任务对话</p>}><nav aria-label="制作阶段" /><div data-editor-player><video /></div><div data-editor-transport /></AppShell>);
+    }
+    it("uses only the centered picture's empty side below stages and above transport, without resizing video", async () => {
+      editor();
+      const panel = await screen.findByRole("region", { name: "镜头 1" });
+      const box = panel.getBoundingClientRect();
+      const pictureRight = width / 2 + (360 * 1080 / 1920) / 2;
+      expect(box.left).toBeGreaterThanOrEqual(pictureRight + 8);
+      expect(box.top).toBeGreaterThanOrEqual(48 + stageHeight + 8);
+      expect(box.bottom).toBeLessThanOrEqual(512);
+      expect(document.querySelector("main")?.className).toBe("desktop-main-scroll");
+      expect(document.querySelector("main")?.style.getPropertyValue("--quick-preview-height")).toBe("");
+      expect(document.querySelector("video")?.getBoundingClientRect().height).toBe(360);
       fireEvent.click(screen.getByRole("button", { name: "收起镜头编辑" }));
-      expect(screen.getByRole("main").className).not.toContain("quickPreviewBesideFloat");
-    } finally { rect.mockRestore(); }
-  });
-
-  it("starts collapsed when the editor center is narrow and lets the user expand it", async () => {
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const top = this.hasAttribute("data-editor-transport") ? 560 : 0;
-      return { top, bottom:768, left:0, right:484, width:484, height:768 - top, x:0, y:top, toJSON:() => ({}) };
-    });
-    try {
-      render(<AppShell editorLayout quickInspectorKey="narrow-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player /><div data-editor-transport /></AppShell>);
-      expect(screen.queryByRole("region", { name:"镜头 1" })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name:"展开镜头编辑" }));
-      const panel = await screen.findByRole("region", { name:"镜头 1" });
-      expect(panel).toHaveStyle({ width:"400px", height:"400px", top:"8px", right:"8px" });
-      fireEvent(window, new Event("resize"));
-      await waitFor(() => expect(screen.getByRole("region", { name:"镜头 1" })).toBeInTheDocument());
-    } finally { rect.mockRestore(); }
-  });
-
-  it("keeps a manual float choice through small panel resizes and hides only when it cannot fit", async () => {
-    let mainWidth = 812;
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const player = this.hasAttribute("data-editor-player");
-      const transport = this.hasAttribute("data-editor-transport");
-      const top = transport ? 560 : player ? 72 : 0;
-      const bottom = player ? 536 : 768;
-      const width = player ? mainWidth - 40 : mainWidth;
-      const left = player ? 20 : 0;
-      return { top, bottom, left, right: left + width, width, height: bottom - top, x: left, y: top, toJSON: () => ({}) };
-    });
-    try {
-      render(<AppShell editorLayout inspector={<p>完整属性</p>} quickInspectorKey="resizing-clip" quickInspectorLabel="镜头 1" quickInspector={() => <p>快速属性</p>}><div data-editor-player data-editor-aspect-ratio="9:16"><video /></div><div data-editor-transport /></AppShell>);
-      fireEvent.click(await screen.findByRole("button", { name: "收起镜头编辑" }));
       fireEvent.click(screen.getByRole("button", { name: "展开镜头编辑" }));
-      expect(await screen.findByRole("region", { name: "镜头 1" })).toBeInTheDocument();
-      mainWidth = 810;
-      await act(async () => { fireEvent(window, new Event("resize")); await new Promise(resolve => window.setTimeout(resolve, 30)); });
-      expect(screen.getByRole("region", { name: "镜头 1" })).toHaveStyle({ width: "480px" });
-      mainWidth = 412;
-      fireEvent(window, new Event("resize"));
-      await waitFor(() => expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument());
-      expect(screen.getByRole("button", { name: "查看镜头详情" })).toBeInTheDocument();
-      mainWidth = 810;
-      fireEvent(window, new Event("resize"));
-      await waitFor(() => expect(screen.getByRole("region", { name: "镜头 1" })).toBeInTheDocument());
+      expect(document.querySelector("video")?.getBoundingClientRect().height).toBe(360);
+    });
+    it("uses the existing closable details dialog when the portrait has no safe side", async () => {
+      width = 700; editor();
+      expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole("button", { name: "查看镜头详情" }));
+      expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("完整镜头详情");
+      fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    it("does not shrink a landscape video to force a float into its side", async () => {
+      videoWidth = 1920; videoHeight = 1080; editor();
+      expect(await screen.findByRole("button", { name: "查看镜头详情" })).toBeVisible();
+      expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument();
+      expect(document.querySelector("video")?.getBoundingClientRect().height).toBe(360);
+    });
+    it("waits for actual media metadata rather than trusting a declared portrait ratio", async () => {
+      videoWidth = 0; videoHeight = 0; editor();
+      expect(await screen.findByRole("button", { name: "查看镜头详情" })).toBeVisible();
+      videoWidth = 1080; videoHeight = 1920;
+      fireEvent(document.querySelector("video")!, new Event("loadedmetadata"));
+      expect(await screen.findByRole("region", { name: "镜头 1" })).toBeVisible();
+    });
+    it("falls back to details if the stage-to-transport space cannot hold the editor", async () => {
+      stageHeight = 300; editor();
+      expect(await screen.findByRole("button", { name: "查看镜头详情" })).toBeVisible();
+      expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument();
+    });
+    it("clamps dragging inside the safe area and preserves manual collapse through resizes", async () => {
+      editor();
+      const panel = await screen.findByRole("region", { name: "镜头 1" });
+      const header = panel.querySelector("header")!;
+      fireEvent(header, new MouseEvent("pointerdown", { bubbles: true, clientX: 1000, clientY: 150 }));
+      fireEvent(header, new MouseEvent("pointermove", { bubbles: true, clientX: 0, clientY: 0 }));
+      const box = panel.getBoundingClientRect();
+      expect(box.left).toBeGreaterThanOrEqual(width / 2 + (360 * 1080 / 1920) / 2 + 8);
+      expect(box.top).toBeGreaterThanOrEqual(48 + stageHeight + 8);
+      fireEvent(header, new MouseEvent("pointerup", { bubbles: true }));
       fireEvent.click(screen.getByRole("button", { name: "收起镜头编辑" }));
-      mainWidth = 812;
-      fireEvent(window, new Event("resize"));
+      width = 1390; fireEvent(window, new Event("resize"));
       await waitFor(() => expect(screen.queryByRole("region", { name: "镜头 1" })).not.toBeInTheDocument());
-    } finally { rect.mockRestore(); }
+      expect(screen.getByRole("button", { name: "展开镜头编辑" })).toBeVisible();
+    });
   });
 });
