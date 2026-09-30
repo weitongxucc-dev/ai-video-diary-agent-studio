@@ -142,3 +142,7 @@ WIL92仅方案审核Done，原15现workspace5接WIL179，在creation-resource-co
 ## 当前GUI与字幕确认空白修复
 
 20已完成WIL152本轮GUI并释放4403/3003，仅整理报告；GUI现转18复验c7d9961。WIL152真实确认后空白有截图与API前后证据，另建具名实施WIL180交原13，复用已干净且无运行依赖的wil126-intake-review/original，从a00863f创建codex/wil180-subtitle-view-recovery。旧61ae26e核验已结束，不再作为这棵树当前身份。只授CreationTaskWorkspace.tsx及现有相关专项测试写权；原18这两路径经主控核干净后撤回写权，继续原候选只读GUI。按本批WIL-180/dispatch.md修确认后视图可用性，不改阶段门禁/后端/API，不放开重渲染前字幕页；其他包独占与HOLD保持。
+
+WIL179已审集成268a55b，原15停止该树写入，改只读审WIL177核心diff，只写本批WIL-177/cross-review.md，不运行测试或GUI。在制diff审核不等于最终候选通过；主控提供最终SHA后再确认变化。19继续唯一产品写者，不因审核自动失去已授权范围。
+
+18原生手动UpdateSubtitleCue发现c7d9961仅修对话/复合路径，exact确认后仍中3.8/英4.0；WIL176不通过。18获main.py中该手动字幕预览/确认继承路径的精确补修授权，沿领域§6.4复用同步规则，补两入口专项，不触碰其他main内容。18先保存失败证据并释放GUI给14，随后继续API修复；前端/桌面写权不收回。无需新的产品决定。
