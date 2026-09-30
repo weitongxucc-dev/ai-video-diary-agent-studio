@@ -55,8 +55,8 @@ cmux 的短编号会变化，每次发送前核对 UUID、标题和屏幕。`ext
 | 可见执行者 | 工作与写权 | 验收/退出 |
 | --- | --- | --- |
 | workspace13 / surface737EB193-23B8-422A-9DC1-8E8F0EB3D1A5 | WIL174→172→173；复用 ~/.codex/worktrees/wil95-evidence-wording/original；AppShell.tsx、useEditorPanels.ts、EditorShell.module.css、VideoEditor.module.css、AppShell.test.tsx和必要新useEditorPanels.test.tsx；完整路径及范围见layout/dispatch.md | 三尺寸真实页面/视频与草稿保持；逐项commit，整组交付后停写；Web3002 |
-| workspace15 / surface70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F | WIL175；~/.codex/worktrees/wil175-save-feedback/original；CreationTaskWorkspace.tsx、对应现有测试及必要新SaveFeedback专项；见WIL-175/dispatch.md | 专项失败可见回归、候选，主控协助原生核验；不改布局文件；Web3003 |
-| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | WIL161→162；产品只读，只写报告及/tmp/wil-output-20260930；见output-verification/dispatch.md | 字幕/封面核验交付后，按派单补充只读复验 WIL175 集成候选 c11967f；主控独占CUA；8000/3000独占隔离服务，结束释放 |
+| workspace15 / surface70D0DA2B-4062-4A12-8FC9-4D6B396B9C8F | WIL175 已交付停写；~/.codex/worktrees/wil175-save-feedback/original；本包产品写权退役，交付及主控审核见WIL-175目录 | 原生核验已收口；不得按旧派单继续修改或重启服务 |
+| workspace14 / surfaceEABE9E01-E2D9-4F69-BC8D-93927990BCEE | WIL161→162 及 WIL175 补充核验已交付停写；产品始终只读，报告见output-verification目录 | 自有Electron/API/Web及子进程已退出，8000/3000释放；夹具与证据保留，不重启、不覆盖 |
 
 仅主控写Linear与共享合同。前批95/55/99已交付停写，旧报告和证据保留，99最终收尾落盘差异由原执行者核对补齐，不重复测试。新任务不得按旧派单恢复写入。文件排队不设成产品阻塞。实际核验失败仍可交付核验工作，但父功能不自动Done。
 
