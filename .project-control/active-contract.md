@@ -126,3 +126,11 @@ WIL56已交28张持久化浏览器证据并释放自有服务，现场端口检�
 ## 用户确认的两项规则与写权
 
 用户明确批准中文仅调时同步关联英文时间保留译文，以及新增应用负责复制完成的导入入口。领域§6.4与PRD§7已更新。原18按本批WIL-176/f1-approved-fix.md重读REBASE_ACK后修复，88f175e上继续，原8路径加compound_edits.py字幕时间逻辑与新增test_subtitle_time_sync.py独占写权，其他HOLD不变；GUI仍归原20。原19按WIL-177/dispatch.md只读准备准确施工边界，产品写权尚未转移，外部监控判据仍待定。
+
+## WIL56验收问题进入修复
+
+原14现workspace4接WIL178，独立托管树wil56-visible-fixes/original、基线abf961e，写PeopleAndVoiceWorkspace.tsx、TemplateLibraryWorkspace.tsx、MembersAndSpacesWorkspace.tsx及这些组件现有专项测试，必要时templates/page.tsx接线；不得动共享AppShell/权限/API/后端。本批WIL-178/dispatch.md为精确边界。GUI仍归原20，修复后安排可见复验；WIL56证据保留不重新扩大矩阵。
+
+## WIL92方案后续资源修复
+
+WIL92仅方案审核Done，原15现workspace5接WIL179，在creation-resource-contract/original的abf961e独立基线修复creation_execution.py资源字段及test_creation_execution.py/必要新增test_creation_resource_contract.py。host_resource_probes/montage/main/调度器/DB无写权，不启动scheduled或缩减PRD，精确派单见本批WIL-179/dispatch.md。
