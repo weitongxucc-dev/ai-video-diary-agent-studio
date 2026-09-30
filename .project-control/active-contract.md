@@ -134,3 +134,7 @@ WIL56已交28张持久化浏览器证据并释放自有服务，现场端口检�
 ## WIL92方案后续资源修复
 
 WIL92仅方案审核Done，原15现workspace5接WIL179，在creation-resource-contract/original的abf961e独立基线修复creation_execution.py资源字段及test_creation_execution.py/必要新增test_creation_resource_contract.py。host_resource_probes/montage/main/调度器/DB无写权，不启动scheduled或缩减PRD，精确派单见本批WIL-179/dispatch.md。
+
+## 桌面文件移交与应用内导入施工
+
+原18的desktop-release.md已确认main.js/preload.js/directoryPicker.ts与88f175e一致并停写，现将三文件独占移交原19。原19使用托管树wil177-managed-import/original的88f175e基线，按WIL-177/dispatch.md实施授权施工，附MaterialLibraryWorkspace及专项测试写权；同文件中的WIL176字幕HTTP有界失败修正由19一并负责、交付单列。18只继续F1 API与测试及只读运行验收。GUI仍归20。所有HOLD保持，外部直接投放判据未决，导入完成不等于分析完成。
