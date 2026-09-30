@@ -111,6 +111,59 @@ def test_exact_chinese_text_change_preserves_all_english_invalidation(
 
 
 @pytest.mark.parametrize("entry", ["compound", "exact"])
+@pytest.mark.parametrize("start,end,expected", [
+    (0, 1.8, ["1.80–2.00"]),
+    (0.5, 1.8, ["0.00–0.50", "1.80–2.00"]),
+    (0, 2.5, []),
+])
+def test_preview_reports_new_gaps_without_writing(person_render_edit_state, monkeypatch, entry, start, end, expected):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    source, translation = tracks()
+    for track in (source, translation):
+        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+            task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
+    before = state.client.get(base).json()
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
+                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
+    preview = (state.client.post(base + "/edits/preview", json={
+        "raw_command": f"中文字幕1显示{start}到{end}秒", "context_stage": "subtitle_cover",
+        "selected_object_refs": [],
+    }) if entry == "compound" else state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "UpdateSubtitleCue", "track_id": source.id, "cue_id": source.cues[0].id,
+        "start_seconds": start, "end_seconds": end,
+    }))
+    assert preview.status_code == 200, preview.text
+    gap_effects = [effect for effect in preview.json()["proposal"]["external_effects"] if "新增无字幕" in effect]
+    assert sorted(gap_effects) == sorted(f"{language}字幕新增无字幕时段：{interval} 秒。"
+                                       for language in ("中文", "英文") for interval in expected)
+    assert state.client.get(base).json() == before
+
+
+def test_compound_preview_reports_only_final_gaps(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    source, translation = tracks()
+    for track in (source, translation):
+        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+            task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
+    before = state.client.get(base).json()
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
+                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
+    preview = state.client.post(base + "/edits/preview", json={
+        "raw_command": "中文字幕1显示0到1.8秒，然后中文字幕2显示1.8到5秒",
+        "context_stage": "subtitle_cover", "selected_object_refs": [],
+    })
+    assert preview.status_code == 200, preview.text
+    assert not any("新增无字幕" in effect for effect in preview.json()["proposal"]["external_effects"])
+    assert state.client.get(base).json() == before
+
+
+@pytest.mark.parametrize("entry", ["compound", "exact"])
 def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
         person_render_edit_state, monkeypatch, tmp_path, entry):
     state = person_render_edit_state

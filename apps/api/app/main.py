@@ -36,7 +36,7 @@ from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
 from app.subtitle_edits import replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
-from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks
+from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
 from app.avatar_lipsync import (
     compile_person_edit_command,
     Authorization,
@@ -8867,7 +8867,7 @@ def preview_creation_task_exact_edit(
         try:
             subtitle_schedule([replace(track, status="valid", style={**track.style, "enabled": True},
                 cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
-            synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds,
+            changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds,
                                             invalidate_all_english_on_text_change=True)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -8907,6 +8907,11 @@ def preview_creation_task_exact_edit(
             "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": f"{start:.2f}–{end:.2f} 秒 · {normalized_text}"},
         }
         effects = ["确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。"]
+        effects.extend(
+            f"{'中文' if before.language == 'zh-CN' else '英文'}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。"
+            for before in tracks for after in changed_tracks if before.id == after.id
+            for start, end in new_subtitle_gap_intervals(before, after, montage.duration_seconds)
+        )
         if track.language == "zh-CN" and normalized_text != cue.text and any(item.language == "en-US" for item in tracks):
             effects.append("中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。")
     else:
@@ -9149,6 +9154,11 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
     if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id!=base.id:
         raise HTTPException(status_code=409,detail="预览期间版本已变化，请重新预览")
     effects=["中文字幕内容已改变，旧英文翻译将失效；需要重新翻译后输出双语字幕。"] if any(track.language=='en-US' and track.source_language=='zh-CN' for track in tracks) and not any(track.language=='en-US' and track.source_language=='zh-CN' for track in changed_tracks) else []
+    effects.extend(
+        f"{'中文' if before.language == 'zh-CN' else '英文'}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。"
+        for before in tracks for after in changed_tracks if before.id == after.id
+        for start, end in new_subtitle_gap_intervals(before, after, plan.duration_seconds)
+    )
     if any(step['enabled'] and step['operation_type']=='UpdateSubtitleCue' for step in steps):
         effects.append("字幕文字和显示时间的修改不会重新生成配音。")
     refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
