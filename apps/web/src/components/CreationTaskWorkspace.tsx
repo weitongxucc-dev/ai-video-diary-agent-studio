@@ -939,6 +939,7 @@ function SubtitleCoverView({
   const translationTrack = tracks.find((track) => track.language === "en-US") ?? null;
   const [frameTime, setFrameTime] = useState(cover?.frame_time_seconds ?? 0);
   const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
+  const [titlePosition, setTitlePosition] = useState<"center" | "bottom">(cover?.layout.title_position ?? "bottom");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [saveSubtitleMode, setSaveSubtitleMode] = useState<"zh" | "en" | "zh-en">(
@@ -956,12 +957,13 @@ function SubtitleCoverView({
   const frameCapability = workspace.cover_frame_capability;
   const currentCueIndex = Math.max(0, activeTrack.cues.findIndex((cue) => cue.id === selectedCueId));
   const currentCue = activeTrack.cues[currentCueIndex];
-  const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0);
+  const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0) || titlePosition !== (cover?.layout.title_position ?? "bottom");
 
   useEffect(() => {
     setFrameTime(cover?.frame_time_seconds ?? 0);
     setCoverTitle(cover?.title ?? "");
-  }, [cover?.id, cover?.timeline_version_id, cover?.frame_time_seconds, cover?.title]);
+    setTitlePosition(cover?.layout.title_position ?? "bottom");
+  }, [cover?.id, cover?.timeline_version_id, cover?.frame_time_seconds, cover?.title, cover?.layout.title_position]);
 
   function seekFrame(next: number) {
     const bounded = Math.max(0, Math.min(duration, next));
@@ -1031,7 +1033,11 @@ function SubtitleCoverView({
           <div className={styles.coverControls}>
             <label><span>成片画面时间（秒）</span><input aria-label="封面画面时间" disabled={busy} max={duration} min="0" onChange={(event) => { onDraftChange(); seekFrame(Number(event.target.value)); }} step="0.1" type="number" value={frameTime} /></label>
             <label><span>封面标题</span><input aria-label="封面标题" disabled={busy} onChange={(event) => { onDraftChange(); setCoverTitle(event.target.value); }} value={coverTitle} /></label>
-            {coverChanged ? <small className={styles.coverDraft}>选帧或标题待生成{cover?.status === "valid" ? "；保存使用已生成的封面" : ""}</small> : null}
+            <div><span>标题位置</span><div className={styles.segmentedControl} role="group" aria-label="封面标题位置">
+              <button aria-pressed={titlePosition === "center"} disabled={busy} onClick={() => { onDraftChange(); setTitlePosition("center"); }} type="button">中部</button>
+              <button aria-pressed={titlePosition === "bottom"} disabled={busy} onClick={() => { onDraftChange(); setTitlePosition("bottom"); }} type="button">底部</button>
+            </div></div>
+            {coverChanged ? <small className={styles.coverDraft}>选帧、标题或构图待生成{cover?.status === "valid" ? "；保存使用已生成的封面" : ""}</small> : null}
             <div className={styles.coverActions}>
             {cover?.status === "valid" && cover.artifact_ref ? <button className={styles.secondaryButton} disabled={busy} onClick={onSaveCover} type="button"><Save size={15} />保存封面</button> : null}
             <button className={styles.secondaryButton} disabled={busy || !frameCapability.available || !coverTitle.trim() || duration <= 0} onClick={() => {
@@ -1040,6 +1046,7 @@ function SubtitleCoverView({
                 operation_type: "GenerateCoverFromFrame",
                 frame_time_seconds: frameTime,
                 title: coverTitle.trim(),
+                title_position: titlePosition,
               });
             }} type="button">从画面生成封面</button>
             </div>

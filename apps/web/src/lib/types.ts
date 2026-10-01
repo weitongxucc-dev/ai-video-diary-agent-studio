@@ -1522,7 +1522,7 @@ export type CreationTaskExactEditInput =
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
   | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: Partial<CreationTaskSubtitleStyle> }
-  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
+  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string; title_position?: "center" | "bottom" }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };
 

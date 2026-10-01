@@ -469,6 +469,7 @@ describe("CreationTaskWorkspace", () => {
     restored.subtitle_tracks[0].cues[0].emphasis = ["不是口号"];
     restored.cover_asset!.title = "恢复后的标题";
     restored.cover_asset!.frame_time_seconds = 1.2;
+    restored.cover_asset!.layout.title_position = "center";
     mocks.undoTimeline.mockResolvedValue({});
     mocks.getWorkspace.mockResolvedValue(restored);
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
@@ -480,6 +481,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("字幕 1 强调词")).toHaveValue("不是口号");
     await waitFor(() => expect(screen.getByLabelText("封面标题")).toHaveValue("恢复后的标题"));
     expect(screen.getByLabelText("封面画面时间")).toHaveValue(1.2);
+    expect(within(screen.getByRole("group", { name: "封面标题位置" })).getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("uses persisted cues when switching tracks and selecting another cue", () => {
@@ -1218,17 +1220,54 @@ describe("CreationTaskWorkspace", () => {
 
     fireEvent.change(screen.getByLabelText("封面画面时间"), { target: { value: "4.2" } });
     fireEvent.change(screen.getByLabelText("封面标题"), { target: { value: "真实运行" } });
+    const positions = within(screen.getByRole("group", { name: "封面标题位置" }));
+    expect(positions.getByRole("button", { name: "底部" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
     fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenNthCalledWith(2, "task-1", {
       operation_type: "GenerateCoverFromFrame",
       frame_time_seconds: 4.2,
       title: "真实运行",
+      title_position: "center",
     }));
     const inspector = screen.getByLabelText("当前选择");
     expect(inspector).toHaveTextContent("图片产物artifact:cover:v6");
     expect(inspector).toHaveTextContent("选帧能力可用 · ffmpeg+Pillow");
     expect(inspector).toHaveTextContent("AI 生图不可用 · 未配置模型");
     expect(screen.queryByRole("button", { name: /AI 生成封面/ })).not.toBeInTheDocument();
+  });
+
+  it("previews cover title position changes and refreshes persisted layout after confirmation", async () => {
+    const initial = workspaceWithCover();
+    const preview = exactPreview(initial.task, "GenerateCoverFromFrame");
+    const confirmed = structuredClone(initial);
+    confirmed.cover_asset!.id = "cover-center";
+    confirmed.cover_asset!.layout.title_position = "center";
+    mocks.exactPreview.mockResolvedValue(preview);
+    mocks.confirmEdit.mockResolvedValue({});
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
+    const positions = within(screen.getByRole("group", { name: "封面标题位置" }));
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
+    expect(screen.getByText(/选帧、标题或构图待生成/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith(initial.task.id, {
+      operation_type: "GenerateCoverFromFrame", frame_time_seconds: initial.cover_asset!.frame_time_seconds,
+      title: initial.cover_asset!.title, title_position: "center",
+    }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(positions.getByRole("button", { name: "底部" }));
+    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
+    fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith(initial.task.id, preview.proposal.id));
+    await waitFor(() => expect(screen.queryByText(/选帧、标题或构图待生成/)).not.toBeInTheDocument());
+    expect(positions.getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("当前选择")).toHaveTextContent("画面中部");
   });
 
   it("keeps bilingual unavailable with one visible repair instruction", () => {
