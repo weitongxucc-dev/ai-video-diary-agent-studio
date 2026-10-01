@@ -831,6 +831,11 @@ function SubtitleCueEditor({
   const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
   const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
   const changed = Number(start) !== cue.start_seconds || Number(end) !== cue.end_seconds || text !== storedText || terms !== cueEmphasisTerms(cue) || style.name !== track.style.name;
+  // UpdateSubtitleCue 的 text 上限 96 字（CreationTaskExactEditRequest，schemas.py）。按 Unicode 字符计数，
+  // 与后端一致；不用 text.length，那会把 emoji 等星芒平面字符算成两个字。
+  const textMaxLength = 96;
+  const textLength = Array.from(text).length;
+  const overTextLimit = textLength > textMaxLength;
 
   return (
     <article className={[styles.subtitleCue, selected ? styles.selectedSubtitleCue : ""].filter(Boolean).join(" ")}>
@@ -843,6 +848,8 @@ function SubtitleCueEditor({
         <label>
           <span>字幕文本与断行</span>
           <textarea aria-label={`字幕 ${index + 1} 文本`} disabled={busy} onChange={(event) => { onDraftChange(); setText(event.target.value); }} rows={2} value={text} />
+          <small aria-label={`字幕 ${index + 1} 字数`}>{textLength} / {textMaxLength} 字</small>
+          {overTextLimit ? <small role="alert">字幕文本超出 {textMaxLength} 字上限（当前 {textLength} 字），无法预览保存。请缩短到 {textMaxLength} 字以内，或还原草稿后用下方「预览拆分」把它拆成两条。</small> : null}
         </label>
         <label>
           <span>强调词（用顿号分隔）</span>
@@ -862,7 +869,7 @@ function SubtitleCueEditor({
       </details>
       <div className={styles.cueAction}>
         {changed ? <small>待预览</small> : <small>已保存</small>}
-        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime} onClick={() => onPreview({
+        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime || overTextLimit} onClick={() => onPreview({
           operation_type: "UpdateSubtitleCue",
           track_id: track.id,
           cue_id: cue.id,

@@ -540,6 +540,32 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", { name: "确认修改" })).not.toBeInTheDocument();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
+  it("blocks the doomed subtitle preview past the 96-character limit and recovers by shortening", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+
+    // 超限：97 个字符，按 UpdateSubtitleCue 的 96 字上限必须拦下，且不发那条已知会 422 的请求。
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "字".repeat(97) } });
+    expect(screen.getByLabelText("字幕 1 字数")).toHaveTextContent("97 / 96 字");
+    expect(screen.getByRole("alert")).toHaveTextContent("超出 96 字上限");
+    expect(screen.getByRole("button", { name: "预览字幕修改" })).toBeDisabled();
+    expect(mocks.exactPreview).not.toHaveBeenCalled();
+
+    // 恢复：缩短回正好 96 个 Unicode 字符（含 6 个星芒平面字符，UTF-16 要 102 个码元），
+    // 提示消失、按钮恢复可用，正常的预览请求重新走通。
+    const recoveredText = `${"字".repeat(90)}${"🎬".repeat(6)}`;
+    expect(Array.from(recoveredText).length).toBe(96);
+    expect(recoveredText.length).toBe(102);
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: recoveredText } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("字幕 1 字数")).toHaveTextContent("96 / 96 字");
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    expect(await screen.findByRole("button", { name: "确认修改" })).toBeInTheDocument();
+    expect(mocks.exactPreview).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the user review persisted topic and script results without rerunning them", () => {
     const initial = workspace(baseTask);
     initial.selected_topic = {
