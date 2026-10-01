@@ -4870,10 +4870,27 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert vague.status_code==422,vague.text
     assert '缺少可执行参数' in vague.json()['detail']
 
-    # 改画幅仍走 ChangeCanvas 既有链路，不被编成裁剪
-    canvas=state.client.post(base+'/edits/preview',json={'raw_command':'改成竖屏','context_stage':'montage',
+    # 改画幅仍走 ChangeCanvas 既有链路，不被编成裁剪。画幅预览直调 publish_color_preview（不经过
+    # _task_audio），必须单独替换，否则这里会真调 ffmpeg。夹具本身就是 9:16，先切到 16:9，
+    # 「改成竖版」才是真的改画幅而不是撞上「画幅与适配方式没有变化」的 409。
+    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(
+        id='canvas-preview',logical_ref='artifacts/canvas-preview.mp4'))
+    wide=state.client.post(base+'/edits/preview',json={'raw_command':'改成横版','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
-    assert canvas.status_code!=200 or canvas.json()['proposal']['operation']['operation_type']!='ChangeCrop',canvas.text
+    assert wide.status_code==200,wide.text
+    assert wide.json()['proposal']['operation']['operation_type']=='ChangeCanvas',wide.text
+    assert state.client.post(base+'/edits/'+wide.json()['proposal']['id']+'/confirm').status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='16:9'
+
+    canvas=state.client.post(base+'/edits/preview',json={'raw_command':'改成竖版','context_stage':'montage',
+        'selected_object_refs':[f"clip:{target['id']}"]})
+    assert canvas.status_code==200,canvas.text
+    assert canvas.json()['proposal']['operation']['operation_type']=='ChangeCanvas',canvas.text
+    assert canvas.json()['proposal']['operation']['payload']['aspect_ratio']=='9:16'
+    # 画幅预览同样不写库
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='16:9'
+    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
 
     # 时间线在预览后变化：旧提案确认被拒
     stale=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 40%','context_stage':'montage',
