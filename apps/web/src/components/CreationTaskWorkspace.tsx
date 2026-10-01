@@ -143,10 +143,27 @@ function personStageFacts(workspace: WorkspaceState): { state: ProductStageState
   const target = workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null;
   if (target === 0) return { state: "skipped", detail: "明确跳过 · 全素材画面" };
 
-  const renders = workspace.person_renders;
-  if (renders.some((render) => render.status === "ready")) return { state: "done", detail: "已完成" };
-  if (renders.some((render) => render.status === "failed")) return { state: "current", detail: "有口型需要处理" };
-  if (renders.length) return { state: "current", detail: "口型生成中" };
+  // 只有属于当前配音、人物与声音版本仍是当前方案的口型才算本阶段的当前产物；
+  // 旧人物版本留下的记录不代表这一阶段做完了。
+  const voice = workspace.plan.selected_voice;
+  const segmentIds = new Set(workspace.narration?.segments.map((segment) => segment.id) ?? []);
+  const renders = workspace.person_renders.filter((render) => segmentIds.has(render.narration_segment_id)
+    && (!voice || (render.person_profile_id === voice.person_profile_id
+      && render.person_version === voice.person_version
+      && render.voice_profile_id === voice.profile_id
+      && render.voice_version === voice.version)));
+  // 本任务真正需要的口型由成片镜头引用决定；有失败或缺覆盖证据时不能算整个阶段完成。
+  const required = (workspace.montage?.clips ?? [])
+    .map((clip) => clip.person_render_id)
+    .filter((id): id is string => Boolean(id))
+    .map((id) => renders.find((render) => render.id === id));
+  if (required.length && required.every((render) => render?.status === "ready")) return { state: "done", detail: "已完成" };
+
+  const ready = renders.filter((render) => render.status === "ready").length;
+  if (renders.some((render) => render.status === "failed")) {
+    return { state: "current", detail: ready ? `已生成 ${ready}/${renders.length} 段 · 仍有口型未完成` : "有口型需要处理" };
+  }
+  if (renders.length) return { state: "current", detail: `已生成 ${ready}/${renders.length} 段 · 仍待处理` };
   if (!workspace.narration) return { state: "upcoming", detail: "待配音" };
   if (target === null) return { state: "upcoming", detail: "未记录露脸目标" };
   if (!workspace.person_render_capability.available) return { state: "current", detail: "口型能力不可用" };

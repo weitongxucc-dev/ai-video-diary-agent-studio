@@ -758,6 +758,64 @@ describe("CreationTaskWorkspace", () => {
     }));
   });
 
+  it("does not report the person stage complete while a required segment is still failed", () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const segment = (id: string) => ({
+      id, source_section_id: "section-1", text: "一段真实配音", audio_reference: `narration://artifact/${id}`,
+      audio_url: `/api/creation-tasks/task-1/narration/segments/${id}/audio`,
+      duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
+      voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+      pronunciation_version: "p1", status: "ready" as const,
+    });
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 40;
+    initial.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "person-v1",
+      person_authorization_id: "person-auth-1", person_authorization_version: "v1",
+      authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts",
+    };
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 6,
+      sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "p1",
+      segments: [segment("narration-segment-1"), segment("narration-segment-2")],
+    };
+    const personRender = (id: string, narrationSegmentId: string, status: "ready" | "failed") => ({
+      id, task_id: task.id,
+      person_profile_id: "person-1", person_version: "person-v1",
+      voice_profile_id: "voice-1", voice_version: "v1",
+      narration_segment_id: narrationSegmentId, visual_reference: "workspace://person.mp4",
+      model_id: "musetalk-local", motion: "natural" as const, expression: "neutral" as const,
+      status, duration_seconds: 3, alignment_evidence: "aligned",
+      media_url: status === "ready" ? `/api/${id}` : null,
+      failure_reason: status === "failed" ? "口型未完成" : null,
+      impact: status === "failed" ? "这一段没有成片。" : null,
+      repair_action: status === "failed" ? "重新生成这一段。" : null,
+      created_at: task.created_at, updated_at: task.updated_at,
+    });
+    // 第一段已生成，第二段失败；成片两个镜头都引用了人物口型。
+    initial.person_renders = [personRender("person-render-1", "narration-segment-1", "ready"), personRender("person-render-2", "narration-segment-2", "failed")];
+    initial.montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "成片",
+      status: "waiting_for_user", cues: [], duration_seconds: 6, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/full-audio",
+      output_url: null, subtitle_url: null, message: "等待确认",
+      clips: ["person-render-1", "person-render-2"].map((personRenderId, index) => ({
+        id: `clip-${index + 1}`, cue_id: `cue-${index + 1}`, asset_id: "asset-1", segment_id: `segment-${index + 1}`,
+        source_reference: "asset://asset-1", source_start_seconds: 0, source_end_seconds: 3,
+        timeline_start_seconds: index * 3, timeline_end_seconds: index * 3 + 3, match_score: 0.9,
+        needs_confirmation: false, role: "a_roll" as const, locked: false, manually_selected: false,
+        person_render_id: personRenderId,
+      })),
+      created_at: task.created_at, updated_at: task.updated_at,
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    expect(screen.getByRole("button", { name: "人物与口型：已生成 1/2 段 · 仍有口型未完成" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "人物与口型：已完成" })).not.toBeInTheDocument();
+  });
+
   it("does not report narration as complete while segments are still running or have failed", () => {
     const task = { ...baseTask, stage: "narration" as const, stage_status: "running" as const, status: "running" as const };
     const segment = {
