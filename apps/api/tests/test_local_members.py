@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
+import threading
 
 import pytest
 
@@ -279,3 +280,105 @@ def test_join_rejects_unknown_code(tmp_path):
         service.join("no-such-code", "小王")
 
     assert exc.value.kind == "invalid"
+
+
+# --- 使用名额上限（auth-workspace-boundary §9：包含主账号在内上限五人）---
+
+
+def _fill_to_cap(service: LocalMemberService, total: int = 5) -> None:
+    """Grow the roster to ``total`` rows; the seed owner is already one of them."""
+    for index in range(total - 1):
+        service.add_member(f"成员{index}", "member")
+
+
+def test_seat_cap_counts_the_owner(tmp_path):
+    service = _service(tmp_path)
+    owner = _owner(service)
+    _fill_to_cap(service)
+
+    with pytest.raises(LocalMembersError) as exc:
+        service.add_member("第六人", "member")
+
+    assert exc.value.kind == "conflict"
+    # The sixth add left nothing behind: same five ids, same five tokens.
+    assert [m.member_id for m in service.list_members()][0] == owner.member_id
+    assert len(service.list_members()) == 5
+    with sqlite3.connect(str(tmp_path / "agent.sqlite3")) as conn:
+        rows = conn.execute("SELECT COUNT(*) FROM local_members").fetchone()[0]
+        tokens = conn.execute("SELECT COUNT(*) FROM local_members WHERE token IS NOT NULL").fetchone()[0]
+    assert rows == 5
+    assert tokens == 5
+
+
+def test_join_is_rejected_once_seats_are_full(tmp_path):
+    service = _service(tmp_path)
+    _fill_to_cap(service)
+
+    with pytest.raises(LocalMembersError) as exc:
+        service.join(service.create_invite_code(), "第六人")
+
+    assert exc.value.kind == "conflict"
+    assert len(service.list_members()) == 5
+
+
+def test_removing_a_member_frees_the_seat(tmp_path):
+    service = _service(tmp_path)
+    _fill_to_cap(service)
+    leaving = service.list_members()[-1]
+
+    service.remove_member(leaving.member_id)
+
+    joined, _token = service.join(service.create_invite_code(), "补位者")
+    assert joined.role == "member"
+    assert len(service.list_members()) == 5
+
+
+def test_role_change_does_not_consume_an_extra_seat(tmp_path):
+    service = _service(tmp_path)
+    _fill_to_cap(service)
+    member = service.list_members()[-1]
+
+    promoted = service.set_role(member.member_id, "owner")
+
+    assert promoted.role == "owner"
+    assert len(service.list_members()) == 5
+    with pytest.raises(LocalMembersError) as exc:
+        service.add_member("第六人", "member")
+    assert exc.value.kind == "conflict"
+
+
+def test_concurrent_join_reserves_only_one_seat(tmp_path):
+    """auth §9 负向验收：并发接受邀请不能超五人.
+
+    Four seats are used (owner + three members) and eight codes are accepted at
+    once. Only one may win the last seat; the rest must be rejected rather than
+    queued behind the lock and inserted after the roster is full.
+    """
+    service = _service(tmp_path)
+    _fill_to_cap(service, total=4)
+    assert len(service.list_members()) == 4
+
+    codes = [service.create_invite_code() for _ in range(8)]
+    barrier = threading.Barrier(len(codes))
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def accept(index: int) -> None:
+        barrier.wait()
+        try:
+            service.join(codes[index], f"并发{index}")
+            outcome = "accepted"
+        except LocalMembersError as exc:
+            outcome = exc.kind
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=accept, args=(i,)) for i in range(len(codes))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert outcomes.count("accepted") == 1
+    assert outcomes.count("conflict") == len(codes) - 1
+    assert len(service.list_members()) == 5

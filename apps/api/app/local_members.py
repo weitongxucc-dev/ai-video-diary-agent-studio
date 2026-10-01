@@ -36,6 +36,9 @@ class LocalMember:
 
 _VALID_ROLES = ("owner", "member")
 
+# auth-workspace-boundary §9: 使用名额按有效使用者计数，包含主账号在内上限五人。
+MAX_SEATS = 5
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -72,6 +75,34 @@ def _open(database_path: str | Path) -> sqlite3.Connection:
     conn.executescript(LOCAL_MEMBERS_TABLE_DDL + "\n" + LOCAL_MEMBERS_SEED_DDL)
     _ensure_token_column(conn)
     return conn
+
+
+def _open_reserving(database_path: str | Path) -> sqlite3.Connection:
+    """Open for a seat-taking write with SQLite's write lock already held.
+
+    ``_open`` leaves an implicit transaction behind (the token backfill), so
+    that is committed first and the lock is then taken explicitly. The lock has
+    to be held *before* the seat count is read, otherwise two concurrent joins
+    both observe "4 seats used" and both insert. Deliberately scoped to the two
+    seat-taking write paths: listing, token lookup, role changes and every
+    unrelated reader keep the ordinary connection and never wait on this lock.
+    """
+    conn = _open(database_path)
+    conn.commit()
+    conn.isolation_level = None
+    conn.execute("BEGIN IMMEDIATE")
+    return conn
+
+
+def _require_free_seat(conn: sqlite3.Connection) -> None:
+    """Refuse a sixth user, counting the owner as a seat holder.
+
+    Every row is counted rather than ``role = 'member'``: the owner holds a seat
+    too, and changing a role never adds one, so both follow from counting rows.
+    """
+    used = conn.execute("SELECT COUNT(*) FROM local_members").fetchone()[0]
+    if used >= MAX_SEATS:
+        raise LocalMembersError("conflict", "使用名额已满：包含主账号在内上限五人")
 
 
 def _validate_role(role: str) -> None:
@@ -136,12 +167,13 @@ class LocalMemberService:
         if not cleaned:
             raise LocalMembersError("invalid", "成员名不能为空")
         _validate_role(role)
-        with _open(self._database_path) as conn:
+        with _open_reserving(self._database_path) as conn:
             duplicate = conn.execute(
                 "SELECT 1 FROM local_members WHERE name = ?", (cleaned,)
             ).fetchone()
             if duplicate is not None:
                 raise LocalMembersError("conflict", "成员名已存在")
+            _require_free_seat(conn)
             member, _token = self._insert_member(conn, cleaned, role)
         return member
 
@@ -187,7 +219,9 @@ class LocalMemberService:
         """Consume a one-time invite code and create the member.
 
         Returns the member together with its bearer token; tokens are only
-        handed out at join time (and via ``whoami``), never in listings.
+        handed out at join time (and via ``whoami``), never in listings. The
+        seat check and the insert share one reserving transaction, so a rejected
+        sixth join leaves no half-written member behind.
         """
         if code not in self._invite_codes:
             raise LocalMembersError("invalid", "邀请码无效或已使用")
@@ -195,12 +229,13 @@ class LocalMemberService:
         if not cleaned:
             raise LocalMembersError("invalid", "成员名不能为空")
         self._invite_codes.discard(code)
-        with _open(self._database_path) as conn:
+        with _open_reserving(self._database_path) as conn:
             duplicate = conn.execute(
                 "SELECT 1 FROM local_members WHERE name = ?", (cleaned,)
             ).fetchone()
             if duplicate is not None:
                 raise LocalMembersError("conflict", "成员名已存在")
+            _require_free_seat(conn)
             return self._insert_member(conn, cleaned, "member")
 
     def resolve_member(self, token: str | None) -> LocalMember | None:
