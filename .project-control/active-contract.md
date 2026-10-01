@@ -53,6 +53,12 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 | workspace1 / 原18 | P1 WIL124与110/112/116后续接线边界，只读产品；不再重复恢复条件审计。更新原WIL116/resume-review.md的下一包落点。 | 已决定新建private/存量shared现已写入PRD1.2，错误旧派单不再有效。只给出一个可交给workspace5的本地邀请撤销/幂等/停用/设备约束最小接口与文件清单，依据auth9保留停用后旧token失效、原归属保留；不能判错设备N/A，不能自动激活Supabase或扩展登录方案。有产品事实缺失只列一个具体决定及选项；最多完成此有限准备即交回。可见性候选仍禁止合入和写入。 |
 | workspace4 / 原14 | P2 WIL154排队，产品只读，保留已有封面报告与合法短样本，不再重复调查或测试。 | 等143审核集成、workspace2明确释放前端写权后，由主控转交CreationTaskWorkspace与封面API/schema/渲染白名单；本轮main.py/schema正由workspace3独占，也须其释放。目标仅既有中部/底部标题构图，不做自由拖拽或模板系统。收到转交前不施工。 |
 
-GUI当前仅workspace2；workspace6已交普通页面PASS及释放证据。workspace2复用 bd25/apps/api/.venv/bin/python 和合法隔离任务，禁止写真实库或为演示修改产品事实。无需再为准备隔离数据请求批准。随后按候选安排123/154。任何线程的“准备完成”不是自动获得GUI。主控收到释放证据后更新合同并发送转交。轻量隔离验证并行，媒体/GUI串行。不重复已通过未变化的测试。
+GUI当前仅workspace3：WIL185候选d7f3ca3已审并集成542585f，集成目录2项定向测试通过；workspace3产品只读，在等价候选验素材目录不可写标签、拒绝接入、修复提示与恢复，以及首启文案，完成立即释放。原main.py/schema/production目录段写权释放；新增types.ts和MaterialLibraryWorkspace的必要消费者改动已审核接受，不扩展输出目录探测。
+
+workspace2已释放GUI，只保留原前端白名单修正personStageFacts的any-ready即整阶段完成；核当前有效片段，无法证明全部覆盖时不能标整阶段Done。只加一个混合状态最小断言，不重跑六项GUI；完成交小候选并释放前端写权。
+
+workspace4原排队行现由此精确授权替代：开始WIL187，基线542585f，独占apps/api/app/main.py仅封面预览/确认段、schemas.py仅GenerateCoverFromFrame参数、cover_generation.py及现有封面专项测试。实现title_position中部/底部、缺省底部，贯穿提案/确认记录/图片和源版本绑定。暂不写前端或production.py，不启GUI/FFmpeg，先轻量参数/布局验证。前端稍后交同一负责人接完，后端完成不能关闭187；不调图片模型、不做自由拖拽。此段取代旧行的“全部排队”。
+
+workspace6只读核WIL145整单与原证据的差额，最多补未覆盖的具体指代/冲突场景，不重测、不启动GUI。各线程不自动写知识库、长期记忆或重复project-log。
 
 旧工作包WIL123/124已交失败报告，不能标为功能通过；新修复候选独立审核后再恢复剩余验收。WIL154为缺实现排队；新父项WIL183仅改变归属，不代表封面已通过。交付含候选SHA、实际文件、最小验证、未验证项、截图及资源释放；主控审查集成，不以派工代替产品完成。
