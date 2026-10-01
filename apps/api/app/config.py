@@ -331,7 +331,7 @@ def llm_service_fingerprint(settings: Settings) -> str:
 
 
 def record_llm_service_verification(
-    settings: Settings, *, ok: bool, cause: str
+    settings: Settings, *, ok: bool, cause: str, detail: str = "", repair_action: str = ""
 ) -> dict[str, Any]:
     """Record one real attempt against the external model service.
 
@@ -343,6 +343,8 @@ def record_llm_service_verification(
     record = {
         "ok": bool(ok),
         "cause": cause,
+        "detail": detail,
+        "repair_action": repair_action,
         "observed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     with _llm_service_lock:
@@ -509,7 +511,7 @@ class Settings:
         elif state == LLM_SERVICE_AVAILABLE:
             detail = "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。"
         else:
-            detail = _LLM_SERVICE_FAILURE_REASONS.get(
+            detail = record.get("detail") or _LLM_SERVICE_FAILURE_REASONS.get(
                 str(record.get("cause")), _LLM_SERVICE_DEFAULT_FAILURE_REASON
             )
         return {
@@ -519,6 +521,7 @@ class Settings:
             "fields_filled": self.llm_configured,
             "verified": state == LLM_SERVICE_AVAILABLE,
             "cause": str(record.get("cause")) if record else "",
+            "repair_action": str(record.get("repair_action", "")) if record else "",
             "observed_at": str(record.get("observed_at")) if record else "",
         }
 
@@ -762,6 +765,15 @@ class Settings:
                     "value": llm_service["label"],
                     "secret": False,
                 },
+                *[
+                    {"name": name, "configured": bool(llm_service[field]),
+                     "value": llm_service[field], "secret": False}
+                    for name, field in (
+                        ("LLM_SERVICE_CAUSE", "cause"),
+                        ("LLM_SERVICE_DETAIL", "detail"),
+                        ("LLM_SERVICE_REPAIR_ACTION", "repair_action"),
+                    )
+                ],
                 {
                     "name": "DEEPSEEK_API_KEY",
                     "configured": bool(self.deepseek_api_key),

@@ -73,6 +73,7 @@ from app.cover_generation import (
 from app.config import (
     Settings,
     configure_process_temporary_directory,
+    record_llm_service_verification,
     runtime_env_file_path,
 )
 from app.content_templates import list_content_templates
@@ -4311,6 +4312,11 @@ def generate_creation_task_topics(
             )
         )
     except CreationTaskTopicGenerationError as exc:
+        if exc.code not in {"input_invalid", "route_configuration_invalid"}:
+            record_llm_service_verification(
+                settings, ok=False, cause=exc.code,
+                detail=exc.reason, repair_action=exc.repair_action,
+            )
         production_repo.fail_topic_generation(
             run.id,
             reason=exc.reason,
@@ -4328,6 +4334,7 @@ def generate_creation_task_topics(
             retryable=exc.retryable,
         ) from exc
 
+    record_llm_service_verification(settings, ok=True, cause="verified")
     candidates: list[CreationTaskTopicCandidate] = []
     evidence_references: list[TopicEvidenceReference] = []
     try:
@@ -4837,6 +4844,11 @@ def generate_creation_task_script(
             )
         )
     except CreationTaskScriptGenerationError as exc:
+        if exc.code not in {"input_invalid", "route_configuration_invalid", "language_unavailable"}:
+            record_llm_service_verification(
+                settings, ok=False, cause=exc.code,
+                detail=exc.reason, repair_action=exc.repair_action,
+            )
         production_repo.fail_script_generation(
             run.id,
             reason=exc.reason,
@@ -4853,6 +4865,7 @@ def generate_creation_task_script(
             repair_action=exc.repair_action,
             retryable=exc.retryable,
         ) from exc
+    record_llm_service_verification(settings, ok=True, cause="verified")
     script = CreationTaskScript(
         id=f"script_{uuid4().hex[:12]}",
         workspace_id=workspace_id,

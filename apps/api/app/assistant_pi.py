@@ -142,7 +142,10 @@ def _record_service(settings: Settings, *, ok: bool, cause: str) -> None:
     """
     if not ok and not bool(_FAILURES.get(cause, {}).get("service_contacted")):
         return
-    record_llm_service_verification(settings, ok=ok, cause=cause)
+    record_llm_service_verification(
+        settings, ok=ok, cause=cause,
+        repair_action=str(_FAILURES[cause]["next_step"]) if not ok else "",
+    )
 
 
 _session_locks: dict[str, threading.Lock] = {}

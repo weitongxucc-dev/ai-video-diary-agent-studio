@@ -120,8 +120,7 @@ function getSetting(
 //
 // 明确不做的事：
 // · 不用 `status.llm.configured` 硬凑四档。填了密钥只是「已填写，未验证」。
-// · 不显示失败的具体原因。后端没把 `cause` / `detail` 送到任何接口上，
-//   这里就写「拿不到更具体的原因」，不编一个像样的理由。
+// · 失败详情只消费后端安全状态行，不读取模型原始响应或日志。
 // · 任何一档都不显示密钥本身。
 const LLM_SERVICE_STATE_BY_LABEL: Record<string, LlmServiceState> = {
   "未填写": "missing",
@@ -190,7 +189,14 @@ function llmServiceView(settings: RuntimeSettingItem[]): LlmServiceView {
   if (!state) {
     return { state: "unknown", ...LLM_SERVICE_UNKNOWN_VIEW };
   }
-  return { state, ...LLM_SERVICE_VIEWS[state] };
+  const view = { state, ...LLM_SERVICE_VIEWS[state] };
+  if (state === "failed") {
+    const detail = getSetting(settings, "LLM_SERVICE_DETAIL")?.value;
+    const repairAction = getSetting(settings, "LLM_SERVICE_REPAIR_ACTION")?.value;
+    if (detail) view.detail = detail;
+    if (repairAction) view.nextStep = `下一步：${repairAction}`;
+  }
+  return view;
 }
 
 function LlmServiceBadge({ settings }: { settings: RuntimeSettingItem[] }) {

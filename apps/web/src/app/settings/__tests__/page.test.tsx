@@ -156,6 +156,21 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     expect(detail.textContent).not.toContain("地址填错");
   });
 
+  it("展示后端安全失败原因和修复动作，不保留可用徽章", async () => {
+    const runtime = runtimeWithServiceState("失败");
+    runtime.settings.push(
+      { name: "LLM_SERVICE_CAUSE", configured: true, value: "transport_failed", secret: false },
+      { name: "LLM_SERVICE_DETAIL", configured: true, value: "文字模型连接失败。", secret: false },
+      { name: "LLM_SERVICE_REPAIR_ACTION", configured: true, value: "检查网络后重试。", secret: false },
+    );
+    api.getRuntimeSettings.mockResolvedValue(runtime);
+    await renderSettings();
+    expect(screen.getByTestId("llm-service-detail")).toHaveTextContent("文字模型连接失败。");
+    expect(screen.getByTestId("llm-service-detail")).toHaveTextContent("下一步：检查网络后重试。");
+    expect(screen.getByTestId("llm-service-detail")).not.toHaveTextContent("拿不到更具体的原因");
+    expect(screen.getByTestId("llm-service-badge").className).not.toContain("is-ready");
+  });
+
   it("任何形态下都不许显示密钥本身", async () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("可用"));
     const { container } = await renderSettings();
