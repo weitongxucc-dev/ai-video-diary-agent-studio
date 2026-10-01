@@ -8064,6 +8064,8 @@ def confirm_creation_task_edit(
             updated_plan=montage,
         )
     if operation_type == "GenerateCoverFromFrame" and isinstance(operation_payload, dict):
+        title_position = operation_payload.get("title_position", "bottom")
+        operation_payload = {**operation_payload, "title_position": title_position}
         base_version_id = operation_payload.get("base_version_id")
         source_video_ref = operation_payload.get("source_video_ref")
         title = operation_payload.get("title")
@@ -8101,6 +8103,7 @@ def confirm_creation_task_edit(
                     title=title,
                     safe_area=CoverSafeArea(),
                     aspect_ratio=operation_payload.get("aspect_ratio", "9:16"),
+                    title_position=title_position,
                 )
             )
             evidence = generated.evidence
@@ -8183,7 +8186,7 @@ def confirm_creation_task_edit(
             frame_time_seconds=float(frame_time_seconds),
             title=title,
             safe_area={key: float(value) for key, value in asdict(CoverSafeArea()).items()},
-            layout={"title_position": "bottom", "text_align": "center"},
+            layout={"title_position": title_position, "text_align": "center"},
             generation_method="video_frame",
             model_or_engine=f"{generated.evidence.engine}+{generated.evidence.layout_engine}",
             artifact_ref=generated.evidence.output_ref,
@@ -8939,18 +8942,20 @@ def preview_creation_task_exact_edit(
                 repair_action="先渲染当前成片，再选择画面和标题生成封面。",
                 retryable=True,
             )
-        summary = f"从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并叠加标题生成封面。"
+        position_label = "画面中部" if payload.title_position == "center" else "画面底部"
+        summary = f"从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并在{position_label}叠加标题生成封面。"
         target_refs = [montage.output_path]
         operation_payload = {
             "source_video_ref": montage.output_path,
             "aspect_ratio": montage.aspect_ratio,
             "frame_time_seconds": payload.frame_time_seconds,
             "title": payload.title,
+            "title_position": payload.title_position,
             "base_version_id": base_version.id,
         }
         preview = {
             "before": {"ref": montage.output_path, "label": "当前成片画面", "detail": f"{payload.frame_time_seconds:.1f} 秒"},
-            "after": {"ref": "cover:preview", "label": "封面标题", "detail": payload.title},
+            "after": {"ref": "cover:preview", "label": "封面标题", "detail": f"{position_label} · {payload.title}"},
         }
         effects = ["确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。"]
 

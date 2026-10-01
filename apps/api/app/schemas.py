@@ -1221,6 +1221,7 @@ class CreationTaskExactEditRequest(BaseModel):
     end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     text: str | None = Field(default=None, min_length=1, max_length=96)
     title: str | None = Field(default=None, min_length=1, max_length=80)
+    title_position: Literal["center", "bottom"] = "bottom"
     subtitle_display: Literal["none", "zh", "en", "zh-en"] | None = None
     target_language: Literal["en-US"] | None = None
     line_breaks: list[int] | None = Field(default=None, max_length=8)
