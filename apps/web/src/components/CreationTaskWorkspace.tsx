@@ -177,7 +177,13 @@ function productStageState(
     return scripts.length ? { state: "current", detail: "待确认" } : { state: "upcoming", detail: "未开始" };
   }
   if (stageId === "narration") {
-    if (narration) return { state: "done", detail: "已完成" };
+    if (narration) {
+      // 配音产物在生成中就已存在，必须按分段状态判定，不能因为对象存在就当成功。
+      const segments = narration.segments;
+      if (segments.some((segment) => segment.status === "failed")) return { state: "current", detail: "有配音段未完成" };
+      if (segments.length && segments.every((segment) => segment.status === "ready")) return { state: "done", detail: "已完成" };
+      if (segments.length) return { state: "current", detail: "配音生成中" };
+    }
     return task.stage === "narration" ? { state: "current", detail: "当前" } : { state: "upcoming", detail: "未开始" };
   }
   if (stageId === "person") return personStageFacts(workspace);

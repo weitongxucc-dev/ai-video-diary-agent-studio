@@ -758,6 +758,39 @@ describe("CreationTaskWorkspace", () => {
     }));
   });
 
+  it("does not report narration as complete while segments are still running or have failed", () => {
+    const task = { ...baseTask, stage: "narration" as const, stage_status: "running" as const, status: "running" as const };
+    const segment = {
+      id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+      audio_reference: "narration://artifact/segment-1",
+      audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+      duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+      voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+      pronunciation_version: "p1", status: "ready" as const,
+    };
+    const initial = workspace(task);
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1", segments: [segment],
+    };
+
+    const { unmount } = render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={{
+      ...initial,
+      narration: { ...initial.narration!, segments: [{ ...segment, status: "generating" as const }] },
+    }} />);
+    expect(screen.getByRole("button", { name: "配音：配音生成中" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "配音：已完成" })).not.toBeInTheDocument();
+    unmount();
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={{
+      ...initial,
+      narration: { ...initial.narration!, segments: [{ ...segment, status: "failed" as const }] },
+    }} />);
+    expect(screen.getByRole("button", { name: "配音：有配音段未完成" })).toBeEnabled();
+    expect(screen.getByTitle("配音：有配音段未完成")).toHaveAttribute("aria-current", "step");
+  });
+
   it("opens the persisted subtitle and cover workspace and previews cue edits before writing", async () => {
     const initial = subtitleCoverWorkspace();
     const refreshed = subtitleCoverWorkspace();
