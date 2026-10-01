@@ -974,7 +974,14 @@ export function MaterialLibraryWorkspace({
               </span>
             ))}
           </div>
-
+          {insights.recommended_gaps.length > 0 ? (
+            <div className="library-coverage__gaps">
+              <span>覆盖建议</span>
+              <p>
+                素材库暂时没有：{insights.recommended_gaps.map(tagLabel).join("、")}。按需补充即可，不影响使用。
+              </p>
+            </div>
+          ) : null}
         </section>
 
         <div className="library-toolbar">

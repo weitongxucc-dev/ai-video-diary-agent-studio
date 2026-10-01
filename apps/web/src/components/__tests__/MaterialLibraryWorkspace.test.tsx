@@ -531,3 +531,26 @@ it("stops editing when the selected segment disappears from a material that stay
     vi.useRealTimers();
   }
 });
+
+it("offers the uncovered taxonomy tags as a library-wide suggestion", async () => {
+  const withGaps = { ...insights, recommended_gaps: ["场景:办公", "镜头:特写"] };
+  vi.mocked(getMaterialLibraryInsights).mockResolvedValue(withGaps);
+  render(
+    <MaterialLibraryWorkspace
+      initialLibrary={library}
+      initialInsights={withGaps}
+      initialCollections={{ collections: [], total_count: 0 }}
+    />,
+  );
+
+  expect(await screen.findByText("覆盖建议")).toBeInTheDocument();
+  expect(screen.getByText(/素材库暂时没有：场景:办公、镜头:特写/)).toBeInTheDocument();
+  expect(screen.getByText(/按需补充即可，不影响使用/)).toBeInTheDocument();
+});
+
+it("leaves the coverage suggestion out when every taxonomy tag already has material", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+  await waitFor(() => expect(screen.getByLabelText("素材覆盖")).toBeInTheDocument());
+  expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
+});
