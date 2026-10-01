@@ -1939,4 +1939,50 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/已选中箭头1 ·/)).toBeInTheDocument();
   });
 
+  // WIL-160：连续制作已成功，但剪辑改动让成片不再对应当前时间线（video_ready=false），
+  // 面板此前只剩一行状态文字、零按钮，且 onStart 会命中同一幂等键返回旧作业。
+  // 这里钉住它改为「切到剪辑页、用既有生成成片按钮按当前时间线重出片」，且按钮确实可用。
+  it("routes a succeeded-but-invalidated render to the montage render button instead of restarting the job", async () => {
+    const task = {
+      ...baseTask, stage: "narration" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, stage_reason: null, stage_impact: null,
+      stage_repair_action: null, stage_retryable: null, progress: 75,
+      current_timeline_version_id: "timeline-version-2", timeline_sequence: 2,
+      montage_plan_id: "montage-1", output_ready: false,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [{ id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 }],
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9, match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "镜头审核已完成，可以重新渲染。", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue({
+      task_id: "task-1",
+      job: { id: "job-1", kind: "creation_task_execution", status: "succeeded", progress: 0, failure_reason: null, impact: null, repair_action: null },
+      stages: [], current_stage: null, waiting_reason: null, status_updated_at: "2026-10-01T00:00:00+00:00",
+      video_ready: false, cover_status: "pending", cover_message: null,
+    });
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    // 文案/配音侧的连续制作面板：状态仍是「成片产物需要检查」，但现在有出口
+    await waitFor(() => expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查"));
+
+    fireEvent.click(screen.getByRole("button", { name: "前往剪辑重新生成" }));
+    // 入口真的到达剪辑页，并且既有「生成成片」按钮此刻是可点的
+    expect(screen.queryByText("成片产物需要检查")).not.toBeInTheDocument();
+    const renderButton = await screen.findByRole("button", { name: "生成成片" });
+    expect(renderButton).toBeEnabled();
+    // 走的是既有渲染路径，不是复用 onStart（同一幂等键只会拿回旧作业）
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+
+    fireEvent.click(renderButton);
+    await waitFor(() => expect(mocks.renderMontage).toHaveBeenCalledWith("task-1"));
+  });
+
 });
