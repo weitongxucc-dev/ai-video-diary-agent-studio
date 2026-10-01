@@ -97,6 +97,25 @@ DEFAULT_MATERIAL_TAXONOMY = (
 )
 
 
+def directory_accepts_writes(root: Path) -> bool:
+    """Prove the directory accepts writes, because existence alone never promised that.
+
+    A read-only mount still lists as a normal directory, so binding to one
+    registers an intake that can never accept a file and hides the cause until
+    a later import fails, and a first-run preflight would report the local video
+    pipeline as ready. Creating and removing a hidden uniquely named file is the
+    same proof the desktop import path already relies on, and every scanner that
+    walks these directories skips anything without a supported media suffix.
+    """
+    probe = root / f".chatcut_write_probe_{uuid4().hex}"
+    try:
+        probe.touch(exist_ok=False)
+        probe.unlink()
+    except OSError:
+        return False
+    return True
+
+
 @dataclass
 class MaterialSegment:
     id: str
@@ -2693,27 +2712,9 @@ class ProductionRepository:
             return "missing"
         if not root.is_dir():
             return "invalid"
-        if not self._material_directory_writable(root):
+        if not directory_accepts_writes(root):
             return "read_only"
         return "ready"
-
-    @staticmethod
-    def _material_directory_writable(root: Path) -> bool:
-        """Prove the directory accepts writes, because existence alone never promised that.
-
-        A read-only mount still lists as a normal directory, so binding to one
-        registers an intake that can never accept a file and hides the cause until
-        a later import fails. Creating and removing a hidden uniquely named file
-        is the same proof the desktop import path already relies on, and both
-        intake scanners skip anything without a supported media suffix.
-        """
-        probe = root / f".chatcut_write_probe_{uuid4().hex}"
-        try:
-            probe.touch(exist_ok=False)
-            probe.unlink()
-        except OSError:
-            return False
-        return True
 
     def discover_material_hash_candidates(self, *, stable_seconds: float = 10.0) -> list[MaterialHashCandidate]:
         """Observe stable files for the opt-in scheduler path without reading their content."""
