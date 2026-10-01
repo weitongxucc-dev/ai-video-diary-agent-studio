@@ -44,7 +44,8 @@ type Props = {
   initialError: TopicError | null;
 };
 
-const stages = ["资料准备", "选题", "文案", "配音", "人物与口型", "视频剪辑", "字幕与封面", "检查与发布", "数据监控"];
+// 选题页只读取任务上的事实，没有事实的阶段明确显示未读取，不按序号推断已完成。
+const stages = ["资料准备", "选题", "文案", "配音", "人物与口型", "视频剪辑", "字幕与封面", "检查与输出", "发布与数据"];
 const stageClasses: Record<CreationTask["stage_status"], string> = {
   not_started: styles.stageNotStarted,
   running: styles.stageRunning,
@@ -52,6 +53,23 @@ const stageClasses: Record<CreationTask["stage_status"], string> = {
   completed: styles.stageCompleted,
   failed: styles.stageFailed,
 };
+
+type StageRow = { label: string; status: CreationTask["stage_status"]; detail: string | null };
+
+function stageRowsFor(task: CreationTask): StageRow[] {
+  const atThisStage = (stage: CreationTask["stage"]) => task.stage === stage;
+  return [
+    { label: "资料准备", status: task.plan_id ? "completed" : "not_started", detail: null },
+    { label: "选题", status: task.selected_topic_id ? "completed" : atThisStage("topic") ? task.stage_status : "not_started", detail: null },
+    { label: "文案", status: task.confirmed_script_id ? "completed" : atThisStage("script") ? task.stage_status : "not_started", detail: null },
+    { label: "配音", status: task.narration_cache_key ? "completed" : atThisStage("narration") ? task.stage_status : "not_started", detail: null },
+    { label: "人物与口型", status: "not_started", detail: "本页面未读取" },
+    { label: "视频剪辑", status: atThisStage("montage") ? task.stage_status : "not_started", detail: null },
+    { label: "字幕与封面", status: "not_started", detail: "本页面未读取" },
+    { label: "检查与输出", status: task.output_ready ? "completed" : "not_started", detail: null },
+    { label: "发布与数据", status: "not_started", detail: "未接入" },
+  ];
+}
 
 function connectionLabel(availability: CreationTaskTopicsResponse["route_preflight"]["availability"]) {
   return {
@@ -329,11 +347,9 @@ export function CreationTaskTopicWorkspace({ plan, creationTasks, initialTopics,
   return <AppShell creationTasks={currentCreationTasks} inspector={<TopicInspector error={error} selectedTopicId={selectedTopicId} topics={topics} />} inspectorTitle="选题详情" workspaceStatus={workspaceStatusFor(topics, error)}>
     <div className={styles.workspace}>
       <header className={styles.header}><div><span>创作任务</span><h1>{plan.name}</h1><p>{plan.goal}</p></div><Link className={styles.backToList} href="/production">返回任务列表</Link></header>
-      <ol className={styles.stages} aria-label="制作阶段">{stages.map((stage, index) => {
-        const isTopic = index === 1;
-        const status = index === 0 ? "completed" : isTopic ? task.stage_status : "not_started";
-        return <li className={stageClasses[status]} key={stage}><span>{index + 1}</span><div><strong>{stage}</strong><small>{index === 0 ? "已完成" : isTopic ? stageLabel(task.stage_status) : "尚未开始"}</small></div></li>;
-      })}</ol>
+      <ol className={styles.stages} aria-label="制作阶段">{stageRowsFor(task).map((row, index) => (
+        <li className={stageClasses[row.status]} key={row.label}><span>{index + 1}</span><div><strong>{row.label}</strong><small>{row.detail ?? stageLabel(row.status)}</small></div></li>
+      ))}</ol>
       {topicContent}
     </div>
   </AppShell>;

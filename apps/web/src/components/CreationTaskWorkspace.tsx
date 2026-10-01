@@ -64,6 +64,7 @@ import type {
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
   CreationTaskNarrationSegment,
+  CreationTaskPersonRender,
   CreationTaskScript,
   CreationTaskSubtitleCue,
   CreationTaskSubtitleTrack,
@@ -92,7 +93,7 @@ type Props = {
 
 type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "narration" | "person-render" | "plan" | "clip" | "render" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 
-type WorkspaceView = CreationTask["stage"] | "subtitle_cover" | "prepare" | "publish";
+type WorkspaceView = CreationTask["stage"] | "subtitle_cover" | "prepare" | "person" | "publish";
 
 type SelectedEditContext = {
   kind: "narration" | "cue" | "clip" | "cover" | "audio" | "overlay";
@@ -102,16 +103,16 @@ type SelectedEditContext = {
   ref: string;
 };
 
-const stageOrder: WorkspaceView[] = ["topic", "script", "narration", "montage", "subtitle_cover", "review"];
 const productStages = [
   { id: "prepare", label: "资料", title: "资料准备" },
   { id: "topic", label: "选题", title: "选题" },
   { id: "script", label: "文案", title: "文案" },
   { id: "narration", label: "配音", title: "配音" },
+  { id: "person", label: "人物口型", title: "人物与口型" },
   { id: "montage", label: "剪辑", title: "视频剪辑" },
   { id: "subtitle_cover", label: "字幕封面", title: "字幕与封面" },
   { id: "review", label: "输出", title: "检查与输出" },
-  { id: "publish", label: "发布", title: "发布" },
+  { id: "publish", label: "发布", title: "发布与数据" },
 ] as const;
 
 const stageLabels = {
@@ -119,15 +120,12 @@ const stageLabels = {
   topic: "选题",
   script: "文案",
   narration: "配音",
+  person: "人物与口型",
   montage: "视频剪辑",
   subtitle_cover: "字幕与封面",
   review: "检查成片",
   publish: "发布",
 };
-
-function stageIndex(stage: WorkspaceView) {
-  return stageOrder.indexOf(stage);
-}
 
 function defaultWorkspaceView(workspace: WorkspaceState): WorkspaceView {
   const hasValidSubtitle = workspace.subtitle_tracks.some((track) => track.status === "valid");
@@ -138,28 +136,64 @@ function defaultWorkspaceView(workspace: WorkspaceState): WorkspaceView {
   return workspace.task.stage;
 }
 
-type ProductStageState = "done" | "current" | "upcoming";
+type ProductStageState = "done" | "skipped" | "current" | "upcoming";
 
+// 人物与口型按 PRD 9.1 判断：露脸目标 0% 是明确跳过而不是完成；目标未记录不能当作 0%。
+function personStageFacts(workspace: WorkspaceState): { state: ProductStageState; detail: string } {
+  const target = workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null;
+  if (target === 0) return { state: "skipped", detail: "明确跳过 · 全素材画面" };
+
+  const renders = workspace.person_renders;
+  if (renders.some((render) => render.status === "ready")) return { state: "done", detail: "已完成" };
+  if (renders.some((render) => render.status === "failed")) return { state: "current", detail: "有口型需要处理" };
+  if (renders.length) return { state: "current", detail: "口型生成中" };
+  if (!workspace.narration) return { state: "upcoming", detail: "待配音" };
+  if (target === null) return { state: "upcoming", detail: "未记录露脸目标" };
+  if (!workspace.person_render_capability.available) return { state: "current", detail: "口型能力不可用" };
+  return { state: "current", detail: "待生成口型" };
+}
+
+// 阶段状态只由任务事实决定，不用阶段序号推断前面的阶段已完成。
 function productStageState(
   stageId: typeof productStages[number]["id"],
-  task: CreationTask,
+  workspace: WorkspaceState,
   subtitleCoverComplete: boolean,
 ): { state: ProductStageState; detail: string } {
-  if (stageId === "prepare") return { state: "done", detail: "已完成" };
+  const { task, selected_topic: topic, scripts, narration, montage } = workspace;
+  const rendered = Boolean(montage?.output_url);
+
+  if (stageId === "prepare") {
+    return task.plan_id ? { state: "done", detail: "已完成" } : { state: "upcoming", detail: "未确认方案" };
+  }
   if (stageId === "publish") return { state: "upcoming", detail: "未接入" };
 
-  if (task.stage === "review" && stageId === "subtitle_cover" && !subtitleCoverComplete) {
-    return { state: "current", detail: "待补封面" };
+  if (stageId === "topic") {
+    if (topic) return { state: "done", detail: "已完成" };
+    return task.stage === "topic" ? { state: "current", detail: "当前" } : { state: "upcoming", detail: "未开始" };
   }
-  if (task.stage === "review" && stageId === "review" && !subtitleCoverComplete) {
-    return { state: "upcoming", detail: "待上一步" };
+  if (stageId === "script") {
+    if (scripts[0]?.selection_status === "confirmed") return { state: "done", detail: "已完成" };
+    if (task.stage === "script") return { state: "current", detail: "当前" };
+    return scripts.length ? { state: "current", detail: "待确认" } : { state: "upcoming", detail: "未开始" };
   }
-
-  const targetIndex = stageIndex(stageId);
-  const currentIndex = stageIndex(task.stage);
-  if (targetIndex < currentIndex) return { state: "done", detail: "已完成" };
-  if (targetIndex === currentIndex) return { state: "current", detail: "当前" };
-  return { state: "upcoming", detail: "未开始" };
+  if (stageId === "narration") {
+    if (narration) return { state: "done", detail: "已完成" };
+    return task.stage === "narration" ? { state: "current", detail: "当前" } : { state: "upcoming", detail: "未开始" };
+  }
+  if (stageId === "person") return personStageFacts(workspace);
+  if (stageId === "montage") {
+    if (rendered) return { state: "done", detail: "已完成" };
+    if (montage) return { state: "current", detail: montage.status === "waiting_for_user" ? "待确认" : "故事板已生成" };
+    return task.stage === "montage" ? { state: "current", detail: "当前" } : { state: "upcoming", detail: "未开始" };
+  }
+  if (stageId === "subtitle_cover") {
+    if (subtitleCoverComplete) return { state: "done", detail: "已完成" };
+    if (!rendered) return { state: "upcoming", detail: "未开始" };
+    return { state: "current", detail: workspace.cover_asset?.status === "valid" ? "待补字幕" : "待补封面" };
+  }
+  if (!subtitleCoverComplete) return { state: "upcoming", detail: "待上一步" };
+  if (task.stage === "review") return { state: "current", detail: "当前" };
+  return rendered ? { state: "done", detail: "已完成" } : { state: "upcoming", detail: "未开始" };
 }
 
 function errorDetails(cause: unknown) {
@@ -192,9 +226,6 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
     ? narration?.segments.find((segment) => segment.id === selectedPersonRender.narration_segment_id) ?? null
     : null;
   const personRenderCapability = workspace.person_render_capability;
-  const lipsyncLabel = (modelId: string | null | undefined) => modelId?.startsWith("latentsync-")
-    ? "高精度 · LatentSync"
-    : modelId?.toLowerCase().includes("musetalk") ? "低精度 · MuseTalk" : modelId ? "其他口型" : "未配置";
   const personRenderCanRegenerate = selectedPersonRender?.status === "ready" || selectedPersonRender?.status === "failed";
   const personRenderStatus = selectedPersonRender?.status === "ready"
     ? "已写入当前版本"
@@ -230,6 +261,12 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
 
 function capabilityLabel(available: boolean) {
   return available ? "可用" : "不可用";
+}
+
+function lipsyncLabel(modelId: string | null | undefined) {
+  return modelId?.startsWith("latentsync-")
+    ? "高精度 · LatentSync"
+    : modelId?.toLowerCase().includes("musetalk") ? "低精度 · MuseTalk" : modelId ? "其他口型" : "未配置";
 }
 
 function SubtitleCoverInspector({
@@ -323,6 +360,34 @@ function narrationSegmentStatus(status: CreationTaskNarrationSegment["status"]) 
   return "生成失败";
 }
 
+function personRenderStageDetail(status: CreationTaskPersonRender["status"]) {
+  if (status === "ready") return "口型已生成";
+  if (status === "failed") return "口型生成失败";
+  return "口型生成中";
+}
+
+function PersonRenderPanel({ busy, onGenerate, selectedRender, selectedSegmentId, workspace }: {
+  busy: boolean;
+  onGenerate: (segmentId: string) => void;
+  selectedRender: CreationTaskPersonRender | null;
+  selectedSegmentId: string | null;
+  workspace: WorkspaceState;
+}) {
+  return (
+    <div className={styles.personRenderPanel}>
+      <div>
+        <UserRound size={18} />
+        <div><strong>人物口型预览</strong><p>选择一段配音，用当前人物版本检查口型效果；确认编辑后才会进入成片时间线。</p></div>
+      </div>
+      {!selectedSegmentId ? <span>先选择上方一段配音</span> : null}
+      {selectedSegmentId && !selectedRender ? <button className="modern-primary-button" disabled={busy || !workspace.plan.selected_voice} onClick={() => onGenerate(selectedSegmentId)} type="button">生成人物口型预览</button> : null}
+      {selectedRender?.status === "running" || selectedRender?.status === "pending" ? <span><LoaderCircle className="is-spinning" size={15} />正在生成人物口型预览</span> : null}
+      {selectedRender?.status === "failed" ? <div className={styles.personRenderFailure}><strong>生成没有完成</strong><p>{selectedRender.impact ?? selectedRender.failure_reason}</p>{selectedRender.repair_action ? <small>{selectedRender.repair_action}</small> : null}<button className="modern-primary-button" disabled={busy} onClick={() => onGenerate(selectedSegmentId!)} type="button">重新生成</button></div> : null}
+      {selectedRender?.status === "ready" && selectedRender.media_url ? <div className={styles.personRenderPreview}><video controls preload="metadata" src={apiUrl(selectedRender.media_url)} /><p>{selectedRender.model_id} · {selectedRender.duration_seconds?.toFixed(1)} 秒 · 人物 {selectedRender.person_version}</p></div> : null}
+    </div>
+  );
+}
+
 function NarrationResultView({ busy, onGeneratePersonRender, onSelect, selectedSegmentId, workspace }: {
   busy: boolean;
   onGeneratePersonRender: (segmentId: string) => void;
@@ -357,17 +422,65 @@ function NarrationResultView({ busy, onGeneratePersonRender, onSelect, selectedS
           </article>
         ))}
       </div>
-      <div className={styles.personRenderPanel}>
-        <div>
-          <UserRound size={18} />
-          <div><strong>人物口型预览</strong><p>选择一段配音，用当前人物版本检查口型效果；确认编辑后才会进入成片时间线。</p></div>
-        </div>
-        {!selectedSegmentId ? <span>先选择上方一段配音</span> : null}
-        {selectedSegmentId && !selectedRender ? <button className="modern-primary-button" disabled={busy || !workspace.plan.selected_voice} onClick={() => onGeneratePersonRender(selectedSegmentId)} type="button">生成人物口型预览</button> : null}
-        {selectedRender?.status === "running" || selectedRender?.status === "pending" ? <span><LoaderCircle className="is-spinning" size={15} />正在生成人物口型预览</span> : null}
-        {selectedRender?.status === "failed" ? <div className={styles.personRenderFailure}><strong>生成没有完成</strong><p>{selectedRender.impact ?? selectedRender.failure_reason}</p>{selectedRender.repair_action ? <small>{selectedRender.repair_action}</small> : null}<button className="modern-primary-button" disabled={busy} onClick={() => onGeneratePersonRender(selectedSegmentId!)} type="button">重新生成</button></div> : null}
-        {selectedRender?.status === "ready" && selectedRender.media_url ? <div className={styles.personRenderPreview}><video controls preload="metadata" src={apiUrl(selectedRender.media_url)} /><p>{selectedRender.model_id} · {selectedRender.duration_seconds?.toFixed(1)} 秒 · 人物 {selectedRender.person_version}</p></div> : null}
+      <PersonRenderPanel busy={busy} onGenerate={onGeneratePersonRender} selectedRender={selectedRender} selectedSegmentId={selectedSegmentId} workspace={workspace} />
+    </section>
+  );
+}
+
+function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, selectedSegmentId, workspace }: {
+  busy: boolean;
+  onGenerate: (segmentId: string) => void;
+  onOpenNarration: () => void;
+  onSelect: (segmentId: string) => void;
+  selectedSegmentId: string | null;
+  workspace: WorkspaceState;
+}) {
+  const { montage, narration, plan, person_render_capability: capability } = workspace;
+  const renders = workspace.person_renders;
+  const presenterShareTarget = plan.presenter_share_target ?? montage?.presenter_share_target ?? null;
+  const selectedRender = renders.find((render) => render.narration_segment_id === selectedSegmentId) ?? null;
+  const summary = presenterShareTarget === 0
+    ? "本方案露脸占比为 0%，按纯素材混剪处理，本阶段明确跳过。"
+    : renders.some((render) => render.status === "ready")
+      ? `已有 ${renders.filter((render) => render.status === "ready").length} 段人物口型预览。`
+      : renders.some((render) => render.status === "failed")
+        ? "有口型没有生成完成，需要处理后才能进入成片。"
+        : renders.length
+          ? "口型正在生成中。"
+          : "还没有生成任何口型；系统只为选中的露脸段生成口型。";
+  return (
+    <section className={styles.workSection}>
+      <div className={styles.sectionHeading}><div><span>第五阶段</span><h2>人物与口型</h2><p>{summary}</p></div><span className={styles.artifactStatus}><UserRound size={15} />{presenterShareTarget === 0 ? "明确跳过" : "按露脸段生成"}</span></div>
+      <div className={styles.artifactGrid}>
+        <section><strong>露脸目标</strong><p>{presenterShareTarget === null ? "当前方案没有记录露脸占比。" : `${presenterShareTarget}% · 实际 ${montage?.presenter_share_actual ?? 0}%`}</p></section>
+        <section><strong>口型档位</strong><p>{plan.lipsync_quality === "high" ? "高精度 · LatentSync" : plan.lipsync_quality === "fast" ? "低精度 · MuseTalk" : "方案未选择档位"}</p></section>
+        <section><strong>人物素材</strong><p>{workspace.portrait_available === undefined ? "未返回该事实" : workspace.portrait_available ? "已就绪" : "没有可用人物素材"}</p></section>
+        <section><strong>当前口型能力</strong><p>{lipsyncLabel(capability.model_id)} · {capabilityLabel(capability.available)}</p></section>
       </div>
+      {!capability.available ? <div className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{capability.message}</p>{capability.repair_action ? <small>处理方式：{capability.repair_action}</small> : null}</div> : null}
+      {!narration ? <div className={styles.emptyAction}><UserRound size={30} /><h2>还没有配音事实</h2><p>口型由最终配音驱动。先生成配音，才能为选中的露脸段制作口型。</p><button className="modern-primary-button" disabled={busy} onClick={onOpenNarration} type="button">前往配音</button></div> : null}
+      {narration && presenterShareTarget === null ? <div className={styles.emptyAction}><UserRound size={30} /><h2>未记录露脸占比</h2><p>当前方案的露脸占比没有记录，不能按 0% 当作跳过处理。请先在制作方案中确认露脸占比，再回到本阶段生成口型。</p></div> : null}
+      {narration && presenterShareTarget === 0 ? <div className={styles.emptyAction}><UserRound size={30} /><h2>本阶段明确跳过</h2><p>露脸占比为 0%，成片全部使用素材画面，不需要生成人物口型。这不是已完成，也不会被写成完成。</p></div> : null}
+      {narration && presenterShareTarget !== null && presenterShareTarget > 0 ? <>
+        <div className={styles.narrationSegments}>
+          {narration.segments.map((segment, index) => (
+            <article className={selectedSegmentId === segment.id ? styles.selectedSegment : ""} key={segment.id}>
+              <button
+                aria-label={`选择配音 ${index + 1}`}
+                aria-pressed={selectedSegmentId === segment.id}
+                disabled={busy}
+                onClick={() => onSelect(segment.id)}
+                type="button"
+              >
+                <span>第 {index + 1} 段</span>
+                <strong>{segment.text}</strong>
+                <small>{segment.duration_seconds !== null ? `${segment.duration_seconds.toFixed(1)} 秒 · ` : ""}{narrationSegmentStatus(segment.status)}{renders.some((render) => render.narration_segment_id === segment.id) ? ` · ${personRenderStageDetail(renders.find((render) => render.narration_segment_id === segment.id)!.status)}` : " · 未生成口型"}</small>
+              </button>
+            </article>
+          ))}
+        </div>
+        <PersonRenderPanel busy={busy} onGenerate={onGenerate} selectedRender={selectedRender} selectedSegmentId={selectedSegmentId} workspace={workspace} />
+      </> : null}
     </section>
   );
 }
@@ -1473,6 +1586,22 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     invalidateEditPreview();
   }
 
+  function generatePersonRender(segmentId: string) {
+    const selectedVoice = workspace.plan.selected_voice;
+    if (!selectedVoice) return;
+    void run(
+      "person-render",
+      () => generateCreationTaskPersonRender(task.id, {
+        narration_segment_id: segmentId,
+        person_profile_id: selectedVoice.person_profile_id,
+        person_version: selectedVoice.person_version,
+        motion: "natural",
+        expression: "neutral",
+      }),
+      "人物口型预览已生成；尚未写入成片时间线。",
+    );
+  }
+
   function preparePersonEdit(clipId: string, command: string) {
     selectClip(clipId);
     setEditCommand(command);
@@ -1708,6 +1837,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (view === "topic") return Boolean(state.selected_topic);
     if (view === "script") return Boolean(state.scripts[0]);
     if (view === "narration") return Boolean(state.narration);
+    if (view === "person") return Boolean(state.narration || state.person_renders.length);
     if (view === "montage") return Boolean(state.montage);
     if (view === "subtitle_cover") return Boolean(state.montage?.output_url && state.subtitle_tracks.length);
     return (view === "review" || view === "publish") && Boolean(state.montage?.output_url);
@@ -1757,7 +1887,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <nav className={editorUi.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage) => {
           const presentation = productStageState(
             stage.id,
-            task,
+            workspace,
             workspace.subtitle_tracks.some((track) => track.status === "valid")
               && workspace.cover_asset?.status === "valid",
           );
@@ -1784,7 +1914,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ConfirmedScriptView script={latestScript} /> : null}
 
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? <section className={styles.workSection}><div className={styles.emptyAction}><Volume2 size={30} /><h2>使用已授权声音生成配音</h2><p>使用你已授权的声音，为这份文案配音。</p>{task.can_revise_script ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : workspace.plan.selected_voice ? <button className={executionPreview ? styles.secondaryButton : "modern-primary-button"} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running"} onClick={() => run("narration", () => generateCreationTaskNarration(task.id), "真实配音已生成，可以制作故事板。") } type="button">{busy === "narration" ? <LoaderCircle className="is-spinning" size={16} /> : <Volume2 size={16} />}{executionPreview ? "单步生成配音" : "生成配音"}</button> : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于本任务的声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，可以生成配音。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用此声音</button></div> : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于中文配音的授权声音</strong><p>登记人物身份、导入已授权录音 并逐字填写参考文字后，可回到本任务继续，不需要重做选题或文案。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>}</div></section> : null}
-        {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={(segmentId) => { const selectedVoice = workspace.plan.selected_voice; if (selectedVoice) void run("person-render", () => generateCreationTaskPersonRender(task.id, { narration_segment_id: segmentId, person_profile_id: selectedVoice.person_profile_id, person_version: selectedVoice.person_version, motion: "natural", expression: "neutral" }), "人物口型预览已生成；尚未写入成片时间线。"); }} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
+        {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>生成混剪故事板</h2><p>露脸目标 {workspace.plan.presenter_share_target ?? 0}%；只为露脸段制作口型，其余段落从已审核素材选镜头。</p><button className={execution?.job ? styles.secondaryButton : "modern-primary-button"} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running"} onClick={() => run("plan", () => createCreationTaskMontagePlan(task.id), "故事板已生成。") } type="button">{busy === "plan" ? <LoaderCircle className="is-spinning" size={16} /> : <Clapperboard size={16} />}{execution?.job ? "单步生成故事板" : "生成故事板"}</button></div></section> : null}
         {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={<button className={editPreview || editorDraft ? editorUi.button : editorUi.primary} disabled={busy !== null || execution?.job?.status === "queued" || execution?.job?.status === "running" || workspace.montage.status === "waiting_for_user" || (workspace.montage.status === "rendered" && Boolean(task.current_timeline_version_id))} onClick={() => void run("render", () => renderCreationTaskMontage(task.id), "成片已生成。")} type="button">{busy === "render" ? "制作中" : "生成成片"}</button>} /> : null}
@@ -1794,6 +1924,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
+        {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
         {activeView === "publish" ? <PublishStageView workspace={workspace} onOpenReview={() => openView("review")} /> : null}
         {recordingOpen ? <div className="home-card-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRecordingOpen(false); }}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></div> : null}
 

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
     exactEdit: vi.fn(),
     exactPreview: vi.fn(),
     generateNarration: vi.fn(),
+    generatePersonRender: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
     initializeTimeline: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("@/lib/api", () => ({
   confirmCreationTaskTopic: vi.fn(),
   createCreationTaskMontagePlan: vi.fn(),
   generateCreationTaskNarration: mocks.generateNarration,
+  generateCreationTaskPersonRender: mocks.generatePersonRender,
   generateCreationTaskScript: vi.fn(),
   generateCreationTaskTopics: vi.fn(),
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
@@ -669,7 +671,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(screen.queryByText("人物与口型")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人物与口型：待配音" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "字幕与封面：待补封面" })).toBeDisabled();
     expect(screen.queryByText("数据监控")).not.toBeInTheDocument();
     expect(screen.getByTitle("字幕与封面：待补封面")).toHaveAttribute("aria-current", "step");
@@ -683,6 +685,77 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成成片" }));
     await waitFor(() => expect(mocks.renderMontage).toHaveBeenCalledWith("task-1"));
+  });
+
+  it("enters the person stage from the rail and reports a pure-material plan as skipped rather than done", () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 0;
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+        audio_reference: "narration://artifact/segment-1",
+        audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+        voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+        pronunciation_version: "p1", status: "ready" as const,
+      }],
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    const railItem = screen.getByTitle("人物与口型：明确跳过 · 全素材画面");
+    expect(within(railItem).getByRole("button")).toBeEnabled();
+    fireEvent.click(within(railItem).getByRole("button"));
+
+    expect(screen.getByRole("heading", { name: "本阶段明确跳过" })).toBeInTheDocument();
+    expect(screen.getByText("0% · 实际 0%")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /生成人物口型预览/ })).not.toBeInTheDocument();
+    expect(screen.getByTitle("人物与口型：明确跳过 · 全素材画面")).not.toHaveAttribute("aria-current");
+  });
+
+  it("generates lipsync for a chosen narration segment when the plan asks for on-camera presence", async () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 40;
+    initial.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "person-v1",
+      person_authorization_id: "person-auth-1", person_authorization_version: "v1",
+      authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+    };
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+        audio_reference: "narration://artifact/segment-1",
+        audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+        voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+        pronunciation_version: "p1", status: "ready" as const,
+      }],
+    };
+    mocks.generatePersonRender.mockResolvedValue({ id: "person-render-1" });
+    mocks.getWorkspace.mockResolvedValue(initial);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "人物与口型：待生成口型" }));
+
+    expect(screen.getByText("还没有生成任何口型；系统只为选中的露脸段生成口型。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成人物口型预览" }));
+
+    await waitFor(() => expect(mocks.generatePersonRender).toHaveBeenCalledWith("task-1", {
+      narration_segment_id: "narration-segment-1",
+      person_profile_id: "person-1",
+      person_version: "person-v1",
+      motion: "natural",
+      expression: "neutral",
+    }));
   });
 
   it("opens the persisted subtitle and cover workspace and previews cue edits before writing", async () => {
@@ -1855,7 +1928,7 @@ describe("CreationTaskWorkspace", () => {
   it("shows an honest publish placeholder and does not claim the video is published", async () => {
     const initial = subtitleCoverWorkspace();
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", { name: "发布：未接入" }));
+    fireEvent.click(screen.getByRole("button", { name: "发布与数据：未接入" }));
     expect(screen.getByRole("heading", { name: "平台发布能力未接入" })).toBeInTheDocument();
     expect(screen.getByText(/本页不会把本地成片计为已发布/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "回到检查与输出" })).toBeInTheDocument();
