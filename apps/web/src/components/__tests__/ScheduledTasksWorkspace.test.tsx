@@ -1,4 +1,4 @@
-import {fireEvent,render,screen,waitFor} from "@testing-library/react";
+import {fireEvent,render,screen,waitFor,within} from "@testing-library/react";
 import {expect,it,vi} from "vitest";
 import {ScheduledTasksWorkspace} from "../ScheduledTasksWorkspace";
 import type {ScheduledTask} from "@/lib/api";
@@ -23,6 +23,7 @@ it("renders saved task definitions with honest no-run-history boundaries",async(
   expect(await screen.findByText("asset:abc123")).toBeInTheDocument();
   expect(screen.getByText("creation-task:render-9")).toBeInTheDocument();
   expect(screen.getByText("2 项")).toBeInTheDocument();
+  expect(screen.queryByRole("heading",{name:"定时任务"})).not.toBeInTheDocument();
   expect(screen.getByText(/素材解析 · 到点 · 2026-03-01 00:30 UTC/)).toBeInTheDocument();
   expect(screen.getByText(/素材解析 · 闲时/)).toBeInTheDocument();
   expect(screen.getByText("已启用")).toBeInTheDocument();
@@ -55,18 +56,28 @@ it("validates the create form, edits the time field, and posts a real definition
   fireEvent.click(screen.getByRole("button",{name:"创建任务定义"}));
   expect(screen.getByRole("alert")).toHaveTextContent("目标对象不能为空");
   expect(imports.create).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText("目标对象"),{target:{value:"asset:abc123"}});
+  const types=within(screen.getByRole("group",{name:"任务类型"}));
+  expect(screen.queryByRole("combobox",{name:"任务类型"})).not.toBeInTheDocument();
+  expect(types.getByRole("button",{name:"素材解析"})).toHaveAttribute("aria-pressed","true");
+  fireEvent.click(types.getByRole("button",{name:"成片制作"}));
+  expect(types.getByRole("button",{name:"成片制作"})).toHaveAttribute("aria-pressed","true");
+  expect(types.getByRole("button",{name:"素材解析"})).toHaveAttribute("aria-pressed","false");
+  expect(imports.create).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("目标对象"),{target:{value:"creation-task:render-9"}});
   fireEvent.click(screen.getByRole("button",{name:"创建任务定义"}));
   expect(screen.getByRole("alert")).toHaveTextContent("到点模式必须给出最早开始时间");
   expect(imports.create).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("最早开始时间"),{target:{value:"2026-03-01T08:30"}});
   fireEvent.change(screen.getByLabelText("时间窗 JSON"),{target:{value:'{"hours":[2]}'}});
-  imports.create.mockResolvedValue(task({id:"st-new",not_before_utc:new Date("2026-03-01T08:30").toISOString(),window:{hours:[2]}}));
+  imports.create.mockResolvedValue(task({id:"st-new",task_type:"creation_render",target_ref:"creation-task:render-9",not_before_utc:new Date("2026-03-01T08:30").toISOString(),window:{hours:[2]}}));
   fireEvent.click(screen.getByRole("button",{name:"创建任务定义"}));
+  expect(types.getByRole("button",{name:"素材解析"})).toBeDisabled();
+  expect(types.getByRole("button",{name:"成片制作"})).toBeDisabled();
   await waitFor(()=>expect(imports.create).toHaveBeenCalledTimes(1));
-  expect(imports.create).toHaveBeenCalledWith({task_type:"material_analysis",trigger_mode:"scheduled",
-    target_ref:"asset:abc123",not_before_utc:new Date("2026-03-01T08:30").toISOString(),window:{hours:[2]}});
-  expect(await screen.findByText("asset:abc123")).toBeInTheDocument();
+  expect(imports.create).toHaveBeenCalledWith({task_type:"creation_render",trigger_mode:"scheduled",
+    target_ref:"creation-task:render-9",not_before_utc:new Date("2026-03-01T08:30").toISOString(),window:{hours:[2]}});
+  expect(await screen.findByText("creation-task:render-9")).toBeInTheDocument();
+  expect(types.getByRole("button",{name:"素材解析"})).toBeEnabled();
   expect((screen.getByLabelText("目标对象") as HTMLInputElement).value).toBe("");
 });
 

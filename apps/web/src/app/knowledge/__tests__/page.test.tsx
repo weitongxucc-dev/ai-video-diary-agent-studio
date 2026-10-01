@@ -28,6 +28,9 @@ describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
     render(<KnowledgePage />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
+    expect(screen.getByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).toBeInTheDocument();
     expect(screen.getAllByText(/未分类/)).not.toHaveLength(0);
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
@@ -39,6 +42,15 @@ describe("KnowledgePage", () => {
     expect(screen.getByText(/不能按文件格式推断/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+  });
+
+  it("keeps the add-source action without an empty relation or question panel", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [], total_count: 0 });
+    render(<KnowledgePage />);
+    await screen.findByText("知识库还没有内容");
+    expect(screen.getByRole("link", { name: "去信息源添加内容" })).toHaveAttribute("href", "/sources");
+    expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
   });
 
   it("keeps search and refresh connected to the real list endpoint", async () => {

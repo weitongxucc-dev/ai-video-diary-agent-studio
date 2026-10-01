@@ -70,8 +70,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
         <button aria-label="刷新知识库" disabled={loading} onClick={onRefresh} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={16} /></button>
       </div>
       {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>本地服务恢复或工作区授权确认后再刷新。</p></div></section> : null}
-      <div className={styles.columns}>
-        <section className={styles.card}>
+      <section className={styles.card}>
           <div className={styles.cardHeading}><div><h2>来源封面</h2><small>{loading ? "正在读取" : error ? "读取失败" : category !== "全部" && !exampleMode ? "用途分类尚未接入" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选来源查看内容</small></div></div>
           {loading ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
             : category !== "全部" && !exampleMode ? <div className={styles.empty}>现有知识条目没有用途分类字段，不能按文件格式推断“{category}”。<button onClick={() => setCategory("全部")} type="button">查看全部来源</button></div>
@@ -81,13 +80,8 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
                 <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : "核对状态未接入"}</span>
               </button>)}</div>
             : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
-        </section>
-        <section className={styles.card}>
-          <div className={styles.cardHeading}><div><h2>主题关系</h2><small>来源与创作引用</small></div></div>
-          <div className={styles.relationEmpty}><BookOpen size={20} /><strong>主题与引用关系尚未接入</strong><p>现有条目记录了来源关联，但没有可核对的主题、参数冲突或任务引用关系。</p></div>
-          <div className={styles.question}><h3>从来源中找答案</h3><p>问答和来源召回尚未接入。可先打开封面核对已保存正文。</p></div>
-        </section>
-      </div>
+      </section>
+      <p className={styles.notWired}>主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入；当前可查看已保存的来源正文。</p>
     </div>
   </AppShell>;
 }

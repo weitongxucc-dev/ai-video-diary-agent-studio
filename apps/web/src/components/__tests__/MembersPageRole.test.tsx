@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalMemberRole } from "@/lib/local-member-auth";
@@ -7,14 +7,15 @@ const identity = vi.hoisted(() => ({
   role: null as LocalMemberRole | null,
   ready: true,
   error: null as string | null,
+  refresh: vi.fn(),
 }));
 
 const api = vi.hoisted(() => ({ listLocalMembers: vi.fn() }));
 
-vi.mock("@/components/AppShell", () => ({ AppShell: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock("@/components/AppShell", () => ({ AppShell: ({ children }: { children: ReactNode }) => <div data-testid="app-shell">{children}</div> }));
 vi.mock("@/lib/api", () => ({ ...api, membersErrorMessage: vi.fn((c: unknown) => (c instanceof Error ? c.message : "成员操作失败")) }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({
-  useLocalMemberIdentity: () => ({ token: "tok", role: identity.role, ready: identity.ready, error: identity.error, refresh: vi.fn() }),
+  useLocalMemberIdentity: () => ({ token: "tok", role: identity.role, ready: identity.ready, error: identity.error, refresh: identity.refresh }),
 }));
 
 import MembersPage from "@/app/members/page";
@@ -35,6 +36,7 @@ beforeEach(() => {
   identity.role = null;
   identity.ready = true;
   identity.error = null;
+  identity.refresh.mockReset();
   api.listLocalMembers.mockReset();
   api.listLocalMembers.mockResolvedValue({ members: [owner, member] });
 });
@@ -70,6 +72,8 @@ describe("members page renders by real identity", () => {
     identity.ready = false;
     render(<MembersPage />);
     expect(screen.getByRole("status")).toHaveTextContent("正在确认身份");
+    expect(screen.getByTestId("app-shell")).toContainElement(screen.getByRole("status"));
+    expect(api.listLocalMembers).not.toHaveBeenCalled();
     // 加载中：既不闪 owner 控件，也不渲染成员列表
     for (const control of OWNER_CONTROLS) {
       expect(screen.queryByRole(control.name as "button", { name: control.text })).not.toBeInTheDocument();
@@ -81,13 +85,22 @@ describe("members page renders by real identity", () => {
     identity.role = null;
     identity.ready = true;
     identity.error = "成员凭据无效";
-    render(<MembersPage />);
+    const { rerender } = render(<MembersPage />);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("成员凭据无效");
-    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.getByTestId("app-shell")).toContainElement(alert);
+    expect(api.listLocalMembers).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(identity.refresh).toHaveBeenCalledTimes(1);
     for (const control of OWNER_CONTROLS) {
       expect(screen.queryByRole(control.name as "button", { name: control.text })).not.toBeInTheDocument();
     }
+    identity.error = null;
+    identity.role = "member";
+    rerender(<MembersPage />);
+    await screen.findByText("小王");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("app-shell")).toHaveLength(1);
   });
 
   it("keeps the join panel available to a member (joining is not an owner-only action)", async () => {

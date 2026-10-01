@@ -19,8 +19,7 @@
 .error { display: flex; gap: 8px; margin: 10px 0; padding: 10px; border: 1px solid var(--border-1); border-radius: 7px; font-size: 13px; }
 .error strong { font-weight: 500; }
 .error p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; }
-.columns { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(225px, .8fr); gap: 10px; align-items: start; }
-.card { min-width: 0; min-height: 220px; padding: 13px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
+.card { min-width: 0; padding: 13px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
 .cardHeading h2 { margin: 0 0 2px; font-size: 14px; font-weight: 500; }
 .cardHeading small { color: var(--text-2); font-size: 11px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
@@ -31,15 +30,9 @@
 .cover strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .cover > small { overflow: hidden; color: var(--text-2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .coverStatus { color: var(--text-2); font-size: 11px; }
-.empty { display: flex; min-height: 170px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); font-size: 12px; text-align: center; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px 0; color: var(--text-2); font-size: 12px; text-align: center; }
 .empty button { padding: 6px 9px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--accent); font: inherit; cursor: pointer; }
 .empty a { color: var(--accent); text-decoration: none; }
-.relationEmpty { display: grid; justify-items: center; gap: 7px; padding: 25px 8px; color: var(--text-2); text-align: center; }
-.relationEmpty strong { color: var(--text-1); font-size: 12px; font-weight: 500; }
-.relationEmpty p { max-width: 230px; margin: 0; font-size: 11px; line-height: 1.5; }
-.question { padding-top: 11px; border-top: 1px solid var(--border-1); }
-.question h3 { margin: 0 0 4px; font-size: 12px; font-weight: 500; }
-.question p { margin: 0; color: var(--text-2); font-size: 11px; }
 .spinning { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .inspector { display: grid; gap: 12px; min-width: 0; color: var(--text-1); }
@@ -66,6 +59,6 @@
 .detailActions button:disabled { color: var(--text-2); opacity: .6; cursor: not-allowed; }
 .detailActions a { margin-top: 0; }
 .notWired { margin: 8px 0 0; color: var(--text-2); font-size: 11px; }
-@media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .columns { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .top { flex-direction: column; } .actions { justify-content: flex-end; } .category { padding: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }

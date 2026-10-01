@@ -80,11 +80,7 @@ export function ScheduledTasksWorkspace() {
 
   const creating=busy==="create";
   return <div className={styles.page}>
-    <header className={styles.header}>
-      <h1>定时任务</h1>
-      <p>按到点或闲时管理自动化任务定义；常驻素材解析不依赖定时任务。</p>
-      <span className={styles.count}>{tasks===null?"正在读取定时任务…":`${tasks.length} 项`}</span>
-    </header>
+    <span className={styles.count}>{tasks===null?"正在读取定时任务…":`${tasks.length} 项`}</span>
     <p className={styles.honestNote}>{HONEST_NOTE}</p>
     <div className={styles.columns}>
       <section className={styles.card} aria-label="定时任务定义">
@@ -108,12 +104,13 @@ export function ScheduledTasksWorkspace() {
       <section className={styles.card} aria-label="新建定时任务">
         <div className={styles.cardHeading}><h2>新建任务定义</h2><small>创建后出现在左侧列表；启停与删除即时生效。</small></div>
         <form onSubmit={event=>void submit(event)} className={styles.field}>
-          <label className={styles.field}><span>任务类型</span>
-           <select aria-label="任务类型" value={draft.taskType} disabled={creating}
-            onChange={event=>setDraft({...draft,taskType:event.target.value as ScheduledTaskType})}>
-            <option value="material_analysis">素材解析</option>
-            <option value="creation_render">成片制作</option>
-           </select></label>
+          <div className={styles.field} role="group" aria-label="任务类型"><span>任务类型</span>
+           <div className={styles.modeRow}>
+            <button className={styles.modeButton} type="button" aria-pressed={draft.taskType==="material_analysis"} disabled={creating}
+             onClick={()=>setDraft({...draft,taskType:"material_analysis"})}>素材解析</button>
+            <button className={styles.modeButton} type="button" aria-pressed={draft.taskType==="creation_render"} disabled={creating}
+             onClick={()=>setDraft({...draft,taskType:"creation_render"})}>成片制作</button>
+           </div></div>
           <div className={styles.fieldRow}>
            <div className={styles.field} role="group" aria-label="触发模式"><span>触发模式</span>
             <div className={styles.modeRow}>
