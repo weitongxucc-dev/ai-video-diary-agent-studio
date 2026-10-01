@@ -9918,8 +9918,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         if payload.operation_type == "ConfirmClip":
             return "待确认" if clip.needs_confirmation else "已确认"
         if payload.operation_type == "ChangeCrop":
-            framing = "完整显示" if clip.fit_mode == "fit" else "填满画面"
-            return f"{framing} · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
+            if clip.fit_mode == "fit":
+                return "完整显示 · 裁剪位置已保留，在此模式下不生效"
+            return f"填满画面 · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
         return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
 
     media_previews = {}
