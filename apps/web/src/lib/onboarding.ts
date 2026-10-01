@@ -277,8 +277,10 @@ export function buildOnboardingSnapshot(input: {
 
     if (status?.video.inbox_path) {
       state = videoInboxConfigured ? "ready" : "missing";
+      // Only existence is verified here, so the copy must not claim readiness or
+      // writability; the material library reports the directory's real state.
       detail = videoInboxConfigured
-        ? `已就绪，当前 ${status.video.pending_count} 个待处理视频。`
+        ? `已找到视频待处理目录，当前 ${status.video.pending_count} 个待处理视频。`
         : `路径未找到：${status.video.inbox_path}`;
     } else if (status) {
       state = "missing";
@@ -301,8 +303,10 @@ export function buildOnboardingSnapshot(input: {
   const videoOutputEntry: OnboardingChecklistEntry = buildEntry({
     id: "video_output",
     title: "视频输出目录",
+    // output_exists only proves the path was found; writability is never probed
+    // by this status call, so claiming "可写" here would outrun the evidence.
     detail: videoOutputConfigured
-      ? "输出目录可写。"
+      ? "已找到视频输出目录。"
       : status?.video.output_path
         ? `路径未找到：${status.video.output_path}`
         : "视频输出目录未填写。",

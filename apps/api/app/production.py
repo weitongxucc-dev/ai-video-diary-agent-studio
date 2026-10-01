@@ -2624,7 +2624,10 @@ class ProductionRepository:
             raise ValueError("请先确认当前素材目录")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if self._material_library_status() != "ready":
+            status = self._material_library_status()
+            if status == "read_only":
+                raise ValueError("素材目录当前不可写；请检查磁盘挂载方式或目录权限，或在设置中改选一个可写目录")
+            if status != "ready":
                 raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
             root_path = str(self.video_library_path.resolve())
             expected_path = str(Path(expected_directory).expanduser().resolve())
@@ -2677,7 +2680,7 @@ class ProductionRepository:
     def _material_library_available(self) -> bool:
         return self._material_library_status() == "ready"
 
-    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "ready"]:
+    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "read_only", "ready"]:
         root = self.video_library_path
         if not root.is_absolute() or root.is_symlink():
             return "invalid"
@@ -2690,7 +2693,27 @@ class ProductionRepository:
             return "missing"
         if not root.is_dir():
             return "invalid"
+        if not self._material_directory_writable(root):
+            return "read_only"
         return "ready"
+
+    @staticmethod
+    def _material_directory_writable(root: Path) -> bool:
+        """Prove the directory accepts writes, because existence alone never promised that.
+
+        A read-only mount still lists as a normal directory, so binding to one
+        registers an intake that can never accept a file and hides the cause until
+        a later import fails. Creating and removing a hidden uniquely named file
+        is the same proof the desktop import path already relies on, and both
+        intake scanners skip anything without a supported media suffix.
+        """
+        probe = root / f".chatcut_write_probe_{uuid4().hex}"
+        try:
+            probe.touch(exist_ok=False)
+            probe.unlink()
+        except OSError:
+            return False
+        return True
 
     def discover_material_hash_candidates(self, *, stable_seconds: float = 10.0) -> list[MaterialHashCandidate]:
         """Observe stable files for the opt-in scheduler path without reading their content."""

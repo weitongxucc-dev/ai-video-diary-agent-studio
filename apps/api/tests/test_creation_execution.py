@@ -643,6 +643,38 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
         }).status_code == 409
 
 
+def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
+    # A read-only volume still lists as a normal directory, so the intake would
+    # otherwise accept a binding it can never fulfil and fail only at import time.
+    library = tmp_path / "曜核AI IP一体机"
+    library.mkdir()
+    repo = ProductionRepository(database_path=tmp_path / "isolated.sqlite3", video_library_path=library)
+    assert main_module._material_binding_status("local", repo).directory_state == "ready"
+
+    library.chmod(0o500)
+    try:
+        refused = main_module._material_binding_status("local", repo)
+        assert refused.directory_state == "read_only"
+        assert "不可写" in refused.directory_message
+        assert refused.repair_action and "只读" in refused.repair_action
+        with pytest.raises(ValueError, match="不可写"):
+            repo.bind_material_ingestion("local", expected_directory=str(library))
+    finally:
+        library.chmod(0o755)
+
+    recovered = main_module._material_binding_status("local", repo)
+    assert recovered.directory_state == "ready"
+    assert recovered.repair_action is None
+    repo.bind_material_ingestion("local", expected_directory=str(library))
+    assert main_module._material_binding_status("local", repo).bound_to_current_workspace is True
+
+    library.chmod(0o500)
+    try:
+        assert main_module._material_binding_status("local", repo).directory_state == "read_only"
+    finally:
+        library.chmod(0o755)
+
+
 def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch):
     # Keep the full runtime reload inside a synthetic library and restore its
     # module globals afterwards; no provider or media operation is invoked.

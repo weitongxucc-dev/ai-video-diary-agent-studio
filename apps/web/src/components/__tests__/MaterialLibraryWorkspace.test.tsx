@@ -198,6 +198,14 @@ it("shows disk repair instead of offering a scan while the bound disk is missing
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
 });
 
+it("names a read-only directory and offers a repair instead of binding it", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, directory_state:"read_only", directory_message:"素材目录当前不可写，素材无法进入分析。", repair_action:"检查磁盘是否以只读方式挂载或目录权限是否被改动，再重新检查。" });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(await screen.findByText("目录不可写")).toBeInTheDocument();
+  expect(screen.getByText(/检查磁盘是否以只读方式挂载/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name:"确认接入" })).toBeDisabled();
+});
+
 it("keeps failed intake visible and retries the selected asset", async () => {
   const failed = { ...asset, analysis_status:"failed" as const, analysis_message:"本地分析服务暂不可用；检查服务后重试。" };
   const retried = { ...failed, analysis_status:"pending" as const, analysis_message:"已请求重试，等待素材稳定后重新分析。" };

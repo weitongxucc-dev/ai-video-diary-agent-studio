@@ -1740,7 +1740,7 @@ export type MaterialIntakeStatus = {
   binding_available: boolean;
   configured_directory: string | null;
   bound_directory: string | null;
-  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "changed" | "unknown";
+  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "read_only" | "changed" | "unknown";
   directory_message: string;
   repair_action: string | null;
   scan_interval_seconds: number;

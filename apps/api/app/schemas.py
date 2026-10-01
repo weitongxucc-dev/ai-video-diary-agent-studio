@@ -540,7 +540,7 @@ class MaterialIntakeStatusResponse(BaseModel):
     binding_available: bool
     configured_directory: str | None
     bound_directory: str | None
-    directory_state: Literal["ready", "missing", "unmounted", "invalid", "changed", "unknown"]
+    directory_state: Literal["ready", "missing", "unmounted", "invalid", "read_only", "changed", "unknown"]
     directory_message: str
     repair_action: str | None
     scan_interval_seconds: int

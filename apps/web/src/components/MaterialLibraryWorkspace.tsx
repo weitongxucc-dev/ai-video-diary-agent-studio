@@ -59,6 +59,7 @@ const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
   ready: "目录可用",
   missing: "目录不存在",
   unmounted: "外接盘未连接",
+  read_only: "目录不可写",
   invalid: "目录不可用",
   changed: "目录已变更",
   unknown: "等待确认",
