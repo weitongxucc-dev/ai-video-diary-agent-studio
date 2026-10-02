@@ -340,9 +340,12 @@ def reorder_linked_group(audio: AudioTimeline, tracks, spans, clip_spans, durati
         # An already split segment keeps its own name, source reference, gain, denoise,
         # loudness, envelope and lock; only its timeline position follows the clip.
         # Old position: the split segment's real pre-move place, or — before this plan is
-        # split — where the whole clip's audio for that source actually sits.
+        # split — where the whole clip's audio for that source actually sits. The lock that
+        # matters is the one on the object actually being moved: the split segment when the
+        # plan is already split, the whole clip when this reorder is the first split.
+        moving = kept if kept is not None else whole
         old_ms = kept.timeline_start_ms if kept is not None else whole.timeline_start_ms + offset
-        if old_ms != start_ms and (track.locked or (kept is not None and kept.locked)):
+        if old_ms != start_ms and (track.locked or moving.locked):
             raise ValueError("关联编辑会改变已锁定音轨或音频片段，请先解锁")
         old_positions[cue_id] = old_ms
         sources[cue_id] = kept.source_ref if kept is not None else whole.source_ref

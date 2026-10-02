@@ -5284,29 +5284,33 @@ def _apply_reorder_narration_linkage(
     来源引用与源区间逐字保留，只有时间线区间移动；音乐/音效/原声轨完全不碰。
     关联缺失或对不上时抛 ValueError，由调用方转 409 并把具体缺口回报给用户。
     """
-    spans = _narration_linkage_spans(plan)
-    known = {cue_id for cue_id, _o, _d in spans}
-    clip_spans = []
-    for item in plan.clips:
-        if item.cue_id not in known:
-            continue
-        clip_spans.append((
-            item.cue_id,
-            round(item.timeline_start_seconds * 1000),
-            round(item.timeline_end_seconds * 1000) - round(item.timeline_start_seconds * 1000),
-        ))
-    tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+    # Building the spans is part of the linkage check, not a separate step: a plan whose person
+    # shot has no matching narration source must fail the same way as a mismatch inside the
+    # reorder, so it is reported as 409 instead of escaping as a 500.
+    try:
+        spans = _narration_linkage_spans(plan)
+        known = {cue_id for cue_id, _o, _d in spans}
+        clip_spans = []
+        for item in plan.clips:
+            if item.cue_id not in known:
+                continue
+            clip_spans.append((
+                item.cue_id,
+                round(item.timeline_start_seconds * 1000),
+                round(item.timeline_end_seconds * 1000) - round(item.timeline_start_seconds * 1000),
+            ))
+        audio, edited_tracks, linkage = reorder_linked_group(
+            _effective_audio_timeline(plan),
+            _current_subtitle_tracks(workspace_id, task, montage=plan),
+            spans, clip_spans, plan.duration_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"镜头顺序未保存：{exc}") from exc
     # The plan had no audio track of its own before this reorder, so it was still on the
     # whole-mix loudnorm path. Splitting it by source must keep that same strategy; a plan
     # that already carried custom audio tracks was already omitting loudnorm and keeps doing so.
     # Once set, the flag is sticky so a second reorder of the same plan keeps the first one's choice.
     created_audio_timeline = plan.narration_linkage_created_audio_timeline or plan.audio_timeline is None
-    try:
-        audio, edited_tracks, linkage = reorder_linked_group(
-            _effective_audio_timeline(plan), tracks, spans, clip_spans, plan.duration_seconds
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=f"镜头顺序未保存：{exc}") from exc
     plan.audio_timeline = audio
     plan.narration_linkage_created_audio_timeline = created_audio_timeline
     rows = [
@@ -10087,9 +10091,12 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     )
     # The frozen picture-only default is claimed per reordered object, so the summary names the
     # object the linkage rule was applied to rather than leaving it as background metadata.
+    # That sentence is only about a reorder; a crop or trim on a material shot keeps its own label.
     if linkage:
         proposal_summary = "调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。"
-    elif after_clip.person_render_id is None and any(item.person_render_id for item in plan.clips):
+    elif (payload.operation_type == "ReorderClip"
+            and after_clip.person_render_id is None
+            and any(item.person_render_id for item in plan.clips)):
         proposal_summary = ("调整镜头顺序；本次移动的是纯素材镜头，按已冻结的纯素材默认只换画面，"
             "同片人物口型镜头的配音与字幕保持不变。")
     else:

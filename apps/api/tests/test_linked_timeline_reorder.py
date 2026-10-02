@@ -31,13 +31,14 @@ def linked_reorder_state(person_render_edit_state):
 
 def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         narration_track: dict | None = None, swapped: bool = False, material: bool = False,
-        plain: bool = False):
+        plain: bool = False, broken_source: bool = False):
     """Two 4s presenter clips over one narration source.
 
     ``swapped`` lays the clips out in the reverse order (and the narration segments with them),
     which is the review's repro for "the reported old position must be the real one".
     ``material`` drops ``person_render_id`` from the second clip so the plan is mixed.
     ``plain`` leaves the plan without any audio track of its own, as before the first split.
+    ``broken_source`` drops the second cue's narration source, so the linkage cannot be built.
     """
     plan = state.montage
     section_id = plan.cues[0].source_section_id
@@ -70,7 +71,8 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
             NarrationCue(id="cue-link-a", source_section_id=section_id, text="第一句。",
                 duration_seconds=4, narration_segment_id=segment_id),
             NarrationCue(id="cue-link-b", source_section_id=section_id, text="第二句。",
-                duration_seconds=4, narration_segment_id="narration-person-link-b"),
+                duration_seconds=4,
+                narration_segment_id=None if broken_source else "narration-person-link-b"),
         ],
         clips=[clips["a"], clips["b"]],
         audio_timeline=None if plain else audio,
@@ -305,3 +307,37 @@ def test_loudness_strategy_is_kept_per_plan_state_instead_of_always_reapplied(
         _reorder(state, "clip-link-a", 0)
         _reorder(state, "clip-link-a", 1)
     assert _linkage_flag(state) is expected
+
+
+def test_first_split_respects_the_lock_on_the_whole_clip(person_render_edit_state):
+    """Before the first split the object that actually moves is the whole clip, not a segment."""
+    source_ref = person_render_edit_state.montage.narration_audio_path
+    whole = {"id": "narration-main", "name": "配音", "role": "narration", "clips": [
+        {"id": "narration-whole", "name": "整片配音", "source_ref": source_ref,
+         "source_start_ms": 0, "source_end_ms": 8000, "timeline_start_ms": 0, "locked": True}]}
+    state = _build_linked_state(person_render_edit_state, narration_track=whole)
+    rejected = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview", json={
+        "operation_type": "ReorderClip", "clip_id": "clip-link-a", "position": 1})
+    assert rejected.status_code == 409, rejected.text
+    assert "请先解锁" in rejected.json()["detail"]
+
+
+def test_missing_narration_source_is_reported_as_a_conflict_not_a_server_error(person_render_edit_state):
+    state = _build_linked_state(person_render_edit_state, broken_source=True)
+    rejected = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview", json={
+        "operation_type": "ReorderClip", "clip_id": "clip-link-a", "position": 1})
+    assert rejected.status_code == 409, rejected.text
+    assert "镜头顺序未保存" in rejected.json()["detail"]
+    assert "没有配音分段来源" in rejected.json()["detail"]
+
+
+def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_state):
+    """A crop on a material shot keeps its own label; it must not be described as a reorder."""
+    state = _build_linked_state(person_render_edit_state, material=True)
+    preview = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview", json={
+        "operation_type": "ChangeCrop", "clip_id": "clip-link-b",
+        "fit_mode": "fit", "crop_x": 0.4, "crop_y": 0.6})
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()["proposal"]["summary"]
+    assert "本次移动的是纯素材镜头" not in summary
+    assert "调整镜头顺序" not in summary
