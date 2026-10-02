@@ -5,6 +5,8 @@ import type { KnowledgeItem } from "@/lib/source-api";
 
 const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), sourceErrorMessage: vi.fn() }));
 vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, sourceErrorMessage: api.sourceErrorMessage }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: ReactNode; inspector?: ReactNode }) => <><div>{children}</div>{inspector ? <aside aria-label="来源详情">{inspector}</aside> : null}</> }));
 
