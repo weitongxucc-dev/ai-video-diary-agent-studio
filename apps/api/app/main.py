@@ -135,6 +135,7 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.production import (
+    ScriptLibraryEntry,
     ArtifactRecord,
     CreationPlan,
     VideoTemplate,
@@ -203,6 +204,8 @@ from app.runtime_health import runtime_health
 from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
 from app.source_repository import SourceRepository
 from app.schemas import (
+    ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
+    ScriptLibrarySourceResponse, ScriptLibraryReuseRequest, ScriptLibraryReuseResponse,
     AuthorizationResponse,
     AuthorizationsResponse,
     AuthorizationUpsertRequest,
@@ -4151,6 +4154,146 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
     return _creation_plan_response(plan, task)
 
 
+def _script_library_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
+    try:
+        return production_repo.get_creation_task(
+            workspace_id, task_id, include_private=_content_include_private(request),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
+
+
+def _script_library_sources(
+    request: Request, workspace_id: str, entry: ScriptLibraryEntry,
+) -> tuple[list[ScriptLibrarySourceResponse], list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
+    task = _script_library_task_access(request, workspace_id, entry.source_task_id)
+    plan = _creation_plan_for_task_or_404(workspace_id, task)
+    knowledge = {reference.id: reference for reference in plan.knowledge_references}
+    sources = {reference.id: reference for reference in plan.source_references}
+    resolved_knowledge: list[CreationPlanKnowledgeReference] = []
+    resolved_sources: list[CreationPlanSourceReference] = []
+    result: list[ScriptLibrarySourceResponse] = []
+    references = dict.fromkeys(ref for section in entry.sections for ref in section.reference_ids)
+    for ref in references:
+        state = ScriptLibrarySourceResponse(reference_id=ref, status="missing")
+        if ref.startswith("knowledge:"):
+            parts = ref.removeprefix("knowledge:").rsplit(":", 1)
+            if len(parts) == 2:
+                item_id, version = parts
+                try:
+                    item = source_repository.get_knowledge_item(workspace_id, item_id)
+                    visible = (_content_include_private(request)
+                               or source_repository.get_knowledge_item_visibility(workspace_id, item_id) == "shared")
+                except KeyError:
+                    item = None
+                    visible = False
+                original = knowledge.get(item_id)
+                if visible and item is not None and original is not None:
+                    if (item.version != version or item.version != original.version
+                            or item.authorization != original.authorization or item.ownership != original.ownership):
+                        state.status = "version_changed"
+                    elif item.authorization.strip() and item.ownership.strip():
+                        state.status = "readable"
+                        state.title = item.title
+                        state.version_or_identity = item.version
+                        resolved_knowledge.append(original)
+        elif ref.startswith("source:"):
+            item_id = ref.removeprefix("source:")
+            try:
+                item = source_repository.get_source_item(workspace_id, item_id)
+            except KeyError:
+                item = None
+            original = sources.get(item_id)
+            if item is not None and original is not None:
+                if (not original.identity or _source_item_identity(item) != original.identity
+                        or item.connector_id != original.connector_id or item.license != original.license):
+                    state.status = "version_changed"
+                elif item.license.strip() and item.license.casefold() not in {"unknown", "unverified"}:
+                    state.status = "readable"
+                    state.title = item.title
+                    state.source_url = item.source_url
+                    state.version_or_identity = original.identity
+                    resolved_sources.append(original)
+        result.append(state)
+    return result, resolved_knowledge, resolved_sources
+
+
+def _readable_script_library_entry(request: Request, workspace_id: str, entry_id: str) -> tuple[ScriptLibraryEntry, list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
+    try:
+        entry = production_repo.get_script_library_entry(workspace_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
+    states, knowledge, sources = _script_library_sources(request, workspace_id, entry)
+    if any(source.status != "readable" for source in states):
+        raise HTTPException(status_code=409, detail="文案引用的来源已不可读或版本已变化，请核对原任务来源")
+    return entry, knowledge, sources
+
+
+@app.post("/api/production/script-library", response_model=ScriptLibraryEntryResponse)
+def save_script_library(request: Request, payload: ScriptLibrarySaveRequest) -> ScriptLibraryEntryResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        script = production_repo.get_creation_task_script(workspace_id, payload.source_script_id)
+        # Saving an owned confirmed script does not authorize reuse of its sources.
+        _script_library_task_access(request, workspace_id, script.task_id)
+        entry = production_repo.save_script_library_entry(
+            workspace_id, source_script_id=script.id, name=payload.name, category=payload.category,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文案不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ScriptLibraryEntryResponse.model_validate(asdict(entry))
+
+
+@app.get("/api/production/script-library", response_model=ScriptLibraryListResponse)
+def list_script_library(request: Request, q: str = "", category: str = "") -> ScriptLibraryListResponse:
+    workspace_id = current_workspace_id(request)
+    items = []
+    for entry in production_repo.list_script_library_entries(workspace_id, query=q, category=category):
+        try:
+            _script_library_task_access(request, workspace_id, entry.source_task_id)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            continue
+        items.append(ScriptLibraryEntryResponse.model_validate(asdict(entry)))
+    return ScriptLibraryListResponse(items=items, total_count=len(items))
+
+
+@app.get("/api/production/script-library/{entry_id}/sources", response_model=list[ScriptLibrarySourceResponse])
+def script_library_sources(entry_id: str, request: Request) -> list[ScriptLibrarySourceResponse]:
+    workspace_id = current_workspace_id(request)
+    try:
+        entry = production_repo.get_script_library_entry(workspace_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
+    states, _, _ = _script_library_sources(request, workspace_id, entry)
+    return states
+
+
+@app.post("/api/production/script-library/{entry_id}/reuse", response_model=ScriptLibraryReuseResponse)
+def reuse_script_library(entry_id: str, request: Request, payload: ScriptLibraryReuseRequest) -> ScriptLibraryReuseResponse:
+    workspace_id = current_workspace_id(request)
+    if not payload.requirements_confirmed:
+        raise HTTPException(status_code=409, detail="请明确确认新任务要求")
+    entry, knowledge, sources = _readable_script_library_entry(request, workspace_id, entry_id)
+    plan = CreationPlan(
+        id=f"plan_{uuid4().hex[:12]}", workspace_id=workspace_id,
+        name=payload.name.strip(), goal=f"复用文案：{entry.name}（版本{entry.version}），待重新确认正文",
+        target_count=1, language=entry.language, aspect_ratio=payload.aspect_ratio,
+        duration_target_seconds=payload.duration_target_seconds,
+        knowledge_references=knowledge, source_references=sources,
+        selected_voice=None, pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
+        material_rule_summary="复用稿尚未选材，确认正文后沿当前任务继续", model_snapshot=[],
+        confirmation_points=[], blockers=[], preflight_fingerprint=f"script-library:{entry.id}",
+    )
+    if not plan.name:
+        raise HTTPException(status_code=422, detail="请输入新任务名称")
+    task, draft = production_repo.reuse_script_library_entry(workspace_id, entry.id, plan=plan)
+    return ScriptLibraryReuseResponse(task_id=task.id, script=CreationTaskScriptResponse.model_validate(asdict(draft)))
+
+
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
 def list_creation_tasks(request: Request) -> CreationTasksResponse:
     tasks = production_repo.list_creation_tasks(
@@ -4942,6 +5085,14 @@ def confirm_creation_task_script(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
+    try:
+        current_script = production_repo.get_creation_task_script(workspace_id, script_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task script not found") from exc
+    if current_script.task_id != task.id:
+        raise HTTPException(status_code=404, detail="creation task script not found")
+    if current_script.reused_from_entry_id:
+        _readable_script_library_entry(request, workspace_id, current_script.reused_from_entry_id)
     estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in payload.sections))
     if estimated_seconds > plan.duration_target_seconds:
         raise HTTPException(status_code=422, detail=(

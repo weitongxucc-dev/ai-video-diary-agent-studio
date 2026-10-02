@@ -1166,6 +1166,7 @@ export type CreationTaskScript = {
   created_at: string;
   updated_at: string;
   confirmed_at: string | null;
+  reused_from_entry_id?: string | null;
 };
 
 export type CreationTaskScriptsResponse = {
@@ -1812,4 +1813,19 @@ export type MaterialLibraryInsights = {
   segment_count: number;
   tags: MaterialTagStat[];
   recommended_gaps: string[];
+};
+
+
+export type ScriptLibrarySection = {
+  id: string; title: string; content: string; visual_prompt: string; reference_ids: string[];
+};
+export type ScriptLibraryEntry = {
+  id: string; name: string; category: string; version: number; supersedes_entry_id: string | null;
+  source_script_id: string; source_task_id: string; source_run_id: string; source_topic_id: string;
+  title: string; language: "zh-CN" | "en-US" | "zh-CN/en-US";
+  sections: ScriptLibrarySection[]; created_at: string; updated_at: string;
+};
+export type ScriptLibrarySource = {
+  reference_id: string; status: "readable" | "missing" | "version_changed";
+  title: string | null; version_or_identity: string | null; source_url: string | null;
 };

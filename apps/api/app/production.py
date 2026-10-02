@@ -786,6 +786,49 @@ class CreationTaskScript:
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime | None = None
+    # 复用稿没有自己的生成记录，这里记下它来自文案库的哪一条，供界面如实标注。
+    reused_from_entry_id: str | None = None
+
+
+@dataclass
+class ScriptLibrarySection:
+    """库条目里冻结的一段文案。
+
+    只保存用户自己写的正文与画面建议。资料标题、来源地址、授权字段一律不落库：
+    那些是授权校验之后才可读的内容，存进库里就等于给快照开了一条绕过当前
+    workspace 权限的路。出处只留 reference_ids，用来回查时定位。
+    """
+
+    id: str
+    title: str
+    content: str
+    visual_prompt: str
+    reference_ids: list[str]
+
+
+@dataclass
+class ScriptLibraryEntry:
+    """一条命名保存的文案：可搜索、可复用，关联原创作任务。
+
+    每次保存都追加一行，version 递增并指向被取代的那一条，旧版本原样留着。
+    不静默合并，也就不会把用户已经保存过的文案悄悄改掉。
+    """
+
+    id: str
+    workspace_id: str
+    name: str
+    category: str
+    source_script_id: str
+    source_task_id: str
+    source_run_id: str
+    source_topic_id: str
+    version: int
+    supersedes_entry_id: str | None
+    title: str
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
+    sections: list[ScriptLibrarySection]
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
 
 JobRunStatus = Literal[
@@ -1424,6 +1467,16 @@ class ProductionRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_topic_evidence_candidate
                     ON topic_evidence_references(workspace_id, candidate_id, created_at ASC);
+                CREATE TABLE IF NOT EXISTS script_library_entries (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    source_task_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_script_library_workspace
+                    ON script_library_entries(workspace_id, source_task_id, name, created_at);
                 CREATE TABLE IF NOT EXISTS script_generation_runs (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -7464,6 +7517,116 @@ class ProductionRepository:
                 (_json_payload(script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
             )
         return script
+
+    def save_script_library_entry(
+        self, workspace_id: str, *, source_script_id: str, name: str, category: str,
+    ) -> ScriptLibraryEntry:
+        if not name.strip():
+            raise ValueError("请为保存的文案命名")
+        script = self.get_creation_task_script(workspace_id, source_script_id)
+        if script.selection_status != "confirmed":
+            raise ValueError("只能保存已确认的文案")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_creation_task(conn, workspace_id, script.task_id)
+            previous = conn.execute(
+                "SELECT payload FROM script_library_entries WHERE workspace_id=? AND source_task_id=? AND name=? "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (workspace_id, script.task_id, name.strip()),
+            ).fetchone()
+            prior = self._script_library_entry_from_payload(json.loads(previous["payload"])) if previous else None
+            entry = ScriptLibraryEntry(
+                id=f"script_library_{uuid4().hex[:12]}", workspace_id=workspace_id,
+                name=name.strip(), category=category.strip(), source_script_id=script.id,
+                source_task_id=script.task_id, source_run_id=script.run_id, source_topic_id=script.topic_id,
+                version=prior.version + 1 if prior else 1, supersedes_entry_id=prior.id if prior else None,
+                title=script.title, language=script.language,
+                sections=[ScriptLibrarySection(
+                    id=section.id, title=section.title, content=section.content,
+                    visual_prompt=section.visual_prompt, reference_ids=list(section.evidence_reference_ids),
+                ) for section in script.sections],
+            )
+            conn.execute(
+                "INSERT INTO script_library_entries (id, workspace_id, source_task_id, name, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (entry.id, workspace_id, script.task_id, entry.name, _json_payload(entry), entry.created_at.isoformat()),
+            )
+        return entry
+
+    @staticmethod
+    def _script_library_entry_from_payload(data: dict[str, object]) -> ScriptLibraryEntry:
+        sections = data.pop("sections", [])
+        return ScriptLibraryEntry(
+            **_with_datetime(data, "created_at", "updated_at"),
+            sections=[ScriptLibrarySection(**section) for section in sections],
+        )
+
+    def get_script_library_entry(self, workspace_id: str, entry_id: str) -> ScriptLibraryEntry:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM script_library_entries WHERE workspace_id=? AND id=?",
+                (workspace_id, entry_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(entry_id)
+        return self._script_library_entry_from_payload(json.loads(row["payload"]))
+
+    def list_script_library_entries(
+        self, workspace_id: str, *, query: str = "", category: str = "",
+    ) -> list[ScriptLibraryEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM script_library_entries WHERE workspace_id=? ORDER BY created_at DESC, id DESC",
+                (workspace_id,),
+            ).fetchall()
+        entries = [self._script_library_entry_from_payload(json.loads(row["payload"])) for row in rows]
+        keyword = query.strip().casefold()
+        return [entry for entry in entries if (not category or entry.category == category)
+                and (not keyword or keyword in " ".join(
+                    [entry.name, entry.title, *(section.content for section in entry.sections)]
+                ).casefold())]
+
+    def reuse_script_library_entry(
+        self, workspace_id: str, entry_id: str, *, plan: CreationPlan,
+    ) -> tuple[CreationTask, CreationTaskScript]:
+        entry = self.get_script_library_entry(workspace_id, entry_id)
+        if plan.workspace_id != workspace_id or plan.language != entry.language:
+            raise ValueError("复用方案必须属于当前工作区并保留文案语言")
+        now = utc_now()
+        task = CreationTask(
+            id=f"task_{uuid4().hex[:12]}", workspace_id=workspace_id, plan_id=plan.id,
+            name=plan.name, scenario="script_library_reuse", stage="script",
+            stage_status="waiting_for_user", status="running", progress=20, recovery_point="script",
+        )
+        draft = CreationTaskScript(
+            id=f"script_{uuid4().hex[:12]}", workspace_id=workspace_id, task_id=task.id,
+            run_id="", topic_id="", title=entry.title, language=entry.language,
+            sections=[CreationTaskScriptSection(
+                id=f"section_{uuid4().hex[:12]}", title=section.title, content=section.content,
+                visual_prompt=section.visual_prompt, evidence_reference_ids=list(section.reference_ids),
+            ) for section in entry.sections],
+            reused_from_entry_id=entry.id,
+        )
+        plan.creation_task_id = task.id
+        # The caller's explicit new requirements confirmation creates this plan;
+        # neither the original task confirmation nor a model generation run is copied.
+        plan.confirmed_at = now
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO creation_plans (id, workspace_id, payload, updated_at) VALUES (?, ?, ?, ?)",
+                (plan.id, workspace_id, _json_payload(plan), plan.updated_at.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (task.id, workspace_id, plan.id, _json_payload(task), task.updated_at.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (draft.id, workspace_id, task.id, "", _json_payload(draft), draft.updated_at.isoformat()),
+            )
+        return task, draft
 
     def _demote_other_confirmed_scripts(
         self,

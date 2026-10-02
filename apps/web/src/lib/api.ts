@@ -1,3 +1,4 @@
+import type { ScriptLibraryEntry, ScriptLibrarySource } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import { localMemberTokenHeader } from "./local-member-auth";
 import type {
@@ -12,6 +13,7 @@ import type {
   CreationExecutionStatus,
   MaterialIntakeStatus,
   CreationTaskScriptsResponse,
+  CreationTaskScript,
   CreationTaskScriptSection,
   CreationTaskNarration,
   CreationTaskPersonRender,
@@ -928,4 +930,25 @@ export function createLocalInviteCode(): Promise<{ invite_code: string }> {
  */
 export function joinLocalMember(input: { code: string; name: string }): Promise<LocalMember & { member_token: string }> {
   return request<LocalMember & { member_token: string }>("/api/members/join", { method: "POST", body: JSON.stringify(input) });
+}
+
+
+export function saveScriptLibraryEntry(input: { source_script_id: string; name: string; category: string }) {
+  return creationPlanRequest<ScriptLibraryEntry>("/api/production/script-library", {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+export function listScriptLibraryEntries(query = "", category = "") {
+  const params = new URLSearchParams({ q: query, category });
+  return creationPlanRequest<{ items: ScriptLibraryEntry[]; total_count: number }>(`/api/production/script-library?${params}`);
+}
+export function getScriptLibrarySources(entryId: string) {
+  return creationPlanRequest<ScriptLibrarySource[]>(`/api/production/script-library/${encodeURIComponent(entryId)}/sources`);
+}
+export function reuseScriptLibraryEntry(entryId: string, input: {
+  name: string; aspect_ratio: "9:16" | "16:9" | "1:1"; duration_target_seconds: number; requirements_confirmed: boolean;
+}) {
+  return creationPlanRequest<{ task_id: string; script: CreationTaskScript }>(
+    `/api/production/script-library/${encodeURIComponent(entryId)}/reuse`, { method: "POST", body: JSON.stringify(input) },
+  );
 }

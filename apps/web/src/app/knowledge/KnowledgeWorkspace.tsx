@@ -2,7 +2,10 @@
 
 import { AlertCircle, ArrowRight, BookOpen, FileText, Link2, LoaderCircle, RefreshCw, Search, Video } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry } from "@/lib/api";
+import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import type { KnowledgeItem } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
@@ -81,6 +84,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
               </button>)}</div>
             : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
       </section>
+      {!exampleMode ? <ScriptLibraryPanel /> : null}
       <p className={styles.notWired}>主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入；当前可查看已保存的来源正文。</p>
     </div>
   </AppShell>;
@@ -97,4 +101,79 @@ function KnowledgeInspector({ item, exampleMode }: { item: KnowledgeDisplayItem;
     <section className={styles.detailSection}><h3>参数与出处</h3><p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "结构化参数尚未接入。"}</p><dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{item.version}</dd></div></dl></section>
     <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? `示例核对状态：${item.exampleIssue ?? "待核对"}` : "核对状态尚未接入；请核对原始来源后再用于创作。"}</p><div className={styles.correctionGrid}><div className={styles.correctionField}><span>摘要纠正</span><textarea aria-label="摘要纠正" defaultValue={exampleMode ? item.exampleSummary ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订摘要" : "纠正保存接口尚未接入"} /></div><div className={styles.correctionField}><span>参数纠正</span><textarea aria-label="参数纠正" defaultValue={exampleMode ? item.exampleParameters ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订参数" : "纠正保存接口尚未接入"} /></div></div><div className={styles.detailActions}><button disabled={!exampleMode} type="button">{exampleMode ? "保存纠正 · 示例" : "保存纠正"}</button><button disabled={!exampleMode} type="button">{exampleMode ? "用于当前任务 · 示例" : "用于当前任务"}</button><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></div>{!exampleMode ? <p className={styles.notWired}>纠正保存与任务引用接口尚未接入，以上操作暂不可用。</p> : null}</section>
   </div>;
+}
+
+
+export function ScriptLibraryPanel() {
+  const router = useRouter();
+  const [entries, setEntries] = useState<ScriptLibraryEntry[]>([]);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
+  const [selected, setSelected] = useState<ScriptLibraryEntry | null>(null);
+  const [sources, setSources] = useState<ScriptLibrarySource[]>([]);
+  const [sourcesChecked, setSourcesChecked] = useState(false);
+  const [name, setName] = useState("");
+  const [ratio, setRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
+  const [duration, setDuration] = useState(60);
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError(null); setSelected(null); setSources([]);
+    listScriptLibraryEntries(query, category).then(result => {
+      if (active) setEntries(result.items);
+    }).catch(cause => {
+      if (active) { setEntries([]); setError(cause instanceof Error ? cause.message : "文案库读取失败"); }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [query, category]);
+  useEffect(() => {
+    if (!selected) return;
+    let active = true;
+    getScriptLibrarySources(selected.id).then(result => { if (active) { setSources(result); setSourcesChecked(true); } })
+      .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "来源核对失败"); });
+    return () => { active = false; };
+  }, [selected]);
+  function select(entry: ScriptLibraryEntry) {
+    setSelected(entry); setSources([]); setSourcesChecked(false); setConfirmed(false); setName(`${entry.name} · 新任务`); setError(null);
+  }
+  async function reuse() {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await reuseScriptLibraryEntry(selected.id, {
+        name, aspect_ratio: ratio, duration_target_seconds: duration, requirements_confirmed: confirmed,
+      });
+      router.push(`/tasks/${encodeURIComponent(result.task_id)}`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "文案复用失败"); }
+    finally { setBusy(false); }
+  }
+  const readable = sourcesChecked && sources.every(source => source.status === "readable");
+  return <section className={styles.card} aria-label="文案库">
+    <div className={styles.cardHeading}><div><h2>文案库</h2><small>已确认文案的命名快照与历史版本；复用需要新确认。</small></div></div>
+    <div className={styles.searchBar}>
+      <label><Search size={16} /><input aria-label="搜索文案" placeholder="搜索名称或正文" value={query} onChange={event => setQuery(event.target.value)} /></label>
+      <label>分类<input aria-label="筛选文案分类" placeholder="输入分类，留空查看全部" value={category} onChange={event => setCategory(event.target.value)} /></label>
+    </div>
+    {error ? <p role="alert">{error}</p> : null}
+    {loading ? <p role="status">正在读取文案…</p> : entries.length ? <div className={styles.grid}>{entries.map(entry =>
+      <button className={styles.cover} key={entry.id} onClick={() => void select(entry)} type="button"><strong>{entry.name}</strong><small>{entry.category || "未分类"} · 版本 {entry.version}</small><span>{entry.title}</span></button>
+    )}</div> : <p>没有匹配的可用文案。可从任务的已确认文案页保存；来源不可读或版本已变化的条目不会用于复用。</p>}
+    {selected ? <section className={styles.detailSection} aria-label="文案复用详情">
+      <h3>{selected.name} · 版本 {selected.version}</h3>
+      <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原任务</Link>
+      <p>原稿 {selected.source_script_id} · {selected.source_run_id ? `原记录 ${selected.source_run_id}` : "复用或人工文案，无模型生成记录"}</p>
+      {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p><small>{section.reference_ids.join("、")}</small></article>)}
+      <h4>事实出处（实时核对）</h4>
+      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : sources.map(source => <p key={source.reference_id}>{source.reference_id} · {source.status === "readable" ? `${source.title} · ${source.version_or_identity}` : source.status === "version_changed" ? "版本或授权已变化" : "不可读"}{source.source_url ? <> · <a href={source.source_url}>原始来源</a></> : null}</p>)}
+      <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmed(false); }} /></label>
+      <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmed(false); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
+      <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmed(false); }} /></label>
+      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />确认以上新任务要求，正文仍需重新确认</label>
+      <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
+      <button disabled={busy || !confirmed || !readable || !name.trim() || duration < 15 || duration > 600} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
+    </section> : null}
+  </section>;
 }
