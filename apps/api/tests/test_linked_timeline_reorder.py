@@ -8,7 +8,7 @@ import app.main as main_module
 from app.audio_timeline import AudioTimeline
 from app.montage import MontageClip, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import SubtitleCue, SubtitleTrack
-from test_montage_pipeline import person_render_edit_state  # noqa: F401
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
 
 def _plan(workspace: dict) -> dict:
