@@ -199,6 +199,28 @@ def test_arrow_nl_contextual_and_failure_paths():
     # 区间过短沿用后端校验。
     with pytest.raises(ValueError,match='至少0.04'):
         compile_overlay_command('箭头1显示1到1.01秒',[arrow])
-    # 缺坐标的加箭头指令不得造默认坐标，引导用编辑表单。
-    with pytest.raises(ValueError,match='表单'):
+    # 缺坐标的加箭头指令不得造默认坐标，明确所需信息。
+    with pytest.raises(ValueError,match='指向坐标X/Y'):
         compile_overlay_command('前3秒加箭头“进料口”',[])
+
+
+def test_arrow_dialogue_creation_uses_manual_coordinates_and_interval():
+    from app.graphic_overlays import ArrowOverlay
+    title=TextOverlay(text='保留标题',start_seconds=0,end_seconds=4).model_dump()
+    action,value,identity=compile_overlay_command(
+        '添加箭头“进料口”，指向X0.46/Y0.35，标注放右上角，显示0.2到3秒',[title])
+    manual=ArrowOverlay(name='进料口',x=.46,y=.35,position='right-top',start_seconds=.2,end_seconds=3).model_dump()
+    assert action=='add' and identity is None
+    assert {key:item for key,item in value.items() if key!='id'}=={key:item for key,item in manual.items() if key!='id'}
+    assert title['text']=='保留标题'
+    assert validate_overlays([title,value],4)[1].kind=='arrow'
+
+
+@pytest.mark.parametrize('command',[
+    '添加箭头“进料口”，标注放右上角，显示0到3秒',
+    '添加箭头“进料口”，指向X0.46/Y0.35，标注放右上角',
+    '添加箭头“进料口”，指向X0.46/Y0.35，显示0到3秒',
+])
+def test_arrow_dialogue_creation_requires_explicit_target_position_and_time(command):
+    with pytest.raises(ValueError,match='名称、指向坐标X/Y、标注所在角和显示起止时间'):
+        compile_overlay_command(command,[])
