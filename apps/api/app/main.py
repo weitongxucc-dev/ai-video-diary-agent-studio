@@ -31,7 +31,7 @@ from app.graphic_sources import import_graphic_source, graphic_sources, resolve_
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.speech_timing import estimate_speech_seconds
-from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, insert_clip
+from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, insert_clip, reorder_linked_group
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
@@ -3744,11 +3744,19 @@ def _subtitle_track_from_montage(
             transform_id = f"transform_{transform_id}"
     if not isinstance(transform_id, str) or not transform_id:
         return None
+    # 时间轴按 clip 的实际区间投影（与 montage._plan_to_srt / _write_subtitle_overlays 同源），
+    # 不再按 cue 顺序累加，否则镜头排序后两者会立刻分叉。
+    windows: dict[str, tuple[float, float]] = {}
+    for item in montage.clips:
+        if item.cue_id and item.cue_id not in windows:
+            windows[item.cue_id] = (item.timeline_start_seconds, item.timeline_end_seconds)
     cues: list[SubtitleCue] = []
-    cursor = 0.0
     for cue in montage.cues:
-        start = cursor
-        end = min(start + cue.duration_seconds, montage.duration_seconds)
+        window = windows.get(cue.id)
+        if window is None:
+            continue
+        start = round(window[0], 3)
+        end = round(min(window[1], montage.duration_seconds), 3)
         normalized_text, line_breaks = _normalize_subtitle_text_and_breaks(
             cue.text,
             None,
@@ -3763,7 +3771,6 @@ def _subtitle_track_from_montage(
                 line_breaks=line_breaks,
             )
         )
-        cursor = end
     source_language = production_repo.get_creation_plan(workspace_id, task.plan_id).language
     track_language = "en-US" if source_language == "en-US" else "zh-CN"
     return SubtitleTrack(
@@ -5245,6 +5252,84 @@ def _person_source_range(workspace_id, task, montage, clip, segment):
         refs, round((segment.duration_seconds or 0) * 1000))
 
 
+def _narration_linkage_spans(
+    plan: CreationTaskMontagePlan,
+) -> list[tuple[str, int, int]]:
+    """按方案自身的 cue 顺序导出每个来源在整片配音里的源区间。
+
+    与 `_person_source_range` 用的是同一段累加推导（前面各段 `round(duration*1000)`
+    依次相加），这里把它抽成可复用函数：镜头换位时靠它拿到"哪句对应哪段源区间"，
+    而不是按移动后的时间重叠去猜。
+    """
+    spans: list[tuple[str, int, int]] = []
+    offset = 0
+    for cue in plan.cues:
+        if not cue.narration_segment_id:
+            raise ValueError(f"文案 {cue.id} 没有配音分段来源，无法确定关联声音。")
+        span_ms = round(cue.duration_seconds * 1000)
+        if span_ms < 10:
+            raise ValueError(f"文案 {cue.id} 的配音分段过短，无法整体换位。")
+        spans.append((cue.id, offset, span_ms))
+        offset += span_ms
+    return spans
+
+
+def _apply_reorder_narration_linkage(
+    workspace_id: str,
+    task: CreationTask,
+    plan: CreationTaskMontagePlan,
+) -> tuple[list[dict[str, object]], list[SubtitleTrack]]:
+    """已做口型的人物镜头换位后，把配音与字幕按来源身份一并换到新位置。
+
+    来源引用与源区间逐字保留，只有时间线区间移动；音乐/音效/原声轨完全不碰。
+    关联缺失或对不上时抛 ValueError，由调用方转 409 并把具体缺口回报给用户。
+    """
+    spans = _narration_linkage_spans(plan)
+    known = {cue_id for cue_id, _o, _d in spans}
+    clip_spans = []
+    for item in plan.clips:
+        if item.cue_id not in known:
+            continue
+        clip_spans.append((
+            item.cue_id,
+            round(item.timeline_start_seconds * 1000),
+            round(item.timeline_end_seconds * 1000) - round(item.timeline_start_seconds * 1000),
+        ))
+    tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+    try:
+        audio, edited_tracks, linkage = reorder_linked_group(
+            _effective_audio_timeline(plan), tracks, spans, clip_spans, plan.duration_seconds
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"镜头顺序未保存：{exc}") from exc
+    plan.audio_timeline = audio
+    plan.narration_linkage_reordered = True
+    rows = [
+        dict(row, narration_segment_id=next(
+            cue.narration_segment_id for cue in plan.cues if cue.id == row["cue_id"]))
+        for row in linkage
+    ]
+    return rows, edited_tracks
+
+
+def _linkage_lines(linkage: list[dict[str, object]]) -> list[str]:
+    """把关联对象与旧→新位置写成预览正文，不新增无人消费的字段。"""
+    lines = ["该人物镜头的配音与字幕按来源一并移动："]
+    for row in linkage:
+        old_ms = int(row["old_timeline_start_ms"])
+        new_ms = int(row["new_timeline_start_ms"])
+        source_ms = int(row["source_end_ms"]) - int(row["source_start_ms"])
+        subtitles = "、".join(str(item) for item in row["subtitle_cue_ids"]) or "无字幕"
+        lines.append(
+            f"- 文案 {row['cue_id']}（配音分段 {row['narration_segment_id']}，音频 {row['audio_clip_id']}"
+            f"，音频来源 {row['source_ref']}）："
+            f"源区间 {int(row['source_start_ms'])}–{int(row['source_end_ms'])} 毫秒保持不变，"
+            f"时间线 {round(old_ms/1000, 3)} 秒 → {round(new_ms/1000, 3)} 秒（时长 {round(source_ms/1000, 3)} 秒）；"
+            f"字幕 {subtitles}。"
+        )
+    return lines
+
+
 def _person_render_matches_narration(
     render: PersonRender, segment: NarrationSegment, transforms: list[TransformRun]
 ) -> bool:
@@ -6034,7 +6119,7 @@ def _persist_typed_montage_edit(
             impact="原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。",
             repair_action="逐条检查字幕文字和时间，确认后重新生成字幕与成片。")
             for track in carried_tracks]
-    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "InsertClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming"}:
+    if operation_type in {"RegenerateNarrationSegment", "DeleteClip", "DuplicateClip", "InsertClip", "ChangeLinkedSpeed", "EditCompoundTimeline", "RemoveSilence", "AlignSubtitleTiming", "ReorderClip"}:
         try:
             if operation_type == "RegenerateNarrationSegment":
                 carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -8726,7 +8811,7 @@ def confirm_creation_task_edit(
         locked=operation_payload.get("locked") if operation_type == "SetClipLock" else None,
         confirmed=True if operation_type in {"ReplaceClip", "ConfirmClip"} else None,
     )
-    updated_plan = _apply_creation_task_montage_clip_update(
+    updated_plan, edited_subtitle_tracks, linkage = _apply_creation_task_montage_clip_update(
         workspace_id,
         task_id,
         plan,
@@ -8735,7 +8820,8 @@ def confirm_creation_task_edit(
     )
     updated_plan, _payload = _prepare_changed_montage(
         updated_plan,
-        message="镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。",
+        message=("镜头顺序已更新；该人物镜头的配音与字幕已按来源一并移动，可以重新渲染。"
+            if linkage else "镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。"),
     )
     return _persist_typed_montage_edit(
         workspace_id=workspace_id,
@@ -8745,6 +8831,7 @@ def confirm_creation_task_edit(
         updated_plan=updated_plan,
         operation_type=operation_draft["operation_type"],
         operation_payload=dict(operation_payload),
+        edited_subtitle_tracks=edited_subtitle_tracks,
     )
 
 
@@ -9885,7 +9972,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         locked=payload.locked if payload.operation_type == "SetClipLock" else None,
         confirmed=True if payload.operation_type == "ConfirmClip" else None,
     )
-    plan = _apply_creation_task_montage_clip_update(
+    plan, edited_tracks, linkage = _apply_creation_task_montage_clip_update(
         workspace_id, task_id, plan, payload.clip_id, update
     )
     after_clip = next(item for item in plan.clips if item.id == payload.clip_id)
@@ -9972,6 +10059,9 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     before_label = "人物口播" if before_clip.person_render_id else production_repo.get_asset(workspace_id, before_clip.asset_id).file_name
     after_label = "人物口播" if after_clip.person_render_id else production_repo.get_asset(workspace_id, after_clip.asset_id).file_name
+    after_detail = describe_clip(after_clip, plan.clips)
+    if linkage:
+        after_detail = "\n".join([after_detail, *_linkage_lines(linkage)])
     now = utc_now()
     intent = production_repo.create_edit_intent(
         EditIntent(
@@ -9996,7 +10086,8 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             workspace_id=workspace_id,
             task_id=task_id,
             intent_id=intent.id,
-            summary=f"{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。",
+            summary=("调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。"
+                if linkage else f"{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。"),
             target_refs=[f"clip:{payload.clip_id}"],
             operation={
                 "operation_type": payload.operation_type,
@@ -10013,7 +10104,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                 "after": {
                     "ref": f"clip:{after_clip.id}",
                     "label": after_label,
-                    "detail": describe_clip(after_clip, plan.clips),
+                    "detail": after_detail,
                     **media_previews.get("after", {}),
                 },
             },
@@ -10081,6 +10172,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         "EditCompoundTimeline",
         "RemoveSilence",
         "AlignSubtitleTiming",
+        "ReorderClip",
     }
     montage_snapshot = target_version.snapshot.get("montage")
     if not isinstance(montage_snapshot, dict):
@@ -10267,7 +10359,7 @@ def _apply_creation_task_montage_clip_update(
         clip.timeline_end_seconds = at
         plan.clips.insert(plan.clips.index(clip) + 1, second)
         _refresh_montage_review_state(plan)
-        return plan
+        return plan, None, None
     if clip.locked and any(value is not None for value in (
         payload.fit_mode, payload.crop_x, payload.crop_y, payload.asset_id,
         payload.segment_id, payload.source_start_seconds, payload.position, payload.playback_rate,
@@ -10346,6 +10438,8 @@ def _apply_creation_task_montage_clip_update(
         clip.crop_y = payload.crop_y
     if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
         clip.needs_confirmation = False
+    edited_tracks: list[SubtitleTrack] | None = None
+    linkage: list[dict[str, object]] | None = None
     if payload.position is not None:
         current_index = plan.clips.index(clip)
         target_index = min(payload.position, len(plan.clips) - 1)
@@ -10358,8 +10452,14 @@ def _apply_creation_task_montage_clip_update(
                 item.timeline_start_seconds = round(timeline_cursor, 3)
                 item.timeline_end_seconds = round(timeline_cursor + duration, 3)
                 timeline_cursor += duration
+            if any(item.person_render_id for item in plan.clips):
+                linkage, edited_tracks = _apply_reorder_narration_linkage(
+                    workspace_id,
+                    production_repo.get_creation_task(workspace_id, task_id),
+                    plan,
+                )
     _refresh_montage_review_state(plan)
-    return plan
+    return plan, edited_tracks, linkage
 
 
 @app.patch(

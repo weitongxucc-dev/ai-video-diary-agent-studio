@@ -148,6 +148,8 @@ class CreationTaskMontagePlan:
     message: str = ""
     graphic_overlays: list[dict] = field(default_factory=list)
     audio_timeline: AudioTimeline | None = None
+    # 人物镜头排序写入了按来源换位的配音音轨；该次排序仍保留原有 loudnorm 语义。
+    narration_linkage_reordered: bool = False
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -833,7 +835,7 @@ class MontageRenderer:
                 "-map",
                 f"{audio_index}:a:0",
                 "-af", ",".join([
-                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["loudnorm", FINITE_LOUDNESS_FILTER]),
+                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None and not plan.narration_linkage_reordered else ["loudnorm", FINITE_LOUDNESS_FILTER]),
                     f"apad=whole_dur={sum(round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30) for clip in plan.clips)/30:.10f}",
                 ]),
                 "-c:v",
