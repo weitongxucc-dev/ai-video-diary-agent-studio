@@ -21,7 +21,7 @@ FINITE_LOUDNESS_FILTER = "aeval=exprs=\'if(isnan(val(ch)),0,val(ch))\':c=same"
 # Single-pass ffmpeg loudnorm applies a time-varying gain, not one constant offset, so measuring a
 # stream whose content has been permuted is not the same measurement as measuring the original. A
 # plan that used to play one narration source whole is normalized here, on that whole source,
-# before any segment is cut out of it.
+# before any segment is cut out of it. Narration only; original sound keeps its recorded level.
 WHOLE_SOURCE_LOUDNESS_FILTER = "loudnorm"
 
 
@@ -386,8 +386,10 @@ def build_audio_mix_command(
             command.extend(["-protocol_whitelist", "file,pipe", "-i", str(source)])
             # Ahead of the trim on purpose: loudnorm measures the stream it is fed, so normalizing
             # first is what keeps the measurement on the whole source instead of on one segment.
+            # Narration only: the linkage split is a narration event, and an original-sound track
+            # must keep the loudness it was recorded at.
             chain = [*( [WHOLE_SOURCE_LOUDNESS_FILTER, FINITE_LOUDNESS_FILTER]
-                        if normalize_voice_sources and track.role in {"narration", "original"} else []),
+                        if normalize_voice_sources and track.role == "narration" else []),
                      f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
                      "asetpts=PTS-STARTPTS", "aformat=channel_layouts=stereo", "asetpts=N/SR/TB"]
             if clip.denoise_db:

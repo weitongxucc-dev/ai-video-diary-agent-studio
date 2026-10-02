@@ -350,9 +350,10 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
          "source_end_ms": 4000, "timeline_start_ms": 4000},
         {"id": "seg-b", "name": "B", "source_ref": "narration://artifact/a", "source_start_ms": 4000,
          "source_end_ms": 8000, "timeline_start_ms": 0}]}]})
-    def build(**options):
+    def build(source_timeline=None, **options):
         return build_audio_mix_command(
-            timeline, 8, lambda _ref: source, tmp_path / "mix.wav", probe_duration=lambda _p: 8.0, **options)
+            source_timeline or timeline, 8, lambda _ref: source, tmp_path / "mix.wav",
+            probe_duration=lambda _p: 8.0, **options)
 
     def chain_of(command):
         return next(
@@ -362,6 +363,11 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
     # Ahead of every atrim, so it still measures all 8s of the source; and only on request.
     assert chain_of(build(normalize_voice_sources=True)).startswith("[0:a:0]loudnorm,")
     assert "loudnorm" not in chain_of(build())
+
+    # Narration is the linkage's own track; original sound must keep the level it was recorded at.
+    original = AudioTimeline.model_validate({"tracks": [
+        {**timeline.tracks[0].model_dump(), "id": "original-main", "role": "original"}]})
+    assert "loudnorm" not in chain_of(build(original, normalize_voice_sources=True))
 
     state = _build_linked_state(person_render_edit_state, plain=True)
     clip_source = tmp_path / "clip.mp4"
