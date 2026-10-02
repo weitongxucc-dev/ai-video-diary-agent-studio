@@ -136,8 +136,16 @@ def test_person_profile_reports_body_reference_source_and_missing_file(
     assert missing.status_code == 200
     assert missing.json()["body_reference_available"] is False
     assert missing.json()["body_reference_name"] == "removed.mp4"
-    assert missing.json()["body_reference_reason"] == "人物参考文件已不在工作区。"
+    assert missing.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
     assert missing.json()["body_reference_repair_action"]
+
+    (library / "approved" / "a-folder.mp4").mkdir()
+    payload["version"] = "person-v3-directory"
+    payload["avatar_reference"] = "workspace://approved/a-folder.mp4"
+    directory = client.post("/api/media/person-profiles", json=payload)
+    assert directory.status_code == 200
+    assert directory.json()["body_reference_available"] is False
+    assert directory.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
 
     versions = client.get("/api/media/person-profiles/person-a/versions")
     assert versions.status_code == 200
@@ -146,6 +154,7 @@ def test_person_profile_reports_body_reference_source_and_missing_file(
         "person-v1",
         "person-v1-workspace",
         "person-v2-missing",
+        "person-v3-directory",
     }
     assert by_version["person-v1-workspace"]["body_reference_available"] is True
     assert by_version["person-v2-missing"]["body_reference_available"] is False

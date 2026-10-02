@@ -56,6 +56,12 @@ function bodyReferenceCopy(person: PersonProfile | null) {
   return `工作区素材 ${person.body_reference_name ?? ""}`.trim();
 }
 
+function bodyReferenceLabel(person: PersonProfile, runnableLabel: string) {
+  if (person.body_reference_kind === "asset") return "参考待核验";
+  if (person.body_reference_available) return runnableLabel;
+  return "参考素材缺失";
+}
+
 function AuthorizationFields({ prefix, kind }: { prefix: string; kind: "person" | "voice" }) {
   return (
     <fieldset className={styles.authorizationFields}>
@@ -224,7 +230,7 @@ export function PeopleAndVoiceWorkspace() {
             <div className={`${styles.workspace}${activeObjectCount ? "" : ` ${styles.singleStage}`}`}>
               {activeObjectCount ? <aside className={styles.objectRail}>
                 <header><div><span>{viewLabel[view]}</span><strong>{view === "people" ? `${people.length} 个档案` : `${voices.length} 个档案`}</strong></div><button aria-label={view === "people" ? "新建人物" : "登记声音"} onClick={() => setShowCreate(true)} type="button"><Plus size={16}/></button></header>
-                <div className={styles.objectList}>{view === "people" ? people.map((person) => <button aria-pressed={selectedPerson?.id === person.id} className={selectedPerson?.id === person.id ? styles.selectedObject : undefined} key={person.id} onClick={() => { setSelectedPersonId(person.id); setShowCreate(false); }} type="button"><span><UserRound size={17}/></span><div><strong>{person.display_name}</strong><small>{person.version} · {person.body_reference_available ? runnableCopy(person.runnable, person.runnable_reason) : "参考素材缺失"}</small></div><ChevronRight size={15}/></button>) : voices.map((voice) => <button aria-pressed={selectedVoice?.id === voice.id} className={selectedVoice?.id === voice.id ? styles.selectedObject : undefined} key={voice.id} onClick={() => { setSelectedVoiceId(voice.id); setShowCreate(false); }} type="button"><span><Volume2 size={17}/></span><div><strong>{people.find((person) => person.id === voice.person_profile_id)?.display_name || "未找到对应人物"}</strong><small>{voice.version} · {voice.language} · {runnableCopy(voice.runnable, voice.runnable_reason)}</small></div><ChevronRight size={15}/></button>)}</div>
+                <div className={styles.objectList}>{view === "people" ? people.map((person) => <button aria-pressed={selectedPerson?.id === person.id} className={selectedPerson?.id === person.id ? styles.selectedObject : undefined} key={person.id} onClick={() => { setSelectedPersonId(person.id); setShowCreate(false); }} type="button"><span><UserRound size={17}/></span><div><strong>{person.display_name}</strong><small>{person.version} · {bodyReferenceLabel(person, runnableCopy(person.runnable, person.runnable_reason))}</small></div><ChevronRight size={15}/></button>) : voices.map((voice) => <button aria-pressed={selectedVoice?.id === voice.id} className={selectedVoice?.id === voice.id ? styles.selectedObject : undefined} key={voice.id} onClick={() => { setSelectedVoiceId(voice.id); setShowCreate(false); }} type="button"><span><Volume2 size={17}/></span><div><strong>{people.find((person) => person.id === voice.person_profile_id)?.display_name || "未找到对应人物"}</strong><small>{voice.version} · {voice.language} · {runnableCopy(voice.runnable, voice.runnable_reason)}</small></div><ChevronRight size={15}/></button>)}</div>
               </aside> : null}
               <section className={styles.stage}>
                 {showCreate ? (

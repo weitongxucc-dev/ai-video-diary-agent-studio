@@ -149,14 +149,27 @@ describe("PeopleAndVoiceWorkspace", () => {
 
   it("states why a person body reference is missing instead of showing an empty preview", async () => {
     arrange();
-    const missing = { ...person, body_reference_available: false, body_reference_reason: "人物参考文件已不在工作区。", body_reference_repair_action: "在工作区重新导入该素材，或保存一个新的人物版本。" };
+    const missing = { ...person, body_reference_available: false, body_reference_reason: "工作区里已没有这个人物参考文件。", body_reference_repair_action: "在工作区重新导入该素材，或保存一个新的人物版本。" };
     api.listPersonProfiles.mockResolvedValue({ items: [missing], total_count: 1 });
     render(<PeopleAndVoiceWorkspace />);
     await screen.findByText("人物预览");
     expect(await screen.findByText("形象参考")).toBeInTheDocument();
-    expect(screen.getAllByText("人物参考文件已不在工作区。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("工作区里已没有这个人物参考文件。").length).toBeGreaterThan(0);
     expect(screen.getByText("处理：在工作区重新导入该素材，或保存一个新的人物版本。")).toBeInTheDocument();
     expect(screen.getAllByText(/参考素材缺失/).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("原始人物视频")).not.toBeInTheDocument();
+  });
+
+  it("marks an unverifiable asset reference as pending check instead of missing", async () => {
+    arrange();
+    const assetBacked = { ...person, avatar_reference: "asset://avatar/person", body_reference_kind: "asset" as const, body_reference_name: null, body_reference_available: false, body_reference_reason: "人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。", body_reference_repair_action: "在工作区重新导入该素材后再保存人物参考。" };
+    api.listPersonProfiles.mockResolvedValue({ items: [assetBacked], total_count: 1 });
+    render(<PeopleAndVoiceWorkspace />);
+    await screen.findByText("人物预览");
+    expect(await screen.findByText("形象参考")).toBeInTheDocument();
+    expect(screen.getAllByText("人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。").length).toBeGreaterThan(0);
+    expect(screen.getByText("处理：在工作区重新导入该素材后再保存人物参考。")).toBeInTheDocument();
+    expect(screen.getAllByText(/参考待核验/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/参考素材缺失/)).not.toBeInTheDocument();
   });
 });

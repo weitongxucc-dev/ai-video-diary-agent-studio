@@ -1459,11 +1459,11 @@ def _person_body_reference(
         resolved = production_repo.resolve_workspace_media_reference(workspace_id, reference)
     except MediaAuthorityError as exc:
         return ("workspace", None, exc.impact, False, exc.repair_action)
-    if not resolved.exists():
+    if not resolved.is_file():
         return (
             "workspace",
             resolved.name,
-            "人物参考文件已不在工作区。",
+            "工作区里已没有这个人物参考文件。",
             False,
             "在工作区重新导入该素材，或保存一个新的人物版本。",
         )
