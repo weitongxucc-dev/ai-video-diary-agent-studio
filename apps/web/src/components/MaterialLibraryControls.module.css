@@ -239,20 +239,22 @@
   .useStateOptions { max-width: 175px; }
 }
 
-/* 预览容器是全局类名；图片和音轨要与视频一样撑满并保持原始比例。 */
-:global(.library-preview) > img {
+/* 预览容器与海报都是全局类名，CSS Modules 的选择器必须先落在本模块的局部类上：
+   预览挂在 .preview 局部钩子上，卡片海报用 .intakePanel ~ 既有局部锚点。
+   图片和音轨要与视频一样撑满并保持原始比例。 */
+.preview > :global(img) {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 
-:global(.library-preview) > audio {
+.preview > :global(audio) {
   align-self: end;
   width: calc(100% - 16px);
   margin-bottom: 8px;
 }
 
-:global(.library-card__poster) > img {
+.intakePanel ~ :global(.library-grid) :global(.library-card__poster) > :global(img) {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -261,7 +263,7 @@
 }
 
 /* 音轨没有画面可叠放，图标本身就是卡片内容，需要居中。 */
-:global(.library-card__poster) > .library-card__fallback-icon {
+.intakePanel ~ :global(.library-grid) :global(.library-card__poster) > :global(.library-card__fallback-icon) {
   top: 50%;
   left: 50%;
   translate: -50% -50%;

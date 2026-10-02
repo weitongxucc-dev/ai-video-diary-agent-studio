@@ -673,7 +673,7 @@ export function MaterialLibraryWorkspace({
 
   const inspector = selected ? (
     <div className="library-inspector">
-      <div className="library-preview">
+      <div className={`library-preview ${styles.preview}`}>
         {selected.media_type === "image" ? (
           <img
             alt={`原素材预览：${fileLabel(selected.file_name)}`}

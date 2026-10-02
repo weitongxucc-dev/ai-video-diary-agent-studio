@@ -310,7 +310,6 @@ def test_incomplete_and_empty_downloads_leave_nothing_registered(tmp_path):
     body = b"y" * 100
 
     def short_handler(request: httpx.Request) -> httpx.Response:
-        response = httpx.Response(200, content=body, headers={"content-type": "video/mp4"})
         return httpx.Response(
             200,
             content=body[:40],
