@@ -286,8 +286,13 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             return real_checkpoint(conn, current_grant, status=status, output=output, reason=reason)
 
         retry_executor._checkpoint = crash_after_inner
-        with pytest.raises(RuntimeError, match="simulated crash"):
+        try:
             retry_executor.execute(retry_grant, scheduler)
+        except RuntimeError as crash:
+            assert "simulated crash" in str(crash)
+        else:
+            pytest.fail(repo.get_job_run(task.workspace_id, resumed.id).failure_reason
+                        or "内层任务失败但未记录原因")
         assert render_calls == [1]
         published_task = repo.get_creation_task(task.workspace_id, task_id)
         published_version = repo.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)

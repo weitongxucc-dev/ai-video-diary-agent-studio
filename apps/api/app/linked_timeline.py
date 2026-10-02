@@ -260,3 +260,152 @@ def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
         subtitle_schedule([replace(moved, status="valid", style={**moved.style, "enabled": True})], result.duration_seconds)
         subtitles.append(moved)
     return result, subtitles
+
+
+LINKED_NARRATION_CLIP_PREFIX = "audio-narration-"
+LINKAGE_SPAN_TOLERANCE_MS = 20
+
+
+def _narration_clips(audio: AudioTimeline, linked_ids: set[str]):
+    """Return the single narration track, its clip to inherit settings from, and its per-source clips."""
+    pairs = [(track, clip) for track in audio.tracks if track.role == "narration" and not track.muted
+             for clip in track.clips if not clip.muted]
+    if not pairs:
+        raise ValueError("当前没有可换位的配音片段。")
+    tracks = {track.id for track, _clip in pairs}
+    split = {clip.id[len(LINKED_NARRATION_CLIP_PREFIX):]: clip for _track, clip in pairs
+             if clip.id.startswith(LINKED_NARRATION_CLIP_PREFIX)}
+    if len(pairs) == len(linked_ids) and set(split) == linked_ids:
+        if len(tracks) != 1:
+            raise ValueError("当前配音分散在多条配音轨上，无法按来源整体换位。")
+        return pairs[0][0], pairs[0][1], split
+    if len(pairs) != 1:
+        raise ValueError("当前配音音轨已被分割或移动，无法按来源整体换位。")
+    track, clip = pairs[0]
+    if clip.source_start_ms != 0:
+        raise ValueError("当前配音片段不是从配音文件起点开始，无法按来源整体换位。")
+    if clip.envelope_duration_ms is not None or clip.gain_points or clip.fade_in_ms or clip.fade_out_ms:
+        raise ValueError("当前配音片段带有音量调整或包络，无法按来源整体换位。")
+    return track, clip, None
+
+
+def reorder_linked_group(audio: AudioTimeline, tracks, spans, clip_spans, duration_seconds):
+    """Move each narration source group onto the new timeline position of its own clip.
+
+    ``spans`` lists ``(cue_id, source_offset_ms, source_duration_ms)`` in narration-file
+    order and must tile that file exactly. ``clip_spans`` lists ``(cue_id,
+    timeline_start_ms, duration_ms)`` in the new clip order. Every group is matched by
+    source identity, never by post-move time overlap: ``source_ref`` and the source
+    interval stay byte-for-byte identical, only ``timeline_start_ms`` moves. Music, effect
+    and original tracks are returned untouched. Returns the new timeline, the new caption
+    tracks and one linkage row per group for the edit preview.
+    """
+    if not spans:
+        raise ValueError("人物镜头缺少来源配音分段，无法确定关联声音。")
+    total = 0
+    for cue_id, offset, span_ms in spans:
+        if offset != total:
+            raise ValueError(
+                f"配音分段 {cue_id} 的来源区间不连续（应为 {total} 毫秒，实际 {offset} 毫秒），无法整体换位。")
+        if span_ms < 10:
+            raise ValueError(f"配音分段 {cue_id} 的时长不足 10 毫秒，无法整体换位。")
+        total += span_ms
+    track, whole, existing = _narration_clips(audio, {cue_id for cue_id, _o, _d in spans})
+    if existing is None:
+        tolerance = LINKAGE_SPAN_TOLERANCE_MS + len(spans)
+        if abs(whole.source_end_ms - total) > tolerance:
+            raise ValueError(
+                f"配音分段合计 {total} 毫秒与整片配音 {whole.source_end_ms} 毫秒不一致，无法按来源整体换位。")
+    positions: dict[str, tuple[int, int]] = {}
+    for cue_id, start_ms, clip_ms in clip_spans:
+        if cue_id in positions:
+            raise ValueError(f"镜头来源 {cue_id} 被复制成多个镜头，无法确定唯一配音来源。")
+        positions[cue_id] = (start_ms, clip_ms)
+    if set(positions) != {cue_id for cue_id, _o, _d in spans}:
+        raise ValueError("镜头来源与配音分段无法一一对应，无法按来源整体换位。")
+    limit = round(duration_seconds * 1000) + 1
+    old_positions: dict[str, int] = {}
+    sources: dict[str, str] = {}
+    moved = []
+    for cue_id, offset, span_ms in spans:
+        start_ms, clip_ms = positions[cue_id]
+        if abs(clip_ms - span_ms) > LINKAGE_SPAN_TOLERANCE_MS:
+            raise ValueError(
+                f"镜头来源 {cue_id} 的时长 {clip_ms} 毫秒与对应配音分段 {span_ms} 毫秒不一致，无法按来源整体换位。")
+        if start_ms < 0 or start_ms + span_ms > limit:
+            raise ValueError(f"配音分段 {cue_id} 换位后超出成片时间线，无法保存。")
+        kept = existing[cue_id] if existing is not None else None
+        if kept is not None and (kept.source_start_ms != offset or kept.source_end_ms != offset + span_ms):
+            raise ValueError(f"配音分段 {cue_id} 的来源区间与当前音轨不一致，无法按来源整体换位。")
+        # An already split segment keeps its own name, source reference, gain, denoise,
+        # loudness, envelope and lock; only its timeline position follows the clip.
+        # Old position: the split segment's real pre-move place, or — before this plan is
+        # split — where the whole clip's audio for that source actually sits. The lock that
+        # matters is the one on the object actually being moved: the split segment when the
+        # plan is already split, the whole clip when this reorder is the first split.
+        moving = kept if kept is not None else whole
+        old_ms = kept.timeline_start_ms if kept is not None else whole.timeline_start_ms + offset
+        if old_ms != start_ms and (track.locked or moving.locked):
+            raise ValueError("关联编辑会改变已锁定音轨或音频片段，请先解锁")
+        old_positions[cue_id] = old_ms
+        sources[cue_id] = kept.source_ref if kept is not None else whole.source_ref
+        moved.append(TimelineAudioClip.model_validate({
+            **(kept.model_dump() if kept is not None else {
+                "id": f"{LINKED_NARRATION_CLIP_PREFIX}{cue_id}",
+                "name": whole.name,
+                "source_ref": whole.source_ref,
+                "source_start_ms": offset,
+                "source_end_ms": offset + span_ms,
+                "gain_db": whole.gain_db,
+                "denoise_db": whole.denoise_db,
+                "loudness_target_lufs": whole.loudness_target_lufs,
+                "muted": whole.muted,
+                "locked": whole.locked,
+            }),
+            "timeline_start_ms": start_ms,
+        }))
+    windows = {cue_id: (positions[cue_id][0], positions[cue_id][0] + span)
+               for cue_id, _o, span in spans}
+    limit_ms = round(duration_seconds * 1000)
+    moved_tracks = []
+    linked_cues: dict[str, list[str]] = {}
+    for item in tracks:
+        cues = []
+        changed = False
+        for cue in item.cues:
+            source_id = cue.source_cue_id or cue.id
+            if source_id not in windows:
+                cues.append(cue)
+                continue
+            # Captions follow the source group by the displacement that group actually moved,
+            # so a hand retimed cue (or one of several split sub-cues) keeps its own timing.
+            delta_ms = windows[source_id][0] - old_positions[source_id]
+            start = round(cue.start_seconds * 1000) + delta_ms
+            end = round(cue.end_seconds * 1000) + delta_ms
+            if end <= start:
+                raise ValueError(f"字幕 {cue.id} 随来源换位后时长为零，无法保存。")
+            if start < 0 or end > limit_ms:
+                raise ValueError(f"字幕 {cue.id} 随来源换位后超出成片时间线，无法保存。")
+            changed = changed or delta_ms != 0
+            cues.append(replace(cue, start_seconds=round(start / 1000, 3), end_seconds=round(end / 1000, 3)))
+            linked_cues.setdefault(source_id, []).append(f"{item.language}：{cue.id}")
+        moved_tracks.append(replace(item,
+            cues=tuple(sorted(cues, key=lambda cue: (cue.start_seconds, cue.end_seconds))),
+            artifact_ref=None if changed else item.artifact_ref,
+            transform_id=None if changed else item.transform_id))
+    subtitle_schedule(moved_tracks, duration_seconds)
+    linkage = [{
+        "cue_id": cue_id,
+        "audio_clip_id": f"{LINKED_NARRATION_CLIP_PREFIX}{cue_id}",
+        "source_ref": sources[cue_id],
+        "source_start_ms": offset,
+        "source_end_ms": offset + span,
+        "old_timeline_start_ms": old_positions[cue_id],
+        "new_timeline_start_ms": windows[cue_id][0],
+        "subtitle_cue_ids": linked_cues.get(cue_id, []),
+    } for cue_id, offset, span in spans]
+    result = audio.model_copy(deep=True)
+    for item in result.tracks:
+        if item.id == track.id:
+            item.clips = moved
+    return AudioTimeline.model_validate(result.model_dump()), moved_tracks, linkage
