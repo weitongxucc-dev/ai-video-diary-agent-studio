@@ -57,4 +57,4 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 
 主控唯一共享权威/Linear/集成/push写入者。146的production.py仅排序提案字段局部例外，可见性/身份/模型/质量等原HOLD不解除；main.py不得进入认证/可见性/模型/发布范围，montage.py不做额外功能。若最小响度一致性需audio_timeline.py，先给精确落点再由主控定界，不扩大整个音轨包。现只有4持有媒体/GUI；6仅接样本，4释放后转6。
 
-PR46候选7d834d3的Backend、Frontend、Desktop syntax均已成功，范围审核完成；主控已按既有授权将草稿转ready并请求标准merge，指定match-head-commit。GitHub首次返回502，复查仍OPEN/main8d09c8e，有限重试返回Merge already in progress；随后REST与GraphQL复查仍merged=false/mergedAt=null，远程main未变化。因此当前是GitHub合并服务处理/响应阻断，不是CI或产品决定，尚未报告合并成功。恢复先核实时PR/远程main，不盲目重复合并或变更待处理PR头；确认成功后验证合并树并让开发分支承接main历史。目标仍7d834d3；本段仅登记执行状态，不改变已验证产品候选。不打tag、不签名、不真实发布/迁移或付费。146新施工尚未合入该候选。保护用户脏树、旧证据及真实库，已通过部分不滚动扩大范围。
+PR46已合入远程main，合并提交5dd69ed124d03bf08cecd6aeb66916551728e23b。指定候选7d834d3的Backend、Frontend、Desktop syntax全部通过，范围审核完成；已核GitHub状态MERGED、远程main指向该合并提交，main完整树等于已验证候选。GraphQL首次502及Merge already in progress是接口响应异常，标准REST合并成功；不再保留为当前阻断。开发分支已承接该main历史，现行合同登记单独保留，不覆盖工作树。146新施工仍在独立工作树，未带入本次main；各线程现有产品基线和文件归属不变，不为无关历史同步重测或重新ACK。不打tag、不签名、不真实发布/迁移或付费。合main不等于0.11整体验收，149/153/123等剩余缺口照现有卡继续。保护用户脏树、旧证据及真实库，已通过部分不滚动扩大范围。
