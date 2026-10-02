@@ -18,6 +18,11 @@ from app.device_scheduler import DeviceScheduler, Grant
 
 # FFmpeg loudnorm can emit NaN for fully silent input; preserve silence for encoders.
 FINITE_LOUDNESS_FILTER = "aeval=exprs=\'if(isnan(val(ch)),0,val(ch))\':c=same"
+# Single-pass ffmpeg loudnorm applies a time-varying gain, not one constant offset, so measuring a
+# stream whose content has been permuted is not the same measurement as measuring the original. A
+# plan that used to play one narration source whole is normalized here, on that whole source,
+# before any segment is cut out of it.
+WHOLE_SOURCE_LOUDNESS_FILTER = "loudnorm"
 
 
 class AudioGainPoint(BaseModel):
@@ -350,7 +355,7 @@ def _gain_expression(clip: TimelineAudioClip, track_gain: float) -> str:
 def build_audio_mix_command(
     timeline: AudioTimeline, duration_seconds: float, resolve_source: Callable[[str], Path], output: Path,
     *, solo_track_ids: set[str] | None = None, start_seconds: float = 0, end_seconds: float | None = None,
-    probe_duration: Callable[[Path], float] | None = None,
+    probe_duration: Callable[[Path], float] | None = None, normalize_voice_sources: bool = False,
 ) -> list[str]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("音频时间线时长无效")
@@ -379,7 +384,11 @@ def build_audio_mix_command(
             if clip.source_end_ms > round(durations[source] * 1000) + 20:
                 raise ValueError("音频源区间超出实际文件时长")
             command.extend(["-protocol_whitelist", "file,pipe", "-i", str(source)])
-            chain = [f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
+            # Ahead of the trim on purpose: loudnorm measures the stream it is fed, so normalizing
+            # first is what keeps the measurement on the whole source instead of on one segment.
+            chain = [*( [WHOLE_SOURCE_LOUDNESS_FILTER, FINITE_LOUDNESS_FILTER]
+                        if normalize_voice_sources and track.role in {"narration", "original"} else []),
+                     f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
                      "asetpts=PTS-STARTPTS", "aformat=channel_layouts=stereo", "asetpts=N/SR/TB"]
             if clip.denoise_db:
                 # A conservative stationary-noise preset; preview remains required before applying.

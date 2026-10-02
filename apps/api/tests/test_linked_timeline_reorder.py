@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import wave
 
 import pytest
 
 import app.main as main_module
-from app.audio_timeline import AudioTimeline
-from app.montage import MontageClip, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+from app.audio_timeline import AudioTimeline, build_audio_mix_command
+from app.montage import MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import SubtitleCue, SubtitleTrack
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
@@ -329,6 +330,53 @@ def test_missing_narration_source_is_reported_as_a_conflict_not_a_server_error(p
     assert rejected.status_code == 409, rejected.text
     assert "镜头顺序未保存" in rejected.json()["detail"]
     assert "没有配音分段来源" in rejected.json()["detail"]
+
+
+def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_master(person_render_edit_state, tmp_path):
+    """A plain plan's loudnorm measured one untouched source on the master.
+
+    Single-pass loudnorm applies a time-varying gain, so measuring the mix after the segments have
+    swapped places is a different measurement: the first split has to normalize the whole source
+    inside the mix instead, and the master must not measure the permuted result a second time.
+    """
+    source = tmp_path / "narration.wav"
+    with wave.open(str(source), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(24000)
+        audio.writeframes(b"\0\0" * 24000 * 8)
+    timeline = AudioTimeline.model_validate({"tracks": [{"id": "narration-main", "name": "配音", "role": "narration", "clips": [
+        {"id": "seg-a", "name": "A", "source_ref": "narration://artifact/a", "source_start_ms": 0,
+         "source_end_ms": 4000, "timeline_start_ms": 4000},
+        {"id": "seg-b", "name": "B", "source_ref": "narration://artifact/a", "source_start_ms": 4000,
+         "source_end_ms": 8000, "timeline_start_ms": 0}]}]})
+    def build(**options):
+        return build_audio_mix_command(
+            timeline, 8, lambda _ref: source, tmp_path / "mix.wav", probe_duration=lambda _p: 8.0, **options)
+
+    def chain_of(command):
+        return next(
+            part for part in command[command.index("-filter_complex") + 1].split(";")
+            if part.startswith("[0:a:0]"))
+
+    # Ahead of every atrim, so it still measures all 8s of the source; and only on request.
+    assert chain_of(build(normalize_voice_sources=True)).startswith("[0:a:0]loudnorm,")
+    assert "loudnorm" not in chain_of(build())
+
+    state = _build_linked_state(person_render_edit_state, plain=True)
+    clip_source = tmp_path / "clip.mp4"
+    clip_source.write_bytes(b"")
+    plan = replace(state.montage,
+        clips=[replace(clip, source_path=str(clip_source)) for clip in state.montage.clips])
+    def master_af(built):
+        command = MontageRenderer(tmp_path).build_command(
+            built, tmp_path / "voice.wav", tmp_path / "out.mp4", [], subtitle_intervals=[])
+        return command[command.index("-af") + 1]
+    # The plan as it stands before the first split still gets the loudnorm it has always had...
+    assert "loudnorm" in master_af(plan)
+    # ...and as it stands after, that same normalization is the one the mix just did on the source.
+    assert "loudnorm" not in master_af(
+        replace(plan, audio_timeline=timeline, narration_linkage_created_audio_timeline=True))
 
 
 def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_state):

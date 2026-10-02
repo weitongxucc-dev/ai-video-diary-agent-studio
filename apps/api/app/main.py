@@ -11748,7 +11748,7 @@ def _render_montage_with_resolved_clip_sources(
             )
             render_audio_mix(plan.audio_timeline, plan.duration_seconds,
                 lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio,
-                **audio_options)
+                normalize_voice_sources=plan.narration_linkage_created_audio_timeline, **audio_options)
             narration_audio_path = mixed_audio
         render_options = (
             {"scheduler": render_context.scheduler, "grant": render_context.grant,

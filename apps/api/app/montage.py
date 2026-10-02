@@ -148,8 +148,9 @@ class CreationTaskMontagePlan:
     message: str = ""
     graphic_overlays: list[dict] = field(default_factory=list)
     audio_timeline: AudioTimeline | None = None
-    # 人物镜头排序把原本没有音轨的方案第一次按来源分成多段；该方案此前使用整片 loudnorm，
-    # 分段后仍沿用同一响度策略。已经有自定义音轨的方案本来就是省略 loudnorm 的，不受此标记影响。
+    # 人物镜头排序把原本没有音轨的方案第一次按来源分成多段；该方案此前的整片 loudnorm 是对
+    # 整条配音源做的，标记表示这次响度要落在混音里的整源上，而不是分段后再在母线上补一次。
+    # 已经有自定义音轨的方案本来就是省略 loudnorm 的，不受此标记影响。
     narration_linkage_created_audio_timeline: bool = False
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -836,7 +837,7 @@ class MontageRenderer:
                 "-map",
                 f"{audio_index}:a:0",
                 "-af", ",".join([
-                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None and not plan.narration_linkage_created_audio_timeline else ["loudnorm", FINITE_LOUDNESS_FILTER]),
+                    *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["loudnorm", FINITE_LOUDNESS_FILTER]),
                     f"apad=whole_dur={sum(round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30) for clip in plan.clips)/30:.10f}",
                 ]),
                 "-c:v",
