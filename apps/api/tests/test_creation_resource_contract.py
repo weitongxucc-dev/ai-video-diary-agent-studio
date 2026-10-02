@@ -28,9 +28,9 @@ import pytest
 
 from app.canvas import canvas_size
 from app.creation_execution import CpuRenderLimits, cpu_render_facts
-from app.host_resource_probes import (CpuRenderBudget, HostBudget, HostResourceProbe,
-                                      ResourceAdmissionRejected, admit_resource,
-                                      sample_host_capacity)
+from app.host_resource_probes import (CpuRenderBudget, HostBudget, HostCapacity,
+                                      HostResourceProbe, ResourceAdmissionRejected,
+                                      admit_resource)
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
 from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord
@@ -223,10 +223,14 @@ def test_executor_registry_subset_is_built_from_the_published_fact_names(tmp_pat
         "wall_clock_s": float(resources["timeout_seconds"]),
     }
     assert set(subset) == _REGISTRY_FIELDS
-    assert admit_resource("creation_render", subset, capacity=sample_host_capacity()) is not None
+    # The gate itself stays real; only the ambient host sample is pinned so a busy
+    # machine cannot decide whether this contract check passes.
+    capacity = HostCapacity(cpu_count=8, cpu_threads_ceiling=7,
+                            available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5)
+    assert admit_resource("creation_render", subset, capacity=capacity) is not None
     legacy = {name: 1 for name in _LEGACY_FACT_KEYS}
     with pytest.raises(ResourceAdmissionRejected, match="undeclared field"):
-        admit_resource("creation_render", legacy, capacity=sample_host_capacity())
+        admit_resource("creation_render", legacy, capacity=capacity)
 
 
 # --- input changes reject a stale request ---------------------------------
