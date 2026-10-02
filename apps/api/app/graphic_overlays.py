@@ -248,7 +248,16 @@ def compile_overlay_command(command, values, sources=(), selected_refs=()):
             value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
         return 'update',ArrowOverlay.model_validate(value).model_dump(),value['id']
     if re.search(r'(?:加|添加)箭头',text):
-        raise ValueError('新增箭头需要在编辑表单指定指向位置，暂不支持纯文字指令添加箭头')
+        number=r'-?\d*\.?\d+'
+        match=re.fullmatch(
+            rf'(?:加|添加)箭头[“「](.+)[”」][，,]\s*指向\s*X\s*({number})/Y\s*({number})'
+            rf'[，,]\s*标注放(左上角|右上角|左下角|右下角)[，,]\s*显示({number})到({number})秒',text)
+        if not match:
+            raise ValueError('新增箭头请明确名称、指向坐标X/Y、标注所在角和显示起止时间；'
+                '例如：添加箭头“进料口”，指向X0.46/Y0.35，标注放右上角，显示0到3秒')
+        position={'左上角':'left-top','右上角':'right-top','左下角':'left-bottom','右下角':'right-bottom'}[match[4]]
+        return 'add',ArrowOverlay(name=match[1],x=float(match[2]),y=float(match[3]),position=position,
+            start_seconds=float(match[5]),end_seconds=float(match[6])).model_dump(),None
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)标题[“「](.+)[”」]',text)
     if match:
         return 'add',TextOverlay(text=match[2],start_seconds=0,end_seconds=float(match[1])).model_dump(),None
