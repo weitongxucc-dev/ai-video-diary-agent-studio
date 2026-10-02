@@ -57,4 +57,4 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 
 主控唯一共享权威/Linear/集成/push写入者。146的production.py仅排序提案字段局部例外，可见性/身份/模型/质量等原HOLD不解除；main.py不得进入认证/可见性/模型/发布范围，montage.py不做额外功能。若最小响度一致性需audio_timeline.py，先给精确落点再由主控定界，不扩大整个音轨包。现只有4持有媒体/GUI；6仅接样本，4释放后转6。
 
-主控将75fe8a4及本合同更新正常合入独立main候选并推PR46，保留main/dev两边历史。正式合main须同候选CI及范围审核通过；不打tag、不签名、不真实发布/迁移或付费。新人物排序施工不等同产品已验，未合施工不偷带入候选。保护用户脏树、旧证据及真实库。进度只认实际结果，已通过部分不滚动扩大范围。
+PR46候选7d834d3的Backend、Frontend、Desktop syntax均已成功，范围审核完成；主控已按既有授权将草稿转ready并请求标准merge，指定match-head-commit。GitHub首次返回502，复查仍OPEN/main8d09c8e，有限重试返回Merge already in progress；随后REST与GraphQL复查仍merged=false/mergedAt=null，远程main未变化。因此当前是GitHub合并服务处理/响应阻断，不是CI或产品决定，尚未报告合并成功。恢复先核实时PR/远程main，不盲目重复合并或变更待处理PR头；确认成功后验证合并树并让开发分支承接main历史。目标仍7d834d3；本段仅登记执行状态，不改变已验证产品候选。不打tag、不签名、不真实发布/迁移或付费。146新施工尚未合入该候选。保护用户脏树、旧证据及真实库，已通过部分不滚动扩大范围。
