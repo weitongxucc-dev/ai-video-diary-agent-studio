@@ -1,0 +1,389 @@
+{
+  "capturedAt": "2026-09-27 Asia/Shanghai; refresh before takeover",
+  "source": "Linear read-only snapshot; descriptions may be truncated; scope authority is development-plan section 12",
+  "issues": [
+    {
+      "id": "WIL-71",
+      "title": "GLM｜发布页刷新失败与任务状态一致性",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-71/glm发布页刷新失败与任务状态一致性",
+      "parentId": "WIL-38"
+    },
+    {
+      "id": "WIL-70",
+      "title": "Pi｜模板搜索与断线、空状态修正",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-70/pi模板搜索与断线空状态修正",
+      "parentId": "WIL-33"
+    },
+    {
+      "id": "WIL-38",
+      "title": "R34｜发布账号与人工确认",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-38/r34发布账号与人工确认"
+    },
+    {
+      "id": "WIL-33",
+      "title": "R29｜模板预设与新任务复用",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-33/r29模板预设与新任务复用"
+    },
+    {
+      "id": "WIL-64",
+      "title": "Pi｜修复 PR44 首页测试找不到创作助手",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-64/pi修复-pr44-首页测试找不到创作助手",
+      "parentId": "WIL-42"
+    },
+    {
+      "id": "WIL-63",
+      "title": "GLM｜修复 PR44 字体测试在 Linux 的失败",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-63/glm修复-pr44-字体测试在-linux-的失败",
+      "parentId": "WIL-42"
+    },
+    {
+      "id": "WIL-67",
+      "title": "账号共享｜目标空间邀请与五人名额",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-67/账号共享目标空间邀请与五人名额",
+      "parentId": "WIL-8"
+    },
+    {
+      "id": "WIL-66",
+      "title": "整机调度｜CPU渲染资源预算与准入",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-66/整机调度cpu渲染资源预算与准入",
+      "parentId": "WIL-35"
+    },
+    {
+      "id": "WIL-59",
+      "title": "账号与共享｜确定邀请、名额与授权接口",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-59/账号与共享确定邀请名额与授权接口",
+      "parentId": "WIL-8"
+    },
+    {
+      "id": "WIL-57",
+      "title": "整机调度｜完成统一许可与权限投影核心",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-57/整机调度完成统一许可与权限投影核心",
+      "parentId": "WIL-35"
+    },
+    {
+      "id": "WIL-69",
+      "title": "桌面实现｜电脑本人配音录制组件",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-69/桌面实现电脑本人配音录制组件",
+      "parentId": "WIL-23"
+    },
+    {
+      "id": "WIL-23",
+      "title": "R19｜电脑录制当前视频配音",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-23/r19电脑录制当前视频配音"
+    },
+    {
+      "id": "WIL-68",
+      "title": "素材工程｜有界镜头切分与恢复",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-68/素材工程有界镜头切分与恢复",
+      "parentId": "WIL-14"
+    },
+    {
+      "id": "WIL-14",
+      "title": "R10｜素材精确理解与时间证据",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-14/r10素材精确理解与时间证据"
+    },
+    {
+      "id": "WIL-8",
+      "title": "R04｜成员名额、工作空间与邀请",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-8/r04成员名额工作空间与邀请"
+    },
+    {
+      "id": "WIL-35",
+      "title": "R31｜整机资源与公平排队",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-35/r31整机资源与公平排队"
+    },
+    {
+      "id": "WIL-65",
+      "title": "制作流程｜受许可的本地成片渲染",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-65/制作流程受许可的本地成片渲染",
+      "parentId": "WIL-26"
+    },
+    {
+      "id": "WIL-26",
+      "title": "R22｜确认文案后连续制作",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-26/r22确认文案后连续制作"
+    },
+    {
+      "id": "WIL-55",
+      "title": "桌面实现｜右上大浮卡与三尺寸交互",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-55/桌面实现右上大浮卡与三尺寸交互",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-60",
+      "title": "素材工程｜接入统一许可与分阶段恢复",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-60/素材工程接入统一许可与分阶段恢复",
+      "parentId": "WIL-12"
+    },
+    {
+      "id": "WIL-42",
+      "title": "R38｜桌面测试包、存储与旧路径退役",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-42/r38桌面测试包存储与旧路径退役"
+    },
+    {
+      "id": "WIL-62",
+      "title": "Kimi｜定位前端素材接收类型错误的缺失依赖",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-62/kimi定位前端素材接收类型错误的缺失依赖",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-61",
+      "title": "GLM｜发布与模板页面中文文案核对",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-61/glm发布与模板页面中文文案核对",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-10",
+      "title": "R06｜三栏布局、精细修改与中文交互",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-10/r06三栏布局精细修改与中文交互"
+    },
+    {
+      "id": "WIL-56",
+      "title": "界面设计｜双身份原型第五版修正",
+      "status": "In Progress",
+      "url": "https://linear.app/wiliiam/issue/WIL-56/界面设计双身份原型第五版修正",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-54",
+      "title": "制作流程｜完成阶段和对象权限修复",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-54/制作流程完成阶段和对象权限修复",
+      "parentId": "WIL-25"
+    },
+    {
+      "id": "WIL-58",
+      "title": "素材工程｜明确分阶段解析接线与检查点",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-58/素材工程明确分阶段解析接线与检查点",
+      "parentId": "WIL-12"
+    },
+    {
+      "id": "WIL-12",
+      "title": "R08｜素材自动接收与后台解析",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-12/r08素材自动接收与后台解析"
+    },
+    {
+      "id": "WIL-53",
+      "title": "整机调度｜核对共享授权和匿名队列接口",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-53/整机调度核对共享授权和匿名队列接口",
+      "parentId": "WIL-35"
+    },
+    {
+      "id": "WIL-52",
+      "title": "界面设计｜整理双身份原型的剩余修正",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-52/界面设计整理双身份原型的剩余修正",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-51",
+      "title": "桌面实现｜核对右上大浮卡与三栏改造范围",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-51/桌面实现核对右上大浮卡与三栏改造范围",
+      "parentId": "WIL-10"
+    },
+    {
+      "id": "WIL-50",
+      "title": "制作流程｜整理阶段权限修复与复验入口",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-50/制作流程整理阶段权限修复与复验入口",
+      "parentId": "WIL-25"
+    },
+    {
+      "id": "WIL-49",
+      "title": "素材工程｜核对接收解析候选与新需求差距",
+      "status": "Done",
+      "url": "https://linear.app/wiliiam/issue/WIL-49/素材工程核对接收解析候选与新需求差距",
+      "parentId": "WIL-12"
+    },
+    {
+      "id": "WIL-25",
+      "title": "R21｜创作助手上下文与受控操作",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-25/r21创作助手上下文与受控操作"
+    },
+    {
+      "id": "WIL-41",
+      "title": "R37｜数据、版本、权限与局部重算",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-41/r37数据版本权限与局部重算"
+    },
+    {
+      "id": "WIL-40",
+      "title": "R36｜模型、赠送用量与自备密钥",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-40/r36模型赠送用量与自备密钥"
+    },
+    {
+      "id": "WIL-39",
+      "title": "R35｜个人及全体发布数据",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-39/r35个人及全体发布数据"
+    },
+    {
+      "id": "WIL-37",
+      "title": "R33｜真实成片导出与原生保存",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-37/r33真实成片导出与原生保存"
+    },
+    {
+      "id": "WIL-36",
+      "title": "R32｜进度、估时与断线恢复",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-36/r32进度估时与断线恢复"
+    },
+    {
+      "id": "WIL-34",
+      "title": "R30｜定时任务与确认边界",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-34/r30定时任务与确认边界"
+    },
+    {
+      "id": "WIL-32",
+      "title": "R28｜调色、轻美颜与质量检查",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-32/r28调色轻美颜与质量检查"
+    },
+    {
+      "id": "WIL-31",
+      "title": "R27｜字幕、箭头说明与封面",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-31/r27字幕箭头说明与封面"
+    },
+    {
+      "id": "WIL-30",
+      "title": "R26｜真实波形与多轨声音",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-30/r26真实波形与多轨声音"
+    },
+    {
+      "id": "WIL-29",
+      "title": "R25｜视频时间线与基础剪辑",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-29/r25视频时间线与基础剪辑"
+    },
+    {
+      "id": "WIL-28",
+      "title": "R24｜对话与手动统一修改",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-28/r24对话与手动统一修改"
+    },
+    {
+      "id": "WIL-27",
+      "title": "R23｜九阶段导航与任务状态",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-27/r23九阶段导航与任务状态"
+    },
+    {
+      "id": "WIL-24",
+      "title": "R20｜人物出镜比例与口型",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-24/r20人物出镜比例与口型"
+    },
+    {
+      "id": "WIL-22",
+      "title": "R18｜声音克隆、发音与语言",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-22/r18声音克隆发音与语言"
+    },
+    {
+      "id": "WIL-21",
+      "title": "R17｜人物形象与参考素材",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-21/r17人物形象与参考素材"
+    },
+    {
+      "id": "WIL-20",
+      "title": "R16｜知识库页面与可操作详情",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-20/r16知识库页面与可操作详情"
+    },
+    {
+      "id": "WIL-19",
+      "title": "R15｜知识召回、出处与文案复用",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-19/r15知识召回出处与文案复用"
+    },
+    {
+      "id": "WIL-18",
+      "title": "R14｜知识文件与链接解析",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-18/r14知识文件与链接解析"
+    },
+    {
+      "id": "WIL-17",
+      "title": "R13｜链接导入与授权去水印",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-17/r13链接导入与授权去水印"
+    },
+    {
+      "id": "WIL-16",
+      "title": "R12｜素材网格、搜索与详情",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-16/r12素材网格搜索与详情"
+    },
+    {
+      "id": "WIL-15",
+      "title": "R11｜人工纠正、素材评价与选片",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-15/r11人工纠正素材评价与选片"
+    },
+    {
+      "id": "WIL-13",
+      "title": "R09｜上传说明与业务对象关联",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-13/r09上传说明与业务对象关联"
+    },
+    {
+      "id": "WIL-11",
+      "title": "R07｜整机首页看板",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-11/r07整机首页看板"
+    },
+    {
+      "id": "WIL-9",
+      "title": "R05｜私有内容与团队共享",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-9/r05私有内容与团队共享"
+    },
+    {
+      "id": "WIL-7",
+      "title": "R03｜主账号首次使用与设备检查",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-7/r03主账号首次使用与设备检查"
+    },
+    {
+      "id": "WIL-5",
+      "title": "R01｜桌面完整使用闭环",
+      "status": "Backlog",
+      "url": "https://linear.app/wiliiam/issue/WIL-5/r01桌面完整使用闭环"
+    }
+  ]
+}

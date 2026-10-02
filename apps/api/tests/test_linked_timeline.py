@@ -118,5 +118,6 @@ def test_remove_multiple_ranges_keeps_one_clock_and_fade_offsets():
     assert all(c.text=='保留用户文字' for c in tracks[0].cues)
     assert max(o['end_seconds'] for o in result.graphic_overlays)==5
     plan.clips[0].locked=True
-    with pytest.raises(ValueError,match='锁定'):remove_time_ranges(plan,subtitles(),audio(),[[1000,1500]])
+    with pytest.raises(ValueError,match='锁定'):
+        remove_time_ranges(plan,subtitles(),audio(),[[1000,1500]])
     assert plan.duration_seconds==6

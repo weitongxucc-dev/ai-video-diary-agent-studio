@@ -38,7 +38,11 @@ from app.visual_semantics import (
     VisualSemanticError,
     VisualSemanticProvider,
 )
-from app.material_probe import MaterialProbeFacts
+from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
+from app.material_scene import (
+    SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
+    scene_window_for_key, scene_windows,
+)
 
 if TYPE_CHECKING:
     from app.device_scheduler import Grant
@@ -91,6 +95,25 @@ DEFAULT_MATERIAL_TAXONOMY = (
     "主体:人物",
     "镜头:特写",
 )
+
+
+def directory_accepts_writes(root: Path) -> bool:
+    """Prove the directory accepts writes, because existence alone never promised that.
+
+    A read-only mount still lists as a normal directory, so binding to one
+    registers an intake that can never accept a file and hides the cause until
+    a later import fails, and a first-run preflight would report the local video
+    pipeline as ready. Creating and removing a hidden uniquely named file is the
+    same proof the desktop import path already relies on, and every scanner that
+    walks these directories skips anything without a supported media suffix.
+    """
+    probe = root / f".chatcut_write_probe_{uuid4().hex}"
+    try:
+        probe.touch(exist_ok=False)
+        probe.unlink()
+    except OSError:
+        return False
+    return True
 
 
 @dataclass
@@ -177,16 +200,38 @@ class MaterialProbeCandidate:
     unit_key: str
 
 
-def material_probe_unit_key(source_sha256: str) -> str:
+@dataclass(frozen=True)
+class MaterialSceneCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    source_sha256: str
+    provisional_revision: str
+    probe_result_ref: str
+    video_stream_index: int
+    video_codec: str
+    video_width_px: int
+    video_height_px: int
+    source_frame_rate_fps: float | None
+    duration_seconds: float
+    size_bytes: int
+    window: SceneWindow
+    unit_key: str
+
+
+def material_probe_unit_key(source_sha256: str, *, version: int = 1) -> str:
     """Identity for bounded ffprobe metadata only; scene analysis is separate."""
     if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
         raise ValueError("素材源哈希无效")
+    if version not in {1, 2}:
+        raise ValueError("素材探测契约版本无效")
     stage_input = hashlib.sha256(json.dumps(
-        {"stage": "probe-meta:v1", "source_sha256": source_sha256,
-         "probe_contract": "ffprobe-metadata:v1"},
+        {"stage": f"probe-meta:v{version}", "source_sha256": source_sha256,
+         "probe_contract": ("ffprobe-metadata:v1" if version == 1
+                            else "ffprobe-metadata-rates:v2")},
         sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest()
-    return f"probe-meta:v1:{stage_input}"
+    return f"probe-meta:v{version}:{stage_input}"
 
 
 def _material_hash_candidate(
@@ -412,10 +457,26 @@ class MaterialCollection:
 
 @dataclass(frozen=True)
 class MaterialSegmentMatch:
+    """一条候选素材及其可核对的依据。
+
+    前四个字段是既有响应形状（schemas.MaterialSegmentMatchResponse）；
+    其余字段是证据，必须能让人不打开代码就判断这条对不对。
+    """
+
     asset_ref: str
     segment_ref: str
     score: float
     reasons: list[str]
+    rank: int = 0
+    match_tier: str = "structural"
+    matched_terms: list[str] = field(default_factory=list)
+    matched_conditions: list[str] = field(default_factory=list)
+    asset_file_name: str = ""
+    start_seconds: float = 0.0
+    end_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    time_range: str = ""
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -915,6 +976,7 @@ EditOperationType = Literal[
         "ChangeLinkedSpeed",
         "DeleteClip",
         "DuplicateClip",
+    "InsertClip",
     "ReorderClip",
     "SetClipLock",
     "ConfirmClip",
@@ -949,6 +1011,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
         "ChangeLinkedSpeed",
         "DeleteClip",
         "DuplicateClip",
+    "InsertClip",
     "ReorderClip",
     "SetClipLock",
     "ConfirmClip",
@@ -1513,6 +1576,20 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
+            # Migration 13 adds the member visibility columns; these guarded
+            # ensures mirror the ctime_ns/inode pattern for databases whose
+            # version row reached 13 without the columns. Content defaults to
+            # 'shared' so existing owner content stays member-visible.
+            for table in ("creation_tasks", "material_assets"):
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                if "visibility" not in columns:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN "
+                        "visibility TEXT NOT NULL DEFAULT 'shared'"
+                    )
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -2566,7 +2643,10 @@ class ProductionRepository:
             raise ValueError("请先确认当前素材目录")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if self._material_library_status() != "ready":
+            status = self._material_library_status()
+            if status == "read_only":
+                raise ValueError("素材目录当前不可写；请检查磁盘挂载方式或目录权限，或在设置中改选一个可写目录")
+            if status != "ready":
                 raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
             root_path = str(self.video_library_path.resolve())
             expected_path = str(Path(expected_directory).expanduser().resolve())
@@ -2619,7 +2699,7 @@ class ProductionRepository:
     def _material_library_available(self) -> bool:
         return self._material_library_status() == "ready"
 
-    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "ready"]:
+    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "read_only", "ready"]:
         root = self.video_library_path
         if not root.is_absolute() or root.is_symlink():
             return "invalid"
@@ -2632,6 +2712,8 @@ class ProductionRepository:
             return "missing"
         if not root.is_dir():
             return "invalid"
+        if not directory_accepts_writes(root):
+            return "read_only"
         return "ready"
 
     def discover_material_hash_candidates(self, *, stable_seconds: float = 10.0) -> list[MaterialHashCandidate]:
@@ -2971,6 +3053,36 @@ class ProductionRepository:
                 ))
         return dependencies
 
+    def material_probe_key_for_dependency(self, dependency: MaterialProbeDependency) -> str:
+        with self._connect() as conn:
+            return self._preferred_material_probe_key(
+                conn, dependency.workspace_id, dependency.asset_id,
+                dependency.source_sha256, dependency.provisional_revision,
+            )
+
+    def _preferred_material_probe_key(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+        source_sha256: str, provisional_revision: str,
+    ) -> str:
+        v1_key = material_probe_unit_key(source_sha256)
+        row = conn.execute(
+            """SELECT stage_input_digest, result_json, result_ref
+               FROM material_analysis_checkpoints WHERE workspace_id=? AND asset_id=?
+                 AND source_sha256=? AND provisional_revision=? AND unit_key=?""",
+            (workspace_id, asset_id, source_sha256, provisional_revision, v1_key),
+        ).fetchone()
+        if row is None or not isinstance(row["result_json"], str):
+            return v1_key
+        result_json = row["result_json"]
+        if (row["stage_input_digest"] != v1_key.rsplit(":", 1)[-1]
+                or row["result_ref"] != "sha256:" + hashlib.sha256(result_json.encode()).hexdigest()):
+            return v1_key
+        try:
+            legacy = probe_checkpoint_needs_rate_refresh(result_json)
+        except ValueError:
+            return v1_key
+        return material_probe_unit_key(source_sha256, version=2) if legacy else v1_key
+
     def legacy_probe_request_for_replacement(
         self, dependency: MaterialProbeDependency,
     ) -> str | None:
@@ -3018,7 +3130,8 @@ class ProductionRepository:
             return "stale"
         if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
             return "stale"
-        if unit_key != material_probe_unit_key(source_sha256):
+        if unit_key not in {material_probe_unit_key(source_sha256),
+                            material_probe_unit_key(source_sha256, version=2)}:
             return "stale"
         asset = conn.execute(
             "SELECT file_path FROM material_assets WHERE workspace_id=? AND id=?",
@@ -3138,6 +3251,11 @@ class ProductionRepository:
             candidate.unit_key, conn,
         ) != "ready":
             raise ValueError("素材来源已变化，未保存过期媒体探测结果")
+        if candidate.unit_key != self._preferred_material_probe_key(
+            conn, candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.provisional_revision,
+        ):
+            raise ValueError("素材媒体探测契约已更新，未保存旧检查点")
         asset_row = conn.execute(
             "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
             (candidate.workspace_id, candidate.asset_id),
@@ -3258,14 +3376,17 @@ class ProductionRepository:
                           a.payload
                    FROM material_analysis_checkpoints c
                    JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
-                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v1:%'""",
+                   WHERE c.workspace_id=? AND c.unit_key LIKE 'probe-meta:v%:%'""",
                 (workspace_id,),
             ).fetchall()
             pending: list[MaterialProbeDependency] = []
             for row in rows:
                 source_sha256 = str(row["source_sha256"])
                 unit_key = str(row["unit_key"])
-                if (unit_key != material_probe_unit_key(source_sha256)
+                if (unit_key != self._preferred_material_probe_key(
+                            conn, workspace_id, str(row["asset_id"]), source_sha256,
+                            str(row["provisional_revision"]),
+                        )
                         or row["stage_input_digest"] != unit_key.rsplit(":", 1)[-1]
                         or self.material_probe_source_verdict(
                             workspace_id, str(row["asset_id"]), source_sha256,
@@ -3290,6 +3411,319 @@ class ProductionRepository:
                     str(row["provisional_revision"]),
                 ))
         return pending
+
+    def _material_scene_source(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+        source_sha256: str,
+    ) -> tuple[sqlite3.Row, MaterialProbeFacts, str] | None:
+        if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+            return None
+        if self.material_probe_source_verdict(
+            workspace_id, asset_id, source_sha256,
+            material_probe_unit_key(source_sha256), conn,
+        ) != "ready":
+            return None
+        rows = conn.execute(
+            """SELECT c.provisional_revision, c.unit_key, c.stage_input_digest,
+                      c.result_json, c.result_ref,
+                      a.file_path, a.payload, f.size_bytes
+               FROM material_analysis_checkpoints c
+               JOIN material_assets a ON a.workspace_id=c.workspace_id AND a.id=c.asset_id
+               JOIN material_ingestion_files f ON f.workspace_id=a.workspace_id
+                    AND f.file_path=a.file_path
+               WHERE c.workspace_id=? AND c.asset_id=? AND c.source_sha256=?
+                 AND c.unit_key IN (?, ?) AND c.provisional_revision=f.provisional_revision""",
+            (workspace_id, asset_id, source_sha256,
+             material_probe_unit_key(source_sha256),
+             material_probe_unit_key(source_sha256, version=2)),
+        ).fetchall()
+        if not rows:
+            return None
+        probe_key = self._preferred_material_probe_key(
+            conn, workspace_id, asset_id, source_sha256,
+            str(rows[0]["provisional_revision"]),
+        )
+        row = next((item for item in rows if item["unit_key"] == probe_key), None)
+        if (row is None or row["stage_input_digest"] != probe_key.rsplit(":", 1)[-1]
+                or not isinstance(row["result_json"], str)):
+            return None
+        result_ref = "sha256:" + hashlib.sha256(row["result_json"].encode()).hexdigest()
+        if row["result_ref"] != result_ref:
+            return None
+        try:
+            facts = MaterialProbeFacts.from_checkpoint_json(row["result_json"])
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        except (ValueError, TypeError, KeyError):
+            return None
+        if asset.duration_seconds != facts.duration_seconds or asset.analysis_status != "blocked":
+            return None
+        return row, facts, result_ref
+
+    def material_scene_candidate(
+        self, workspace_id: str, asset_id: str, source_sha256: str,
+        unit_key: str, conn: sqlite3.Connection,
+    ) -> MaterialSceneCandidate | None:
+        source = self._material_scene_source(conn, workspace_id, asset_id, source_sha256)
+        if source is None:
+            return None
+        row, facts, result_ref = source
+        video = next(stream for stream in facts.streams if stream.kind == "video")
+        window = scene_window_for_key(
+            facts.duration_seconds, source_sha256, result_ref, video.index, unit_key,
+        )
+        if window is None:
+            return None
+        rate = (video.avg_frame_rate_fps
+                if video.avg_frame_rate_fps is not None
+                and video.avg_frame_rate_fps == video.r_frame_rate_fps else None)
+        return MaterialSceneCandidate(
+            workspace_id, asset_id, str(row["file_path"]), source_sha256,
+            str(row["provisional_revision"]), result_ref, video.index, video.codec,
+            int(video.width), int(video.height), rate, facts.duration_seconds,
+            int(row["size_bytes"]), window, unit_key,
+        )
+
+    def pending_material_scene_windows(self) -> list[MaterialSceneCandidate]:
+        """Replay missing windows from the metadata fact; completed windows stay durable."""
+        pending: list[MaterialSceneCandidate] = []
+        for dependency in self.pending_material_scene_dependencies():
+            with self._connect() as conn:
+                source = self._material_scene_source(
+                    conn, dependency.workspace_id, dependency.asset_id,
+                    dependency.source_sha256,
+                )
+                if source is None:
+                    continue
+                _, facts, result_ref = source
+                video = next(stream for stream in facts.streams if stream.kind == "video")
+                for window in scene_windows(facts.duration_seconds):
+                    unit_key = scene_unit_key(
+                        dependency.source_sha256, result_ref, video.index, window,
+                    )
+                    checkpoint = conn.execute(
+                        """SELECT stage_input_digest, result_json, result_ref
+                           FROM material_analysis_checkpoints WHERE workspace_id=?
+                             AND asset_id=? AND source_sha256=? AND provisional_revision=?
+                             AND unit_key=?""",
+                        (dependency.workspace_id, dependency.asset_id,
+                         dependency.source_sha256, dependency.provisional_revision, unit_key),
+                    ).fetchone()
+                    if checkpoint is not None and self._valid_scene_checkpoint(checkpoint, unit_key, window):
+                        continue
+                    candidate = self.material_scene_candidate(
+                        dependency.workspace_id, dependency.asset_id,
+                        dependency.source_sha256, unit_key, conn,
+                    )
+                    if candidate is not None:
+                        pending.append(candidate)
+                    if len(pending) >= 8:
+                        return pending
+        return pending
+
+    @staticmethod
+    def _valid_scene_checkpoint(row: sqlite3.Row, unit_key: str, window: SceneWindow) -> bool:
+        result_json = row["result_json"]
+        if (row["stage_input_digest"] != unit_key.rsplit(":", 1)[-1]
+                or not isinstance(result_json, str)
+                or row["result_ref"] != "sha256:" + hashlib.sha256(result_json.encode()).hexdigest()):
+            return False
+        try:
+            return SceneWindowFacts.from_checkpoint_json(result_json).window == window
+        except ValueError:
+            return False
+
+    def material_scene_verdict_for_grant(self, grant: Grant) -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+                "attempt_number FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"],
+                        row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key,
+                        grant.attempt_number)):
+                return "unauthorized"
+            if not re.fullmatch(r"[0-9a-f]{64}", grant.input_digest):
+                return "stale"
+            source_verdict = self.material_probe_source_verdict(
+                grant.workspace_id, str(row["owner_id"]), grant.input_digest,
+                material_probe_unit_key(grant.input_digest), conn,
+            )
+            if source_verdict != "ready":
+                return source_verdict
+            return ("ready" if self.material_scene_candidate(
+                grant.workspace_id, str(row["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            ) is not None else "stale")
+
+    def material_scene_candidate_for_grant(self, grant: Grant) -> MaterialSceneCandidate:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+                "attempt_number FROM device_work_requests WHERE id=?", (grant.request_id,),
+            ).fetchone()
+            if (row is None or row["owner_type"] != "material_asset"
+                    or (row["workspace_id"], row["input_digest"], row["unit_key"],
+                        row["attempt_number"])
+                    != (grant.workspace_id, grant.input_digest, grant.unit_key,
+                        grant.attempt_number)):
+                raise PermissionError("镜头许可与执行对象不匹配")
+            candidate = self.material_scene_candidate(
+                grant.workspace_id, str(row["owner_id"]), grant.input_digest,
+                grant.unit_key, conn,
+            )
+            if candidate is None:
+                raise ValueError("镜头窗口来源已变化")
+            return candidate
+
+    def commit_material_scene(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialSceneCandidate, facts: SceneWindowFacts,
+    ) -> str:
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or facts.window != candidate.window
+                or self.material_scene_candidate(
+                    candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+                    candidate.unit_key, conn,
+                ) != candidate):
+            raise ValueError("镜头检查点不属于当前许可或来源已变化")
+        result_json = facts.checkpoint_json()
+        if SceneWindowFacts.from_checkpoint_json(result_json) != facts:
+            raise ValueError("镜头切点事实无效")
+        result_ref = "sha256:" + hashlib.sha256(result_json.encode()).hexdigest()
+        existing = conn.execute(
+            """SELECT stage_input_digest, result_json, result_ref
+               FROM material_analysis_checkpoints WHERE workspace_id=? AND asset_id=?
+                 AND source_sha256=? AND provisional_revision=? AND unit_key=?""",
+            (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+             candidate.provisional_revision, candidate.unit_key),
+        ).fetchone()
+        if existing is not None and (
+            existing["stage_input_digest"] != candidate.unit_key.rsplit(":", 1)[-1]
+            or existing["result_json"] != result_json or existing["result_ref"] != result_ref
+        ):
+            raise ValueError("既有镜头检查点结果不匹配")
+        if existing is None:
+            conn.execute(
+                """INSERT INTO material_analysis_checkpoints
+                   (workspace_id, asset_id, source_sha256, provisional_revision,
+                    unit_key, stage_input_digest, result_json, result_ref, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+                 candidate.provisional_revision, candidate.unit_key,
+                 candidate.unit_key.rsplit(":", 1)[-1], result_json, result_ref,
+                 utc_now().isoformat()),
+            )
+        self._assemble_material_scene_if_complete(conn, candidate)
+        return f"material_scene:{candidate.asset_id}:{candidate.window.start_seconds:.3f}"
+
+    def _assemble_material_scene_if_complete(
+        self, conn: sqlite3.Connection, candidate: MaterialSceneCandidate,
+    ) -> None:
+        expected_windows = math.ceil(candidate.duration_seconds / SCENE_LOGICAL_WINDOW_SECONDS)
+        completed_windows = conn.execute(
+            """SELECT COUNT(*) FROM material_analysis_checkpoints
+               WHERE workspace_id=? AND asset_id=? AND source_sha256=?
+                 AND provisional_revision=? AND unit_key LIKE 'scene-window:v1:%'""",
+            (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+             candidate.provisional_revision),
+        ).fetchone()[0]
+        if completed_windows < expected_windows:
+            return
+        boundaries: list[float] = []
+        for window in scene_windows(candidate.duration_seconds):
+            unit_key = scene_unit_key(
+                candidate.source_sha256, candidate.probe_result_ref,
+                candidate.video_stream_index, window,
+            )
+            row = conn.execute(
+                """SELECT stage_input_digest, result_json, result_ref
+                   FROM material_analysis_checkpoints WHERE workspace_id=? AND asset_id=?
+                     AND source_sha256=? AND provisional_revision=? AND unit_key=?""",
+                (candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+                 candidate.provisional_revision, unit_key),
+            ).fetchone()
+            if row is None:
+                return
+            if not self._valid_scene_checkpoint(row, unit_key, window):
+                raise ValueError("镜头检查点损坏，不能装配片段")
+            boundaries.extend(SceneWindowFacts.from_checkpoint_json(row["result_json"]).boundaries_seconds)
+        row = conn.execute(
+            "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("镜头装配时素材已不存在")
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        old_segments = {segment.id: segment for segment in asset.segments}
+        segments = []
+        for start, end in _scene_ranges(boundaries, candidate.duration_seconds):
+            segment_id = _segment_id(asset.id, start, end)
+            segments.append(old_segments.pop(segment_id, None) or MaterialSegment(
+                id=segment_id, asset_id=asset.id, start_seconds=start, end_seconds=end,
+            ))
+        for segment in self._corrected_material_segments(list(old_segments.values())):
+            conn.execute(
+                """INSERT OR IGNORE INTO material_unmatched_corrections
+                   (workspace_id, asset_id, segment_id, payload, preserved_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (asset.workspace_id, asset.id, segment.id, _json_payload(segment),
+                 utc_now().isoformat()),
+            )
+        asset.segments = segments
+        asset.analysis_status = "blocked"
+        asset.analysis_message = (
+            f"已定位 {len(segments)} 个镜头候选；原片声音和画面理解尚未完成。"
+        )
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
+        )
+
+    def fail_material_scene(
+        self, conn: sqlite3.Connection, grant: Grant,
+        candidate: MaterialSceneCandidate, reason: str,
+    ) -> None:
+        request = conn.execute(
+            "SELECT owner_type, owner_id, workspace_id, input_digest, unit_key, "
+            "attempt_number, state FROM device_work_requests WHERE id=?",
+            (grant.request_id,),
+        ).fetchone()
+        if (request is None or request["owner_type"] != "material_asset"
+                or (request["owner_id"], request["workspace_id"], request["input_digest"],
+                    request["unit_key"], request["attempt_number"])
+                != (candidate.asset_id, grant.workspace_id, grant.input_digest,
+                    grant.unit_key, grant.attempt_number)
+                or request["state"] not in {"granted", "yield_requested"}
+                or self.material_scene_candidate(
+            candidate.workspace_id, candidate.asset_id, candidate.source_sha256,
+            candidate.unit_key, conn,
+        ) != candidate):
+            raise ValueError("镜头失败来源已变化")
+        row = conn.execute(
+            "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+            (candidate.workspace_id, candidate.asset_id),
+        ).fetchone()
+        asset = self._asset_from_payload(json.loads(str(row["payload"])))
+        asset.analysis_status = "failed"
+        asset.analysis_message = f"镜头窗口分析失败（{reason}）；检查原片后可重试。"
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
+        )
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Persist observations and claim stable, changed files for one serial analyzer."""
@@ -3514,12 +3948,18 @@ class ProductionRepository:
             rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
         return [json.loads(str(row["payload"])) for row in rows]
 
-    def list_assets(self, workspace_id: str) -> list[MaterialAsset]:
+    def list_assets(
+        self,
+        workspace_id: str,
+        *,
+        include_private: bool = True,
+    ) -> list[MaterialAsset]:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
-                """
+                f"""
                 SELECT payload FROM material_assets
-                WHERE workspace_id = ? ORDER BY updated_at DESC
+                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
@@ -3533,9 +3973,12 @@ class ProductionRepository:
         offset: int,
         query: str | None = None,
         review_status: str | None = None,
+        include_private: bool = True,
     ) -> tuple[list[MaterialAsset], int]:
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
+        if not include_private:
+            clauses.append("visibility = 'shared'")
         if query:
             clauses.append("""(
                 LOWER(json_extract(payload, '$.file_name')) LIKE ?
@@ -3599,7 +4042,12 @@ class ProductionRepository:
         max_duration_seconds: float | None = None,
         limit: int = 20,
     ) -> list[MaterialSegmentMatch]:
-        """Deterministically search approved, persisted segments in one workspace."""
+        """Search one workspace's approved, persisted segments and explain every candidate.
+
+        硬过滤（workspace 隔离、已审核、已持久化、调用方给的结构化条件）保持严格，
+        任何放宽都只发生在排序上：文字匹配不上时依次降级到「分词包含」和
+        「仅按结构化条件返回」，并且每条候选都带上可核对的依据。
+        """
         roles = set(usage_roles or [])
         if not roles <= {"unassigned", "a_roll", "b_roll", "exclude"}:
             raise ValueError("素材用途条件无效")
@@ -3620,6 +4068,10 @@ class ProductionRepository:
             raise ValueError("素材检索 limit 必须在 1 到 100 之间")
 
         normalized_query = query.strip().casefold()
+        # 「仅按结构化条件返回」只在调用方真的给了结构化条件时才有意义。
+        has_structured_condition = bool(roles or requested_tags) or (
+            min_duration_seconds is not None or max_duration_seconds is not None
+        )
         matches: list[MaterialSegmentMatch] = []
         for asset in self.list_assets(workspace_id):
             if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
@@ -3641,44 +4093,105 @@ class ProductionRepository:
                 role = selectable_segment_usage_role(asset, segment)
                 if roles and role not in roles:
                     continue
-                segment_tags = {
-                    value.casefold()
+                segment_tags = [
+                    value.strip()
                     for value in (*segment.system_tags, *segment.user_tags, *asset.user_tags)
-                }
-                if requested_tags and not set(requested_tags) <= segment_tags:
+                    if value.strip()
+                ]
+                if requested_tags and not set(requested_tags) <= {
+                    value.casefold() for value in segment_tags
+                }:
                     continue
 
                 score = 0.1
                 reasons = ["当前工作区已分析素材"]
+                conditions: list[str] = []
                 if roles:
                     score += 0.25
                     reasons.append(f"用途匹配 {role}")
+                    conditions.append(f"用途 {role}")
                 if requested_tags:
                     score += 0.15 * len(requested_tags)
                     reasons.append("标签匹配 " + "、".join(tags or []))
-                if normalized_query:
-                    query_reasons = _material_query_reasons(
-                        normalized_query, segment, asset
-                    )
-                    if not query_reasons:
-                        continue
-                    score += 0.35 + 0.1 * len(query_reasons)
-                    reasons.extend(query_reasons)
+                    conditions.append("标签 " + "、".join(tags or []))
                 if min_duration_seconds is not None or max_duration_seconds is not None:
                     score += 0.1
-                    reasons.append(f"时长 {duration:.1f} 秒符合范围")
+                    lower = "不限" if min_duration_seconds is None else f"{min_duration_seconds:.1f}"
+                    upper = "不限" if max_duration_seconds is None else f"{max_duration_seconds:.1f}"
+                    reasons.append(f"时长 {duration:.1f} 秒在 {lower}–{upper} 秒内")
+                    conditions.append(f"时长 {duration:.1f} 秒")
+                if min_duration_seconds is not None and duration > min_duration_seconds:
+                    surplus = min(0.15, 0.02 * (duration - min_duration_seconds))
+                    score += surplus
+                    reasons.append(
+                        f"比要求的最短 {min_duration_seconds:.1f} 秒多"
+                        f" {duration - min_duration_seconds:.1f} 秒"
+                    )
+                    conditions.append(f"比最短要求多 {duration - min_duration_seconds:.1f} 秒")
+
+                tier = "structural"
+                matched_terms: list[str] = []
+                if normalized_query:
+                    text_reasons = _material_query_reasons(
+                        normalized_query, segment, asset
+                    )
+                    if text_reasons:
+                        tier = "text"
+                        score += 0.45 + 0.1 * len(text_reasons)
+                        reasons.extend(text_reasons)
+                        matched_terms = _material_partial_terms(
+                            normalized_query, segment, asset
+                        )
+                    else:
+                        matched_terms = _material_partial_terms(
+                            normalized_query, segment, asset
+                        )
+                        if matched_terms:
+                            tier = "partial"
+                            score += 0.25 + 0.03 * min(len(matched_terms), 5)
+                            reasons.append(
+                                "文字未整段匹配，分词命中 "
+                                + "、".join(f"「{term}」" for term in matched_terms)
+                            )
+                        elif has_structured_condition:
+                            tier = "structural"
+                            score += 0.05
+                            reasons.append("文字未匹配，按结构化条件返回")
+                        else:
+                            # 既没有文字重合，也没有结构化条件可退：没有东西可返回。
+                            continue
+
                 matches.append(
                     MaterialSegmentMatch(
                         asset_ref=f"asset:{asset.id}",
                         segment_ref=f"segment:{segment.id}",
                         score=round(score, 4),
                         reasons=reasons,
+                        match_tier=tier,
+                        matched_terms=matched_terms,
+                        matched_conditions=conditions,
+                        asset_file_name=asset.file_name,
+                        start_seconds=segment.start_seconds,
+                        end_seconds=segment.end_seconds,
+                        duration_seconds=round(duration, 3),
+                        time_range=(
+                            f"{_material_timecode(segment.start_seconds)} – "
+                            f"{_material_timecode(segment.end_seconds)}"
+                        ),
+                        tags=segment_tags,
                     )
                 )
-        return sorted(
-            matches,
-            key=lambda item: (-item.score, item.asset_ref, item.segment_ref),
-        )[:limit]
+        matches.sort(key=lambda item: (-item.score, item.asset_ref, item.segment_ref))
+        selected = matches[:limit]
+        total = len(selected)
+        return [
+            replace(
+                match,
+                rank=rank,
+                reasons=[*match.reasons, f"综合排第 {rank} 名（本次候选 {total} 条）"],
+            )
+            for rank, match in enumerate(selected, start=1)
+        ]
 
     def get_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
         with self._connect() as conn:
@@ -4110,12 +4623,19 @@ class ProductionRepository:
             raise KeyError(plan_id)
         return self._creation_plan_from_payload(json.loads(str(row["payload"])))
 
-    def get_creation_task(self, workspace_id: str, task_id: str) -> CreationTask:
+    def get_creation_task(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        include_private: bool = True,
+    ) -> CreationTask:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             row = conn.execute(
-                """
+                f"""
                 SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
+                WHERE workspace_id = ? AND id = ?{visibility_clause}
                 """,
                 (workspace_id, task_id),
             ).fetchone()
@@ -4123,12 +4643,18 @@ class ProductionRepository:
             raise KeyError(task_id)
         return self._creation_task_from_payload(json.loads(str(row["payload"])))
 
-    def list_creation_tasks(self, workspace_id: str) -> list[CreationTask]:
+    def list_creation_tasks(
+        self,
+        workspace_id: str,
+        *,
+        include_private: bool = True,
+    ) -> list[CreationTask]:
         with self._connect() as conn:
+            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
-                """
+                f"""
                 SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? ORDER BY updated_at DESC
+                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
@@ -9231,6 +9757,82 @@ def _infer_system_tags(
     return _normalized_labels(tags)
 
 
+def _material_contains_text(text: str, phrase: str) -> bool:
+    """中文按子串算包含，英文按词边界算——避免 "usb" 命中 "bus"。"""
+    if re.search(r"[\u4e00-\u9fff]", phrase):
+        return phrase in text
+    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
+
+
+# 英文虚词不作为匹配依据：命中它们不构成「这条更好」的证据。
+_MATERIAL_QUERY_STOPWORDS = frozenset(
+    {"a", "an", "the", "of", "to", "in", "on", "at", "is", "it", "and", "or", "for"}
+)
+# 中文虚字：切分前先剔掉，它们不携带检索意图。
+# 「更」「长」「太」「吵」都不在表内，所以「更长」「太吵」能切出来。
+_MATERIAL_QUERY_FUNCTION_CHARS = frozenset("的了着过和与或是在这那不也就都而之其为以于被把从对向")
+
+
+def _material_query_units(normalized_query: str) -> list[str]:
+    """把一句查询切成可核对的最小单元：英文/数字词 + 中文二元组。"""
+    units: list[str] = []
+    for token in re.findall(r"[^\W_]+", normalized_query):
+        chunks = (
+            re.findall(r"[\u4e00-\u9fff]+", token)
+            if re.search(r"[\u4e00-\u9fff]", token)
+            else [token]
+        )
+        for chunk in chunks:
+            if re.search(r"[\u4e00-\u9fff]", chunk):
+                # 先剔虚字再切二元组：「更长一点的」要切出「更长」而不是「点的」。
+                meaningful = "".join(
+                    char for char in chunk if char not in _MATERIAL_QUERY_FUNCTION_CHARS
+                )
+                units.extend(
+                    meaningful[index : index + 2] for index in range(len(meaningful) - 1)
+                )
+            elif len(chunk) >= 2 and chunk not in _MATERIAL_QUERY_STOPWORDS:
+                units.append(chunk)
+    # 去重且保持出现顺序，让「为什么被选中」稳定可复现。
+    return list(dict.fromkeys(units))
+
+
+def _material_searchable_corpus(segment: MaterialSegment, asset: MaterialAsset) -> str:
+    """一个片段所有能被人读出来的文字，作为「依据」的取样范围。"""
+    return " ".join(
+        value.casefold()
+        for value in (
+            segment.description,
+            searchable_ocr_text(segment.understanding),
+            segment.transcript,
+            *segment.system_tags,
+            *segment.user_tags,
+            *(asset.user_tags if isinstance(asset, MaterialAsset) else ()),
+        )
+        if value
+    )
+
+
+def _material_partial_terms(
+    normalized_query: str, segment: MaterialSegment, asset: MaterialAsset
+) -> list[str]:
+    """字面没整段命中时，看查询里还有哪些词真的出现在这条素材上。"""
+    corpus = _material_searchable_corpus(segment, asset)
+    if not corpus:
+        return []
+    return [unit for unit in _material_query_units(normalized_query) if unit in corpus]
+
+
+def _material_timecode(seconds: float) -> str:
+    """把秒数写成 00:12 这种人能读的时间点。"""
+    total = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
 def _material_query_reasons(
     normalized_query: str, segment: MaterialSegment, asset: MaterialAsset
 ) -> list[str]:
@@ -9244,9 +9846,7 @@ def _material_query_reasons(
     query_terms = re.findall(r"[^\W_]+", normalized_query)
 
     def contains_text(text: str, phrase: str) -> bool:
-        if re.search(r"[\u4e00-\u9fff]", phrase):
-            return phrase in text
-        return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
+        return _material_contains_text(text, phrase)
     for label, raw_value in text_fields:
         value = raw_value.strip().casefold()
         if not value:

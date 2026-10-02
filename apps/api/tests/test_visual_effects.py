@@ -4,7 +4,7 @@ import subprocess
 from PIL import Image
 import pytest
 from app.montage import MontageRenderer
-from app.visual_effects import VisualEffects, clip_video_filters, compile_visual_command, render_color_preview, reusable_color_settings
+from app.visual_effects import VisualEffects, clip_video_filters, compile_crop_command, compile_visual_command, render_color_preview, reusable_color_settings
 
 
 def frame(path):
@@ -114,7 +114,8 @@ def test_transform_commands_keep_color_and_color_reset_keeps_geometry():
     assert restored.exposure==0 and restored.zoom==1.3 and restored.offset_x==.1
     reset=compile_visual_command('重置画面变换',moved.model_dump())
     assert reset.zoom==1 and reset.rotation==0 and reset.exposure==.5
-    with pytest.raises(ValueError):compile_visual_command('放大到9倍',{})
+    with pytest.raises(ValueError):
+        compile_visual_command('放大到9倍',{})
 
 
 def test_geometry_preview_and_export_match_without_stretching_or_clock_change(tmp_path):
@@ -150,7 +151,8 @@ def test_many_fractional_shots_do_not_accumulate_frames_or_drop_the_last_shot(tm
         source_start_seconds=0,source_end_seconds=.137,timeline_start_seconds=i*.137,timeline_end_seconds=(i+1)*.137) for i in range(12)]
     voice=tmp_path/'voice.wav'
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t',str(duration),str(voice)],check=True)
-    overlay=tmp_path/'overlay.png';Image.new('RGBA',(1080,1920),(0,0,0,0)).save(overlay)
+    overlay=tmp_path/'overlay.png'
+    Image.new('RGBA',(1080,1920),(0,0,0,0)).save(overlay)
     output=tmp_path/'fractional.mp4'
     command=MontageRenderer(tmp_path).build_command(SimpleNamespace(clips=clips),voice,output,[overlay],subtitle_intervals=[(0,duration)])
     subprocess.run(command,capture_output=True,check=True,timeout=60)
@@ -196,7 +198,8 @@ def test_fade_preview_includes_tail_and_matches_export(tmp_path):
     def samples(path):
         raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
         return list(zip(raw[0::3],raw[1::3],raw[2::3]))
-    before=samples(preview);after=samples(output)
+    before=samples(preview)
+    after=samples(output)
     assert len(before)==len(after)==180
     for pixels in (before,after):
         assert max(pixels[0])<8 and max(pixels[-1])<8
@@ -229,7 +232,8 @@ def test_split_inside_fades_has_same_visible_frames_as_unsplit(tmp_path):
             assert newfade.fade_envelope_duration_frames is None and newfade.fade_envelope_offset_frames==0
     def pixels(path):
         return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
-    a=pixels(whole);b=b''.join(pixels(path) for path in paths)
+    a=pixels(whole)
+    b=b''.join(pixels(path) for path in paths)
     assert len(a)==len(b)==90
     assert max(abs(x-y) for x,y in zip(a,b))<=4
 
@@ -264,5 +268,65 @@ def test_compound_visual_edit_compiles_all_clauses_in_order_or_rejects_all():
     sequential=compile_visual_command('曝光改为0.5，恢复原色，然后暖一点',{})
     assert sequential.exposure==0 and sequential.temperature==.15
     for command in ('亮一点，加上闪电特效','恢复原色但不要改饱和度','替换第二个镜头，同时亮一点','淡出0.4秒，曝光改为99'):
-        with pytest.raises(ValueError):compile_visual_command(command,original)
+        with pytest.raises(ValueError):
+            compile_visual_command(command,original)
     assert compile_visual_command('美颜一下，轻一点，配音不变',{}).beauty_strength==.2
+
+
+def test_crop_command_only_touches_what_it_was_asked_and_never_guesses_a_step():
+    current={"fit_mode":"fill","crop_x":.3,"crop_y":.7}
+
+    # 一个模式词只改模式，两个轴沿用当前值
+    assert compile_crop_command("完整显示",current)=={"fit_mode":"fit","crop_x":.3,"crop_y":.7}
+    assert compile_crop_command("填满画面",current)=={"fit_mode":"fill","crop_x":.3,"crop_y":.7}
+
+    # 单轴指令保留原 fit_mode 与另一轴
+    assert compile_crop_command("水平裁剪到 40%",current)=={"fit_mode":"fill","crop_x":.4,"crop_y":.7}
+    assert compile_crop_command("垂直裁剪到 60%",current)=={"fit_mode":"fill","crop_x":.3,"crop_y":.6}
+
+    # 多个已支持子句按顺序全部应用，不是只取第一句
+    assert compile_crop_command("完整显示，水平裁剪到 20%，垂直裁剪到 80%",current)=={"fit_mode":"fit","crop_x":.2,"crop_y":.8}
+    assert compile_crop_command("填满画面，同时水平裁剪到 20%",{"fit_mode":"fit","crop_x":.9,"crop_y":.1})=={
+        "fit_mode":"fill","crop_x":.2,"crop_y":.1}
+
+    # 相对量沿既有 crop 坐标语义：右/下增大，左/上减小
+    assert compile_crop_command("裁剪向右移动 10%",current)["crop_x"]==.4
+    assert compile_crop_command("裁剪向左移动 10%",current)["crop_x"]==.2
+    assert compile_crop_command("裁剪向下移动 20%",current)["crop_y"]==.9
+    assert compile_crop_command("裁剪向上移动 20%",current)["crop_y"]==.5
+
+    # 澄清提示里给出的示例必须真的可达
+    for command in ("填满画面","完整显示","水平裁剪到 40%","垂直裁剪到 60%"):
+        assert compile_crop_command(command,current) is not None
+
+    # 明确越界要拒绝，不能静默截断成用户没要求的 100%
+    with pytest.raises(ValueError,match="0% 到 100%"):
+        compile_crop_command("水平裁剪到 120%",current)
+    with pytest.raises(ValueError,match="0% 到 100%"):
+        compile_crop_command("水平裁剪到 -10%",current)
+    with pytest.raises(ValueError,match="超出可移动范围"):
+        compile_crop_command("裁剪向右移动 80%",current)
+    with pytest.raises(ValueError,match="超出可移动范围"):
+        compile_crop_command("裁剪向左移动 50%",current)
+
+    # 未定义的量不猜步长，返回需要补参数的提示而不是假装已执行
+    for command in ("裁剪一下","往左一点","裁剪一点点"):
+        with pytest.raises(ValueError,match="缺少可执行参数"):
+            compile_crop_command(command,current)
+
+    # 模式子串不能吞掉额外限制：整条拒绝，不只执行 fit
+    with pytest.raises(ValueError,match="尚未支持的裁剪限制或操作"):
+        compile_crop_command("完整显示并把声音关掉",current)
+    with pytest.raises(ValueError,match="尚未支持的裁剪限制或操作"):
+        compile_crop_command("填满画面，水平裁剪到 30%，把字幕改一下",current)
+
+    # 提示里的「其他不要动」这类不改变画面的说法不构成未知子句
+    assert compile_crop_command("填满画面，其他不要动",current)["fit_mode"]=="fill"
+
+    # 非裁剪指令保持原有行为（含改画幅不误编为裁剪）
+    for command in ("改成竖屏","往左移动 10%","替换这个镜头","亮一点","往左一点，同时亮一点"):
+        assert compile_crop_command(command,current) is None
+
+    # 当前镜头的裁剪位置不可用时如实报错
+    with pytest.raises(ValueError,match="裁剪位置不可用"):
+        compile_crop_command("完整显示",{"fit_mode":None,"crop_x":None,"crop_y":None})

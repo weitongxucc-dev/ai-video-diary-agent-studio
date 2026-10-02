@@ -50,23 +50,54 @@ class ImageOverlay(BaseModel):
         return self
 
 
+class ArrowOverlay(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    kind: Literal['arrow']='arrow'
+    id: str=Field(default_factory=lambda:f'overlay_{uuid4().hex[:12]}',min_length=1,max_length=80)
+    x: float=Field(ge=0,le=1,allow_inf_nan=False)
+    y: float=Field(ge=0,le=1,allow_inf_nan=False)
+    name: str=Field(min_length=1,max_length=24)
+    purpose: str=Field(default='',min_length=0,max_length=64)
+    start_seconds: float=Field(ge=0,allow_inf_nan=False)
+    end_seconds: float=Field(gt=0,allow_inf_nan=False)
+    position: Literal['left-top','right-top','right-bottom','left-bottom']='right-top'
+    color: str=Field(default='#FFFFFF',pattern=r'^#[0-9a-fA-F]{6}$')
+    @model_validator(mode='after')
+    def valid_interval(self):
+        if self.end_seconds-self.start_seconds<.04:
+            raise ValueError('箭头显示时间至少0.04秒')
+        return self
+
+
 def parse_overlay(value):
-    return (ImageOverlay if value.get('kind')=='image' else TextOverlay).model_validate(value)
+    kind=value.get('kind')
+    if kind=='image':
+        return ImageOverlay.model_validate(value)
+    if kind=='arrow':
+        return ArrowOverlay.model_validate(value)
+    return TextOverlay.model_validate(value)
 
 
 def write_graphic_overlay(value,output,size):
+    if value.get('kind')=='arrow':
+        return write_arrow_overlay(value,output,size)
     if value.get('kind')!='image':
         return write_text_overlay(value,output,size)
     overlay=ImageOverlay.model_validate(value)
     with Image.open(overlay.source_ref) as original:
         source=original.convert('RGBA')
-    width=round(size[0]*overlay.width);height=round(width*source.height/source.width)
-    left=round(size[0]*overlay.x-width/2);top=round(size[1]*overlay.y-height/2)
+    width=round(size[0]*overlay.width)
+    height=round(width*source.height/source.width)
+    left=round(size[0]*overlay.x-width/2)
+    top=round(size[1]*overlay.y-height/2)
     if left<0 or top<0 or left+width>size[0] or top+height>size[1]:
         raise ValueError('图片超出画幅，请缩小宽度或调整位置')
     source=source.resize((width,height),Image.Resampling.LANCZOS)
-    if overlay.opacity!=1:source.putalpha(source.getchannel('A').point(lambda value:round(value*overlay.opacity)))
-    image=Image.new('RGBA',size,(0,0,0,0));image.alpha_composite(source,(left,top));image.save(output)
+    if overlay.opacity!=1:
+        source.putalpha(source.getchannel('A').point(lambda value:round(value*overlay.opacity)))
+    image=Image.new('RGBA',size,(0,0,0,0))
+    image.alpha_composite(source,(left,top))
+    image.save(output)
 
 
 def validate_overlays(values, duration):
@@ -82,7 +113,8 @@ def write_text_overlay(value, output: Path, size):
     from app.montage import _subtitle_font
     overlay=TextOverlay.model_validate(value)
     font=_subtitle_font(overlay.font_size,family=overlay.font_family)
-    image=Image.new('RGBA',size,(0,0,0,0));draw=ImageDraw.Draw(image)
+    image=Image.new('RGBA',size,(0,0,0,0))
+    draw=ImageDraw.Draw(image)
     max_width=int(size[0]*overlay.width)-8
     lines=[]
     for paragraph in overlay.text.split('\n'):
@@ -91,17 +123,53 @@ def write_text_overlay(value, output: Path, size):
             pieces=list(token) if draw.textlength(token,font=font)>max_width else [token]
             for piece in pieces:
                 if line and draw.textlength(line+piece,font=font)>max_width:
-                    lines.append(line.rstrip());line=piece.lstrip()
-                else:line+=piece
+                    lines.append(line.rstrip())
+                    line=piece.lstrip()
+                else:
+                    line+=piece
         lines.append(line)
     text='\n'.join(lines)
     bounds=draw.multiline_textbbox((0,0),text,font=font,spacing=8,stroke_width=2)
     width,height=bounds[2]-bounds[0],bounds[3]-bounds[1]
-    left=size[0]*overlay.x-width/2;top=size[1]*overlay.y-height/2
+    left=size[0]*overlay.x-width/2
+    top=size[1]*overlay.y-height/2
     if left<0 or top<0 or left+width>size[0] or top+height>size[1]:
         raise ValueError('标题排版超出画幅，请缩小字号、调整位置或减少文字')
     draw.multiline_text((left-bounds[0],top-bounds[1]),text,font=font,fill=overlay.color,stroke_width=2,
         stroke_fill='#000000',align='center',spacing=8)
+    image.save(output)
+
+
+def write_arrow_overlay(value, output: Path, size):
+    from app.montage import _subtitle_font
+    overlay=ArrowOverlay.model_validate(value)
+    width,height=size
+    target=(round(width*overlay.x),round(height*overlay.y))
+    margin=max(8,round(min(width,height)*0.04))
+    corner={
+        'left-top':(margin,margin),
+        'right-top':(width-margin,margin),
+        'right-bottom':(width-margin,height-margin),
+        'left-bottom':(margin,height-margin),
+    }[overlay.position]
+    image=Image.new('RGBA',size,(0,0,0,0))
+    draw=ImageDraw.Draw(image)
+    draw.line([corner,target],fill=overlay.color,width=3)
+    dx,dy=target[0]-corner[0],target[1]-corner[1]
+    length=(dx*dx+dy*dy)**0.5
+    if length>1:
+        ux,uy=dx/length,dy/length
+        head=max(6,min(18,length*.25))
+        base=(target[0]-ux*head,target[1]-uy*head)
+        px,py=-uy,ux
+        wing=head*.5
+        draw.polygon([target,(base[0]+px*wing,base[1]+py*wing),
+                      (base[0]-px*wing,base[1]-py*wing)],fill=overlay.color)
+    label=overlay.name if not overlay.purpose else f'{overlay.name}\n{overlay.purpose}'
+    anchor=('l' if overlay.position.startswith('left') else 'r')+('a' if overlay.position.endswith('top') else 'd')
+    label_y=corner[1]+(margin if overlay.position.endswith('top') else -margin)
+    draw.multiline_text((corner[0],label_y),label,font=_subtitle_font(32),fill=overlay.color,
+        stroke_width=2,stroke_fill='#000000',anchor=anchor,spacing=4)
     image.save(output)
 
 
@@ -112,7 +180,8 @@ def splice_overlays(values, intervals):
         parts=[]
         for old_start,old_end,new_start in intervals:
             left,right=max(start,old_start),min(end,old_end)
-            if right-left>=40:parts.append((left,right,new_start+left-old_start))
+            if right-left>=40:
+                parts.append((left,right,new_start+left-old_start))
         for index,(left,right,at) in enumerate(parts):
             result.append({**value,'id':value['id'] if index==0 else f'overlay_{uuid4().hex[:12]}',
                 'start_seconds':at/1000,'end_seconds':(at+right-left)/1000})
@@ -121,43 +190,82 @@ def splice_overlays(values, intervals):
 
 def compile_overlay_command(command, values, sources=(), selected_refs=()):
     text=command.strip().rstrip('。！')
-    contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识)',text)
+    contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识|箭头)',text)
     if contextual:
         refs=[ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]
         matches=[(index,value) for index,value in enumerate(values) if value['id'] in refs]
-        if len(refs)!=1 or len(matches)!=1:raise ValueError('请先选择一个当前版本的标题或图片')
+        if len(refs)!=1 or len(matches)!=1:
+            raise ValueError('请先选择一个当前版本的标题、图片或箭头')
         index,value=matches[0]
-        if (contextual[1]=='标题') == (value.get('kind')=='image'):raise ValueError('当前选中对象与指令类型不符，请重新选择')
+        if value.get('kind')!={'标题':'text','图片':'image','标识':'image','箭头':'arrow'}[contextual[1]]:
+            raise ValueError('当前选中对象与指令类型不符，请重新选择')
         text=f'{contextual[1]}{index+1}'+text[contextual.end():]
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)(?:图片|标识)[“「](.+)[”」]',text)
     if match:
         candidates=[item for item in sources if item['name']==match[2]]
-        if len(candidates)!=1:raise ValueError('指定图片未导入或存在同名图片，请从图片列表选择明确来源')
+        if len(candidates)!=1:
+            raise ValueError('指定图片未导入或存在同名图片，请从图片列表选择明确来源')
         item=candidates[0]
         return 'add',ImageOverlay(source_ref=item['source_ref'],name=item['name'],start_seconds=0,end_seconds=float(match[1])).model_dump(),None
     match=re.fullmatch(r'(?:把)?(?:图片|标识)(\d+)(删除|移到右上角|移到左上角|移到中间|宽度改为\d+%|不透明度改为\d+%|显示\d+(?:\.\d+)?到\d+(?:\.\d+)?秒)',text)
     if match:
         index=int(match[1])-1
-        if not 0<=index<len(values) or values[index].get('kind')!='image':raise ValueError('所选图片不存在，请按叠加层列表序号操作')
-        value=dict(values[index]);action=match[2]
-        if action=='删除':return 'delete',None,value['id']
-        if action=='移到右上角':value.update(x=1-value['width']/2-.02,y=.2)
-        elif action=='移到左上角':value.update(x=value['width']/2+.02,y=.2)
-        elif action=='移到中间':value.update(x=.5,y=.5)
-        elif action.startswith('宽度改为'):value['width']=int(action[4:-1])/100
-        elif action.startswith('不透明度改为'):value['opacity']=int(action[6:-1])/100
+        if not 0<=index<len(values) or values[index].get('kind')!='image':
+            raise ValueError('所选图片不存在，请按叠加层列表序号操作')
+        value=dict(values[index])
+        action=match[2]
+        if action=='删除':
+            return 'delete',None,value['id']
+        if action=='移到右上角':
+            value.update(x=1-value['width']/2-.02,y=.2)
+        elif action=='移到左上角':
+            value.update(x=value['width']/2+.02,y=.2)
+        elif action=='移到中间':
+            value.update(x=.5,y=.5)
+        elif action.startswith('宽度改为'):
+            value['width']=int(action[4:-1])/100
+        elif action.startswith('不透明度改为'):
+            value['opacity']=int(action[6:-1])/100
         else:
-            times=re.findall(r'\d+(?:\.\d+)?',action);value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
+            times=re.findall(r'\d+(?:\.\d+)?',action)
+            value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
         return 'update',ImageOverlay.model_validate(value).model_dump(),value['id']
+    match=re.fullmatch(r'(?:把)?箭头(\d+)(删除|移到左上角|移到右上角|移到左下角|移到右下角|颜色改为#[0-9a-fA-F]{6}|显示\d+(?:\.\d+)?到\d+(?:\.\d+)?秒)',text)
+    if match:
+        index=int(match[1])-1
+        if not 0<=index<len(values) or values[index].get('kind')!='arrow':
+            raise ValueError('所选箭头不存在，请按叠加层列表序号操作')
+        value=dict(values[index])
+        action=match[2]
+        if action=='删除':
+            return 'delete',None,value['id']
+        if action.startswith('移到'):
+            value['position']={'移到左上角':'left-top','移到右上角':'right-top','移到左下角':'left-bottom','移到右下角':'right-bottom'}[action]
+        elif action.startswith('颜色改为'):
+            value['color']=action.removeprefix('颜色改为')
+        else:
+            times=re.findall(r'\d+(?:\.\d+)?',action)
+            value.update(start_seconds=float(times[0]),end_seconds=float(times[1]))
+        return 'update',ArrowOverlay.model_validate(value).model_dump(),value['id']
+    if re.search(r'(?:加|添加)箭头',text):
+        raise ValueError('新增箭头需要在编辑表单指定指向位置，暂不支持纯文字指令添加箭头')
     match=re.fullmatch(r'前(\d+(?:\.\d+)?)秒(?:加|添加)标题[“「](.+)[”」]',text)
-    if match:return 'add',TextOverlay(text=match[2],start_seconds=0,end_seconds=float(match[1])).model_dump(),None
+    if match:
+        return 'add',TextOverlay(text=match[2],start_seconds=0,end_seconds=float(match[1])).model_dump(),None
     match=re.fullmatch(r'(?:把)?标题(\d+)(删除|移到上面|移到中间|移到下面|字号改为\d+|改成[“「].+[”」])',text)
-    if not match:return None
+    if not match:
+        return None
     index=int(match[1])-1
-    if not 0<=index<len(values) or values[index].get('kind')=='image':raise ValueError('所选标题不存在，请查看标题列表序号')
-    value=dict(values[index]);action=match[2]
-    if action=='删除':return 'delete',None,value['id']
-    if action in {'移到上面','移到中间','移到下面'}:value['y']={'移到上面':.15,'移到中间':.5,'移到下面':.8}[action]
-    elif action.startswith('字号改为'):value['font_size']=int(action.removeprefix('字号改为'))
-    else:value['text']=action[3:-1]
+    if not 0<=index<len(values) or values[index].get('kind')=='image':
+        raise ValueError('所选标题不存在，请查看标题列表序号')
+    value=dict(values[index])
+    action=match[2]
+    if action=='删除':
+        return 'delete',None,value['id']
+    if action in {'移到上面','移到中间','移到下面'}:
+        value['y']={'移到上面':.15,'移到中间':.5,'移到下面':.8}[action]
+    elif action.startswith('字号改为'):
+        value['font_size']=int(action.removeprefix('字号改为'))
+    else:
+        value['text']=action[3:-1]
     return 'update',TextOverlay.model_validate(value).model_dump(),value['id']

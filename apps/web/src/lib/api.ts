@@ -1,4 +1,5 @@
-import type { VideoTemplate, AudioEditInput } from "./types";
+import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
+import { localMemberTokenHeader } from "./local-member-auth";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -87,6 +88,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
       ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+      // 无令牌时 localMemberTokenHeader() 返回 {}，保持 header 缺席 = 后端方案 A 匿名放行。
+      ...localMemberTokenHeader(),
     },
     cache: "no-store",
   });
@@ -150,6 +153,8 @@ async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
         ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+        // 无令牌时不注入，缺席即匿名放行（方案 A）。
+        ...localMemberTokenHeader(),
       },
       cache: "no-store",
     });
@@ -787,12 +792,28 @@ export function saveVideoTemplate(taskId: string, input: {
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
 }
+export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`);
+}
+export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording> {
+  const mediaType = recording.type.split(";")[0].trim().toLowerCase();
+  const suffix = ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a",
+    "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav" } as Record<string, string>)[mediaType];
+  if (!suffix) throw new Error("当前录音格式无法保存，请换一个支持录音的浏览器重试。");
+  const body = new FormData();
+  body.append("audio", recording, `本机录音.${suffix}`);
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`),
+    { method: "POST", body, cache: "no-store", headers: { ...localMemberTokenHeader() } });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "电脑录音未保存");
+  return payload as CreationTaskRecording;
+}
 export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string }> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/listen`, { method: "POST", body: JSON.stringify(input) });
 }
 export async function importCreationTaskAudio(taskId: string, file: File): Promise<{ source_ref: string; name: string; duration_ms: number }> {
   const body = new FormData(); body.append("audio", file);
-  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body });
+  const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body, headers: { ...localMemberTokenHeader() } });
   const payload = await response.json();
   if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
   return payload;
@@ -805,11 +826,106 @@ export function previewCreationTaskVisual(taskId: string, input: import("./types
 
 export async function importCreationTaskGraphic(taskId:string,file:File):Promise<import("./types").GraphicSource> {
   const body=new FormData();body.append("image",file);
-  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body});
+  const response=await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`),{method:"POST",body,headers:{...localMemberTokenHeader()}});
   const payload=await response.json();
   if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:"图片导入失败");
   return payload;
 }
 export function getCreationTaskGraphicSources(taskId:string):Promise<import("./types").GraphicSource[]> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`);
+}
+
+// 定时任务：任务定义管理（创建/启停/删除）。到点真实执行属后续接线，本页不触发任何自动运行。
+export type ScheduledTaskType = "material_analysis" | "creation_render";
+export type ScheduledTaskTriggerMode = "idle" | "scheduled";
+export type ScheduledTask = {
+  id: string;
+  workspace_id: string;
+  task_type: string;
+  trigger_mode: string;
+  target_ref: string;
+  not_before_utc: string | null;
+  window: Record<string, unknown> | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export type ScheduledTasksResponse = { tasks: ScheduledTask[]; total_count: number };
+export type ScheduledTaskCreateInput = {
+  task_type: ScheduledTaskType;
+  trigger_mode: ScheduledTaskTriggerMode;
+  target_ref: string;
+  not_before_utc?: string | null;
+  window?: Record<string, unknown> | null;
+};
+export function listScheduledTasks(): Promise<ScheduledTasksResponse> {
+  return creationPlanRequest("/api/scheduled-tasks");
+}
+export function createScheduledTask(input: ScheduledTaskCreateInput): Promise<ScheduledTask> {
+  return creationPlanRequest("/api/scheduled-tasks", { method: "POST", body: JSON.stringify(input) });
+}
+export function setScheduledTaskEnabled(taskId: string, enabled: boolean): Promise<ScheduledTask> {
+  return creationPlanRequest(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
+}
+export async function deleteScheduledTask(taskId: string): Promise<void> {
+  await creationPlanRequest<ScheduledTask | null>(`/api/scheduled-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
+export type LocalMember = {
+  member_id: string;
+  name: string;
+  role: "owner" | "member";
+  created_at: string;
+};
+
+export type LocalMemberListResponse = { members: LocalMember[] };
+
+/**
+ * Local member commands fail with a JSON body `{"error": kind, "detail": message}`;
+ * surface the human-readable `detail` instead of the raw body.
+ */
+export function membersErrorMessage(cause: unknown): string {
+  if (cause instanceof Error && cause.message) {
+    try {
+      const payload = JSON.parse(cause.message) as { detail?: unknown };
+      if (payload && typeof payload.detail === "string") return payload.detail;
+    } catch {
+      // not a JSON error body; fall through to the raw message
+    }
+    return cause.message;
+  }
+  return "成员操作失败";
+}
+
+export function listLocalMembers(): Promise<LocalMemberListResponse> {
+  return request<LocalMemberListResponse>("/api/members");
+}
+
+export function addLocalMember(input: { name: string; role?: "owner" | "member" }): Promise<LocalMember> {
+  return request<LocalMember>("/api/members", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function removeLocalMember(memberId: string): Promise<{ deleted: string }> {
+  return request<{ deleted: string }>(`/api/members/${encodeURIComponent(memberId)}`, { method: "DELETE" });
+}
+
+export function setLocalMemberRole(memberId: string, role: "owner" | "member"): Promise<LocalMember> {
+  return request<LocalMember>(`/api/members/${encodeURIComponent(memberId)}`, { method: "PATCH", body: JSON.stringify({ role }) });
+}
+
+export function createLocalInviteCode(): Promise<{ invite_code: string }> {
+  return request<{ invite_code: string }>("/api/members/invite-code", { method: "POST" });
+}
+
+/**
+ * 加入空间。后端 `POST /api/members/join` 返回 `MemberWithTokenResponse`，其
+ * `member_token` 是调用方唯一能拿到本人令牌的时机（main.py 的注释：token 只在
+ * join 与 whoami 两处暴露）。所以这里如实返回带令牌的类型，调用方必须立刻落盘，
+ * 否则后续请求会一直匿名（方案 A 下按 owner 放行，多成员形同虚设）。
+ */
+export function joinLocalMember(input: { code: string; name: string }): Promise<LocalMember & { member_token: string }> {
+  return request<LocalMember & { member_token: string }>("/api/members/join", { method: "POST", body: JSON.stringify(input) });
 }

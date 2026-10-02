@@ -10,7 +10,7 @@ body {
   color: var(--text-1);
   font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.42;
   letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
 }
@@ -83,7 +83,7 @@ input:not([type="checkbox"]):not([type="radio"]):not(.video-editor-shell input),
 select:not(.video-editor-shell select),
 textarea:not(.video-editor-shell textarea):not(.home-composer textarea),
 .ui-input {
-  min-height: 32px;
+  min-height: 28px;
   border: 1px solid var(--border-2) !important;
   border-radius: 8px !important;
   background: var(--surface-1) !important;
@@ -135,11 +135,11 @@ h4 {
 
 .home-workspace { min-width: 0; padding: 0 0 20px; }
 .home-execution-pane { display: flex; min-width: 0; flex-direction: column; }
-.home-pane-heading { display: flex; min-height: 74px; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border-1); }
+.home-pane-heading { display: flex; min-height: 74px; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px; border-bottom: 1px solid var(--border-1); }
 .home-pane-heading > div { display: grid; gap: 1px; }
 .home-pane-heading span { color: var(--text-3); font-size: 12px; }
 .home-pane-heading h1,
-.home-pane-heading h2 { margin: 0; font-size: 18px; font-weight: 500; line-height: 1.3; }
+.home-pane-heading h2 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.3; }
 .home-pane-heading a { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-size: 12px; text-decoration: none; white-space: nowrap; }
 .home-pane-heading__switch { min-height: 32px; padding: 0 9px; border: 1px solid var(--border-1); background: var(--surface-1); color: var(--text-2); font-size: 12px; cursor: pointer; }
 .home-pane-heading > div span { overflow: hidden; max-width: 250px; text-overflow: ellipsis; white-space: nowrap; }
@@ -150,7 +150,7 @@ h4 {
 .home-composer__footer button { color: var(--accent); }
 
 .home-execution-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0 0 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--border-1); }
-.home-execution-summary > div { display: flex; min-height: 78px; align-items: baseline; gap: 8px; padding: 20px 18px; background: var(--surface-1); }
+.home-execution-summary > div { display: flex; min-height: 78px; align-items: baseline; gap: 8px; padding: 12px 11px; background: var(--surface-1); }
 .home-execution-summary strong { font-size: 24px; font-weight: 500; line-height: 1; }
 .home-execution-summary span { color: var(--text-2); font-size: 12px; }
 .home-execution-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
@@ -174,11 +174,11 @@ h4 {
 .home-execution-empty p { margin: 0; font-size: 13px; }
 
 .home-card-backdrop { position: fixed; z-index: 70; inset: 0; display: flex; justify-content: center; align-items: center; padding: 28px; background: rgb(15 24 40 / 27%); }
-.home-card-dialog { display: flex; width: min(620px, calc(100vw - 48px)); max-height: calc(100vh - 112px); flex-direction: column; overflow: hidden; border: 1px solid var(--border-1); border-radius: 14px; background: var(--surface-1); box-shadow: var(--shadow-float); }
-.home-card-dialog > header { display: flex; min-height: 55px; align-items: center; justify-content: space-between; padding: 10px 14px 10px 18px; border-bottom: 1px solid var(--border-1); }
-.home-card-dialog h2 { margin: 0; font-size: 16px; font-weight: 500; }
+.home-card-dialog { display: flex; width: min(570px, calc(100vw - 48px)); max-height: calc(100vh - 112px); flex-direction: column; overflow: hidden; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-1); box-shadow: var(--shadow-float); }
+.home-card-dialog > header { display: flex; min-height: 39px; align-items: center; justify-content: space-between; padding: 10px 14px 10px 18px; border-bottom: 1px solid var(--border-1); }
+.home-card-dialog h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .home-card-dialog > header button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; background: transparent; color: var(--text-2); cursor: pointer; }
-.home-card-dialog__body { min-height: 0; overflow-y: auto; padding: 18px; }
+.home-card-dialog__body { min-height: 0; overflow-y: auto; padding: 12px; }
 .home-card-dialog .home-composer__result { margin: 0; border: 0; padding: 0; background: transparent; }
 .home-edit-preview { display: grid; gap: 14px; }
 .home-edit-preview > strong { font-size: 15px; font-weight: 500; }
@@ -200,10 +200,10 @@ h4 {
 .home-edit-preview__video { display: block; width: 100%; max-height: 220px; object-fit: contain; background: #111; }
 .home-edit-preview audio { width: 100%; }
 .home-edit-preview__actions { position: sticky; bottom: -18px; display: flex; justify-content: flex-end; gap: 10px; margin: 0 -18px -18px; padding: 12px 18px; border-top: 1px solid var(--border-1); background: var(--surface-1); }
-.home-edit-preview__actions > button:first-child { min-height: 36px; padding: 0 12px; border: 1px solid var(--border-1); background: var(--surface-1); color: var(--text-2); cursor: pointer; }
+.home-edit-preview__actions > button:first-child { min-height: 32px; padding: 0 12px; border: 1px solid var(--border-1); background: var(--surface-1); color: var(--text-2); cursor: pointer; }
 .home-composer__open-card { min-height: 32px; padding: 0 10px; border: 1px solid var(--border-1); background: var(--surface-1); color: var(--accent); font-size: 12px; cursor: pointer; }
 .home-task-card { display: grid; gap: 14px; }
-.home-task-card h3 { margin: 0; font-size: 18px; font-weight: 500; }
+.home-task-card h3 { margin: 0; font-size: 14px; font-weight: 500; }
 .home-task-card > p { margin: -8px 0 0; color: var(--text-2); font-size: 13px; }
 .home-task-card__progress { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 13px; }
 .home-task-card__progress strong { font-weight: 500; }
@@ -212,7 +212,7 @@ h4 {
 .home-task-card__detail { display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-1); color: var(--text-2); font-size: 13px; }
 .home-task-card__detail:has(p) { display: grid; gap: 5px; }
 .home-task-card__detail p { margin: 0; }
-.home-task-card__open { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 6px; justify-self: start; padding: 0 14px; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 13px; text-decoration: none; }
+.home-task-card__open { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 6px; justify-self: start; padding: 0 14px; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 13px; text-decoration: none; }
 .home-task-card__actions { display: flex; align-items: center; gap: 12px; }
 .home-task-card__actions > a { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-size: 13px; text-decoration: none; }
 .home-task-card__actions > button { border: 0; cursor: pointer; }
@@ -1396,7 +1396,7 @@ h4 {
 .source-workspace__grid { grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 16px; }
 .source-panel, .source-manual-entry, .source-items, .knowledge-items { padding: 0; border-width: 1px 0 0; border-radius: 0; background: transparent; }
 .source-panel > header, .source-manual-entry > header, .source-items > header, .knowledge-items > header { min-height: 60px; align-items: center; padding: 0; }
-.source-panel h2, .source-manual-entry h2, .source-items h2, .knowledge-items h2 { font-size: 18px; }
+.source-panel h2, .source-manual-entry h2, .source-items h2, .knowledge-items h2 { font-size: 14px; }
 .source-panel header span, .source-manual-entry header span, .source-items header span, .knowledge-items header span { font-size: 12px; }
 .source-connector { min-height: 76px; padding: 12px 0; }
 .source-connector strong { font-size: 14px; }
@@ -1484,14 +1484,14 @@ h4 {
 /* Shared controls use semantic ui-* classes. They deliberately do not inherit
    legacy pixel borders, hard shadows, or Windows-style fills. */
 .ui-panel { border: 1px solid var(--border-1) !important; border-radius: 10px !important; background: var(--surface-1) !important; box-shadow: none !important; }
-.ui-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size: 13px !important; font-weight: 500 !important; line-height: 1.2; text-decoration: none; }
-.ui-button:not(.secondary):not(.ui-button--secondary):not(.danger):not(.ui-button--danger), .ui-button--primary { min-height: 36px; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--accent-contrast) !important; }
+.ui-button { display: inline-flex; min-height: 28px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size: 13px !important; font-weight: 500 !important; line-height: 1.2; text-decoration: none; }
+.ui-button:not(.secondary):not(.ui-button--secondary):not(.danger):not(.ui-button--danger), .ui-button--primary { min-height: 32px; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--accent-contrast) !important; }
 .ui-button.secondary, .ui-button--secondary { border-color: var(--border-2) !important; background: var(--surface-1) !important; color: var(--text-1) !important; }
 .ui-button.danger, .ui-button--danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-1)) !important; background: var(--surface-1) !important; color: var(--danger) !important; }
 .ui-button:disabled { cursor: not-allowed; opacity: .5; }
 .ui-form-error { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: start; padding: 12px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-1)); border-radius: 10px; background: var(--surface-1); color: var(--text-1); }
 .ui-form-error-light { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--danger); }.ui-form-error-body strong, .ui-form-error-body span { display: block; font-size: 12px; }.ui-form-error-body span { margin-top: 2px; color: var(--text-2); }.ui-form-error-close { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font-size: 16px; }
-.ui-input, .ui-field input { min-height: 32px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size: 14px !important; box-shadow: none !important; }
+.ui-input, .ui-field input { min-height: 28px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size: 14px !important; box-shadow: none !important; }
 .ui-field { display: grid; gap: 5px; }.ui-field__label, .ui-field__message { color: var(--text-2); font-size: 12px; }.ui-field.is-invalid .ui-input { border-color: var(--danger) !important; }
 .ui-status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 500; }.ui-status__mark { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }.ui-status--running { color: var(--accent); }.ui-status--waiting_for_user { color: var(--warning); }.ui-status--succeeded { color: var(--success); }.ui-status--failed, .ui-status--blocked { color: var(--danger); }
 .ui-state { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }.ui-state h2 { margin: 0; font-size: 18px; font-weight: 500; }.ui-state p { margin: 4px 0 0; color: var(--text-2); font-size: 14px; }.ui-state__actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1501,11 +1501,11 @@ h4 {
 
 /* A readable density floor for every active desktop surface. */
 /* Shared conversation and real task entry cards. */
-.home-chat-start h2 { font-size: 16px; font-weight: 500; margin: 0 0 8px; }
+.home-chat-start h2 { font-size: 14px; font-weight: 500; margin: 0 0 8px; }
 .home-chat-start p { color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .home-chat-start > button { display: block; width: 100%; text-align: left; white-space: normal; margin: 9px 0; padding: 13px 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-2); color: var(--text-1); font-size: 13px; cursor: pointer; }
 .home-start-card { display: flex; align-items: center; flex-direction: column; padding: 26px 18px; border: 1px solid var(--border-1); border-radius: 11px; background: var(--surface-1); text-align: center; }
-.home-start-card h2 { font-size: 17px; font-weight: 500; margin: 14px 0 0; }
+.home-start-card h2 { font-size: 14px; font-weight: 500; margin: 14px 0 0; }
 .home-start-card p { font-size: 13px; color: var(--text-2); }
 .home-start-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 18px; }
 .home-start-links a { color: var(--text-2); font-size: 13px; text-decoration: none; }

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
+import { ScheduledTasksWorkspace } from "@/components/ScheduledTasksWorkspace";
 import { getProductionFoundation, listCreationTasks, listVideoTemplates } from "@/lib/api.server";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import type { CreationTask, ProductionFoundation } from "@/lib/types";
@@ -96,16 +97,7 @@ export default async function ProductionPage({
   if (params.view === "automations") {
     return (
       <AppShell creationTasks={creationTasks}>
-        <div className="automation-unavailable">
-          <AlertCircle size={21} />
-          <div>
-            <h1>暂不支持定时</h1>
-            <p>
-              目前可手动创建视频。定时制作将在后续版本提供。
-            </p>
-          </div>
-          <Link href="/templates">查看模板</Link>
-        </div>
+        <ScheduledTasksWorkspace />
       </AppShell>
     );
   }

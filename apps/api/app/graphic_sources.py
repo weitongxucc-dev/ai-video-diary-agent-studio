@@ -12,13 +12,18 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
     temporary_root.mkdir(parents=True,exist_ok=True)
     name=Path(upload.filename or '图片').name[:120]
     with TemporaryDirectory(prefix='graphic-import-',dir=temporary_root) as folder:
-        raw=Path(folder)/'upload';size=0;digest=hashlib.sha256()
+        raw=Path(folder)/'upload'
+        size=0
+        digest=hashlib.sha256()
         with raw.open('wb') as handle:
             while chunk:=upload.file.read(1024*1024):
                 size+=len(chunk)
-                if size>20*1024*1024:raise ValueError('图片不能超过20MB，请先压缩')
-                digest.update(chunk);handle.write(chunk)
-        if not size:raise ValueError('图片文件为空')
+                if size>20*1024*1024:
+                    raise ValueError('图片不能超过20MB，请先压缩')
+                digest.update(chunk)
+                handle.write(chunk)
+        if not size:
+            raise ValueError('图片文件为空')
         with Image.open(raw) as source:
             if source.format not in {'PNG','JPEG','WEBP'} or getattr(source,'n_frames',1)!=1:
                 raise ValueError('请选择静态PNG、JPEG或WebP图片；动画和SVG尚未支持')
@@ -26,8 +31,10 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
                 raise ValueError('图片尺寸过大，请缩小到8192边长和2400万像素以内')
             normalized=ImageOps.exif_transpose(source).convert('RGBA')
             normalized.info.clear()
-        path=Path(folder)/'source.png';normalized.save(path)
-        identity=uuid4().hex;parameters={'name':name,'width':normalized.width,'height':normalized.height,'original_sha256':digest.hexdigest()}
+        path=Path(folder)/'source.png'
+        normalized.save(path)
+        identity=uuid4().hex
+        parameters={'name':name,'width':normalized.width,'height':normalized.height,'original_sha256':digest.hexdigest()}
         job=repository.create_job_run(JobRun(id=f'job_{identity}',workspace_id=workspace_id,task_id=task_id,
             kind='graphic_import',idempotency_key=f'graphic_import:{identity}',input_digest=digest.hexdigest()))
         running=repository.claim_job_run(workspace_id,job.id)
@@ -57,5 +64,6 @@ def graphic_sources(repository,workspace_id,task_id):
 def resolve_graphic_source(repository,store,workspace_id,task_id,reference):
     record=next((item for item in repository.list_artifact_records(workspace_id,task_id)
         if item.kind=='graphic_source' and item.logical_ref==reference),None)
-    if record is None:raise ValueError('图片不是当前任务导入的来源，请重新导入或选择当前图片')
+    if record is None:
+        raise ValueError('图片不是当前任务导入的来源，请重新导入或选择当前图片')
     return store.resolve_file(record.logical_ref)

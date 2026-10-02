@@ -14,6 +14,35 @@ class TimedCaption:
     subtitle_emphasis_ranges: list[tuple[int,int]] | None = None
 
 
+def new_subtitle_gap_intervals(before_track, after_track, duration_seconds: float) -> list[tuple[float, float]]:
+    """Return previously covered intervals left blank by a same-track edit.
+
+    Call after timing validation, with the original and final candidate of one
+    valid language track. Visibility settings and other languages do not affect
+    this track's coverage. Existing blank intervals are never reported.
+    """
+    if before_track.status != "valid" or after_track.status != "valid":
+        return []
+    if before_track.language != after_track.language:
+        raise ValueError("新增空白须比较同一语言轨")
+    boundaries = sorted({0.0, duration_seconds, *(
+        min(duration_seconds, max(0.0, time))
+        for track in (before_track, after_track)
+        for cue in track.cues
+        for time in (cue.start_seconds, cue.end_seconds)
+    )})
+    gaps = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        covered_before = any(cue.start_seconds <= start and cue.end_seconds >= end for cue in before_track.cues)
+        covered_after = any(cue.start_seconds <= start and cue.end_seconds >= end for cue in after_track.cues)
+        if covered_before and not covered_after:
+            if gaps and gaps[-1][1] == start:
+                gaps[-1] = (gaps[-1][0], end)
+            else:
+                gaps.append((start, end))
+    return gaps
+
+
 def subtitle_schedule(tracks, duration_seconds: float) -> list[TimedCaption]:
     if any(type(track.style.get("enabled", True)) is not bool for track in tracks):
         raise ValueError("字幕显示设置必须为布尔值")
@@ -38,7 +67,9 @@ def subtitle_schedule(tracks, duration_seconds: float) -> list[TimedCaption]:
             source=next((track for track,cue in group if track.source_language is None),group[0][0])
             translation_first=source.style.get("bilingual_order")=="translation_then_source"
             group.sort(key=lambda item:(item[0].source_language is None)==translation_first)
-            lines=[];ranges=[];offset=0
+            lines=[]
+            ranges=[]
+            offset=0
             for track,cue in group:
                 text=cue.text.replace("\r\n","\n").replace("\r","\n")
                 if cue.line_breaks:
@@ -49,14 +80,16 @@ def subtitle_schedule(tracks, duration_seconds: float) -> list[TimedCaption]:
                 compact=re.sub(r"\s+","",text)
                 for term in cue.emphasis:
                     term=re.sub(r"\s+","",term)
-                    if term:ranges.extend((offset+match.start(),offset+match.end()) for match in re.finditer(re.escape(term),compact))
+                    if term:
+                        ranges.extend((offset+match.start(),offset+match.end()) for match in re.finditer(re.escape(term),compact))
                 offset+=len(compact)
             caption=TimedCaption(start,end,"\n".join(lines),dict(source.style),subtitle_emphasis_ranges=ranges)
             # Merge event boundaries introduced only by another screen position.
             prior=next((item for item in reversed(result) if item.subtitle_style.get("position","bottom")==position),None)
             if prior and abs(prior.end_seconds-start)<.0001 and prior.text==caption.text and prior.subtitle_style==caption.subtitle_style and prior.subtitle_emphasis_ranges==ranges:
                 prior.end_seconds=end
-            else:result.append(caption)
+            else:
+                result.append(caption)
     return sorted(result,key=lambda item:(item.start_seconds,item.subtitle_style.get("position","bottom")))
 
 
@@ -76,7 +109,10 @@ def narration_schedule(cues, duration_seconds: float) -> list[TimedCaption]:
 
 def schedule_srt(schedule: list[TimedCaption]) -> str:
     def timestamp(seconds):
-        ms=round(seconds*1000);hours,ms=divmod(ms,3600000);minutes,ms=divmod(ms,60000);seconds,ms=divmod(ms,1000)
+        ms=round(seconds*1000)
+        hours,ms=divmod(ms,3600000)
+        minutes,ms=divmod(ms,60000)
+        seconds,ms=divmod(ms,1000)
         return f"{hours:02}:{minutes:02}:{seconds:02},{ms:03}"
     # SRT has no screen-position layering: combine simultaneous captions.
     boundaries=sorted({time for item in schedule for time in (item.start_seconds,item.end_seconds)})

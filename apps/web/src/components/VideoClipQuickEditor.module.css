@@ -1,23 +1,23 @@
 .editor { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.summary { display: flex; flex: 0 0 42px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; color: var(--text-2); font-size: 12px; }
-.summary strong { color: var(--text-1); font-size: 13px; font-weight: 500; }
-.tabs { display: flex; flex: 0 0 38px; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--border-1); }
-.tabs button { flex: 1; min-width: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.summary { display: flex; flex: 0 0 36px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; color: var(--text-2); font-size: 12px; }
+.summary strong { color: var(--text-1); font-size: 12px; font-weight: 500; }
+.tabs { display: flex; flex: 0 0 32px; gap: 3px; padding: 0 10px; border-bottom: 1px solid var(--border-1); }
+.tabs button { flex: 1; min-width: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .tabs button[aria-pressed="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 500; }
 .tabs button:focus-visible, .footer button:focus-visible, .body input:focus-visible, .body select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
-.controlGroup { display: grid; gap: 14px; }
-.controlGroup h3 { margin: 0; color: var(--text-1); font-size: 14px; font-weight: 500; }
-.controlGroup p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
-.controlGroup > label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-1); font-size: 13px; }
-.controlGroup > label input, .controlGroup > label select { width: 144px; min-width: 0; min-height: 34px; padding: 4px 8px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 13px; }
-.valueRow { display: flex; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: 12px; }
+.body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.controlGroup { display: grid; gap: 10px; }
+.controlGroup h3 { margin: 0; color: var(--text-1); font-size: 13px; font-weight: 500; }
+.controlGroup p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.45; }
+.controlGroup > label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-1); font-size: 12px; }
+.controlGroup > label input, .controlGroup > label select { width: 132px; min-width: 0; min-height: 30px; padding: 3px 7px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 13px; }
+.valueRow { display: flex; justify-content: space-between; gap: 10px; color: var(--text-2); font-size: 12px; }
 .valueRow output { color: var(--text-1); }
-.cropControls { display: grid; gap: 12px; }
-.cropControls label { display: grid; grid-template-columns: 1fr auto; gap: 4px; color: var(--text-1); font-size: 13px; }
+.cropControls { display: grid; gap: 10px; }
+.cropControls label { display: grid; grid-template-columns: 1fr auto; gap: 4px; color: var(--text-1); font-size: 12px; }
 .cropControls output { color: var(--text-2); font-size: 12px; }
 .cropControls input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
-.footer { display: flex; flex: 0 0 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--border-1); }
+.footer { display: flex; flex: 0 0 44px; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border-1); }
 .footer small { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.footer button { flex: 0 0 auto; min-height: 34px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-contrast); font: inherit; font-size: 13px; cursor: pointer; }
+.footer button { flex: 0 0 auto; min-height: 30px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-contrast); font: inherit; font-size: 12px; cursor: pointer; }
 .footer button:disabled { cursor: default; opacity: .55; }

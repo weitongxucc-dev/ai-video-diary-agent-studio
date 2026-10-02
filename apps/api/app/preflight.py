@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.models import utc_now
+from app.production import directory_accepts_writes
 
 
 def setup_preflight(settings: Settings) -> dict:
@@ -143,6 +144,22 @@ def _obsidian_check(settings: Settings) -> dict:
 def _video_inbox_check(settings: Settings) -> dict:
     path = Path(settings.video_inbox_path).expanduser()
     if path.is_dir():
+        # Listing a directory proves nothing about accepting the files the local
+        # video pipeline writes into it, and a first run that reports ready here
+        # only fails later, at the first import.
+        if not directory_accepts_writes(path):
+            return _preflight_item(
+                item_id="video_inbox",
+                label="视频待处理目录",
+                status="invalid",
+                summary="目录存在但当前不可写",
+                impact="待处理视频无法进入该目录，扫描到也不会被处理。",
+                repair_action=(
+                    "检查该磁盘是否以只读方式挂载或目录权限是否被改动，"
+                    "恢复可写后重新检查；或在设置页改选一个可写目录。"
+                ),
+                settings_target="video_inbox_path",
+            )
         video_count = sum(
             1
             for f in path.iterdir()
@@ -154,7 +171,7 @@ def _video_inbox_check(settings: Settings) -> dict:
             item_id="video_inbox",
             label="视频待处理目录",
             status="ready",
-            summary=f"目录存在，当前 {video_count} 个待处理视频",
+            summary=f"目录存在且可写，当前 {video_count} 个待处理视频",
             impact="支持扫描和导入待录制/待处理视频。",
             repair_action="无需处理。" if video_count else "放置视频文件到该目录后自动识别。",
             settings_target="video_inbox_path",
@@ -173,11 +190,27 @@ def _video_inbox_check(settings: Settings) -> dict:
 def _video_output_check(settings: Settings) -> dict:
     path = Path(settings.video_output_path).expanduser()
     if path.is_dir():
+        # The render pipeline writes finished video, subtitles and material packs
+        # here, so a directory that cannot be written to is not a usable output
+        # directory even when it lists normally.
+        if not directory_accepts_writes(path):
+            return _preflight_item(
+                item_id="video_output",
+                label="视频输出目录",
+                status="invalid",
+                summary="目录存在但当前不可写",
+                impact="处理后视频、字幕和素材无法写入此目录。",
+                repair_action=(
+                    "检查该磁盘是否以只读方式挂载或目录权限是否被改动，"
+                    "恢复可写后重新检查；或在设置页改选一个可写目录。"
+                ),
+                settings_target="video_output_path",
+            )
         return _preflight_item(
             item_id="video_output",
             label="视频输出目录",
             status="ready",
-            summary="目录可访问",
+            summary="目录可写",
             impact="处理后视频、字幕和素材将写入此目录。",
             repair_action="无需处理。",
             settings_target="video_output_path",

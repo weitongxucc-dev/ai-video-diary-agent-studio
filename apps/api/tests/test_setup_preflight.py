@@ -185,6 +185,95 @@ def test_preflight_directory_invalid_blocks(tmp_path):
     assert result["overall"] == "blocked"
 
 
+def _settings_for_dirs(tmp_path, inbox, output):
+    return Settings(
+        deepseek_api_key="sk-test",
+        obsidian_vault_path=str(tmp_path),
+        video_inbox_path=str(inbox),
+        video_output_path=str(output),
+        jianying_draft_root_path=str(tmp_path / "jianying"),
+        database_path=str(tmp_path / "db.sqlite"),
+    )
+
+
+def _check(result, item_id):
+    return next(c for c in result["checks"] if c["id"] == item_id)
+
+
+def test_preflight_read_only_required_directory_blocks_and_recovers(tmp_path):
+    """A chmod-500 directory still lists as a directory, so only a real write proves it."""
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
+    settings = _settings_for_dirs(tmp_path, inbox, output)
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        writable = setup_preflight(settings)
+    assert _check(writable, "video_inbox")["status"] == "ready"
+    assert _check(writable, "video_output")["status"] == "ready"
+    assert writable["overall"] == "ready"
+
+    inbox.chmod(0o500)
+    output.chmod(0o500)
+    try:
+        with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+            blocked = setup_preflight(settings)
+
+        for item_id in ("video_inbox", "video_output"):
+            check = _check(blocked, item_id)
+            assert check["status"] == "invalid", item_id
+            assert "不可写" in check["summary"], item_id
+            # The repair has to name the cause and a way out, not just "fix it".
+            assert "只读" in check["repair_action"], item_id
+            assert "设置" in check["repair_action"], item_id
+        assert blocked["overall"] == "blocked"
+    finally:
+        inbox.chmod(0o755)
+        output.chmod(0o755)
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        recovered = setup_preflight(settings)
+    assert _check(recovered, "video_inbox")["status"] == "ready"
+    assert _check(recovered, "video_output")["status"] == "ready"
+    assert recovered["overall"] == "ready"
+
+
+def test_preflight_read_only_output_directory_blocks_on_its_own(tmp_path):
+    """Output is written to by the render pipeline, so it is gated independently of the inbox."""
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
+    settings = _settings_for_dirs(tmp_path, inbox, output)
+
+    output.chmod(0o500)
+    try:
+        with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+            result = setup_preflight(settings)
+    finally:
+        output.chmod(0o755)
+
+    assert _check(result, "video_inbox")["status"] == "ready"
+    assert _check(result, "video_output")["status"] == "invalid"
+    assert result["overall"] == "blocked"
+
+
+def test_preflight_write_probe_leaves_nothing_behind(tmp_path):
+    """The proof is a real create, so it must not leave a file the scanner would count."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "clip.mp4").write_bytes(b"x")
+    settings = _settings_for_dirs(tmp_path, inbox, tmp_path)
+
+    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        result = setup_preflight(settings)
+
+    assert _check(result, "video_inbox")["status"] == "ready"
+    assert _check(result, "video_inbox")["summary"].endswith("1 个待处理视频")
+    assert [p.name for p in inbox.iterdir()] == ["clip.mp4"]
+
+
 def test_preflight_invalid_obsidian_directory_is_optional(tmp_path):
     """An invalid optional Obsidian path is visible without locking the app."""
     inbox = tmp_path / "inbox"

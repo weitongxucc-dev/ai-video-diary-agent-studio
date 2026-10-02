@@ -44,7 +44,8 @@ def test_rejects_cut_inside_recognized_word_and_missing_schema():
     with pytest.raises(ValueError,match="断开"):
         align_subtitle_track(track("hel","lo"),{"transcription":[{"tokens":[token("hello",0,500)]}]},3)
     for result in ({}, {"transcription":[{}]}, {"transcription":"invalid"}):
-        with pytest.raises(ValueError):align_subtitle_track(track("hello"),result,3)
+        with pytest.raises(ValueError):
+            align_subtitle_track(track("hello"),result,3)
 
 
 def test_recognition_uses_local_cli_even_when_global_asr_is_cloud(tmp_path, monkeypatch):

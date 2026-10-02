@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace, PreviewVideo } from "../CreationTaskWorkspace";
-import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import type { CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import { confirmCreationTaskTopic } from "@/lib/api";
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => {
     exactEdit: vi.fn(),
     exactPreview: vi.fn(),
     generateNarration: vi.fn(),
+    generatePersonRender: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
     initializeTimeline: vi.fn(),
@@ -40,12 +42,24 @@ const mocks = vi.hoisted(() => {
     selectVoice: vi.fn(),
     undoTimeline: vi.fn(),
     redoTimeline: vi.fn(),
+    saveRecording: vi.fn(),
+    previewAudioEdit: vi.fn(),
+    getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
   };
 });
 
 vi.mock("@/components/AppShell", () => ({
   AppShell: ({ children, conversation, inspector, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; quickInspector?: (openDetails: () => void) => React.ReactNode; quickInspectorLabel?: string; inspectorTitle?: string }) => (
     <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
+  ),
+}));
+
+vi.mock("../DesktopVoiceRecorder", () => ({
+  DesktopVoiceRecorder: ({ onRecorded, onCancel }: { onRecorded: (blob: Blob) => void | Promise<void>; onCancel: () => void }) => (
+    <div data-testid="voice-recorder">
+      <button onClick={() => void Promise.resolve(onRecorded(new Blob(["audio"], { type: "audio/webm" }))).catch(() => undefined)} type="button">提交录音</button>
+      <button onClick={onCancel} type="button">取消录音</button>
+    </div>
   ),
 }));
 
@@ -59,6 +73,7 @@ vi.mock("@/lib/api", () => ({
   confirmCreationTaskTopic: vi.fn(),
   createCreationTaskMontagePlan: vi.fn(),
   generateCreationTaskNarration: mocks.generateNarration,
+  generateCreationTaskPersonRender: mocks.generatePersonRender,
   generateCreationTaskScript: vi.fn(),
   generateCreationTaskTopics: vi.fn(),
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
@@ -80,6 +95,9 @@ vi.mock("@/lib/api", () => ({
   selectCreationTaskNarrationVoice: mocks.selectVoice,
   undoCreationTaskTimeline: mocks.undoTimeline,
   redoCreationTaskTimeline: mocks.redoTimeline,
+  saveCreationTaskRecording: mocks.saveRecording,
+  previewCreationTaskAudio: mocks.previewAudioEdit,
+  getProductionMaterials: mocks.getProductionMaterials,
 }));
 
 const baseTask: CreationTask = {
@@ -211,7 +229,7 @@ function subtitleCoverWorkspace() {
   return result;
 }
 
-function exactPreview(task: CreationTask, operationType: "EditAudioTimeline" | "EditCompoundTimeline" | "EditGraphicOverlay" | "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
+function exactPreview(task: CreationTask, operationType: "EditAudioTimeline" | "EditCompoundTimeline" | "EditGraphicOverlay" | "SetClipTransition" | "ChangeCanvas" | "SplitSubtitleCue" | "MergeSubtitleCue" | "DeleteSubtitleCue" | "ReplaceSubtitleText" | "UpdateSubtitleCue" | "ConfigureSubtitleTrack" | "GenerateCoverFromFrame" | "ReplaceClip" | "InsertClip" | "ChangeCrop" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip") {
   return {
     intent: {
       id: "intent-exact", workspace_id: "local", task_id: task.id, raw_command: "精确控件修改",
@@ -451,6 +469,7 @@ describe("CreationTaskWorkspace", () => {
     restored.subtitle_tracks[0].cues[0].emphasis = ["不是口号"];
     restored.cover_asset!.title = "恢复后的标题";
     restored.cover_asset!.frame_time_seconds = 1.2;
+    restored.cover_asset!.layout.title_position = "center";
     mocks.undoTimeline.mockResolvedValue({});
     mocks.getWorkspace.mockResolvedValue(restored);
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
@@ -462,6 +481,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("字幕 1 强调词")).toHaveValue("不是口号");
     await waitFor(() => expect(screen.getByLabelText("封面标题")).toHaveValue("恢复后的标题"));
     expect(screen.getByLabelText("封面画面时间")).toHaveValue(1.2);
+    expect(within(screen.getByRole("group", { name: "封面标题位置" })).getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("uses persisted cues when switching tracks and selecting another cue", () => {
@@ -520,6 +540,32 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", { name: "确认修改" })).not.toBeInTheDocument();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
+  it("blocks the doomed subtitle preview past the 96-character limit and recovers by shortening", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+
+    // 超限：97 个字符，按 UpdateSubtitleCue 的 96 字上限必须拦下，且不发那条已知会 422 的请求。
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "字".repeat(97) } });
+    expect(screen.getByLabelText("字幕 1 字数")).toHaveTextContent("97 / 96 字");
+    expect(screen.getByRole("alert")).toHaveTextContent("超出 96 字上限");
+    expect(screen.getByRole("button", { name: "预览字幕修改" })).toBeDisabled();
+    expect(mocks.exactPreview).not.toHaveBeenCalled();
+
+    // 恢复：缩短回正好 96 个 Unicode 字符（含 6 个星芒平面字符，UTF-16 要 102 个码元），
+    // 提示消失、按钮恢复可用，正常的预览请求重新走通。
+    const recoveredText = `${"字".repeat(90)}${"🎬".repeat(6)}`;
+    expect(Array.from(recoveredText).length).toBe(96);
+    expect(recoveredText.length).toBe(102);
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: recoveredText } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("字幕 1 字数")).toHaveTextContent("96 / 96 字");
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    expect(await screen.findByRole("button", { name: "确认修改" })).toBeInTheDocument();
+    expect(mocks.exactPreview).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the user review persisted topic and script results without rerunning them", () => {
     const initial = workspace(baseTask);
     initial.selected_topic = {
@@ -653,7 +699,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(screen.queryByText("人物与口型")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人物与口型：待配音" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "字幕与封面：待补封面" })).toBeDisabled();
     expect(screen.queryByText("数据监控")).not.toBeInTheDocument();
     expect(screen.getByTitle("字幕与封面：待补封面")).toHaveAttribute("aria-current", "step");
@@ -667,6 +713,168 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成成片" }));
     await waitFor(() => expect(mocks.renderMontage).toHaveBeenCalledWith("task-1"));
+  });
+
+  it("enters the person stage from the rail and reports a pure-material plan as skipped rather than done", () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 0;
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+        audio_reference: "narration://artifact/segment-1",
+        audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+        voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+        pronunciation_version: "p1", status: "ready" as const,
+      }],
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    const railItem = screen.getByTitle("人物与口型：明确跳过 · 全素材画面");
+    expect(within(railItem).getByRole("button")).toBeEnabled();
+    fireEvent.click(within(railItem).getByRole("button"));
+
+    expect(screen.getByRole("heading", { name: "本阶段明确跳过" })).toBeInTheDocument();
+    expect(screen.getByText("0% · 实际 0%")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /生成人物口型预览/ })).not.toBeInTheDocument();
+    expect(screen.getByTitle("人物与口型：明确跳过 · 全素材画面")).not.toHaveAttribute("aria-current");
+  });
+
+  it("generates lipsync for a chosen narration segment when the plan asks for on-camera presence", async () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 40;
+    initial.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "person-v1",
+      person_authorization_id: "person-auth-1", person_authorization_version: "v1",
+      authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+    };
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+        audio_reference: "narration://artifact/segment-1",
+        audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+        voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+        pronunciation_version: "p1", status: "ready" as const,
+      }],
+    };
+    mocks.generatePersonRender.mockResolvedValue({ id: "person-render-1" });
+    mocks.getWorkspace.mockResolvedValue(initial);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "人物与口型：待生成口型" }));
+
+    expect(screen.getByText("还没有生成任何口型；系统只为选中的露脸段生成口型。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成人物口型预览" }));
+
+    await waitFor(() => expect(mocks.generatePersonRender).toHaveBeenCalledWith("task-1", {
+      narration_segment_id: "narration-segment-1",
+      person_profile_id: "person-1",
+      person_version: "person-v1",
+      motion: "natural",
+      expression: "neutral",
+    }));
+  });
+
+  it("does not report the person stage complete while a required segment is still failed", () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const segment = (id: string) => ({
+      id, source_section_id: "section-1", text: "一段真实配音", audio_reference: `narration://artifact/${id}`,
+      audio_url: `/api/creation-tasks/task-1/narration/segments/${id}/audio`,
+      duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
+      voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+      pronunciation_version: "p1", status: "ready" as const,
+    });
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 40;
+    initial.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "person-v1",
+      person_authorization_id: "person-auth-1", person_authorization_version: "v1",
+      authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts",
+    };
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 6,
+      sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "p1",
+      segments: [segment("narration-segment-1"), segment("narration-segment-2")],
+    };
+    const personRender = (id: string, narrationSegmentId: string, status: "ready" | "failed") => ({
+      id, task_id: task.id,
+      person_profile_id: "person-1", person_version: "person-v1",
+      voice_profile_id: "voice-1", voice_version: "v1",
+      narration_segment_id: narrationSegmentId, visual_reference: "workspace://person.mp4",
+      model_id: "musetalk-local", motion: "natural" as const, expression: "neutral" as const,
+      status, duration_seconds: 3, alignment_evidence: "aligned",
+      media_url: status === "ready" ? `/api/${id}` : null,
+      failure_reason: status === "failed" ? "口型未完成" : null,
+      impact: status === "failed" ? "这一段没有成片。" : null,
+      repair_action: status === "failed" ? "重新生成这一段。" : null,
+      created_at: task.created_at, updated_at: task.updated_at,
+    });
+    // 第一段已生成，第二段失败；成片两个镜头都引用了人物口型。
+    initial.person_renders = [personRender("person-render-1", "narration-segment-1", "ready"), personRender("person-render-2", "narration-segment-2", "failed")];
+    initial.montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "成片",
+      status: "waiting_for_user", cues: [], duration_seconds: 6, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/full-audio",
+      output_url: null, subtitle_url: null, message: "等待确认",
+      clips: ["person-render-1", "person-render-2"].map((personRenderId, index) => ({
+        id: `clip-${index + 1}`, cue_id: `cue-${index + 1}`, asset_id: "asset-1", segment_id: `segment-${index + 1}`,
+        source_reference: "asset://asset-1", source_start_seconds: 0, source_end_seconds: 3,
+        timeline_start_seconds: index * 3, timeline_end_seconds: index * 3 + 3, match_score: 0.9,
+        needs_confirmation: false, role: "a_roll" as const, locked: false, manually_selected: false,
+        person_render_id: personRenderId,
+      })),
+      created_at: task.created_at, updated_at: task.updated_at,
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    expect(screen.getByRole("button", { name: "人物与口型：已生成 1/2 段 · 仍有口型未完成" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "人物与口型：已完成" })).not.toBeInTheDocument();
+  });
+
+  it("does not report narration as complete while segments are still running or have failed", () => {
+    const task = { ...baseTask, stage: "narration" as const, stage_status: "running" as const, status: "running" as const };
+    const segment = {
+      id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+      audio_reference: "narration://artifact/segment-1",
+      audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
+      duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
+      voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+      pronunciation_version: "p1", status: "ready" as const,
+    };
+    const initial = workspace(task);
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      language: "zh" as const, pronunciation_version: "v1", segments: [segment],
+    };
+
+    const { unmount } = render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={{
+      ...initial,
+      narration: { ...initial.narration!, segments: [{ ...segment, status: "generating" as const }] },
+    }} />);
+    expect(screen.getByRole("button", { name: "配音：配音生成中" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "配音：已完成" })).not.toBeInTheDocument();
+    unmount();
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={{
+      ...initial,
+      narration: { ...initial.narration!, segments: [{ ...segment, status: "failed" as const }] },
+    }} />);
+    expect(screen.getByRole("button", { name: "配音：有配音段未完成" })).toBeEnabled();
+    expect(screen.getByTitle("配音：有配音段未完成")).toHaveAttribute("aria-current", "step");
   });
 
   it("opens the persisted subtitle and cover workspace and previews cue edits before writing", async () => {
@@ -740,6 +948,100 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+  });
+
+  // WIL-180 专项：字幕确认后服务端把任务退回 montage 并作废旧成片
+  // （stage:"montage"、output_ready:false、output_url:null，见 WIL-152/evidence/02-replaced.json），
+  // 字幕轨仍是 1 条 valid、can_undo:true。此时字幕页按既有门禁已不可呈现
+  // （canOpenStage("subtitle_cover") 要求 output_url），但 confirmEdit 的 refresh(true) 仍保留它，
+  // 结果主区没有任何视图命中 → 空白、撤销入口一起消失。
+  // 正确表现是按既有可用/默认规则回到 montage 剪辑页，撤销入口可见。
+  it("falls back to the default montage page with undo after a confirm that invalidates output_url", async () => {
+    const initial = subtitleCoverWorkspace();
+    const confirmed = subtitleCoverWorkspace();
+    confirmed.task = {
+      ...confirmed.task,
+      stage: "montage" as const,
+      progress: 75,
+      current_timeline_version_id: "timeline-version-7",
+      can_undo: true,
+      can_redo: false,
+      output_ready: false,
+    };
+    confirmed.montage = {
+      ...confirmed.montage!,
+      output_url: null,
+      subtitle_url: null,
+      message: "字幕修改已保存，配音未改；请重新渲染。",
+    };
+    confirmed.subtitle_tracks = [{
+      ...confirmed.subtitle_tracks[0],
+      timeline_version_id: "timeline-version-7",
+      cues: [{ ...confirmed.subtitle_tracks[0].cues[0], text: "真实运行\n不是口号" }],
+    }];
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    mocks.confirmEdit.mockResolvedValue({ operation: { id: "operation-subtitle" }, montage: confirmed.montage });
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择中文字幕 1" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "真实运行\n不是口号" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-UpdateSubtitleCue"));
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
+
+    // 1) 视图失效后按既有默认规则回落到可操作的剪辑页，而不是留一片空白
+    await waitFor(() => expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument());
+    // 2) 撤销入口必须可见且可用（can_undo=true）
+    const undo = await screen.findByRole("button", { name: "撤销" });
+    expect(undo).toBeEnabled();
+    // 3) 不放开重渲染前的字幕页：output_url 已空，字幕页门禁原样保留
+    expect(screen.queryByLabelText("字幕与封面工作区")).not.toBeInTheDocument();
+    // 4) 不把旧成片当新成片：剪辑页如实显示未出片，不渲染指向旧成片的播放器
+    expect(screen.getByText("未出片")).toBeInTheDocument();
+    expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+  });
+
+  // 对照用例：成片仍有效（output_url 保留）时，refresh(true) 仍保留字幕页，不得乱跳。
+  // 字段改动与既有用例一致，确保单跑也能产出合法精确预览。
+  it("does not jump away from a still-valid view when output_url is present", async () => {
+    const initial = subtitleCoverWorkspace();
+    const confirmed = subtitleCoverWorkspace();
+    confirmed.task = { ...confirmed.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 };
+    confirmed.subtitle_tracks = [{
+      ...confirmed.subtitle_tracks[0],
+      timeline_version_id: "timeline-version-7",
+      cues: [{ ...confirmed.subtitle_tracks[0].cues[0], text: "真实运行\n不是口号" }],
+    }];
+    mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    mocks.confirmEdit.mockResolvedValue({ operation: { id: "operation-subtitle" }, montage: confirmed.montage });
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择中文字幕 1" }));
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "真实运行\n不是口号" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 出现时间"), { target: { value: "0.4" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 结束时间"), { target: { value: "2.8" } });
+    fireEvent.change(screen.getByLabelText("字幕 1 强调词"), { target: { value: "真实运行" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览字幕修改" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
+
+    // 成片仍有效时不得乱跳：仍停在字幕与封面页，预览器照旧
+    await waitFor(() => expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument());
+    expect(screen.getByLabelText("字幕成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output");
   });
 
   it("previews the selected cut dissolve without immediately applying it", async () => {
@@ -944,17 +1246,54 @@ describe("CreationTaskWorkspace", () => {
 
     fireEvent.change(screen.getByLabelText("封面画面时间"), { target: { value: "4.2" } });
     fireEvent.change(screen.getByLabelText("封面标题"), { target: { value: "真实运行" } });
+    const positions = within(screen.getByRole("group", { name: "封面标题位置" }));
+    expect(positions.getByRole("button", { name: "底部" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
     fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenNthCalledWith(2, "task-1", {
       operation_type: "GenerateCoverFromFrame",
       frame_time_seconds: 4.2,
       title: "真实运行",
+      title_position: "center",
     }));
     const inspector = screen.getByLabelText("当前选择");
     expect(inspector).toHaveTextContent("图片产物artifact:cover:v6");
     expect(inspector).toHaveTextContent("选帧能力可用 · ffmpeg+Pillow");
     expect(inspector).toHaveTextContent("AI 生图不可用 · 未配置模型");
     expect(screen.queryByRole("button", { name: /AI 生成封面/ })).not.toBeInTheDocument();
+  });
+
+  it("previews cover title position changes and refreshes persisted layout after confirmation", async () => {
+    const initial = workspaceWithCover();
+    const preview = exactPreview(initial.task, "GenerateCoverFromFrame");
+    const confirmed = structuredClone(initial);
+    confirmed.cover_asset!.id = "cover-center";
+    confirmed.cover_asset!.layout.title_position = "center";
+    mocks.exactPreview.mockResolvedValue(preview);
+    mocks.confirmEdit.mockResolvedValue({});
+    mocks.getWorkspace.mockResolvedValue(confirmed);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：已完成" }));
+    const positions = within(screen.getByRole("group", { name: "封面标题位置" }));
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
+    expect(screen.getByText(/选帧、标题或构图待生成/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith(initial.task.id, {
+      operation_type: "GenerateCoverFromFrame", frame_time_seconds: initial.cover_asset!.frame_time_seconds,
+      title: initial.cover_asset!.title, title_position: "center",
+    }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(positions.getByRole("button", { name: "底部" }));
+    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    fireEvent.click(positions.getByRole("button", { name: "中部" }));
+    fireEvent.click(screen.getByRole("button", { name: "从画面生成封面" }));
+    await screen.findByLabelText("变更预览");
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith(initial.task.id, preview.proposal.id));
+    await waitFor(() => expect(screen.queryByText(/选帧、标题或构图待生成/)).not.toBeInTheDocument());
+    expect(positions.getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("当前选择")).toHaveTextContent("画面中部");
   });
 
   it("keeps bilingual unavailable with one visible repair instruction", () => {
@@ -1068,6 +1407,81 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
     }));
+  });
+
+  it("wires a desktop voice recording into a narration replacement proposal without applying it", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+      current_timeline_version_id: "timeline-version-2",
+      timeline_sequence: 2,
+      can_undo: true,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [{ id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 }],
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9, match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      audio_timeline: { format_version: 1 as const, tracks: [{ id: "audio-narration", name: "旁白", role: "narration" as const, gain_db: 0, muted: false, locked: false, duck_under_voice: false, clips: [] }] },
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.saveRecording.mockResolvedValue({ source_ref: "recording:rec-1", artifact_id: "artifact-rec-1", audio_url: "/api/recordings/rec-1.wav", duration_ms: 3000, applied: false });
+    mocks.previewAudioEdit.mockResolvedValue({
+      intent: { id: "intent-audio", workspace_id: "local", task_id: task.id, raw_command: "用本机录音替换整条旁白", context_stage: "montage", selected_object_refs: [], playhead_ms: null, intent_type: "audio_edit", scope: {}, constraints: {}, confidence: 1, status: "compiled", created_at: task.created_at },
+      proposal: { id: "proposal-replace-narration", workspace_id: "local", task_id: task.id, intent_id: "intent-audio", summary: "用本机录音替换整条旁白", target_refs: ["timeline:timeline-version-2"], operation: { operation_type: "EditAudioTimeline", payload: {} }, invalidated_refs: ["artifact:audio:v2"], preview: { before: { ref: "timeline:timeline-version-2", label: "当前版本", detail: "已保存" }, after: { ref: "timeline:proposal", label: "待确认版本", detail: "替换旁白" } }, external_effects: ["未确认前不写入时间线。"], status: "proposed" as const, created_at: task.created_at, updated_at: task.updated_at },
+    });
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "电脑录音替换旁白" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
+
+    await waitFor(() => expect(mocks.saveRecording).toHaveBeenCalledWith("task-1", expect.any(Blob)));
+    await waitFor(() => expect(mocks.previewAudioEdit).toHaveBeenCalledWith("task-1", {
+      base_version_id: "timeline-version-2",
+      action: "replace_narration",
+      target_id: "audio-narration",
+      values: { source_ref: "recording:rec-1" },
+      raw_command: "用本机录音替换整条旁白",
+    }));
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "确认修改" })).toBeInTheDocument();
+  });
+
+  it("surfaces an honest recording error and never previews when the upload fails", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+      current_timeline_version_id: "timeline-version-2",
+      timeline_sequence: 2,
+      can_undo: true,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const, cues: [], clips: [], duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.saveRecording.mockRejectedValue(new mocks.MockCreationPlanApiError(409, "stage_invalid", "当前任务阶段无法保存录音", null, "请回到剪辑阶段再重试。"));
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "电脑录音替换旁白" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("当前任务阶段无法保存录音");
+    expect(alert).toHaveTextContent("请回到剪辑阶段再重试");
+    expect(mocks.previewAudioEdit).not.toHaveBeenCalled();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("keeps each clip's quick draft through selection and a failed preview", async () => {
@@ -1231,6 +1645,23 @@ describe("CreationTaskWorkspace", () => {
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled());
+
+    // WIL-90：主轨 Insert —— clip_id 是锚点镜头，插在它之后。后端对每个操作都要求
+    // clip_id，缺了直接 409，所以 payload 必须带且等于当前选中镜头。
+    // 仍不带 duration（时长继承源片段 span）。
+    mocks.exactPreview.mockResolvedValue(exactPreview(task, "InsertClip"));
+    fireEvent.click(screen.getAllByRole("button", { name: "添加片段" })[0]);
+    await waitFor(() => expect(mocks.getCandidates).toHaveBeenCalledWith("task-1", "clip-1"));
+    fireEvent.change(await screen.findByLabelText("插在当前镜头之后"), { target: { value: "asset-3:segment-3" } });
+    await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", {
+      operation_type: "InsertClip", clip_id: "clip-1", asset_id: "asset-3", segment_id: "segment-3", source_start_seconds: 5,
+    }));
+    const insertCall = mocks.exactPreview.mock.calls.at(-1)?.[1];
+    // 锚点必填：等于当前选中镜头 id，否则后端 409
+    expect(insertCall?.clip_id).toBe("clip-1");
+    expect(insertCall).not.toHaveProperty("duration_seconds");
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
 
     fireEvent.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(mocks.undoTimeline).toHaveBeenCalledWith("task-1"));
@@ -1609,6 +2040,178 @@ describe("CreationTaskWorkspace", () => {
     expect(await screen.findByLabelText("变更预览")).toHaveTextContent("与现有音轨混合");
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     expect(mocks.exactEdit).not.toHaveBeenCalled();
+  });
+
+  it("shows a read-only materials list when the prepare stage is opened", async () => {
+    mocks.getProductionMaterials.mockResolvedValue({
+      assets: [
+        {
+          id: "asset-1",
+          workspace_id: "local",
+          file_name: "外景口播.mp4",
+          path: "/materials/外景口播.mp4",
+          size_bytes: 1024,
+          modified_at: "2026-08-30T00:00:00Z",
+          duration_seconds: 12.5,
+          usage_role: "b_roll",
+          suggested_usage_role: "b_roll",
+          usage_role_confidence: 1,
+          usage_role_reason: "已审核",
+          review_status: "approved",
+          use_state: "available",
+          analysis_status: "ready",
+          analysis_message: "",
+          user_tags: ["外景", "口播"],
+          segments: [],
+          created_at: "2026-08-30T00:00:00Z",
+          updated_at: "2026-08-30T00:00:00Z",
+        },
+      ],
+      total_count: 1,
+      limit: 200,
+      offset: 0,
+      has_more: false,
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspace(baseTask)} />);
+    fireEvent.click(screen.getByRole("button", { name: "资料准备：已完成" }));
+    expect(await screen.findByRole("heading", { name: "本次任务素材" })).toBeInTheDocument();
+    expect(screen.getByText("外景口播.mp4")).toBeInTheDocument();
+    expect(screen.getByText(/已解析/)).toBeInTheDocument();
+    expect(screen.getByText(/已通过/)).toBeInTheDocument();
+    expect(mocks.getProductionMaterials).toHaveBeenCalledWith({ limit: 200 });
+  });
+
+  it("shows an honest publish placeholder and does not claim the video is published", async () => {
+    const initial = subtitleCoverWorkspace();
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "发布与数据：未接入" }));
+    expect(screen.getByRole("heading", { name: "平台发布能力未接入" })).toBeInTheDocument();
+    expect(screen.getByText(/本页不会把本地成片计为已发布/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "回到检查与输出" })).toBeInTheDocument();
+    expect(screen.getAllByText("未接入")).toHaveLength(3);
+  });
+
+  it("edits the topic title, requires a non-empty title, and confirms the selected topic", async () => {
+    const topicTask: CreationTask = {
+      ...baseTask,
+      stage: "topic",
+      stage_status: "waiting_for_user",
+      status: "waiting_for_user",
+      progress: 5,
+      recovery_point: "",
+      stage_reason: null,
+      stage_impact: null,
+      stage_repair_action: null,
+    };
+    const topics: CreationTaskTopicsResponse = {
+      task: topicTask,
+      candidates: [
+        { id: "topic-1", run_id: "run-1", title: "用三件小事讲清断舍离", angle: "从生活场景切入", audience: "想整理生活的人", outline: ["开场", "三件事", "收尾"], score: 92, selection_status: "unselected", created_at: topicTask.created_at },
+        { id: "topic-2", run_id: "run-1", title: "一分钟复盘我的周计划", angle: "效率视角", audience: "职场人", outline: ["开场", "复盘", "收尾"], score: 88, selection_status: "unselected", created_at: topicTask.created_at },
+      ],
+      evidence_references: [],
+      selected_topic_id: "topic-1",
+      latest_run: null,
+      route_preflight: { provider_kind: "minimax", execution_location: "cloud", model_id: "MiniMax-M3", endpoint_identity: "ep", connection_version: "1", availability: "succeeded", checked_at: topicTask.created_at },
+      egress_preflight: { cloud_egress: true, source_count: 1, text_excerpt_count: 1, reason: null, impact: null, repair_action: null },
+    };
+    const initial = workspace(topicTask);
+    mocks.getWorkspace.mockResolvedValue({ ...initial, task: { ...topicTask, stage: "script" as const } });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={topics} initialWorkspace={initial} />);
+    const input = screen.getByRole("textbox", { name: "编辑标题" });
+    expect(input).toHaveValue("用三件小事讲清断舍离");
+    fireEvent.change(input, { target: { value: "我的新标题" } });
+    expect(input).toHaveValue("我的新标题");
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(screen.getByRole("button", { name: "确认选题" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "我的新标题" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
+    await waitFor(() => expect(confirmCreationTaskTopic).toHaveBeenCalledWith("task-1", "topic-1"));
+    expect(await screen.findByText(/选题「我的新标题」已确认/)).toBeInTheDocument();
+  });
+
+  it("shows an honest read-only review checklist and drops the blanket pass claim", () => {
+    const initial = workspaceWithCover();
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByText("检查清单 · 2/3 项已就绪")).toBeInTheDocument();
+    expect(screen.getByText("中文轨已就绪")).toBeInTheDocument();
+    expect(screen.getByText("讲解与音乐音量")).toBeInTheDocument();
+    expect(screen.getByText("需人工试听确认，当前无自动音量校验")).toBeInTheDocument();
+    expect(screen.getAllByText("已就绪")).toHaveLength(2);
+    expect(screen.queryByText("画面、声音和尺寸检查已通过。")).not.toBeInTheDocument();
+    expect(screen.getByText("成片可预览；请按上方清单逐项确认。")).toBeInTheDocument();
+  });
+
+  // WIL-56 遗留：箭头叠加层选中后，编辑上下文芯片不能叫「标题」。
+  it("labels a selected arrow overlay as 箭头, not 标题", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    initial.montage!.graphic_overlays = [{
+      kind: "arrow", id: "overlay-arrow", x: 0.3, y: 0.4, name: "指向数据",
+      purpose: "指出关键数字", start_seconds: 1, end_seconds: 3,
+      position: "right-top", color: "#FFDD00",
+    }];
+    mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "EditGraphicOverlay"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^视频剪辑：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "箭头1 · 指向数据" }));
+    // 右侧面板标题用的是同一个编辑上下文标签
+    expect(screen.getByRole("complementary", { name: "箭头1" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "标题1" })).not.toBeInTheDocument();
+    // 指令栏里选中的芯片也要叫「箭头1」
+    expect(screen.getByText(/已选中箭头1 ·/)).toBeInTheDocument();
+  });
+
+  // WIL-160：连续制作已成功，但剪辑改动让成片不再对应当前时间线（video_ready=false），
+  // 面板此前只剩一行状态文字、零按钮，且 onStart 会命中同一幂等键返回旧作业。
+  // 这里钉住它改为「切到剪辑页、用既有生成成片按钮按当前时间线重出片」，且按钮确实可用。
+  it("routes a succeeded-but-invalidated render to the montage render button instead of restarting the job", async () => {
+    const task = {
+      ...baseTask, stage: "narration" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, stage_reason: null, stage_impact: null,
+      stage_repair_action: null, stage_retryable: null, progress: 75,
+      current_timeline_version_id: "timeline-version-2", timeline_sequence: 2,
+      montage_plan_id: "montage-1", output_ready: false,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [{ id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 }],
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9, match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "镜头审核已完成，可以重新渲染。", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue({
+      task_id: "task-1",
+      job: { id: "job-1", kind: "creation_task_execution", status: "succeeded", progress: 0, failure_reason: null, impact: null, repair_action: null },
+      stages: [], current_stage: null, waiting_reason: null, status_updated_at: "2026-10-01T00:00:00+00:00",
+      video_ready: false, cover_status: "pending", cover_message: null,
+    });
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    // 文案/配音侧的连续制作面板：状态仍是「成片产物需要检查」，但现在有出口
+    await waitFor(() => expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查"));
+
+    fireEvent.click(screen.getByRole("button", { name: "前往剪辑重新生成" }));
+    // 入口真的到达剪辑页，并且既有「生成成片」按钮此刻是可点的
+    expect(screen.queryByText("成片产物需要检查")).not.toBeInTheDocument();
+    const renderButton = await screen.findByRole("button", { name: "生成成片" });
+    expect(renderButton).toBeEnabled();
+    // 走的是既有渲染路径，不是复用 onStart（同一幂等键只会拿回旧作业）
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+
+    fireEvent.click(renderButton);
+    await waitFor(() => expect(mocks.renderMontage).toHaveBeenCalledWith("task-1"));
   });
 
 });

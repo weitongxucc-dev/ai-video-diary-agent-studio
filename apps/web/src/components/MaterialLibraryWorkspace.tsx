@@ -33,6 +33,7 @@ import {
   updateProductionMaterialSegment,
   updateMaterialUseState,
 } from "@/lib/api";
+import { importLocalMaterials } from "@/lib/directoryPicker";
 import type {
   MaterialAsset,
   MaterialCollections,
@@ -58,6 +59,7 @@ const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
   ready: "目录可用",
   missing: "目录不存在",
   unmounted: "外接盘未连接",
+  read_only: "目录不可写",
   invalid: "目录不可用",
   changed: "目录已变更",
   unknown: "等待确认",
@@ -167,6 +169,15 @@ export function MaterialLibraryWorkspace({
   const [intake, setIntake] = useState<IntakeStatus | null>(null);
   const [intakeError, setIntakeError] = useState("");
   const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | null>("refresh");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    copied: { sourceName: string; fileName: string }[];
+    skipped: string[];
+    failures: { sourceName: string; error: string }[];
+    canceled: boolean;
+    error?: string;
+    warning?: string;
+  } | null>(null);
   const [detailError, setDetailError] = useState("");
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
@@ -184,12 +195,30 @@ export function MaterialLibraryWorkspace({
   const lastSearch = useRef({ filter, query });
   const assetWriteRevision = useRef(0);
 
-  const selected =
-    assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
-  const selectedSegment =
-    selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
-    selected?.segments[0] ??
-    null;
+  // A background refresh can drop whatever is selected: the material was
+  // removed or re-indexed, or the current search no longer returns it. Falling
+  // back to assets[0] put one material's name above another material's
+  // description draft, and 保存片段修改 then wrote that draft onto the wrong
+  // item. Treat the loss as its own state instead. The typed draft stays in
+  // component state so a later pick can restore context, the inspector closes
+  // so nothing can be saved under the wrong name, and picking again re-seeds
+  // from the newly selected item.
+  const selectionLost =
+    Boolean(selectedId) && !assets.some((asset) => asset.id === selectedId);
+  const selected = selectionLost
+    ? null
+    : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
+  // The same applies one level down: re-analysis can replace a segment's list,
+  // and the drafts in the textarea still belong to the segment that left.
+  const segmentLost =
+    Boolean(selectedSegmentId) &&
+    selected !== null &&
+    !selected.segments.some((segment) => segment.id === selectedSegmentId);
+  const selectedSegment = segmentLost
+    ? null
+    : selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
+      selected?.segments[0] ??
+      null;
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
   const tagDraft = tagDrafts[tagScope] ?? "";
   const tagError = tagErrors[tagScope] ?? "";
@@ -241,11 +270,7 @@ export function MaterialLibraryWorkspace({
         }
         if (active && revision === assetWriteRevision.current) {
           const refreshed = libraries.flatMap((page) => page.assets);
-          setAssets((current) => {
-            const retained = current.find((asset) => asset.id === selectedId);
-            if (retained && refreshed.length >= loadedCount && !refreshed.some((asset) => asset.id === retained.id)) refreshed.push(retained);
-            return refreshed;
-          });
+          setAssets(refreshed);
           setTotalCount(libraries[0]?.total_count ?? 0);
           setHasMore(refreshed.length < (libraries[0]?.total_count ?? 0));
         }
@@ -391,6 +416,32 @@ export function MaterialLibraryWorkspace({
       setError(visibleError(cause, "检查素材目录失败，请重试。"));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function runImport() {
+    if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
+    setImportBusy(true);
+    setImportResult(null);
+    try {
+      const result = await importLocalMaterials();
+      if ("kind" in result) {
+        setImportResult({
+          copied: [], skipped: [], failures: [], canceled: false,
+          error: "当前环境不支持从应用内导入素材，请使用桌面客户端。",
+        });
+        return;
+      }
+      setImportResult({
+        copied: result.copied ?? [],
+        skipped: result.skipped ?? [],
+        failures: result.failures ?? [],
+        canceled: result.canceled === true,
+        error: result.error,
+        warning: result.warning,
+      });
+    } finally {
+      setImportBusy(false);
     }
   }
 
@@ -861,12 +912,41 @@ export function MaterialLibraryWorkspace({
                   {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : " 新文件稳定后自动分析。"}
                 </p>
                 {intake.directory_state === "ready" ? (
-                  <button className={styles.intakeSecondary} disabled={busy !== null || intakeBusy !== null} onClick={() => void scan()} type="button">
-                    {busy === "scan" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderSearch size={15} />}
-                    {busy === "scan" ? "正在检查…" : "立即检查"}
-                  </button>
+                  <span className={styles.intakeRow}>
+                    <button className={styles.intakeSecondary} disabled={importBusy || busy !== null || intakeBusy !== null} onClick={() => void runImport()} type="button">
+                      {importBusy ? <LoaderCircle className="is-spinning" size={15} /> : <FolderPlus size={15} />}
+                      {importBusy ? "正在导入…" : "导入本地素材"}
+                    </button>
+                    <button className={styles.intakeSecondary} disabled={busy !== null || intakeBusy !== null || importBusy} onClick={() => void scan()} type="button">
+                      {busy === "scan" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderSearch size={15} />}
+                      {busy === "scan" ? "正在检查…" : "立即检查"}
+                    </button>
+                  </span>
                 ) : null}
               </div>
+              {importResult ? (
+                <p
+                  className={styles.intakeDescription}
+                  role={importResult.error || importResult.failures.length > 0 ? "alert" : "status"}
+                >
+                  {importResult.canceled ? "已取消导入，源文件保持不变。" : null}
+                  {!importResult.canceled && importResult.error ? importResult.error : null}
+                  {!importResult.error && importResult.copied.length > 0
+                    ? `已复制 ${importResult.copied.length} 个文件到素材目录：${importResult.copied.map((entry) => entry.fileName).join("、")}。等待稳定后才会登记并分析，源文件保持不变。`
+                    : null}
+                  {!importResult.error && importResult.copied.length === 0 && !importResult.canceled
+                    && importResult.failures.length === 0 && importResult.skipped.length > 0
+                    ? `没有可导入的文件：${importResult.skipped.join("、")}。仅支持 mp4、mov、m4v。`
+                    : null}
+                  {importResult.failures.length > 0
+                    ? `导入失败 ${importResult.failures.length} 个：${importResult.failures.map((entry) => `${entry.sourceName}（${entry.error}）`).join("；")}`
+                    : null}
+                  {importResult.skipped.length > 0 && importResult.copied.length > 0
+                    ? `跳过不支持的文件：${importResult.skipped.join("、")}。`
+                    : null}
+                  {importResult.warning ? ` ${importResult.warning}` : null}
+                </p>
+              ) : null}
               <div className={styles.intakeCounts} aria-label="自动接入进度">
                 <span>等待稳定 {intake.file_counts.observing}</span>
                 <span>分析中 {intake.file_counts.running}</span>
@@ -895,7 +975,14 @@ export function MaterialLibraryWorkspace({
               </span>
             ))}
           </div>
-
+          {insights.recommended_gaps.length > 0 ? (
+            <div className="library-coverage__gaps">
+              <span>覆盖建议</span>
+              <p>
+                素材库暂时没有：{insights.recommended_gaps.map(tagLabel).join("、")}。按需补充即可，不影响使用。
+              </p>
+            </div>
+          ) : null}
         </section>
 
         <div className="library-toolbar">
@@ -942,6 +1029,15 @@ export function MaterialLibraryWorkspace({
           <div className="library-error" role="alert">
             <AlertCircle size={15} />
             {error}
+          </div>
+        ) : null}
+
+        {selectionLost || segmentLost ? (
+          <div className="library-error" role="alert">
+            <AlertCircle size={15} />
+            {selectionLost
+              ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
+              : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
           </div>
         ) : null}
 

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
-from app.graphic_overlays import TextOverlay, ImageOverlay
+from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -540,7 +540,7 @@ class MaterialIntakeStatusResponse(BaseModel):
     binding_available: bool
     configured_directory: str | None
     bound_directory: str | None
-    directory_state: Literal["ready", "missing", "unmounted", "invalid", "changed", "unknown"]
+    directory_state: Literal["ready", "missing", "unmounted", "invalid", "read_only", "changed", "unknown"]
     directory_message: str
     repair_action: str | None
     scan_interval_seconds: int
@@ -786,10 +786,33 @@ class CreationPlanBlockerResponse(BaseModel):
 
 
 class MaterialSegmentMatchResponse(BaseModel):
+    """一条候选素材及其可核对的依据。
+
+    前四个字段是原有形状。后面这些是「凭什么说这条候选对」的证据，缺一个
+    用户就只能盲选。字段名与 production.MaterialSegmentMatch 一一对应。
+
+    几乎全部可选：检索会从「文字整段命中」降级到「分词命中」再到「仅按结构化
+    条件返回」，降级路径产出的证据天然更少。要求它们必填会把一条本来能正常
+    返回的候选变成 422 —— 那比少几个字段糟得多。
+    """
+
     asset_ref: str
     segment_ref: str
+    # 不加上界：production 侧对 score 没有截断，多个标签条件（每条 +0.15）叠加
+    # 多条文字命中（+0.45 + 每条理由 +0.1）可以合法地超过 1.0。写 le=1.0 会把
+    # 合法结果挡成 422。
     score: float = Field(ge=0)
     reasons: list[str]
+    rank: int = 0
+    match_tier: str = "structural"
+    matched_terms: list[str] = Field(default_factory=list)
+    matched_conditions: list[str] = Field(default_factory=list)
+    asset_file_name: str = ""
+    start_seconds: float = 0.0
+    end_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    time_range: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
 class CreationTaskResponse(BaseModel):
@@ -1105,7 +1128,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskMontagePlanResponse(BaseModel):
-    graphic_overlays: list[TextOverlay | ImageOverlay] = Field(default_factory=list)
+    graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     presenter_share_actual: float = Field(default=0, ge=0, le=100)
@@ -1149,7 +1172,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 class CreationTaskExactEditRequest(BaseModel):
     overlay_action: Literal["add","update","delete"] | None = None
-    graphic_overlay: TextOverlay | ImageOverlay | None = None
+    graphic_overlay: TextOverlay | ImageOverlay | ArrowOverlay | None = None
     overlay_id: str | None = None
     transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
     fit_mode: Literal["fill", "fit"] | None = None
@@ -1171,6 +1194,7 @@ class CreationTaskExactEditRequest(BaseModel):
         "ChangeLinkedSpeed",
         "DeleteClip",
         "DuplicateClip",
+        "InsertClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
@@ -1197,6 +1221,7 @@ class CreationTaskExactEditRequest(BaseModel):
     end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     text: str | None = Field(default=None, min_length=1, max_length=96)
     title: str | None = Field(default=None, min_length=1, max_length=80)
+    title_position: Literal["center", "bottom"] = "bottom"
     subtitle_display: Literal["none", "zh", "en", "zh-en"] | None = None
     target_language: Literal["en-US"] | None = None
     line_breaks: list[int] | None = Field(default=None, max_length=8)
@@ -1272,6 +1297,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "ChangeLinkedSpeed",
         "DeleteClip",
         "DuplicateClip",
+        "InsertClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",
@@ -1386,6 +1412,7 @@ class EditOperationResponse(BaseModel):
         "ChangeLinkedSpeed",
         "DeleteClip",
         "DuplicateClip",
+        "InsertClip",
         "ReorderClip",
         "SetClipLock",
         "ConfirmClip",

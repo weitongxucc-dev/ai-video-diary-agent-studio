@@ -161,6 +161,29 @@ describe("buildOnboardingSnapshot", () => {
     expect(asr?.secretSummary).not.toContain("secret-value");
   });
 
+  it("never claims the video directories are writable when only existence was checked", () => {
+    // inbox_exists / output_exists only report that the path was found, so the
+    // checklist must not promise readiness or writability the status never proved.
+    const snapshot = buildOnboardingSnapshot({
+      setup: makeSetup(),
+      setupError: null,
+      health: makeHealth(),
+      healthError: null,
+      settings: makeSettings(),
+      settingsError: null,
+      status: makeSystemStatus(),
+      statusError: null,
+    });
+
+    const entries = snapshot.sections.flatMap((s) => s.entries);
+    for (const id of ["video_inbox", "video_output"]) {
+      const detail = entries.find((e) => e.id === id)?.detail ?? "";
+      expect(detail).not.toContain("可写");
+      expect(detail).not.toContain("已就绪");
+      expect(detail).toContain("已找到");
+    }
+  });
+
   it("reports draft_output as ready when DRAFT_OUTPUT_PATH is configured (no longer hardcoded missing)", () => {
     const snapshot = buildOnboardingSnapshot({
       setup: null,

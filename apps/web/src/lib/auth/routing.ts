@@ -53,6 +53,27 @@ export function isOnboardingSupportApiPath(pathname: string): boolean {
   );
 }
 
+export function isDeviceInviteAcceptApiPath(
+  method: string,
+  pathname: string,
+): boolean {
+  return method === "POST" && pathname === "/api/device-invites/accept";
+}
+
+export function shouldBlockOnboarding(
+  userId: string | null,
+  onboardingComplete: boolean,
+  method: string,
+  pathname: string,
+): boolean {
+  return (
+    Boolean(userId) &&
+    !onboardingComplete &&
+    !isOnboardingSupportApiPath(pathname) &&
+    !isDeviceInviteAcceptApiPath(method, pathname)
+  );
+}
+
 export function trustedApiHeaders(
   incoming: Headers,
   accessToken: string | null,

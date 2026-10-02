@@ -1,11 +1,13 @@
 import array
 import math
 import subprocess
+import time
 import wave
 
 import pytest
 
 from app.audio_timeline import AudioEditRequest, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, apply_audio_edit, compile_audio_command, render_audio_mix
+from app.host_resource_probes import HostProcessProbe
 
 
 def tone(path, frequency):
@@ -37,7 +39,8 @@ def test_actual_mix_preserves_both_tracks_and_solo_does_not_change_export(tmp_pa
             id="m", name="音乐", source_ref="artifacts/music", source_start_ms=0, source_end_ms=2000,
             timeline_start_ms=1000, gain_db=-6, fade_out_ms=500)]),
     ])
-    resolver = lambda ref: {"artifacts/voice": voice, "artifacts/music": music}[ref]
+    def resolver(ref):
+        return {"artifacts/voice": voice, "artifacts/music": music}[ref]
     snapshot = timeline.model_dump()
     full = render_audio_mix(timeline, 4, resolver, tmp_path / "full.wav")
     both = samples(full, 1.2, 1.7)
@@ -50,6 +53,39 @@ def test_actual_mix_preserves_both_tracks_and_solo_does_not_change_export(tmp_pa
     assert timeline.model_dump() == snapshot
     export = render_audio_mix(timeline, 4, resolver, tmp_path / "export.wav")
     assert samples(export, 1.2, 1.7) == both
+
+
+def test_audio_mix_probe_and_export_share_granted_process_runner(tmp_path):
+    source = tmp_path / "voice.wav"
+    tone(source, 440)
+    timeline = AudioTimeline(tracks=[TimelineAudioTrack(
+        id="voice", name="配音", role="narration", clips=[TimelineAudioClip(
+            id="clip", name="人声", source_ref="artifacts/voice", source_start_ms=0,
+            source_end_ms=1000, timeline_start_ms=0,
+        )],
+    )])
+
+    class RecordingGrant:
+        processes = HostProcessProbe()
+
+        def __init__(self):
+            self.children = []
+
+        def assert_grant(self, grant):
+            assert grant == "one-audio-grant"
+
+        def register_child(self, grant, child):
+            self.assert_grant(grant)
+            self.children.append(child)
+
+    scheduler = RecordingGrant()
+    output = render_audio_mix(
+        timeline, 1, lambda _ref: source, tmp_path / "mix.wav", scheduler=scheduler,
+        grant="one-audio-grant", deadline_monotonic=time.monotonic() + 30,
+        max_output_bytes=1024 * 1024, threads=1,
+    )
+    assert output.is_file()
+    assert len(scheduler.children) == 2  # source ffprobe and bounded FFmpeg mix
 
 
 def test_all_muted_tracks_produce_explicit_silence_with_requested_duration(tmp_path):
@@ -84,12 +120,14 @@ def test_split_keeps_original_source_and_fade_envelope(tmp_path):
 
 def test_ducking_recovers_after_voice_and_rejects_source_overrun(tmp_path):
     voice,music=tmp_path/"voice.wav",tmp_path/"music.wav"
-    tone(voice,440);tone(music,660)
+    tone(voice,440)
+    tone(music,660)
     timeline=AudioTimeline(tracks=[
         TimelineAudioTrack(id="voice",name="配音",role="narration",clips=[TimelineAudioClip(id="v",name="v",source_ref="artifacts/voice",source_start_ms=0,source_end_ms=1000,timeline_start_ms=1000)]),
         TimelineAudioTrack(id="music",name="音乐",role="music",duck_under_voice=True,clips=[TimelineAudioClip(id="m",name="m",source_ref="artifacts/music",source_start_ms=0,source_end_ms=4000,timeline_start_ms=0)]),
     ])
-    resolver=lambda ref:voice if ref.endswith("voice") else music
+    def resolver(ref):
+        return voice if ref.endswith("voice") else music
     output=render_audio_mix(timeline,4,resolver,tmp_path/"duck.wav")
     before=amplitude(samples(output,.2,.5),660)
     during=amplitude(samples(output,1.3,1.6),660)
@@ -122,7 +160,7 @@ def test_audio_artifact_cannot_cross_workspace_or_task_boundaries(tmp_path):
     for workspace,task_id in (("a","task-a"),("a","task-other"),("b","task-b")):
         task=CreationTask(id=task_id,workspace_id=workspace,plan_id=f"plan-{task_id}",name="音频边界测试",scenario="test")
         with repo._connect() as conn:
-            conn.execute("INSERT INTO creation_tasks VALUES (?,?,?,?,?)",(task.id,workspace,task.plan_id,json.dumps(asdict(task),default=str),str(task.updated_at)))
+            conn.execute("INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?,?,?,?,?)",(task.id,workspace,task.plan_id,json.dumps(asdict(task),default=str),str(task.updated_at)))
     service=TaskAudio(repo,ArtifactStore(tmp_path/"output"),tmp_path/"temp")
     artifact=service.publish("a","task-a",kind="audio_source",parameters={},input_refs=[],produce=lambda path:tone(path,440))
     assert service.source("a","task-a",artifact.logical_ref).is_file()
@@ -249,7 +287,8 @@ def test_compound_audio_parameters_share_one_patch_and_cover_both_fades():
     assert ordered.values=={'gain_db':-3}
     assert compile_audio_command('淡入1秒和淡出2秒','audio-narration-main',timeline,'version',None).values=={'fade_in_ms':1000,'fade_out_ms':2000}
     for command in ('音量小一点，删除字幕','静音但保留原声','解锁音乐','音量降低3分贝，然后加混响'):
-        with pytest.raises(ValueError):compile_audio_command(command,'audio-narration-main',timeline,'version',None)
+        with pytest.raises(ValueError):
+            compile_audio_command(command,'audio-narration-main',timeline,'version',None)
 
 @pytest.mark.parametrize('use_state', ['reference_only', 'excluded'])
 def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use_state, monkeypatch):
@@ -262,7 +301,7 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     repo = ProductionRepository(tmp_path/'db.sqlite', tmp_path/'library')
     task = CreationTask(id='task', workspace_id='workspace', plan_id='plan', name='原声', scenario='test')
     with repo._connect() as conn:
-        conn.execute('INSERT INTO creation_tasks VALUES (?,?,?,?,?)',
+        conn.execute('INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?,?,?,?,?)',
             (task.id, task.workspace_id, task.plan_id, json.dumps(asdict(task), default=str), str(task.updated_at)))
     source = repo.video_library_path/'source.wav'
     source.parent.mkdir(parents=True)

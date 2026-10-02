@@ -37,6 +37,7 @@ function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-video-diary-build-identity-'));
   try {
     write(root, 'apps/desktop/main.js', 'main-v1');
+    write(root, 'apps/desktop/device-identity.js', 'device-identity-v1');
     write(root, 'apps/desktop/preload.js', 'preload-v1');
     write(root, 'apps/desktop/package.json', '{"build":{"files":["main.js"]}}');
     write(root, 'apps/desktop/assets/runtime.json', '{"mode":"local"}');
@@ -61,7 +62,7 @@ function main() {
     assert.equal(repeated.candidateInputDigest, first.candidateInputDigest, 'same packaged inputs must have one identity');
     assert.equal(fs.readFileSync(path.join(root, 'apps/desktop/build-identity.generated.json'), 'utf8'), firstMetadata, 'metadata must be deterministic');
     assert.equal(new Set(first.inputs.map((input) => input.path)).size, first.inputs.length, 'input paths must be unique');
-    for (const inputPath of ['desktop/main.js', 'desktop/preload.js', 'desktop/package.json', 'desktop/assets/runtime.json']) {
+    for (const inputPath of ['desktop/main.js', 'desktop/device-identity.js', 'desktop/preload.js', 'desktop/package.json', 'desktop/assets/runtime.json']) {
       assert.equal(first.inputs.some((input) => input.path === inputPath), true, `${inputPath} must be auditable`);
     }
     for (const inputPath of [
@@ -76,6 +77,7 @@ function main() {
 
     for (const relativePath of [
       'apps/desktop/main.js',
+      'apps/desktop/device-identity.js',
       'apps/desktop/preload.js',
       'apps/desktop/package.json',
       'apps/desktop/assets/runtime.json',

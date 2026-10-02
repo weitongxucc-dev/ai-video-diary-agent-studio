@@ -276,3 +276,32 @@ class SupabaseAuthContext:
             authenticated=True,
             access_token=token,
         )
+
+    def authenticate_identity(self, request: Request) -> AuthPrincipal:
+        """Authenticate a request's identity only, without workspace resolution.
+
+        Verifies the bearer JWT and derives ``user_id`` from the verified
+        ``sub`` claim, but leaves ``workspace_id`` unset. This is the identity
+        entry for the narrow device-invite acceptance endpoint: a first-time
+        invitee has no workspace membership yet, so membership-based
+        ``authenticate()`` would reject them with 403 before they can reach
+        the invite RPC. All product-data paths must keep using
+        ``authenticate()``.
+
+        Never returns a local principal: missing, malformed, expired or
+        unverifiable tokens — and unconfigured Supabase auth — raise
+        ``UnauthorizedError``.
+        """
+        token = extract_bearer_token(request)
+        if token is None:
+            raise UnauthorizedError("missing bearer token")
+        payload = self.verify_token(token)
+        user_id = str(payload.get("sub") or "")
+        if not user_id:
+            raise UnauthorizedError("token missing subject claim")
+        return AuthPrincipal(
+            user_id=user_id,
+            workspace_id=None,
+            authenticated=True,
+            access_token=token,
+        )
