@@ -449,6 +449,9 @@ def _profile() -> ProductionProfile:
 
 @pytest.fixture
 def person_render_edit_state(tmp_path, monkeypatch):
+    # Route fixtures use placeholder media; preview encoding is not a media test.
+    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
+        SimpleNamespace(id="fixture-visual-preview", logical_ref="artifacts/fixture-visual-preview.mp4"))
     workspace_id = "workspace_a"
     output_root = tmp_path / "output"
     production = ProductionRepository(
@@ -2287,6 +2290,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert current_tracks[0].transform_id is not None
 
     before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
+    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
+        SimpleNamespace(id="fixture-crop-preview", logical_ref="artifacts/fixture-crop-preview.mp4"))
     crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
     crop_preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload)
     assert crop_preview.status_code == 200, crop_preview.text
@@ -4827,7 +4832,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
         SimpleNamespace(id='crop-preview',logical_ref='artifacts/crop-preview.mp4'),
         validate_material_use=lambda *args:None))
 
-    # 明确单轴指令：产 ChangeCrop 提案，预览不写、不产媒体、不动另一轴和原 fit_mode
+    # 明确单轴指令：画面预览不写时轴、不派生声音、不动另一轴和原 fit_mode
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 20%','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
     assert preview.status_code==200,preview.text

@@ -10038,7 +10038,8 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
 
     media_previews = {}
-    if payload.operation_type == "ChangeClipSpeed":
+    if payload.operation_type in {"ChangeClipSpeed", "ChangeCrop"}:
+        preview_kind = "speed_preview" if payload.operation_type == "ChangeClipSpeed" else "color_preview"
         try:
             for side, target in (("before", before_clip), ("after", after_clip)):
                 if target.person_render_id:
@@ -10049,12 +10050,13 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
                 else:
                     source = production_repo.resolve_clip_media_reference(workspace_id, target.asset_id, target.source_path)
                 record = publish_color_preview(production_repo, artifact_store, settings.effective_temporary_root_path,
-                    workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind="speed_preview", aspect_ratio=plan.aspect_ratio)
+                    workspace_id, task_id, target, source, _portrait_processor(workspace_id), kind=preview_kind, aspect_ratio=plan.aspect_ratio)
                 media_previews[side] = {"ref": record.logical_ref,
                     "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError)
-                else "变速预览失败，请检查源素材、FFmpeg和外接盘") from exc
+                else ("变速预览失败，请检查源素材、FFmpeg和外接盘" if payload.operation_type == "ChangeClipSpeed"
+                      else "画面预览失败，请检查源素材、FFmpeg和外接盘")) from exc
         if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
             raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     if payload.operation_type == "TrimClip":
