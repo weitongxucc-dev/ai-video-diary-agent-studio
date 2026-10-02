@@ -179,7 +179,8 @@ def _probe_file_media_type(path: Path) -> MediaType | None:
         completed = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe",
-                "-show_entries", "stream=codec_type,codec_name,width,height,sample_rate,channels",
+                "-show_entries",
+                "stream=codec_type,codec_name,width,height,sample_rate,channels:stream_disposition=attached_pic",
                 "-of", "json", str(path),
             ],
             capture_output=True,
@@ -197,17 +198,26 @@ def _probe_file_media_type(path: Path) -> MediaType | None:
     # codec_type alone is not evidence: ffprobe picks a demuxer from the file
     # extension, so a corrupt file named .png still reports a "video" stream
     # (codec_name png, width 0, height 0). A stream only counts when it names a
-    # real codec and carries the dimensions or the sample layout it claims.
+    # real codec and carries the dimensions or the sample layout it claims — and
+    # an embedded cover picture is artwork, not the media the file really is, so
+    # it never makes an audio file look like a video.
     kinds = {
         str(stream.get("codec_type"))
         for stream in streams
-        if isinstance(stream, dict) and _stream_is_usable(stream)
+        if isinstance(stream, dict)
+        and _stream_is_usable(stream)
+        and not _is_cover_picture(stream)
     }
     if "video" in kinds:
         return "video"
     if "audio" in kinds:
         return "audio"
     return None
+
+
+def _is_cover_picture(stream: dict) -> bool:
+    disposition = stream.get("disposition")
+    return isinstance(disposition, dict) and _as_int(disposition.get("attached_pic")) == 1
 
 
 def _stream_is_usable(stream: dict) -> bool:

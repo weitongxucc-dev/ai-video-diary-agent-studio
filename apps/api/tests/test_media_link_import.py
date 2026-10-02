@@ -18,6 +18,7 @@ from app.media_link_import import (
     MediaLinkImportError,
     MediaLinkImportService,
     RegisteredLink,
+    _probe_file_media_type,
 )
 
 PUBLIC = "93.184.216.34"
@@ -355,6 +356,15 @@ def test_the_real_format_wins_over_the_declared_one(tmp_path):
     assert result.media_type == "image"
     assert result.file_name.endswith(".jpg")
     assert sink.records[0].media_type == "image"
+
+
+def test_an_embedded_cover_picture_does_not_make_audio_look_like_video(tmp_path):
+    """正常 MP3 带封面图：封面是美术，不是这个文件真正的媒体类型。"""
+    sample = Path("/tmp/wil102-ui-preparation/media/audio-cover.mp3")
+    if not sample.is_file():
+        pytest.skip("现成的封面音频样本不在本机")
+
+    assert _probe_file_media_type(sample) == "audio"
 
 
 def test_download_stops_at_the_size_limit(tmp_path):
