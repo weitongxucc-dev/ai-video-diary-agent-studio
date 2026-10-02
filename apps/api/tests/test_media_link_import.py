@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
+import subprocess
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app import media_link_import as media_link_module
 from app.media_link_import import (
     LinkProvenance,
     MediaLinkImportError,
@@ -358,11 +361,45 @@ def test_the_real_format_wins_over_the_declared_one(tmp_path):
     assert sink.records[0].media_type == "image"
 
 
-def test_an_embedded_cover_picture_does_not_make_audio_look_like_video(tmp_path):
-    """正常 MP3 带封面图：封面是美术，不是这个文件真正的媒体类型。"""
-    sample = Path("/tmp/wil102-ui-preparation/media/audio-cover.mp3")
-    if not sample.is_file():
-        pytest.skip("现成的封面音频样本不在本机")
+def test_an_embedded_cover_picture_does_not_make_audio_look_like_video(tmp_path, monkeypatch):
+    """正常 MP3 带封面图：封面是美术，不是这个文件真正的媒体类型。
+
+    ffprobe 的取值是本机实测的 0.3 秒带封面 MP3：一条有效音轨，外加一条
+    320x180、disposition.attached_pic=1 的 PNG 视频流。封面图宽高都是真的，
+    所以只看 codec_type 或宽高都会把它当成视频。
+    """
+    # 实测输出，逐字作为可移植输入，不依赖本机任何样本文件。
+    probed = subprocess.CompletedProcess(
+        args=["ffprobe"],
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "streams": [
+                    {
+                        "index": 0,
+                        "codec_type": "audio",
+                        "codec_name": "mp3",
+                        "sample_rate": "44100",
+                        "channels": 1,
+                        "disposition": {"attached_pic": 0},
+                    },
+                    {
+                        "index": 1,
+                        "codec_type": "video",
+                        "codec_name": "png",
+                        "width": 320,
+                        "height": 180,
+                        "disposition": {"attached_pic": 1},
+                    },
+                ]
+            }
+        ).encode("utf-8"),
+        stderr=b"",
+    )
+    monkeypatch.setattr(media_link_module.subprocess, "run", lambda *a, **k: probed)
+
+    sample = tmp_path / "cover-song.mp3"
+    sample.write_bytes(b"not an image, not the bytes ffprobe would really see")
 
     assert _probe_file_media_type(sample) == "audio"
 
