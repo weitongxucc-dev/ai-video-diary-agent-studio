@@ -324,6 +324,8 @@ def reorder_linked_group(audio: AudioTimeline, tracks, spans, clip_spans, durati
     if set(positions) != {cue_id for cue_id, _o, _d in spans}:
         raise ValueError("镜头来源与配音分段无法一一对应，无法按来源整体换位。")
     limit = round(duration_seconds * 1000) + 1
+    old_positions: dict[str, int] = {}
+    sources: dict[str, str] = {}
     moved = []
     for cue_id, offset, span_ms in spans:
         start_ms, clip_ms = positions[cue_id]
@@ -335,36 +337,55 @@ def reorder_linked_group(audio: AudioTimeline, tracks, spans, clip_spans, durati
         kept = existing[cue_id] if existing is not None else None
         if kept is not None and (kept.source_start_ms != offset or kept.source_end_ms != offset + span_ms):
             raise ValueError(f"配音分段 {cue_id} 的来源区间与当前音轨不一致，无法按来源整体换位。")
-        moved.append(TimelineAudioClip(
-            id=f"{LINKED_NARRATION_CLIP_PREFIX}{cue_id}",
-            name=whole.name,
-            source_ref=whole.source_ref,
-            source_start_ms=offset,
-            source_end_ms=offset + span_ms,
-            timeline_start_ms=start_ms,
-            gain_db=whole.gain_db,
-            denoise_db=whole.denoise_db,
-            loudness_target_lufs=whole.loudness_target_lufs,
-            muted=whole.muted,
-            locked=whole.locked,
-        ))
+        # An already split segment keeps its own name, source reference, gain, denoise,
+        # loudness, envelope and lock; only its timeline position follows the clip.
+        # Old position: the split segment's real pre-move place, or — before this plan is
+        # split — where the whole clip's audio for that source actually sits.
+        old_ms = kept.timeline_start_ms if kept is not None else whole.timeline_start_ms + offset
+        if old_ms != start_ms and (track.locked or (kept is not None and kept.locked)):
+            raise ValueError("关联编辑会改变已锁定音轨或音频片段，请先解锁")
+        old_positions[cue_id] = old_ms
+        sources[cue_id] = kept.source_ref if kept is not None else whole.source_ref
+        moved.append(TimelineAudioClip.model_validate({
+            **(kept.model_dump() if kept is not None else {
+                "id": f"{LINKED_NARRATION_CLIP_PREFIX}{cue_id}",
+                "name": whole.name,
+                "source_ref": whole.source_ref,
+                "source_start_ms": offset,
+                "source_end_ms": offset + span_ms,
+                "gain_db": whole.gain_db,
+                "denoise_db": whole.denoise_db,
+                "loudness_target_lufs": whole.loudness_target_lufs,
+                "muted": whole.muted,
+                "locked": whole.locked,
+            }),
+            "timeline_start_ms": start_ms,
+        }))
     windows = {cue_id: (positions[cue_id][0], positions[cue_id][0] + span)
                for cue_id, _o, span in spans}
+    limit_ms = round(duration_seconds * 1000)
     moved_tracks = []
     linked_cues: dict[str, list[str]] = {}
     for item in tracks:
         cues = []
         changed = False
         for cue in item.cues:
-            window = windows.get(cue.source_cue_id or cue.id)
-            if window is None:
+            source_id = cue.source_cue_id or cue.id
+            if source_id not in windows:
                 cues.append(cue)
                 continue
-            start, end = round(window[0] / 1000, 3), round(window[1] / 1000, 3)
-            if (cue.start_seconds, cue.end_seconds) != (start, end):
-                changed = True
-            cues.append(replace(cue, start_seconds=start, end_seconds=end))
-            linked_cues.setdefault(cue.source_cue_id or cue.id, []).append(f"{item.language}：{cue.id}")
+            # Captions follow the source group by the displacement that group actually moved,
+            # so a hand retimed cue (or one of several split sub-cues) keeps its own timing.
+            delta_ms = windows[source_id][0] - old_positions[source_id]
+            start = round(cue.start_seconds * 1000) + delta_ms
+            end = round(cue.end_seconds * 1000) + delta_ms
+            if end <= start:
+                raise ValueError(f"字幕 {cue.id} 随来源换位后时长为零，无法保存。")
+            if start < 0 or end > limit_ms:
+                raise ValueError(f"字幕 {cue.id} 随来源换位后超出成片时间线，无法保存。")
+            changed = changed or delta_ms != 0
+            cues.append(replace(cue, start_seconds=round(start / 1000, 3), end_seconds=round(end / 1000, 3)))
+            linked_cues.setdefault(source_id, []).append(f"{item.language}：{cue.id}")
         moved_tracks.append(replace(item,
             cues=tuple(sorted(cues, key=lambda cue: (cue.start_seconds, cue.end_seconds))),
             artifact_ref=None if changed else item.artifact_ref,
@@ -373,10 +394,10 @@ def reorder_linked_group(audio: AudioTimeline, tracks, spans, clip_spans, durati
     linkage = [{
         "cue_id": cue_id,
         "audio_clip_id": f"{LINKED_NARRATION_CLIP_PREFIX}{cue_id}",
-        "source_ref": whole.source_ref,
+        "source_ref": sources[cue_id],
         "source_start_ms": offset,
         "source_end_ms": offset + span,
-        "old_timeline_start_ms": offset,
+        "old_timeline_start_ms": old_positions[cue_id],
         "new_timeline_start_ms": windows[cue_id][0],
         "subtitle_cue_ids": linked_cues.get(cue_id, []),
     } for cue_id, offset, span in spans]

@@ -5296,6 +5296,11 @@ def _apply_reorder_narration_linkage(
             round(item.timeline_end_seconds * 1000) - round(item.timeline_start_seconds * 1000),
         ))
     tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+    # The plan had no audio track of its own before this reorder, so it was still on the
+    # whole-mix loudnorm path. Splitting it by source must keep that same strategy; a plan
+    # that already carried custom audio tracks was already omitting loudnorm and keeps doing so.
+    # Once set, the flag is sticky so a second reorder of the same plan keeps the first one's choice.
+    created_audio_timeline = plan.narration_linkage_created_audio_timeline or plan.audio_timeline is None
     try:
         audio, edited_tracks, linkage = reorder_linked_group(
             _effective_audio_timeline(plan), tracks, spans, clip_spans, plan.duration_seconds
@@ -5303,7 +5308,7 @@ def _apply_reorder_narration_linkage(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=f"镜头顺序未保存：{exc}") from exc
     plan.audio_timeline = audio
-    plan.narration_linkage_reordered = True
+    plan.narration_linkage_created_audio_timeline = created_audio_timeline
     rows = [
         dict(row, narration_segment_id=next(
             cue.narration_segment_id for cue in plan.cues if cue.id == row["cue_id"]))
@@ -10080,14 +10085,22 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             created_at=now,
         )
     )
+    # The frozen picture-only default is claimed per reordered object, so the summary names the
+    # object the linkage rule was applied to rather than leaving it as background metadata.
+    if linkage:
+        proposal_summary = "调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。"
+    elif after_clip.person_render_id is None and any(item.person_render_id for item in plan.clips):
+        proposal_summary = ("调整镜头顺序；本次移动的是纯素材镜头，按已冻结的纯素材默认只换画面，"
+            "同片人物口型镜头的配音与字幕保持不变。")
+    else:
+        proposal_summary = f"{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。"
     proposal = production_repo.create_edit_proposal(
         EditProposal(
             id=f"proposal_{uuid4().hex}",
             workspace_id=workspace_id,
             task_id=task_id,
             intent_id=intent.id,
-            summary=("调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。"
-                if linkage else f"{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。"),
+            summary=proposal_summary,
             target_refs=[f"clip:{payload.clip_id}"],
             operation={
                 "operation_type": payload.operation_type,
@@ -10444,6 +10457,10 @@ def _apply_creation_task_montage_clip_update(
         current_index = plan.clips.index(clip)
         target_index = min(payload.position, len(plan.clips) - 1)
         if current_index != target_index:
+            # Scope basis is the reordered object itself, not the plan's contents: the frozen
+            # picture-only default for a pure material shot is never extended, so a material
+            # reorder stays picture-only even on a plan that also holds person shots, while any
+            # person shot that is reordered still brings its narration and captions with it.
             plan.clips.pop(current_index)
             plan.clips.insert(target_index, clip)
             timeline_cursor = 0.0
@@ -10452,7 +10469,7 @@ def _apply_creation_task_montage_clip_update(
                 item.timeline_start_seconds = round(timeline_cursor, 3)
                 item.timeline_end_seconds = round(timeline_cursor + duration, 3)
                 timeline_cursor += duration
-            if any(item.person_render_id for item in plan.clips):
+            if clip.person_render_id:
                 linkage, edited_tracks = _apply_reorder_narration_linkage(
                     workspace_id,
                     production_repo.get_creation_task(workspace_id, task_id),
