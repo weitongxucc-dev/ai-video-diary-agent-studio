@@ -4820,7 +4820,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     target=before['montage']['clips'][1]
-    original_fit,original_x,original_y=target['fit_mode'],target['crop_x'],target['crop_y']
+    original_fit,original_y=target['fit_mode'],target['crop_y']
     publishes=[]
     monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
         publish=lambda *args,**kwargs:publishes.append(kwargs.get('kind')) or

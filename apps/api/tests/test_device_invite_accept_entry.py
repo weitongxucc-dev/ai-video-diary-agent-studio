@@ -121,7 +121,6 @@ def _acceptance_service(acceptance=None, error=None):
 
 def test_device_accept_success_with_workspaceless_identity(entry, monkeypatch):
     client, private_pem, ctx = entry
-    captured = {}
     fake = _acceptance_service()
     monkeypatch.setattr(main_module, "DeviceAccountService", fake)
 

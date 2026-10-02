@@ -11,7 +11,6 @@ from app.runtime_health import (
     _feature_gates,
     _local_model_item,
     _obsidian_item,
-    model_catalog_from_settings,
     runtime_health,
 )
 

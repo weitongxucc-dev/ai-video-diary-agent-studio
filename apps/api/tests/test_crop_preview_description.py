@@ -2,7 +2,8 @@
 import pytest
 
 import app.main as main_module
-from test_montage_pipeline import person_render_edit_state
+
+pytest_plugins = ("test_montage_pipeline",)
 
 
 @pytest.mark.parametrize("mode,detail", [

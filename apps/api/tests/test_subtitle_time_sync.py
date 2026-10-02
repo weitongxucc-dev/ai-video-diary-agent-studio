@@ -7,7 +7,8 @@ import pytest
 import app.main as main_module
 from app.compound_edits import apply_compound_subtitles
 from app.production import SubtitleCue, SubtitleTrack
-from test_montage_pipeline import person_render_edit_state
+
+pytest_plugins = ("test_montage_pipeline",)
 
 
 def tracks(*, references=("zh-1", "zh-2")):
