@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import array
+import math
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import threading
+import time
 import wave
 
 import pytest
 
+import app.audio_timeline as audio_timeline
 import app.main as main_module
-from app.audio_timeline import AudioTimeline, build_audio_mix_command
+from app.audio_timeline import AudioTimeline, build_audio_mix_command, render_audio_mix
 from app.montage import MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import SubtitleCue, SubtitleTrack
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
@@ -336,8 +345,8 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
     """A plain plan's loudnorm measured one untouched source on the master.
 
     Single-pass loudnorm applies a time-varying gain, so measuring the mix after the segments have
-    swapped places is a different measurement: the first split has to normalize the whole source
-    inside the mix instead, and the master must not measure the permuted result a second time.
+    swapped places is a different measurement: the first split has to measure the whole source once,
+    on its own, and then let the mix read the result instead of measuring the permuted master.
     """
     source = tmp_path / "narration.wav"
     with wave.open(str(source), "wb") as audio:
@@ -360,14 +369,22 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
             part for part in command[command.index("-filter_complex") + 1].split(";")
             if part.startswith("[0:a:0]"))
 
-    # Ahead of every atrim, so it still measures all 8s of the source; and only on request.
-    assert chain_of(build(normalize_voice_sources=True)).startswith("[0:a:0]loudnorm,")
+    # The measured file replaces the source for narration and the mix graph measures nothing: one
+    # measurement per source, on all 8s of it, whatever order its segments end up in.
+    measured = tmp_path / "narration-0.wav"
+    measured.write_bytes(b"")
+    assert str(measured) in build(normalized_narration={source: measured})
+    assert "loudnorm" not in chain_of(build(normalized_narration={source: measured}))
+    # Without a measurement the mix still must not measure anything itself: that graph is what
+    # segfaulted, and there is no fallback that would put it back.
     assert "loudnorm" not in chain_of(build())
+    assert str(source) in build()
 
-    # Narration is the linkage's own track; original sound must keep the level it was recorded at.
+    # Narration is the linkage's own track; original sound must keep the level it was recorded at,
+    # so the very same file stays un-substituted when it plays that role.
     original = AudioTimeline.model_validate({"tracks": [
         {**timeline.tracks[0].model_dump(), "id": "original-main", "role": "original"}]})
-    assert "loudnorm" not in chain_of(build(original, normalize_voice_sources=True))
+    assert str(source) in build(original, normalized_narration={source: measured})
 
     state = _build_linked_state(person_render_edit_state, plain=True)
     clip_source = tmp_path / "clip.mp4"
@@ -395,3 +412,141 @@ def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_stat
     summary = preview.json()["proposal"]["summary"]
     assert "本次移动的是纯素材镜头" not in summary
     assert "调整镜头顺序" not in summary
+
+
+needs_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="需要 ffmpeg 与 ffprobe 才能实跑旁白混音")
+
+
+def _two_level_narration(path, seconds=8, rate=24000):
+    """A real source whose two halves sit at clearly different levels.
+
+    Silence would let a mix that dropped a segment or duplicated one pass unnoticed, and two levels
+    make a per-source RMS comparison a statement about the same material rather than about the mix.
+    """
+    frames = bytearray()
+    for index in range(rate * seconds):
+        amplitude = 12000 if index < rate * seconds // 2 else 1000
+        frames += struct.pack("<h", int(amplitude * math.sin(2 * math.pi * 440 * index / rate)))
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(bytes(frames))
+
+
+def _split_narration_timeline(role="narration"):
+    """One source cut into two segments, laid down in source order."""
+    return AudioTimeline.model_validate({"tracks": [{"id": "narration-main", "name": "配音",
+        "role": role, "clips": [
+        {"id": "seg-a", "name": "A", "source_ref": "narration://artifact/a", "source_start_ms": 0,
+         "source_end_ms": 4000, "timeline_start_ms": 0},
+        {"id": "seg-b", "name": "B", "source_ref": "narration://artifact/a", "source_start_ms": 4000,
+         "source_end_ms": 8000, "timeline_start_ms": 4000}]}]})
+
+
+def _wav_seconds(path):
+    with wave.open(str(path), "rb") as audio:
+        return audio.getnframes() / audio.getframerate()
+
+
+def _per_second_rms_db(path):
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "-"],
+        capture_output=True, check=True).stdout
+    samples = array.array("f")
+    samples.frombytes(raw)
+    window = 48000
+    return [20 * math.log10(math.sqrt(
+        sum(float(value) ** 2 for value in samples[start:start + window]) / window) + 1e-12)
+        for start in range(0, len(samples) - window + 1, window)]
+
+
+@needs_ffmpeg
+def test_a_reordered_narration_mix_renders_and_keeps_each_source_at_its_own_level(tmp_path):
+    """The reorder that used to segfault has to render, and moving segments may not change level.
+
+    Both orders come out of one source measured once, so the same source interval has to reach the
+    output at the same level whichever side of the reorder it ends up on.
+    """
+    source = tmp_path / "narration.wav"
+    _two_level_narration(source)
+    in_order = _split_narration_timeline()
+    swapped = AudioTimeline.model_validate({"tracks": [in_order.tracks[0].model_copy(update={"clips": [
+        in_order.tracks[0].clips[0].model_copy(update={"timeline_start_ms": 4000}),
+        in_order.tracks[0].clips[1].model_copy(update={"timeline_start_ms": 0})]})]})
+
+    rendered = {}
+    for name, timeline in (("before", in_order), ("after", swapped)):
+        rendered[name] = render_audio_mix(
+            timeline, 8, lambda _ref: source, tmp_path / f"{name}.wav", normalize_voice_sources=True)
+        assert rendered[name].stat().st_size > 0
+        assert _wav_seconds(rendered[name]) == pytest.approx(8, abs=0.05)
+
+    # The halves are genuinely different material, so a level comparison is worth making at all.
+    source_rms = _per_second_rms_db(source)
+    assert source_rms[1] - source_rms[5] > 10
+
+    before, after = _per_second_rms_db(rendered["before"]), _per_second_rms_db(rendered["after"])
+    # Pair the windows by what plays in them, not by position: the loud half of the source sits at
+    # 0-4s before the reorder and at 4-8s after it, and the quiet half moves the other way.
+    for before_second, after_second in ((1, 5), (5, 1)):
+        assert abs(before[before_second] - after[after_second]) <= 0.2
+
+
+def test_the_narration_normalization_is_a_second_granted_pass_under_the_same_grant(tmp_path, monkeypatch):
+    """The measurement is a real second FFmpeg unit, not a way around the resource gate.
+
+    Both commands leave under the one grant, deadline and cancel the caller handed over, the second
+    one no longer measures anything, and the files in between live inside the caller's own output
+    directory instead of becoming a cleanup problem.
+    """
+    source = tmp_path / "narration.wav"
+    _two_level_narration(source)
+    output = tmp_path / "mix.wav"
+    ceiling = 8_000_000
+    seen = []
+
+    # What this test is about is how the two units are gated and what the second one reads, so the
+    # units themselves stand in; the real mix is covered by the reordered-render regression above.
+    def fake_granted(scheduler, grant, command, *, timeout_seconds, cancel_event, deadline_monotonic):
+        seen.append({"scheduler": scheduler, "grant": grant, "command": list(command),
+                     "cancel_event": cancel_event, "deadline": deadline_monotonic})
+        shutil.copyfile(source, command[-1])
+
+    monkeypatch.setattr(audio_timeline, "_run_granted_audio_command", fake_granted)
+    monkeypatch.setattr(audio_timeline, "probe_audio_source", lambda path, **_options: _wav_seconds(path))
+
+    grant, scheduler, cancel = object(), object(), threading.Event()
+    deadline = time.monotonic() + 600
+    render_audio_mix(_split_narration_timeline(), 8, lambda _ref: source, output,
+        normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
+        deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
+
+    # Two units, one gate: the measurement, then the mix that reads it.
+    assert len(seen) == 2
+    assert [call["grant"] for call in seen] == [grant, grant]
+    assert [call["scheduler"] for call in seen] == [scheduler, scheduler]
+    assert [call["cancel_event"] for call in seen] == [cancel, cancel]
+    assert [call["deadline"] for call in seen] == [deadline, deadline]
+
+    measured = Path(seen[0]["command"][-1])
+    # The measurement is bounded and stays inside the caller's own output directory.
+    assert 0 < int(seen[0]["command"][seen[0]["command"].index("-fs") + 1]) <= ceiling
+    assert measured.parent.parent == tmp_path
+    # The mix reads the measurement and no longer measures anything itself.
+    assert str(measured) in seen[1]["command"]
+    assert "loudnorm" not in seen[1]["command"][seen[1]["command"].index("-filter_complex") + 1]
+
+    # The same file played as original sound is not the linkage's narration, so it is not substituted
+    # and there is nothing to measure: one pass, reading the source it was recorded at.
+    seen.clear()
+    render_audio_mix(_split_narration_timeline("original"), 8, lambda _ref: source, output,
+        normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
+        deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
+    assert len(seen) == 1
+    assert str(source) in seen[0]["command"]
+
+    assert output.stat().st_size > 0
+    assert not list(tmp_path.glob("narration-normalized-*"))

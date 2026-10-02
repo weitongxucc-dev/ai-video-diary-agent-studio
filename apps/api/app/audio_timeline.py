@@ -4,8 +4,10 @@ from __future__ import annotations
 import math
 import json
 import re
+from contextlib import nullcontext
 from pathlib import Path
 import subprocess
+from tempfile import TemporaryDirectory
 import threading
 import time
 from typing import Callable, Literal
@@ -355,7 +357,8 @@ def _gain_expression(clip: TimelineAudioClip, track_gain: float) -> str:
 def build_audio_mix_command(
     timeline: AudioTimeline, duration_seconds: float, resolve_source: Callable[[str], Path], output: Path,
     *, solo_track_ids: set[str] | None = None, start_seconds: float = 0, end_seconds: float | None = None,
-    probe_duration: Callable[[Path], float] | None = None, normalize_voice_sources: bool = False,
+    probe_duration: Callable[[Path], float] | None = None,
+    normalized_narration: dict[Path, Path] | None = None,
 ) -> list[str]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("音频时间线时长无效")
@@ -383,14 +386,12 @@ def build_audio_mix_command(
                 durations[source] = (probe_duration or probe_audio_source)(source)
             if clip.source_end_ms > round(durations[source] * 1000) + 20:
                 raise ValueError("音频源区间超出实际文件时长")
-            command.extend(["-protocol_whitelist", "file,pipe", "-i", str(source)])
-            # Ahead of the trim on purpose: loudnorm measures the stream it is fed, so normalizing
-            # first is what keeps the measurement on the whole source instead of on one segment.
-            # Narration only: the linkage split is a narration event, and an original-sound track
-            # must keep the loudness it was recorded at.
-            chain = [*( [WHOLE_SOURCE_LOUDNESS_FILTER, FINITE_LOUDNESS_FILTER]
-                        if normalize_voice_sources and track.role == "narration" else []),
-                     f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
+            # A narration source that was measured on its own arrives already loudness-correct, so
+            # its segments read that file and the mix graph carries no loudnorm. Only narration
+            # consumes it: an original-sound track on the very same file keeps its recorded level.
+            normalized = (normalized_narration or {}).get(source) if track.role == "narration" else None
+            command.extend(["-protocol_whitelist", "file,pipe", "-i", str(normalized or source)])
+            chain = [f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
                      "asetpts=PTS-STARTPTS", "aformat=channel_layouts=stereo", "asetpts=N/SR/TB"]
             if clip.denoise_db:
                 # A conservative stationary-noise preset; preview remains required before applying.
@@ -441,6 +442,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
     deadline_monotonic = kwargs.pop("deadline_monotonic", None)
     max_output_bytes = kwargs.pop("max_output_bytes", None)
     threads = kwargs.pop("threads", None)
+    normalize_voice_sources = kwargs.pop("normalize_voice_sources", False)
     if (scheduler is None) != (grant is None):
         raise ValueError("音轨渲染许可和调度器必须一起提供")
     if grant is not None:
@@ -451,17 +453,81 @@ def render_audio_mix(*args, **kwargs) -> Path:
             path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
             deadline_monotonic=deadline_monotonic,
         )
-    command = build_audio_mix_command(*args, **kwargs)
-    if grant is None:
-        subprocess.run(command, capture_output=True, check=True, timeout=600)
-    else:
-        command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
-        command[-1:-1] = ["-threads:a", str(threads), "-fs", str(max_output_bytes)]
-        _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
-                                   cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
-        if Path(command[-1]).stat().st_size > max_output_bytes:
-            raise OSError("音轨中间产物超出本次受许可输出上限")
-    return Path(command[-1])
+    staging = (TemporaryDirectory(prefix="narration-normalized-", dir=args[3].parent)
+               if normalize_voice_sources else nullcontext(None))
+    with staging as directory:
+        if directory is not None:
+            kwargs["normalized_narration"] = _render_narration_normalizations(
+                directory, args[0], args[2], kwargs.get("probe_duration") or probe_audio_source,
+                scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
+                threads=threads, solo_track_ids=kwargs.get("solo_track_ids"))
+        command = build_audio_mix_command(*args, **kwargs)
+        if grant is None:
+            subprocess.run(command, capture_output=True, check=True, timeout=600)
+        else:
+            command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
+            command[-1:-1] = ["-threads:a", str(threads), "-fs", str(max_output_bytes)]
+            _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
+                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+            if Path(command[-1]).stat().st_size > max_output_bytes:
+                raise OSError("音轨中间产物超出本次受许可输出上限")
+        return Path(command[-1])
+
+
+def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
+                                     resolve_source: Callable[[str], Path],
+                                     probe: Callable[[Path], float], *,
+                                     scheduler: DeviceScheduler | None, grant: Grant | None,
+                                     cancel_event: threading.Event | None, deadline_monotonic: float | None,
+                                     max_output_bytes: int | None, threads: int | None,
+                                     solo_track_ids: set[str] | None) -> dict[Path, Path]:
+    """Measure each narration source once, on the whole stream, and let the mix read the results.
+
+    Single-pass loudnorm measures the stream it is fed, so a source whose segments have been
+    permuted has to be measured before it is cut up. The measurement is its own ffmpeg pass and the
+    mix then reads the rendered file, which keeps one measurement per source whatever order its
+    segments end up in.
+    """
+    sources: list[Path] = []
+    for track in timeline.tracks:
+        if track.role != "narration" or track.muted or (solo_track_ids and track.id not in solo_track_ids):
+            continue
+        for clip in track.clips:
+            if clip.muted:
+                continue
+            source = resolve_source(clip.source_ref)
+            if source not in sources:
+                sources.append(source)
+    rendered: dict[Path, Path] = {}
+    for position, source in enumerate(sources):
+        if not source.is_file():
+            raise ValueError("音轨的源文件已丢失")
+        expected = probe(source)
+        # 48kHz stereo pcm_s16le carries 192000 bytes per second, plus room for the wav header.
+        ceiling = math.ceil(expected * 192000) + 65536
+        if max_output_bytes is not None:
+            ceiling = min(ceiling, max_output_bytes)
+        target = Path(directory) / f"narration-{position}.wav"
+        command = ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", str(source),
+                   "-filter_complex", f"[0:a:0]{WHOLE_SOURCE_LOUDNESS_FILTER},{FINITE_LOUDNESS_FILTER},"
+                                      "aresample=48000[out]",
+                   "-map", "[out]", "-c:a", "pcm_s16le", "-ar", "48000", "-fs", str(ceiling), str(target)]
+        if grant is None:
+            subprocess.run(command, capture_output=True, check=True, timeout=600)
+        else:
+            command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
+            command[-1:-1] = ["-threads:a", str(threads)]
+            _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
+                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+        # -fs stops at the ceiling rather than rejecting the write, so the size is checked the same way
+        # the final mix is checked; a short file must not go on to set the level of the mix either.
+        if target.stat().st_size > ceiling:
+            raise OSError("旁白归一化中间产物超出本次输出上限")
+        if abs(probe(target) - expected) > 0.05:
+            raise OSError("旁白归一化未覆盖整源，已中止本次混音")
+        rendered[source] = target
+    return rendered
 
 
 def _run_granted_audio_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,
