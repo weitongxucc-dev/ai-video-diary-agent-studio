@@ -39,7 +39,7 @@ from app.visual_semantics import (
     VisualSemanticProvider,
 )
 from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
-from app.media_link_import import RegisteredLink
+from app.media_link_import import RegisteredLink, _probe_file_media_type
 from app.material_scene import (
     SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
     scene_window_for_key, scene_windows,
@@ -8085,11 +8085,24 @@ class ProductionRepository:
         )
 
     def _material_file_intact(self, asset: MaterialAsset) -> bool:
+        """原文件是否仍完整可读——大小相等只是其中一条。
+
+        登记时非空，这里同样要求非空；还要是普通文件，并且真实格式仍能被本地
+        工具读出来、且与登记时的类型一致。只做格式判定，不做内容分析。
+        """
+        path = Path(asset.path)
         try:
-            stat = Path(asset.path).stat()
+            if path.is_symlink() or not path.is_file():
+                return False
+            size = path.stat().st_size
         except OSError:
             return False
-        return stat.st_size == asset.size_bytes
+        if size == 0 or size != asset.size_bytes:
+            return False
+        try:
+            return _probe_file_media_type(path) == asset.media_type
+        except OSError:
+            return False
 
     def existing_link_material(
         self, workspace_id: str, source_url: str
@@ -8172,7 +8185,8 @@ class ProductionRepository:
                     self._discard_redundant_link_file(resolved)
                 return recorded
             # 原文件已缺失或读不出来：按既有导入契约把同一条记录恢复回来。
-            self._discard_redundant_link_file(Path(recorded.path))
+            if Path(recorded.path).resolve() != resolved.resolve():
+                self._discard_redundant_link_file(Path(recorded.path))
             stat = resolved.stat()
             recorded.file_name = resolved.name
             recorded.path = str(resolved.resolve())

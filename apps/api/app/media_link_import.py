@@ -161,8 +161,9 @@ def _probe_file_media_type(path: Path) -> MediaType | None:
     """Read the real container type of a finished download.
 
     Reuses the same local tools the rest of the product already trusts — Pillow
-    for still images, ffprobe for streams. No model, no network, no AI. Returns
-    None when the file is not a media container the product can actually read.
+    for still images, ffprobe for streams. No model, no network, no AI, no full
+    decode. Returns None when the file is not a media container the product can
+    actually read.
     """
     try:
         with Image.open(path) as image:
@@ -178,7 +179,8 @@ def _probe_file_media_type(path: Path) -> MediaType | None:
         completed = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe",
-                "-show_entries", "stream=codec_type", "-of", "json", str(path),
+                "-show_entries", "stream=codec_type,codec_name,width,height,sample_rate,channels",
+                "-of", "json", str(path),
             ],
             capture_output=True,
             timeout=PROBE_TIMEOUT_SECONDS,
@@ -192,12 +194,37 @@ def _probe_file_media_type(path: Path) -> MediaType | None:
         streams = json.loads(completed.stdout.decode("utf-8", "replace")).get("streams") or []
     except (json.JSONDecodeError, AttributeError):
         return None
-    kinds = {str(stream.get("codec_type")) for stream in streams if isinstance(stream, dict)}
+    # codec_type alone is not evidence: ffprobe picks a demuxer from the file
+    # extension, so a corrupt file named .png still reports a "video" stream
+    # (codec_name png, width 0, height 0). A stream only counts when it names a
+    # real codec and carries the dimensions or the sample layout it claims.
+    kinds = {
+        str(stream.get("codec_type"))
+        for stream in streams
+        if isinstance(stream, dict) and _stream_is_usable(stream)
+    }
     if "video" in kinds:
         return "video"
     if "audio" in kinds:
         return "audio"
     return None
+
+
+def _stream_is_usable(stream: dict) -> bool:
+    if not stream.get("codec_name"):
+        return False
+    if stream.get("codec_type") == "video":
+        return _as_int(stream.get("width")) > 0 and _as_int(stream.get("height")) > 0
+    if stream.get("codec_type") == "audio":
+        return _as_int(stream.get("sample_rate")) > 0 and _as_int(stream.get("channels")) > 0
+    return False
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
 
 
 def _resolve_host(host: str, resolver: Callable[[str], list[str]]) -> list[str]:

@@ -310,6 +310,32 @@ def test_a_longer_body_for_the_same_png_url_never_overwrites_the_original(link_c
     assert recorded.source_url == PNG_URL
 
 
+def test_a_same_length_garbage_file_is_never_reported_as_reusable(link_client) -> None:
+    """原 PNG 被等长垃圾覆盖时不得声称"原文件完整可读"。
+
+    大小相等不等于完整：只有真实格式还读得出来、且与登记类型一致，才允许复用。
+    """
+    original = tmp_png()
+    link_client.state.handler = serve(original, "image/png")
+    first = link_client.client.post(
+        "/api/production/materials/link/import", json={"url": PNG_URL}
+    ).json()
+    original_path = link_client.library / first["file_name"]
+    assert original_path.read_bytes() == original
+
+    original_path.write_bytes(b"\x00" * len(original))
+
+    again = link_client.client.post(
+        "/api/production/materials/link/import", json={"url": PNG_URL}
+    )
+    assert again.status_code == 200, again.text
+
+    assert again.json()["reused_existing_file"] is False, "垃圾文件不得被当作可复用"
+    assert original_path.read_bytes() == original, "登记记录被恢复到可读的原始文件"
+    assert link_client.repository.list_assets_page("workspace-a", limit=24, offset=0)[1] == 1
+    assert link_client.repository.get_asset("workspace-a", first["asset_id"]).source_url == PNG_URL
+
+
 def test_the_original_url_is_the_provenance_key_across_a_cdn_redirect(link_client) -> None:
     """出处与去重键是用户提交的原始地址；CDN 跳转地址只用来判断真实类型。"""
     body = tmp_png()
