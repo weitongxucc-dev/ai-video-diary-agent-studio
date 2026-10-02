@@ -3,7 +3,6 @@
 import io
 import json
 import shutil
-import sqlite3
 import subprocess
 import wave
 from dataclasses import asdict
