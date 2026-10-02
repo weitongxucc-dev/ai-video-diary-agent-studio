@@ -106,6 +106,60 @@ def test_person_profile_allows_empty_optional_capabilities(
     assert listed.json()["items"][0]["shot_capabilities"] == []
 
 
+def test_person_profile_reports_body_reference_source_and_missing_file(
+    client: TestClient,
+) -> None:
+    asset_backed = client.post("/api/media/person-profiles", json=_person_payload())
+    assert asset_backed.status_code == 200
+    assert asset_backed.json()["body_reference_kind"] == "asset"
+    assert asset_backed.json()["body_reference_available"] is False
+    assert asset_backed.json()["body_reference_reason"]
+    assert asset_backed.json()["runnable"] is True
+
+    library = main_module.production_repo.video_library_path
+    (library / "approved").mkdir()
+    (library / "approved" / "person-a.mp4").write_bytes(b"body reference")
+    payload = _person_payload()
+    payload["version"] = "person-v1-workspace"
+    payload["avatar_reference"] = "workspace://approved/person-a.mp4"
+
+    saved = client.post("/api/media/person-profiles", json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["body_reference_kind"] == "workspace"
+    assert saved.json()["body_reference_name"] == "person-a.mp4"
+    assert saved.json()["body_reference_available"] is True
+    assert saved.json()["body_reference_reason"] is None
+
+    payload["version"] = "person-v2-missing"
+    payload["avatar_reference"] = "workspace://approved/removed.mp4"
+    missing = client.post("/api/media/person-profiles", json=payload)
+    assert missing.status_code == 200
+    assert missing.json()["body_reference_available"] is False
+    assert missing.json()["body_reference_name"] == "removed.mp4"
+    assert missing.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
+    assert missing.json()["body_reference_repair_action"]
+
+    (library / "approved" / "a-folder.mp4").mkdir()
+    payload["version"] = "person-v3-directory"
+    payload["avatar_reference"] = "workspace://approved/a-folder.mp4"
+    directory = client.post("/api/media/person-profiles", json=payload)
+    assert directory.status_code == 200
+    assert directory.json()["body_reference_available"] is False
+    assert directory.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
+
+    versions = client.get("/api/media/person-profiles/person-a/versions")
+    assert versions.status_code == 200
+    by_version = {item["version"]: item for item in versions.json()["items"]}
+    assert set(by_version) == {
+        "person-v1",
+        "person-v1-workspace",
+        "person-v2-missing",
+        "person-v3-directory",
+    }
+    assert by_version["person-v1-workspace"]["body_reference_available"] is True
+    assert by_version["person-v2-missing"]["body_reference_available"] is False
+
+
 def test_source_run_history_persists_after_failure_and_is_workspace_scoped(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
