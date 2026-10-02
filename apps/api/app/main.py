@@ -1442,11 +1442,42 @@ def _current_authorization(workspace_id: str, authorization: Authorization) -> A
     return production_repo.get_authorization(workspace_id, authorization.id)
 
 
+def _person_body_reference(
+    workspace_id: str,
+    reference: str,
+) -> tuple[str, str | None, str | None, bool, str | None]:
+    """Report where a person body reference points and whether that file is still there."""
+    if not reference.startswith("workspace://"):
+        return (
+            "asset",
+            None,
+            "人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。",
+            False,
+            "在工作区重新导入该素材后再保存人物参考。",
+        )
+    try:
+        resolved = production_repo.resolve_workspace_media_reference(workspace_id, reference)
+    except MediaAuthorityError as exc:
+        return ("workspace", None, exc.impact, False, exc.repair_action)
+    if not resolved.exists():
+        return (
+            "workspace",
+            resolved.name,
+            "人物参考文件已不在工作区。",
+            False,
+            "在工作区重新导入该素材，或保存一个新的人物版本。",
+        )
+    return ("workspace", resolved.name, None, True, None)
+
+
 def _person_profile_response(person: PersonProfile) -> PersonProfileResponse:
     current_authorization = _current_authorization(person.workspace_id, person.authorization)
     reason = current_authorization.failure_for(
         content_type="person_likeness",
         usage_scope="avatar_lipsync",
+    )
+    kind, name, reference_reason, available, repair_action = _person_body_reference(
+        person.workspace_id, person.avatar_reference
     )
     return PersonProfileResponse(
         id=person.id,
@@ -1460,6 +1491,11 @@ def _person_profile_response(person: PersonProfile) -> PersonProfileResponse:
         current_authorization=_authorization_response(current_authorization),
         runnable=reason is None,
         runnable_reason=reason,
+        body_reference_kind=kind,
+        body_reference_name=name,
+        body_reference_available=available,
+        body_reference_reason=reference_reason,
+        body_reference_repair_action=repair_action,
     )
 
 

@@ -2036,6 +2036,11 @@ class PersonProfileResponse(BaseModel):
     current_authorization: AuthorizationResponse
     runnable: bool
     runnable_reason: str | None
+    body_reference_kind: str
+    body_reference_name: str | None
+    body_reference_available: bool
+    body_reference_reason: str | None
+    body_reference_repair_action: str | None
 
 
 class PersonProfileUpsertRequest(BaseModel):

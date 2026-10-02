@@ -12,6 +12,11 @@ export type PersonProfile = {
   avatar_reference: string; background_capabilities: string[]; shot_capabilities: string[];
   authorization: MediaAuthorization; current_authorization: MediaAuthorization;
   runnable: boolean; runnable_reason: string | null;
+  body_reference_kind: "workspace" | "asset";
+  body_reference_name: string | null;
+  body_reference_available: boolean;
+  body_reference_reason: string | null;
+  body_reference_repair_action: string | null;
 };
 
 export type VoiceProfile = {
@@ -74,6 +79,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const listPersonProfiles = () => request<{ items: PersonProfile[]; total_count: number }>("/api/media/person-profiles");
+export const listPersonProfileVersions = (personProfileId: string) => request<{ items: PersonProfile[]; total_count: number }>(`/api/media/person-profiles/${encodeURIComponent(personProfileId)}/versions`);
 export const savePersonProfile = (input: PersonInput) => request<PersonProfile>("/api/media/person-profiles", { method: "POST", body: JSON.stringify(input) });
 export const listVoiceProfiles = () => request<{ items: VoiceProfile[]; total_count: number }>("/api/media/voice-profiles");
 export const saveVoiceProfile = (input: VoiceInput) => request<VoiceProfile>("/api/media/voice-profiles", { method: "POST", body: JSON.stringify(input) });

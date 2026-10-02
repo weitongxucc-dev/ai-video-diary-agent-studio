@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  listPersonProfiles: vi.fn(), listVoiceProfiles: vi.fn(), listPronunciationEntries: vi.fn(), listAuthorizations: vi.fn(), listApprovedMaterials: vi.fn(), getMediaCapability: vi.fn(), listMediaPreviews: vi.fn(), listMediaPreviewAttempts: vi.fn(), savePersonProfile: vi.fn(), saveVoiceProfile: vi.fn(), savePronunciationEntry: vi.fn(), importVoiceReference: vi.fn(), createVoicePreview: vi.fn(), createAvatarLipsyncPreview: vi.fn(), mediaProfilesErrorMessage: vi.fn(() => "请求失败"),
+  listPersonProfiles: vi.fn(), listPersonProfileVersions: vi.fn(), listVoiceProfiles: vi.fn(), listPronunciationEntries: vi.fn(), listAuthorizations: vi.fn(), listApprovedMaterials: vi.fn(), getMediaCapability: vi.fn(), listMediaPreviews: vi.fn(), listMediaPreviewAttempts: vi.fn(), savePersonProfile: vi.fn(), saveVoiceProfile: vi.fn(), savePronunciationEntry: vi.fn(), importVoiceReference: vi.fn(), createVoicePreview: vi.fn(), createAvatarLipsyncPreview: vi.fn(), mediaProfilesErrorMessage: vi.fn(() => "请求失败"),
 }));
 
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
@@ -12,13 +12,13 @@ import { PeopleAndVoiceWorkspace } from "@/components/PeopleAndVoiceWorkspace";
 
 const auth = { id: "auth-1", workspace_id: "local", version: "v1", rights_holder: "本人", content_types: ["voice"], usage_scopes: ["narration", "avatar_lipsync"], effective_from: "2026-08-28T00:00:00Z", expires_at: null, evidence_reference: "workspace://proof/1", status: "active" as const };
 const personAuthorization = { ...auth, id: "person-auth-1", content_types: ["person_likeness", "avatar_video"], usage_scopes: ["avatar_lipsync"] };
-const person = { id: "person-1", workspace_id: "local", display_name: "主讲人", version: "v1", avatar_reference: "workspace://media/person", background_capabilities: [], shot_capabilities: [], authorization: personAuthorization, current_authorization: personAuthorization, runnable: true, runnable_reason: null };
+const person = { id: "person-1", workspace_id: "local", display_name: "主讲人", version: "v1", avatar_reference: "workspace://media/person", background_capabilities: [], shot_capabilities: [], authorization: personAuthorization, current_authorization: personAuthorization, runnable: true, runnable_reason: null, body_reference_kind: "workspace" as const, body_reference_name: "person.mp4", body_reference_available: true, body_reference_reason: null, body_reference_repair_action: null };
 const voice = { id: "voice-1", workspace_id: "local", person_profile_id: "person-1", person_version: "v1", version: "v1", language: "zh" as const, reference_audio_path: "workspace://media/voice", reference_text: "你好", model_id: "voice-clone", authorization: auth, current_authorization: auth, runnable: true, runnable_reason: null };
 const voicePreview = { id: "voice-preview-1", workspace_id: "local", preview_type: "voice" as const, identity: "voice-identity-1", attempt: 2, status: "succeeded" as const, capability_id: "voice_clone", model_id: "local", language: "zh", person_profile_id: null, person_version: null, voice_profile_id: "voice-1", voice_version: "v1", authorization_id: null, authorization_version: null, output_url: "/api/media/previews/voice/voice-identity-1/media", reason: null, impact: null, repair_action: null, started_at: "2026-08-28T03:00:00Z", finished_at: "2026-08-28T03:00:02Z" };
 const failedVoicePreview = { ...voicePreview, id: "voice-preview-failed", identity: "voice-identity-failed", attempt: 1, status: "failed" as const, output_url: null, reason: "模型服务不可用", repair_action: "检查模型服务后重新尝试。", finished_at: "2026-08-28T03:00:02Z" };
 
 function arrange() {
-  api.listPersonProfiles.mockResolvedValue({ items: [person], total_count: 1 }); api.listVoiceProfiles.mockResolvedValue({ items: [voice], total_count: 1 }); api.listPronunciationEntries.mockResolvedValue({ items: [], total_count: 0 }); api.listAuthorizations.mockResolvedValue({ items: [auth], total_count: 1 }); api.listApprovedMaterials.mockResolvedValue({ assets: [{ id: "asset-1", file_name: "已批准声音.wav", duration_seconds: 3, review_status: "approved", workspace_reference: "workspace://approved/asset-1" }, { id: "asset-2", file_name: "不可引用.mp4", duration_seconds: 3, review_status: "approved", workspace_reference: null }], total_count: 2 }); api.getMediaCapability.mockResolvedValue({ available: true, model_id: "local", message: "可用", impact: null, repair_action: null }); api.listMediaPreviews.mockResolvedValue({ items: [], total_count: 0 }); api.listMediaPreviewAttempts.mockResolvedValue({ items: [], total_count: 0 }); api.createVoicePreview.mockResolvedValue(voicePreview);
+  api.listPersonProfiles.mockResolvedValue({ items: [person], total_count: 1 }); api.listPersonProfileVersions.mockResolvedValue({ items: [person], total_count: 1 }); api.listVoiceProfiles.mockResolvedValue({ items: [voice], total_count: 1 }); api.listPronunciationEntries.mockResolvedValue({ items: [], total_count: 0 }); api.listAuthorizations.mockResolvedValue({ items: [auth], total_count: 1 }); api.listApprovedMaterials.mockResolvedValue({ assets: [{ id: "asset-1", file_name: "已批准声音.wav", duration_seconds: 3, review_status: "approved", workspace_reference: "workspace://approved/asset-1" }, { id: "asset-2", file_name: "不可引用.mp4", duration_seconds: 3, review_status: "approved", workspace_reference: null }], total_count: 2 }); api.getMediaCapability.mockResolvedValue({ available: true, model_id: "local", message: "可用", impact: null, repair_action: null }); api.listMediaPreviews.mockResolvedValue({ items: [], total_count: 0 }); api.listMediaPreviewAttempts.mockResolvedValue({ items: [], total_count: 0 }); api.createVoicePreview.mockResolvedValue(voicePreview);
 }
 
 afterEach(() => { vi.clearAllMocks(); });
@@ -130,5 +130,33 @@ describe("PeopleAndVoiceWorkspace", () => {
     await screen.findByText("授权已撤销");
     expect(screen.getByText("授权已撤销")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "试做口型" })).toBeDisabled();
+  });
+
+  it("shows the person body reference source and the read-only version history", async () => {
+    arrange();
+    const older = { ...person, version: "v0", body_reference_name: "person-old.mp4" };
+    api.listPersonProfileVersions.mockResolvedValue({ items: [person, older], total_count: 2 });
+    render(<PeopleAndVoiceWorkspace />);
+    await screen.findByText("人物预览");
+    expect(await screen.findByText("历史版本")).toBeInTheDocument();
+    expect(api.listPersonProfileVersions).toHaveBeenCalledWith("person-1");
+    expect(screen.getByText("形象参考")).toBeInTheDocument();
+    expect(screen.getAllByText(/工作区素材 person\.mp4/).length).toBeGreaterThan(0);
+    expect(screen.getByText("v0")).toBeInTheDocument();
+    expect(screen.getByText("v1 · 当前")).toBeInTheDocument();
+    expect(screen.queryByText("workspace://media/person", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("states why a person body reference is missing instead of showing an empty preview", async () => {
+    arrange();
+    const missing = { ...person, body_reference_available: false, body_reference_reason: "人物参考文件已不在工作区。", body_reference_repair_action: "在工作区重新导入该素材，或保存一个新的人物版本。" };
+    api.listPersonProfiles.mockResolvedValue({ items: [missing], total_count: 1 });
+    render(<PeopleAndVoiceWorkspace />);
+    await screen.findByText("人物预览");
+    expect(await screen.findByText("形象参考")).toBeInTheDocument();
+    expect(screen.getAllByText("人物参考文件已不在工作区。").length).toBeGreaterThan(0);
+    expect(screen.getByText("处理：在工作区重新导入该素材，或保存一个新的人物版本。")).toBeInTheDocument();
+    expect(screen.getAllByText(/参考素材缺失/).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("原始人物视频")).not.toBeInTheDocument();
   });
 });
