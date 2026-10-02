@@ -62,11 +62,16 @@ def test_linked_merge_rejects_uncertain_mapping(problem):
     english = replace(chinese, id="en", language="en-US", source_language="zh-CN", cues=[
         SubtitleCue(id="e1", source_cue_id="z1", text="First", start_seconds=0, end_seconds=1),
         SubtitleCue(id="e2", source_cue_id="z2", text="Second", start_seconds=1, end_seconds=2)])
-    if problem == "missing": english = replace(english, cues=english.cues[:1])
-    if problem == "duplicate": english = replace(english, cues=[english.cues[0], replace(english.cues[1], source_cue_id="z1")])
-    if problem == "time": english = replace(english, cues=[replace(english.cues[0], end_seconds=.9), english.cues[1]])
-    if problem == "order": english = replace(english, cues=[replace(english.cues[0], source_cue_id="z2"), replace(english.cues[1], source_cue_id="z1")])
-    if problem == "unlinked": english = replace(english, source_language=None)
+    if problem == "missing":
+        english = replace(english, cues=english.cues[:1])
+    if problem == "duplicate":
+        english = replace(english, cues=[english.cues[0], replace(english.cues[1], source_cue_id="z1")])
+    if problem == "time":
+        english = replace(english, cues=[replace(english.cues[0], end_seconds=.9), english.cues[1]])
+    if problem == "order":
+        english = replace(english, cues=[replace(english.cues[0], source_cue_id="z2"), replace(english.cues[1], source_cue_id="z1")])
+    if problem == "unlinked":
+        english = replace(english, source_language=None)
     inputs = [chinese, english] + ([replace(english, id="other")] if problem == "multiple" else [])
     with pytest.raises(ValueError, match="关联|对应关系|时间"):
         merge_linked_subtitle_tracks(inputs, chinese, "z1")
