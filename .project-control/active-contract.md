@@ -48,13 +48,17 @@ ACTIVE。2026-09-29 19:12（Asia/Shanghai）完成交接登记：唯一主控为
 
 | 执行者 | 当前任务与独占范围 | 判据和退出 |
 | --- | --- | --- |
-| workspace6 / 原20 | P1 WIL145现在独占GUI/本地服务，产品只读。使用/tmp/wil145-ws6-local-entry-20261002真实local副本和a55be30。只自己的tmp、原145报告。 | 跨任务/选中对象指代重绑；两页真实版本竞争旧卡409→重预览→确认成功。仅补两项，原取消撤销重做PASS不重跑；不替换身份或工作区，不调用模型。完成立即释放明确PID并回报像素/HTTP/版本证据。185后续由主控明确转交，不自动占用。 |
+| workspace6 / 原20 | P1 WIL145现在独占GUI/本地服务，产品只读。使用/tmp/wil145-ws6-local-entry-20261002真实local副本和a55be30。只自己的tmp、原145报告。 | 跨任务/选中对象指代重绑；两页真实版本竞争旧卡409→重预览→确认成功。仅补两项，原取消撤销重做PASS不重跑；不替换身份或工作区，不调用模型。完成立即释放明确PID并回报像素/HTTP/版本证据。145已完成并经主控接受Done，当前顺序续授185首启页面三态差额；精确交接WIL-185/handoff-to-ws6-a55-gui.md，既有API结果不重测，临时DB复用不删。 |
 | workspace2 / 原13 | P1 WIL146已批准人物排序联动的实施定界；产品只读，独占原146报告和自己的tmp。 | 重读PRD§9.3/domain§6.3并REBASE_ACK；找当前CreationTask排序路径、音轨/字幕来源及版本恢复消费；交最小需要修改的精确文件、预览/确认/撤销/输出的实现方案与阻断。不得按时间重叠猜改cue，不自行建第二事实源。报告后主控赋予写权，不重复145样本检查。 |
 | workspace5 / 原15 | P1 WIL153建立真正可用的隔离样本，产品只读，独占原153报告和新tmp。 | 复用已有真实mp4/wav并核时长及来源；正常仓储建立local任务、已有人工zh/en字幕和至少两英文cue。真实默认解析器完整GET及字幕preview通过；测试fixture中的假output文件不可直接当媒体。无GUI、FFmpeg或模型，仅短暂自有API。给出实际可打开副本，不再只报告准备方案。随后按队列补页面和一次短输出。 |
 | workspace3 / 原19 | WIL185截图路线停止重试，产品只读；只原报告/专属tmp交接。 | 给6一份a55隔离服务启动入口、全路径、四步操作与待验画面清单，不再运行已失败路线、不改审批模式，不再次碰真实库路径（含stat）。接口已通过不重测。无GUI/服务，交接后释放。 |
-| workspace4 / 原14 | P2 WIL149合法样本就绪等待媒体；WIL146关联范围只读协助，只原149报告/tmp。 | 重读新人物排序规则REBASE_ACK，将现有cue来源审核与新规则下需要同步的对象交2，不重复历史消费者调查。149仅列实际预览/确认/撤销/输出的最短执行入口，未授GUI/渲染；媒体队列153后另授。 |
-| workspace1 / 原18 | P1审核root生成的main合并候选，产品/分支只读；只原main-merge-review.md。 | 已确认884f814是dev祖先且全树与main8d09c8e一致。核历史桥接仅连接两个相同树；正常合并结果全树与指定dev一致、main/dev均为祖先、无旧HOLD候选偷合入。收到候选SHA后按此有限审核，不再查450历史或重跑全套。CI须用本候选，旧#45绿不能替代。 |
+| workspace4 / 原14 | P2 WIL149合法样本就绪等待媒体；WIL146关联范围只读协助，只原149报告/tmp。 | 重读新人物排序规则REBASE_ACK，将现有cue来源审核与新规则下需要同步的对象交2，不重复历史消费者调查。149样本和最短执行入口已交，6完成185后优先授149页面/短输出，153样本若仍未准备好不挡149。当前仍不得抢占GUI/渲染。 |
+| workspace1 / 原18 | P1修PR46实际CI阻断，工作树/Users/Zhuanz/.codex/worktrees/011-ci-ruff/original，基线c75ee06。独占下述七个测试文件；报告复用main-merge-review.md。 | Backend pytest已成功，Frontend/Desktop成功；Ruff13报错。只修测试中的unused import/赋值及fixture注册与形参重名警告，保留fixture和测试意图，不屏蔽检查、不改workflow/config或产品。仅七文件Ruff及受影响轻量测试/收集；不重跑本地全套，提交给主控集成后同候选CI。 |
 
 主控唯一合同/产品权威/Linear/集成/push写入者。允许主控用Git对象构造独立codex/011-main-integration分支：先只连接main和同树dev祖先884f814，再正常合入指定dev；必须证明相同树/祖先/最终树，保留原main/dev，无工作树覆盖、无产品代码手工解冲突。可推独立候选、创建草稿PR触发现有CI；正式合并main等待本候选CI和范围审核，不打发布tag，不签名发布。GUI/重型媒体仍串行，目前仅6持有；后续185差额→153→149按准备情况明确授予。所有HOLD、真实库、模型和发布边界不变。
 
 封面183及154/187已按完整范围接受Done，不复验。新的用户规则不是既有产品已实现的证据；146仍需施工及真实验收。未验不关单，子项Done不自动完成父项。
+
+本轮CI局部写权例外：workspace1仅apps/api/tests/test_crop_preview_description.py、test_device_invite_accept_entry.py、test_local_model_health.py、test_montage_pipeline.py（4823附近unused变量）、test_platform_auth.py、test_subtitle_time_sync.py、test_task_recording.py。test_local_model_health.py只移除报告unused import，不改模型/健康断言，不解除WIL118及原候选HOLD。pytest导入fixture不能简单删除使fixture失效。保持产品候选不变；权限/模型/质量/真实库HOLD不变。
+
+收口纪律：145已接受Done，既有PASS不再转派。153只交实际可打开样本，146只交可施工的精确方案；连续准备不得只回另一份准备计划。发现新问题先判是否影响本卡关闭标准，无关缺口留在对应既有卡，不把旧卡验收范围滚动扩大。GUI队列按已具备样本者前进，当前6验185，随后优先149，153准备完再授。
