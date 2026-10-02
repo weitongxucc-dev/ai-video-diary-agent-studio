@@ -21,7 +21,7 @@ from PIL import Image
 import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CpuRenderGrantContext
-from app.host_resource_probes import HostProcessProbe
+from app.host_resource_probes import HostCapacity, HostProcessProbe
 from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
 from app.models import (
     Episode,
@@ -1379,7 +1379,11 @@ def test_mixed_person_and_material_clips_render_with_continuous_narration(tmp_pa
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="ffmpeg is not installed")
-def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path):
+def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path, monkeypatch):
+    # 准入门禁的请求与上限校验保持真实执行，只把环境采样钉死，避免机器繁忙与否决定本用例成败。
+    pinned_capacity = HostCapacity(cpu_count=8, cpu_threads_ceiling=7,
+                                   available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5)
+    monkeypatch.setattr("app.montage.sample_host_capacity", lambda **_kwargs: pinned_capacity)
     video = tmp_path / "source.mp4"
     audio = tmp_path / "narration.wav"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",

@@ -25,7 +25,7 @@ from app.creation_execution import (
     revision_digest, submit_creation_stage,
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity
-from app.host_resource_probes import HostProcessProbe
+from app.host_resource_probes import HostCapacity, HostProcessProbe
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
                             MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
@@ -129,6 +129,14 @@ def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tm
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg tools unavailable")
 @pytest.mark.parametrize("source_change", [False, True])
 def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path, monkeypatch, source_change):
+    # The admission gate keeps its real request/limit checks; only the ambient host
+    # sample is pinned so a busy machine cannot decide whether this test passes.
+    pinned_capacity = HostCapacity(cpu_count=8, cpu_threads_ceiling=7,
+                                   available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5)
+    monkeypatch.setattr("app.creation_execution.sample_host_capacity",
+                        lambda **_kwargs: pinned_capacity)
+    monkeypatch.setattr("app.montage.sample_host_capacity",
+                        lambda **_kwargs: pinned_capacity)
     repo, task_id, script_id, digest = _seed(tmp_path)
     audio = tmp_path / "voice.wav"
     video = tmp_path / "library" / "source.mp4"
