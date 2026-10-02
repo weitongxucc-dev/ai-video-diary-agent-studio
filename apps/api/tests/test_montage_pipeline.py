@@ -3904,7 +3904,7 @@ def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
     clip.visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
     frames=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
     from app.schemas import CreationTaskMontageClipUpdateRequest
-    plan=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
+    plan,_tracks,_linkage=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
         CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
     assert plan.clips[0].visual_effects==plan.clips[1].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
     assert plan.clips[0].fade_envelope_duration_frames==plan.clips[1].fade_envelope_duration_frames==frames
