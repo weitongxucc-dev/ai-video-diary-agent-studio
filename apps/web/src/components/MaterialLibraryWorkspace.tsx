@@ -14,6 +14,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Volume2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -34,6 +35,13 @@ import {
   updateMaterialUseState,
 } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
+import {
+  checkMediaLink,
+  importMediaLink,
+  mediaLinkErrorMessage,
+  type MediaLinkCheck,
+  type MediaLinkImport,
+} from "@/lib/media-link-api";
 import type {
   MaterialAsset,
   MaterialCollections,
@@ -91,6 +99,10 @@ function roleLabel(asset: MaterialAsset) {
   if (role === "b_roll") return "补充画面";
   if (asset.usage_role === "exclude") return "不使用";
   return "待判断";
+}
+
+function mediaLabel(mediaType: MaterialAsset["media_type"]) {
+  return { video: "视频", audio: "音频", image: "图片" }[mediaType];
 }
 
 function reviewLabel(asset: MaterialAsset) {
@@ -178,6 +190,11 @@ export function MaterialLibraryWorkspace({
     error?: string;
     warning?: string;
   } | null>(null);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkBusy, setLinkBusy] = useState<"check" | "import" | null>(null);
+  const [linkCheck, setLinkCheck] = useState<MediaLinkCheck | null>(null);
+  const [linkImport, setLinkImport] = useState<MediaLinkImport | null>(null);
+  const [linkError, setLinkError] = useState("");
   const [detailError, setDetailError] = useState("");
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
@@ -445,6 +462,37 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function runLinkCheck() {
+    if (!linkUrl.trim()) return;
+    setLinkBusy("check");
+    setLinkError("");
+    setLinkImport(null);
+    try {
+      setLinkCheck(await checkMediaLink(linkUrl.trim()));
+    } catch (cause) {
+      setLinkCheck(null);
+      setLinkError(mediaLinkErrorMessage(cause));
+    } finally {
+      setLinkBusy(null);
+    }
+  }
+
+  async function runLinkImport() {
+    if (!linkCheck?.supported) return;
+    setLinkBusy("import");
+    setLinkError("");
+    try {
+      const result = await importMediaLink(linkUrl.trim());
+      setLinkImport(result);
+      await scan();
+    } catch (cause) {
+      setLinkImport(null);
+      setLinkError(mediaLinkErrorMessage(cause));
+    } finally {
+      setLinkBusy(null);
+    }
+  }
+
   async function loadMore() {
     setBusy("load");
     setError("");
@@ -625,26 +673,49 @@ export function MaterialLibraryWorkspace({
 
   const inspector = selected ? (
     <div className="library-inspector">
-      <div className="library-preview">
-        <video
-          ref={sourceVideo}
-          aria-label="原素材预览"
-          onLoadedMetadata={event => { event.currentTarget.currentTime = selectedSegment?.start_seconds ?? 0; }}
-          controls
-          key={selected.id}
-          preload="metadata"
-          src={`/api/production/materials/${selected.id}/media`}
-        />
-        <span>
-          <Play size={14} /> {duration(selected.duration_seconds)}
-        </span>
+      <div className={`library-preview ${styles.preview}`}>
+        {selected.media_type === "image" ? (
+          <img
+            alt={`原素材预览：${fileLabel(selected.file_name)}`}
+            key={selected.id}
+            src={`/api/production/materials/${selected.id}/media`}
+          />
+        ) : selected.media_type === "audio" ? (
+          <audio
+            aria-label="原素材预览"
+            controls
+            key={selected.id}
+            preload="metadata"
+            src={`/api/production/materials/${selected.id}/media`}
+          />
+        ) : (
+          <video
+            ref={sourceVideo}
+            aria-label="原素材预览"
+            onLoadedMetadata={event => { event.currentTarget.currentTime = selectedSegment?.start_seconds ?? 0; }}
+            controls
+            key={selected.id}
+            preload="metadata"
+            src={`/api/production/materials/${selected.id}/media`}
+          />
+        )}
+        {selected.media_type === "image" ? null : (
+          <span>
+            <Play size={14} /> {duration(selected.duration_seconds)}
+          </span>
+        )}
       </div>
       <div className="library-inspector__title">
         <strong title={fileLabel(selected.file_name)}>{fileLabel(selected.file_name)}</strong>
         <span>
-          {roleLabel(selected)} · {reviewLabel(selected)}
+          {mediaLabel(selected.media_type)} · {roleLabel(selected)} · {reviewLabel(selected)}
         </span>
       </div>
+      {selected.source_url ? (
+        <p className={styles.assetDiagnostic}>
+          来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a>
+        </p>
+      ) : null}
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
       ) : null}
@@ -947,6 +1018,53 @@ export function MaterialLibraryWorkspace({
                   {importResult.warning ? ` ${importResult.warning}` : null}
                 </p>
               ) : null}
+              <div className={`${styles.intakeRow} ${styles.intakeLinkRow}`}>
+                <input
+                  aria-label="媒体文件直链"
+                  className={styles.intakeLinkInput}
+                  disabled={linkBusy !== null}
+                  onChange={(event) => setLinkUrl(event.target.value)}
+                  placeholder="粘贴公开的视频、音频或图片直链"
+                  type="url"
+                  value={linkUrl}
+                />
+                <span className={styles.intakeRow}>
+                  <button
+                    className={styles.intakeSecondary}
+                    disabled={linkBusy !== null || !linkUrl.trim() || busy !== null}
+                    onClick={() => void runLinkCheck()}
+                    type="button"
+                  >
+                    {linkBusy === "check" ? <LoaderCircle className="is-spinning" size={15} /> : <ShieldCheck size={15} />}
+                    {linkBusy === "check" ? "正在检查…" : "检查直链"}
+                  </button>
+                  <button
+                    className={styles.intakeSecondary}
+                    disabled={linkBusy !== null || !linkCheck?.supported || busy !== null}
+                    onClick={() => void runLinkImport()}
+                    type="button"
+                  >
+                    {linkBusy === "import" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderPlus size={15} />}
+                    {linkBusy === "import" ? "正在导入…" : "导入这条链接"}
+                  </button>
+                </span>
+              </div>
+              {linkCheck || linkImport || linkError ? (
+                <p
+                  className={styles.intakeDescription}
+                  role={linkError ? "alert" : "status"}
+                >
+                  {linkError ? linkError : null}
+                  {!linkError && linkCheck?.supported ? linkCheck.message : null}
+                  {!linkError && linkImport
+                    ? `已导入${linkImport.reused_existing_file ? "（复用已有素材）" : ""}：${linkImport.file_name}，${linkImport.size_bytes} 字节。${
+                        linkImport.media_type === "video"
+                          ? "已登记进素材库，等待文件稳定后分析。"
+                          : linkImport.analysis_message
+                      }来源：${linkImport.url}`
+                    : null}
+                </p>
+              ) : null}
               <div className={styles.intakeCounts} aria-label="自动接入进度">
                 <span>等待稳定 {intake.file_counts.observing}</span>
                 <span>分析中 {intake.file_counts.running}</span>
@@ -1051,15 +1169,29 @@ export function MaterialLibraryWorkspace({
                 type="button"
                 >
                 <span className="library-card__poster">
-                  <video
-                    aria-hidden="true"
-                    muted
-                    playsInline
-                    preload="metadata"
-                    src={`/api/production/materials/${asset.id}/media`}
-                  />
-                  <Film className="library-card__fallback-icon" size={22} />
-                  <small>{duration(asset.duration_seconds)}</small>
+                  {asset.media_type === "image" ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      src={`/api/production/materials/${asset.id}/media`}
+                    />
+                  ) : asset.media_type === "audio" ? (
+                    <Volume2 className="library-card__fallback-icon" size={22} />
+                  ) : (
+                    <video
+                      aria-hidden="true"
+                      muted
+                      playsInline
+                      preload="metadata"
+                      src={`/api/production/materials/${asset.id}/media`}
+                    />
+                  )}
+                  {asset.media_type === "video" ? (
+                    <Film className="library-card__fallback-icon" size={22} />
+                  ) : null}
+                  <small>
+                    {asset.media_type === "image" ? mediaLabel(asset.media_type) : duration(asset.duration_seconds)}
+                  </small>
                   <i
                     className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}
                   >

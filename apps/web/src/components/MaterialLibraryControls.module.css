@@ -108,6 +108,21 @@
 .intakeDescription a { color: var(--accent); text-decoration: underline; }
 .intakeCounts { flex-wrap: wrap; color: var(--text-3); font-size: 11px; }
 
+.intakeLinkRow { align-items: stretch; }
+.intakeLinkInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+}
+.intakeLinkInput:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .intakePrimary,
 .intakeSecondary,
 .intakeError button {
@@ -222,4 +237,35 @@
 
 @media (max-width: 1120px) {
   .useStateOptions { max-width: 175px; }
+}
+
+/* 预览容器与海报都是全局类名，CSS Modules 的选择器必须先落在本模块的局部类上：
+   预览挂在 .preview 局部钩子上，卡片海报用 .intakePanel ~ 既有局部锚点。
+   图片和音轨要与视频一样撑满并保持原始比例。 */
+.preview > :global(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.preview > :global(audio) {
+  align-self: end;
+  width: calc(100% - 16px);
+  margin-bottom: 8px;
+}
+
+.intakePanel ~ :global(.library-grid) :global(.library-card__poster) > :global(img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 音轨没有画面可叠放，图标本身就是卡片内容，需要居中。 */
+.intakePanel ~ :global(.library-grid) :global(.library-card__poster) > :global(.library-card__fallback-icon) {
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  opacity: .7;
 }

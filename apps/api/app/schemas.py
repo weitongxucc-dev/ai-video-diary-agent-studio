@@ -462,6 +462,8 @@ class MaterialAssetResponse(BaseModel):
     workspace_reference: str | None = None
     size_bytes: int = Field(ge=0)
     modified_at: datetime
+    media_type: Literal["video", "audio", "image"] = "video"
+    source_url: str | None = None
     duration_seconds: float | None = Field(default=None, ge=0)
     usage_role: Literal["unassigned", "a_roll", "b_roll", "exclude"]
     suggested_usage_role: Literal["unassigned", "a_roll", "b_roll"]
@@ -476,6 +478,36 @@ class MaterialAssetResponse(BaseModel):
     segments: list[MaterialSegmentResponse]
     created_at: datetime
     updated_at: datetime
+
+
+class MediaLinkCheckRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class MediaLinkCheckResponse(BaseModel):
+    url: str
+    supported: bool
+    media_type: Literal["video", "audio", "image"] | None = None
+    file_name: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    message: str
+
+
+class MediaLinkImportRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class MediaLinkImportResponse(BaseModel):
+    url: str
+    media_type: Literal["video", "audio", "image"]
+    file_name: str
+    size_bytes: int = Field(ge=0)
+    file_path: str
+    asset_id: str
+    provenance_id: str
+    reused_existing_file: bool
+    analysis_status: Literal["pending", "ready", "blocked", "failed"]
+    analysis_message: str
 
 
 class MaterialLibraryResponse(BaseModel):

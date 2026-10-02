@@ -22,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
+import httpx
+
 from app.assistant_pi import AssistantUnavailable, run_plan_turn, run_task_turn
 
 from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
@@ -152,6 +154,7 @@ from app.production import (
     JobRun,
     MediaAuthorityError,
     MaterialCollection,
+    MaterialLinkProvenanceSink,
     NarrationArtifactRecord,
     NarrationSegment,
     PersonRender,
@@ -171,6 +174,11 @@ from app.production import (
     material_allows_footage,
 )
 from app.task_runtime import JobFailure, JobResult
+from app.media_link_import import (
+    DEFAULT_MAX_BYTES,
+    MediaLinkImportError,
+    MediaLinkImportService,
+)
 from app.subtitle_tracks import (
     SubtitleCue as SubtitleExecutionCue,
     SubtitleStyle as SubtitleExecutionStyle,
@@ -258,6 +266,10 @@ from app.schemas import (
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
+    MediaLinkCheckRequest,
+    MediaLinkCheckResponse,
+    MediaLinkImportRequest,
+    MediaLinkImportResponse,
     MaterialBatchTagsRequest,
     MaterialBatchTagsResponse,
     MaterialCollectionCreateRequest,
@@ -2147,7 +2159,10 @@ def _material_workspace_reference(asset) -> str | None:
 def _material_asset_response(asset) -> MaterialAssetResponse:
     response = MaterialAssetResponse.model_validate(asset, from_attributes=True)
     return response.model_copy(
-        update={"workspace_reference": _material_workspace_reference(asset)}
+        update={
+            "workspace_reference": _material_workspace_reference(asset),
+            "source_url": asset.source_url or None,
+        }
     )
 
 
@@ -11378,6 +11393,90 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     )
 
 
+def _media_link_service(workspace_id: str) -> MediaLinkImportService:
+    """Build the direct-link importer on top of the existing intake binding."""
+    repository = production_repo
+    try:
+        intake_root = repository.material_link_target(workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return MediaLinkImportService(
+        # trust_env=False：不读环境里的代理设置，导入只能连到已判定的公开地址。
+        client_factory=lambda: httpx.Client(
+            follow_redirects=False, timeout=60.0, trust_env=False
+        ),
+        intake_root=intake_root,
+        provenance=MaterialLinkProvenanceSink(repository, workspace_id),
+        max_bytes=DEFAULT_MAX_BYTES,
+    )
+
+
+# 只有真正的边界拒绝才算客户端可修的问题；其余照实报告来源返回的状态。
+_MEDIA_LINK_STATUS = {
+    "invalid_url": 422,
+    "unsupported_scheme": 422,
+    "credentials_in_url": 422,
+    "social_page": 422,
+    "private_address": 422,
+    "host_unresolved": 422,
+    "web_page_not_media": 422,
+    "unsupported_media_type": 422,
+    "too_large": 413,
+    "credentials_required": 415,
+    "not_found": 404,
+}
+
+
+def _media_link_failure(exc: MediaLinkImportError) -> HTTPException:
+    return HTTPException(
+        status_code=_MEDIA_LINK_STATUS.get(exc.code, 502),
+        detail={"code": exc.code, "detail": exc.message},
+    )
+
+
+@app.post("/api/production/materials/link/check", response_model=MediaLinkCheckResponse)
+def check_production_material_link(
+    request: Request,
+    payload: MediaLinkCheckRequest,
+) -> MediaLinkCheckResponse:
+    workspace_id = current_workspace_id(request)
+    service = _media_link_service(workspace_id)
+    try:
+        result = service.check(payload.url)
+    except MediaLinkImportError as exc:
+        raise _media_link_failure(exc) from exc
+    return MediaLinkCheckResponse.model_validate(asdict(result))
+
+
+@app.post("/api/production/materials/link/import", response_model=MediaLinkImportResponse)
+def import_production_material_link(
+    request: Request,
+    payload: MediaLinkImportRequest,
+) -> MediaLinkImportResponse:
+    workspace_id = current_workspace_id(request)
+    service = _media_link_service(workspace_id)
+    try:
+        result = service.import_link(payload.url)
+        asset = production_repo.get_asset(workspace_id, result.asset_id)
+    except MediaLinkImportError as exc:
+        raise _media_link_failure(exc) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    return MediaLinkImportResponse(
+        url=result.url,
+        media_type=asset.media_type,
+        file_name=asset.file_name,
+        size_bytes=asset.size_bytes,
+        # 以已登记素材为准：同一原网址重复提交时，响应描述的仍是那条素材。
+        file_path=asset.path,
+        asset_id=asset.id,
+        provenance_id=result.provenance_id,
+        reused_existing_file=result.reused_existing_file,
+        analysis_status=asset.analysis_status,
+        analysis_message=asset.analysis_message,
+    )
+
+
 @app.post("/api/production/materials/{asset_id}/intake/retry")
 def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetResponse:
     workspace_id = current_workspace_id(request)
@@ -11501,6 +11600,16 @@ def stream_production_material(asset_id: str, request: Request) -> FileResponse:
         ".mp4": "video/mp4",
         ".mov": "video/quicktime",
         ".m4v": "video/x-m4v",
+        ".webm": "video/webm",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+        ".wav": "audio/wav",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
     }.get(path.suffix.lower(), "application/octet-stream")
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 

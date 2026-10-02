@@ -4,11 +4,17 @@ import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
+vi.mock("@/lib/media-link-api", () => ({
+  checkMediaLink: vi.fn(),
+  importMediaLink: vi.fn(),
+  mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
+}));
 import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
+import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[],
-  modified_at:"2026-09-20", duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
+  modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
 const library={ assets:[asset], total_count:1, limit:24, offset:0, has_more:false };
 const insights={ asset_count:1, segment_count:0, tags:[], recommended_gaps:[] };
@@ -561,4 +567,64 @@ it("leaves the coverage suggestion out when every taxonomy tag already has mater
 
   await waitFor(() => expect(screen.getByLabelText("素材覆盖")).toBeInTheDocument());
   expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
+});
+
+const linkUrl = "https://media.example.com/clip.mp4";
+
+it("shows the media type before importing and keeps the source visible after a complete import", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(scanMaterialIntake).mockResolvedValue(library);
+  vi.mocked(checkMediaLink).mockResolvedValue({ url: linkUrl, supported: true, media_type: "video", file_name: "link-abcd.mp4", size_bytes: 4096, message: "可接入的视频直链，约 4.0 KB" });
+  vi.mocked(importMediaLink).mockResolvedValue({ url: linkUrl, media_type: "video", file_name: "link-abcd.mp4", size_bytes: 4096, file_path: "/Volumes/Test/media/link-abcd.mp4", asset_id: "asset-abcd", provenance_id: "asset-abcd", reused_existing_file: false, analysis_status: "pending", analysis_message: "待分析镜头和画面内容。" });
+  renderBound();
+  await waitFor(() => expect(screen.getByLabelText("媒体文件直链")).toBeInTheDocument());
+
+  fireEvent.change(screen.getByLabelText("媒体文件直链"), { target: { value: linkUrl } });
+  fireEvent.click(screen.getByRole("button", { name: "检查直链" }));
+
+  await waitFor(() => expect(screen.getByText("可接入的视频直链，约 4.0 KB")).toBeInTheDocument());
+  expect(importMediaLink).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "导入这条链接" }));
+  await waitFor(() => expect(importMediaLink).toHaveBeenCalledWith(linkUrl));
+  await waitFor(() => expect(screen.getByText(/已导入：link-abcd.mp4，4096 字节/)).toBeInTheDocument());
+  expect(screen.getByText(/来源：https:\/\/media\.example\.com\/clip\.mp4/)).toBeInTheDocument();
+});
+
+it("previews an imported image with its own element and shows the recorded source", async () => {
+  const stillLibrary = {
+    ...library,
+    assets: [{
+      ...asset,
+      id: "asset-still",
+      file_name: "link-abcd.jpg",
+      media_type: "image" as const,
+      source_url: "https://media.example.com/still.png",
+      duration_seconds: null,
+      analysis_status: "blocked" as const,
+      analysis_message: "这条图片已入库；首批只支持视频的镜头与画面分析，内容分析尚未接入。",
+    }],
+  };
+  vi.mocked(getProductionMaterials).mockResolvedValue(stillLibrary);
+  renderBound({ initialLibrary: stillLibrary });
+
+  const preview = await screen.findByAltText(/原素材预览：link-abcd\.jpg/);
+  expect(preview).toHaveAttribute("src", "/api/production/materials/asset-still/media");
+  expect(screen.queryByLabelText("原素材预览")).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "https://media.example.com/still.png" })).toBeInTheDocument();
+  expect(screen.getAllByText(/内容分析尚未接入/).length).toBeGreaterThan(0);
+});
+
+it("does not report an import when the source is refused before submission", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(checkMediaLink).mockRejectedValue(new Error("这是社交平台页面，不是媒体文件直链，暂不支持。"));
+  renderBound();
+  await waitFor(() => expect(screen.getByLabelText("媒体文件直链")).toBeInTheDocument());
+
+  fireEvent.change(screen.getByLabelText("媒体文件直链"), { target: { value: "https://youtube.com/watch?v=abc" } });
+  fireEvent.click(screen.getByRole("button", { name: "检查直链" }));
+
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("这是社交平台页面，不是媒体文件直链，暂不支持。"));
+  expect(importMediaLink).not.toHaveBeenCalled();
+  expect(screen.queryByText(/已导入/)).not.toBeInTheDocument();
 });
