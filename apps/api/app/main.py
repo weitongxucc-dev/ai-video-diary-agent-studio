@@ -37,7 +37,7 @@ from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, in
 from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command, publish_subtitle_style_preview
-from app.subtitle_edits import replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
+from app.subtitle_edits import merge_linked_subtitle_tracks, replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
 from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
 from app.avatar_lipsync import (
     compile_person_edit_command,
@@ -8323,19 +8323,28 @@ def confirm_creation_task_edit(
         if track is None:
             raise HTTPException(status_code=409, detail="字幕轨已变化，请重新预览")
         try:
-            changed, changes = _apply_caption_edit(track, operation_type, operation_payload)
+            if operation_type == "MergeSubtitleCue":
+                changed_tracks, changes = merge_linked_subtitle_tracks(tracks, track, operation_payload["cue_id"])
+            else:
+                changed, changes = _apply_caption_edit(track, operation_type, operation_payload)
+                changed_tracks = [changed]
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         version_id = f"timeline_{uuid4().hex}"
-        if changed.cues:
-            subtitle_ref, transform_id = _publish_subtitle_text(workspace_id=workspace_id, task_id=task.id,
-                proposal_id=proposal.id, kind="subtitle_text_edit", input_refs=[track.artifact_ref or f"subtitle-track:{track.id}"],
-                content=render_srt(_execution_subtitle_track(changed)), engine="local-subtitle-edit/v1",
-                parameters={"track_id":track.id, "changes":changes})
-            changed = _clone_subtitle_track(changed, timeline_version_id=version_id, artifact_ref=subtitle_ref, transform_id=transform_id)
-        # Match the existing source-correction rule: dependent translations need regeneration.
+        published_tracks = []
+        for changed in changed_tracks:
+            original = next(item for item in tracks if item.id == changed.id)
+            if changed.cues:
+                subtitle_ref, transform_id = _publish_subtitle_text(workspace_id=workspace_id, task_id=task.id,
+                    proposal_id=proposal.id, kind="subtitle_text_edit", input_refs=[original.artifact_ref or f"subtitle-track:{original.id}"],
+                    content=render_srt(_execution_subtitle_track(changed)), engine="local-subtitle-edit/v1",
+                    parameters={"track_id":original.id, "changes":changes})
+                published_tracks.append(_clone_subtitle_track(changed, timeline_version_id=version_id, artifact_ref=subtitle_ref, transform_id=transform_id))
+        changed = changed_tracks[0]
+        changed_ids = {item.id for item in changed_tracks}
+        # Source text replacements still invalidate dependent translations.
         retained = [_clone_subtitle_track(other, timeline_version_id=version_id) for other in tracks
-            if other.id != track.id and not (operation_type == "ReplaceSubtitleText" and track.source_language is None and other.source_language == track.language)]
+            if other.id not in changed_ids and not (operation_type == "ReplaceSubtitleText" and track.source_language is None and other.source_language == track.language)]
         if operation_type == "ReplaceSubtitleText" and track.source_language is None:
             text_by_id = {cue.id:cue.text for cue in changed.cues}
             for cue in montage.cues:
@@ -8345,7 +8354,7 @@ def confirm_creation_task_edit(
         _prepare_changed_montage(montage, message="字幕修改已保存，配音未改；请重新渲染。")
         return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
             result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload,
-            subtitle_tracks=([changed] if changed.cues else []) + retained, cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
+            subtitle_tracks=published_tracks + retained, cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
             updated_plan=montage)
     if (
         operation_type == "UpdateSubtitleCue"
@@ -9577,26 +9586,33 @@ def _preview_subtitle_structure(task_id: str, request: Request, payload: Creatio
         raise HTTPException(status_code=409, detail="请选择可用字幕轨")
     operation = payload.model_dump(exclude_unset=True, exclude={"operation_type"})
     try:
-        changed, changes = _apply_caption_edit(track, payload.operation_type, operation)
-        subtitle_schedule([replace(changed, style={**changed.style, "enabled": True})], montage.duration_seconds)
-        if changed.cues:
-            render_srt(_execution_subtitle_track(changed))
+        if payload.operation_type == "MergeSubtitleCue":
+            changed_tracks, changes = merge_linked_subtitle_tracks(tracks, track, payload.cue_id)
+        else:
+            changed, changes = _apply_caption_edit(track, payload.operation_type, operation)
+            changed_tracks = [changed]
+        subtitle_schedule([replace(item, style={**item.style, "enabled": True}) for item in changed_tracks], montage.duration_seconds)
+        for item in changed_tracks:
+            if item.cues:
+                render_srt(_execution_subtitle_track(item))
+        changed = changed_tracks[0]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    bilingual = len(changed_tracks) == 2
     label = {"SplitSubtitleCue":"拆分字幕", "MergeSubtitleCue":"与下一条字幕合并", "DeleteSubtitleCue":"删除字幕"}[payload.operation_type]
     now = utc_now()
     intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}", workspace_id=workspace_id,
-        task_id=task_id, raw_command=label, context_stage="subtitle_cover", selected_object_refs=[f"cue:{payload.cue_id}", f"subtitle-track:{track.id}"],
+        task_id=task_id, raw_command=label, context_stage="subtitle_cover", selected_object_refs=[f"cue:{payload.cue_id}", *[f"subtitle-track:{item.id}" for item in changed_tracks]],
         playhead_ms=None, intent_type="subtitle_structure", scope={"kind":"subtitle_track", "track_id":track.id},
         constraints={"preserve_narration":True}, confidence=1, status="interpreted", created_at=now))
     proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
-        task_id=task_id, intent_id=intent.id, summary=f"{label}，仅修改当前{'中文' if track.language == 'zh-CN' else '英文'}字幕轨；配音和镜头不变。",
-        target_refs=[f"subtitle-track:{track.id}",f"cue:{payload.cue_id}"], operation={"operation_type":payload.operation_type,
+        task_id=task_id, intent_id=intent.id, summary=f"{label}，修改{'中英两轨并保留译文' if bilingual else '当前字幕轨'}；配音和镜头不变。",
+        target_refs=[*[f"subtitle-track:{item.id}" for item in changed_tracks],f"cue:{payload.cue_id}"], operation={"operation_type":payload.operation_type,
             "payload":{**operation, "base_version_id":base.id}},
-        invalidated_refs=[*_logical_montage_output_refs(montage), *([track.artifact_ref] if track.artifact_ref else [])],
+        invalidated_refs=[*_logical_montage_output_refs(montage), *[item.artifact_ref for item in tracks if item.id in {changed.id for changed in changed_tracks} and item.artifact_ref]],
         preview={"before":{"ref":f"subtitle-track:{track.id}","label":"当前字幕", "detail":f"{len(track.cues)} 条"},
             "after":{"ref":f"subtitle-track:{track.id}","label":label, "detail":f"{len(changed.cues)} 条"}, "text_changes":changes},
-        external_effects=["其他语言轨保持不变。", {
+        external_effects=["同步合并英文，保留原译文与来源映射，不重新翻译。" if bilingual else "其他语言轨保持不变。", {
             "SplitSubtitleCue":"文字拆分点和显示时间按指定值执行，不代表语音自动对齐；跨拆分点的强调词会移除。",
             "MergeSubtitleCue":"合并后的字幕覆盖两条之间的空白时段。",
             "DeleteSubtitleCue":"删除会留下无字幕时段；删除本轨最后一条后可通过撤销恢复。",
