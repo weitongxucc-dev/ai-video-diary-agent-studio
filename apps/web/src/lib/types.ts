@@ -1754,6 +1754,8 @@ export type MaterialAsset = {
   path: string;
   size_bytes: number;
   modified_at: string;
+  media_type: "video" | "audio" | "image";
+  source_url: string | null;
   duration_seconds: number | null;
   usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
   suggested_usage_role: "unassigned" | "a_roll" | "b_roll";
