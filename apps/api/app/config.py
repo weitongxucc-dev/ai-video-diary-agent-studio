@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -15,6 +18,54 @@ from typing import Any
 # share one writable config file outside the signed Resources
 # bundle.
 _ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
+
+# 设置页写盘的那批键。对它们来说 .env 是唯一真相来源：桌面壳把 Electron 自己的
+# process.env 原样透传给 API 子进程（apps/desktop/main.js:283），用户 shell 里
+# 恰好有过同名变量时，first-wins 会让那份继承值把 .env 永久遮住——同一进程里更正
+# 密钥静默不生效，llm_service_fingerprint 也跟着停在旧值上。列在这里的键改为
+# 「.env 覆盖环境变量」；不在列里的键保持 first-wins，12-factor 的
+# 「真实环境变量优先于 .env」原样保留。
+#
+# 与 app.runtime_settings.FIELD_TO_ENV 一一对应（外加它单独派生的两个键）；
+# tests/test_env_shadow.py 有一条断言守着这份名单，漏登记会当场失败。
+SETTINGS_OWNED_ENV_KEYS = frozenset(
+    {
+        "ASR_PROVIDER",
+        "DATABASE_PATH",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_MODEL",
+        "DRAFT_BACKGROUND_MUSIC_PATH",
+        "DRAFT_OUTPUT_PATH",
+        "HERMES_RADAR_PATH",
+        "JIANYING_DRAFT_ROOT_PATH",
+        "LLM_API_KEY",
+        "LLM_API_KEY_PROVIDER",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_PROVIDER",
+        "LOCAL_WHISPER_BACKEND",
+        "LOCAL_WHISPER_CLI_PATH",
+        "LOCAL_WHISPER_LANGUAGE",
+        "LOCAL_WHISPER_MODEL_PATH",
+        "LOCAL_WHISPER_PYTHON_PATH",
+        "MODEL_ROOT_PATH",
+        "NATIVE_OCR_WORKER_PATH",
+        "OBSIDIAN_VAULT_PATH",
+        "PRODUCT_HUNT_TOKEN",
+        "SUPABASE_JWT_AUDIENCE",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_URL",
+        "TEMPORARY_ROOT_PATH",
+        "TENCENTCLOUD_ASR_ENGINE_MODEL_TYPE",
+        "TENCENTCLOUD_ASR_REGION",
+        "TENCENTCLOUD_SECRET_ID",
+        "TENCENTCLOUD_SECRET_KEY",
+        "TOPIC_SOURCE_URLS",
+        "UNDERSTANDING_RUNTIME_PYTHON_PATH",
+        "VIDEO_INBOX_PATH",
+        "VIDEO_OUTPUT_PATH",
+    }
+)
 
 
 def structured_completion_options(model_id: str) -> dict[str, object]:
@@ -76,8 +127,12 @@ def load_dotenv_files() -> None:
             key, value = line.split("=", 1)
             key = key.strip()
             value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
+            if not key:
+                continue
+            file_wins = key in SETTINGS_OWNED_ENV_KEYS and bool(value)
+            if key in os.environ and not file_wins:
+                continue
+            os.environ[key] = value
 
 
 def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
@@ -225,6 +280,84 @@ def _hermes_radar_status(path: str | None) -> dict[str, Any]:
     }
 
 
+# ── 外部文字模型服务状态（0.11 B03）──────────────────────────────────────
+# 四档状态，语义严格按 backlog：已填写 / 未验证 / 可用 / 失败。
+# 「可用」只能由一次**真实发生过**的外部调用产生，绝不由字段是否填好推断。
+LLM_SERVICE_MISSING = "missing"        # 未填写
+LLM_SERVICE_UNVERIFIED = "unverified"  # 已填写，未验证
+LLM_SERVICE_AVAILABLE = "available"    # 可用（真的连通过）
+LLM_SERVICE_FAILED = "failed"          # 失败（真的试过且没成功）
+
+_LLM_SERVICE_LABELS = {
+    LLM_SERVICE_MISSING: "未填写",
+    LLM_SERVICE_UNVERIFIED: "已填写，未验证",
+    LLM_SERVICE_AVAILABLE: "可用",
+    LLM_SERVICE_FAILED: "失败",
+}
+
+# 每种失败原因对应一句日常中文。cause 来自 assistant_pi 的真实观测结果，
+# 未知原因不许编，写「拿不到更具体的原因」。
+_LLM_SERVICE_FAILURE_REASONS = {
+    "key_rejected": "服务拒绝了这把密钥。这一步是真的连到了服务，是密钥没通过。",
+    "address_unreachable": "连不上设置里的服务地址。可能是地址填错，或当前网络到不了这个服务。",
+    "timeout": "等模型回复超时，这一轮没有拿到回复。",
+}
+
+_LLM_SERVICE_DEFAULT_FAILURE_REASON = (
+    "上一次真实尝试没有成功，但日志里没有留下能说明原因的信息，拿不到更具体的原因。"
+)
+
+# 进程内记录「本次运行真的连通过/没通过」。不落盘：重启后我们确实不知道，
+# 就回到「未验证」，而不是沿用一次陈旧的结论。
+_llm_service_verifications: dict[str, dict[str, Any]] = {}
+_llm_service_lock = threading.Lock()
+
+
+def llm_service_fingerprint(settings: Settings) -> str:
+    """Identify the exact credential set an observation belongs to.
+
+    Changing provider / address / model / key must invalidate an earlier
+    「可用」; otherwise a fixed key would keep an old green badge.
+    """
+    material = "\n".join(
+        [
+            settings.effective_llm_provider,
+            settings.effective_llm_base_url,
+            settings.effective_llm_model,
+            settings.effective_llm_api_key or "",
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def record_llm_service_verification(
+    settings: Settings, *, ok: bool, cause: str, detail: str = "", repair_action: str = ""
+) -> dict[str, Any]:
+    """Record one real attempt against the external model service.
+
+    Only call this from a code path that has actually reached the provider.
+    A Pi/工具/本机盘故障 must not be recorded as a service failure — the
+    service was never asked, and saying otherwise would be the same lie B03
+    is fixing.
+    """
+    record = {
+        "ok": bool(ok),
+        "cause": cause,
+        "detail": detail,
+        "repair_action": repair_action,
+        "observed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    with _llm_service_lock:
+        _llm_service_verifications[llm_service_fingerprint(settings)] = record
+    return record
+
+
+def llm_service_verification(settings: Settings) -> dict[str, Any] | None:
+    with _llm_service_lock:
+        record = _llm_service_verifications.get(llm_service_fingerprint(settings))
+    return dict(record) if record else None
+
+
 @dataclass(frozen=True)
 class Settings:
     llm_provider: str | None = None
@@ -337,11 +470,60 @@ class Settings:
 
     @property
     def llm_configured(self) -> bool:
+        """True when the fields needed to *attempt* a cloud call are present.
+
+        This is a field-presence gate, never a health claim: it never contacts
+        the provider. Callers use it to decide "try the external model, else
+        fall back locally". For what we have actually verified against the
+        service, read `llm_service_status` instead. `llm_configured == True`
+        must never be shown to a user as 「可用」.
+        """
         provider = self.effective_llm_provider
         has_connection = bool(self.effective_llm_base_url and self.effective_llm_model)
         return has_connection and (
             provider in {"ollama", "custom"} or bool(self.effective_llm_api_key)
         )
+
+    @property
+    def llm_service_state(self) -> str:
+        """One of missing / unverified / available / failed.
+
+        「可用」is only ever reached from a recorded real call — a filled-in
+        form can produce 「已填写，未验证」and nothing more.
+        """
+        if not self.llm_configured:
+            return LLM_SERVICE_MISSING
+        record = llm_service_verification(self)
+        if record is None:
+            return LLM_SERVICE_UNVERIFIED
+        return LLM_SERVICE_AVAILABLE if record["ok"] else LLM_SERVICE_FAILED
+
+    def llm_service_status(self) -> dict[str, Any]:
+        state = self.llm_service_state
+        record = llm_service_verification(self)
+        if state == LLM_SERVICE_MISSING:
+            detail = "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。"
+        elif state == LLM_SERVICE_UNVERIFIED:
+            detail = (
+                "地址、模型和密钥都填了，但还没有真的连过一次服务；"
+                "能不能用要等下一次真实对话或写稿才知道。"
+            )
+        elif state == LLM_SERVICE_AVAILABLE:
+            detail = "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。"
+        else:
+            detail = record.get("detail") or _LLM_SERVICE_FAILURE_REASONS.get(
+                str(record.get("cause")), _LLM_SERVICE_DEFAULT_FAILURE_REASON
+            )
+        return {
+            "state": state,
+            "label": _LLM_SERVICE_LABELS[state],
+            "detail": detail,
+            "fields_filled": self.llm_configured,
+            "verified": state == LLM_SERVICE_AVAILABLE,
+            "cause": str(record.get("cause")) if record else "",
+            "repair_action": str(record.get("repair_action", "")) if record else "",
+            "observed_at": str(record.get("observed_at")) if record else "",
+        }
 
     @property
     def effective_temporary_root_path(self) -> Path:
@@ -473,6 +655,14 @@ class Settings:
         )
 
     def public_status(self) -> dict[str, Any]:
+        """Status shown to the client.
+
+        The four-level service state deliberately does **not** go here: this dict
+        is validated by `LLMStatusResponse`, which has no field for it, so any
+        extra key is silently dropped before it ever reaches the browser. Put it
+        in `safe_runtime_settings()` (row `LLM_SERVICE_STATE`) instead, and only
+        mirror it here once `LLMStatusResponse` grows a real field.
+        """
         cloud_configured = self.llm_configured
         obsidian_path = self.obsidian_vault_path
         obsidian_exists = bool(
@@ -537,6 +727,7 @@ class Settings:
         }
 
     def safe_runtime_settings(self) -> dict[str, Any]:
+        llm_service = self.llm_service_status()
         return {
             "settings": [
                 {
@@ -546,9 +737,11 @@ class Settings:
                     "secret": False,
                 },
                 {
+                    # 「已配置」只说明钥匙填了，不说明服务认它。B03 之前这里写
+                    # 「已配置」，会被直接读成「可用」。
                     "name": "LLM_API_KEY",
                     "configured": bool(self.effective_llm_api_key),
-                    "value": "已配置" if self.effective_llm_api_key else "未配置",
+                    "value": "已填写" if self.effective_llm_api_key else "未填写",
                     "secret": True,
                 },
                 {
@@ -564,9 +757,27 @@ class Settings:
                     "secret": False,
                 },
                 {
+                    # 四档状态里前端唯一能拿到的形状：settings 是自由数组，
+                    # RuntimeSettingItemResponse 原样放行，不需要动 schemas.py。
+                    # 只读，RuntimeSettingsUpdateRequest 里没有它，PATCH 不会回写。
+                    "name": "LLM_SERVICE_STATE",
+                    "configured": True,
+                    "value": llm_service["label"],
+                    "secret": False,
+                },
+                *[
+                    {"name": name, "configured": bool(llm_service[field]),
+                     "value": llm_service[field], "secret": False}
+                    for name, field in (
+                        ("LLM_SERVICE_CAUSE", "cause"),
+                        ("LLM_SERVICE_DETAIL", "detail"),
+                        ("LLM_SERVICE_REPAIR_ACTION", "repair_action"),
+                    )
+                ],
+                {
                     "name": "DEEPSEEK_API_KEY",
                     "configured": bool(self.deepseek_api_key),
-                    "value": "已配置" if self.deepseek_api_key else "未配置",
+                    "value": "已填写" if self.deepseek_api_key else "未填写",
                     "secret": True,
                 },
                 {

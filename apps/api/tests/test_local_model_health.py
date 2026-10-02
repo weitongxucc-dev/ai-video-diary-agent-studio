@@ -1,9 +1,18 @@
+import json
 import socket
 from pathlib import Path
 
 from app.config import Settings
+from app.model_runtime import CHINESE_CLIP_VIT_B16, ModelCatalog
 from app.models import utc_now
-from app.runtime_health import _deepseek_item, _obsidian_item
+from app.runtime_health import (
+    _LOCAL_MODEL_FEATURES,
+    _deepseek_item,
+    _feature_gates,
+    _local_model_item,
+    _obsidian_item,
+    runtime_health,
+)
 
 
 def test_startup_health_does_not_traverse_user_documents(tmp_path, monkeypatch):
@@ -52,3 +61,112 @@ def test_invalid_local_port_returns_actionable_health_result():
     item = _deepseek_item(Settings(llm_provider='custom', llm_base_url='http://127.0.0.1:bad/v1', llm_model='local'), utc_now())
     assert item['status'] == 'degraded'
     assert '端口' in item['repair_action']
+
+
+def _catalog_with_installed_weights(tmp_path, *, write_runtime=True):
+    runtime_python = tmp_path / "python"
+    worker = tmp_path / "worker.py"
+    if write_runtime:
+        runtime_python.write_text("python", encoding="utf-8")
+    worker.write_text("worker", encoding="utf-8")
+    catalog = ModelCatalog(tmp_path / "models", runtime_python, worker)
+    model_path = catalog.model_path(CHINESE_CLIP_VIT_B16)
+    model_path.mkdir(parents=True)
+    weights = model_path / "model.safetensors"
+    weights.write_bytes(b"weights")
+    (model_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_id": CHINESE_CLIP_VIT_B16.id,
+                "repository": CHINESE_CLIP_VIT_B16.repository,
+                "revision": CHINESE_CLIP_VIT_B16.revision,
+                "files": [{"path": weights.name, "size": weights.stat().st_size}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return catalog
+
+
+def test_absent_local_model_reports_missing_with_a_download_fix_command(tmp_path):
+    catalog = ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py")
+    _feature, spec, item_id, label, impact = next(
+        entry
+        for entry in _LOCAL_MODEL_FEATURES
+        if entry[0] == "material-visual-semantics"
+    )
+
+    item = _local_model_item(catalog, spec, item_id, label, impact, utc_now())
+
+    assert item["status"] == "missing"
+    assert item["fix_command"] == "在应用内「设置 → 模型管理」中下载"
+    # 降级必须可见：不能只给一个「missing」了事，要说清后果。
+    assert "只按素材文字与时长推荐" in item["impact"]
+    assert "权重未下载" in item["reason"]
+    assert CHINESE_CLIP_VIT_B16.display_name in item["label"]
+
+
+def test_broken_local_model_install_reports_invalid_not_missing(tmp_path):
+    catalog = _catalog_with_installed_weights(tmp_path)
+    (catalog.model_path(CHINESE_CLIP_VIT_B16) / "manifest.json").write_text("{", encoding="utf-8")
+
+    item = _local_model_item(
+        catalog, CHINESE_CLIP_VIT_B16, "local_visual_semantics", "本地画面语义模型", "影响推荐。", utc_now()
+    )
+
+    assert item["status"] == "invalid"
+    assert item["fix_command"] is None
+    assert "重新下载" in item["repair_action"]
+
+
+def test_present_weights_with_missing_runtime_reports_degraded(tmp_path):
+    """标签跟着权重的状态走：权重还在就不该劝用户重下几 GB。"""
+    catalog = _catalog_with_installed_weights(tmp_path, write_runtime=False)
+
+    item = _local_model_item(
+        catalog, CHINESE_CLIP_VIT_B16, "local_visual_semantics", "本地画面语义模型", "影响推荐。", utc_now()
+    )
+
+    assert item["status"] == "degraded"
+    assert "运行环境不完整" in item["reason"]
+    assert "重新下载" not in item["repair_action"]
+
+
+def test_fully_installed_local_model_reports_ready_without_impact(tmp_path):
+    catalog = _catalog_with_installed_weights(tmp_path)
+
+    item = _local_model_item(
+        catalog, CHINESE_CLIP_VIT_B16, "local_visual_semantics", "本地画面语义模型", "影响推荐。", utc_now()
+    )
+
+    assert item["status"] == "ready"
+    assert item["impact"] == "无影响。"
+    assert item["fix_command"] is None
+
+
+def test_feature_gates_expose_both_local_model_dependencies(tmp_path):
+    catalog = ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py")
+
+    gates = {gate["feature"]: gate for gate in _feature_gates(Settings(), catalog)}
+
+    assert gates["material-visual-understanding"]["available"] is False
+    assert gates["material-visual-semantics"]["available"] is False
+    # 门禁必须给出原因，否则前端只能显示一个没有解释的红灯。
+    assert "权重未下载" in gates["material-visual-understanding"]["reason"]
+    assert "权重未下载" in gates["material-visual-semantics"]["reason"]
+
+
+def test_runtime_health_counts_every_local_model_item(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime_health.model_catalog_from_settings",
+        lambda settings: ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py"),
+    )
+
+    report = runtime_health(Settings())
+    by_id = {item["id"]: item for item in report["items"]}
+
+    assert by_id["local_vlm"]["status"] == "missing"
+    assert by_id["local_visual_semantics"]["status"] == "missing"
+    assert report["summary"]["total"] == len(report["items"])
+    assert report["summary"]["missing"] == sum(1 for item in report["items"] if item["status"] == "missing")

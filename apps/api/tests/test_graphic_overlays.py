@@ -27,8 +27,10 @@ def test_overlay_commands_and_linked_intervals_preserve_text():
     assert [(p['start_seconds'],p['end_seconds']) for p in pieces]==[(0,1),(1,2)]
     assert len({p['id'] for p in pieces})==2 and all(p['text']==value['text'] for p in pieces)
     for invalid in ([{**value,'end_seconds':5}],[value,value]):
-        with pytest.raises(ValueError):validate_overlays(invalid,3)
-    with pytest.raises(ValueError):TextOverlay(text=' ',start_seconds=0,end_seconds=1)
+        with pytest.raises(ValueError):
+            validate_overlays(invalid,3)
+    with pytest.raises(ValueError):
+        TextOverlay(text=' ',start_seconds=0,end_seconds=1)
 
 
 def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
@@ -44,7 +46,8 @@ def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
 
 
 def test_real_title_only_appears_in_its_interval(tmp_path):
-    source=tmp_path/'blue.mp4';voice=tmp_path/'voice.wav'
+    source=tmp_path/'blue.mp4'
+    voice=tmp_path/'voice.wav'
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=180x320:r=30:d=1','-c:v','libx264',str(source)],check=True)
     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','1',str(voice)],check=True)
     clip=MontageClip(id='clip',cue_id='cue',asset_id='a',segment_id='s',source_path=str(source),source_start_seconds=0,source_end_seconds=1,
@@ -63,10 +66,13 @@ def test_real_title_only_appears_in_its_interval(tmp_path):
 def test_image_overlay_preserves_alpha_aspect_and_natural_parameters(tmp_path):
     from PIL import Image,ImageDraw
     from app.graphic_overlays import ImageOverlay,write_graphic_overlay
-    source=tmp_path/'logo.png';image=Image.new('RGBA',(200,100),(0,0,0,0))
-    ImageDraw.Draw(image).rectangle((50,0,149,99),fill=(255,0,0,255));image.save(source)
+    source=tmp_path/'logo.png'
+    image=Image.new('RGBA',(200,100),(0,0,0,0))
+    ImageDraw.Draw(image).rectangle((50,0,149,99),fill=(255,0,0,255))
+    image.save(source)
     value=ImageOverlay(source_ref=str(source),name='logo.png',start_seconds=0,end_seconds=1,width=.4,opacity=.5)
-    output=tmp_path/'layer.png';write_graphic_overlay(value.model_dump(),output,(1000,1000))
+    output=tmp_path/'layer.png'
+    write_graphic_overlay(value.model_dump(),output,(1000,1000))
     rendered=Image.open(output)
     left,top,right,bottom=rendered.getbbox()
     assert (left+right)/2==500 and (top,bottom)==(400,600)
@@ -92,12 +98,18 @@ def test_graphic_import_rejects_oversize_empty_and_animation_before_publication(
     from app.graphic_sources import import_graphic_source
     def attempt(data):
         return import_graphic_source(None,None,tmp_path,'w','t',SimpleNamespace(filename='test.png',file=io.BytesIO(data)))
-    with pytest.raises(ValueError,match='为空'):attempt(b'')
-    with pytest.raises(ValueError,match='20MB'):attempt(b'x'*(20*1024*1024+1))
-    large=io.BytesIO();Image.new('RGB',(8193,1)).save(large,format='PNG')
-    with pytest.raises(ValueError,match='尺寸过大'):attempt(large.getvalue())
-    animated=io.BytesIO();Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
-    with pytest.raises(ValueError,match='静态'):attempt(animated.getvalue())
+    with pytest.raises(ValueError,match='为空'):
+        attempt(b'')
+    with pytest.raises(ValueError,match='20MB'):
+        attempt(b'x'*(20*1024*1024+1))
+    large=io.BytesIO()
+    Image.new('RGB',(8193,1)).save(large,format='PNG')
+    with pytest.raises(ValueError,match='尺寸过大'):
+        attempt(large.getvalue())
+    animated=io.BytesIO()
+    Image.new('RGBA',(8,8),'red').save(animated,format='PNG',save_all=True,append_images=[Image.new('RGBA',(8,8),'blue')],duration=100,loop=0)
+    with pytest.raises(ValueError,match='静态'):
+        attempt(animated.getvalue())
 
 
 def test_overlay_context_is_bound_to_identity_and_type():
@@ -115,3 +127,78 @@ def test_overlay_context_is_bound_to_identity_and_type():
             compile_overlay_command('当前图片删除',[image,title],selected_refs=refs)
     with pytest.raises(ValueError,match='类型不符'):
         compile_overlay_command('当前标题删除',[image],selected_refs=[ref])
+
+
+def test_arrow_overlay_parse_defaults_and_validation():
+    from app.graphic_overlays import ArrowOverlay, parse_overlay
+    value=ArrowOverlay(x=.46,y=.35,name='进料口',purpose='原料从这里进入',start_seconds=.2,end_seconds=1.2)
+    dump=value.model_dump()
+    assert dump['kind']=='arrow'
+    assert dump['position']=='right-top' and dump['color']=='#FFFFFF'
+    assert dump['id'].startswith('overlay_')
+    assert isinstance(parse_overlay(dump),ArrowOverlay)
+    with pytest.raises(ValueError,match='至少0.04'):
+        ArrowOverlay(x=.5,y=.5,name='a',start_seconds=1,end_seconds=1.01)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=1.5,y=.5,name='a',start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=-.1,name='a',start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='a',start_seconds=0,end_seconds=1,color='red')
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='x'*25,start_seconds=0,end_seconds=1)
+    with pytest.raises(ValueError):
+        ArrowOverlay(x=.5,y=.5,name='',start_seconds=0,end_seconds=1)
+
+
+def test_arrow_overlay_rasterizes_and_dispatches_without_breaking_others(tmp_path):
+    from PIL import Image
+    from app.graphic_overlays import ArrowOverlay, write_arrow_overlay, write_graphic_overlay, validate_overlays
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',purpose='原料从这里进入',start_seconds=0,end_seconds=1).model_dump()
+    output=tmp_path/'arrow.png'
+    write_arrow_overlay(arrow,output,(1080,1920))
+    image=Image.open(output)
+    assert image.size==(1080,1920) and image.getbbox() is not None
+    dispatched=tmp_path/'dispatched.png'
+    write_graphic_overlay(arrow,dispatched,(1080,1920))
+    assert Image.open(dispatched).getbbox() is not None
+    # Arrow parses through the shared validate_overlays entry without breaking text.
+    title=TextOverlay(text='本地',start_seconds=0,end_seconds=1).model_dump()
+    overlays=validate_overlays([title,arrow],2)
+    assert [item.kind for item in overlays]==['text','arrow']
+
+
+def test_arrow_nl_numbered_commands_update_and_delete():
+    from app.graphic_overlays import ArrowOverlay, compile_overlay_command
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
+    action,changed,identity=compile_overlay_command('箭头1移到左下角',[arrow])
+    assert action=='update' and changed['position']=='left-bottom' and identity==arrow['id']
+    assert compile_overlay_command('把箭头1移到右上角',[arrow])[1]['position']=='right-top'
+    assert compile_overlay_command('箭头1颜色改为#FF8800',[arrow])[1]['color']=='#FF8800'
+    assert compile_overlay_command('箭头1显示1到3秒',[arrow])[1]['end_seconds']==3
+    action,value,identity=compile_overlay_command('箭头1删除',[arrow])
+    assert action=='delete' and value is None and identity==arrow['id']
+
+
+def test_arrow_nl_contextual_and_failure_paths():
+    from app.graphic_overlays import ArrowOverlay, TextOverlay, compile_overlay_command
+    arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
+    ref=f"overlay:{arrow['id']}"
+    action,value,identity=compile_overlay_command('把当前箭头移到右上角',[arrow],selected_refs=[ref])
+    assert action=='update' and value['position']=='right-top' and identity==arrow['id']
+    # 指令序号越界。
+    with pytest.raises(ValueError,match='不存在'):
+        compile_overlay_command('箭头2删除',[arrow])
+    # 序号指向非箭头叠加层。
+    title=TextOverlay(text='标题',start_seconds=0,end_seconds=1).model_dump()
+    with pytest.raises(ValueError,match='不存在'):
+        compile_overlay_command('箭头1删除',[title])
+    # 当前选中对象与指令类型不符。
+    with pytest.raises(ValueError,match='类型不符'):
+        compile_overlay_command('当前标题删除',[arrow],selected_refs=[ref])
+    # 区间过短沿用后端校验。
+    with pytest.raises(ValueError,match='至少0.04'):
+        compile_overlay_command('箭头1显示1到1.01秒',[arrow])
+    # 缺坐标的加箭头指令不得造默认坐标，引导用编辑表单。
+    with pytest.raises(ValueError,match='表单'):
+        compile_overlay_command('前3秒加箭头“进料口”',[])

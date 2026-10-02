@@ -10,18 +10,21 @@ import {
   ChevronDown,
   CircleHelp,
   Clapperboard,
+  Columns2,
   FileStack,
   Home,
   Library,
   Menu,
   Moon,
   PanelLeft,
+  PanelRight,
   Plus,
   Search,
   Settings,
   Sparkles,
   Sun,
   UserRound,
+  Users,
 } from "lucide-react";
 import {
   useEffect,
@@ -75,6 +78,7 @@ const primaryNav: NavItem[] = [
   { href: "/templates", label: "视频模板", icon: FileStack },
   { href: "/production?view=automations", label: "定时任务", icon: Sparkles, activePath: "/automations" },
   { href: "/history", label: "发布与数据", icon: Activity },
+  { href: "/members", label: "成员与空间", icon: Users },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
@@ -141,14 +145,14 @@ function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, 
     .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
 }
 
-function NavigationRows({ pathname }: { pathname: string }) {
+function NavigationRows({ pathname, showMembers }: { pathname: string; showMembers: boolean }) {
   const searchParams = useSearchParams();
-  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} />;
+  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} showMembers={showMembers} />;
 }
 
-function NavigationRowsContent({ pathname, searchParams }: { pathname: string; searchParams?: Pick<URLSearchParams, "get"> }) {
+function NavigationRowsContent({ pathname, searchParams, showMembers = true }: { pathname: string; searchParams?: Pick<URLSearchParams, "get">; showMembers?: boolean }) {
   return <>
-    {primaryNav.map((item) => {
+    {primaryNav.filter((item) => showMembers || item.href !== "/members").map((item) => {
       const ItemIcon = item.icon;
       const active = isActive(pathname, item.href, item.activePath, searchParams);
       return (
@@ -191,6 +195,8 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.dataset.themeMode = mode;
 }
 
+import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
+
 export function AppShell({
   children,
   creationTasks,
@@ -208,14 +214,16 @@ export function AppShell({
   toolbarActions,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
+  // 身份引导：挂载时拉一次 whoami 并把令牌写进 localStorage（hook 内完成）。
+  // 角色未知（加载中）时先显示“成员与空间”，避免 owner 首屏看不到自己的页面。
+  const { role: localMemberRole } = useLocalMemberIdentity();
+  const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(true);
-  const [quickSize, setQuickSize] = useState({ width: 400, height: 0, maxTop: 8 });
-  const [quickPreviewHeight, setQuickPreviewHeight] = useState<number | null>(null);
-  const [quickPreviewOccluded, setQuickPreviewOccluded] = useState(false);
+  const [quickSize, setQuickSize] = useState({ width: 400, height: 0, minLeft: 8, maxLeft: 8, minTop: 8, maxTop: 8 });
   const [quickPosition, setQuickPosition] = useState<{ left: number; top: number } | null>(null);
   const editorMainRef = useRef<HTMLElement>(null);
   const quickExpandRef = useRef<HTMLButtonElement>(null);
@@ -241,42 +249,38 @@ export function AppShell({
       const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
       const player = main.querySelector<HTMLElement>("[data-editor-player]");
       const mainRect = main.getBoundingClientRect();
-      const anchorTop = transport?.getBoundingClientRect().top
-        ?? (player ? player.getBoundingClientRect().bottom - 48 : mainRect.bottom);
-      const available = Math.floor(anchorTop - mainRect.top - 16);
-      const height = Math.max(0, Math.min(400, available));
-      const width = Math.min(480, Math.max(400, Math.round(mainRect.width * .62)), Math.max(0, Math.floor(mainRect.width - 16)));
-      const maxTop = Math.max(8, Math.floor(anchorTop - mainRect.top - height - 8));
-      let previewOccluded = false;
-      const video = player?.querySelector("video");
-      if (player && video && width > 0 && height > 0) {
-        const playerRect = player.getBoundingClientRect();
-        const [declaredWidth, declaredHeight] = (player.dataset.editorAspectRatio ?? "9:16").split(":").map(Number);
-        const ratio = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : declaredWidth / declaredHeight;
-        const frameWidth = Math.min(playerRect.width, playerRect.height * ratio);
-        const frameHeight = frameWidth / ratio;
-        // The open float uses the player's empty right side, so measure the
-        // picture in the same left-aligned position used while it is visible.
-        const frameLeft = playerRect.left;
-        const frameTop = playerRect.top + (playerRect.height - frameHeight) / 2;
-        const floatLeft = mainRect.right - width - 8;
-        const floatTop = mainRect.top + 8;
-        const availablePictureWidth = Math.max(0, floatLeft - playerRect.left - 8);
-        const nextPreviewHeight = Math.min(playerRect.height, availablePictureWidth / ratio);
-        setQuickPreviewHeight((current) => current === nextPreviewHeight ? current : nextPreviewHeight);
-        const overlapWidth = Math.max(0, Math.min(floatLeft + width, frameLeft + frameWidth) - Math.max(floatLeft, frameLeft));
-        const overlapHeight = Math.max(0, Math.min(floatTop + height, frameTop + frameHeight) - Math.max(floatTop, frameTop));
-        previewOccluded = overlapWidth > 0 && overlapHeight > 0;
-      } else setQuickPreviewHeight(null);
-      setQuickPreviewOccluded(previewOccluded);
-      setQuickSize((current) => current.height === height && current.width === width && current.maxTop === maxTop ? current : { width, height, maxTop });
+      const stage = main.querySelector<HTMLElement>('nav[aria-label="制作阶段"]');
+      const minTop = Math.ceil((stage?.getBoundingClientRect().bottom ?? mainRect.top) - mainRect.top + 8);
+      const bottom = Math.floor((transport?.getBoundingClientRect().top ?? mainRect.bottom) - mainRect.top - 8);
+      const height = Math.max(0, Math.min(400, bottom - minTop));
+      let safeLeft = 8;
+      let safeRight = mainRect.width - 8;
+      if (player) {
+        const video = player.querySelector("video");
+        const box = (video ?? player).getBoundingClientRect();
+        let pictureLeft = box.left - mainRect.left;
+        let pictureRight = box.right - mainRect.left;
+        // VideoEditor's contained picture stays centered; only the float uses its empty side.
+        if (video?.videoWidth && video.videoHeight) {
+          const pictureWidth = Math.min(box.width, box.height * video.videoWidth / video.videoHeight);
+          pictureLeft += (box.width - pictureWidth) / 2;
+          pictureRight = pictureLeft + pictureWidth;
+        }
+        if (mainRect.width - pictureRight >= pictureLeft) safeLeft = Math.max(8, pictureRight + 8);
+        else safeRight = Math.min(safeRight, pictureLeft - 8);
+      }
+      const width = Math.max(0, Math.min(480, Math.floor(safeRight - safeLeft)));
+      const minLeft = Math.ceil(safeLeft);
+      const maxLeft = Math.max(minLeft, Math.floor(safeRight - width));
+      const maxTop = Math.max(minTop, bottom - height);
+      setQuickSize((current) => current.height === height && current.width === width && current.minLeft === minLeft && current.maxLeft === maxLeft && current.minTop === minTop && current.maxTop === maxTop ? current : { width, height, minLeft, maxLeft, minTop, maxTop });
       setQuickPosition((current) => {
         if (!current) return null;
-        const left = Math.min(Math.max(8, current.left), Math.max(8, mainRect.width - width - 8));
-        const top = Math.min(Math.max(8, current.top), maxTop);
+        const left = Math.min(Math.max(minLeft, current.left), maxLeft);
+        const top = Math.min(Math.max(minTop, current.top), maxTop);
         return left === current.left && top === current.top ? current : { left, top };
       });
-      if (!quickManualRef.current) setQuickOpen(mainRect.width >= 540 && width >= 400 && height >= 240 && !previewOccluded);
+      if (!quickManualRef.current) setQuickOpen(width >= 400 && height >= 240);
     };
     const scheduleMeasure = () => {
       window.cancelAnimationFrame(frame);
@@ -289,6 +293,8 @@ export function AppShell({
     const video = player?.querySelector("video");
     if (player) observer?.observe(player);
     if (transport) observer?.observe(transport);
+    const stage = main.querySelector<HTMLElement>('nav[aria-label="制作阶段"]');
+    if (stage) observer?.observe(stage);
     video?.addEventListener("loadedmetadata", scheduleMeasure);
     main.addEventListener("scroll", scheduleMeasure, true);
     window.addEventListener("resize", scheduleMeasure);
@@ -343,7 +349,7 @@ export function AppShell({
   const ThemeIcon = themeMode === "dark" ? Moon : Sun;
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
     { id: "new-production", label: "新建视频", description: "说说想法", href: "/?new=1", icon: Plus },
-    ...primaryNav.map((item) => ({
+    ...primaryNav.filter((item) => showMembersNav || item.href !== "/members").map((item) => ({
       id: `nav-${item.href}`,
       label: item.label,
       description: item.label === "首页" ? "查看任务、阻断和通知" : `打开${item.label}`,
@@ -359,7 +365,7 @@ export function AppShell({
     })),
     { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
-  ], [recentTasks]);
+  ], [recentTasks, showMembersNav]);
 
   function collapseQuick() {
     quickManualRef.current = true;
@@ -393,10 +399,9 @@ export function AppShell({
     const drag = quickDragRef.current;
     const main = editorMainRef.current;
     if (!drag || !main || drag.pointerId !== event.pointerId) return;
-    const maxLeft = Math.max(8, main.getBoundingClientRect().width - quickSize.width - 8);
     setQuickPosition({
-      left: Math.min(maxLeft, Math.max(8, drag.left + event.clientX - drag.x)),
-      top: Math.min(quickSize.maxTop, Math.max(8, drag.top + event.clientY - drag.y)),
+      left: Math.min(quickSize.maxLeft, Math.max(quickSize.minLeft, drag.left + event.clientX - drag.x)),
+      top: Math.min(quickSize.maxTop, Math.max(quickSize.minTop, drag.top + event.clientY - drag.y)),
     });
   }
 
@@ -439,8 +444,8 @@ export function AppShell({
           </Link>
 
           <div className="desktop-nav-group">
-            <Suspense fallback={<NavigationRowsContent pathname={pathname} />}>
-              <NavigationRows pathname={pathname} />
+            <Suspense fallback={<NavigationRowsContent pathname={pathname} showMembers={showMembersNav} />}>
+              <NavigationRows pathname={pathname} showMembers={showMembersNav} />
             </Suspense>
           </div>
 
@@ -491,6 +496,8 @@ export function AppShell({
               <Menu size={17} />
             </button>
             {<button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={17} /></button>}
+            {<button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={17} /></button>}
+            {<button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={17} /></button>}
             {!editorLayout ? <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
             </button> : null}
@@ -500,7 +507,7 @@ export function AppShell({
           </div>
           <div className="desktop-toolbar__actions">
             {toolbarActions}
-            {quickAvailable && !quickShown ? <button aria-label={quickFits ? "展开镜头编辑" : "查看镜头详情"} className={editorShell.quickCollapsed} onClick={quickFits ? expandQuick : () => setDetailsOpen(true)} ref={quickExpandRef} title={quickPreviewOccluded ? "浮卡已收起，避免遮挡预览画面" : quickInspectorLabel ?? "镜头编辑"} type="button"><span>{quickInspectorLabel ?? "镜头编辑"}</span><strong>{quickFits ? "展开" : "详情"}</strong></button> : null}
+            {quickAvailable && !quickShown ? <button aria-label={quickFits ? "展开镜头编辑" : "查看镜头详情"} className={editorShell.quickCollapsed} onClick={quickFits ? expandQuick : () => setDetailsOpen(true)} ref={quickExpandRef} title={quickFits ? quickInspectorLabel ?? "镜头编辑" : "空间不足，使用镜头详情"} type="button"><span>{quickInspectorLabel ?? "镜头编辑"}</span><strong>{quickFits ? "展开" : "详情"}</strong></button> : null}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
 
@@ -517,7 +524,7 @@ export function AppShell({
           </div>
         </header>
 
-        <div className={editorShell.contentGrid}>
+        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`}>
           <section aria-label="创作助手" className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small></header>
             <div className={editorShell.conversationBody}>
@@ -525,10 +532,10 @@ export function AppShell({
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className={`desktop-main-scroll${quickShown ? ` ${editorShell.quickPreviewBesideFloat}` : ""}`} data-scroll-region="main-y" ref={editorMainRef} style={quickShown && quickPreviewHeight !== null ? { "--quick-preview-height": `${quickPreviewHeight}px` } as CSSProperties : undefined} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+          <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
             {quickShown && quickInspector ? (
-                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? 8, left: quickPosition?.left, right: quickPosition ? undefined : 8 }}>
+                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? quickSize.minTop, left: quickPosition?.left ?? quickSize.maxLeft }}>
                   <header className={editorShell.quickHeader} onPointerDown={startQuickDrag} onPointerMove={moveQuickDrag} onPointerUp={stopQuickDrag} onPointerCancel={stopQuickDrag} title="拖动以调整浮卡位置">
                     <strong>{quickInspectorLabel ?? "镜头快速编辑"}</strong>
                     <div>

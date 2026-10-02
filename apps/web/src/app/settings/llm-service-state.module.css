@@ -1,0 +1,37 @@
+/*
+ * 外部文字模型服务四档徽章的配色。
+ *
+ * 形状、字号、圆角都沿用 v4 既有的 `.settings-connection-state`（globals.css），
+ * 这里只补四档各自的 border-color / color，不另起布局。
+ *
+ * 绿色只留给 `available`——也就是后端真的观测到一次成功的那一档。
+ * 「已填写」不是绿色：填了密钥和能用之间没有这一步。
+ */
+.toneMissing {
+  border-color: var(--border-2);
+  color: var(--text-2);
+}
+
+.toneUnverified {
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--border-1));
+  color: var(--warning);
+}
+
+.toneFailed {
+  border-color: color-mix(in srgb, var(--red) 36%, var(--border-1));
+  color: var(--red);
+}
+
+/* 接不到后端状态线：虚线边框提示「这一档不是结论，是没取到」。 */
+.toneUnknown {
+  border-color: var(--border-2);
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.detail {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+}

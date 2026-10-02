@@ -59,7 +59,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
           {categories.map((name, index) => <button aria-pressed={category === name} className={styles.category} key={name} onClick={() => setCategory(category === name ? "全部" : name)} type="button">
             <span className={styles.categoryIcon}>{[<BookOpen key="a" size={20} />, <FileText key="b" size={20} />, <FileText key="c" size={20} />, <BookOpen key="d" size={20} />][index]}</span>
             <strong>{name}</strong>
-            <small>{exampleMode ? items.filter((item) => item.exampleCategory === name).length + " 条示例来源" : "用途待分类"}</small>
+            <small>{exampleMode ? items.filter((item) => item.exampleCategory === name).length + " 条示例来源" : "未分类"}</small>
           </button>)}
         </nav>
         <div className={styles.actions}><Link href="/sources">添加内容 <Link2 size={14} /></Link></div>
@@ -70,24 +70,18 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
         <button aria-label="刷新知识库" disabled={loading} onClick={onRefresh} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={16} /></button>
       </div>
       {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>本地服务恢复或工作区授权确认后再刷新。</p></div></section> : null}
-      <div className={styles.columns}>
-        <section className={styles.card}>
+      <section className={styles.card}>
           <div className={styles.cardHeading}><div><h2>来源封面</h2><small>{loading ? "正在读取" : error ? "读取失败" : category !== "全部" && !exampleMode ? "用途分类尚未接入" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选来源查看内容</small></div></div>
           {loading ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
             : category !== "全部" && !exampleMode ? <div className={styles.empty}>现有知识条目没有用途分类字段，不能按文件格式推断“{category}”。<button onClick={() => setCategory("全部")} type="button">查看全部来源</button></div>
             : visibleItems.length ? <div className={styles.grid}>{visibleItems.map((item) => <button className={styles.cover} data-open-details key={item.id} onClick={() => setSelectedId(item.id)} type="button">
                 <span className={styles.coverArt}>{itemIcon(item.content_type)}<small>{itemType(item.content_type)}</small></span>
-                <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : "用途未分类"} · 版本 {item.version}</small>
+                <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : "未分类"} · 版本 {item.version}</small>
                 <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : "核对状态未接入"}</span>
               </button>)}</div>
             : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
-        </section>
-        <section className={styles.card}>
-          <div className={styles.cardHeading}><div><h2>主题关系</h2><small>来源与创作引用</small></div></div>
-          <div className={styles.relationEmpty}><BookOpen size={20} /><strong>主题与引用关系尚未接入</strong><p>现有条目记录了来源关联，但没有可核对的主题、参数冲突或任务引用关系。</p></div>
-          <div className={styles.question}><h3>从来源中找答案</h3><p>问答和来源召回尚未接入。可先打开封面核对已保存正文。</p></div>
-        </section>
-      </div>
+      </section>
+      <p className={styles.notWired}>主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入；当前可查看已保存的来源正文。</p>
     </div>
   </AppShell>;
 }
@@ -101,6 +95,6 @@ function KnowledgeInspector({ item, exampleMode }: { item: KnowledgeDisplayItem;
       <section><h3>{exampleMode ? "AI 摘要 · 示例" : "摘要"}</h3><p>{exampleMode ? item.exampleSummary ?? "示例暂无摘要" : "尚无可核对的摘要来源；不能把正文当作 AI 摘要。"}</p></section>
     </div>
     <section className={styles.detailSection}><h3>参数与出处</h3><p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "结构化参数尚未接入。"}</p><dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{item.version}</dd></div></dl></section>
-    <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? item.exampleIssue ?? "示例未标记问题" : "冲突检测与人工纠正保存尚未接入；请核对原始来源后再用于创作。"}</p><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></section>
+    <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? `示例核对状态：${item.exampleIssue ?? "待核对"}` : "核对状态尚未接入；请核对原始来源后再用于创作。"}</p><div className={styles.correctionGrid}><div className={styles.correctionField}><span>摘要纠正</span><textarea aria-label="摘要纠正" defaultValue={exampleMode ? item.exampleSummary ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订摘要" : "纠正保存接口尚未接入"} /></div><div className={styles.correctionField}><span>参数纠正</span><textarea aria-label="参数纠正" defaultValue={exampleMode ? item.exampleParameters ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订参数" : "纠正保存接口尚未接入"} /></div></div><div className={styles.detailActions}><button disabled={!exampleMode} type="button">{exampleMode ? "保存纠正 · 示例" : "保存纠正"}</button><button disabled={!exampleMode} type="button">{exampleMode ? "用于当前任务 · 示例" : "用于当前任务"}</button><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></div>{!exampleMode ? <p className={styles.notWired}>纠正保存与任务引用接口尚未接入，以上操作暂不可用。</p> : null}</section>
   </div>;
 }

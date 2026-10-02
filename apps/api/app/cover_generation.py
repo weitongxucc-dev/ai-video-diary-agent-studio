@@ -61,6 +61,7 @@ class CoverGenerationRequest:
     title: str
     safe_area: CoverSafeArea = field(default_factory=CoverSafeArea)
     aspect_ratio: AspectRatio = "9:16"
+    title_position: Literal["center", "bottom"] = "bottom"
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class CoverGenerationService:
                 safe_area=request.safe_area,
                 output_format=output_format,
                 size=size,
+                title_position=request.title_position,
             )
             _validate_cover_image(composed_cover, output_format, size=size)
             if _sha256(source) != input_sha256:
@@ -180,7 +182,8 @@ class CoverGenerationService:
                 "safe_area": asdict(request.safe_area),
                 "canvas": {"width": size[0], "height": size[1]},
                 "scale_mode": "cover_center_crop",
-                "title_layout": "bottom_center_dark_panel",
+                "title_position": request.title_position,
+                "title_layout": f"{request.title_position}_center_dark_panel",
             },
             output_ref=publication.logical_ref,
             output_sha256=publication.sha256,
@@ -206,6 +209,8 @@ class CoverGenerationService:
 
     @staticmethod
     def _validated_request(request: CoverGenerationRequest) -> CoverImageFormat:
+        if request.title_position not in ("center", "bottom"):
+            raise ValueError("封面标题位置必须为中部或底部")
         if (
             not isinstance(request.frame_time_seconds, (int, float))
             or isinstance(request.frame_time_seconds, bool)
@@ -302,6 +307,7 @@ def _layout_cover(
     safe_area: CoverSafeArea,
     output_format: CoverImageFormat,
     size=(COVER_WIDTH,COVER_HEIGHT),
+    title_position: Literal["center", "bottom"] = "bottom",
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, str]:
     with Image.open(selected_frame) as frame:
         canvas = frame.convert("RGBA")
@@ -332,9 +338,13 @@ def _layout_cover(
     panel_width = safe_right - safe_left
     panel_height = max(text_height + 2 * vertical_padding, min(260, safe_bottom - safe_top))
     panel_left = safe_left + (safe_right - safe_left - panel_width) / 2
-    panel_top = safe_bottom - panel_height
+    panel_top = (
+        (safe_top + safe_bottom - panel_height) / 2
+        if title_position == "center"
+        else safe_bottom - panel_height
+    )
     panel_right = panel_left + panel_width
-    panel_bottom = safe_bottom
+    panel_bottom = panel_top + panel_height
     if panel_top < safe_top:
         raise ValueError("封面标题无法放入指定安全区")
     draw.rounded_rectangle(

@@ -107,7 +107,7 @@ describe("CreationTaskTopicWorkspace", () => {
 
     const stageList = screen.getByRole("list", { name: "制作阶段" });
     expect(stageList.querySelectorAll("li")).toHaveLength(9);
-    ["资料准备", "选题", "文案", "配音", "人物与口型", "视频剪辑", "字幕与封面", "检查与发布", "数据监控"].forEach((stage) => {
+    ["资料准备", "选题", "文案", "配音", "人物与口型", "视频剪辑", "字幕与封面", "检查与输出", "发布与数据"].forEach((stage) => {
       expect(stageList).toHaveTextContent(stage);
     });
     expect(stageList).toHaveTextContent("等待开始");

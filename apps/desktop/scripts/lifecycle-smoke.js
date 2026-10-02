@@ -14,6 +14,7 @@ const path = require('node:path');
 const Module = require('node:module');
 
 const MAIN_SOURCE = path.resolve(__dirname, '..', 'main.js');
+const DEVICE_IDENTITY_SOURCE = path.resolve(__dirname, '..', 'device-identity.js');
 const { createMetadata } = require('./generate-build-identity');
 const POLL_MS = 25;
 const TIMEOUT_MS = 8_000;
@@ -333,6 +334,9 @@ function createResources({ api = true, web = true, legacyWorker = false, buildId
   fs.mkdirSync(appRoot, { recursive: true });
   const mainPath = path.join(appRoot, 'main.js');
   fs.copyFileSync(MAIN_SOURCE, mainPath);
+  // main.js requires this sibling at load time; without it every fixture dies on
+  // MODULE_NOT_FOUND before reaching the behaviour under test.
+  fs.copyFileSync(DEVICE_IDENTITY_SOURCE, path.join(appRoot, 'device-identity.js'));
   if (buildIdentity === 'valid') {
     const metadata = createMetadata(identityRecords || [{ path: 'desktop/main.js', content: fs.readFileSync(mainPath) }]);
     writeFixture(path.join(appRoot, 'build-identity.generated.json'), `${JSON.stringify(metadata, null, 2)}\n`);

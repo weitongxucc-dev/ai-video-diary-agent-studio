@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
-from app.config import Settings
+from app.config import Settings, record_llm_service_verification
 from app.database_migrations import (
     PRODUCTION_SCHEMA_VERSION,
     _MIGRATIONS,
@@ -428,12 +428,18 @@ def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use
     if usable:
         assert restarted.resolve_clip_media_reference('workspace_a',asset.id,reference).is_file()
     else:
-        with pytest.raises(MediaAuthorityError):restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
-    with pytest.raises(KeyError):restarted.update_asset_use_state('workspace_b',asset.id,'available')
-    with pytest.raises(ValueError,match='使用状态'):restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
+        with pytest.raises(MediaAuthorityError):
+            restarted.resolve_clip_media_reference('workspace_a',asset.id,reference)
+    with pytest.raises(KeyError):
+        restarted.update_asset_use_state('workspace_b',asset.id,'available')
+    with pytest.raises(ValueError,match='使用状态'):
+        restarted.update_asset_use_state('workspace_a',asset.id,'invalid')
     if use_state=='excluded':
-        with pytest.raises(ValueError,match='不使用'):production.analyze_asset('workspace_a',asset.id)
-    legacy=asdict(asset);legacy.pop('use_state');legacy.update(rights_confirmed=False,brand_safe=False)
+        with pytest.raises(ValueError,match='不使用'):
+            production.analyze_asset('workspace_a',asset.id)
+    legacy=asdict(asset)
+    legacy.pop('use_state')
+    legacy.update(rights_confirmed=False,brand_safe=False)
     assert ProductionRepository._asset_from_payload(legacy).use_state=='available'
     for key,value in [('review_status','rejected'),('usage_role','exclude')]:
         assert ProductionRepository._asset_from_payload({**legacy,key:value}).use_state=='excluded'
@@ -2849,10 +2855,37 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         f"/api/creation-tasks/{task_id}/topics/{topic_id}/confirm", json={}
     ).status_code == 200
 
+    successful_script_generator = main_module._creation_task_script_generator_from_settings
+
+    class FailingScriptGenerator:
+        def generate(self, _input):
+            from app.topics import CreationTaskScriptGenerationError
+            raise CreationTaskScriptGenerationError(
+                code="http_failed", reason="文字模型服务拒绝了文案请求。",
+                impact="未生成文案。", repair_action="检查服务状态后重试。", retryable=True,
+            )
+
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_from_settings",
+                        lambda: FailingScriptGenerator())
+    failed = client.post(f"/api/creation-tasks/{task_id}/scripts/generate", json={})
+    assert failed.status_code == 502
+    runtime = client.get("/api/settings/runtime").json()
+    rows = {row["name"]: row["value"] for row in runtime["settings"]}
+    assert rows["LLM_SERVICE_STATE"] == "失败"
+    assert rows["LLM_SERVICE_CAUSE"] == "http_failed"
+    assert rows["LLM_SERVICE_DETAIL"] == "文字模型服务拒绝了文案请求。"
+    assert rows["LLM_SERVICE_REPAIR_ACTION"] == "检查服务状态后重试。"
+    assert main_module.settings.effective_llm_api_key not in json.dumps(runtime)
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_from_settings",
+                        successful_script_generator)
+
     generated = client.post(
         f"/api/creation-tasks/{task_id}/scripts/generate", json={}
     )
     assert generated.status_code == 200
+    recovered_rows = {row["name"]: row["value"] for row in client.get("/api/settings/runtime").json()["settings"]}
+    assert recovered_rows["LLM_SERVICE_STATE"] == "可用"
+    assert recovered_rows["LLM_SERVICE_REPAIR_ACTION"] == ""
     body = generated.json()
     assert len(script_calls) == 1
     assert body["task"]["stage"] == "script"
@@ -3279,10 +3312,16 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         "_creation_task_topic_generator_from_settings",
         lambda: FailingGenerator(),
     )
+    record_llm_service_verification(main_module.settings, ok=True, cause="verified")
     failed = client.post(
         f"/api/creation-tasks/{provider_task}/topics/generate", json={}
     )
     assert failed.status_code == 502
+    rows = {row["name"]: row["value"] for row in client.get("/api/settings/runtime").json()["settings"]}
+    assert rows["LLM_SERVICE_STATE"] == "失败"
+    assert rows["LLM_SERVICE_CAUSE"] == "transport_failed"
+    assert rows["LLM_SERVICE_DETAIL"] == "模型连接失败。"
+    assert rows["LLM_SERVICE_REPAIR_ACTION"] == "检查连接后重试。"
     failed_state = client.get(f"/api/creation-tasks/{provider_task}/topics")
     assert failed_state.json()["latest_run"]["status"] == "failed"
     assert failed_state.json()["latest_run"]["reason"] == "模型连接失败。"
@@ -3684,7 +3723,8 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
     provider=_FakeVisualProvider()
     production=ProductionRepository(database_path=tmp_path/'studio.sqlite3',video_library_path=tmp_path,
         duration_reader=lambda _:8.0,scene_reader=lambda *_:[4.0],visual_provider=provider)
-    video=tmp_path/'source.mp4';video.write_bytes(b'original source')
+    video=tmp_path/'source.mp4'
+    video.write_bytes(b'original source')
     asset=production.scan_library('workspace_a')[0]
     analyzed=production.analyze_asset('workspace_a',asset.id)
     segment=analyzed.segments[0]
@@ -3693,8 +3733,10 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
     segment.description='人工修正画面描述'
     production._save_asset(analyzed)
     assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]
-    if change=='replace_file':video.write_bytes(b'replacement source with different length')
-    elif change=='remove_file':video.unlink()
+    if change=='replace_file':
+        video.write_bytes(b'replacement source with different length')
+    elif change=='remove_file':
+        video.unlink()
     elif change=='change_interval':
         segment.end_seconds-=1
         production._save_asset(analyzed)

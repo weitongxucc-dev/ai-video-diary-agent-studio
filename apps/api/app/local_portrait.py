@@ -15,7 +15,8 @@ _portrait_lock=Lock()
 def _sha256(path):
     digest=hashlib.sha256()
     with path.open("rb") as source:
-        for chunk in iter(lambda:source.read(1024*1024),b""):digest.update(chunk)
+        for chunk in iter(lambda:source.read(1024*1024),b""):
+            digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -49,13 +50,17 @@ class LocalPortrait:
             self.cache_root.mkdir(parents=True,exist_ok=True)
             if output.is_file() and manifest.is_file():
                 saved=json.loads(manifest.read_text())
-                if saved["output_sha256"]==_sha256(output):return output,saved
+                if saved["output_sha256"]==_sha256(output):
+                    return output,saved
             with TemporaryDirectory(prefix="portrait-",dir=self.cache_root) as directory:
-                root=Path(directory);prepared=root/"source.mp4";processed=root/"portrait.mp4"
+                root=Path(directory)
+                prepared=root/"source.mp4"
+                processed=root/"portrait.mp4"
                 subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe","-ss",str(start),"-t",str(end-start),
                     "-i",str(source),"-vf","scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps=30,setpts=PTS-STARTPTS",
                     "-an","-c:v","libx264","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",str(prepared)],capture_output=True,check=True,timeout=600)
-                request=root/"request.json";response=root/"response.json"
+                request=root/"request.json"
+                response=root/"response.json"
                 request.write_text(json.dumps({"source_path":str(prepared),"output_path":str(processed),"strength":strength,"skin_exposure":skin_exposure}))
                 run=subprocess.run([str(self.worker),"--request",str(request),"--response",str(response)],capture_output=True,timeout=600)
                 if run.returncode:
@@ -74,5 +79,6 @@ class LocalPortrait:
                     raise ValueError("源素材在处理期间发生变化，请重新预览")
                 saved={**identity,**result,"duration_seconds":duration,"output_sha256":_sha256(processed)}
                 processed.replace(output)
-                response.write_text(json.dumps(saved));response.replace(manifest)
+                response.write_text(json.dumps(saved))
+                response.replace(manifest)
                 return output,saved

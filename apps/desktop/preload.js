@@ -12,9 +12,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   openDirectory: () => ipcRenderer.invoke('open-directory'),
   openWavFile: () => ipcRenderer.invoke('open-wav-file'),
+  // No path argument: the shell resolves the destination from the controlled
+  // intake binding, so the renderer cannot name a write target.
+  importMaterials: () => ipcRenderer.invoke('import-materials'),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   saveRenderedVideo: (taskId) => ipcRenderer.invoke('save-rendered-video', taskId),
   saveCoverImage: (taskId, coverId) => ipcRenderer.invoke('save-cover-image', taskId, coverId),
+  saveSubtitleFile: (selection) => ipcRenderer.invoke('save-subtitle-file', selection),
 
   // Help
   onOpenHelp: (callback) => ipcRenderer.on('open-help', callback),

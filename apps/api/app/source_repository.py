@@ -4,9 +4,15 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Sequence
 from uuid import uuid4
 
 from app.sources import KnowledgeItem, SourceConnector, SourceItem, SourceRunEvidence
+from app.database_migrations import (
+    CONTENT_VISIBILITY_DEFAULT,
+    CONTENT_VISIBILITY_LEGACY,
+    ensure_content_visibility_columns,
+)
 
 
 class SourceRepository:
@@ -153,8 +159,9 @@ class SourceRepository:
                 """
                 INSERT INTO knowledge_items (
                     id, workspace_id, content_type, title, body, file_reference,
-                    authorization, ownership, source_item_id, version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    authorization, ownership, source_item_id, version, created_at,
+                    visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -168,6 +175,9 @@ class SourceRepository:
                     item.source_item_id,
                     version,
                     item.created_at.isoformat(),
+                    # 新建内容默认私有（用户 2026-09-29 拍板），显式写入而不是只靠
+                    # DDL 默认值：升级来的库没有那个 DEFAULT。
+                    CONTENT_VISIBILITY_DEFAULT,
                 ),
             )
         return self.get_knowledge_item(item.workspace_id, item.id)
@@ -208,14 +218,86 @@ class SourceRepository:
             raise KeyError(item_id)
         return self._knowledge_item_from_row(row)
 
-    def list_knowledge_items(self, workspace_id: str) -> list[KnowledgeItem]:
+    def list_knowledge_items(
+        self,
+        workspace_id: str,
+        *,
+        visibilities: Sequence[str] | None = None,
+    ) -> list[KnowledgeItem]:
+        """列出知识条目，可按可见范围过滤。
+
+        ``visibilities=None`` 表示不过滤（保持旧行为，调用方自己负责）。
+        传入如 ``("shared",)`` 时，private 行取不到——这就是「可见范围」在
+        应用层的实现。
+
+        诚实边界：这里只是**应用层过滤**，不构成安全隔离。方案 A 下 member 不带
+        身份头仍能以 owner 身份调后端，真正的约束要等第②段的路由过滤与更后面的
+        方案 B。本方法不得被当作权限边界使用。
+        """
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            if visibilities is None:
+                rows = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
+                    (workspace_id,),
+                ).fetchall()
+            else:
+                wanted = [str(value).strip() for value in visibilities if str(value).strip()]
+                if not wanted:
+                    return []
+                placeholders = ", ".join("?" for _ in wanted)
+                rows = conn.execute(
+                    f"SELECT * FROM knowledge_items WHERE workspace_id = ? "
+                    f"AND visibility IN ({placeholders}) ORDER BY created_at DESC",
+                    (workspace_id, *wanted),
+                ).fetchall()
+        return [self._knowledge_item_from_row(row) for row in rows]
+
+    def get_knowledge_item_visibility(self, workspace_id: str, item_id: str) -> str:
+        """读单条知识的可见性。
+
+        单独提供而不是塞进 KnowledgeItem：那个 dataclass 定义在 app/sources.py，
+        不在本段授权面内，改它就是越权。
+        """
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT visibility FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                (item_id, workspace_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
+        value = row["visibility"]
+        return str(value) if value else CONTENT_VISIBILITY_LEGACY
+
+    def set_knowledge_item_visibility(self, workspace_id: str, item_id: str, visibility: str) -> str:
+        """写单条知识的可见性，返回写入后的值。"""
+        value = str(visibility).strip()
+        if value not in (CONTENT_VISIBILITY_LEGACY, CONTENT_VISIBILITY_DEFAULT):
+            raise ValueError("visibility 只能是 shared 或 private")
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE knowledge_items SET visibility = ? WHERE id = ? AND workspace_id = ?",
+                (value, item_id, workspace_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(item_id)
+        return value
+
+    def count_knowledge_items_by_visibility(self, workspace_id: str) -> dict[str, int]:
+        """按可见性统计，用于迁移对账与测试断言。"""
         self._require_workspace(workspace_id)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
+                "SELECT visibility, COUNT(*) AS total FROM knowledge_items "
+                "WHERE workspace_id = ? GROUP BY visibility",
                 (workspace_id,),
             ).fetchall()
-        return [self._knowledge_item_from_row(row) for row in rows]
+        counts = {CONTENT_VISIBILITY_LEGACY: 0, CONTENT_VISIBILITY_DEFAULT: 0}
+        for row in rows:
+            counts[str(row["visibility"])] = int(row["total"])
+        return counts
 
     def record_sync_success(
         self,
@@ -367,6 +449,10 @@ class SourceRepository:
                     source_item_id TEXT,
                     version TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    -- 新建内容默认私有（用户 2026-09-29 拍板）。注意：这里的 DEFAULT
+                    -- 只管 fresh 库的 INSERT；升级库的存量行由
+                    -- ensure_content_visibility_columns 回填为 shared。
+                    visibility TEXT NOT NULL DEFAULT 'private',
                     FOREIGN KEY(source_item_id) REFERENCES source_items(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
@@ -398,6 +484,9 @@ class SourceRepository:
                 conn.execute(
                     "ALTER TABLE source_items ADD COLUMN source_label TEXT NOT NULL DEFAULT ''"
                 )
+            # 补齐内容可见性列（knowledge_items 属于本段；另两张表由
+            # ProductionRepository 打开时补，本段不写 production.py）。
+            ensure_content_visibility_columns(conn)
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(

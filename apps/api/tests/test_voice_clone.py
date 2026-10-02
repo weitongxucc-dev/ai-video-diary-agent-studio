@@ -533,7 +533,8 @@ def test_creation_task_english_uses_target_language_and_separate_cache(tmp_path)
     voice=VersionedVoiceProfile(id="voice",workspace_id="workspace_a",person_profile_id="person",person_version="v1",
         version="v1",language="zh-en",reference_audio_path="workspace://ref.wav",reference_text="参考文字",
         model_id="voice-test",authorization=_active_authorization(content_type="voice"))
-    reference=tmp_path/"ref.wav";_write_wav(reference)
+    reference=tmp_path/"ref.wav"
+    _write_wav(reference)
     generator=NarrationGenerator(output_root=tmp_path/"output",provider=Provider())
     args=dict(workspace_id="workspace_a",task_id="task",script_id="script",narration_text="Preview the result.",
         max_duration_seconds=30,voice_identity=voice,pronunciation_entries=(),resolved_reference_audio_path=reference)

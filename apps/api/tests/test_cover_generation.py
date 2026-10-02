@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
+from pydantic import ValidationError
 
 from app.cover_generation import (
     COVER_HEIGHT,
@@ -16,8 +17,10 @@ from app.cover_generation import (
     CoverGenerationService,
     CoverSafeArea,
     _fit_title,
+    _layout_cover,
     unconfigured_image_generation_capability,
 )
+from app.schemas import CreationTaskExactEditRequest
 
 
 def _sha256(path: Path) -> str:
@@ -28,6 +31,67 @@ def _sha256(path: Path) -> str:
 def test_cover_title_balances_chinese_lines():
     _, lines = _fit_title("本地创作，数据更清楚", 848, 1400)
     assert lines == ["本地创作，", "数据更清楚"]
+
+
+@pytest.mark.parametrize("title_position", ["center", "bottom"])
+def test_cover_position_parameter_keeps_exact_request_and_renderer_in_sync(title_position):
+    payload = CreationTaskExactEditRequest(
+        operation_type="GenerateCoverFromFrame",
+        title="布局核验",
+        frame_time_seconds=0.5,
+        title_position=title_position,
+    )
+    request = CoverGenerationRequest("source.mp4", "cover.png", 0.5, payload.title,
+                                     title_position=payload.title_position)
+    assert payload.model_dump()["title_position"] == title_position
+    assert request.title_position == title_position
+    assert CoverGenerationService._validated_request(request) == "png"
+
+
+def test_cover_position_defaults_to_bottom_and_rejects_unknown_values(monkeypatch, tmp_path):
+    payload = CreationTaskExactEditRequest(operation_type="GenerateCoverFromFrame", title="标题", frame_time_seconds=0)
+    assert payload.title_position == "bottom"
+    assert CoverGenerationRequest("source.mp4", "cover.png", 0, "标题").title_position == "bottom"
+    with pytest.raises(ValidationError):
+        CreationTaskExactEditRequest(operation_type="GenerateCoverFromFrame", title="标题", frame_time_seconds=0, title_position="middle")
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"controlled parameter-validation input")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("invalid position invoked a media tool"))
+    with pytest.raises(ValueError, match="标题位置"):
+        CoverGenerationService(tmp_path).generate(CoverGenerationRequest(source, "cover.png", 0, "标题", title_position="middle"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS cover typography")
+def test_cover_title_positions_render_distinct_pngs_inside_safe_area_without_ffmpeg(monkeypatch, tmp_path):
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("layout invoked a media tool"))
+    base = Image.new("RGB", (COVER_WIDTH, COVER_HEIGHT), "red")
+    frame = tmp_path / "synthetic-frame.png"
+    base.save(frame)
+    area = CoverSafeArea()
+    boxes = {}
+    outputs = {}
+    for position in ("center", "bottom"):
+        output = tmp_path / f"{position}.png"
+        _layout_cover(frame, output, title="真实中文布局核验", safe_area=area,
+                      output_format="png", title_position=position)
+        with Image.open(output) as image:
+            assert image.format == "PNG" and image.size == base.size
+            bounds = ImageChops.difference(base, image.convert("RGB")).getbbox()
+            assert bounds is not None
+            left, top, right, bottom = bounds
+            assert left >= area.left and right <= COVER_WIDTH - area.right + 1
+            assert top >= area.top and bottom <= COVER_HEIGHT - area.bottom + 1
+            boxes[position] = bounds
+        outputs[position] = output.read_bytes()
+    safe_center = (area.top + COVER_HEIGHT - area.bottom) / 2
+    assert abs((boxes["center"][1] + boxes["center"][3]) / 2 - safe_center) <= 2
+    assert abs(boxes["bottom"][3] - (COVER_HEIGHT - area.bottom)) <= 2
+    assert boxes["center"][3] < boxes["bottom"][1]
+    assert outputs["center"] != outputs["bottom"]
+    default = tmp_path / "default.png"
+    _layout_cover(frame, default, title="真实中文布局核验", safe_area=area, output_format="png")
+    assert default.read_bytes() == outputs["bottom"]
+    assert Image.open(frame).tobytes() == base.tobytes()
 
 
 def _write_two_scene_video(path: Path) -> None:

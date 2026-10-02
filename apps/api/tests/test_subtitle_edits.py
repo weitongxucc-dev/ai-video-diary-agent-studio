@@ -25,7 +25,8 @@ def test_literal_replace_preserves_clock_style_and_maps_manual_breaks():
 
 def test_replace_rejects_no_match_no_change_and_empty_caption():
     for find,replacement in [("missing","x"),("AI","AI"),("", "x"),("AI tool. AI notes.",""),("AI", "new\ncaption"),("AI\r", "x")]:
-        with pytest.raises(ValueError):replace_subtitle_text(track(),find,replacement)
+        with pytest.raises(ValueError):
+            replace_subtitle_text(track(),find,replacement)
 
 
 def test_split_merge_delete_keep_caption_metadata_and_time():
@@ -47,4 +48,5 @@ def test_split_merge_delete_keep_caption_metadata_and_time():
 @pytest.mark.parametrize("offset,time", [(0,2),(99,2),(3,.99),(3,2.99),(3,float('nan'))])
 def test_split_rejects_invalid_boundaries(offset,time):
     from app.subtitle_edits import restructure_subtitle
-    with pytest.raises(ValueError):restructure_subtitle(track(),"SplitSubtitleCue","c",split_offset=offset,split_time_seconds=time)
+    with pytest.raises(ValueError):
+        restructure_subtitle(track(),"SplitSubtitleCue","c",split_offset=offset,split_time_seconds=time)

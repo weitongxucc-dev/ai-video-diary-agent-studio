@@ -15,6 +15,7 @@ const FORMAT = 'ai-video-diary-candidate-inputs/v1';
 
 const INPUT_SOURCES = [
   { identityPath: 'desktop/main.js', relativePath: 'apps/desktop/main.js' },
+  { identityPath: 'desktop/device-identity.js', relativePath: 'apps/desktop/device-identity.js' },
   { identityPath: 'desktop/preload.js', relativePath: 'apps/desktop/preload.js' },
   { identityPath: 'desktop/package.json', relativePath: 'apps/desktop/package.json' },
   { identityPath: 'desktop/assets', relativePath: 'apps/desktop/assets' },

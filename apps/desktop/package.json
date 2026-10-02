@@ -10,6 +10,7 @@
     "dev": "NODE_ENV=development electron .",
     "generate:build-identity": "node scripts/generate-build-identity.js",
     "test:build-identity": "node scripts/build-identity-test.js",
+    "test:device-identity": "node scripts/device-identity-test.js",
     "test:lifecycle": "node scripts/lifecycle-smoke.js",
     "build:web": "NEXT_PUBLIC_AUTH_MODE=\"${NEXT_PUBLIC_AUTH_MODE:-local}\"; export NEXT_PUBLIC_AUTH_MODE; node scripts/write-distribution-config.js && cd ../web && pnpm build && node ../desktop/scripts/bundle-standalone.js",
     "build:api": "cd ../api && .venv/bin/pyinstaller pyinstaller.spec --distpath ../desktop/dist --workpath ../desktop/build-api --clean --noconfirm",
@@ -51,6 +52,7 @@
     },
     "files": [
       "main.js",
+      "device-identity.js",
       "preload.js",
       "build-identity.generated.json",
       "assets/**/*"

@@ -9,7 +9,8 @@ from app.subtitle_schedule import TimedCaption
 def test_caption_canvas_and_safe_area_use_selected_ratio(tmp_path,ratio):
     size=canvas_size(ratio)
     cue=TimedCaption(0,1,'Long English captions retain safe margins and never stretch the source picture. 中文字幕安全区。',{'font_size':72})
-    path=tmp_path/'subtitle.png';_write_subtitle_image(cue,path,size=size)
+    path=tmp_path/'subtitle.png'
+    _write_subtitle_image(cue,path,size=size)
     with Image.open(path) as image:
         assert image.size==size
         left,top,right,bottom=image.getbbox()

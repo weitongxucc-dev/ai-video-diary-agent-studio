@@ -3,7 +3,9 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn() }));
+vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment } from "@/lib/api";
+import { importLocalMaterials } from "@/lib/directoryPicker";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[],
   modified_at:"2026-09-20", duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
@@ -196,6 +198,14 @@ it("shows disk repair instead of offering a scan while the bound disk is missing
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
 });
 
+it("names a read-only directory and offers a repair instead of binding it", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, directory_state:"read_only", directory_message:"素材目录当前不可写，素材无法进入分析。", repair_action:"检查磁盘是否以只读方式挂载或目录权限是否被改动，再重新检查。" });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(await screen.findByText("目录不可写")).toBeInTheDocument();
+  expect(screen.getByText(/检查磁盘是否以只读方式挂载/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name:"确认接入" })).toBeDisabled();
+});
+
 it("keeps failed intake visible and retries the selected asset", async () => {
   const failed = { ...asset, analysis_status:"failed" as const, analysis_message:"本地分析服务暂不可用；检查服务后重试。" };
   const retried = { ...failed, analysis_status:"pending" as const, analysis_message:"已请求重试，等待素材稳定后重新分析。" };
@@ -243,4 +253,312 @@ it("keeps a loaded second page, selected asset and draft during background refre
   } finally {
     vi.useRealTimers();
   }
+});
+
+const boundReadyIntake = () => ({
+  ...intakeReady,
+  bound_to_current_workspace: true,
+  bound_directory: intakeReady.configured_directory,
+});
+const renderBound = (props = {}) => render(
+  <MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} {...props} />,
+);
+
+it("offers local import only for a bound ready directory and sends no path", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({ canceled: true });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  await waitFor(() => expect(importLocalMaterials).toHaveBeenCalledTimes(1));
+  // The renderer must not be able to name a write target.
+  expect(importLocalMaterials).toHaveBeenCalledWith();
+  expect(screen.getByText("已取消导入，源文件保持不变。")).toBeInTheDocument();
+});
+
+it("hides local import while the directory is not bound", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
+  renderBound();
+  await screen.findByRole("button", { name:"确认接入" });
+  expect(screen.queryByRole("button", { name:"导入本地素材" })).not.toBeInTheDocument();
+});
+
+it("hides local import while a bound directory is not ready", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({
+    ...boundReadyIntake(), directory_state:"missing", directory_message:"素材盘未连接。",
+  });
+  renderBound();
+  await waitFor(() => expect(screen.getByText(/素材盘未连接/)).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name:"导入本地素材" })).not.toBeInTheDocument();
+});
+
+it("reports copied files as waiting for registration, never as already ingested", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({
+    canceled: false,
+    copied: [{ sourceName:"a.mp4", fileName:"a.mp4" }, { sourceName:"b.mp4", fileName:"b (1).mp4" }],
+    skipped: [],
+    failures: [],
+  });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  const message = await screen.findByText(/等待稳定后才会登记并分析/);
+  expect(message).toHaveTextContent("已复制 2 个文件到素材目录");
+  expect(message).toHaveTextContent("a.mp4");
+  expect(message).toHaveTextContent("b (1).mp4");
+  expect(message).toHaveTextContent("源文件保持不变");
+  // The copy state must not be presented as registration or analysis.
+  expect(screen.queryByText(/已入库/)).not.toBeInTheDocument();
+  expect(message).not.toHaveTextContent("已入库");
+});
+
+it("shows a per-file import failure and a top-level error without claiming a fix", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({
+    canceled: false,
+    copied: [],
+    skipped: [],
+    failures: [{ sourceName:"x.mp4", error:"该素材盘的文件系统不支持本导入入口所需的原子提交方式，本次未导入，源文件保持不变。" }],
+  });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("导入失败 1 个");
+  expect(alert).toHaveTextContent("x.mp4");
+  expect(alert).toHaveTextContent("不支持本导入入口所需的原子提交方式");
+  expect(alert).not.toHaveTextContent("格式化");
+});
+
+it("does not offer a formatting suggestion when the intake bridge cannot be read", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({
+    canceled: false, copied: [], skipped: [], failures: [],
+    error: "本地服务要求登录，桌面端当前没有可用凭据，无法确认素材接入目录。本次未导入，源文件保持不变。",
+  });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("没有可用凭据");
+  expect(alert).not.toHaveTextContent("登录后重试");
+  expect(alert).not.toHaveTextContent("格式化");
+});
+
+it("explains which files were skipped as unsupported", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({ canceled:false, copied:[], skipped:["notes.txt"], failures:[] });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  const status = await screen.findByRole("status");
+  expect(status).toHaveTextContent("notes.txt");
+  expect(status).toHaveTextContent("仅支持 mp4、mov、m4v");
+});
+
+it("surfaces a cleanup warning without turning a completed copy into a failure", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  vi.mocked(importLocalMaterials).mockResolvedValue({
+    canceled:false, copied:[{ sourceName:"a.mp4", fileName:"a.mp4" }], skipped:[], failures:[],
+    warning: "部分临时文件未能自动清理（素材已导入成功），这些文件对素材接入不可见，可稍后重试导入或联系支持。",
+  });
+  renderBound();
+  fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
+  const status = await screen.findByRole("status");
+  expect(status).toHaveTextContent("已复制 1 个文件到素材目录");
+  expect(status).toHaveTextContent("未能自动清理");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+// The 15s poll used to re-seed `assets` while silently falling back to
+// assets[0], so a material that left the library left its description draft
+// under another material's name and 保存片段修改 wrote that draft onto the
+// wrong item. These pin the corrected behaviour: the loss is reported, nothing
+// is savable while it stands, and picking a material again re-seeds from that
+// material rather than restoring the stale draft.
+const dropPoll = (
+  render_: () => void,
+  answer: (dropped: boolean) => typeof twoAssetLibrary,
+) => {
+  let drop = false;
+  vi.mocked(getProductionMaterials).mockImplementation(async () => answer(drop));
+  render_();
+  return {
+    startDropping: () => { drop = true; },
+    async tick() {
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    },
+  };
+};
+
+const withBoundIntake = async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+};
+
+it("stops editing when a refresh drops the selected material instead of saving its draft elsewhere", async () => {
+  await withBoundIntake();
+  try {
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [otherAsset], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "A的说明" } });
+
+    poll.startDropping();
+    await poll.tick();
+
+    // The material is gone from the list, editing has stopped, and the reason is
+    // stated rather than the panel quietly showing a different material.
+    expect(screen.queryByRole("button", { name: /local\.mp4/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("片段描述")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+
+    // Re-selecting is the way out, and it must seed from B, not restore A's text.
+    fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+    expect(screen.getByLabelText("片段描述")).not.toHaveValue("A的说明");
+    fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+    await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith(
+      "asset-b",
+      "segment-b",
+      expect.not.objectContaining({ description: "A的说明" }),
+    ));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A full page of results is exactly the case the old `retained` push was meant
+// to cover. It must not keep a removed material alive: doing so would hide the
+// loss behind a stale entry that still looks editable.
+it("does not keep a removed material listed just because the refreshed page is full", async () => {
+  await withBoundIntake();
+  try {
+    const thirdSegment = { ...otherSegment, id: "segment-c", asset_id: "asset-c" };
+    const thirdAsset = { ...otherAsset, id: "asset-c", file_name: "自造素材C.mp4", segments: [thirdSegment] };
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={{ ...twoAssetLibrary, limit: 1 }}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { assets: [otherAsset, thirdAsset], total_count: 2, limit: 2, offset: 0, has_more: false }
+        : { ...twoAssetLibrary, limit: 1 }),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    poll.startDropping();
+    await poll.tick();
+
+    expect(screen.queryByRole("button", { name: /local\.mp4/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Losing the selection is a durable state, not a one-tick flicker. Repeated
+// refreshes must not oscillate back into an editable panel for a material that
+// is gone.
+it("keeps the selection reported as lost across repeated refreshes", async () => {
+  await withBoundIntake();
+  try {
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [otherAsset], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    poll.startDropping();
+    await poll.tick();
+    await poll.tick();
+    await poll.tick();
+
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的素材已不在当前列表中");
+    expect(updateProductionMaterialSegment).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// The same loss one level down: the material survives, but re-analysis replaced
+// the segment the draft was typed against. Falling back to segments[0] would
+// put that draft on a different segment of the same file.
+it("stops editing when the selected segment disappears from a material that stays", async () => {
+  await withBoundIntake();
+  try {
+    const resegmented = { ...taggedAsset, segments: [{ ...segment, id: "segment-new", description: "重新分段后的说明" }] };
+    const poll = dropPoll(
+      () => render(
+        <MaterialLibraryWorkspace
+          initialLibrary={twoAssetLibrary}
+          initialInsights={insights}
+          initialCollections={{ collections: [], total_count: 0 }}
+        />,
+      ),
+      (dropped) => (dropped
+        ? { ...library, assets: [resegmented], total_count: 1 }
+        : twoAssetLibrary),
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "A的说明" } });
+
+    poll.startDropping();
+    await poll.tick();
+
+    // The material is still listed and still selected; only its segment moved on.
+    expect(screen.getByRole("button", { name: /local\.mp4/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("片段描述")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存片段修改" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("选中的片段已不在该素材中");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("offers the uncovered taxonomy tags as a library-wide suggestion", async () => {
+  const withGaps = { ...insights, recommended_gaps: ["场景:办公", "镜头:特写"] };
+  vi.mocked(getMaterialLibraryInsights).mockResolvedValue(withGaps);
+  render(
+    <MaterialLibraryWorkspace
+      initialLibrary={library}
+      initialInsights={withGaps}
+      initialCollections={{ collections: [], total_count: 0 }}
+    />,
+  );
+
+  expect(await screen.findByText("覆盖建议")).toBeInTheDocument();
+  expect(screen.getByText(/素材库暂时没有：场景:办公、镜头:特写/)).toBeInTheDocument();
+  expect(screen.getByText(/按需补充即可，不影响使用/)).toBeInTheDocument();
+});
+
+it("leaves the coverage suggestion out when every taxonomy tag already has material", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+  await waitFor(() => expect(screen.getByLabelText("素材覆盖")).toBeInTheDocument());
+  expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
 });

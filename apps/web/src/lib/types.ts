@@ -222,6 +222,23 @@ export type EpisodeHistory = {
   items: EpisodeHistoryItem[];
 };
 
+/**
+ * 外部文字模型服务的四档状态。抄自后端 `app/config.py` 的
+ * `LLM_SERVICE_MISSING / UNVERIFIED / AVAILABLE / FAILED`（dev `add94df`）。
+ *
+ * 注意 `SystemStatus.llm.configured` 只是「字段填了没有」，与这四档无关：
+ * `configured === true` 绝不能被显示成「可用」。B03 立的线就是这两件事。
+ *
+ * 后端目前只通过 `/api/settings/runtime` 的 `LLM_SERVICE_STATE` 行把
+ * `label`（中文）送到前端；`cause` / `detail` / `observed_at` 没有落到任何
+ * 接口上，所以前端拿不到失败的具体原因——拿不到就说拿不到，不许编。
+ */
+export type LlmServiceState =
+  | "missing"
+  | "unverified"
+  | "available"
+  | "failed";
+
 export type SystemStatus = {
   llm: {
     provider: string;
@@ -1331,7 +1348,8 @@ export type VisualEditInput = { base_version_id: string | null; clip_ids: string
 export type TextOverlay = {kind?:"text";id:string;text:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;font_size:number;font_family:string;color:string};
 
 export type ImageOverlay = {kind:"image";id:string;source_ref:string;name:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;opacity:number};
-export type GraphicOverlay = TextOverlay | ImageOverlay;
+export type ArrowOverlay = {kind:"arrow";id:string;x:number;y:number;name:string;purpose:string;start_seconds:number;end_seconds:number;position:"left-top"|"right-top"|"right-bottom"|"left-bottom";color:string};
+export type GraphicOverlay = TextOverlay | ImageOverlay | ArrowOverlay;
 export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number};
 
 export type CreationTaskMontageClip = {
@@ -1371,8 +1389,16 @@ export type TimelineAudioTrack = {
   gain_db: number; muted: boolean; locked: boolean; duck_under_voice: boolean; clips: TimelineAudioClip[];
 };
 export type AudioTimeline = { format_version: 1; tracks: TimelineAudioTrack[] };
-export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track";
+export type AudioEditInput = { base_version_id: string | null; action: "add" | "update" | "delete" | "split" | "duplicate" | "track" | "replace_narration";
   target_id: string; values: Record<string, unknown>; raw_command?: string };
+export type CreationTaskRecording = {
+  source_ref: string;
+  artifact_id: string;
+  audio_url: string;
+  duration_ms: number;
+  applied: boolean;
+  created_at?: string;
+};
 
 export type CreationTaskMontage = {
   graphic_overlays?:GraphicOverlay[];
@@ -1473,6 +1499,13 @@ export type CreationTaskEditIntent = {
 export type CreationTaskExactEditInput =
   | { operation_type: "ChangeCrop"; clip_id: string; fit_mode: "fill" | "fit"; crop_x: number; crop_y: number }
   | { operation_type: "ReplaceClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
+  // InsertClip 在锚点镜头之后插入一个片段。clip_id 是锚点，必填：后端
+  // _preview_exact_montage_edit 对每个操作都要求 clip_id，缺了直接 409。
+  // 不带 duration：既有 25 个操作都没有该参数，时长继承源片段 span。
+  // 落点不是播放头——既有 SplitClip 就是 plan.clips.insert(index + 1, ...)，
+  // 插在锚点后面是这个编辑器一贯的做法。字面量名与后端 schemas.py 的三处
+  // Literal 逐字一致，拼错即 422。
+  | { operation_type: "InsertClip"; clip_id: string; asset_id: string; segment_id: string; source_start_seconds: number }
   | { operation_type: "DeleteClip" | "DuplicateClip"; clip_id: string }
   | { operation_type: "ChangeClipSpeed" | "ChangeLinkedSpeed"; clip_id: string; playback_rate: number }
   | { operation_type: "SplitClip"; clip_id: string; split_time_seconds: number }
@@ -1483,13 +1516,13 @@ export type CreationTaskExactEditInput =
   | { operation_type: "RegenerateNarrationSegment"; narration_segment_id: string; delivery_instruction?: string }
   | { operation_type: "SplitSubtitleCue"; track_id: string; cue_id: string; split_offset: number; split_time_seconds: number }
   | { operation_type: "MergeSubtitleCue" | "DeleteSubtitleCue"; track_id: string; cue_id: string }
-  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id">) & {id?:string}; overlay_id?:string }
+  | { operation_type: "EditGraphicOverlay"; overlay_action: "add"|"update"|"delete"; graphic_overlay?: (Omit<TextOverlay,"id"> | Omit<ImageOverlay,"id"> | Omit<ArrowOverlay,"id">) & {id?:string}; overlay_id?:string }
   | { operation_type: "SetClipTransition"; clip_id: string; transition_seconds: number }
   | { operation_type: "ChangeCanvas"; aspect_ratio: "9:16" | "16:9" | "1:1"; fit_mode?: "fill" | "fit" }
   | { operation_type: "ReplaceSubtitleText"; track_id: string; find_text: string; replacement_text: string }
   | { operation_type: "UpdateSubtitleCue"; track_id?: string; cue_id: string; text: string; start_seconds?: number; end_seconds?: number; line_breaks?: number[]; emphasis?: string[]; style?: CreationTaskSubtitleStyle }
   | { operation_type: "ConfigureSubtitleTrack"; track_id?: string; subtitle_display?: "none" | "zh" | "en" | "zh-en"; target_language?: "en-US"; style?: Partial<CreationTaskSubtitleStyle> }
-  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string }
+  | { operation_type: "GenerateCoverFromFrame"; frame_time_seconds: number; title: string; title_position?: "center" | "bottom" }
   | { operation_type: "ChangePersonSegment"; clip_id: string }
   | { operation_type: "RegeneratePersonRender"; clip_id: string };
 
@@ -1707,7 +1740,7 @@ export type MaterialIntakeStatus = {
   binding_available: boolean;
   configured_directory: string | null;
   bound_directory: string | null;
-  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "changed" | "unknown";
+  directory_state: "ready" | "missing" | "unmounted" | "invalid" | "read_only" | "changed" | "unknown";
   directory_message: string;
   repair_action: string | null;
   scan_interval_seconds: number;

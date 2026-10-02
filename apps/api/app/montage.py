@@ -5,6 +5,8 @@ import math
 import re
 import sqlite3
 import subprocess
+import threading
+import time
 from tempfile import TemporaryDirectory
 from collections.abc import Callable
 from dataclasses import replace, asdict, dataclass, field
@@ -17,6 +19,15 @@ from uuid import uuid4
 from PIL import Image, ImageDraw, ImageFont
 
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
+from app.device_scheduler import DeviceScheduler, Grant
+from app.host_resource_probes import (
+    HostCapacity,
+    ResourceAdmission,
+    ResourceAdmissionRejected,
+    ResourceSamplingUnavailable,
+    admit_resource,
+    sample_host_capacity,
+)
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.transitions import extend_dissolve_sources, join_picture_filters
@@ -592,6 +603,28 @@ class MontagePlanner:
         return cue_vectors, segment_vectors, ""
 
 
+def admit_creation_render(*, source_duration_s: float, input_count: int,
+                          cpu_threads: int, wall_clock_s: float,
+                          capacity: HostCapacity | None = None) -> ResourceAdmission:
+    """Admit a bounded CPU render through the SCHED ``creation_render`` registry.
+
+    The declared dimensions use the registry's field semantics: source duration,
+    input clip count, requested encoder threads, and the wall-clock budget. An
+    undeclared field, an over-limit value, a type mismatch, or a missing field
+    raises :class:`ResourceAdmissionRejected` with a readable reason; a host
+    sample that cannot complete raises :class:`ResourceSamplingUnavailable`
+    instead of fabricating a budget.
+    """
+    if capacity is None:
+        capacity = sample_host_capacity()
+    return admit_resource("creation_render", {
+        "source_duration_s": source_duration_s,
+        "input_count": input_count,
+        "cpu_threads": cpu_threads,
+        "wall_clock_s": wall_clock_s,
+    }, capacity=capacity)
+
+
 class MontageRenderer:
     def __init__(
         self,
@@ -603,9 +636,13 @@ class MontageRenderer:
         self.runner = runner or self._run
         self.duration_reader = duration_reader or _probe_duration
 
-    def audio_duration(self, audio_path: str | Path) -> float:
+    def audio_duration(self, audio_path: str | Path, *, scheduler: DeviceScheduler | None = None,
+                       grant: Grant | None = None, cancel_event: threading.Event | None = None,
+                       deadline_monotonic: float | None = None) -> float:
         path = self._validated_audio_path(audio_path)
-        duration = float(self.duration_reader(path))
+        duration = float(_probe_duration(path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                                         deadline_monotonic=deadline_monotonic)
+                         if grant is not None else self.duration_reader(path))
         if duration <= 0:
             raise ValueError("旁白音频时长无效")
         return duration
@@ -617,14 +654,39 @@ class MontageRenderer:
         *,
         job_staging_path: str | Path | None = None,
         subtitle_tracks=None,
+        scheduler: DeviceScheduler | None = None,
+        grant: Grant | None = None,
+        cancel_event: threading.Event | None = None,
+        max_output_bytes: int | None = None,
+        threads: int | None = None,
+        deadline_monotonic: float | None = None,
     ) -> MontagePlan | CreationTaskMontagePlan:
+        if (scheduler is None) != (grant is None):
+            raise ValueError("渲染许可和调度器必须一起提供")
+        if grant is not None and (max_output_bytes is None or max_output_bytes <= 0
+                                  or threads is None or threads <= 0 or deadline_monotonic is None):
+            raise ValueError("受许可渲染必须提供输出、线程和总时限")
         if plan.status != "ready":
             raise ValueError("混剪计划仍有待确认镜头，不能渲染")
         if not plan.clips:
             raise ValueError("混剪计划没有镜头")
+        if grant is not None:
+            try:
+                admit_creation_render(
+                    source_duration_s=plan.duration_seconds,
+                    input_count=len(plan.clips),
+                    cpu_threads=threads,
+                    wall_clock_s=deadline_monotonic - time.monotonic(),
+                )
+            except (ResourceAdmissionRejected, ResourceSamplingUnavailable) as exc:
+                plan.status = "failed"
+                plan.message = f"CPU 成片资源准入未通过：{exc}"
+                raise
         narration_path = self._validated_audio_path(audio_path)
         if isinstance(plan, CreationTaskMontagePlan):
-            narration_duration = self.audio_duration(narration_path)
+            narration_duration = self.audio_duration(narration_path, scheduler=scheduler, grant=grant,
+                                                     cancel_event=cancel_event,
+                                                     deadline_monotonic=deadline_monotonic)
             # Allow encoder padding, but never let -shortest silently truncate a changed voice track.
             if abs(narration_duration - plan.duration_seconds) > 0.25:
                 raise ValueError("配音与剪辑时长不一致，请按当前配音重新生成故事板后渲染。")
@@ -678,16 +740,23 @@ class MontageRenderer:
                         graphic_paths.append(path)
                     subtitle_overlays=graphic_paths+subtitle_overlays
                     intervals=[(item.start_seconds,item.end_seconds) for item in graphics]+intervals
-                self.runner(
-                    self.build_command(
-                        plan,
-                        narration_path,
-                        output_path,
-                        subtitle_overlays,
-                        subtitle_intervals=intervals,
-                    )
+                command = self.build_command(
+                    plan, narration_path, output_path, subtitle_overlays,
+                    subtitle_intervals=intervals,
                 )
-            _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920))
+                if grant is None:
+                    self.runner(command)
+                else:
+                    command[2:2] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
+                    command[-1:-1] = ["-threads:v", str(threads), "-fs", str(max_output_bytes)]
+                    _run_granted_media_command(scheduler, grant, command, timeout_seconds=None,
+                                               cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+            if max_output_bytes is not None and output_path.stat().st_size > max_output_bytes:
+                raise OSError("成片超出本次受许可输出上限")
+            _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920),
+                                     expected_duration_seconds=plan.duration_seconds,
+                                     scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                                     deadline_monotonic=deadline_monotonic)
         except subprocess.CalledProcessError as exc:
             render_error = _render_error_from_process(exc)
             plan.status = "failed"
@@ -696,6 +765,11 @@ class MontageRenderer:
         except (OSError, subprocess.SubprocessError) as exc:
             plan.status = "failed"
             plan.message = f"FFmpeg 渲染失败：{exc}"
+            raise
+        except RuntimeError as exc:
+            if grant is not None:
+                plan.status = "failed"
+                plan.message = f"受许可渲染中断：{exc}"
             raise
         plan.status = "rendered"
         if isinstance(plan, CreationTaskMontagePlan):
@@ -1383,9 +1457,31 @@ def _srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def _probe_duration(path: Path) -> float:
-    completed = subprocess.run(
-        [
+def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,
+                               timeout_seconds: float | None, cancel_event: threading.Event | None,
+                               deadline_monotonic: float | None):
+    from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
+
+    if deadline_monotonic is None:
+        raise ValueError("受许可媒体命令缺少阶段总时限")
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        raise GrantedCommandTimeout("渲染阶段已超出总时限")
+    timeout_seconds = min(timeout_seconds, remaining) if timeout_seconds is not None else remaining
+
+    result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout_seconds,
+                                 max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
+                                 cancel_event=cancel_event)
+    if result.returncode:
+        raise MontageRenderError(tool=Path(command[0]).name, exit_code=result.returncode,
+                                 stderr=result.stderr.decode("utf-8", errors="replace"))
+    return result
+
+
+def _probe_duration(path: Path, *, scheduler: DeviceScheduler | None = None,
+                    grant: Grant | None = None, cancel_event: threading.Event | None = None,
+                    deadline_monotonic: float | None = None) -> float:
+    command = [
             "ffprobe",
             "-v",
             "error",
@@ -1394,31 +1490,47 @@ def _probe_duration(path: Path) -> float:
             "-of",
             "default=noprint_wrappers=1:nokey=1",
             str(path),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+        ]
+    if grant is not None:
+        if scheduler is None:
+            raise ValueError("音频探测缺少调度器")
+        return float(_run_granted_media_command(scheduler, grant, command, timeout_seconds=30,
+                                                cancel_event=cancel_event,
+                                                deadline_monotonic=deadline_monotonic).stdout.strip())
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
     return float(completed.stdout.strip())
 
 
-def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920)) -> None:
+def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
+                             expected_duration_seconds: float | None = None,
+                             scheduler: DeviceScheduler | None = None, grant: Grant | None = None,
+                             cancel_event: threading.Event | None = None,
+                             deadline_monotonic: float | None = None) -> None:
     if not output_path.is_file() or output_path.stat().st_size <= 0:
         raise OSError("FFmpeg 未生成有效输出文件")
-    completed = subprocess.run(
-        [
+    command = [
             "ffprobe",
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,width,height",
+            "stream=codec_type,codec_name,width,height,duration",
+            "-show_entries",
+            "format=duration",
             "-of",
             "json",
             str(output_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
+        ]
+    if grant is not None:
+        if scheduler is None:
+            raise ValueError("成片探测缺少调度器")
+        result = _run_granted_media_command(scheduler, grant, command, timeout_seconds=30,
+                                            cancel_event=cancel_event,
+                                            deadline_monotonic=deadline_monotonic)
+        completed = subprocess.CompletedProcess(command, result.returncode,
+                                                result.stdout.decode("utf-8", errors="replace"),
+                                                result.stderr.decode("utf-8", errors="replace"))
+    else:
+        completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode:
         raise MontageRenderError(
             tool="ffprobe",
@@ -1426,7 +1538,8 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920)) ->
             stderr=completed.stderr,
         )
     try:
-        streams = json.loads(completed.stdout).get("streams", [])
+        metadata = json.loads(completed.stdout)
+        streams = metadata.get("streams", [])
     except json.JSONDecodeError as exc:
         raise OSError("ffprobe 返回了无效的媒体元数据") from exc
     video_stream = next(
@@ -1443,6 +1556,16 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920)) ->
         raise OSError("渲染输出缺少 AAC 音频轨")
     if (video_stream.get("width"), video_stream.get("height")) != expected_size:
         raise OSError(f"渲染输出画幅不符合 {expected_size[0]}×{expected_size[1]}")
+    if expected_duration_seconds is not None:
+        if not math.isfinite(expected_duration_seconds) or expected_duration_seconds <= 0:
+            raise ValueError("成片计划时长无效")
+        for stream in (video_stream, audio_stream):
+            try:
+                duration = float(stream["duration"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise OSError("渲染输出缺少可核对的音视频时长") from exc
+            if not math.isfinite(duration) or duration + 0.1 < expected_duration_seconds:
+                raise OSError("渲染输出音视频时长不足，未完成整段计划")
 
 
 def _render_error_from_process(exc: subprocess.CalledProcessError) -> MontageRenderError:

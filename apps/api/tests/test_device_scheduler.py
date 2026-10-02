@@ -204,6 +204,22 @@ def test_two_processes_share_one_host_permit_even_with_different_business_databa
             second.pick_and_grant()  # first DB's untouched request must be checked
 
 
+def test_same_kind_second_request_waits_until_permit_released(tmp_path):
+    # One host permit is held until a unit completes. A second request of the
+    # same kind stays queued (pick_and_grant returns None) rather than gaining
+    # a second license in flight; it is granted only after the first releases.
+    scheduler = _scheduler(tmp_path)
+    scheduler.submit(_intent("first"), "member-a")
+    scheduler.submit(_intent("second"), "member-a")
+    first = scheduler.pick_and_grant()
+    assert first is not None
+    assert scheduler.pick_and_grant() is None  # single permit still held
+    _complete(scheduler, first)
+    second = scheduler.pick_and_grant()
+    assert second is not None and second.request_id != first.request_id
+    _complete(scheduler, second)
+
+
 def test_fencing_checkpoint_atomicity_and_different_database_rejection(tmp_path):
     scheduler = _scheduler(tmp_path)
     scheduler.submit(_intent("job"), "member-a")
@@ -579,7 +595,7 @@ def test_v8_to_v10_preserves_requests_and_rebuilds_index(tmp_path):
         assert (row["member_id"], row["first_ready_at_utc"], row["eligible_wait_seconds"],
                 row["attempt_number"], row["state"]) == (
                     "member-a", "2026-09-01T00:00:00+00:00", 91, 1, "blocked")
-        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == PRODUCTION_SCHEMA_VERSION
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_device_work_pending'").fetchone()
 
 
@@ -625,7 +641,7 @@ def test_v10_material_checkpoint_upgrade_is_idempotent_and_transactional(tmp_pat
         conn.rollback()
         apply_production_migrations(conn)
         assert conn.execute("SELECT count(*) FROM material_analysis_checkpoints").fetchone()[0] == 1
-        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == 10
+        assert conn.execute("SELECT max(version) FROM production_schema_migrations").fetchone()[0] == PRODUCTION_SCHEMA_VERSION
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE material_ingestion_files SET attempted_digest='uncommitted' WHERE file_path='/library/a.mp4'")
         conn.execute("""INSERT INTO material_analysis_checkpoints
