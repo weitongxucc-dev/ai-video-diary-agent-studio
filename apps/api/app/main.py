@@ -2821,9 +2821,14 @@ class _CreationTaskTopicPreflightError(RuntimeError):
         super().__init__(reason)
 
 
-def _topic_route_snapshot() -> dict[str, object]:
-    provider_kind = settings.effective_llm_provider
-    base_url = settings.effective_llm_base_url
+def _topic_route_snapshot(workspace_id: str) -> dict[str, object]:
+    """按当前工作区的文字服务配置判断可用性。
+
+    读全局设置会把配置正确的工作区判成「未配置」，所以这里只用该工作区的配置。
+    """
+    settings_for_workspace = _workspace_settings_for(workspace_id)
+    provider_kind = settings_for_workspace.effective_llm_provider
+    base_url = settings_for_workspace.effective_llm_base_url
     parsed = urlparse(base_url)
     host = parsed.hostname or "unconfigured"
     try:
@@ -2840,14 +2845,14 @@ def _topic_route_snapshot() -> dict[str, object]:
         if provider_kind == "ollama" or host in {"localhost", "127.0.0.1", "::1"}
         else "cloud"
     )
-    availability = "unverified" if settings.llm_configured else "unconfigured"
+    availability = "unverified" if settings_for_workspace.llm_configured else "unconfigured"
     connection_version = hashlib.sha256(
-        f"{provider_kind}|{endpoint_identity}|{settings.effective_llm_model}".encode("utf-8")
+        f"{provider_kind}|{endpoint_identity}|{settings_for_workspace.effective_llm_model}".encode("utf-8")
     ).hexdigest()[:16]
     return {
         "provider_kind": provider_kind,
         "execution_location": execution_location,
-        "model_id": settings.effective_llm_model,
+        "model_id": settings_for_workspace.effective_llm_model,
         "endpoint_identity": endpoint_identity,
         "connection_version": connection_version,
         "availability": availability,
@@ -3080,7 +3085,7 @@ def _creation_task_topic_response(
     preflight_error: _CreationTaskTopicPreflightError | None = None,
     preflight_input_count: int = 0,
 ) -> CreationTaskTopicsResponse:
-    route_snapshot = route_snapshot or _topic_route_snapshot()
+    route_snapshot = route_snapshot or _topic_route_snapshot(workspace_id)
     latest_run = production_repo.latest_topic_generation_run(workspace_id, task.id)
     route_snapshot = _projected_topic_route_snapshot(route_snapshot, latest_run)
     candidates = production_repo.list_topic_candidates(workspace_id, task.id)
@@ -3141,7 +3146,7 @@ def _creation_task_scripts_response(
     task: CreationTask,
 ) -> CreationTaskScriptsResponse:
     latest_run = production_repo.latest_script_generation_run(workspace_id, task.id)
-    route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(), latest_run)
+    route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(workspace_id), latest_run)
     return CreationTaskScriptsResponse.model_validate(
         {
             "task": task.__dict__,
@@ -4130,8 +4135,8 @@ def workspace_assistant_plan_turn(
     plan_preview = CreationPlanPreviewResponse.model_validate(preview) if preview is not None else None
     return WorkspaceAssistantPlanTurnResponse(
         reply=reply,
-        provider=settings.effective_llm_provider,
-        model=settings.effective_llm_model,
+        provider=_workspace_settings_for(workspace_id).effective_llm_provider,
+        model=_workspace_settings_for(workspace_id).effective_llm_model,
         plan_preview=plan_preview,
     )
 
@@ -4429,7 +4434,7 @@ def get_creation_task_topics(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
-    route_snapshot = _topic_route_snapshot()
+    route_snapshot = _topic_route_snapshot(workspace_id)
     preflight_error: _CreationTaskTopicPreflightError | None = None
     input_count = 0
     try:
@@ -4470,7 +4475,7 @@ def generate_creation_task_topics(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
-    route_snapshot = _topic_route_snapshot()
+    route_snapshot = _topic_route_snapshot(workspace_id)
     provider_sources: tuple[CreationTaskTopicSource, ...] = ()
     input_references: list[dict[str, object]] = []
     evidence_by_reference_id: dict[str, dict[str, object]] = {}
@@ -4550,8 +4555,9 @@ def generate_creation_task_topics(
     except CreationTaskTopicGenerationError as exc:
         if exc.code not in {"input_invalid", "route_configuration_invalid"}:
             record_llm_service_verification(
-                settings, ok=False, cause=exc.code,
+                _workspace_settings_for(workspace_id), ok=False, cause=exc.code,
                 detail=exc.reason, repair_action=exc.repair_action,
+                workspace_id=workspace_id,
             )
         production_repo.fail_topic_generation(
             run.id,
@@ -4570,7 +4576,10 @@ def generate_creation_task_topics(
             retryable=exc.retryable,
         ) from exc
 
-    record_llm_service_verification(settings, ok=True, cause="verified")
+    record_llm_service_verification(
+        _workspace_settings_for(workspace_id), ok=True, cause="verified",
+        workspace_id=workspace_id,
+    )
     candidates: list[CreationTaskTopicCandidate] = []
     evidence_references: list[TopicEvidenceReference] = []
     try:
@@ -4751,7 +4760,7 @@ def save_assistant_script_draft(
         run = ScriptGenerationRun(
             id=f"script_run_{uuid4().hex[:12]}", workspace_id=workspace_id,
             task_id=task_id, plan_id=plan.id, topic_id=topic.id, status="running",
-            route_snapshot=_topic_route_snapshot(),
+            route_snapshot=_topic_route_snapshot(workspace_id),
             prompt_schema_version="assistant-script-draft/v1",
             input_references=input_references,
         )
@@ -4793,9 +4802,10 @@ def get_creation_task_assistant_history(task_id: str, request: Request) -> Creat
     ]})
 
 
-def _assistant_text_without_credentials(value: str) -> str:
+def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
     safe = value
-    for known in (settings.effective_llm_api_key, settings.tencentcloud_secret_id,
+    for known in (_workspace_settings_for(workspace_id).effective_llm_api_key,
+                  settings.tencentcloud_secret_id,
                   settings.tencentcloud_secret_key):
         if known and len(known) >= 8:
             safe = safe.replace(known, "[已隐藏凭据]")
@@ -4900,7 +4910,7 @@ def creation_task_assistant_turn(
     task = _creation_task_or_404(workspace_id, task_id)
     trusted_stage, trusted_refs = _assistant_turn_scope(workspace_id, task, payload)
     message = payload.message.strip()
-    if _assistant_text_without_credentials(message) != message:
+    if _assistant_text_without_credentials(message, workspace_id) != message:
         raise HTTPException(status_code=422, detail="请勿在创作要求中粘贴密钥或口令。")
     production_repo.append_task_event(TaskEvent(
         id=f"event_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
@@ -4922,7 +4932,7 @@ def creation_task_assistant_turn(
         )
     except AssistantUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    reply = _assistant_text_without_credentials(reply)
+    reply = _assistant_text_without_credentials(reply, workspace_id)
     script_draft = None
     if preview is not None and trusted_stage == "script":
         script_id = preview.get("script_id") if isinstance(preview, dict) else None
@@ -4951,8 +4961,8 @@ def creation_task_assistant_turn(
     ))
     return CreationTaskAssistantTurnResponse(
         reply=reply,
-        provider=settings.effective_llm_provider,
-        model=settings.effective_llm_model,
+        provider=_workspace_settings_for(workspace_id).effective_llm_provider,
+        model=_workspace_settings_for(workspace_id).effective_llm_model,
         edit_preview=edit_preview,
         script_draft=script_draft,
     )
@@ -5002,7 +5012,7 @@ def generate_creation_task_script(
             repair_action="先生成并确认一个选题。",
             retryable=False,
         )
-    route_snapshot = _topic_route_snapshot()
+    route_snapshot = _topic_route_snapshot(workspace_id)
     provider_sources: tuple[CreationTaskTopicSource, ...] = ()
     input_references: list[dict[str, object]] = []
     preflight_error: _CreationTaskTopicPreflightError | None = None
@@ -5082,8 +5092,9 @@ def generate_creation_task_script(
     except CreationTaskScriptGenerationError as exc:
         if exc.code not in {"input_invalid", "route_configuration_invalid", "language_unavailable"}:
             record_llm_service_verification(
-                settings, ok=False, cause=exc.code,
+                _workspace_settings_for(workspace_id), ok=False, cause=exc.code,
                 detail=exc.reason, repair_action=exc.repair_action,
+                workspace_id=workspace_id,
             )
         production_repo.fail_script_generation(
             run.id,
@@ -5101,7 +5112,10 @@ def generate_creation_task_script(
             repair_action=exc.repair_action,
             retryable=exc.retryable,
         ) from exc
-    record_llm_service_verification(settings, ok=True, cause="verified")
+    record_llm_service_verification(
+        _workspace_settings_for(workspace_id), ok=True, cause="verified",
+        workspace_id=workspace_id,
+    )
     script = CreationTaskScript(
         id=f"script_{uuid4().hex[:12]}",
         workspace_id=workspace_id,

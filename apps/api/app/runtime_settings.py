@@ -96,6 +96,24 @@ def apply_runtime_settings_update(
 
 LLM_KEY_DELETE_ACTION = "delete"
 
+
+def _secret_fields_for_provider(workspace_id: str) -> list[str]:
+    """当前工作区实际在用的那把钥匙串键，以及同供应商的旧备用键。
+
+    DeepSeek 安装还可能留着旧的 `deepseek_api_key`；只删 `llm_api_key` 的话，
+    删完那把旧键会继续生效。删除要按当前供应商来，别的供应商和其他平台的
+    凭据不碰。
+    """
+    snapshot = load_workspace_config(workspace_id)
+    provider = (snapshot.get("llm_provider") or "").strip().lower()
+    owner = (snapshot.get("llm_api_key_provider") or "").strip().lower()
+    if provider == "deepseek":
+        fields = ["deepseek_api_key"]
+        if not owner or owner == "deepseek":
+            fields.append("llm_api_key")
+        return fields
+    return ["llm_api_key"]
+
 # 本单只接管文字服务这一组字段。模型盘、媒体目录、ASR、腾讯云、Supabase 这些
 # 设备级设置仍走原来的全局 dotenv 路径，不当成工作区文案配置处理。
 WORKSPACE_TEXT_FIELDS = ("llm_provider", "llm_base_url", "llm_model", "deepseek_model")
@@ -143,10 +161,10 @@ def apply_workspace_runtime_settings_update(
     config_updates, secret_updates = split_runtime_settings_updates(payload)
     deleting = str(payload.get("llm_key_action", "")) == LLM_KEY_DELETE_ACTION
     if deleting:
-        secret_updates.pop("llm_api_key", None)
-        if delete_workspace_secret(workspace_id, "llm_api_key"):
-            # 密钥没了，归属它的 provider 也得从快照里去掉，旧字段不许把旧键叫回来。
-            if "llm_api_key_provider" in load_workspace_config(workspace_id):
+        secret_updates.clear()
+        # 删完当前供应商真正在用的那把键，以及同供应商的旧备用键；旧键不得复活。
+        for field in _secret_fields_for_provider(workspace_id):
+            if delete_workspace_secret(workspace_id, field):
                 config_updates["llm_api_key_provider"] = ""
     for field, value in secret_updates.items():
         save_workspace_secret(workspace_id, field, value)

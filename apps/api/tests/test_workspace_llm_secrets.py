@@ -230,6 +230,64 @@ def test_settings_route_reports_a_refused_keychain_instead_of_success(isolated, 
     assert refused.value.status_code == 503
 
 
+@macos
+def test_delete_removes_the_deepseek_fallback_key_too(isolated):
+    """选了 DeepSeek 时，只删新键的话旧 DEEPSEEK 键会接着生效。"""
+    module.save_workspace_config("ws-a", {"llm_provider": "deepseek"})
+    module.save_workspace_secret("ws-a", "llm_api_key", "new-deepseek-key")
+    module.save_workspace_secret("ws-a", "deepseek_api_key", "legacy-deepseek-key")
+
+    apply_workspace_runtime_settings_update(
+        "ws-a", {"llm_key_action": "delete"}, lambda: None
+    )
+
+    assert module.read_workspace_secret("ws-a", "llm_api_key") is None
+    assert module.read_workspace_secret("ws-a", "deepseek_api_key") is None
+    resolved = module.workspace_settings("ws-a", Settings()).settings
+    assert resolved.effective_llm_api_key is None
+
+
+@macos
+def test_delete_leaves_another_workspace_and_other_keys_alone(isolated):
+    module.save_workspace_config("ws-a", {"llm_provider": "minimax"})
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+    module.save_workspace_secret("ws-b", "llm_api_key", "key-b")
+
+    apply_workspace_runtime_settings_update(
+        "ws-a", {"llm_key_action": "delete"}, lambda: None
+    )
+
+    assert module.read_workspace_secret("ws-b", "llm_api_key") == "key-b"
+    assert module.read_workspace_secret("ws-a", "llm_api_key") is None
+
+
+def test_secret_write_failure_is_never_read_as_success(isolated, monkeypatch):
+    monkeypatch.setattr(
+        module, "_run_security",
+        lambda arguments: subprocess.CompletedProcess(
+            arguments, 44, "",
+            "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.",
+        ),
+    )
+
+    with pytest.raises(module.WorkspaceSecretStoreError):
+        module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+
+
+def test_topic_route_snapshot_reads_the_requesting_workspace(isolated):
+    import app.main as main_module
+
+    module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+
+    snapshot = main_module._topic_route_snapshot("ws-a")
+    unconfigured = main_module._topic_route_snapshot("ws-b")
+
+    assert snapshot["availability"] == "unverified"
+    assert snapshot["model_id"] == "MiniMax-M3"
+    assert unconfigured["availability"] == "unconfigured"
+
+
 def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):
     monkeypatch.setattr(
         module, "_run_security",

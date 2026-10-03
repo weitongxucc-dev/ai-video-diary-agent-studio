@@ -100,6 +100,13 @@ def _require_store(result: subprocess.CompletedProcess[str], action: str) -> Non
     raise WorkspaceSecretStoreError(f"密钥{action}失败：系统钥匙串拒绝了这次操作。")
 
 
+def _require_write(result: subprocess.CompletedProcess[str], action: str) -> None:
+    """写入没有「本来就不存在」这回事：任何非零结果都是写入失败，必须失败。"""
+    if result.returncode == 0:
+        return
+    raise WorkspaceSecretStoreError(f"密钥{action}失败：系统钥匙串拒绝了这次写入。")
+
+
 def save_workspace_secret(workspace_id: str, field: str, value: str) -> None:
     """把一把密钥写进系统钥匙串。失败即抛错，调用方不得退回明文。"""
     if field not in WORKSPACE_SECRET_FIELDS:
@@ -115,7 +122,7 @@ def save_workspace_secret(workspace_id: str, field: str, value: str) -> None:
         *_keychain_args(),
     ])
     if result.returncode != 0:
-        _require_store(result, "保存")
+        _require_write(result, "保存")
     with _lock:
         _secret_cache.pop((workspace_id, field), None)
 
