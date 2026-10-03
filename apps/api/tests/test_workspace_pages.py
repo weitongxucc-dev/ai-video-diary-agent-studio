@@ -176,44 +176,65 @@ def test_workflow_status_exposes_langgraph_nodes():
     assert "approve_script" in body["human_review_nodes"]
 
 
-def test_runtime_settings_endpoint_updates_env_and_runtime(tmp_path):
+def test_runtime_settings_endpoint_updates_env_and_runtime(tmp_path, monkeypatch):
+    """文字服务进工作区快照和系统钥匙串，其余设备设置仍写 dotenv。"""
+    import subprocess
+
+    from app import workspace_settings as workspace_settings_module
+
+    keychain_path = tmp_path / "wil165-settings.keychain"
+    created = subprocess.run(
+        ["security", "create-keychain", "-p", "wil165-settings", str(keychain_path)],
+        text=True, capture_output=True, check=False,
+    )
+    if created.returncode != 0:
+        pytest.skip("无法创建临时钥匙串")
+    monkeypatch.setenv(workspace_settings_module._CONFIG_ROOT_ENV, str(tmp_path / "workspaces"))
+    monkeypatch.setenv(workspace_settings_module._KEYCHAIN_ENV, str(keychain_path))
+
     env_path = tmp_path / ".env"
     main_module.runtime_env_path = env_path
     main_module.settings = Settings(database_path=str(tmp_path / "old.sqlite3"))
     old_video_pipeline = object()
     main_module.video_pipeline = old_video_pipeline
 
-    response = client.post(
-        "/api/settings/runtime",
-        json={
-            "deepseek_model": "deepseek-chat",
-            "deepseek_api_key": "new-secret",
-            "tencentcloud_secret_id": "new-tencent-id",
-            "tencentcloud_secret_key": "new-tencent-key",
-            "tencentcloud_asr_region": "ap-guangzhou",
-            "tencentcloud_asr_engine_model_type": "16k_zh",
-            "video_inbox_path": str(tmp_path / "inbox"),
-            "video_output_path": str(tmp_path / "out"),
-            "draft_output_path": str(tmp_path / "drafts"),
-            "database_path": str(tmp_path / "new.sqlite3"),
-            "topic_source_urls": ["https://watcha.cn/", "https://example.com/radar"],
-        },
-    )
+    try:
+        response = client.post(
+            "/api/settings/runtime",
+            json={
+                "deepseek_model": "deepseek-chat",
+                "deepseek_api_key": "new-secret",
+                "tencentcloud_secret_id": "new-tencent-id",
+                "tencentcloud_secret_key": "new-tencent-key",
+                "tencentcloud_asr_region": "ap-guangzhou",
+                "tencentcloud_asr_engine_model_type": "16k_zh",
+                "video_inbox_path": str(tmp_path / "inbox"),
+                "video_output_path": str(tmp_path / "out"),
+                "draft_output_path": str(tmp_path / "drafts"),
+                "database_path": str(tmp_path / "new.sqlite3"),
+                "topic_source_urls": ["https://watcha.cn/", "https://example.com/radar"],
+            },
+        )
 
-    assert response.status_code == 200
-    dumped = json.dumps(response.json(), ensure_ascii=False)
-    assert "new-secret" not in dumped
-    assert "new-tencent-id" not in dumped
-    assert "new-tencent-key" not in dumped
-    assert main_module.settings.deepseek_model == "deepseek-chat"
-    assert main_module.settings.tencentcloud_asr_region == "ap-guangzhou"
-    assert main_module.settings.tencentcloud_asr_engine_model_type == "16k_zh"
-    assert main_module.video_inbox.path == tmp_path / "inbox"
-    assert main_module.video_pipeline is not old_video_pipeline
-    assert main_module.video_pipeline.processor.output_path == tmp_path / "out"
-    assert main_module.draft_workspace.draft_output_path == tmp_path / "drafts"
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "DEEPSEEK_MODEL=deepseek-chat" in env_text
-    assert "TENCENTCLOUD_ASR_REGION=ap-guangzhou" in env_text
-    assert f"VIDEO_INBOX_PATH={tmp_path / 'inbox'}" in env_text
-    assert "TOPIC_SOURCE_URLS=https://watcha.cn/,https://example.com/radar" in env_text
+        assert response.status_code == 200
+        dumped = json.dumps(response.json(), ensure_ascii=False)
+        assert "new-secret" not in dumped
+        assert "new-tencent-id" not in dumped
+        assert "new-tencent-key" not in dumped
+        # 文字服务的模型名归工作区快照，密钥归系统钥匙串，两样都不再进 dotenv。
+        assert workspace_settings_module.load_workspace_config("local")["deepseek_model"] == "deepseek-chat"
+        assert workspace_settings_module.read_workspace_secret("local", "deepseek_api_key") == "new-secret"
+        assert main_module.settings.tencentcloud_asr_region == "ap-guangzhou"
+        assert main_module.settings.tencentcloud_asr_engine_model_type == "16k_zh"
+        assert main_module.video_inbox.path == tmp_path / "inbox"
+        assert main_module.video_pipeline is not old_video_pipeline
+        assert main_module.video_pipeline.processor.output_path == tmp_path / "out"
+        assert main_module.draft_workspace.draft_output_path == tmp_path / "drafts"
+        env_text = env_path.read_text(encoding="utf-8")
+        assert "DEEPSEEK_MODEL" not in env_text
+        assert "DEEPSEEK_API_KEY" not in env_text
+        assert "TENCENTCLOUD_ASR_REGION=ap-guangzhou" in env_text
+        assert f"VIDEO_INBOX_PATH={tmp_path / 'inbox'}" in env_text
+        assert "TOPIC_SOURCE_URLS=https://watcha.cn/,https://example.com/radar" in env_text
+    finally:
+        subprocess.run(["security", "delete-keychain", str(keychain_path)], check=False)

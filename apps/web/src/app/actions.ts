@@ -98,7 +98,7 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
   const destination = `/settings?section=${section}`;
   type RuntimeTextField = Exclude<
     keyof RuntimeSettingsUpdate,
-    "topic_source_urls"
+    "topic_source_urls" | "llm_key_action"
   >;
   const textFieldNames: RuntimeTextField[] = [
     "asr_provider",
@@ -151,6 +151,12 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
         }
       }
       payload[fieldName] = trimmed;
+    }
+
+    const llmKeyAction = formData.get("llm_key_action");
+    if (llmKeyAction === "delete") {
+      // 只有明确的删除动作才删密钥；输入框留空表示不改。
+      payload.llm_key_action = "delete";
     }
 
     const sourceUrls = formData.get("topic_source_urls");

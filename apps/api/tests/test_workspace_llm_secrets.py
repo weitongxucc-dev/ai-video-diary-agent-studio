@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app import workspace_settings as module
 from app.config import Settings
@@ -173,6 +175,59 @@ def test_snapshot_update_keeps_earlier_fields(isolated):
         "llm_base_url": "https://api.minimax.io/v1",
         "llm_model": "MiniMax-M3",
     }
+
+
+@macos
+def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(isolated):
+    """同一套保存路由，两个工作区各自读回自己的配置和密钥。"""
+    import app.main as main_module
+    from app.auth import AuthPrincipal
+    from app.schemas import RuntimeSettingsUpdateRequest
+
+    def call(workspace_id, payload):
+        request = SimpleNamespace(
+            state=SimpleNamespace(
+                principal=AuthPrincipal(user_id="u", workspace_id=workspace_id)
+            ),
+            client=SimpleNamespace(host="127.0.0.1"),
+        )
+        return main_module.update_runtime_settings(
+            request, RuntimeSettingsUpdateRequest(**payload)
+        )
+
+    call("ws-a", {"llm_provider": "minimax", "llm_api_key": "key-a", "llm_model": "MiniMax-M3"})
+    call("ws-b", {"llm_provider": "deepseek"})
+
+    assert module.load_workspace_config("ws-a")["llm_model"] == "MiniMax-M3"
+    assert module.load_workspace_config("ws-b") == {"llm_provider": "deepseek"}
+    assert module.read_workspace_secret("ws-b", "llm_api_key") is None
+
+
+@macos
+def test_settings_route_reports_a_refused_keychain_instead_of_success(isolated, monkeypatch):
+    import app.main as main_module
+    from app.auth import AuthPrincipal
+    from app.schemas import RuntimeSettingsUpdateRequest
+
+    monkeypatch.setattr(
+        module, "_run_security",
+        lambda arguments: subprocess.CompletedProcess(
+            arguments, 36, "", "security: SecKeychainItemCreateFromContent: User interaction is not allowed."
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            principal=AuthPrincipal(user_id="u", workspace_id="ws-a")
+        ),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        main_module.update_runtime_settings(
+            request, RuntimeSettingsUpdateRequest(llm_api_key="key-a")
+        )
+
+    assert refused.value.status_code == 503
 
 
 def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):

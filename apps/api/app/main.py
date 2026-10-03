@@ -204,7 +204,17 @@ from app.repository import (
     set_workspace_context,
 )
 from app.runtime_health import runtime_health
-from app.runtime_settings import apply_runtime_settings_update, is_local_client_host
+from app.runtime_settings import (
+    WORKSPACE_TEXT_FIELDS,
+    apply_runtime_settings_update,
+    apply_workspace_runtime_settings_update,
+    is_local_client_host,
+)
+from app.workspace_settings import (
+    WORKSPACE_SECRET_FIELDS,
+    WorkspaceSecretStoreError,
+    workspace_settings,
+)
 from app.source_repository import SourceRepository
 from app.schemas import (
     ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
@@ -3019,20 +3029,28 @@ def _creation_task_topic_inputs(
     return tuple(provider_sources), input_references, evidence_by_reference_id
 
 
-def _creation_task_topic_generator_from_settings() -> OpenAICompatibleCreationTaskTopicGenerator:
+def _creation_task_topic_generator_for(settings_for_workspace: Settings) -> OpenAICompatibleCreationTaskTopicGenerator:
     return OpenAICompatibleCreationTaskTopicGenerator(
-        base_url=settings.effective_llm_base_url,
-        model=settings.effective_llm_model,
-        api_key=settings.effective_llm_api_key,
+        base_url=settings_for_workspace.effective_llm_base_url,
+        model=settings_for_workspace.effective_llm_model,
+        api_key=settings_for_workspace.effective_llm_api_key,
     )
 
 
-def _creation_task_script_generator_from_settings() -> OpenAICompatibleCreationTaskScriptGenerator:
+def _creation_task_script_generator_for(settings_for_workspace: Settings) -> OpenAICompatibleCreationTaskScriptGenerator:
     return OpenAICompatibleCreationTaskScriptGenerator(
-        base_url=settings.effective_llm_base_url,
-        model=settings.effective_llm_model,
-        api_key=settings.effective_llm_api_key,
+        base_url=settings_for_workspace.effective_llm_base_url,
+        model=settings_for_workspace.effective_llm_model,
+        api_key=settings_for_workspace.effective_llm_api_key,
     )
+
+
+def _workspace_settings_for(workspace_id: str) -> Settings:
+    """当前工作区的文字服务配置：快照 + 本工作区钥匙串里的密钥。
+
+    全局 dotenv 里的旧明文密钥不会叠进来，删除过的密钥也不会被旧字段叫回来。
+    """
+    return workspace_settings(workspace_id, settings).settings
 
 
 def _projected_topic_route_snapshot(
@@ -4100,7 +4118,7 @@ def workspace_assistant_plan_turn(
 ) -> WorkspaceAssistantPlanTurnResponse:
     try:
         reply, preview = run_plan_turn(
-            settings,
+            _workspace_settings_for(current_workspace_id(request)),
             workspace_id=current_workspace_id(request),
             conversation_id=str(payload.conversation_id),
             message=payload.message.strip(),
@@ -4520,7 +4538,7 @@ def generate_creation_task_topics(
         )
 
     try:
-        generated_topics = _creation_task_topic_generator_from_settings().generate(
+        generated_topics = _creation_task_topic_generator_for(_workspace_settings_for(workspace_id)).generate(
             CreationTaskTopicInput(
                 goal=plan.goal,
                 language=plan.language,
@@ -4892,7 +4910,7 @@ def creation_task_assistant_turn(
     ))
     try:
         reply, preview = run_task_turn(
-            settings,
+            _workspace_settings_for(workspace_id),
             workspace_id=workspace_id,
             task_id=task_id,
             message=message,
@@ -5044,7 +5062,7 @@ def generate_creation_task_script(
         )
     try:
         generated: CreationTaskGeneratedScript = (
-            _creation_task_script_generator_from_settings().generate(
+            _creation_task_script_generator_for(_workspace_settings_for(workspace_id)).generate(
                 CreationTaskScriptInput(
                     goal=plan.goal,
                     language=plan.language,
@@ -12728,8 +12746,12 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
 
 
 @app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)
-def get_runtime_settings() -> RuntimeSettingsResponse:
-    return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
+def get_runtime_settings(request: Request) -> RuntimeSettingsResponse:
+    return RuntimeSettingsResponse.model_validate(
+        _workspace_settings_for(current_workspace_id(request)).safe_runtime_settings(
+            current_workspace_id(request)
+        )
+    )
 
 
 @app.post("/api/settings/runtime", response_model=RuntimeSettingsResponse)
@@ -12743,12 +12765,32 @@ def update_runtime_settings(
             status_code=403,
             detail="runtime settings can only be updated from a local client",
         )
+    workspace_id = current_workspace_id(request)
+    submitted = payload.model_dump()
+    try:
+        apply_workspace_runtime_settings_update(
+            workspace_id,
+            submitted,
+            _reload_runtime_dependencies,
+        )
+    except WorkspaceSecretStoreError as exc:
+        # 存储拒绝就说拒绝了，不能当成保存成功。
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # 文字服务这组已进工作区快照/钥匙串；其余设备级设置仍走原来的 dotenv 路径。
     apply_runtime_settings_update(
         runtime_env_path,
-        payload.model_dump(),
+        {
+            field: value
+            for field, value in submitted.items()
+            if field not in WORKSPACE_TEXT_FIELDS
+            and field not in WORKSPACE_SECRET_FIELDS
+            and field != "llm_key_action"
+        },
         _reload_runtime_dependencies,
     )
-    return RuntimeSettingsResponse.model_validate(settings.safe_runtime_settings())
+    return RuntimeSettingsResponse.model_validate(
+        _workspace_settings_for(workspace_id).safe_runtime_settings(workspace_id)
+    )
 
 
 
