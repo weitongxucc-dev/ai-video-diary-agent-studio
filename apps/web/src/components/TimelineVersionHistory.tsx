@@ -1,0 +1,183 @@
+import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, LoaderCircle, X } from "lucide-react";
+
+import styles from "./TimelineVersionHistory.module.css";
+import {
+  CreationPlanApiError,
+  getCreationTaskTimelineVersion,
+  listCreationTaskTimelineVersions,
+} from "@/lib/api";
+import type {
+  CreationTaskTimelineVersionArtifactKind,
+  CreationTaskTimelineVersionDetail,
+  CreationTaskTimelineVersionList,
+} from "@/lib/types";
+
+export type TimelineVersionHistoryProps = {
+  taskId: string;
+  onClose: () => void;
+};
+
+const artifactLabels: Record<CreationTaskTimelineVersionArtifactKind, string> = {
+  video: "成片",
+  subtitles: "字幕文件",
+  cover: "封面",
+};
+
+const trackStatusLabels: Record<string, string> = {
+  failed: "生成失败",
+  unavailable: "已失效",
+  superseded: "已被新版本替代",
+};
+
+function versionTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function seconds(value: number) {
+  return `${value.toFixed(1)}s`;
+}
+
+function errorText(error: unknown) {
+  if (error instanceof CreationPlanApiError) return error.message;
+  return "历史版本暂时读不出来。";
+}
+
+export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHistoryProps) {
+  const [versions, setVersions] = useState<CreationTaskTimelineVersionList | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<CreationTaskTimelineVersionDetail | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [loadingList, setLoadingList] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingList(true);
+    listCreationTaskTimelineVersions(taskId)
+      .then((loaded) => {
+        if (cancelled) return;
+        setVersions(loaded);
+        setListError(null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setListError(errorText(error));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingList(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
+
+  const loadDetail = useCallback((versionId: string) => {
+    setSelectedId(versionId);
+    setLoadingDetail(true);
+    setDetailError(null);
+    getCreationTaskTimelineVersion(taskId, versionId)
+      .then((loaded) => {
+        setDetail(loaded);
+        setDetailError(null);
+      })
+      .catch((error: unknown) => {
+        setDetail(null);
+        setDetailError(errorText(error));
+      })
+      .finally(() => setLoadingDetail(false));
+  }, [taskId]);
+
+  return <section className={styles.history} aria-label="历史时间线版本">
+    <header className={styles.head}>
+      <h2 className={styles.heading}>历史时间线版本</h2>
+      <button type="button" className={styles.close} aria-label="收起历史版本" onClick={onClose}>
+        <X size={15} aria-hidden />
+      </button>
+    </header>
+    <p className={styles.note}>只读查看。打开旧版本不会改动当前版本、提案、音轨或任务，也不能在这里回滚。</p>
+
+    {loadingList ? <p className={styles.note}><LoaderCircle size={14} aria-hidden /> 正在读取版本…</p> : null}
+    {listError ? <p className={styles.error}><AlertCircle size={14} aria-hidden /> {listError}</p> : null}
+
+    {versions && versions.items.length <= 1 && !listError
+      ? <p className={styles.note}>这个任务目前只有一个版本，还没有更早的版本可以查看。</p>
+      : null}
+
+    {versions && versions.items.length > 1 ? <ol className={styles.list}>
+      {versions.items.slice().reverse().map((version) => (
+        <li key={version.id}>
+          <button
+            type="button"
+            className={selectedId === version.id ? styles.itemActive : styles.item}
+            aria-current={selectedId === version.id ? "true" : undefined}
+            onClick={() => loadDetail(version.id)}
+          >
+            <span className={styles.itemTitle}>
+              第 {version.sequence} 版
+              {version.is_current ? <em className={styles.current}>当前版本</em> : null}
+            </span>
+            <span className={styles.itemMeta}>
+              <time dateTime={version.created_at}>{versionTime(version.created_at)}</time>
+              {" · "}{version.shot_count} 个镜头
+              {version.subtitle_track_count ? ` · ${version.subtitle_track_count} 条字幕轨` : ""}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ol> : null}
+
+    {loadingDetail ? <p className={styles.note}><LoaderCircle size={14} aria-hidden /> 正在读取这一版…</p> : null}
+    {detailError ? <p className={styles.error}><AlertCircle size={14} aria-hidden /> {detailError}</p> : null}
+
+    {detail ? <div className={styles.detail}>
+      <h3 className={styles.detailTitle}>第 {detail.version.sequence} 版 · {versionTime(detail.version.created_at)}</h3>
+
+      <h4 className={styles.sectionTitle}>镜头（{detail.shots.length}）</h4>
+      {detail.shots.length ? <ol className={styles.shots}>
+        {detail.shots.map((shot) => (
+          <li key={shot.id} className={styles.shot}>
+            <span className={styles.shotRange}>{seconds(shot.start_seconds)} – {seconds(shot.end_seconds)}</span>
+            <span className={styles.shotText}>{shot.narration_text ?? "（这一镜头没有对应文案）"}</span>
+            {shot.description ? <span className={styles.shotNote}>{shot.description}</span> : null}
+          </li>
+        ))}
+      </ol> : <p className={styles.note}>这一版没有记录镜头。</p>}
+
+      <h4 className={styles.sectionTitle}>字幕（{detail.subtitle_tracks.length}）</h4>
+      {detail.subtitle_tracks.length ? detail.subtitle_tracks.map((track) => (
+        <div key={track.id} className={styles.track}>
+          <span className={styles.trackHead}>
+            {track.language === "zh-CN" ? "中文轨" : "英文轨"} · {track.cues.length} 条
+            {track.status !== "valid" ? ` · ${trackStatusLabels[track.status] ?? track.status}` : ""}
+          </span>
+          <ul className={styles.cues}>
+            {track.cues.map((cue) => <li key={cue.id}>{cue.text}</li>)}
+          </ul>
+        </div>
+      )) : <p className={styles.note}>这一版没有字幕轨。</p>}
+
+      <h4 className={styles.sectionTitle}>产物</h4>
+      <ul className={styles.artifacts}>
+        {detail.artifacts.map((artifact) => (
+          <li key={artifact.kind} className={styles.artifact}>
+            <span className={styles.artifactLabel}>{artifactLabels[artifact.kind]}</span>
+            {artifact.status === "available" && artifact.url
+              ? <a className={styles.artifactLink} href={artifact.url} target="_blank" rel="noreferrer">查看这一版的{artifactLabels[artifact.kind]}</a>
+              : <span className={styles.artifactReason}>{artifact.reason ?? "这一版没有可查看的产物。"}</span>}
+          </li>
+        ))}
+      </ul>
+    </div> : null}
+  </section>;
+}

@@ -1,0 +1,200 @@
+.history {
+  display: grid;
+  gap: 8px;
+  max-height: 460px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.close {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.note,
+.error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.note {
+  color: var(--text-3);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item,
+.itemActive {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-1);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--surface-2);
+}
+
+.itemActive {
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+
+.itemTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.current {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.itemMeta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.detail {
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-1);
+}
+
+.detailTitle {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sectionTitle {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.shots {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--text-1);
+  font-size: 12px;
+}
+
+.shot {
+  display: grid;
+  gap: 1px;
+}
+
+.shotRange {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.shotText {
+  overflow-wrap: anywhere;
+}
+
+.shotNote {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.track {
+  display: grid;
+  gap: 3px;
+}
+
+.trackHead {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.cues {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-1);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.artifacts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.artifact {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.artifactLabel {
+  color: var(--text-3);
+}
+
+.artifactLink {
+  color: var(--text-1);
+}
+
+.artifactReason {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
