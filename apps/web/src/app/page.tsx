@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { HomeWorkspace } from "@/components/HomeWorkspace";
-import { getProductionFoundation, listCreationTasks } from "@/lib/api.server";
-import type { ProductionFoundation } from "@/lib/types";
+import { getMaterialLibraryInsights, getProductionFoundation, listCreationTasks } from "@/lib/api.server";
+import type { MaterialLibraryInsights, ProductionFoundation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +15,10 @@ async function loadFoundation(): Promise<ProductionFoundation | null> {
 
 export default async function HomePage({ searchParams }: { searchParams?: Promise<{ new?: string }> }) {
   const params = searchParams ? await searchParams : {};
-  const [foundation, creationTaskResponse] = await Promise.all([
+  const [foundation, creationTaskResponse, insights] = await Promise.all([
     loadFoundation(),
     listCreationTasks().catch(() => null),
+    getMaterialLibraryInsights().catch(() => null),
   ]);
   const creationTasks = creationTaskResponse?.items ?? [];
 
@@ -26,6 +27,6 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
     creationTasks={creationTasks}
     workspaceStatus={foundation?.readiness.ready ? { kind: "connected", label: "可以开工" } : { kind: "attention", label: "需要处理" }}
   >
-    <HomeWorkspace foundation={foundation} tasks={creationTasks} />
+    <HomeWorkspace foundation={foundation} tasks={creationTasks} insights={insights} />
   </AppShell>;
 }

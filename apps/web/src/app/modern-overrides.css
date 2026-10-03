@@ -505,6 +505,33 @@ h4 {
   cursor: pointer;
 }
 
+.library-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 4px 0 9px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.library-tag a {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-2);
+}
+
+.library-tag a:hover {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+
 .library-filters button.is-active {
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border-1));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));

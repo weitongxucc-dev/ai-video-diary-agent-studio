@@ -47,6 +47,8 @@ button.queueRow:hover { background: var(--surface-2); }
 .cloudField { display: flex; min-height: 115px; flex-wrap: wrap; align-content: center; align-items: center; justify-content: center; gap: 4px 9px; padding: 7px 4px; }
 .cloudField button { padding: 2px; border: 0; border-radius: 3px; background: transparent; color: var(--accent); font: inherit; line-height: 1.2; cursor: pointer; }
 .cloudField button:hover, .cloudField button[aria-pressed="true"] { background: var(--surface-2); text-decoration: underline; }
+.cloudField a { padding: 2px; border-radius: 3px; color: var(--accent); line-height: 1.2; text-decoration: none; }
+.cloudField a:hover, .cloudField a:focus-visible { background: var(--surface-2); text-decoration: underline; }
 .cloudField sup { margin-left: 2px; color: var(--text-2); font-size: 9px; }
 .filterResults { display: grid; gap: 10px; min-width: 280px; }
 .filterResults > p { margin: 0; color: var(--text-2); font-size: 12px; }

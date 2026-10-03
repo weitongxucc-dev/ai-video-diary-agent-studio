@@ -11731,6 +11731,7 @@ def list_production_materials(
     limit: int = 24,
     offset: int = 0,
     q: str | None = None,
+    tag: str | None = None,
     review_status: str | None = None,
 ) -> MaterialLibraryResponse:
     if limit < 1 or limit > 100 or offset < 0:
@@ -11742,6 +11743,7 @@ def list_production_materials(
         limit=limit,
         offset=offset,
         query=q,
+        tag=tag,
         review_status=review_status,
         include_private=_content_include_private(request),
     )

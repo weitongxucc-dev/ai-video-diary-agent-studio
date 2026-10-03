@@ -36,7 +36,7 @@ describe("HomeWorkspace", () => {
     expect(screen.getAllByText("—")).toHaveLength(5);
     expect(screen.getByText("尚无接收日聚合数据")).toBeInTheDocument();
     expect(screen.getByText("素材尚无可信行业分类")).toBeInTheDocument();
-    expect(screen.getByText("尚无按素材去重的标签统计")).toBeInTheDocument();
+    expect(screen.getAllByText("标签统计未载入")).toHaveLength(2);
     expect(screen.getByText("当前工作区任务；整机队列待接入")).toBeInTheDocument();
     expect(screen.getByText("还没有可查看的本地成片")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /设备演示/ }));
@@ -142,5 +142,52 @@ describe("HomeWorkspace", () => {
     expect(screen.getByRole("button", { name: /门店4/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /门店4/ }));
     expect(screen.getByRole("dialog", { name: "示例素材筛选" })).toHaveTextContent("4 条对应示例素材");
+  });
+
+  it("shows real tag counts from the server insights and links each tag to a precise material filter", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} insights={{
+      asset_count: 5,
+      segment_count: 40,
+      tags: [
+        { tag: "门店", asset_count: 3, segment_count: 12, duration_seconds: 60, usage_count: 0 },
+        { tag: "操作", asset_count: 1, segment_count: 28, duration_seconds: 20, usage_count: 0 },
+      ],
+      recommended_gaps: [],
+    }} />);
+    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    // 数字取素材数量 asset_count，不是片段数量 segment_count
+    expect(within(cloud).getByRole("link", { name: /门店/ })).toHaveTextContent("门店3");
+    expect(within(cloud).getByRole("link", { name: /操作/ })).toHaveTextContent("操作1");
+    expect(within(cloud).getByRole("link", { name: /操作/ })).toHaveAttribute("href", "/library?tag=%E6%93%8D%E4%BD%9C");
+  });
+
+  it("keeps the tag card empty when the server reports no tags instead of borrowing segment counts", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} insights={{ asset_count: 0, segment_count: 9, tags: [], recommended_gaps: [] }} />);
+    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    expect(within(cloud).getAllByText("当前工作区还没有素材标签")).toHaveLength(2);
+    expect(within(cloud).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("hides taxonomy tags that no material carries, so a zero count cannot pose as a real tag", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} insights={{
+      asset_count: 2,
+      segment_count: 0,
+      tags: [
+        { tag: "门店", asset_count: 2, segment_count: 0, duration_seconds: 0, usage_count: 0 },
+        // 服务端为默认分类表补的零值行：一个素材都没有，不能出现在词云里
+        { tag: "设备", asset_count: 0, segment_count: 6, duration_seconds: 30, usage_count: 0 },
+      ],
+      recommended_gaps: [],
+    }} />);
+    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    expect(within(cloud).getByRole("link", { name: /门店/ })).toHaveTextContent("门店2");
+    expect(within(cloud).queryByRole("link", { name: /设备/ })).not.toBeInTheDocument();
+  });
+
+  it("says the read failed when the insights could not be loaded, and does not blame an empty workspace", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} insights={null} />);
+    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    expect(within(cloud).getAllByText("标签统计读取失败，请刷新重试")).toHaveLength(2);
+    expect(within(cloud).queryByText("当前工作区还没有素材标签")).not.toBeInTheDocument();
   });
 });

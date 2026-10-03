@@ -544,6 +544,9 @@ class MaterialCollectionCreateRequest(BaseModel):
 
 class MaterialTagStatResponse(BaseModel):
     tag: str
+    # Materials carrying this tag, counted once each. The segment count below
+    # keeps its own meaning and is not a second material count.
+    asset_count: int = Field(ge=0)
     segment_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0)
     usage_count: int = Field(ge=0)
