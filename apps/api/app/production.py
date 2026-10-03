@@ -326,6 +326,18 @@ def material_allows_footage(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
 
 
+def material_allows_automation(asset: MaterialAsset) -> bool:
+    """Can a machine pick this material on its own?
+
+    Stricter than `material_allows_footage` in exactly one way: a material the
+    user marked "不要自动选用" stays usable by hand — searchable, insertable,
+    replaceable — but must never reach a candidate pool the machine itself draws
+    from, including scheduled runs. Everything the manual rule allows stays
+    allowed, so restoring `available` needs no second edit anywhere else.
+    """
+    return asset.use_state in {"available", "not_for_publish"}
+
+
 def _material_analysis_public_error(error: Exception) -> str:
     if isinstance(error, PermissionError):
         return "素材文件没有读取权限"
@@ -4258,6 +4270,7 @@ class ProductionRepository:
         limit: int,
         offset: int,
         query: str | None = None,
+        tag: str | None = None,
         review_status: str | None = None,
         include_private: bool = True,
     ) -> tuple[list[MaterialAsset], int]:
@@ -4293,6 +4306,22 @@ class ProductionRepository:
                 )
             )""")
             parameters.extend([*[f"%{query.strip().lower()}%"] * 7, OCR_RETRIEVAL_MIN_CONFIDENCE])
+        if tag:
+            # Clicking a tag is an exact choice, not a search: "红烧肉" must not
+            # drag in "红烧肉特写", and the tag's own spelling is the whole test —
+            # no case folding and no trimming, or the number shown beside the
+            # word cloud would not be the number of rows this returns. It joins
+            # the same clause as every other filter, so the counted total and the
+            # paged rows are one set.
+            clauses.append("""(
+                EXISTS (SELECT 1 FROM json_each(material_assets.payload, '$.user_tags') AS tag WHERE tag.value = ?)
+                OR EXISTS (
+                    SELECT 1 FROM json_each(material_assets.payload, '$.segments') AS segment
+                    WHERE EXISTS (SELECT 1 FROM json_each(segment.value, '$.user_tags') AS tag WHERE tag.value = ?)
+                        OR EXISTS (SELECT 1 FROM json_each(segment.value, '$.system_tags') AS tag WHERE tag.value = ?)
+                )
+            )""")
+            parameters.extend([tag] * 3)
         if review_status:
             clauses.append("json_extract(payload, '$.review_status') = ?")
             parameters.append(review_status)
@@ -4734,21 +4763,36 @@ class ProductionRepository:
         assets = self.list_assets(workspace_id)
         segments = [segment for asset in assets for segment in asset.segments]
         stats: dict[str, dict[str, object]] = {}
+
+        def blank(tag: str) -> dict[str, object]:
+            return {"tag": tag, "asset_count": 0, "segment_count": 0, "duration_seconds": 0.0, "usage_count": 0}
+
+        for asset in assets:
+            # A material is counted once per tag name, however many of its
+            # segments repeat that name and whichever list carried it. The
+            # segment count keeps its own meaning beside it. Names are grouped
+            # exactly as stored — the same equality the tag filter uses — so a
+            # count here and the rows behind a click are always the same set.
+            asset_tags = {
+                value
+                for value in (
+                    *asset.user_tags,
+                    *(tag for segment in asset.segments for tag in (*segment.system_tags, *segment.user_tags)),
+                )
+                if value
+            }
+            for tag in asset_tags:
+                item = stats.setdefault(tag, blank(tag))
+                item["asset_count"] = int(item["asset_count"]) + 1
         for segment in segments:
             duration = max(0.0, segment.end_seconds - segment.start_seconds)
             for tag in {*segment.system_tags, *segment.user_tags}:
-                item = stats.setdefault(
-                    tag,
-                    {"tag": tag, "segment_count": 0, "duration_seconds": 0.0, "usage_count": 0},
-                )
+                item = stats.setdefault(tag, blank(tag))
                 item["segment_count"] = int(item["segment_count"]) + 1
                 item["duration_seconds"] = float(item["duration_seconds"]) + duration
                 item["usage_count"] = int(item["usage_count"]) + segment.usage_count
         for tag in DEFAULT_MATERIAL_TAXONOMY:
-            stats.setdefault(
-                tag,
-                {"tag": tag, "segment_count": 0, "duration_seconds": 0.0, "usage_count": 0},
-            )
+            stats.setdefault(tag, blank(tag))
         ordered = sorted(
             stats.values(),
             key=lambda item: (-int(item["segment_count"]), str(item["tag"])),

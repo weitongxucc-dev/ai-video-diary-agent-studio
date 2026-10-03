@@ -174,6 +174,7 @@ from app.production import (
     SubtitleTrack,
     TransformRun,
     effective_segment_usage_role,
+    material_allows_automation,
     material_allows_footage,
 )
 from app.task_runtime import JobFailure, JobResult
@@ -6084,12 +6085,20 @@ def _creation_task_montage_candidates(
     workspace_id: str,
     plan: CreationTaskMontagePlan,
     clip: MontageClip,
+    *,
+    automation_only: bool = False,
 ) -> list[MontageClipCandidateResponse]:
+    # `automation_only` marks the callers where the machine, not the user, picks
+    # the winner from this list. Only those hide material the user marked
+    # "不要自动选用"; a candidate list a person browses keeps showing it, so a
+    # deliberate manual choice stays possible.
     cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
     for asset in production_repo.list_assets(workspace_id):
         if asset.review_status != "approved" or not material_allows_footage(asset):
+            continue
+        if automation_only and not material_allows_automation(asset):
             continue
         for segment in asset.segments:
             if (
@@ -7046,7 +7055,9 @@ def _presenter_share_selection(plan: CreationTaskMontagePlan, target: int) -> tu
 
 
 def _presenter_share_broll_candidate(workspace_id: str, plan: CreationTaskMontagePlan, clip: MontageClip):
-    for candidate in _creation_task_montage_candidates(workspace_id, plan, clip):
+    # This one picks by itself — the first usable B-roll becomes the replacement
+    # — so material the user kept out of automation must not appear here.
+    for candidate in _creation_task_montage_candidates(workspace_id, plan, clip, automation_only=True):
         asset = production_repo.get_asset(workspace_id, candidate.asset_id)
         segment = next(item for item in asset.segments if item.id == candidate.segment_id)
         if effective_segment_usage_role(asset, segment) == "b_roll":
@@ -7883,7 +7894,7 @@ def preview_creation_task_edit(
     invalidated_refs = _logical_montage_output_refs(plan)
     candidates = [
         candidate
-        for candidate in _creation_task_montage_candidates(workspace_id, plan, clip)
+        for candidate in _creation_task_montage_candidates(workspace_id, plan, clip, automation_only=True)
         if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id)
     ]
     material_constraint = _edit_material_constraint(command)
@@ -11736,6 +11747,7 @@ def list_production_materials(
     limit: int = 24,
     offset: int = 0,
     q: str | None = None,
+    tag: str | None = None,
     review_status: str | None = None,
 ) -> MaterialLibraryResponse:
     if limit < 1 or limit > 100 or offset < 0:
@@ -11747,6 +11759,7 @@ def list_production_materials(
         limit=limit,
         offset=offset,
         query=q,
+        tag=tag,
         review_status=review_status,
         include_private=_content_include_private(request),
     )

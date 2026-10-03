@@ -171,10 +171,13 @@ export function MaterialLibraryWorkspace({
   initialLibrary,
   initialInsights,
   initialCollections,
+  initialTag,
 }: {
   initialLibrary: MaterialLibrary;
   initialInsights: MaterialLibraryInsights;
   initialCollections: MaterialCollections;
+  // 来自 /library?tag= 的精确标签筛选；URL 是唯一来源，清除后由页面重挂载恢复
+  initialTag?: string;
 }) {
   const [assets, setAssets] = useState(initialLibrary.assets);
   const [totalCount, setTotalCount] = useState(initialLibrary.total_count);
@@ -243,7 +246,7 @@ export function MaterialLibraryWorkspace({
   const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
   const intakeRevision = useRef(0);
-  const lastSearch = useRef({ filter, query });
+  const lastSearch = useRef({ filter, query, tag: initialTag ?? "" });
   const assetWriteRevision = useRef(0);
   const objectLoadRevision = useRef(0);
   const objectReadRetry = useRef(0);
@@ -338,7 +341,7 @@ export function MaterialLibraryWorkspace({
         for (let offset = 0; offset < loadedCount; offset += 100) {
           libraries.push(await getProductionMaterials({
             limit: Math.min(100, loadedCount - offset), offset,
-            query: query.trim(), reviewStatus: filter,
+            query: query.trim(), reviewStatus: filter, tag: initialTag,
           }));
         }
         if (active && revision === assetWriteRevision.current) {
@@ -355,11 +358,11 @@ export function MaterialLibraryWorkspace({
       }
     }, 15000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [assets.length, busy, filter, initialLibrary.limit, intake?.bound_to_current_workspace, query, selectedId]);
+  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, query, selectedId]);
 
   useEffect(() => {
-    if (lastSearch.current.filter === filter && lastSearch.current.query === query) return;
-    lastSearch.current = { filter, query };
+    if (lastSearch.current.filter === filter && lastSearch.current.query === query && lastSearch.current.tag === (initialTag ?? "")) return;
+    lastSearch.current = { filter, query, tag: initialTag ?? "" };
     let active = true;
     const timer = window.setTimeout(() => {
       const revision = assetWriteRevision.current;
@@ -369,6 +372,7 @@ export function MaterialLibraryWorkspace({
         offset: 0,
         query: query.trim(),
         reviewStatus: filter,
+        tag: initialTag,
       })
         .then((result) => {
           if (!active || revision !== assetWriteRevision.current) return;
@@ -396,7 +400,7 @@ export function MaterialLibraryWorkspace({
     };
     // selectedId and selectAsset are intentionally excluded: changing selection must not re-run search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, initialLibrary.limit, query]);
+  }, [filter, initialLibrary.limit, initialTag, query]);
 
   // 工作区的名称条目与素材无关，进页面读一次就够了；之后新增的直接并进同一份列表。
   useEffect(() => {
@@ -604,6 +608,7 @@ export function MaterialLibraryWorkspace({
         offset: assets.length,
         query: query.trim(),
         reviewStatus: filter,
+        tag: initialTag,
       });
       assetWriteRevision.current += 1;
       setAssets((current) => {
@@ -1391,6 +1396,14 @@ export function MaterialLibraryWorkspace({
               ),
             )}
           </div>
+          {initialTag ? (
+            <span className="library-tag">
+              标签：{initialTag}
+              <Link aria-label="清除标签筛选" href="/library">
+                <X size={12} aria-hidden />
+              </Link>
+            </span>
+          ) : null}
           <span className="library-count">
             已载入 {assets.length} / {totalCount}
           </span>

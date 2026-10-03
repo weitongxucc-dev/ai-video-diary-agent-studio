@@ -850,6 +850,36 @@ it("discards late transcription after material switching, cancellation or editin
   expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("A原说明");
 });
 
+it("keeps the URL tag on the first load, on a new search and on the next page, then clears back to the whole library", async () => {
+  const paged = { ...library, total_count: 2, has_more: true };
+  vi.mocked(getProductionMaterials).mockResolvedValue(paged);
+  render(<MaterialLibraryWorkspace initialLibrary={paged} initialInsights={insights} initialCollections={{collections:[],total_count:0}} initialTag="产品演示" />);
+  expect(screen.getByText("标签：产品演示")).toBeInTheDocument();
+  // 清除走 URL，不在客户端另存一份标签状态，避免清除后仍带着旧筛选
+  expect(screen.getByRole("link", { name: "清除标签筛选" })).toHaveAttribute("href", "/library");
+
+  fireEvent.change(screen.getByLabelText("搜索素材"), { target: { value: "门店" } });
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, tag: "产品演示" })));
+
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 1, tag: "产品演示" })));
+});
+
+it("keeps the URL tag when the background refresh re-reads the loaded pages", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace: true });
+  vi.useFakeTimers();
+  try {
+    render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} initialTag="产品演示" />);
+    await act(async () => { await Promise.resolve(); });
+    vi.mocked(getProductionMaterials).mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, tag: "产品演示" }));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// 128 业务名称关联：接在 199 的 URL 标签筛选用例之后，两组断言各自独立。
 const product = { id:"bo-product", kind:"product" as const, name:"曜核一体机" };
 const dish = { id:"bo-dish", kind:"dish" as const, name:"红烧肉" };
 const entries = { items:[product, dish], total_count:2 };
