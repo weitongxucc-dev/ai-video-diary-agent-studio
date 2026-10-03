@@ -2,14 +2,14 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -35,6 +35,8 @@ beforeEach(() => {
   vi.mocked(getProductionMaterials).mockResolvedValue(library);
   vi.mocked(getMaterialLibraryInsights).mockResolvedValue(insights);
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
+  vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
 });
 it("persists the selected restriction and removes obsolete proof displays", async () => {
   vi.mocked(updateMaterialUseState).mockResolvedValue({...asset,use_state:"reference_only"});
@@ -770,4 +772,101 @@ it("shows the returned material note after saving and rereading, and allows an e
   await screen.findByText("本素材说明已保存。");
   expect(updateMaterialNotes).toHaveBeenLastCalledWith([{asset_id:"asset",user_description:"",upload_context:"原背景"}]);
   expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("");
+});
+
+const product = { id:"bo-product", kind:"product" as const, name:"曜核一体机" };
+const dish = { id:"bo-dish", kind:"dish" as const, name:"红烧肉" };
+const entries = { items:[product, dish], total_count:2 };
+
+it("reads the workspace name entries and the current material's saved associations", async () => {
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items:[dish], total_count:1 });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+  expect(screen.getByRole("checkbox",{name:/曜核一体机/})).not.toBeChecked();
+  expect(getAssetBusinessObjects).toHaveBeenCalledWith("asset");
+  // 读回来的关联就是已保存的选择，用户还没改动就没什么可保存的。
+  expect(screen.getByRole("button",{name:"保存关联到当前素材"})).toBeDisabled();
+});
+
+it("creates a name entry but writes it to the material only after an explicit save", async () => {
+  const person = { id:"bo-person", kind:"person" as const, name:"老张" };
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  vi.mocked(createMaterialBusinessObject).mockResolvedValue(person);
+  vi.mocked(saveAssetBusinessObjects).mockResolvedValue({ items:[person], total_count:1 });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/曜核一体机/})).toBeEnabled());
+
+  fireEvent.change(screen.getByLabelText("名称"), { target: { value:"老张" } });
+  fireEvent.change(screen.getByLabelText("类型"), { target: { value:"person" } });
+  fireEvent.click(screen.getByRole("button",{name:"新增并选中"}));
+
+  expect(createMaterialBusinessObject).toHaveBeenCalledWith({ kind:"person", name:"老张" });
+  // 新增只是条目本身：还没写进任何素材。
+  expect(saveAssetBusinessObjects).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/老张/})).toBeChecked());
+
+  fireEvent.click(screen.getByRole("button",{name:"保存关联到当前素材"}));
+  await screen.findByText("已保存 1 条名称关联。");
+  expect(saveAssetBusinessObjects).toHaveBeenCalledWith("asset", ["bo-person"]);
+});
+
+it("does not let a late association read overwrite the material selected after it", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  let resolveFirst!: (value: { items: typeof product[]; total_count: number }) => void;
+  vi.mocked(getAssetBusinessObjects).mockImplementation((assetId: string) => assetId === "asset"
+    ? new Promise(resolve => { resolveFirst = resolve; })
+    : Promise.resolve({ items:[dish], total_count:1 }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+  fireEvent.click(screen.getByRole("button",{ name:/自造素材B\.mp4/ }));
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+  // 第一条素材的读取这时才回来，不能盖到已经切过去的这条素材上。
+  resolveFirst({ items:[product], total_count:1 });
+  await waitFor(() => expect(screen.getByRole("button",{name:"保存关联到当前素材"})).toBeDisabled());
+  expect(screen.getByRole("checkbox",{name:/曜核一体机/})).not.toBeChecked();
+  expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked();
+});
+
+it("saves the association without touching the material's note or upload context", async () => {
+  const noted = { ...asset, user_description:"我的补充说明", upload_context:"这批是产品演示" };
+  const notedLibrary = { ...library, assets:[noted] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(notedLibrary);
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  vi.mocked(saveAssetBusinessObjects).mockResolvedValue({ items:[product], total_count:1 });
+  render(<MaterialLibraryWorkspace initialLibrary={notedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/曜核一体机/})).toBeEnabled());
+
+  fireEvent.click(screen.getByRole("checkbox",{name:/曜核一体机/}));
+  fireEvent.click(screen.getByRole("button",{name:"保存关联到当前素材"}));
+  await screen.findByText("已保存 1 条名称关联。");
+
+  expect(updateMaterialNotes).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("我的补充说明");
+  expect(screen.getByText("已保存背景：这批是产品演示")).toBeInTheDocument();
+});
+
+it("keeps a late create/save failure on the material that asked, not on the one now shown", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items:[dish], total_count:1 });
+  let rejectCreate!: (reason: unknown) => void;
+  vi.mocked(createMaterialBusinessObject).mockImplementation(() => new Promise((_, reject) => { rejectCreate = reject; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+
+  fireEvent.change(screen.getByLabelText("名称"), { target: { value:"老张" } });
+  fireEvent.click(screen.getByRole("button",{name:"新增并选中"}));
+  expect(createMaterialBusinessObject).toHaveBeenCalled();
+
+  // 请求还挂在素材 A 上时切到 B。
+  fireEvent.click(screen.getByRole("button",{ name:/自造素材B\.mp4/ }));
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+
+  rejectCreate(new Error("名称条目新增失败，请重试"));
+  // B 的读取已经完成，这条失败如果照旧 setObjectError 会显示在 B 上。
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeEnabled());
+  expect(screen.queryByText(/名称条目新增失败/)).not.toBeInTheDocument();
 });

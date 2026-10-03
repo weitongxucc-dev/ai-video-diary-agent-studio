@@ -10,6 +10,10 @@ vi.mock("@/lib/api", () => ({
   getProductionMaterials: vi.fn(() => new Promise(() => {})),
   getMaterialLibraryInsights: vi.fn(async () => ({ tags: [], recommended_gaps: [], asset_count: 1, segment_count: 1 })),
   updateProductionMaterialSegment: vi.fn(),
+  // 父页进入时会读名称列表和当前素材的关联；这个用例只关心语音证据与人工纠正，
+  // 所以这里返回它不关注的空列表。
+  getMaterialBusinessObjects: vi.fn(async () => ({ items: [], total_count: 0 })),
+  getAssetBusinessObjects: vi.fn(async () => ({ items: [], total_count: 0 })),
 }));
 
 it("seeks original speech evidence and saves a user correction without replacing the evidence", async () => {

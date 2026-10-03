@@ -113,4 +113,28 @@ describe("creation execution API", () => {
     await getCreationTaskAssistantHistory("task/one");
     expect(fetchMock).toHaveBeenCalledWith("/api/creation-tasks/task%2Fone/assistant/history", expect.anything());
   });
+
+  it("reads and creates name entries on the workspace-scoped route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ items: [], total_count: 0 }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getMaterialBusinessObjects, createMaterialBusinessObject } = await import("../api");
+    await getMaterialBusinessObjects();
+    await createMaterialBusinessObject({ kind: "dish", name: "红烧肉" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/production/business-objects", expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/production/business-objects", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ kind: "dish", name: "红烧肉" }),
+    }));
+  });
+
+  it("reads and replaces only the current material's associations", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ items: [], total_count: 0 }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getAssetBusinessObjects, saveAssetBusinessObjects } = await import("../api");
+    await getAssetBusinessObjects("asset/1");
+    await saveAssetBusinessObjects("asset/1", ["bo-a"]);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/production/materials/asset%2F1/business-objects", expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/production/materials/asset%2F1/business-objects", expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ business_object_ids: ["bo-a"] }),
+    }));
+  });
 });
