@@ -69,6 +69,7 @@ describe("CreateProductionTaskForm", () => {
   it("performs one read-only preflight, shows returned facts, and does not confirm before the user acts", async () => {
     mocks.previewCreationPlan.mockResolvedValue(preview());
     renderForm();
+    expect(screen.getByText("画幅：9:16（当前本地服务支持的画幅）")).toBeInTheDocument();
 
     fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
 
@@ -83,6 +84,7 @@ describe("CreateProductionTaskForm", () => {
     }));
     expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
     expect(await screen.findByText("产品资料")).toBeInTheDocument();
+    expect(screen.getByText("预检画幅：9:16")).toBeInTheDocument();
     expect(screen.getAllByText("补充画面", { exact: false })).toHaveLength(2);
     expect(screen.getByText("匹配 86%")).toBeInTheDocument();
     expect(screen.getByText("用途匹配补充画面；标签匹配产品")).toBeInTheDocument();
@@ -169,10 +171,35 @@ it("keeps the template identity through preview and confirmation", async () => {
   mocks.previewCreationPlan.mockResolvedValue(preview());
   mocks.confirmCreationPlan.mockResolvedValue({ creation_task: { id: "new-task" } });
   render(<CreateProductionTaskForm template={template} initialGoal="新的主题" assignLocation={mocks.assignLocation} />);
+  expect(screen.getByText("画幅：9:16（继承所选模板）")).toBeInTheDocument();
   fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
   await screen.findByRole("button", { name: "确认并创建任务" });
-  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3, goal: "新的主题", duration_target_seconds: 30 }));
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3, goal: "新的主题", duration_target_seconds: 30, aspect_ratio: "9:16" }));
   expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ lipsync_quality: "fast" }));
   fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
   await waitFor(() => expect(mocks.confirmCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3 })));
+});
+
+it("inherits landscape ratio through the form and preflight, then replaces it when the template changes", async () => {
+  const template = { id: "template_landscape", version: 1, name: "横版模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-10-03", settings: { language: "zh-CN" as const, aspect_ratio: "16:9" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
+  mocks.previewCreationPlan.mockReset();
+  mocks.previewCreationPlan.mockResolvedValueOnce(preview({ aspect_ratio: "16:9" })).mockResolvedValueOnce(preview());
+  const view = render(<CreateProductionTaskForm template={template} initialGoal="新的主题" />);
+  expect(screen.getByText("画幅：16:9（继承所选模板）")).toBeInTheDocument();
+  fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+  expect(await screen.findByText("预检画幅：16:9")).toBeInTheDocument();
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_landscape", aspect_ratio: "16:9" }));
+
+  const portrait = { ...template, id: "template_portrait", settings: { ...template.settings, aspect_ratio: "9:16" as const } };
+  view.rerender(<CreateProductionTaskForm template={portrait} initialGoal="新的主题" />);
+  expect(screen.getByText("画幅：9:16（继承所选模板）")).toBeInTheDocument();
+  expect(screen.queryByText("预检画幅：16:9")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "确认并创建任务" })).not.toBeInTheDocument();
+  fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+  expect(await screen.findByText("预检画幅：9:16")).toBeInTheDocument();
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_portrait", aspect_ratio: "9:16" }));
+
+  view.rerender(<CreateProductionTaskForm initialGoal="新的主题" />);
+  expect(screen.getByText("画幅：9:16（当前本地服务支持的画幅）")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "确认并创建任务" })).not.toBeInTheDocument();
 });
