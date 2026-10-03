@@ -11749,11 +11749,14 @@ def list_production_materials(
     q: str | None = None,
     tag: str | None = None,
     review_status: str | None = None,
+    media_type: str | None = None,
 ) -> MaterialLibraryResponse:
     if limit < 1 or limit > 100 or offset < 0:
         raise HTTPException(status_code=422, detail="invalid material pagination")
     if review_status not in {None, "raw", "approved", "rejected"}:
         raise HTTPException(status_code=422, detail="invalid material review status")
+    if media_type not in {None, "video", "audio", "image"}:
+        raise HTTPException(status_code=422, detail="invalid material media type")
     assets, total = production_repo.list_assets_page(
         current_workspace_id(request),
         limit=limit,
@@ -11761,6 +11764,7 @@ def list_production_materials(
         query=q,
         tag=tag,
         review_status=review_status,
+        media_type=media_type,
         include_private=_content_include_private(request),
     )
     return MaterialLibraryResponse(

@@ -4272,6 +4272,7 @@ class ProductionRepository:
         query: str | None = None,
         tag: str | None = None,
         review_status: str | None = None,
+        media_type: str | None = None,
         include_private: bool = True,
     ) -> tuple[list[MaterialAsset], int]:
         clauses = ["workspace_id = ?"]
@@ -4325,6 +4326,13 @@ class ProductionRepository:
         if review_status:
             clauses.append("json_extract(payload, '$.review_status') = ?")
             parameters.append(review_status)
+        if media_type:
+            # 和审核状态、标签、关键词一样是同一批行上的一条独立条件，所以计数
+            # 和分页自动共用它；省略这个参数就是全部。
+            # 缺 media_type 的旧记录在 MaterialAsset 里默认是 video（见字段定义），
+            # 筛选必须跟加载后的类型一致，否则这些视频会从「视频」里消失。
+            clauses.append("COALESCE(json_extract(payload, '$.media_type'), 'video') = ?")
+            parameters.append(media_type)
         where_clause = " AND ".join(clauses)
         with self._connect() as conn:
             total = int(
