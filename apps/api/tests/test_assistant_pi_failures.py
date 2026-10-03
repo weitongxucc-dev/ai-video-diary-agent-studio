@@ -219,11 +219,11 @@ def test_no_failure_text_echoes_the_raw_log_or_the_key(monkeypatch, tmp_path, st
 
 def test_a_real_rejection_marks_the_service_failed(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
-    assert settings.llm_service_state == LLM_SERVICE_UNVERIFIED
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
     with pytest.raises(AssistantUnavailable):
         _turn(monkeypatch, tmp_path, returncode=1, stdout='{"error":"invalid api key"}')
-    assert settings.llm_service_state == LLM_SERVICE_FAILED
-    assert settings.llm_service_status()["cause"] == FAILURE_KEY_REJECTED
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_FAILED
+    assert settings.llm_service_status("w")["cause"] == FAILURE_KEY_REJECTED
 
 
 def test_a_missing_runtime_does_not_mark_the_service_failed(monkeypatch, tmp_path):
@@ -254,4 +254,4 @@ def test_a_successful_turn_marks_the_service_available(monkeypatch, tmp_path):
         '{"type":"agent_settled"}',
     ]))
     assert answer == "收到。"
-    assert settings.llm_service_state == LLM_SERVICE_AVAILABLE
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_AVAILABLE

@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from app.config import Settings, record_llm_service_verification
+from app.workspace_settings import workspace_pi_config_dir
 
 # ── 失败分类（0.11 B04）────────────────────────────────────────────────────
 # 以前非零退出和不完整回复一律压成一句「请检查模型连接」。这里按日志里**真的**
@@ -133,7 +134,7 @@ def _classify_output(stdout: str, stderr: str = "") -> str:
     return FAILURE_UNKNOWN
 
 
-def _record_service(settings: Settings, *, ok: bool, cause: str) -> None:
+def _record_service(settings: Settings, *, ok: bool, cause: str, workspace_id: str = "") -> None:
     """Write an observation into the service state — but only a real one.
 
     A failure that never reached the provider (Pi 没装、业务工具坏、日志读不懂)
@@ -145,6 +146,7 @@ def _record_service(settings: Settings, *, ok: bool, cause: str) -> None:
     record_llm_service_verification(
         settings, ok=ok, cause=cause,
         repair_action=str(_FAILURES[cause]["next_step"]) if not ok else "",
+        workspace_id=workspace_id,
     )
 
 
@@ -177,16 +179,13 @@ SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每
 不要请求、读取或发送原始媒体文件。回答用日常中文，不说工具名、模型名、预检、版本号等内部词。"""
 
 
-def _agent_root(settings: Settings) -> Path:
+def _agent_root(settings: Settings, workspace_id: str) -> Path:
     parent = Path(settings.model_root_path).expanduser().parent
     if len(parent.parts) >= 3 and parent.parts[1] == "Volumes" and not Path(*parent.parts[:3]).is_mount():
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
     if not parent.is_dir():
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
-    root = parent / "agent"
-    root.mkdir(mode=0o700, exist_ok=True)
-    (root / "sessions").mkdir(mode=0o700, exist_ok=True)
-    return root
+    return workspace_pi_config_dir(workspace_id, parent / "agent")
 
 
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
@@ -319,7 +318,7 @@ def _run_turn(
             explanation="对话的业务工具文件不在安装包里，助手没法读取任务数据。",
         )
     base_url, model, key = _configured_model(settings)
-    root = _agent_root(settings)
+    root = _agent_root(settings, workspace_id)
     session_id = uuid5(NAMESPACE_URL, f"ai-video-diary:{workspace_id}:{session_key or task_id}")
     runtime_root = root / "runtimes" / str(session_id)
     runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -368,7 +367,7 @@ def _run_turn(
         )
     except subprocess.TimeoutExpired as exc:
         # 请求已经发出去了，所以这是关于服务的一次真实观察。
-        _record_service(settings, ok=False, cause=FAILURE_TIMEOUT)
+        _record_service(settings, ok=False, cause=FAILURE_TIMEOUT, workspace_id=workspace_id)
         raise _fail(FAILURE_TIMEOUT) from exc
     except OSError as exc:
         raise _fail(
@@ -379,14 +378,14 @@ def _run_turn(
         session_lock.release()
     if result.returncode:
         failure = _fail(_classify_output(result.stdout, result.stderr or ""))
-        _record_service(settings, ok=False, cause=failure.cause)
+        _record_service(settings, ok=False, cause=failure.cause, workspace_id=workspace_id)
         raise failure
     try:
         answer, preview = _last_answer_and_preview(result.stdout, preview_kind)
     except AssistantUnavailable as exc:
         # 不完整回复也可能是密钥被拒或超时打回来的，日志里能看出来就照实记。
-        _record_service(settings, ok=False, cause=exc.cause)
+        _record_service(settings, ok=False, cause=exc.cause, workspace_id=workspace_id)
         raise
     # 走到这里说明这一轮真的连了服务、也真的拿到了回复。
-    _record_service(settings, ok=True, cause="verified")
+    _record_service(settings, ok=True, cause="verified", workspace_id=workspace_id)
     return answer, preview

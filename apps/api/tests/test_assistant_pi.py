@@ -104,7 +104,7 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     assert "private-test-key" not in " ".join(captured["cmd"])
     assert {"--print", "--no-builtin-tools", "--no-context-files", "--no-extensions"} <= set(captured["cmd"])
     runtime_root = Path(captured["kwargs"]["cwd"])
-    assert runtime_root.parent.parent == tmp_path / "agent"
+    assert runtime_root.parent.parent == tmp_path / "agent" / "workspaces" / "workspace-1"
     assert "private-test-key" not in (runtime_root / "models.json").read_text()
 
 
