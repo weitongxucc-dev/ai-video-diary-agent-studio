@@ -161,8 +161,8 @@ function visibleError(cause: unknown, fallback: string) {
   return /[\u3400-\u9fff]/.test(message) ? message : fallback;
 }
 
-// \u5173\u8054\u8fd8\u6ca1\u8bfb\u56de\u6765\u65f6\u4f20\u8fd9\u4e2a\u7a7a\u6570\u7ec4\uff0c\u800c\u4e0d\u662f\u6bcf\u6b21\u6e32\u67d3\u73b0\u9020\u4e00\u4e2a\uff1a\u540c\u4e00\u4e2a\u5f15\u7528\uff0c
-// \u5b50\u7ec4\u4ef6\u5c31\u4e0d\u4f1a\u56e0\u4e3a\u7236\u9875\u91cd\u6e32\u67d3\u800c\u91cd\u7b97\u4e00\u6b21"\u9009\u62e9\u6709\u6ca1\u6709\u53d8"\u3002
+// 关联还没读回来时传这个空数组，而不是每次渲染现造一个：同一个引用，
+// 子组件就不会因为父页重渲染而重算一次“选择有没有变”。
 const EMPTY_OBJECT_IDS: readonly string[] = [];
 
 export function MaterialLibraryWorkspace({
@@ -223,6 +223,9 @@ export function MaterialLibraryWorkspace({
   const [assetObjectIds, setAssetObjectIds] = useState<Record<string, string[]>>({});
   const [objectPending, setObjectPending] = useState<"create" | "save" | null>(null);
   const [objectError, setObjectError] = useState("");
+  // 关联读成功之前 selectedIds 只是「还没读到」，不是「没有关联」，不能拿去保存。
+  const [objectRead, setObjectRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
+  const [objectReadTick, setObjectReadTick] = useState(0);
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -238,6 +241,7 @@ export function MaterialLibraryWorkspace({
   const lastSearch = useRef({ filter, query });
   const assetWriteRevision = useRef(0);
   const objectLoadRevision = useRef(0);
+  const objectReadRetry = useRef(0);
 
   // A background refresh can drop whatever is selected: the material was
   // removed or re-indexed, or the current search no longer returns it. Falling
@@ -252,6 +256,9 @@ export function MaterialLibraryWorkspace({
   const selected = selectionLost
     ? null
     : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
+  // 请求发出时记住目标素材，回来时用它判断这条结果还属不属于用户眼前的素材。
+  const currentAssetIdRef = useRef<string | null>(null);
+  currentAssetIdRef.current = selected?.id ?? null;
   // The same applies one level down: re-analysis can replace a segment's list,
   // and the drafts in the textarea still belong to the segment that left.
   const segmentLost =
@@ -385,20 +392,27 @@ export function MaterialLibraryWorkspace({
   useEffect(() => {
     const assetId = selected?.id ?? null;
     const revision = ++objectLoadRevision.current;
+    // 换素材就清掉上一条素材的失败提示；之后迟到的失败不会再挂回来（见下面的目标判断）。
     setObjectError("");
-    if (!assetId) return;
+    if (!assetId) {
+      setObjectRead({ status: "ready", message: "" });
+      return;
+    }
     let active = true;
+    setObjectRead({ status: "loading", message: "" });
     getAssetBusinessObjects(assetId)
       .then(result => {
         if (!active || revision !== objectLoadRevision.current) return;
         setAssetObjectIds(current => ({ ...current, [assetId]: result.items.map(item => item.id) }));
+        setObjectRead({ status: "ready", message: "" });
       })
       .catch(cause => {
-        if (active && revision === objectLoadRevision.current)
-          setObjectError(visibleError(cause, "名称关联读取失败，请重试。"));
+        if (!active || revision !== objectLoadRevision.current) return;
+        // 读失败不等于「没有关联」。明确报出来并留重试，不让用户拿空选择去覆盖。
+        setObjectRead({ status: "error", message: visibleError(cause, "名称关联读取失败，请重试。") });
       });
     return () => { active = false; };
-  }, [selected?.id]);
+  }, [selected?.id, objectReadTick]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -765,6 +779,7 @@ export function MaterialLibraryWorkspace({
   // 新增只写名称条目本身，不碰任何素材的关联；组件拿到新条目后自己选中，
   // 还要用户点「保存关联到当前素材」才真正写进这条素材。
   async function createBusinessObject(kind: BusinessObjectKind, name: string) {
+    const targetAssetId = currentAssetIdRef.current;
     setObjectPending("create");
     setObjectError("");
     try {
@@ -773,7 +788,8 @@ export function MaterialLibraryWorkspace({
       return created;
     } catch (cause) {
       const message = visibleError(cause, "名称条目新增失败，请重试");
-      setObjectError(message);
+      // 用户已经切到别的素材：这条迟到失败不挂到眼前那条身上。
+      if (currentAssetIdRef.current === targetAssetId) setObjectError(message);
       throw new Error(message);
     } finally { setObjectPending(null); }
   }
@@ -788,7 +804,8 @@ export function MaterialLibraryWorkspace({
       return result.items;
     } catch (cause) {
       const message = visibleError(cause, "名称关联保存失败，请重试");
-      setObjectError(message);
+      // 同上：目标素材已经不在眼前，就不把它的失败写成当前素材的问题。
+      if (currentAssetIdRef.current === assetId) setObjectError(message);
       throw new Error(message);
     } finally { setObjectPending(null); }
   }
@@ -857,6 +874,12 @@ export function MaterialLibraryWorkspace({
       </section>
       <MaterialBusinessObjects
         assetId={selected.id}
+        loaded={objectRead.status === "ready"}
+        readError={objectRead.status === "error" ? objectRead.message : null}
+        onRetryRead={() => {
+          objectReadRetry.current += 1;
+          setObjectReadTick(tick => tick + 1);
+        }}
         objects={businessObjects}
         selectedIds={assetObjectIds[selected.id] ?? EMPTY_OBJECT_IDS}
         onCreate={createBusinessObject}

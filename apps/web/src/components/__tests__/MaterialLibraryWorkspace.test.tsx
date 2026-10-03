@@ -796,7 +796,7 @@ it("creates a name entry but writes it to the material only after an explicit sa
   vi.mocked(createMaterialBusinessObject).mockResolvedValue(person);
   vi.mocked(saveAssetBusinessObjects).mockResolvedValue({ items:[person], total_count:1 });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  await waitFor(() => expect(screen.getByRole("checkbox",{name:/曜核一体机/})).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/曜核一体机/})).toBeEnabled());
 
   fireEvent.change(screen.getByLabelText("名称"), { target: { value:"老张" } });
   fireEvent.change(screen.getByLabelText("类型"), { target: { value:"person" } });
@@ -846,4 +846,27 @@ it("saves the association without touching the material's note or upload context
   expect(updateMaterialNotes).not.toHaveBeenCalled();
   expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("我的补充说明");
   expect(screen.getByText("已保存背景：这批是产品演示")).toBeInTheDocument();
+});
+
+it("keeps a late create/save failure on the material that asked, not on the one now shown", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  vi.mocked(getMaterialBusinessObjects).mockResolvedValue(entries);
+  vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items:[dish], total_count:1 });
+  let rejectCreate!: (reason: unknown) => void;
+  vi.mocked(createMaterialBusinessObject).mockImplementation(() => new Promise((_, reject) => { rejectCreate = reject; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+
+  fireEvent.change(screen.getByLabelText("名称"), { target: { value:"老张" } });
+  fireEvent.click(screen.getByRole("button",{name:"新增并选中"}));
+  expect(createMaterialBusinessObject).toHaveBeenCalled();
+
+  // 请求还挂在素材 A 上时切到 B。
+  fireEvent.click(screen.getByRole("button",{ name:/自造素材B\.mp4/ }));
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeChecked());
+
+  rejectCreate(new Error("名称条目新增失败，请重试"));
+  // B 的读取已经完成，这条失败如果照旧 setObjectError 会显示在 B 上。
+  await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeEnabled());
+  expect(screen.queryByText(/名称条目新增失败/)).not.toBeInTheDocument();
 });

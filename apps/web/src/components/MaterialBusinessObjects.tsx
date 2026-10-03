@@ -11,6 +11,14 @@ export type BusinessObject = MaterialBusinessObject;
 export type MaterialBusinessObjectsProps = {
   /** 当前素材。切换素材时本组件的草稿会整体重置，迟到响应不会写回已切换的素材。 */
   assetId: string | null;
+  /**
+   * 当前素材的关联是否已经读成功。读成功之前整块不开放选择/新增/保存：还没读
+   * 回来的空数组不等于「这条素材没有关联」，照着保存会把旧关联覆盖掉。
+   */
+  loaded: boolean;
+  /** 读取失败的提示。只有重新读取能把不确定变成确定，所以它配的是重试，不是关闭。 */
+  readError?: string | null;
+  onRetryRead?: () => void;
   /** 当前工作区已有的名称条目，由父页读取冻结接口后传入。 */
   objects: readonly BusinessObject[];
   /** 该素材当前已保存的名称条目 ID。 */
@@ -58,6 +66,9 @@ function draftFor(assetId: string | null, selectedIds: readonly string[]): Draft
 
 export function MaterialBusinessObjects({
   assetId,
+  loaded,
+  readError = null,
+  onRetryRead,
   objects,
   selectedIds,
   onCreate,
@@ -100,9 +111,12 @@ export function MaterialBusinessObjects({
   const busy = creating || saving;
   // 没有素材时整块不可操作，不让用户先把名称和选择准备好却无处保存。
   const ready = Boolean(assetId);
+  // 关联读成功之前一律不开放：界面上暂时空着的选择可能只是「还没读到」，
+  // 不是「这条素材没有关联」，放开就等于让用户拿未知状态覆盖已知状态。
+  const canOperate = ready && loaded;
   const trimmedName = draft.name.trim();
-  const canCreate = ready && !busy && trimmedName.length > 0;
-  const canSave = ready && !busy && !sameIds(draft.ids, selectedIds);
+  const canCreate = canOperate && !busy && trimmedName.length > 0;
+  const canSave = canOperate && !busy && !sameIds(draft.ids, selectedIds);
 
   function toggle(id: string, checked: boolean) {
     setActionError(null);
@@ -182,6 +196,16 @@ export function MaterialBusinessObjects({
       <p>人物名称用于素材分类。</p>
 
       {!assetId ? <p role="status">先选择一条素材，再维护它的名称条目。</p> : null}
+      {assetId && !loaded ? (
+        readError ? (
+          <div role="alert">
+            <p className={styles.tagError}>{readError}</p>
+            {onRetryRead ? <button onClick={onRetryRead} type="button">重新读取</button> : null}
+          </div>
+        ) : (
+          <p role="status">正在读取这条素材已保存的名称关联…</p>
+        )
+      ) : null}
 
       {error ? (
         <div role="alert">
@@ -200,7 +224,7 @@ export function MaterialBusinessObjects({
             <label key={object.id}>
               <input
                 checked={draft.ids.includes(object.id)}
-                disabled={!ready || busy}
+                disabled={!canOperate || busy}
                 onChange={event => toggle(object.id, event.target.checked)}
                 type="checkbox"
               />
@@ -214,7 +238,7 @@ export function MaterialBusinessObjects({
       <label>
         类型
         <select
-          disabled={!ready || busy}
+          disabled={!canOperate || busy}
           onChange={event => setDraftState(current => ({ ...current, kind: event.target.value as BusinessObjectKind }))}
           value={draft.kind}
         >
@@ -227,7 +251,7 @@ export function MaterialBusinessObjects({
         名称
         <input
           className={styles.intakeLinkInput}
-          disabled={!ready || busy}
+          disabled={!canOperate || busy}
           onChange={event => setDraftState(current => ({ ...current, name: event.target.value, saved: null }))}
           placeholder="例如：红烧肉"
           value={draft.name}
@@ -235,7 +259,7 @@ export function MaterialBusinessObjects({
       </label>
       <button disabled={!canCreate} onClick={() => void handleCreate()} type="button">新增并选中</button>
       <button disabled={!canSave} onClick={() => void handleSave()} type="button">保存关联到当前素材</button>
-      <button disabled={!ready || busy} onClick={handleCancel} type="button">取消</button>
+      <button disabled={!canOperate || busy} onClick={handleCancel} type="button">取消</button>
     </section>
   );
 }

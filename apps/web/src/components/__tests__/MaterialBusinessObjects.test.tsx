@@ -19,6 +19,9 @@ function Harness({
   initialIds = [],
   pending = null,
   error = null,
+  loaded = true,
+  readError = null,
+  onRetryRead,
   onCreate: onCreateOverride,
   onSave: onSaveOverride,
 }: {
@@ -27,6 +30,9 @@ function Harness({
   initialIds?: string[];
   pending?: "create" | "save" | null;
   error?: string | null;
+  loaded?: boolean;
+  readError?: string | null;
+  onRetryRead?: () => void;
   onCreate?: (kind: BusinessObjectKind, name: string) => Promise<BusinessObject>;
   onSave?: (assetId: string, ids: string[]) => Promise<BusinessObject[]>;
 }) {
@@ -55,7 +61,10 @@ function Harness({
     <MaterialBusinessObjects
       assetId={assetId}
       error={error}
+      loaded={loaded}
       objects={objects}
+      onRetryRead={onRetryRead}
+      readError={readError}
       onCreate={onCreateOverride ?? defaultCreate}
       onSave={onSaveOverride ?? defaultSave}
       pending={pending}
@@ -288,4 +297,28 @@ it("asks for a material before allowing any association work", () => {
   expect(screen.getByRole("button", { name: "新增并选中" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存关联到当前素材" })).toBeDisabled();
   expect(onSave).not.toHaveBeenCalled();
+});
+
+it("keeps the whole block closed until the associations are known, and offers a real retry on failure", async () => {
+  const onRetryRead = vi.fn();
+  const { rerender } = render(<Harness assetId="asset-1" initialIds={["obj-dish"]} loaded={false} />);
+
+  // 还没读回来：空选择只是未知，不能当成「没有关联」去保存。
+  expect(screen.getByText("正在读取这条素材已保存的名称关联…")).toBeInTheDocument();
+  expect(checkbox("红烧肉")).toBeDisabled();
+  expect(screen.getByLabelText("名称")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保存关联到当前素材" })).toBeDisabled();
+  expect(screen.queryByText("名称关联读取失败。")).not.toBeInTheDocument();
+
+  rerender(<Harness assetId="asset-1" initialIds={["obj-dish"]} loaded={false} readError="名称关联读取失败。" onRetryRead={onRetryRead} />);
+  // 读取失败就明确说出来，并给真正的重读入口，而不是只让用户把错误关掉。
+  expect(screen.getByText("名称关联读取失败。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+  expect(onRetryRead).toHaveBeenCalledTimes(1);
+  expect(checkbox("红烧肉")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保存关联到当前素材" })).toBeDisabled();
+
+  rerender(<Harness assetId="asset-1" initialIds={["obj-dish"]} />);
+  await waitFor(() => expect(checkbox("红烧肉")).toBeChecked());
+  expect(checkbox("红烧肉")).toBeEnabled();
 });
