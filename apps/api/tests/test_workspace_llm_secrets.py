@@ -1,6 +1,8 @@
 """按工作区隔离的文字服务配置与密钥（WIL-165 阶段A）。
 
-只碰本单自建的临时钥匙串和临时配置根：不读登录钥匙串、不读真实 dotenv。
+普通用例走 tests/conftest.py 的临时工作区根 + 内存钥匙串替身，任何平台都能跑，
+也不碰登录钥匙串。系统安全存储的真实实证另用 `real_keychain`：只在本单自建的
+临时钥匙串里进行，仅 macOS 上执行。
 """
 
 from __future__ import annotations
@@ -22,12 +24,11 @@ from app.runtime_settings import (
 
 macos = pytest.mark.skipif(shutil.which("security") is None, reason="系统安全存储只在 macOS 上可用")
 
-
 @pytest.fixture
-def isolated(tmp_path, monkeypatch):
-    """临时钥匙串 + 临时配置根。测试结束删掉钥匙串。"""
-    config_root = tmp_path / "workspace-config"
-    monkeypatch.setenv(module._CONFIG_ROOT_ENV, str(config_root))
+def real_keychain(tmp_path, monkeypatch):
+    """本单自建的临时钥匙串：真实系统安全存储实证，用完删掉。"""
+    if shutil.which("security") is None:
+        pytest.skip("系统安全存储只在 macOS 上可用")
     keychain_path = tmp_path / "wil165-test.keychain"
     created = subprocess.run(
         ["security", "create-keychain", "-p", "wil165-test", str(keychain_path)],
@@ -35,6 +36,7 @@ def isolated(tmp_path, monkeypatch):
     )
     if created.returncode != 0:
         pytest.skip("无法创建临时钥匙串")
+    monkeypatch.setattr(module, "_run_security", _real_security)
     monkeypatch.setenv(module._KEYCHAIN_ENV, str(keychain_path))
     with module._lock:
         module._secret_cache.clear()
@@ -46,8 +48,12 @@ def isolated(tmp_path, monkeypatch):
             module._secret_cache.clear()
 
 
+def _real_security(arguments: list[str]) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run(["security", *arguments], text=True, capture_output=True, check=False)
+
+
 @macos
-def test_two_workspaces_save_read_delete_their_own_secret(isolated):
+def test_two_workspaces_save_read_delete_their_own_secret(real_keychain):
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
     module.save_workspace_secret("ws-b", "llm_api_key", "key-b")
 
@@ -61,19 +67,19 @@ def test_two_workspaces_save_read_delete_their_own_secret(isolated):
 
 
 @macos
-def test_delete_then_read_never_revives_the_old_key(isolated):
+def test_delete_then_read_never_revives_the_old_key(real_keychain):
     module.save_workspace_secret("ws-a", "deepseek_api_key", "ds-old")
     assert module.delete_workspace_secret("ws-a", "deepseek_api_key") is True
     assert module.read_workspace_secret("ws-a", "deepseek_api_key") is None
     assert module.delete_workspace_secret("ws-a", "deepseek_api_key") is False
 
 
-def test_snapshot_refuses_plaintext_secret_fields(isolated):
+def test_snapshot_refuses_plaintext_secret_fields():
     with pytest.raises(module.WorkspaceSecretStoreError):
         module.save_workspace_config("ws-a", {"llm_api_key": "must-not-be-plaintext"})
 
 
-def test_snapshot_keeps_workspaces_apart(isolated):
+def test_snapshot_keeps_workspaces_apart():
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
     module.save_workspace_config("ws-b", {"llm_provider": "deepseek"})
 
@@ -88,7 +94,7 @@ def test_snapshot_keeps_workspaces_apart(isolated):
 
 
 @macos
-def test_workspace_settings_use_that_workspace_secret_only(isolated):
+def test_workspace_settings_use_that_workspace_secret_only(real_keychain):
     base = Settings(llm_provider="minimax")
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
 
@@ -100,7 +106,7 @@ def test_workspace_settings_use_that_workspace_secret_only(isolated):
 
 
 @macos
-def test_apply_update_keeps_key_out_of_snapshot(isolated):
+def test_apply_update_keeps_key_out_of_snapshot(real_keychain):
     reloaded: list[bool] = []
     changed = apply_workspace_runtime_settings_update(
         "ws-a",
@@ -114,7 +120,8 @@ def test_apply_update_keeps_key_out_of_snapshot(isolated):
     assert "key-a" not in module.workspace_config_path("ws-a").read_text(encoding="utf-8")
 
 
-def test_blank_key_input_keeps_the_stored_key(isolated):
+@macos
+def test_blank_key_input_keeps_the_stored_key(real_keychain):
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
     changed = apply_workspace_runtime_settings_update(
         "ws-a",
@@ -127,7 +134,7 @@ def test_blank_key_input_keeps_the_stored_key(isolated):
 
 
 @macos
-def test_explicit_delete_action_removes_the_key(isolated):
+def test_explicit_delete_action_removes_the_key(real_keychain):
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_api_key_provider": "minimax"})
 
@@ -142,8 +149,7 @@ def test_explicit_delete_action_removes_the_key(isolated):
     assert module.load_workspace_config("ws-a") == {"llm_provider": "minimax"}
 
 
-@macos
-def test_workspace_settings_do_not_inherit_the_global_plaintext_key(isolated):
+def test_workspace_settings_do_not_inherit_the_global_plaintext_key():
     """旧全局明文没有工作区归属，不能被这个工作区继承去用。"""
     base = Settings(llm_provider="minimax", llm_api_key="global-plaintext",
                     llm_base_url="https://api.minimax.io/v1", llm_model="MiniMax-M3")
@@ -156,7 +162,7 @@ def test_workspace_settings_do_not_inherit_the_global_plaintext_key(isolated):
 
 
 @macos
-def test_deleted_key_is_not_revived_by_the_global_plaintext(isolated):
+def test_deleted_key_is_not_revived_by_the_global_plaintext(real_keychain):
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
     base = Settings(llm_provider="minimax", llm_api_key="global-plaintext")
     assert module.workspace_settings("ws-a", base).settings.effective_llm_api_key == "key-a"
@@ -166,7 +172,7 @@ def test_deleted_key_is_not_revived_by_the_global_plaintext(isolated):
     assert module.workspace_settings("ws-a", base).settings.effective_llm_api_key is None
 
 
-def test_snapshot_update_keeps_earlier_fields(isolated):
+def test_snapshot_update_keeps_earlier_fields():
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_base_url": "https://api.minimax.io/v1"})
     module.save_workspace_config("ws-a", {"llm_model": "MiniMax-M3"})
 
@@ -178,7 +184,7 @@ def test_snapshot_update_keeps_earlier_fields(isolated):
 
 
 @macos
-def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(isolated):
+def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(real_keychain):
     """同一套保存路由，两个工作区各自读回自己的配置和密钥。"""
     import app.main as main_module
     from app.auth import AuthPrincipal
@@ -203,8 +209,7 @@ def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(isolate
     assert module.read_workspace_secret("ws-b", "llm_api_key") is None
 
 
-@macos
-def test_settings_route_reports_a_refused_keychain_instead_of_success(isolated, monkeypatch):
+def test_settings_route_reports_a_refused_keychain_instead_of_success(monkeypatch):
     import app.main as main_module
     from app.auth import AuthPrincipal
     from app.schemas import RuntimeSettingsUpdateRequest
@@ -231,7 +236,7 @@ def test_settings_route_reports_a_refused_keychain_instead_of_success(isolated, 
 
 
 @macos
-def test_delete_removes_the_deepseek_fallback_key_too(isolated):
+def test_delete_removes_the_deepseek_fallback_key_too(real_keychain):
     """选了 DeepSeek 时，只删新键的话旧 DEEPSEEK 键会接着生效。"""
     module.save_workspace_config("ws-a", {"llm_provider": "deepseek"})
     module.save_workspace_secret("ws-a", "llm_api_key", "new-deepseek-key")
@@ -248,7 +253,7 @@ def test_delete_removes_the_deepseek_fallback_key_too(isolated):
 
 
 @macos
-def test_delete_leaves_another_workspace_and_other_keys_alone(isolated):
+def test_delete_leaves_another_workspace_and_other_keys_alone(real_keychain):
     module.save_workspace_config("ws-a", {"llm_provider": "minimax"})
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
     module.save_workspace_secret("ws-b", "llm_api_key", "key-b")
@@ -261,7 +266,7 @@ def test_delete_leaves_another_workspace_and_other_keys_alone(isolated):
     assert module.read_workspace_secret("ws-a", "llm_api_key") is None
 
 
-def test_secret_write_failure_is_never_read_as_success(isolated, monkeypatch):
+def test_secret_write_failure_is_never_read_as_success(monkeypatch):
     monkeypatch.setattr(
         module, "_run_security",
         lambda arguments: subprocess.CompletedProcess(
@@ -274,7 +279,7 @@ def test_secret_write_failure_is_never_read_as_success(isolated, monkeypatch):
         module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
 
 
-def test_topic_route_snapshot_reads_the_requesting_workspace(isolated):
+def test_topic_route_snapshot_reads_the_requesting_workspace():
     import app.main as main_module
 
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
@@ -288,8 +293,7 @@ def test_topic_route_snapshot_reads_the_requesting_workspace(isolated):
     assert unconfigured["availability"] == "unconfigured"
 
 
-@macos
-def test_plan_turn_reports_the_requesting_workspace_provider(isolated, monkeypatch):
+def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
     """响应里的 provider/model 必须是本次工作区的配置，且不靠网络。"""
     import app.main as main_module
     from app.auth import AuthPrincipal
@@ -325,7 +329,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(isolated, monkeypat
 
 
 @macos
-def test_delete_clears_a_workspace_that_only_saved_a_deepseek_key(isolated):
+def test_delete_clears_a_workspace_that_only_saved_a_deepseek_key(real_keychain):
     """没写 provider、只存了旧 DeepSeek 键时，删后不能再继续生效。"""
     module.save_workspace_secret("ws-a", "deepseek_api_key", "legacy-deepseek-key")
     module.save_workspace_secret("ws-b", "deepseek_api_key", "other-workspace-key")
@@ -339,7 +343,7 @@ def test_delete_clears_a_workspace_that_only_saved_a_deepseek_key(isolated):
     assert module.read_workspace_secret("ws-b", "deepseek_api_key") == "other-workspace-key"
 
 
-def test_workspace_settings_fall_back_to_the_product_deepseek_model(isolated):
+def test_workspace_settings_fall_back_to_the_product_deepseek_model():
     base = Settings(deepseek_model="global-deepseek-model")
 
     resolved = module.workspace_settings("ws-a", base).settings
@@ -347,7 +351,7 @@ def test_workspace_settings_fall_back_to_the_product_deepseek_model(isolated):
     assert resolved.deepseek_model == Settings.deepseek_model
 
 
-def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):
+def test_locked_keychain_read_is_not_reported_as_no_key(monkeypatch):
     monkeypatch.setattr(
         module, "_run_security",
         lambda arguments: subprocess.CompletedProcess(
@@ -359,7 +363,7 @@ def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):
         module.read_workspace_secret("ws-a", "llm_api_key")
 
 
-def test_locked_keychain_delete_is_not_reported_as_nothing_deleted(isolated, monkeypatch):
+def test_locked_keychain_delete_is_not_reported_as_nothing_deleted(monkeypatch):
     monkeypatch.setattr(
         module, "_run_security",
         lambda arguments: subprocess.CompletedProcess(
@@ -395,8 +399,7 @@ def test_split_routes_only_llm_keys_to_the_secret_store():
                               "llm_api_key_provider": "minimax"}
 
 
-@macos
-def test_secret_store_failure_never_falls_back_to_plaintext(isolated, monkeypatch):
+def test_secret_store_failure_never_falls_back_to_plaintext(monkeypatch):
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
 
     monkeypatch.setattr(
@@ -410,8 +413,8 @@ def test_secret_store_failure_never_falls_back_to_plaintext(isolated, monkeypatc
     assert not snapshot.exists() or "rotated-key" not in snapshot.read_text(encoding="utf-8")
 
 
-def test_pi_config_dir_is_per_workspace(isolated):
-    parent = isolated / "agent"
+def test_pi_config_dir_is_per_workspace(tmp_path):
+    parent = tmp_path / "agent"
     parent.mkdir()
 
     a = module.workspace_pi_config_dir("ws-a", parent)
@@ -422,7 +425,7 @@ def test_pi_config_dir_is_per_workspace(isolated):
     assert (a / "sessions").is_dir() and (b / "sessions").is_dir()
 
 
-def test_pi_verification_does_not_light_up_another_workspace(isolated):
+def test_pi_verification_does_not_light_up_another_workspace():
     from app.config import record_llm_service_verification
 
     settings = Settings(llm_provider="minimax", llm_api_key="key-a", llm_model="MiniMax-M3")
@@ -433,8 +436,8 @@ def test_pi_verification_does_not_light_up_another_workspace(isolated):
     assert settings.llm_service_status()["state"] == "unverified"
 
 
-def test_pi_config_dir_sanitises_workspace_id(isolated):
-    parent = isolated / "agent"
+def test_pi_config_dir_sanitises_workspace_id(tmp_path):
+    parent = tmp_path / "agent"
     parent.mkdir()
 
     root = module.workspace_pi_config_dir("ws/../../escape", parent)
