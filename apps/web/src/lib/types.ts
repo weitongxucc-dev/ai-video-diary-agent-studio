@@ -1825,6 +1825,9 @@ export type MaterialCollections = {
 
 export type MaterialTagStat = {
   tag: string;
+  // 素材数量：同一素材内同名标签只计一次（资产用户标签 + 片段系统/用户标签）
+  asset_count: number;
+  // 片段数量：保留原语义，不作为素材数量的替代
   segment_count: number;
   duration_seconds: number;
   usage_count: number;

@@ -222,6 +222,8 @@ export function getProductionMaterials(input?: {
   offset?: number;
   query?: string;
   reviewStatus?: string;
+  // 精确标签筛选，由服务端在分页前生效
+  tag?: string;
 }): Promise<MaterialLibrary> {
   const query = new URLSearchParams();
   if (input?.limit) query.set("limit", String(input.limit));
@@ -229,6 +231,7 @@ export function getProductionMaterials(input?: {
   if (input?.query) query.set("q", input.query);
   if (input?.reviewStatus && input.reviewStatus !== "all")
     query.set("review_status", input.reviewStatus);
+  if (input?.tag) query.set("tag", input.tag);
   const suffix = query.size ? `?${query.toString()}` : "";
   return request<MaterialLibrary>(`/api/production/materials${suffix}`);
 }

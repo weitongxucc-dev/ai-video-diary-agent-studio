@@ -11,6 +11,7 @@ import type { CreationTask, ProductionFoundation } from "@/lib/types";
 let pathname = "/";
 
 const serverMocks = vi.hoisted(() => ({
+  getMaterialLibraryInsights: vi.fn(),
   getProductionFoundation: vi.fn(),
   listCreationTasks: vi.fn(),
 }));
@@ -31,6 +32,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("@/lib/api.server", () => ({
+  getMaterialLibraryInsights: serverMocks.getMaterialLibraryInsights,
   getProductionFoundation: serverMocks.getProductionFoundation,
   listCreationTasks: serverMocks.listCreationTasks,
 }));
@@ -100,6 +102,13 @@ describe("HomePage workspace overview", () => {
     routerPush.mockReset();
     serverMocks.getProductionFoundation.mockReset();
     serverMocks.listCreationTasks.mockReset();
+    serverMocks.getMaterialLibraryInsights.mockReset();
+    serverMocks.getMaterialLibraryInsights.mockResolvedValue({
+      asset_count: 0,
+      segment_count: 0,
+      tags: [],
+      recommended_gaps: [],
+    });
     clientMocks.listCreationTasks.mockReset();
     clientMocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
     Object.defineProperty(window, "matchMedia", {
