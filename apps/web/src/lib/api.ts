@@ -24,6 +24,8 @@ import type {
   CreationTaskAssistantTurnResponse,
   CreationTaskAssistantHistory,
   CreationTaskTopicsResponse,
+  CreationTaskTimelineVersionDetail,
+  CreationTaskTimelineVersionList,
   FeedbackSummary,
   KnowledgeNote,
   LocalModelCatalog,
@@ -472,6 +474,21 @@ export function confirmCreationTaskTopic(
 export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
   return creationPlanRequest<CreationTaskWorkspace>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}`,
+  );
+}
+
+export function listCreationTaskTimelineVersions(taskId: string): Promise<CreationTaskTimelineVersionList> {
+  return creationPlanRequest<CreationTaskTimelineVersionList>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions`,
+  );
+}
+
+export function getCreationTaskTimelineVersion(
+  taskId: string,
+  versionId: string,
+): Promise<CreationTaskTimelineVersionDetail> {
+  return creationPlanRequest<CreationTaskTimelineVersionDetail>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions/${encodeURIComponent(versionId)}`,
   );
 }
 

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 import type { DesktopVoiceRecorderProps } from "@/components/DesktopVoiceRecorder";
 const recorder = vi.hoisted(() => ({ props: null as DesktopVoiceRecorderProps | null }));
@@ -575,6 +575,80 @@ it("leaves the coverage suggestion out when every taxonomy tag already has mater
 
   await waitFor(() => expect(screen.getByLabelText("素材覆盖")).toBeInTheDocument());
   expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+const laterSegment = { ...segment, id: "later-segment", start_seconds: 2.5, end_seconds: 3.5, description: "后段声音" };
+
+it.each(["audio", "video"] as const)("seeks loaded %s to the clicked segment without changing playback", async (mediaType) => {
+  const mediaLibrary = { ...library, assets: [{ ...taggedAsset, media_type: mediaType, segments: [segment, laterSegment] }] };
+  render(<MaterialLibraryWorkspace initialLibrary={mediaLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const media = await screen.findByLabelText<HTMLMediaElement>("原素材预览");
+  Object.defineProperty(media, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  const play = vi.spyOn(media, "play").mockResolvedValue();
+  const pause = vi.spyOn(media, "pause").mockImplementation(() => {});
+  fireEvent.loadedMetadata(media);
+  expect(media.currentTime).toBe(1);
+  fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
+  expect(media.currentTime).toBe(2.5);
+  Object.defineProperty(media, "paused", { configurable: true, value: false });
+  fireEvent.click(screen.getByRole("button", { name: /画面说明/ }));
+  expect(media.currentTime).toBe(1);
+  expect(media.paused).toBe(false);
+  media.currentTime = 3.9;
+  fireEvent.timeUpdate(media);
+  expect(media.currentTime).toBe(3.9);
+  expect(play).not.toHaveBeenCalled();
+  expect(pause).not.toHaveBeenCalled();
+});
+
+it.each(["audio", "video"] as const)("defers unloaded %s seeking until metadata for the latest selected segment", async (mediaType) => {
+  const mediaLibrary = { ...library, assets: [{ ...taggedAsset, media_type: mediaType, segments: [segment, laterSegment] }] };
+  render(<MaterialLibraryWorkspace initialLibrary={mediaLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const media = await screen.findByLabelText<HTMLMediaElement>("原素材预览");
+  const seek = vi.spyOn(media, "currentTime", "set");
+  fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
+  fireEvent.click(screen.getByRole("button", { name: /画面说明/ }));
+  fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
+  expect(seek).not.toHaveBeenCalled();
+  Object.defineProperty(media, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  fireEvent.loadedMetadata(media);
+  expect(seek).toHaveBeenCalledExactlyOnceWith(2.5);
+});
+
+it("switches audio assets and video without seeking the previous media element", async () => {
+  const audioA = { ...taggedAsset, media_type: "audio" as const, file_name: "声音A.wav", segments: [segment, laterSegment] };
+  const audioB = { ...otherAsset, media_type: "audio" as const, file_name: "声音B.wav", segments: [{ ...otherSegment, start_seconds: 0.5 }, { ...laterSegment, id: "later-b", asset_id: otherAsset.id, start_seconds: 2 }] };
+  const mediaLibrary = { ...library, assets: [audioA, audioB, { ...taggedAsset, id: "video-c", file_name: "画面C.mp4", segments: [{ ...segment, asset_id: "video-c", start_seconds: 1.5 }] }], total_count: 3 };
+  render(<MaterialLibraryWorkspace initialLibrary={mediaLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const first = await screen.findByLabelText<HTMLMediaElement>("原素材预览");
+  Object.defineProperty(first, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  fireEvent.loadedMetadata(first);
+  fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
+  expect(first.currentTime).toBe(2.5);
+  fireEvent.click(screen.getByRole("button", { name: /声音B\.wav/ }));
+  const second = screen.getByLabelText<HTMLMediaElement>("原素材预览");
+  expect(second).not.toBe(first);
+  Object.defineProperty(second, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  fireEvent.loadedMetadata(second);
+  expect(second.currentTime).toBe(0.5);
+  fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
+  expect(second.currentTime).toBe(2);
+  fireEvent.loadedMetadata(first);
+  expect(first.currentTime).toBe(2.5);
+  expect(second.currentTime).toBe(2);
+  fireEvent.click(screen.getByRole("button", { name: /画面C\.mp4/ }));
+  const video = screen.getByLabelText<HTMLMediaElement>("原素材预览");
+  Object.defineProperty(video, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(1.5);
+  fireEvent.click(screen.getByRole("button", { name: /声音B\.wav/ }));
+  const returnedAudio = screen.getByLabelText<HTMLMediaElement>("原素材预览");
+  Object.defineProperty(returnedAudio, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
+  fireEvent.loadedMetadata(returnedAudio);
+  expect(returnedAudio.currentTime).toBe(0.5);
+  expect(video.currentTime).toBe(1.5);
 });
 
 const linkUrl = "https://media.example.com/clip.mp4";

@@ -2636,3 +2636,54 @@ class ScriptLibraryReuseRequest(BaseModel):
 class ScriptLibraryReuseResponse(BaseModel):
     task_id: str
     script: CreationTaskScriptResponse
+
+
+class TimelineVersionSummaryResponse(BaseModel):
+    id: str
+    sequence: int
+    parent_version_id: str | None
+    created_at: datetime
+    is_current: bool
+    shot_count: int
+    subtitle_track_count: int
+    narration_segment_count: int
+
+
+class TimelineVersionListResponse(BaseModel):
+    task_id: str
+    current_version_id: str | None
+    items: list[TimelineVersionSummaryResponse]
+
+
+class TimelineVersionShotResponse(BaseModel):
+    index: int
+    id: str
+    narration_text: str | None
+    start_seconds: float
+    end_seconds: float
+    description: str | None
+
+
+class TimelineVersionNarrationSegmentResponse(BaseModel):
+    index: int
+    id: str
+    text: str
+    duration_seconds: float | None
+    status: str | None
+
+
+class TimelineVersionArtifactResponse(BaseModel):
+    kind: Literal["video", "subtitles", "cover"]
+    status: Literal["available", "not_generated", "missing"]
+    url: str | None
+    reason: str | None
+
+
+class TimelineVersionDetailResponse(BaseModel):
+    task_id: str
+    version: TimelineVersionSummaryResponse
+    shots: list[TimelineVersionShotResponse]
+    narration_segments: list[TimelineVersionNarrationSegmentResponse]
+    subtitle_tracks: list[SubtitleTrackResponse]
+    cover_asset: CoverAssetResponse | None
+    artifacts: list[TimelineVersionArtifactResponse]
