@@ -156,6 +156,7 @@ from app.production import (
     MediaAuthorityError,
     MaterialCollection,
     MaterialAssetNote,
+    MaterialBusinessObject,
     MaterialLinkProvenanceSink,
     NarrationArtifactRecord,
     NarrationSegment,
@@ -269,6 +270,10 @@ from app.schemas import (
     MaterialAssetResponse,
     MaterialAssetNotesRequest,
     MaterialAssetNotesResponse,
+    MaterialBusinessObjectCreateRequest,
+    MaterialBusinessObjectResponse,
+    MaterialBusinessObjectsResponse,
+    MaterialAssetBusinessObjectsSaveRequest,
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
@@ -12007,6 +12012,71 @@ def update_material_asset_notes(request: Request, payload: MaterialAssetNotesReq
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MaterialAssetNotesResponse(assets=[_material_asset_response(asset) for asset in assets])
+
+
+def _material_business_object_response(entry: MaterialBusinessObject) -> MaterialBusinessObjectResponse:
+    return MaterialBusinessObjectResponse(id=entry.id, kind=entry.kind, name=entry.name)
+
+
+@app.get("/api/production/business-objects", response_model=MaterialBusinessObjectsResponse)
+def list_material_business_objects(request: Request) -> MaterialBusinessObjectsResponse:
+    """List this workspace's product/dish/person name entries.
+
+    Entries are scoped to the calling workspace, and creating one attaches it to
+    nothing: the user still chooses which materials carry it.
+    """
+    entries = production_repo.list_business_objects(current_workspace_id(request))
+    return MaterialBusinessObjectsResponse(
+        items=[_material_business_object_response(entry) for entry in entries],
+        total_count=len(entries),
+    )
+
+
+@app.post("/api/production/business-objects", response_model=MaterialBusinessObjectResponse, status_code=201)
+def create_material_business_object(
+    request: Request, payload: MaterialBusinessObjectCreateRequest
+) -> MaterialBusinessObjectResponse:
+    """Add one name entry without associating it to any material yet."""
+    try:
+        entry = production_repo.create_business_object(current_workspace_id(request), payload.kind, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _material_business_object_response(entry)
+
+
+@app.get("/api/production/materials/{asset_id}/business-objects", response_model=MaterialBusinessObjectsResponse)
+def list_material_asset_business_objects(request: Request, asset_id: str) -> MaterialBusinessObjectsResponse:
+    """Read back the name entries attached to one material."""
+    try:
+        entries = production_repo.list_asset_business_objects(current_workspace_id(request), asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材不存在或不属于当前工作区") from exc
+    return MaterialBusinessObjectsResponse(
+        items=[_material_business_object_response(entry) for entry in entries],
+        total_count=len(entries),
+    )
+
+
+@app.put("/api/production/materials/{asset_id}/business-objects", response_model=MaterialBusinessObjectsResponse)
+def save_material_asset_business_objects(
+    request: Request, asset_id: str, payload: MaterialAssetBusinessObjectsSaveRequest
+) -> MaterialBusinessObjectsResponse:
+    """Save exactly the name entries the user selected for this one material.
+
+    Only the material named in the path is touched, and the repository refuses
+    the whole selection if any entry belongs to another workspace, so the user is
+    never shown associations that were not written. An empty list clears them.
+    """
+    try:
+        entries = production_repo.set_asset_business_objects(
+            current_workspace_id(request), asset_id, list(payload.business_object_ids)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材或名称条目不属于当前工作区，未做任何修改") from exc
+    return MaterialBusinessObjectsResponse(
+        items=[_material_business_object_response(entry) for entry in entries],
+        total_count=len(entries),
+    )
 
 
 @app.get("/api/production/materials/{asset_id}/unmatched-corrections")

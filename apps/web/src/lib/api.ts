@@ -11,6 +11,9 @@ import type {
   CreationTaskWorkspace,
   CreationExecutionPreview,
   CreationExecutionStatus,
+  BusinessObjectKind,
+  MaterialBusinessObject,
+  MaterialBusinessObjects,
   MaterialIntakeStatus,
   CreationTaskScriptsResponse,
   CreationTaskScript,
@@ -298,6 +301,42 @@ export function updateMaterialNotes(items: MaterialAssetNote[]): Promise<{ asset
   return request("/api/production/materials/notes", {
     method: "PUT", body: JSON.stringify({ items }),
   });
+}
+
+/** 当前工作区已有的产品/菜品/人物名称条目，供用户选择关联。 */
+export function getMaterialBusinessObjects(): Promise<MaterialBusinessObjects> {
+  return request<MaterialBusinessObjects>("/api/production/business-objects");
+}
+
+/** 新增一条名称条目。不会自动关联到任何素材，仍需用户明确选择保存。 */
+export function createMaterialBusinessObject(input: {
+  kind: BusinessObjectKind;
+  name: string;
+}): Promise<MaterialBusinessObject> {
+  return request<MaterialBusinessObject>("/api/production/business-objects", {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+/** 这条素材当前已保存的名称条目。 */
+export function getAssetBusinessObjects(assetId: string): Promise<MaterialBusinessObjects> {
+  return request<MaterialBusinessObjects>(
+    `/api/production/materials/${encodeURIComponent(assetId)}/business-objects`,
+  );
+}
+
+/**
+ * 把这条素材的名称关联换成用户选中的那几条。只写这一个素材的关联，
+ * 不改它的说明、公共背景、片段描述或人工纠正；空数组清空关联。
+ */
+export function saveAssetBusinessObjects(
+  assetId: string,
+  businessObjectIds: string[],
+): Promise<MaterialBusinessObjects> {
+  return request<MaterialBusinessObjects>(
+    `/api/production/materials/${encodeURIComponent(assetId)}/business-objects`,
+    { method: "PUT", body: JSON.stringify({ business_object_ids: businessObjectIds }) },
+  );
 }
 
 export function analyzeProductionMaterial(

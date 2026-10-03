@@ -616,6 +616,28 @@ class MaterialAssetNotesResponse(BaseModel):
     assets: list[MaterialAssetResponse]
 
 
+class MaterialBusinessObjectResponse(BaseModel):
+    id: str
+    kind: Literal["product", "dish", "person"]
+    name: str
+
+
+class MaterialBusinessObjectsResponse(BaseModel):
+    items: list[MaterialBusinessObjectResponse]
+    total_count: int = Field(ge=0)
+
+
+class MaterialBusinessObjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["product", "dish", "person"]
+    name: str = Field(min_length=1, max_length=80)
+
+
+class MaterialAssetBusinessObjectsSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    business_object_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
 class MaterialUseStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     use_state: ContentUseState

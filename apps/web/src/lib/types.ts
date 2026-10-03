@@ -1791,6 +1791,24 @@ export type MaterialLibrary = {
   has_more: boolean;
 };
 
+/** 名称条目的类型：产品、菜品、人物。人物名称只用于素材分类，不是出镜形象。 */
+export type BusinessObjectKind = "product" | "dish" | "person";
+
+/**
+ * 一条工作区自有的名称条目。用户自己怎么称呼这个东西，不是系统识别出的画面
+ * 事实；与出镜形象/声音档案（PersonProfile）无关，关联不会创建形象或声音档案。
+ */
+export type MaterialBusinessObject = {
+  id: string;
+  kind: BusinessObjectKind;
+  name: string;
+};
+
+export type MaterialBusinessObjects = {
+  items: MaterialBusinessObject[];
+  total_count: number;
+};
+
 export type MaterialCollection = {
   id: string;
   workspace_id: string;
