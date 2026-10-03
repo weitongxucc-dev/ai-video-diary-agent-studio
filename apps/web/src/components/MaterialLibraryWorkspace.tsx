@@ -59,6 +59,7 @@ import type {
 } from "@/lib/types";
 
 type Filter = "all" | "raw" | "approved" | "rejected";
+type MediaTypeFilter = "all" | MaterialAsset["media_type"];
 type IntakeStatus = Awaited<ReturnType<typeof getMaterialIntakeStatus>>;
 type Busy =
   | "scan"
@@ -112,6 +113,24 @@ function roleLabel(asset: MaterialAsset) {
 
 function mediaLabel(mediaType: MaterialAsset["media_type"]) {
   return { video: "视频", audio: "音频", image: "图片" }[mediaType];
+}
+
+const mediaTypeOptions: MediaTypeFilter[] = ["all", "video", "audio", "image"];
+const mediaTypeLabels: Record<MediaTypeFilter, string> = {
+  all: "全部",
+  video: "视频",
+  audio: "音频",
+  image: "图片",
+};
+
+// 类型筛选和标签一样靠 URL 保留下来，刷新后从这里读回；读到的不是三个固定
+// 类型之一就当没筛，免得手改地址栏把列表卡在一个服务端不认的值上。
+function readMediaTypeFromUrl(): MediaTypeFilter {
+  if (typeof window === "undefined") return "all";
+  const value = new URLSearchParams(window.location.search).get("media_type");
+  return mediaTypeOptions.includes(value as MediaTypeFilter)
+    ? (value as MediaTypeFilter)
+    : "all";
 }
 
 function reviewLabel(asset: MaterialAsset) {
@@ -192,6 +211,7 @@ export function MaterialLibraryWorkspace({
   );
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
   const [intake, setIntake] = useState<IntakeStatus | null>(null);
@@ -241,7 +261,9 @@ export function MaterialLibraryWorkspace({
   const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
   const intakeRevision = useRef(0);
-  const lastSearch = useRef({ filter, query, tag: initialTag ?? "" });
+  // 服务端渲染的第一页没有类型条件，所以这里的 mediaType 只能是「全部」；
+  // 挂载后从 URL 读回的类型会让下面的搜索 effect 重新取第一页。
+  const lastSearch = useRef({ filter, query, tag: initialTag ?? "", mediaType: "all" as MediaTypeFilter });
   const assetWriteRevision = useRef(0);
   const objectLoadRevision = useRef(0);
   const objectReadRetry = useRef(0);
@@ -322,6 +344,7 @@ export function MaterialLibraryWorkspace({
           libraries.push(await getProductionMaterials({
             limit: Math.min(100, loadedCount - offset), offset,
             query: query.trim(), reviewStatus: filter, tag: initialTag,
+            mediaType,
           }));
         }
         if (active && revision === assetWriteRevision.current) {
@@ -338,11 +361,18 @@ export function MaterialLibraryWorkspace({
       }
     }, 15000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, query, selectedId]);
+  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, mediaType, query, selectedId]);
+
+  // 首屏是服务端按「全部」渲染的，URL 里的类型在挂载后才读回来，
+  // 于是下面那次搜索会带上类型重新取第一页；URL 里没有类型时状态不变，不会多取一次。
+  useEffect(() => {
+    const restored = readMediaTypeFromUrl();
+    if (restored !== "all") setMediaType(restored);
+  }, []);
 
   useEffect(() => {
-    if (lastSearch.current.filter === filter && lastSearch.current.query === query && lastSearch.current.tag === (initialTag ?? "")) return;
-    lastSearch.current = { filter, query, tag: initialTag ?? "" };
+    if (lastSearch.current.filter === filter && lastSearch.current.query === query && lastSearch.current.tag === (initialTag ?? "") && lastSearch.current.mediaType === mediaType) return;
+    lastSearch.current = { filter, query, tag: initialTag ?? "", mediaType };
     let active = true;
     const timer = window.setTimeout(() => {
       const revision = assetWriteRevision.current;
@@ -353,6 +383,7 @@ export function MaterialLibraryWorkspace({
         query: query.trim(),
         reviewStatus: filter,
         tag: initialTag,
+        mediaType,
       })
         .then((result) => {
           if (!active || revision !== assetWriteRevision.current) return;
@@ -380,7 +411,7 @@ export function MaterialLibraryWorkspace({
     };
     // selectedId and selectAsset are intentionally excluded: changing selection must not re-run search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, initialLibrary.limit, initialTag, query]);
+  }, [filter, initialLibrary.limit, initialTag, mediaType, query]);
 
   // 工作区的名称条目与素材无关，进页面读一次就够了；之后新增的直接并进同一份列表。
   useEffect(() => {
@@ -577,6 +608,20 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  function selectMediaType(value: MediaTypeFilter) {
+    // 只改这一个查询参数，tag 等其它已经生效的筛选原样留在地址栏里。
+    const params = new URLSearchParams(window.location.search);
+    if (value === "all") params.delete("media_type");
+    else params.set("media_type", value);
+    const search = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${search ? `?${search}` : ""}`,
+    );
+    setMediaType(value);
+  }
+
   async function loadMore() {
     setBusy("load");
     setError("");
@@ -587,6 +632,7 @@ export function MaterialLibraryWorkspace({
         query: query.trim(),
         reviewStatus: filter,
         tag: initialTag,
+        mediaType,
       });
       assetWriteRevision.current += 1;
       setAssets((current) => {
@@ -1327,6 +1373,22 @@ export function MaterialLibraryWorkspace({
               ),
             )}
           </div>
+          <div
+            className="library-filters"
+            role="group"
+            aria-label="媒体类型筛选"
+          >
+            {mediaTypeOptions.map((value) => (
+              <button
+                className={mediaType === value ? "is-active" : ""}
+                key={value}
+                onClick={() => selectMediaType(value)}
+                type="button"
+              >
+                {mediaTypeLabels[value]}
+              </button>
+            ))}
+          </div>
           {initialTag ? (
             <span className="library-tag">
               标签：{initialTag}
@@ -1422,7 +1484,7 @@ export function MaterialLibraryWorkspace({
               </strong>
               <p>
                 {assets.length
-                  ? "调整搜索条件或审核状态。"
+                  ? "调整搜索条件、审核状态或媒体类型。"
                   : intake?.bound_to_current_workspace
                     ? "系统会自动检查新素材。新文件稳定并完成分析后，将显示在这里。"
                     : "先在上方确认素材目录，系统随后会自动检查新文件。"}

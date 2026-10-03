@@ -137,4 +137,15 @@ describe("creation execution API", () => {
       method: "PUT", body: JSON.stringify({ business_object_ids: ["bo-a"] }),
     }));
   });
+
+  it("sends the material type filter, and omits it for the whole library", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ assets: [], total_count: 0 }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getProductionMaterials } = await import("../api");
+    await getProductionMaterials({ limit: 24, offset: 0, reviewStatus: "all", mediaType: "audio" });
+    await getProductionMaterials({ limit: 24, offset: 0, mediaType: "all" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/production/materials?limit=24&media_type=audio", expect.anything());
+    // 「全部」不带这个参数，服务端也就不会加类型条件。
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/production/materials?limit=24", expect.anything());
+  });
 });

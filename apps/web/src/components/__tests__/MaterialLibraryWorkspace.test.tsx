@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
@@ -899,4 +899,67 @@ it("keeps a late create/save failure on the material that asked, not on the one 
   // B 的读取已经完成，这条失败如果照旧 setObjectError 会显示在 B 上。
   await waitFor(() => expect(screen.getByRole("checkbox",{name:/红烧肉/})).toBeEnabled());
   expect(screen.queryByText(/名称条目新增失败/)).not.toBeInTheDocument();
+});
+
+// 132 媒体类型筛选：接在 128 的名称关联用例之后，两组断言各自独立。
+const typeGroup = () => screen.getByRole("group", { name: "媒体类型筛选" });
+const typeButton = (label: string) => within(typeGroup()).getByRole("button", { name: label });
+const activeType = () => typeGroup().querySelector(".is-active")?.textContent;
+
+it("switches the flat media types and starts the new type from the first page", async () => {
+  const paged = { ...library, total_count: 2, has_more: true };
+  vi.mocked(getProductionMaterials).mockResolvedValue(paged);
+  render(<MaterialLibraryWorkspace initialLibrary={paged} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+  expect(["全部", "视频", "音频", "图片"].map(label => typeButton(label).textContent))
+    .toEqual(["全部", "视频", "音频", "图片"]);
+  expect(activeType()).toBe("全部");
+
+  // 先翻到第二页，再切类型：新类型必须从第一页开始，不能接着旧的页码。
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 1 })));
+
+  fireEvent.click(typeButton("音频"));
+  expect(activeType()).toBe("音频");
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "audio" })));
+
+  // 类型和审核状态是各自独立的一条条件，叠上以后类型不能被冲掉。
+  fireEvent.click(screen.getByRole("button", { name: "已批准" }));
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "audio", reviewStatus: "approved" })));
+
+  fireEvent.click(typeButton("全部"));
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "all" })));
+});
+
+it("keeps the chosen media type in the URL and restores it after a refresh", async () => {
+  try {
+    vi.mocked(getProductionMaterials).mockResolvedValue(library);
+    const first = render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+
+    fireEvent.click(typeButton("视频"));
+    expect(window.location.search).toBe("?media_type=video");
+    first.unmount();
+
+    // 刷新：服务端渲染的第一页不带类型，读回地址栏后要按这个类型重新取第一页。
+    vi.mocked(getProductionMaterials).mockClear();
+    render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+    await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "video" })));
+    expect(activeType()).toBe("视频");
+
+    fireEvent.click(typeButton("全部"));
+    expect(window.location.search).toBe("");
+  } finally {
+    window.history.replaceState(null, "", "/library");
+  }
+});
+
+it("ignores a media type in the URL that the list does not know", async () => {
+  window.history.replaceState(null, "", "/library?media_type=text");
+  try {
+    render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+    await waitFor(() => expect(activeType()).toBe("全部"));
+    expect(getProductionMaterials).not.toHaveBeenCalledWith(expect.objectContaining({ mediaType: "text" }));
+  } finally {
+    window.history.replaceState(null, "", "/library");
+  }
 });

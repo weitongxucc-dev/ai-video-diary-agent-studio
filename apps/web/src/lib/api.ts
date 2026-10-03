@@ -224,6 +224,8 @@ export function getProductionMaterials(input?: {
   reviewStatus?: string;
   // 精确标签筛选，由服务端在分页前生效
   tag?: string;
+  // 媒体类型筛选，省略或 all 与不带这个参数等价，表示不限类型
+  mediaType?: string;
 }): Promise<MaterialLibrary> {
   const query = new URLSearchParams();
   if (input?.limit) query.set("limit", String(input.limit));
@@ -232,6 +234,8 @@ export function getProductionMaterials(input?: {
   if (input?.reviewStatus && input.reviewStatus !== "all")
     query.set("review_status", input.reviewStatus);
   if (input?.tag) query.set("tag", input.tag);
+  if (input?.mediaType && input.mediaType !== "all")
+    query.set("media_type", input.mediaType);
   const suffix = query.size ? `?${query.toString()}` : "";
   return request<MaterialLibrary>(`/api/production/materials${suffix}`);
 }
