@@ -552,6 +552,30 @@ class MaterialTagStatResponse(BaseModel):
     usage_count: int = Field(ge=0)
 
 
+class MaterialUsageRecordTaskResponse(BaseModel):
+    id: str | None
+    name: str | None
+    stage: str | None
+    status: str | None
+    current_timeline_version_id: str | None
+
+
+class MaterialUsageRecordResponse(BaseModel):
+    plan_id: str
+    clip_id: str
+    used_at: datetime
+    task: MaterialUsageRecordTaskResponse | None
+    role: str | None
+    manually_selected: bool | None
+    timeline_version_id: str | None
+    resolution: Literal["current", "unknown"]
+
+
+class MaterialUsageRecordsResponse(BaseModel):
+    items: list[MaterialUsageRecordResponse]
+    total_count: int = Field(ge=0)
+
+
 class MaterialLibraryInsightsResponse(BaseModel):
     asset_count: int = Field(ge=0)
     segment_count: int = Field(ge=0)
