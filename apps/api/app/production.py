@@ -181,12 +181,31 @@ class MaterialAsset:
     review_status: AssetReviewStatus = "raw"
     use_state: ContentUseState = "available"
     user_tags: list[str] = field(default_factory=list)
+    # What the user typed about this one material, and the batch background it
+    # arrived with. Both are the user's own words, so they ride the JSON payload
+    # untouched: a later scan or re-analysis must not rewrite them, and a note
+    # saved for one material must never become a fact about its neighbours.
+    user_description: str = ""
+    upload_context: str = ""
     analysis_status: AnalysisStatus = "pending"
     analysis_message: str = "待分析镜头和画面内容。"
     speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class MaterialAssetNote:
+    """One material's own text and the batch background it was uploaded with.
+
+    An empty string is a real value: it means the user left that box blank, and
+    saving it must clear an earlier note rather than be rejected or ignored.
+    """
+
+    asset_id: str
+    user_description: str = ""
+    upload_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -3978,6 +3997,42 @@ class ProductionRepository:
                 updated.append(asset)
             for asset in updated:
                 conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id))
+        return updated
+
+    def update_asset_notes(
+        self, workspace_id: str, notes: list[MaterialAssetNote]
+    ) -> list[MaterialAsset]:
+        """Save the user's own text for exactly the materials named in `notes`.
+
+        Each note carries that material's whole text, so this replaces rather
+        than merges, and an empty string clears an earlier note instead of being
+        rejected. Nothing is written until every named material is confirmed to
+        exist in this workspace: a batch naming one missing or foreign asset is
+        refused whole, because a half-saved batch would leave the user believing
+        a note is stored that is not.
+        """
+        if not notes:
+            raise ValueError("请选择至少一条素材")
+        updated: list[MaterialAsset] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for note in dict.fromkeys(notes):
+                row = conn.execute(
+                    "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+                    (workspace_id, note.asset_id),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(note.asset_id)
+                asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                asset.user_description = note.user_description.strip()
+                asset.upload_context = note.upload_context.strip()
+                asset.updated_at = utc_now()
+                updated.append(asset)
+            for asset in updated:
+                conn.execute(
+                    "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+                    (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id),
+                )
         return updated
 
     def _mark_material_ingestion_disk_missing(self, workspace_id: str) -> None:

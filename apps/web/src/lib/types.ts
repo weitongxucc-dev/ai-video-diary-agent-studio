@@ -1767,6 +1767,10 @@ export type MaterialAsset = {
   analysis_status: "pending" | "ready" | "blocked" | "failed";
   analysis_message: string;
   user_tags: string[];
+  // The user's own words: what this one material is, and the batch background
+  // it arrived with. Text, never facts the search or filter may score on.
+  user_description: string;
+  upload_context: string;
   speech_analysis?: {
     status: "ready" | "blocked" | "failed";
     source_fingerprint: string;

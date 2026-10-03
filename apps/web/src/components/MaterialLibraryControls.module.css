@@ -269,3 +269,14 @@
   translate: -50% -50%;
   opacity: .7;
 }
+
+.notesEditor { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); font-size: 12px; }
+.notesEditor summary { cursor: pointer; font-weight: 500; }
+.notesEditor > label { display: grid; gap: 5px; }
+.notesEditor textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--border-1); border-radius: 5px; background: var(--surface-2); color: var(--text-1); font: inherit; resize: vertical; }
+.notesEditor p { margin: 0; color: var(--text-2); line-height: 1.5; }
+.notesEditor p[role="alert"] { color: var(--danger); }
+.notesEditor button { justify-self: start; padding: 6px 10px; border: 1px solid var(--border-1); border-radius: 5px; background: var(--surface-2); color: var(--text-1); font: inherit; cursor: pointer; }
+.notesEditor button:disabled { opacity: .5; cursor: default; }
+.notesSelection { display: grid; gap: 5px; max-height: 160px; overflow: auto; margin: 8px 0; }
+.notesSelection label { display: flex; gap: 7px; align-items: center; }

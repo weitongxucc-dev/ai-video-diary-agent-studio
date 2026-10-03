@@ -155,6 +155,7 @@ from app.production import (
     JobRun,
     MediaAuthorityError,
     MaterialCollection,
+    MaterialAssetNote,
     MaterialLinkProvenanceSink,
     NarrationArtifactRecord,
     NarrationSegment,
@@ -266,6 +267,8 @@ from app.schemas import (
     ManualSourceItemRequest,
     ManualLinkRequest,
     MaterialAssetResponse,
+    MaterialAssetNotesRequest,
+    MaterialAssetNotesResponse,
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
@@ -11724,6 +11727,33 @@ def update_material_asset_tags_batch(request: Request, payload: MaterialBatchTag
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MaterialBatchTagsResponse(assets=[_material_asset_response(asset) for asset in assets])
+
+
+@app.put("/api/production/materials/notes", response_model=MaterialAssetNotesResponse)
+def update_material_asset_notes(request: Request, payload: MaterialAssetNotesRequest) -> MaterialAssetNotesResponse:
+    """Save each named material's own text and the batch background it arrived with.
+
+    Only the materials named in the request are touched, and the repository
+    refuses the whole batch if any one of them is not this workspace's, so the
+    user is never told a note is stored that was not written.
+    """
+    try:
+        assets = production_repo.update_asset_notes(
+            current_workspace_id(request),
+            [
+                MaterialAssetNote(
+                    asset_id=item.asset_id,
+                    user_description=item.user_description,
+                    upload_context=item.upload_context,
+                )
+                for item in payload.items
+            ],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="所选素材有不属于当前工作区的项目，未做任何修改") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MaterialAssetNotesResponse(assets=[_material_asset_response(asset) for asset in assets])
 
 
 @app.get("/api/production/materials/{asset_id}/unmatched-corrections")

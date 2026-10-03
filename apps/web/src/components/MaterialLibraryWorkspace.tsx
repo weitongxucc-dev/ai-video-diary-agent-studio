@@ -33,6 +33,7 @@ import {
   scanMaterialIntake,
   updateProductionMaterialSegment,
   updateMaterialUseState,
+  updateMaterialNotes,
 } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import {
@@ -61,6 +62,7 @@ type Busy =
   | "segment"
   | "collection"
   | "retry"
+  | "notes"
   | null;
 
 const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
@@ -198,6 +200,13 @@ export function MaterialLibraryWorkspace({
   const [detailError, setDetailError] = useState("");
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [noteErrors, setNoteErrors] = useState<Record<string, string>>({});
+  const [noteSaved, setNoteSaved] = useState<Record<string, boolean>>({});
+  const [noteBatchIds, setNoteBatchIds] = useState<string[]>([]);
+  const [batchContext, setBatchContext] = useState("");
+  const [batchNoteError, setBatchNoteError] = useState("");
+  const [batchNoteSaved, setBatchNoteSaved] = useState(false);
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -236,6 +245,8 @@ export function MaterialLibraryWorkspace({
     : selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
       selected?.segments[0] ??
       null;
+  const noteBatchAssets = assets.filter(asset => noteBatchIds.includes(asset.id));
+  const noteDraft = selected ? noteDrafts[selected.id] ?? selected.user_description : "";
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
   const tagDraft = tagDrafts[tagScope] ?? "";
   const tagError = tagErrors[tagScope] ?? "";
@@ -671,6 +682,31 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function saveNotes(targets: MaterialAsset[], context?: string) {
+    const batch = context !== undefined;
+    const assetId = targets[0].id;
+    setBusy("notes");
+    if (batch) { setBatchNoteError(""); setBatchNoteSaved(false); }
+    else { setNoteErrors(current => ({ ...current, [assetId]: "" })); setNoteSaved(current => ({ ...current, [assetId]: false })); }
+    try {
+      const result = await updateMaterialNotes(targets.map(asset => ({
+        asset_id: asset.id,
+        user_description: batch ? asset.user_description : noteDrafts[asset.id] ?? asset.user_description,
+        upload_context: batch ? context : asset.upload_context,
+      })));
+      result.assets.forEach(replaceAsset);
+      if (batch) setBatchNoteSaved(true);
+      else {
+        setNoteDrafts(current => { const next = { ...current }; delete next[assetId]; return next; });
+        setNoteSaved(current => ({ ...current, [assetId]: true }));
+      }
+    } catch (cause) {
+      const message = `${visibleError(cause, "说明保存失败")}。草稿已保留，请重试保存。`;
+      if (batch) setBatchNoteError(message);
+      else setNoteErrors(current => ({ ...current, [assetId]: message }));
+    } finally { setBusy(null); }
+  }
+
   const inspector = selected ? (
     <div className="library-inspector">
       <div className={`library-preview ${styles.preview}`}>
@@ -720,6 +756,17 @@ export function MaterialLibraryWorkspace({
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
       ) : null}
       {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
+      <section className={styles.notesEditor} aria-label="素材文字说明">
+        <label>本素材说明（可选）<textarea disabled={busy === "notes"} value={noteDraft} onChange={event => {
+          setNoteDrafts(current => ({ ...current, [selected.id]: event.target.value }));
+          setNoteSaved(current => ({ ...current, [selected.id]: false }));
+        }} /></label>
+        <p>只记录你的补充，不改片段描述或事实标签；留空不影响分析。</p>
+        <p>已保存背景：{selected.upload_context || "未填写"}</p>
+        {noteErrors[selected.id] ? <p role="alert">{noteErrors[selected.id]}</p> : null}
+        {noteSaved[selected.id] ? <p role="status">本素材说明已保存。</p> : null}
+        <button disabled={busy !== null} onClick={() => void saveNotes([selected])} type="button">保存本素材说明</button>
+      </section>
       <dl className="library-inspector__meta">
         <div>
           <dt>画面建议</dt>
@@ -1102,6 +1149,22 @@ export function MaterialLibraryWorkspace({
             </div>
           ) : null}
         </section>
+
+        <details className={styles.notesEditor}>
+          <summary>给选中素材保存公共背景（可选）</summary>
+          <p>仅列出当前已加载素材。请明确勾选本批文件，不会默认应用到全库。</p>
+          <div className={styles.notesSelection}>
+            {assets.map(asset => <label key={asset.id}><input type="checkbox" checked={noteBatchIds.includes(asset.id)} disabled={busy === "notes"} onChange={event => {
+              setNoteBatchIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id));
+              setBatchNoteSaved(false);
+            }} />{fileLabel(asset.file_name)}</label>)}
+          </div>
+          <label>公共背景（可选）<textarea disabled={busy === "notes"} value={batchContext} onChange={event => { setBatchContext(event.target.value); setBatchNoteSaved(false); }} /></label>
+          <p>当前选中 {noteBatchAssets.length} 份；只更新这些素材的背景，各自说明保持不变。</p>
+          {batchNoteError ? <p role="alert">{batchNoteError}</p> : null}
+          {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
+          <button disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</button>
+        </details>
 
         <div className="library-toolbar">
           <label className="library-search">
