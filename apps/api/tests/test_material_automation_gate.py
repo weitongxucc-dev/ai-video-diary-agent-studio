@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
