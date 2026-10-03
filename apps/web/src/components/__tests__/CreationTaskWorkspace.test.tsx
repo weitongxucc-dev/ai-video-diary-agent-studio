@@ -2276,4 +2276,82 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.getWorkspace).not.toHaveBeenCalled();
   });
 
+  it("keeps the detail bound to the still-selected version when an older response arrives late", async () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, progress: 70, timeline_sequence: 2 };
+    const initial = workspace(task);
+    mocks.listTimelineVersions.mockResolvedValue({
+      task_id: "task-1",
+      current_version_id: "tv-2",
+      items: [
+        { id: "tv-1", sequence: 1, parent_version_id: null, created_at: "2026-10-01T02:00:00+00:00",
+          is_current: false, shot_count: 2, subtitle_track_count: 1, narration_segment_count: 1 },
+        { id: "tv-2", sequence: 2, parent_version_id: "tv-1", created_at: "2026-10-02T02:00:00+00:00",
+          is_current: true, shot_count: 2, subtitle_track_count: 0, narration_segment_count: 1 },
+      ],
+    });
+    const detailFor = (versionId: "tv-1" | "tv-2", sequence: number, narrationText: string) => ({
+      task_id: "task-1",
+      version: { id: versionId, sequence, parent_version_id: null, created_at: "2026-10-01T02:00:00+00:00",
+        is_current: versionId === "tv-2", shot_count: 2, subtitle_track_count: 0, narration_segment_count: 1 },
+      shots: [{ index: 0, id: `clip-${sequence}`, narration_text: narrationText, start_seconds: 0, end_seconds: 1.5, description: null }],
+      narration_segments: [],
+      subtitle_tracks: [],
+      cover_asset: null,
+      artifacts: [],
+    });
+    const oldDetail = detailFor("tv-1", 1, "旧版本第一句");
+    const currentDetail = detailFor("tv-2", 2, "当前版本第一句");
+    // 每次详情请求都挂起，由测试自己决定哪一版先返回（A 慢 / B 快）
+    const pending = new Map<string, Array<(value: unknown) => void>>();
+    mocks.getTimelineVersion.mockImplementation((_taskId: string, versionId: string) =>
+      new Promise((resolve) => {
+        const queue = pending.get(versionId) ?? [];
+        queue.push(resolve);
+        pending.set(versionId, queue);
+      }));
+    const settle = async (versionId: string, value: unknown) => {
+      const resolve = pending.get(versionId)?.shift();
+      expect(resolve).toBeTruthy();
+      await act(async () => { resolve?.(value); });
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
+    const panel = await screen.findByRole("region", { name: "历史时间线版本" });
+    await waitFor(() => expect(within(panel).getByRole("button", { name: /第 2 版/ })).toBeInTheDocument());
+
+    const firstButton = within(panel).getByRole("button", { name: /第 1 版/ });
+    const secondButton = within(panel).getByRole("button", { name: /第 2 版/ });
+
+    fireEvent.click(secondButton);
+    await settle("tv-2", currentDetail);
+    expect(await within(panel).findByText("当前版本第一句")).toBeInTheDocument();
+
+    // 切到第 1 版时，上一版详情必须立刻消失，不能继续显示着等新响应
+    fireEvent.click(firstButton);
+    expect(within(panel).queryByText("当前版本第一句")).not.toBeInTheDocument();
+    expect(within(panel).getByText("正在读取这一版…")).toBeInTheDocument();
+    expect(firstButton).toHaveAttribute("aria-current", "true");
+
+    // 第 1 版这次请求被挂起：快速改选第 2 版，让后发先至
+    fireEvent.click(secondButton);
+    expect(within(panel).queryByText("当前版本第一句")).not.toBeInTheDocument();
+    await settle("tv-2", currentDetail);
+    expect(await within(panel).findByText("当前版本第一句")).toBeInTheDocument();
+    expect(secondButton).toHaveAttribute("aria-current", "true");
+
+    // 迟到的第 1 版响应不能覆盖当前选中的第 2 版
+    await settle("tv-1", oldDetail);
+    expect(within(panel).queryByText("旧版本第一句")).not.toBeInTheDocument();
+    expect(within(panel).getByText("当前版本第一句")).toBeInTheDocument();
+    expect(secondButton).toHaveAttribute("aria-current", "true");
+
+    // 切换查看旧版本始终只是读，没有任何写任务的调用
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(mocks.undoTimeline).not.toHaveBeenCalled();
+    expect(mocks.getWorkspace).not.toHaveBeenCalled();
+  });
+
 });

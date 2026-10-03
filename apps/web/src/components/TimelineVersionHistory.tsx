@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle, X } from "lucide-react";
 
 import styles from "./TimelineVersionHistory.module.css";
@@ -60,6 +60,7 @@ export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHisto
   const [detailError, setDetailError] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const detailRequest = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,19 +84,28 @@ export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHisto
   }, [taskId]);
 
   const loadDetail = useCallback((versionId: string) => {
+    // 每次选择自增一次令牌：响应只允许作用于仍是最新选择的那一次，否则快速点 A 再 B 时 A 会覆盖 B
+    const request = detailRequest.current + 1;
+    detailRequest.current = request;
     setSelectedId(versionId);
+    setDetail(null);
     setLoadingDetail(true);
     setDetailError(null);
     getCreationTaskTimelineVersion(taskId, versionId)
       .then((loaded) => {
+        if (detailRequest.current !== request) return;
         setDetail(loaded);
         setDetailError(null);
       })
       .catch((error: unknown) => {
+        if (detailRequest.current !== request) return;
         setDetail(null);
         setDetailError(errorText(error));
       })
-      .finally(() => setLoadingDetail(false));
+      .finally(() => {
+        if (detailRequest.current !== request) return;
+        setLoadingDetail(false);
+      });
   }, [taskId]);
 
   return <section className={styles.history} aria-label="历史时间线版本">
