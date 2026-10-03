@@ -305,6 +305,7 @@ export async function transcribeMaterialVoiceNote(audio: Blob, signal?: AbortSig
   if (!suffix) throw new Error("当前录音格式无法转写，请直接输入说明或换支持录音的浏览器。");
   const body = new FormData();
   body.append("audio", audio, `素材口述录音.${suffix}`);
+  body.append("local_only", "true");
   const response = await fetch(apiUrl("/api/voice/transcribe"), {
     method: "POST", body, signal, cache: "no-store", headers: { ...localMemberTokenHeader() },
   });

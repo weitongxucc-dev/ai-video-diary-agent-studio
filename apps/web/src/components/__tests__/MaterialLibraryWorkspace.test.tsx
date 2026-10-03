@@ -798,6 +798,7 @@ it("transcribes a material recording through multipart audio into an editable un
     expect(url).toEqual(expect.stringContaining("/api/voice/transcribe"));
     expect(options?.method).toBe("POST");
     expect(options?.body).toBeInstanceOf(FormData);
+    expect((options!.body as FormData).get("local_only")).toBe("true");
     const audio = (options!.body as FormData).get("audio") as File;
     expect(audio.type).toBe(blob.type);
     expect(audio.name).toBe("素材口述录音.webm");
