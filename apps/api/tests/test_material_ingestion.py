@@ -582,6 +582,46 @@ def test_asset_tags_are_atomic_workspace_scoped_and_searchable(tmp_path: Path) -
         repo.update_asset_tags("other", ids[0], ["越界"])
 
 
+def test_segment_usage_change_updates_persisted_tags_and_search(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    (library / "one.mp4").write_bytes(b"one")
+    (library / "two.mp4").write_bytes(b"two")
+    assets = repo.scan_library("one")
+    for asset in assets:
+        repo.analyze_asset("one", asset.id)
+        repo.update_asset_review("one", asset.id, review_status="approved", usage_role="b_roll")
+        segment = repo.get_asset("one", asset.id).segments[0]
+        repo.update_segment(
+            "one", asset.id, segment.id,
+            description="人工描述", transcript="人工转录", review_status="approved",
+            usage_role="b_roll", user_tags=["手工标签"],
+        )
+    first = repo.get_asset("one", assets[0].id)
+    other = repo.get_asset("one", assets[1].id)
+    original = first.segments[0]
+    assert "用途:b_roll" in original.system_tags
+
+    repo.update_segment(
+        "one", first.id, original.id,
+        description=original.description, transcript=original.transcript,
+        review_status=original.review_status, usage_role="a_roll",
+    )
+    saved = repo.get_asset("one", first.id).segments[0]
+    assert saved.usage_role == "a_roll"
+    assert "用途:a_roll" in saved.system_tags
+    assert "用途:b_roll" not in saved.system_tags
+    assert (saved.description, saved.transcript, saved.user_tags) == (
+        original.description, original.transcript, original.user_tags,
+    )
+    assert repo.get_asset("one", other.id) == other
+    assert [match.segment_ref for match in repo.search_material_segments(
+        "one", tags=["用途:a_roll"],
+    )] == [f"segment:{original.id}"]
+    assert [match.segment_ref for match in repo.search_material_segments(
+        "one", tags=["用途:b_roll"],
+    )] == [f"segment:{other.segments[0].id}"]
+
+
 def test_manual_edit_during_analysis_survives_merge(tmp_path: Path) -> None:
     repo, library = make_repo(tmp_path)
     (library / "clip.mp4").write_bytes(b"video")
