@@ -4702,7 +4702,6 @@ class ProductionRepository:
             raise ValueError("素材文件尚未进入可用库")
         segment.description = description.strip()
         segment.transcript = transcript.strip()
-        segment.system_tags = _infer_system_tags(asset, segment)
         if usage_role is not None:
             segment.usage_role = usage_role
             if usage_role == "exclude":
@@ -4717,6 +4716,7 @@ class ProductionRepository:
                 raise ValueError("标签夹不存在或不属于当前工作区")
             segment.collection_ids = list(dict.fromkeys(collection_ids))
         segment.review_status = review_status
+        segment.system_tags = _infer_system_tags(asset, segment)
         segment.updated_at = utc_now()
         return self._save_asset(asset)
 
