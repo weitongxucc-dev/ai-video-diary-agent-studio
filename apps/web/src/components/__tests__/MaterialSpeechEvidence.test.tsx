@@ -14,6 +14,8 @@ vi.mock("@/lib/api", () => ({
   // 所以这里返回它不关注的空列表。
   getMaterialBusinessObjects: vi.fn(async () => ({ items: [], total_count: 0 })),
   getAssetBusinessObjects: vi.fn(async () => ({ items: [], total_count: 0 })),
+  // 详情页还会读当前片段的使用记录；本用例不关心它，返回空列表。
+  getAssetSegmentUsageRecords: vi.fn(async () => ({ items: [], total_count: 0 })),
 }));
 
 it("seeks original speech evidence and saves a user correction without replacing the evidence", async () => {

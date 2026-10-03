@@ -8,14 +8,14 @@ vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (pro
   return <span>录音组件测试替身</span>;
 } }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -45,6 +45,7 @@ beforeEach(() => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
   vi.mocked(getMaterialBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
+  vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ items: [], total_count: 0 });
 });
 it("persists the selected restriction and removes obsolete proof displays", async () => {
   vi.mocked(updateMaterialUseState).mockResolvedValue({...asset,use_state:"reference_only"});
@@ -1038,4 +1039,21 @@ it("ignores a media type in the URL that the list does not know", async () => {
   } finally {
     window.history.replaceState(null, "", "/library");
   }
+});
+
+it("shows what used the selected segment and keeps the current version labelled", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
+  vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ total_count: 2, items: [
+    { plan_id: "plan-1", clip_id: "clip-1", used_at: "2026-10-03T01:32:15Z", role: "a_roll",
+      manually_selected: true, resolution: "current", timeline_version_id: "timeline-current",
+      task: { id: "task-1", name: "第一条成片", stage: "review", status: "waiting_for_user", current_timeline_version_id: "timeline-current" } },
+    { plan_id: "plan-2", clip_id: "clip-2", used_at: "2026-10-03T02:29:22Z", role: null,
+      manually_selected: null, resolution: "unknown", timeline_version_id: null, task: null },
+  ] });
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await waitFor(() => expect(getAssetSegmentUsageRecords).toHaveBeenCalledWith("asset","segment"));
+  await screen.findByText(/第一条成片/);
+  expect(screen.getByText(/时间线版本：当前版本 timeline-current（使用记录本身未记录当次版本/)).toBeInTheDocument();
+  expect(screen.getByText("时间线版本未记录")).toBeInTheDocument();
+  expect(screen.getByText(/关联任务未记录/)).toBeInTheDocument();
 });

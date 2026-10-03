@@ -1809,6 +1809,36 @@ export type MaterialBusinessObjects = {
   total_count: number;
 };
 
+/**
+ * 一条使用记录回查结果：某个片段被哪条成片用过。
+ * 使用记录本身没有时间线版本外键，一个任务的多个快照也可能都含同一片段，
+ * 所以 timeline_version_id 只是该任务的**当前**版本（resolution="current"），
+ * 不代表当次使用时的版本；无法指认时 resolution="unknown"，界面须写明版本未记录。
+ */
+export type MaterialUsageRecordTask = {
+  id: string | null;
+  name: string | null;
+  stage: string | null;
+  status: string | null;
+  current_timeline_version_id: string | null;
+};
+
+export type MaterialUsageRecord = {
+  plan_id: string;
+  clip_id: string;
+  used_at: string;
+  task: MaterialUsageRecordTask | null;
+  role: string | null;
+  manually_selected: boolean | null;
+  timeline_version_id: string | null;
+  resolution: "current" | "unknown";
+};
+
+export type MaterialUsageRecords = {
+  items: MaterialUsageRecord[];
+  total_count: number;
+};
+
 export type MaterialCollection = {
   id: string;
   workspace_id: string;
