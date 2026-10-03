@@ -17,7 +17,7 @@ from typing import Literal
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
@@ -13632,8 +13632,9 @@ def _read_retake_report(episode: Episode) -> RetakeReportResponse:
 @app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
 async def voice_transcribe(
     audio: UploadFile = File(...),  # noqa: B008
+    local_only: bool = Form(False),  # noqa: B008
 ) -> VoiceTranscriptionResponse:
-    """Upload an audio file (webm) and transcribe via ASR pipeline."""
+    """Transcribe uploaded audio; local_only selects LocalWhisper for this request."""
     try:
         content = await audio.read()
     except Exception as exc:
@@ -13643,7 +13644,10 @@ async def voice_transcribe(
         raise HTTPException(status_code=400, detail="Empty audio file")
 
     try:
-        result = transcribe_audio_bytes(content, settings)
+        if local_only:
+            result = transcribe_audio_bytes(content, settings, local_only=True)
+        else:
+            result = transcribe_audio_bytes(content, settings)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

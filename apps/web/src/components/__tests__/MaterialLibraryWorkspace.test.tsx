@@ -1,15 +1,21 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
+import type { DesktopVoiceRecorderProps } from "@/components/DesktopVoiceRecorder";
+const recorder = vi.hoisted(() => ({ props: null as DesktopVoiceRecorderProps | null }));
+vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (props: DesktopVoiceRecorderProps) => {
+  recorder.props = props;
+  return <span>录音组件测试替身</span>;
+} }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -32,6 +38,8 @@ const intakeReady: MaterialIntakeStatus = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(transcribeMaterialVoiceNote).mockReset();
+  recorder.props = null;
   vi.mocked(getProductionMaterials).mockResolvedValue(library);
   vi.mocked(getMaterialLibraryInsights).mockResolvedValue(insights);
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
@@ -772,6 +780,74 @@ it("shows the returned material note after saving and rereading, and allows an e
   await screen.findByText("本素材说明已保存。");
   expect(updateMaterialNotes).toHaveBeenLastCalledWith([{asset_id:"asset",user_description:"",upload_context:"原背景"}]);
   expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("");
+});
+
+it("transcribes a material recording through multipart audio into an editable unsaved note, then saves only that material", async () => {
+  const a = { ...taggedAsset, user_description: "A原说明", upload_context: "A原背景" };
+  const b = { ...otherAsset, user_description: "B原说明", upload_context: "B原背景" };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ transcript: "测试转写草稿", provider: "unit-test", segments: [] })));
+  const actualApi = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  vi.mocked(transcribeMaterialVoiceNote).mockImplementationOnce(actualApi.transcribeMaterialVoiceNote);
+  vi.mocked(updateMaterialNotes).mockResolvedValue({ assets: [{ ...a, user_description: "编辑后的说明" }] });
+  try {
+    render(<MaterialLibraryWorkspace initialLibrary={{ ...twoAssetLibrary, assets: [a, b] }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+    fireEvent.click(screen.getByRole("button", { name: "补口述说明" }));
+    expect(recorder.props?.purpose).toBe("material-notes");
+    const blob = new Blob(["unit-test-audio"], { type: "audio/webm" });
+    await act(async () => { await recorder.props!.onRecorded(blob, { mimeType: blob.type, durationMs: 1000 }); });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toEqual(expect.stringContaining("/api/voice/transcribe"));
+    expect(options?.method).toBe("POST");
+    expect(options?.body).toBeInstanceOf(FormData);
+    expect((options!.body as FormData).get("local_only")).toBe("true");
+    const audio = (options!.body as FormData).get("audio") as File;
+    expect(audio.type).toBe(blob.type);
+    expect(audio.name).toBe("素材口述录音.webm");
+    expect(new Headers(options?.headers).has("Content-Type")).toBe(false);
+    expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("测试转写草稿");
+    expect(updateMaterialNotes).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value: "编辑后的说明" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存本素材说明" }));
+    await screen.findByText("本素材说明已保存。");
+    expect(updateMaterialNotes).toHaveBeenCalledExactlyOnceWith([{ asset_id: a.id, user_description: "编辑后的说明", upload_context: "A原背景" }]);
+    fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+    expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("B原说明");
+    expect(screen.getByText("已保存背景：B原背景")).toBeInTheDocument();
+  } finally { fetchMock.mockRestore(); }
+});
+
+it("discards late transcription after material switching, cancellation or editing and retains typed fallback on failure", async () => {
+  const a = { ...taggedAsset, user_description: "A原说明", upload_context: "A原背景" };
+  const b = { ...otherAsset, user_description: "B原说明", upload_context: "B原背景" };
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...twoAssetLibrary, assets: [a, b] }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  const blob = new Blob(["unit-test-audio"], { type: "audio/webm" });
+  const metadata = { mimeType: blob.type, durationMs: 1000 };
+  for (const action of ["switch", "cancel", "edit"]) {
+    let resolve!: (value: string) => void;
+    vi.mocked(transcribeMaterialVoiceNote).mockImplementationOnce(() => new Promise<string>(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole("button", { name: "补口述说明" }));
+    let pending!: void | Promise<void>;
+    act(() => { pending = recorder.props!.onRecorded(blob, metadata); });
+    const signal = vi.mocked(transcribeMaterialVoiceNote).mock.calls.at(-1)![1]!;
+    if (action === "switch") fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+    else if (action === "cancel") fireEvent.click(screen.getByRole("button", { name: "取消口述说明" }));
+    else fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value: "B手工草稿" } });
+    expect(signal.aborted).toBe(true);
+    await act(async () => { resolve("不应覆盖的迟到转写"); await pending; });
+    expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue(action === "edit" ? "B手工草稿" : "B原说明");
+  }
+  expect(updateMaterialNotes).not.toHaveBeenCalled();
+  vi.mocked(transcribeMaterialVoiceNote).mockRejectedValueOnce(new Error("本地转写不可用"));
+  fireEvent.click(screen.getByRole("button", { name: "补口述说明" }));
+  await act(async () => { await expect(recorder.props!.onRecorded(blob, metadata)).rejects.toThrow("原文字保留，可重试或直接输入说明"); });
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("B手工草稿");
+  vi.mocked(updateMaterialNotes).mockResolvedValue({ assets: [{ ...b, user_description: "B手工草稿" }] });
+  fireEvent.click(screen.getByRole("button", { name: "保存本素材说明" }));
+  await screen.findByText("本素材说明已保存。");
+  expect(updateMaterialNotes).toHaveBeenCalledExactlyOnceWith([{ asset_id: b.id, user_description: "B手工草稿", upload_context: "B原背景" }]);
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("A原说明");
 });
 
 it("keeps the URL tag on the first load, on a new search and on the next page, then clears back to the whole library", async () => {

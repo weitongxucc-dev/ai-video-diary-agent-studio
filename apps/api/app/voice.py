@@ -10,6 +10,7 @@ from app.asr import (
     ASRConfigurationError,
     ASRTranscriber,
     ASRTranscriptionError,
+    LocalWhisperTranscriber,
     asr_transcriber_from_settings,
 )
 from app.config import Settings
@@ -22,17 +23,22 @@ def transcribe_audio_bytes(
     settings: Settings,
     *,
     transcriber: ASRTranscriber | None = None,
+    local_only: bool = False,
 ) -> dict:
-    """Run ASR on raw audio bytes using the configured transcriber pipeline.
+    """Return transcript, provider and segments from raw audio.
 
-    Uses Tencent Cloud ASR if configured, else falls back to local Whisper.
-    Returns dict with keys: text, provider.
-    Raises RuntimeError if no transcriber is configured.
-    Raises ASRTranscriptionError on transcription failure.
+    local_only always selects LocalWhisper, ignoring the configured provider and
+    injected transcriber, with no cloud fallback. Otherwise use the injected or
+    configured transcriber. Missing configuration or ASR failure raises RuntimeError.
     """
-    _transcriber = transcriber or asr_transcriber_from_settings(settings)
+    if local_only:
+        _transcriber = LocalWhisperTranscriber(settings)
+    else:
+        _transcriber = transcriber or asr_transcriber_from_settings(settings)
 
     if not _transcriber.configured:
+        if local_only:
+            raise RuntimeError("素材口述仅使用本地 Whisper，当前缺少本地转写配置。请直接输入素材说明。")
         raise RuntimeError(
             "No ASR transcriber is configured. "
             "Set TENCENTCLOUD_SECRET_ID/TENCENTCLOUD_SECRET_KEY for Tencent Cloud ASR "
