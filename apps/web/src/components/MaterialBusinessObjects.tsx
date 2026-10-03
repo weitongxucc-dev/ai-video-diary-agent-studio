@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { BusinessObjectKind, MaterialBusinessObject } from "@/lib/types";
 import styles from "./MaterialLibraryControls.module.css";
 
-export type BusinessObjectKind = "product" | "dish" | "person";
-
-export type BusinessObject = { id: string; kind: BusinessObjectKind; name: string };
+// 类型与 lib/types.ts 共用同一份，避免组件和真实接口各自漂移。
+export type { BusinessObjectKind };
+export type BusinessObject = MaterialBusinessObject;
 
 export type MaterialBusinessObjectsProps = {
   /** 当前素材。切换素材时本组件的草稿会整体重置，迟到响应不会写回已切换的素材。 */

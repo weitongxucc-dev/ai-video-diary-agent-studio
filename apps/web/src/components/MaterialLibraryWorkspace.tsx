@@ -21,15 +21,20 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import styles from "./MaterialLibraryControls.module.css";
+import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
 import {
   analyzeProductionMaterial,
+  createMaterialBusinessObject,
   createMaterialCollection,
+  getAssetBusinessObjects,
+  getMaterialBusinessObjects,
   getMaterialLibraryInsights,
   getMaterialIntakeStatus,
   getProductionMaterials,
   bindMaterialIntake,
   reviewProductionMaterial,
   retryMaterialIntake,
+  saveAssetBusinessObjects,
   scanMaterialIntake,
   updateProductionMaterialSegment,
   updateMaterialUseState,
@@ -44,7 +49,9 @@ import {
   type MediaLinkImport,
 } from "@/lib/media-link-api";
 import type {
+  BusinessObjectKind,
   MaterialAsset,
+  MaterialBusinessObject,
   MaterialCollections,
   MaterialLibrary,
   MaterialLibraryInsights,
@@ -154,6 +161,10 @@ function visibleError(cause: unknown, fallback: string) {
   return /[\u3400-\u9fff]/.test(message) ? message : fallback;
 }
 
+// \u5173\u8054\u8fd8\u6ca1\u8bfb\u56de\u6765\u65f6\u4f20\u8fd9\u4e2a\u7a7a\u6570\u7ec4\uff0c\u800c\u4e0d\u662f\u6bcf\u6b21\u6e32\u67d3\u73b0\u9020\u4e00\u4e2a\uff1a\u540c\u4e00\u4e2a\u5f15\u7528\uff0c
+// \u5b50\u7ec4\u4ef6\u5c31\u4e0d\u4f1a\u56e0\u4e3a\u7236\u9875\u91cd\u6e32\u67d3\u800c\u91cd\u7b97\u4e00\u6b21"\u9009\u62e9\u6709\u6ca1\u6709\u53d8"\u3002
+const EMPTY_OBJECT_IDS: readonly string[] = [];
+
 export function MaterialLibraryWorkspace({
   initialLibrary,
   initialInsights,
@@ -207,6 +218,11 @@ export function MaterialLibraryWorkspace({
   const [batchContext, setBatchContext] = useState("");
   const [batchNoteError, setBatchNoteError] = useState("");
   const [batchNoteSaved, setBatchNoteSaved] = useState(false);
+  // 名称条目按素材分别保存：每条素材读回自己的关联，换素材不会串。
+  const [businessObjects, setBusinessObjects] = useState<MaterialBusinessObject[]>([]);
+  const [assetObjectIds, setAssetObjectIds] = useState<Record<string, string[]>>({});
+  const [objectPending, setObjectPending] = useState<"create" | "save" | null>(null);
+  const [objectError, setObjectError] = useState("");
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -221,6 +237,7 @@ export function MaterialLibraryWorkspace({
   const intakeRevision = useRef(0);
   const lastSearch = useRef({ filter, query });
   const assetWriteRevision = useRef(0);
+  const objectLoadRevision = useRef(0);
 
   // A background refresh can drop whatever is selected: the material was
   // removed or re-indexed, or the current search no longer returns it. Falling
@@ -353,6 +370,35 @@ export function MaterialLibraryWorkspace({
     // selectedId and selectAsset are intentionally excluded: changing selection must not re-run search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, initialLibrary.limit, query]);
+
+  // 工作区的名称条目与素材无关，进页面读一次就够了；之后新增的直接并进同一份列表。
+  useEffect(() => {
+    let active = true;
+    getMaterialBusinessObjects()
+      .then(result => { if (active) setBusinessObjects(result.items); })
+      .catch(cause => { if (active) setObjectError(visibleError(cause, "名称条目读取失败，请重试。")); });
+    return () => { active = false; };
+  }, []);
+
+  // 每条素材读回自己的关联。单独一个 revision：selectionRevision 也会被切片段
+  // 推进，用它会让切片段顺手作废这次读取，关联再也读不回来。
+  useEffect(() => {
+    const assetId = selected?.id ?? null;
+    const revision = ++objectLoadRevision.current;
+    setObjectError("");
+    if (!assetId) return;
+    let active = true;
+    getAssetBusinessObjects(assetId)
+      .then(result => {
+        if (!active || revision !== objectLoadRevision.current) return;
+        setAssetObjectIds(current => ({ ...current, [assetId]: result.items.map(item => item.id) }));
+      })
+      .catch(cause => {
+        if (active && revision === objectLoadRevision.current)
+          setObjectError(visibleError(cause, "名称关联读取失败，请重试。"));
+      });
+    return () => { active = false; };
+  }, [selected?.id]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -716,6 +762,37 @@ export function MaterialLibraryWorkspace({
     } finally { setBusy(null); }
   }
 
+  // 新增只写名称条目本身，不碰任何素材的关联；组件拿到新条目后自己选中，
+  // 还要用户点「保存关联到当前素材」才真正写进这条素材。
+  async function createBusinessObject(kind: BusinessObjectKind, name: string) {
+    setObjectPending("create");
+    setObjectError("");
+    try {
+      const created = await createMaterialBusinessObject({ kind, name });
+      setBusinessObjects(current => [created, ...current.filter(item => item.id !== created.id)]);
+      return created;
+    } catch (cause) {
+      const message = visibleError(cause, "名称条目新增失败，请重试");
+      setObjectError(message);
+      throw new Error(message);
+    } finally { setObjectPending(null); }
+  }
+
+  // 只写这一条素材的关联。它的说明、公共背景、片段描述和人工纠正都不在这里。
+  async function saveBusinessObjects(assetId: string, businessObjectIds: string[]) {
+    setObjectPending("save");
+    setObjectError("");
+    try {
+      const result = await saveAssetBusinessObjects(assetId, businessObjectIds);
+      setAssetObjectIds(current => ({ ...current, [assetId]: result.items.map(item => item.id) }));
+      return result.items;
+    } catch (cause) {
+      const message = visibleError(cause, "名称关联保存失败，请重试");
+      setObjectError(message);
+      throw new Error(message);
+    } finally { setObjectPending(null); }
+  }
+
   const inspector = selected ? (
     <div className="library-inspector">
       <div className={`library-preview ${styles.preview}`}>
@@ -778,6 +855,16 @@ export function MaterialLibraryWorkspace({
         {noteSaved[selected.id] ? <p role="status">本素材说明已保存。</p> : null}
         <button disabled={busy !== null} onClick={() => void saveNotes([selected])} type="button">保存本素材说明</button>
       </section>
+      <MaterialBusinessObjects
+        assetId={selected.id}
+        objects={businessObjects}
+        selectedIds={assetObjectIds[selected.id] ?? EMPTY_OBJECT_IDS}
+        onCreate={createBusinessObject}
+        onSave={saveBusinessObjects}
+        pending={objectPending}
+        error={objectError || null}
+        onDismissError={() => setObjectError("")}
+      />
       <dl className="library-inspector__meta">
         <div>
           <dt>画面建议</dt>
