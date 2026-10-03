@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
@@ -48,6 +48,42 @@ describe("HomeWorkspace", () => {
     expect(screen.getByText("当前工作区的本地成片，未代表平台发布")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /设备演示.*本地成片可查看/ })).toHaveAttribute("href", "/tasks/task-one");
     expect(screen.getAllByText("—")).toHaveLength(5);
+  });
+
+  it.each([
+    ["running", "视频剪辑：处理中 · 视频剪辑处理中"],
+    ["waiting_for_user", "视频剪辑：等待确认 · 等待确认"],
+    ["failed", "视频剪辑：需要处理 · 需要处理"],
+  ] as const)("shows the same real %s stage in the list and reopened task card", (stageStatus, presentation) => {
+    const current = {
+      ...task, stage_status: stageStatus,
+      stage_reason: stageStatus === "failed" ? "输出目录不可写" : null,
+      stage_impact: stageStatus === "failed" ? "尚未生成新成片" : null,
+      stage_repair_action: stageStatus === "failed" ? "选择可写目录后重试" : null,
+    };
+    const view = render(<HomeWorkspace foundation={null} tasks={[current]} />);
+    const row = screen.getByRole("button", { name: /设备演示/ });
+    expect(row).toHaveTextContent(presentation);
+    fireEvent.click(row);
+    const card = screen.getByRole("dialog", { name: "任务卡片" });
+    expect(card).toHaveTextContent(presentation);
+    expect(card).not.toHaveTextContent("68%");
+    expect(within(card).queryByText("进度")).not.toBeInTheDocument();
+    expect(card.querySelector(".home-task-card__progress")).toBeNull();
+    if (stageStatus === "failed") {
+      expect(card).toHaveTextContent("输出目录不可写");
+      expect(card).toHaveTextContent("尚未生成新成片");
+      expect(card).toHaveTextContent("选择可写目录后重试");
+    }
+    expect(within(card).getByRole("link", { name: "打开任务" })).toHaveAttribute("href", "/tasks/task-one");
+    fireEvent.click(within(card).getByRole("button", { name: "对话修改" }));
+    expect(routerPush).toHaveBeenCalledWith("/tasks/task-one");
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
+    view.rerender(<HomeWorkspace foundation={null} tasks={[{ ...current, updated_at: "2026-10-03T09:00:00Z" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备演示/ }));
+    const reopened = screen.getByRole("dialog", { name: "任务卡片" });
+    expect(reopened).toHaveTextContent(presentation);
+    expect(reopened).toHaveTextContent("2026/10/03");
   });
 
   it("labels isolated sample figures and lets users inspect ranges and tag choices", () => {
