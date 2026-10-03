@@ -112,6 +112,104 @@ def test_apply_update_keeps_key_out_of_snapshot(isolated):
     assert "key-a" not in module.workspace_config_path("ws-a").read_text(encoding="utf-8")
 
 
+def test_blank_key_input_keeps_the_stored_key(isolated):
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+    changed = apply_workspace_runtime_settings_update(
+        "ws-a",
+        {"llm_provider": "minimax", "llm_api_key": "   "},
+        lambda: None,
+    )
+
+    assert changed is True
+    assert module.read_workspace_secret("ws-a", "llm_api_key") == "key-a"
+
+
+@macos
+def test_explicit_delete_action_removes_the_key(isolated):
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+    module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_api_key_provider": "minimax"})
+
+    changed = apply_workspace_runtime_settings_update(
+        "ws-a",
+        {"llm_key_action": "delete"},
+        lambda: None,
+    )
+
+    assert changed is True
+    assert module.read_workspace_secret("ws-a", "llm_api_key") is None
+    assert module.load_workspace_config("ws-a") == {"llm_provider": "minimax"}
+
+
+@macos
+def test_workspace_settings_do_not_inherit_the_global_plaintext_key(isolated):
+    """旧全局明文没有工作区归属，不能被这个工作区继承去用。"""
+    base = Settings(llm_provider="minimax", llm_api_key="global-plaintext",
+                    llm_base_url="https://api.minimax.io/v1", llm_model="MiniMax-M3")
+
+    resolved = module.workspace_settings("ws-a", base).settings
+
+    assert resolved.effective_llm_api_key is None
+    assert resolved.llm_api_key is None
+    assert resolved.effective_llm_model == "MiniMax-M3"
+
+
+@macos
+def test_deleted_key_is_not_revived_by_the_global_plaintext(isolated):
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+    base = Settings(llm_provider="minimax", llm_api_key="global-plaintext")
+    assert module.workspace_settings("ws-a", base).settings.effective_llm_api_key == "key-a"
+
+    module.delete_workspace_secret("ws-a", "llm_api_key")
+
+    assert module.workspace_settings("ws-a", base).settings.effective_llm_api_key is None
+
+
+def test_snapshot_update_keeps_earlier_fields(isolated):
+    module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_base_url": "https://api.minimax.io/v1"})
+    module.save_workspace_config("ws-a", {"llm_model": "MiniMax-M3"})
+
+    assert module.load_workspace_config("ws-a") == {
+        "llm_provider": "minimax",
+        "llm_base_url": "https://api.minimax.io/v1",
+        "llm_model": "MiniMax-M3",
+    }
+
+
+def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):
+    monkeypatch.setattr(
+        module, "_run_security",
+        lambda arguments: subprocess.CompletedProcess(
+            arguments, 36, "", "security: SecKeychainSearchCopyNext: User interaction is not allowed."
+        ),
+    )
+
+    with pytest.raises(module.WorkspaceSecretStoreError):
+        module.read_workspace_secret("ws-a", "llm_api_key")
+
+
+def test_locked_keychain_delete_is_not_reported_as_nothing_deleted(isolated, monkeypatch):
+    monkeypatch.setattr(
+        module, "_run_security",
+        lambda arguments: subprocess.CompletedProcess(
+            arguments, 36, "", "security: SecKeychainItemDelete: User interaction is not allowed."
+        ),
+    )
+
+    with pytest.raises(module.WorkspaceSecretStoreError):
+        module.delete_workspace_secret("ws-a", "llm_api_key")
+
+
+def test_split_leaves_non_text_settings_out_of_the_workspace_route():
+    config_updates, _secret_updates = split_runtime_settings_updates({
+        "llm_model": "MiniMax-M3",
+        "model_root_path": "/Volumes/Models/AI视频日记/models",
+        "video_output_path": "/Volumes/Media/AI视频日记/output",
+        "supabase_url": "https://example.supabase.co",
+    })
+
+    assert config_updates == {"llm_model": "MiniMax-M3"}
+
+
 def test_split_routes_only_llm_keys_to_the_secret_store():
     config_updates, secret_updates = split_runtime_settings_updates({
         "llm_provider": "minimax",

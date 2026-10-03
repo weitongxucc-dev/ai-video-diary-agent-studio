@@ -76,6 +76,7 @@ export function LlmProviderFields({
   const [provider, setProvider] = useState(fallbackProvider);
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
   const [model, setModel] = useState(initialModel);
+  const [keyDeleteArmed, setKeyDeleteArmed] = useState(false);
   const preset = useMemo(
     () => PROVIDERS.find((item) => item.id === provider) ?? PROVIDERS.at(-1)!,
     [provider],
@@ -88,6 +89,8 @@ export function LlmProviderFields({
     setBaseUrl(next.baseUrl);
     setModel(next.models[0] ?? "");
   }
+
+  const keyConfigured = apiKeyConfigured && provider === initialProvider;
 
   return (
     <div className="llm-settings-stack">
@@ -114,13 +117,9 @@ export function LlmProviderFields({
         <span>
           连接密钥
           <span
-            className={`settings-secret-badge ${apiKeyConfigured && provider === initialProvider ? "green" : "red"}`}
+            className={`settings-secret-badge ${keyConfigured ? "green" : "red"}`}
           >
-            {apiKeyConfigured && provider === initialProvider
-              ? "已配置"
-              : preset.apiKeyOptional
-                ? "可选"
-                : "未配置"}
+            {keyConfigured ? "已配置" : preset.apiKeyOptional ? "可选" : "未配置"}
           </span>
         </span>
         <input
@@ -128,16 +127,30 @@ export function LlmProviderFields({
           autoComplete="off"
           maxLength={512}
           name="llm_api_key"
-          placeholder={
-            apiKeyConfigured && provider === initialProvider
-              ? "已配置 · 留空不修改"
-              : "粘贴服务商提供的密钥"
-          }
+          placeholder={keyConfigured ? "已配置 · 留空不修改" : "粘贴服务商提供的密钥"}
           type="password"
         />
         <small className="settings-field-helper">
           仅保存在这台电脑，不会显示完整内容。
         </small>
+        {keyConfigured ? (
+          <span className="settings-field-actions">
+            {keyDeleteArmed ? (
+              <>
+                <button name="llm_key_action" type="submit" value="delete">
+                  确认删除密钥
+                </button>
+                <button onClick={() => setKeyDeleteArmed(false)} type="button">
+                  取消
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setKeyDeleteArmed(true)} type="button">
+                删除已保存的密钥
+              </button>
+            )}
+          </span>
+        ) : null}
       </label>
 
       <label className="settings-field wide">

@@ -26,11 +26,18 @@ from app.config import Settings, runtime_env_file_path
 WORKSPACE_SECRET_FIELDS = ("llm_api_key", "deepseek_api_key")
 
 # 快照里允许出现的非密钥字段。写入前按这张名单过滤，密钥字段永远写不进去。
-WORKSPACE_CONFIG_FIELDS = ("llm_provider", "llm_base_url", "llm_model", "llm_api_key_provider")
+WORKSPACE_CONFIG_FIELDS = (
+    "llm_provider", "llm_base_url", "llm_model", "deepseek_model", "llm_api_key_provider",
+)
 
 _CONFIG_ROOT_ENV = "AI_VIDEO_DIARY_WORKSPACE_CONFIG_ROOT"
 _KEYCHAIN_ENV = "AI_VIDEO_DIARY_KEYCHAIN_PATH"
 _SERVICE_PREFIX = "ai-video-diary.workspace-secret"
+
+# `security` 用 44 报「钥匙串里没这条」，这和「钥匙串锁了/拒绝访问」是两件事：
+# 前者是正常的「没存过」，后者必须报出来，不能装作没有。
+_ITEM_NOT_FOUND_RETURNCODE = 44
+_ITEM_NOT_FOUND_TEXT = "could not be found"
 
 _lock = threading.Lock()
 # 键值读取缓存。删除时必须连缓存一起清掉，否则旧密钥会被缓存复活。
@@ -82,6 +89,17 @@ def _run_security(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         raise WorkspaceSecretStoreError("系统钥匙串不可用，密钥没有保存。") from exc
 
 
+def _is_item_not_found(result: subprocess.CompletedProcess[str]) -> bool:
+    return _ITEM_NOT_FOUND_TEXT in (result.stderr or "")
+
+
+def _require_store(result: subprocess.CompletedProcess[str], action: str) -> None:
+    """除「没有这条」以外的失败都是真实的安全边界问题，必须让调用方看见。"""
+    if result.returncode == 0 or _is_item_not_found(result):
+        return
+    raise WorkspaceSecretStoreError(f"密钥{action}失败：系统钥匙串拒绝了这次操作。")
+
+
 def save_workspace_secret(workspace_id: str, field: str, value: str) -> None:
     """把一把密钥写进系统钥匙串。失败即抛错，调用方不得退回明文。"""
     if field not in WORKSPACE_SECRET_FIELDS:
@@ -97,7 +115,7 @@ def save_workspace_secret(workspace_id: str, field: str, value: str) -> None:
         *_keychain_args(),
     ])
     if result.returncode != 0:
-        raise WorkspaceSecretStoreError("密钥保存失败：系统钥匙串拒绝了这次写入。")
+        _require_store(result, "保存")
     with _lock:
         _secret_cache.pop((workspace_id, field), None)
 
@@ -116,8 +134,9 @@ def read_workspace_secret(workspace_id: str, field: str) -> str | None:
         "-w",
         *_keychain_args(),
     ])
-    if result.returncode != 0:
+    if _is_item_not_found(result):
         return None
+    _require_store(result, "读取")
     value = result.stdout.strip("\n")
     if not value:
         return None
@@ -127,7 +146,10 @@ def read_workspace_secret(workspace_id: str, field: str) -> str | None:
 
 
 def delete_workspace_secret(workspace_id: str, field: str) -> bool:
-    """删除一把密钥。返回是否真的删掉了一条；缓存同时清掉。"""
+    """删除一把密钥。返回是否真的删掉了一条；缓存同时清掉。
+
+    钥匙串拒绝或锁定时抛错，不当成「没删掉」——那会让界面显示已删、实际还在。
+    """
     if field not in WORKSPACE_SECRET_FIELDS:
         raise ValueError(f"不是本单范围内的文字服务密钥：{field}")
     result = _run_security([
@@ -138,7 +160,10 @@ def delete_workspace_secret(workspace_id: str, field: str) -> bool:
     ])
     with _lock:
         _secret_cache.pop((workspace_id, field), None)
-    return result.returncode == 0
+    if _is_item_not_found(result):
+        return False
+    _require_store(result, "删除")
+    return True
 
 
 def load_workspace_config(workspace_id: str) -> dict[str, str]:
@@ -157,24 +182,31 @@ def load_workspace_config(workspace_id: str) -> dict[str, str]:
 
 
 def save_workspace_config(workspace_id: str, fields: dict[str, str]) -> dict[str, str]:
-    """写工作区配置快照。密钥字段直接拒绝，不落任何明文。"""
+    """写工作区配置快照，按已有快照合并更新。
+
+    只改模型名不能把上次的 provider 和地址一起丢掉，所以这里与既有快照合并。
+    密钥字段直接拒绝，不落任何明文。
+    """
     rejected = sorted(key for key in fields if key in WORKSPACE_SECRET_FIELDS)
     if rejected:
         raise WorkspaceSecretStoreError(
             f"密钥不能写进配置文件：{', '.join(rejected)}"
         )
-    clean = {
-        key: value.strip()
-        for key, value in fields.items()
-        if key in WORKSPACE_CONFIG_FIELDS and isinstance(value, str) and value.strip()
-    }
+    merged = load_workspace_config(workspace_id)
+    for key, value in fields.items():
+        if key in WORKSPACE_CONFIG_FIELDS and isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                merged[key] = cleaned
+            else:
+                merged.pop(key, None)
     path = workspace_config_path(workspace_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.chmod(0o600)
     os.replace(temporary, path)
-    return clean
+    return merged
 
 
 @dataclass(frozen=True)
@@ -193,12 +225,22 @@ def workspace_settings(
     workspace_id: str,
     base: Settings | None = None,
 ) -> WorkspaceSettings:
-    """全局 Settings 打底，叠上本工作区快照与本工作区钥匙串里的密钥。
+    """产品默认打底，叠本工作区快照与本工作区钥匙串里的密钥。
 
-    另一个工作区存了什么，这里看不到：不读别的 id 的配置，也不回退到全局
-    dotenv 里的旧明文密钥。
+    另一工作区存了什么，这里看不到；也不读别的 id 的配置。全局 dotenv 里的旧文字
+    配置和明文密钥不叠进来——它们没有工作区归属，叠进来就等于把一把没有归属的
+    旧密钥分给了这个工作区。
     """
     settings = base or Settings.from_env()
+    settings = replace(
+        settings,
+        llm_provider=None,
+        llm_api_key=None,
+        llm_api_key_provider=None,
+        llm_base_url=None,
+        llm_model=None,
+        deepseek_api_key=None,
+    )
     overrides = load_workspace_config(workspace_id)
     if overrides:
         settings = replace(settings, **overrides)

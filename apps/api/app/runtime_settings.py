@@ -8,6 +8,7 @@ from app.workspace_settings import (
     WORKSPACE_SECRET_FIELDS,
     WorkspaceSecretStoreError,
     delete_workspace_secret,
+    load_workspace_config,
     save_workspace_config,
     save_workspace_secret,
 )
@@ -93,23 +94,32 @@ def apply_runtime_settings_update(
     return True
 
 
+LLM_KEY_DELETE_ACTION = "delete"
+
+# 本单只接管文字服务这一组字段。模型盘、媒体目录、ASR、腾讯云、Supabase 这些
+# 设备级设置仍走原来的全局 dotenv 路径，不当成工作区文案配置处理。
+WORKSPACE_TEXT_FIELDS = ("llm_provider", "llm_base_url", "llm_model", "deepseek_model")
+
+
 def split_runtime_settings_updates(
     payload: Mapping[str, object],
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """把设置更新拆成「进工作区配置快照」和「进系统钥匙串」两份。
+    """把文字服务更新拆成「进工作区配置快照」和「进系统钥匙串」两份。
 
-    密钥只进钥匙串：快照和 dotenv 都不许出现明文。删除用空字符串表示。
+    密钥只进钥匙串：快照和 dotenv 都不许出现明文。非文字服务的设置不在这份
+    拆分里，它们仍旧走原来的 dotenv 写入路径。
     """
     updates = runtime_settings_updates(payload)
     config_updates: dict[str, str] = {}
     secret_updates: dict[str, str] = {}
-    for field, env_key in FIELD_TO_ENV.items():
-        if env_key not in updates:
-            continue
-        if field in WORKSPACE_SECRET_FIELDS:
-            secret_updates[field] = updates[env_key]
-        else:
+    for field in WORKSPACE_TEXT_FIELDS:
+        env_key = FIELD_TO_ENV[field]
+        if env_key in updates:
             config_updates[field] = updates[env_key]
+    for field in WORKSPACE_SECRET_FIELDS:
+        env_key = FIELD_TO_ENV[field]
+        if env_key in updates:
+            secret_updates[field] = updates[env_key]
     if "LLM_API_KEY" in updates:
         provider = updates.get("LLM_API_KEY_PROVIDER")
         if provider:
@@ -126,13 +136,23 @@ def apply_workspace_runtime_settings_update(
 
     密钥先落系统钥匙串再写配置：钥匙串失败就整单失败，绝不退回明文文件，
     也不会出现「配置显示已保存、密钥其实没存」的状态。
+
+    删除走同一个保存路由的显式动作字段 `llm_key_action=delete`。没传动作字段
+    时，密钥输入框留空表示「不改」，不能因为空输入把已存的密钥删掉。
     """
     config_updates, secret_updates = split_runtime_settings_updates(payload)
+    deleting = str(payload.get("llm_key_action", "")) == LLM_KEY_DELETE_ACTION
+    if deleting:
+        secret_updates.pop("llm_api_key", None)
+        if delete_workspace_secret(workspace_id, "llm_api_key"):
+            # 密钥没了，归属它的 provider 也得从快照里去掉，旧字段不许把旧键叫回来。
+            if "llm_api_key_provider" in load_workspace_config(workspace_id):
+                config_updates["llm_api_key_provider"] = ""
     for field, value in secret_updates.items():
         save_workspace_secret(workspace_id, field, value)
     if config_updates:
         save_workspace_config(workspace_id, config_updates)
-    if not config_updates and not secret_updates:
+    if not config_updates and not secret_updates and not deleting:
         return False
     reload_dependencies()
     return True
