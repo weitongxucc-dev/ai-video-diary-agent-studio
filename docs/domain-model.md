@@ -56,7 +56,7 @@ SourceItem 可以被确认保存为 KnowledgeItem，也可以把媒体部分登�
 - available：可用于当前工作区的人工和自动创作；
 - reference_only：只可用于理解和事实参考，不直接进入成片；
 - excluded：不得进入检索、生成或成片；
-- not_for_automation：可人工使用，不可被定时任务自动选用；
+- not_for_automation：可由用户明确选择用于人工创作，不进入自动选片候选（含定时任务）；不自动移除已有时间线引用；
 - not_for_publish：可制作预览，不可进入发布产物。
 
 这些状态由用户或明确的导入规则设置。模型可以提示风险，但不得自行把 available 降级、升级或绕过限制。
