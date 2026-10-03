@@ -240,3 +240,62 @@ def test_broken_link_rejects_preview_without_persisting_any_track(
     after = state.client.get(base).json()
     assert after["task"]["current_timeline_version_id"] == before["task"]["current_timeline_version_id"]
     assert after["subtitle_tracks"] == before["subtitle_tracks"]
+
+
+def test_bilingual_merge_publishes_both_tracks_exports_and_undoes(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    for track in tracks():
+        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+            task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "MergeSubtitleCue", "track_id": "zh", "cue_id": "zh-1"})
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()["proposal"]
+    assert len(proposal["preview"]["text_changes"]) == 2
+    assert "英文" in proposal["preview"]["text_changes"][1]["after"]
+    assert state.client.get(base).json() == before
+    confirmed = state.client.post(base + "/edits/" + proposal["id"] + "/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    after = state.client.get(base).json()
+    selected = {track["language"]: track for track in after["subtitle_tracks"]}
+    assert selected["zh-CN"]["cues"][0]["text"] == "第一句第二句"
+    assert selected["en-US"]["cues"][0]["text"] == "First sentence Second sentence"
+    assert selected["en-US"]["cues"][0]["source_cue_id"] == "zh-1"
+    for track in selected.values():
+        assert len(track["cues"]) == 1 and track["status"] == "valid"
+        assert track["timeline_version_id"] == after["task"]["current_timeline_version_id"]
+        assert (track["cues"][0]["start_seconds"], track["cues"][0]["end_seconds"]) == (0, 5)
+        assert main_module.artifact_store.resolve_file(track["artifact_ref"]).read_text().strip()
+        transform = state.production.get_transform_run(state.workspace_id, track["transform_id"])
+        assert transform.status == "succeeded" and transform.output_refs == [track["artifact_ref"]]
+    exported = state.client.get(base + "/output/selected-subtitles", params={
+        "expected_version_id": after["task"]["current_timeline_version_id"], "mode": "zh-en",
+        "zh_track_id": selected["zh-CN"]["id"], "en_track_id": selected["en-US"]["id"]})
+    assert exported.status_code == 200, exported.text
+    assert "第一句第二句\nFirst sentence Second sentence" in exported.text
+    assert after["montage"]["narration_reference"] == before["montage"]["narration_reference"]
+    assert after["montage"]["clips"] == before["montage"]["clips"]
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    restored = state.client.get(base).json()
+    assert {t["language"]: t["cues"] for t in restored["subtitle_tracks"]} == {t["language"]: t["cues"] for t in before["subtitle_tracks"]}
+    selected = {t["language"]: t for t in restored["subtitle_tracks"]}
+    assert state.client.get(base + "/output/selected-subtitles", params={
+        "expected_version_id": restored["task"]["current_timeline_version_id"], "mode": "zh-en",
+        "zh_track_id": selected["zh-CN"]["id"], "en_track_id": selected["en-US"]["id"]}).status_code == 200
+
+
+def test_bilingual_merge_rejects_missing_mapping_without_writing(person_render_edit_state):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    for track in tracks(references=(None, "zh-2")):
+        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+            task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
+    before = state.client.get(base).json()
+    preview = state.client.post(base + "/edits/exact/preview", json={
+        "operation_type": "MergeSubtitleCue", "track_id": "zh", "cue_id": "zh-1"})
+    assert preview.status_code == 422 and "对应关系" in preview.text
+    assert state.client.get(base).json() == before

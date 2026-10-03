@@ -109,3 +109,28 @@ def update_subtitle_cue(track,cue_id,*,text=None,start_seconds=None,end_seconds=
         start_seconds=cue.start_seconds if start_seconds is None else start_seconds,
         end_seconds=cue.end_seconds if end_seconds is None else end_seconds)
     return replace(track,cues=[updated if item.id==cue_id else item for item in track.cues],artifact_ref=None,transform_id=None)
+
+
+def merge_linked_subtitle_tracks(tracks, source, cue_id):
+    """Merge Chinese and its uniquely mapped English without translating text."""
+    chinese, changes = restructure_subtitle(source, "MergeSubtitleCue", cue_id)
+    english_tracks = [track for track in tracks if track.language == "en-US"] if source.language == "zh-CN" else []
+    if not english_tracks:
+        return [chinese], changes
+    if len(english_tracks) != 1:
+        raise ValueError("英文字幕关联不唯一，不能同步合并")
+    english = english_tracks[0]
+    if english.status != "valid" or english.source_language != "zh-CN":
+        raise ValueError("英文字幕缺少有效中文来源关联，不能同步合并")
+    source_cues = sorted(source.cues, key=lambda cue: cue.start_seconds)
+    english_cues = sorted(english.cues, key=lambda cue: cue.start_seconds)
+    if [cue.source_cue_id for cue in english_cues] != [cue.id for cue in source_cues]:
+        raise ValueError("中英字幕对应关系缺失、冲突或不相邻，不能同步合并")
+    if any((a.start_seconds, a.end_seconds) != (b.start_seconds, b.end_seconds)
+           for a, b in zip(source_cues, english_cues, strict=True)):
+        raise ValueError("中英字幕时间不一致，不能同步合并")
+    index = next(index for index, cue in enumerate(source_cues) if cue.id == cue_id)
+    translated, translated_changes = restructure_subtitle(english, "MergeSubtitleCue", english_cues[index].id)
+    changes = [{**change, "before": "中文：" + change["before"], "after": "中文：" + change["after"]} for change in changes]
+    changes += [{**change, "before": "英文：" + change["before"], "after": "英文：" + change["after"]} for change in translated_changes]
+    return [chinese, translated], changes

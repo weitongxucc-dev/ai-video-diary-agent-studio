@@ -50,3 +50,31 @@ def test_split_rejects_invalid_boundaries(offset,time):
     from app.subtitle_edits import restructure_subtitle
     with pytest.raises(ValueError):
         restructure_subtitle(track(),"SplitSubtitleCue","c",split_offset=offset,split_time_seconds=time)
+
+
+@pytest.mark.parametrize("problem", ["missing", "duplicate", "time", "order", "multiple", "unlinked"])
+def test_linked_merge_rejects_uncertain_mapping(problem):
+    from dataclasses import replace
+    from app.subtitle_edits import merge_linked_subtitle_tracks
+    chinese = replace(track(), id="zh", language="zh-CN", cues=[
+        SubtitleCue(id="z1", source_cue_id=None, text="甲", start_seconds=0, end_seconds=1),
+        SubtitleCue(id="z2", source_cue_id=None, text="乙", start_seconds=1, end_seconds=2)])
+    english = replace(chinese, id="en", language="en-US", source_language="zh-CN", cues=[
+        SubtitleCue(id="e1", source_cue_id="z1", text="First", start_seconds=0, end_seconds=1),
+        SubtitleCue(id="e2", source_cue_id="z2", text="Second", start_seconds=1, end_seconds=2)])
+    if problem == "missing":
+        english = replace(english, cues=english.cues[:1])
+    if problem == "duplicate":
+        english = replace(english, cues=[english.cues[0], replace(english.cues[1], source_cue_id="z1")])
+    if problem == "time":
+        english = replace(english, cues=[replace(english.cues[0], end_seconds=.9), english.cues[1]])
+    if problem == "order":
+        english = replace(english, cues=[replace(english.cues[0], source_cue_id="z2"), replace(english.cues[1], source_cue_id="z1")])
+    if problem == "unlinked":
+        english = replace(english, source_language=None)
+    inputs = [chinese, english] + ([replace(english, id="other")] if problem == "multiple" else [])
+    with pytest.raises(ValueError, match="关联|对应关系|时间"):
+        merge_linked_subtitle_tracks(inputs, chinese, "z1")
+    assert len(chinese.cues) == 2 and chinese.artifact_ref == "old.srt"
+    changed, _ = merge_linked_subtitle_tracks([chinese], chinese, "z1")
+    assert len(changed) == 1 and changed[0].cues[0].text == "甲乙"
