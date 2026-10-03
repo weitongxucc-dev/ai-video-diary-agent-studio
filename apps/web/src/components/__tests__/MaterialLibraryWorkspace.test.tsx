@@ -2,18 +2,18 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
-const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[],
+const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
 const library={ assets:[asset], total_count:1, limit:24, offset:0, has_more:false };
@@ -627,4 +627,73 @@ it("does not report an import when the source is refused before submission", asy
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("这是社交平台页面，不是媒体文件直链，暂不支持。"));
   expect(importMediaLink).not.toHaveBeenCalled();
   expect(screen.queryByText(/已导入/)).not.toBeInTheDocument();
+});
+
+
+it("keeps material note drafts and save failures on their own asset when switching", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  let rejectSave!: (cause: Error) => void;
+  vi.mocked(updateMaterialNotes).mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value:"A自己的说明" } });
+  fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("");
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value:"B自己的说明" } });
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("A自己的说明");
+  fireEvent.click(screen.getByRole("button", { name:"保存本素材说明" }));
+  expect(updateMaterialNotes).toHaveBeenLastCalledWith([{asset_id:"asset",user_description:"A自己的说明",upload_context:""}]);
+  fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+  await act(async () => rejectSave(new Error("目录暂不可写")));
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("B自己的说明");
+  expect(screen.queryByText(/目录暂不可写/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  expect(screen.getByRole("alert")).toHaveTextContent("目录暂不可写");
+  expect(screen.getByRole("alert")).toHaveTextContent("草稿已保留，请重试保存");
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("A自己的说明");
+  expect(screen.queryByText("本素材说明已保存。")).not.toBeInTheDocument();
+});
+
+it("writes a shared context only to explicitly checked loaded files without saving another description draft", async () => {
+  const a = {...taggedAsset,user_description:"A原说明",upload_context:"A原背景"};
+  const b = {...otherAsset,user_description:"B原说明",upload_context:"B原背景"};
+  const current = {...twoAssetLibrary, assets:[a,b]};
+  vi.mocked(getProductionMaterials).mockResolvedValue(current);
+  vi.mocked(updateMaterialNotes).mockResolvedValue({assets:[{...b,upload_context:"这批是产品演示"}]});
+  render(<MaterialLibraryWorkspace initialLibrary={current} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value:"A未保存草稿" } });
+  fireEvent.click(screen.getByText("给选中素材保存公共背景（可选）"));
+  expect(screen.getByRole("button", { name:"保存选中素材背景" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name:"自造素材B.mp4" }));
+  fireEvent.change(screen.getByLabelText("公共背景（可选）"), { target: { value:"这批是产品演示" } });
+  fireEvent.click(screen.getByRole("button", { name:"保存选中素材背景" }));
+  await screen.findByText("选中素材的公共背景已保存。");
+  expect(updateMaterialNotes).toHaveBeenLastCalledWith([{asset_id:"asset-b",user_description:"B原说明",upload_context:"这批是产品演示"}]);
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("A未保存草稿");
+  expect(screen.getByText("已保存背景：A原背景")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:/自造素材B\.mp4/ }));
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("B原说明");
+  expect(screen.getByText("已保存背景：这批是产品演示")).toBeInTheDocument();
+});
+
+it("shows the returned material note after saving and rereading, and allows an empty note", async () => {
+  const saved = {...asset,user_description:"服务端保存事实",upload_context:"原背景"};
+  vi.mocked(updateMaterialNotes).mockResolvedValue({assets:[saved]});
+  const view = render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value:"待保存文字" } });
+  fireEvent.click(screen.getByRole("button", { name:"保存本素材说明" }));
+  await screen.findByText("本素材说明已保存。");
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("服务端保存事实");
+  view.unmount();
+  const reread = {...library,assets:[saved]};
+  vi.mocked(getProductionMaterials).mockResolvedValue(reread);
+  render(<MaterialLibraryWorkspace initialLibrary={reread} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("服务端保存事实");
+  vi.mocked(updateMaterialNotes).mockResolvedValue({assets:[{...saved,user_description:""}]});
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value:"" } });
+  expect(screen.getByRole("button", { name:"保存本素材说明" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name:"保存本素材说明" }));
+  await screen.findByText("本素材说明已保存。");
+  expect(updateMaterialNotes).toHaveBeenLastCalledWith([{asset_id:"asset",user_description:"",upload_context:"原背景"}]);
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("");
 });

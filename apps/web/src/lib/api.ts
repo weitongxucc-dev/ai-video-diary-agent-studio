@@ -282,6 +282,19 @@ export function updateMaterialAssetTagsBatch(assetIds: string[], add: string[], 
   });
 }
 
+/** Save each named material's own text and the batch background it arrived with. */
+export type MaterialAssetNote = {
+  asset_id: string;
+  user_description: string;
+  upload_context: string;
+};
+
+export function updateMaterialNotes(items: MaterialAssetNote[]): Promise<{ assets: MaterialAsset[] }> {
+  return request("/api/production/materials/notes", {
+    method: "PUT", body: JSON.stringify({ items }),
+  });
+}
+
 export function analyzeProductionMaterial(
   assetId: string,
 ): Promise<MaterialAsset> {

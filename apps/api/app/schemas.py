@@ -474,6 +474,11 @@ class MaterialAssetResponse(BaseModel):
     analysis_status: Literal["pending", "ready", "blocked", "failed"]
     analysis_message: str
     user_tags: list[str] = Field(default_factory=list)
+    # The user's own words about this material and the batch it arrived with.
+    # Kept beside the tags but never merged into them: a note is not a fact the
+    # system may search, filter or score on.
+    user_description: str = ""
+    upload_context: str = ""
     speech_analysis: MaterialSpeechAnalysisResponse | None = None
     segments: list[MaterialSegmentResponse]
     created_at: datetime
@@ -587,6 +592,24 @@ class MaterialBatchTagsRequest(BaseModel):
 
 
 class MaterialBatchTagsResponse(BaseModel):
+    assets: list[MaterialAssetResponse]
+
+
+class MaterialAssetNoteRequest(BaseModel):
+    """One material's own text. Empty strings are a real value, not an omission."""
+
+    model_config = ConfigDict(extra="forbid")
+    asset_id: str = Field(min_length=1)
+    user_description: str = Field(default="", max_length=2000)
+    upload_context: str = Field(default="", max_length=2000)
+
+
+class MaterialAssetNotesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[MaterialAssetNoteRequest] = Field(min_length=1, max_length=100)
+
+
+class MaterialAssetNotesResponse(BaseModel):
     assets: list[MaterialAssetResponse]
 
 
