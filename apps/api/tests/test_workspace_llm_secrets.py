@@ -288,6 +288,65 @@ def test_topic_route_snapshot_reads_the_requesting_workspace(isolated):
     assert unconfigured["availability"] == "unconfigured"
 
 
+@macos
+def test_plan_turn_reports_the_requesting_workspace_provider(isolated, monkeypatch):
+    """响应里的 provider/model 必须是本次工作区的配置，且不靠网络。"""
+    import app.main as main_module
+    from app.auth import AuthPrincipal
+    from app.schemas import WorkspaceAssistantPlanTurnRequest
+
+    module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
+    module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
+    seen: dict[str, str] = {}
+
+    def fake_run_plan_turn(turn_settings, **kwargs):
+        seen["provider"] = turn_settings.effective_llm_provider
+        seen["key"] = turn_settings.effective_llm_api_key or ""
+        return "已记下", None
+
+    monkeypatch.setattr(main_module, "run_plan_turn", fake_run_plan_turn)
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            principal=AuthPrincipal(user_id="u", workspace_id="ws-a")
+        ),
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={},
+    )
+
+    response = main_module.workspace_assistant_plan_turn(
+        request, WorkspaceAssistantPlanTurnRequest(
+            conversation_id="11111111-1111-5111-8111-111111111111", message="帮我列个提纲"
+        )
+    )
+
+    assert response.provider == "minimax"
+    assert response.model == "MiniMax-M3"
+    assert seen == {"provider": "minimax", "key": "key-a"}
+
+
+@macos
+def test_delete_clears_a_workspace_that_only_saved_a_deepseek_key(isolated):
+    """没写 provider、只存了旧 DeepSeek 键时，删后不能再继续生效。"""
+    module.save_workspace_secret("ws-a", "deepseek_api_key", "legacy-deepseek-key")
+    module.save_workspace_secret("ws-b", "deepseek_api_key", "other-workspace-key")
+    assert module.workspace_settings("ws-a", Settings()).settings.effective_llm_provider == "deepseek"
+
+    apply_workspace_runtime_settings_update(
+        "ws-a", {"llm_key_action": "delete"}, lambda: None
+    )
+
+    assert module.read_workspace_secret("ws-a", "deepseek_api_key") is None
+    assert module.read_workspace_secret("ws-b", "deepseek_api_key") == "other-workspace-key"
+
+
+def test_workspace_settings_fall_back_to_the_product_deepseek_model(isolated):
+    base = Settings(deepseek_model="global-deepseek-model")
+
+    resolved = module.workspace_settings("ws-a", base).settings
+
+    assert resolved.deepseek_model == Settings.deepseek_model
+
+
 def test_locked_keychain_read_is_not_reported_as_no_key(isolated, monkeypatch):
     monkeypatch.setattr(
         module, "_run_security",

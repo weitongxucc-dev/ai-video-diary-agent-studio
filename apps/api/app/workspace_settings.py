@@ -247,6 +247,7 @@ def workspace_settings(
         llm_base_url=None,
         llm_model=None,
         deepseek_api_key=None,
+        deepseek_model=Settings.deepseek_model,
     )
     overrides = load_workspace_config(workspace_id)
     if overrides:

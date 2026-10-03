@@ -4121,10 +4121,12 @@ def workspace_assistant_plan_turn(
     request: Request,
     payload: WorkspaceAssistantPlanTurnRequest,
 ) -> WorkspaceAssistantPlanTurnResponse:
+    workspace_id = current_workspace_id(request)
+    workspace_settings_for_turn = _workspace_settings_for(workspace_id)
     try:
         reply, preview = run_plan_turn(
-            _workspace_settings_for(current_workspace_id(request)),
-            workspace_id=current_workspace_id(request),
+            workspace_settings_for_turn,
+            workspace_id=workspace_id,
             conversation_id=str(payload.conversation_id),
             message=payload.message.strip(),
             authorization=request.headers.get("authorization"),
@@ -4135,8 +4137,8 @@ def workspace_assistant_plan_turn(
     plan_preview = CreationPlanPreviewResponse.model_validate(preview) if preview is not None else None
     return WorkspaceAssistantPlanTurnResponse(
         reply=reply,
-        provider=_workspace_settings_for(workspace_id).effective_llm_provider,
-        model=_workspace_settings_for(workspace_id).effective_llm_model,
+        provider=workspace_settings_for_turn.effective_llm_provider,
+        model=workspace_settings_for_turn.effective_llm_model,
         plan_preview=plan_preview,
     )
 

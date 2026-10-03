@@ -9,6 +9,7 @@ from app.workspace_settings import (
     WorkspaceSecretStoreError,
     delete_workspace_secret,
     load_workspace_config,
+    read_workspace_secret,
     save_workspace_config,
     save_workspace_secret,
 )
@@ -101,12 +102,15 @@ def _secret_fields_for_provider(workspace_id: str) -> list[str]:
     """当前工作区实际在用的那把钥匙串键，以及同供应商的旧备用键。
 
     DeepSeek 安装还可能留着旧的 `deepseek_api_key`；只删 `llm_api_key` 的话，
-    删完那把旧键会继续生效。删除要按当前供应商来，别的供应商和其他平台的
-    凭据不碰。
+    删完那把旧键会继续生效。还有一种真实状态是：快照里没写 provider，只存了
+    `deepseek_api_key` —— 此时生效的供应商就是 DeepSeek，删除也得把它清掉。
+    删除按当前供应商来，别的供应商和其他平台的凭据不碰。
     """
     snapshot = load_workspace_config(workspace_id)
     provider = (snapshot.get("llm_provider") or "").strip().lower()
     owner = (snapshot.get("llm_api_key_provider") or "").strip().lower()
+    if not provider and read_workspace_secret(workspace_id, "deepseek_api_key"):
+        provider = "deepseek"
     if provider == "deepseek":
         fields = ["deepseek_api_key"]
         if not owner or owner == "deepseek":
