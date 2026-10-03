@@ -1014,6 +1014,7 @@ class CreationTaskScriptResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     confirmed_at: datetime | None
+    reused_from_entry_id: str | None = None
 
 
 class CreationTaskScriptsResponse(BaseModel):
@@ -2556,3 +2557,59 @@ class CreatorProfileUpdate(BaseModel):
 class CreatorProfileLearnResult(BaseModel):
     profile: CreatorProfileResponse
     summary: dict[str, object]
+
+
+class ScriptLibrarySaveRequest(BaseModel):
+    source_script_id: str
+    name: str = Field(min_length=1)
+    category: str = ""
+
+
+class ScriptLibrarySectionResponse(BaseModel):
+    id: str
+    title: str
+    content: str
+    visual_prompt: str
+    reference_ids: list[str]
+
+
+class ScriptLibraryEntryResponse(BaseModel):
+    id: str
+    name: str
+    category: str
+    source_script_id: str
+    source_task_id: str
+    source_run_id: str
+    source_topic_id: str
+    version: int
+    supersedes_entry_id: str | None
+    title: str
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
+    sections: list[ScriptLibrarySectionResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScriptLibraryListResponse(BaseModel):
+    items: list[ScriptLibraryEntryResponse]
+    total_count: int
+
+
+class ScriptLibrarySourceResponse(BaseModel):
+    reference_id: str
+    status: Literal["readable", "missing", "version_changed"]
+    title: str | None = None
+    version_or_identity: str | None = None
+    source_url: str | None = None
+
+
+class ScriptLibraryReuseRequest(BaseModel):
+    name: str = Field(min_length=1)
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    requirements_confirmed: bool
+
+
+class ScriptLibraryReuseResponse(BaseModel):
+    task_id: str
+    script: CreationTaskScriptResponse
