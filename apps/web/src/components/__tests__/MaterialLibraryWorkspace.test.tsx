@@ -1052,8 +1052,34 @@ it("shows what used the selected segment and keeps the current version labelled"
   ] });
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   await waitFor(() => expect(getAssetSegmentUsageRecords).toHaveBeenCalledWith("asset","segment"));
-  await screen.findByText(/第一条成片/);
+  const taskLink = await screen.findByRole("link", { name: /打开任务：第一条成片/ });
+  expect(taskLink).toHaveAttribute("href", "/tasks/task-1");
+  expect(screen.getByText(/当前计划用途：人物主镜头/)).toBeInTheDocument();
   expect(screen.getByText(/时间线版本：当前版本 timeline-current（使用记录本身未记录当次版本/)).toBeInTheDocument();
   expect(screen.getByText("时间线版本未记录")).toBeInTheDocument();
   expect(screen.getByText(/关联任务未记录/)).toBeInTheDocument();
+});
+
+it("keeps the previous segment's records off screen while the next one loads", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets: [
+    { ...taggedAsset, segments: [segment, { ...segment, id: "segment-2", description: "另一段画面" }] },
+  ] });
+  const pending = new Promise<{ items: never[]; total_count: number }>(() => {});
+  vi.mocked(getAssetSegmentUsageRecords).mockImplementation((_assetId, segmentId) =>
+    segmentId === "segment"
+      ? Promise.resolve({ total_count: 1, items: [{
+          plan_id: "plan-1", clip_id: "clip-1", used_at: "2026-10-03T01:32:15Z", role: "b_roll",
+          manually_selected: true, resolution: "unknown", timeline_version_id: null,
+          task: { id: "task-1", name: "第一条成片", stage: "review", status: "waiting_for_user", current_timeline_version_id: null },
+        }] })
+      : pending);
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [{ ...taggedAsset, segments: [segment, { ...segment, id: "segment-2", description: "另一段画面" }] }] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByRole("link", { name: /打开任务：第一条成片/ });
+
+  fireEvent.click(screen.getAllByRole("button").find(button => button.textContent?.includes("另一段画面"))!);
+
+  // 第二个片段还没读到时，不能看到上一片段的任务名或计划。
+  expect(screen.queryByText(/第一条成片/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/plan-1/)).not.toBeInTheDocument();
+  expect(screen.getByText("正在读取使用记录……")).toBeInTheDocument();
 });

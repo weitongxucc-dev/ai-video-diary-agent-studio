@@ -493,6 +493,8 @@ export function MaterialLibraryWorkspace({
       return;
     }
     let active = true;
+    // 换片段就先清空上一片段的记录：加载中不能把旧记录的文案挂在当前片段上。
+    setUsageRecords([]);
     setUsageRead({ status: "loading", message: "" });
     getAssetSegmentUsageRecords(assetId, segmentId)
       .then(result => {
@@ -1150,27 +1152,28 @@ export function MaterialLibraryWorkspace({
           <p className={styles.segmentRange}>当前片段：{duration(selectedSegment.start_seconds)}–{duration(selectedSegment.end_seconds)}。下面的标签只用于这段画面。</p>
           <section className="library-speech-evidence" aria-label="片段使用记录">
             <strong>使用记录</strong>
-            <p>回查这个片段进过哪条成片。只列已实际写入的使用记录，读取不会增加使用次数。</p>
+            <p>回查这个片段进过哪条成片。只列已实际写入的使用记录，读取不会增加使用次数。用途和版本都只反映该计划当前的取值，不是当次使用时的历史值。</p>
             {usageRead.status === "loading" ? <p>正在读取使用记录……</p> : null}
             {usageRead.status === "error" ? <p>{usageRead.message}</p> : null}
             {usageRead.status === "ready" && !usageRecords.length ? <p>这个片段还没有被任何成片使用过。</p> : null}
-            {usageRecords.map(record => <article key={`${record.plan_id}:${record.clip_id}`}>
+            {usageRead.status === "ready" ? usageRecords.map(record => <article key={`${record.plan_id}:${record.clip_id}`}>
               <p>
-                计划 {record.plan_id} · 片段 {record.clip_id} · {clipRoleLabel(record.role)}
+                计划 {record.plan_id} · 片段 {record.clip_id} · 当前计划用途：{clipRoleLabel(record.role)}
                 {record.manually_selected === null ? "" : record.manually_selected ? " · 人工选定" : " · 自动匹配"}
               </p>
               <p>
                 {new Date(record.used_at).toLocaleString("zh-CN")}
                 {record.task
-                  ? ` · 任务 ${record.task.name ?? record.task.id ?? "（任务信息未记录）"}（${record.task.stage ?? "阶段未记录"} / ${record.task.status ?? "状态未记录"}）`
+                  ? ` · 任务 ${record.task.stage ?? "阶段未记录"} / ${record.task.status ?? "状态未记录"}`
                   : " · 关联任务未记录"}
               </p>
+              {record.task?.id ? <p><Link href={"/tasks/" + encodeURIComponent(record.task.id)}>打开任务{record.task.name ? `：${record.task.name}` : ""}</Link></p> : null}
               <p>
                 {record.resolution === "current" && record.timeline_version_id
                   ? `时间线版本：当前版本 ${record.timeline_version_id}（使用记录本身未记录当次版本，这里只显示该任务的当前版本）`
                   : "时间线版本未记录"}
               </p>
-            </article>)}
+            </article>) : null}
           </section>
           {selectedSegment.understanding ? <section className="library-speech-evidence" aria-label="画面观察证据">
             <strong>画面观察</strong>
