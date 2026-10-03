@@ -326,6 +326,18 @@ def material_allows_footage(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
 
 
+def material_allows_automation(asset: MaterialAsset) -> bool:
+    """Can a machine pick this material on its own?
+
+    Stricter than `material_allows_footage` in exactly one way: a material the
+    user marked "不要自动选用" stays usable by hand — searchable, insertable,
+    replaceable — but must never reach a candidate pool the machine itself draws
+    from, including scheduled runs. Everything the manual rule allows stays
+    allowed, so restoring `available` needs no second edit anywhere else.
+    """
+    return asset.use_state in {"available", "not_for_publish"}
+
+
 def _material_analysis_public_error(error: Exception) -> str:
     if isinstance(error, PermissionError):
         return "素材文件没有读取权限"
