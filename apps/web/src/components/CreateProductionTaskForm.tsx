@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircle, CheckCircle2, ChevronRight, LoaderCircle, SearchCheck, ShieldCheck } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   confirmCreationPlan,
   CreationPlanApiError,
@@ -101,6 +101,7 @@ export function CreateProductionTaskForm({
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
   const language: CreationPlanInput["language"] = template?.settings.language ?? "zh-CN";
+  const aspectRatio: CreationPlanInput["aspect_ratio"] = template?.settings.aspect_ratio ?? "9:16";
   const [duration, setDuration] = useState(String(template?.settings.duration_target_seconds ?? 60));
   const [presenterShare, setPresenterShare] = useState<PresenterShare>(template?.settings.presenter_share_target ?? 20);
   const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
@@ -109,6 +110,11 @@ export function CreateProductionTaskForm({
   const [error, setError] = useState<FormError | null>(null);
   const submittingRef = useRef(false);
 
+  useEffect(() => {
+    setPreview(null);
+    setError(null);
+  }, [template?.id, template?.version]);
+
   function input(): CreationPlanInput {
     return {
       ...(template ? { template_id: template.id, template_version: template.version } : {}),
@@ -116,7 +122,7 @@ export function CreateProductionTaskForm({
       ...(name.trim() ? { name: name.trim() } : {}),
       target_count: Number(targetCount),
       language,
-      aspect_ratio: "9:16",
+      aspect_ratio: aspectRatio,
       duration_target_seconds: Number(duration),
       presenter_share_target: presenterShare,
       lipsync_quality: lipsyncQuality,
@@ -178,7 +184,7 @@ export function CreateProductionTaskForm({
           <label><span>语言</span><select disabled name="language" value={language}><option value="zh-CN">中文（当前版本）</option></select></label>
           <label><span>目标时长（秒）</span><input disabled={isPending || !!template} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} /></label>
         </div>
-        <p className="creation-plan-form__ratio">画幅：9:16（当前本地服务支持的画幅）</p>
+        <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
         <PresenterShareSlider disabled={isPending} onChange={(value) => { setPresenterShare(value); invalidatePreview(); }} value={presenterShare} />
         <LipSyncQualitySelect disabled={isPending || presenterShare === 0} onChange={(value) => { setLipsyncQuality(value); invalidatePreview(); }} value={lipsyncQuality} />
         <div className="creation-plan-form__actions"><button className="modern-primary-button" disabled={isPending || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button>{preview ? <span className={preview.confirmable ? "is-ready" : "is-blocking"}>{preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有阻断需要处理。"}</span> : <span>检查不会创建任务，也不会生成选题、文案或成片。</span>}</div>
@@ -186,7 +192,7 @@ export function CreateProductionTaskForm({
 
       {error ? <section className="creation-plan-error" role="alert"><AlertCircle size={17} /><div><strong>操作未完成：{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div>{error.repairAction ? <button disabled={isPending || !goal.trim()} onClick={() => void runPreview()} type="button">重新检查可用内容</button> : null}</section> : null}
 
-      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "内容可用于创建创作任务" : "先处理当前影响，再创建创作任务"}</h3><p>以下事实来自本次只读检查；确认后会按当前结果持久化。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "已就绪" : "需要处理"}</span></header><PreflightFacts preview={preview} /><Blockers preview={preview} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p></div><button className="modern-primary-button" disabled={!preview.confirmable || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
+      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "内容可用于创建创作任务" : "先处理当前影响，再创建创作任务"}</h3><p>预检画幅：{preview.aspect_ratio}</p><p>以下事实来自本次只读检查；确认后会按当前结果持久化。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "已就绪" : "需要处理"}</span></header><PreflightFacts preview={preview} /><Blockers preview={preview} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p></div><button className="modern-primary-button" disabled={!preview.confirmable || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
     </div>
   );
 }
