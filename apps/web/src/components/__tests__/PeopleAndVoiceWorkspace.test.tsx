@@ -142,8 +142,8 @@ describe("PeopleAndVoiceWorkspace", () => {
     expect(api.listPersonProfileVersions).toHaveBeenCalledWith("person-1");
     expect(screen.getByText("形象参考")).toBeInTheDocument();
     expect(screen.getAllByText(/工作区素材 person\.mp4/).length).toBeGreaterThan(0);
-    expect(screen.getByText("v0 · 工作区素材 person-old.mp4")).toBeInTheDocument();
-    expect(screen.getByText("v1 · 当前 · 工作区素材 person.mp4")).toBeInTheDocument();
+    expect(await screen.findByText("v0 · 工作区素材 person-old.mp4")).toBeInTheDocument();
+    expect(await screen.findByText("v1 · 当前 · 工作区素材 person.mp4")).toBeInTheDocument();
     expect(screen.queryByText("workspace://media/person", { exact: true })).not.toBeInTheDocument();
   });
 
@@ -154,9 +154,9 @@ describe("PeopleAndVoiceWorkspace", () => {
     api.listPersonProfileVersions.mockResolvedValue({ items: [person, assetBacked, missing], total_count: 3 });
     render(<PeopleAndVoiceWorkspace />);
     await screen.findByText("历史版本");
-    expect(screen.getByText("v1 · 当前 · 工作区素材 person.mp4")).toBeInTheDocument();
-    expect(screen.getByText("v2 · 人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。")).toBeInTheDocument();
-    expect(screen.getByText("v3 · 工作区里已没有这个人物参考文件。")).toBeInTheDocument();
+    expect(await screen.findByText("v1 · 当前 · 工作区素材 person.mp4")).toBeInTheDocument();
+    expect(await screen.findByText("v2 · 人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。")).toBeInTheDocument();
+    expect(await screen.findByText("v3 · 工作区里已没有这个人物参考文件。")).toBeInTheDocument();
   });
 
   it("states why a person body reference is missing instead of showing an empty preview", async () => {
