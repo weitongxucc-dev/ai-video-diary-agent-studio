@@ -295,6 +295,25 @@ export function updateMaterialNotes(items: MaterialAssetNote[]): Promise<{ asset
   });
 }
 
+export async function transcribeMaterialVoiceNote(audio: Blob, signal?: AbortSignal): Promise<string> {
+  if (!audio.size) throw new Error("没有录到声音，请重录或直接输入说明。");
+  const mediaType = audio.type.split(";")[0].trim().toLowerCase();
+  const suffix = ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a",
+    "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav" } as Record<string, string>)[mediaType];
+  if (!suffix) throw new Error("当前录音格式无法转写，请直接输入说明或换支持录音的浏览器。");
+  const body = new FormData();
+  body.append("audio", audio, `素材口述录音.${suffix}`);
+  const response = await fetch(apiUrl("/api/voice/transcribe"), {
+    method: "POST", body, signal, cache: "no-store", headers: { ...localMemberTokenHeader() },
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "转写失败，请重试或直接输入说明。");
+  if (typeof payload.transcript !== "string" || !payload.transcript.trim()) {
+    throw new Error("录音未转成可用文字，请重试或直接输入说明。");
+  }
+  return payload.transcript.trim();
+}
+
 export function analyzeProductionMaterial(
   assetId: string,
 ): Promise<MaterialAsset> {

@@ -258,3 +258,16 @@ describe("DesktopVoiceRecorder", () => {
     expect(await screen.findByText("录音已交给当前任务，保存结果以任务提示为准。")).toBeInTheDocument();
   });
 });
+
+it("uses material-note wording without changing the default task wording", async () => {
+  const { getUserMedia } = microphone();
+  const props = { onRecorded: vi.fn(), onCancel: vi.fn() };
+  const view = render(<DesktopVoiceRecorder {...props} purpose="material-notes" />);
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByRole("heading", { name: "为已入库素材补口述说明" })).toBeInTheDocument();
+  expect(screen.getByText(/核对后另行保存本素材说明/)).toBeInTheDocument();
+  expect(getUserMedia).not.toHaveBeenCalled();
+  view.rerender(<DesktopVoiceRecorder {...props} />);
+  expect(screen.getByRole("heading", { name: "为这条视频录音" })).toBeInTheDocument();
+  expect(screen.getByText("录完先试听，确认后再交给当前任务。")).toBeInTheDocument();
+});

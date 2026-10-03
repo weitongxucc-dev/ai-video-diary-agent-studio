@@ -20,6 +20,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { DesktopVoiceRecorder } from "@/components/DesktopVoiceRecorder";
 import styles from "./MaterialLibraryControls.module.css";
 import {
   analyzeProductionMaterial,
@@ -34,6 +35,7 @@ import {
   updateProductionMaterialSegment,
   updateMaterialUseState,
   updateMaterialNotes,
+  transcribeMaterialVoiceNote,
 } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import {
@@ -200,6 +202,9 @@ export function MaterialLibraryWorkspace({
   const [detailError, setDetailError] = useState("");
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
+  const [voiceNote, setVoiceNote] = useState<{ assetId: string; controller: AbortController } | null>(null);
+  const voiceNoteRef = useRef<typeof voiceNote>(null);
+  const [voiceNoteNotice, setVoiceNoteNotice] = useState("");
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [noteErrors, setNoteErrors] = useState<Record<string, string>>({});
   const [noteSaved, setNoteSaved] = useState<Record<string, boolean>>({});
@@ -251,6 +256,21 @@ export function MaterialLibraryWorkspace({
   const tagDraft = tagDrafts[tagScope] ?? "";
   const tagError = tagErrors[tagScope] ?? "";
   const visible = assets;
+
+  useEffect(() => {
+    const context = voiceNoteRef.current;
+    if (context && context.assetId !== selected?.id) {
+      context.controller.abort();
+      voiceNoteRef.current = null;
+      setVoiceNote(null);
+      setVoiceNoteNotice("");
+    }
+  }, [selected?.id]);
+
+  useEffect(() => () => {
+    voiceNoteRef.current?.controller.abort();
+    voiceNoteRef.current = null;
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -361,6 +381,8 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectAsset(asset: MaterialAsset) {
+    cancelVoiceNote();
+    setVoiceNoteNotice("");
     selectionRevision.current += 1;
     const first = asset.segments[0];
     setDescriptionDraft(first?.description ?? "");
@@ -682,7 +704,40 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  function cancelVoiceNote() {
+    voiceNoteRef.current?.controller.abort();
+    voiceNoteRef.current = null;
+    setVoiceNote(null);
+  }
+
+  function startVoiceNote(assetId: string) {
+    cancelVoiceNote();
+    const context = { assetId, controller: new AbortController() };
+    voiceNoteRef.current = context;
+    setVoiceNote(context);
+    setVoiceNoteNotice("");
+  }
+
+  async function receiveVoiceNote(context: NonNullable<typeof voiceNote>, blob: Blob) {
+    if (voiceNoteRef.current !== context) return;
+    try {
+      const transcript = await transcribeMaterialVoiceNote(blob, context.controller.signal);
+      if (voiceNoteRef.current !== context) return;
+      setNoteDrafts(current => ({ ...current, [context.assetId]: transcript }));
+      setNoteSaved(current => ({ ...current, [context.assetId]: false }));
+      setNoteErrors(current => ({ ...current, [context.assetId]: "" }));
+      cancelVoiceNote();
+      setVoiceNoteNotice("口述已转为可编辑草稿，尚未保存；请核对文字后保存本素材说明。");
+    } catch (cause) {
+      if (voiceNoteRef.current === context) {
+        throw new Error(`${visibleError(cause, "转写失败")}。原文字保留，可重试或直接输入说明。`);
+      }
+    }
+  }
+
   async function saveNotes(targets: MaterialAsset[], context?: string) {
+    cancelVoiceNote();
+    setVoiceNoteNotice("");
     const batch = context !== undefined;
     const assetId = targets[0].id;
     setBusy("notes");
@@ -758,11 +813,25 @@ export function MaterialLibraryWorkspace({
       {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
       <section className={styles.notesEditor} aria-label="素材文字说明">
         <label>本素材说明（可选）<textarea disabled={busy === "notes"} value={noteDraft} onChange={event => {
+          if (voiceNoteRef.current) {
+            cancelVoiceNote();
+            setVoiceNoteNotice("说明已编辑，口述已取消；保留当前文字，可继续编辑保存。");
+          }
           setNoteDrafts(current => ({ ...current, [selected.id]: event.target.value }));
           setNoteSaved(current => ({ ...current, [selected.id]: false }));
         }} /></label>
         <p>只记录你的补充，不改片段描述或事实标签；留空不影响分析。</p>
         <p>已保存背景：{selected.upload_context || "未填写"}</p>
+        <button disabled={busy !== null || voiceNote !== null} onClick={() => startVoiceNote(selected.id)} type="button">补口述说明</button>
+        <p>仅补当前素材库条目的说明，不改变公共背景。</p>
+        {voiceNote?.assetId === selected.id ? <>
+          <DesktopVoiceRecorder purpose="material-notes" onRecorded={blob => receiveVoiceNote(voiceNote, blob)} onCancel={() => {
+            cancelVoiceNote();
+            setVoiceNoteNotice("口述已取消，原文字保留，可直接输入说明。");
+          }} />
+          <button onClick={() => { cancelVoiceNote(); setVoiceNoteNotice("口述已取消，原文字保留，可直接输入说明。"); }} type="button">取消口述说明</button>
+        </> : null}
+        {voiceNoteNotice ? <p role="status">{voiceNoteNotice}</p> : null}
         {noteErrors[selected.id] ? <p role="alert">{noteErrors[selected.id]}</p> : null}
         {noteSaved[selected.id] ? <p role="status">本素材说明已保存。</p> : null}
         <button disabled={busy !== null} onClick={() => void saveNotes([selected])} type="button">保存本素材说明</button>

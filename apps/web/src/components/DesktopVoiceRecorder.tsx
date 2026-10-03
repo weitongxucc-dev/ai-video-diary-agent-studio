@@ -12,6 +12,7 @@ export type RecordedVoiceMetadata = {
 
 export type DesktopVoiceRecorderProps = {
   scriptText?: string;
+  purpose?: "material-notes";
   onRecorded: (blob: Blob, metadata: RecordedVoiceMetadata) => void | Promise<void>;
   onCancel: () => void;
 };
@@ -36,7 +37,8 @@ function recordingOptions(): MediaRecorderOptions | undefined {
   return supported ? { mimeType: supported } : undefined;
 }
 
-export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: DesktopVoiceRecorderProps) {
+export function DesktopVoiceRecorder({ scriptText, purpose, onRecorded, onCancel }: DesktopVoiceRecorderProps) {
+  const materialNotes = purpose === "material-notes";
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -256,7 +258,8 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
     } catch (cause) {
       submitPendingRef.current = false;
       if (mountedRef.current && request === requestRef.current) {
-        setError(cause instanceof Error && cause.message ? `保存录音失败：${cause.message}` : "保存录音失败，请重试。");
+        const action = materialNotes ? "转写" : "保存录音";
+        setError(cause instanceof Error && cause.message ? `${action}失败：${cause.message}` : `${action}失败，请重试。`);
         setPhase("review");
       }
     }
@@ -270,18 +273,18 @@ export function DesktopVoiceRecorder({ scriptText, onRecorded, onCancel }: Deskt
 
   const busy = phase === "requesting" || phase === "countdown" || phase === "stopping" || phase === "submitting";
   return <section aria-label="电脑录音" className={styles.recorder}>
-    <div className={styles.heading}><div><span className={styles.eyebrow}>本机麦克风</span><h2>为这条视频录音</h2></div><button aria-label={phase === "submitted" ? "关闭录音" : "取消录音"} className={styles.iconButton} disabled={phase === "submitting"} onClick={cancel} type="button"><X size={16} /></button></div>
-    {scriptText ? <p className={styles.script}>{scriptText}</p> : <p className={styles.help}>录完先试听，确认后再交给当前任务。</p>}
+    <div className={styles.heading}><div><span className={styles.eyebrow}>本机麦克风</span><h2>{materialNotes ? "为已入库素材补口述说明" : "为这条视频录音"}</h2></div><button aria-label={phase === "submitted" ? "关闭录音" : "取消录音"} className={styles.iconButton} disabled={phase === "submitting"} onClick={cancel} type="button"><X size={16} /></button></div>
+    {scriptText ? <p className={styles.script}>{scriptText}</p> : <p className={styles.help}>{materialNotes ? "录完先试听，再转为可编辑文字；核对后另行保存本素材说明。麦克风或转写不可用时可直接输入文字。" : "录完先试听，确认后再交给当前任务。"}</p>}
     {devices.length > 1 ? <div className={styles.devices} role="group" aria-label="选择麦克风"><span>录音设备</span><div><button aria-pressed={!deviceId} className={styles.deviceButton} disabled={phase === "recording" || busy || phase === "submitted"} onClick={() => setDeviceId("")} type="button">系统默认</button>{devices.map((device, index) => <button aria-pressed={deviceId === device.deviceId} className={styles.deviceButton} disabled={phase === "recording" || busy || phase === "submitted"} key={device.deviceId || index} onClick={() => setDeviceId(device.deviceId)} type="button">{device.label || `麦克风 ${index + 1}`}</button>)}</div></div> : null}
-    <div aria-live="polite" className={styles.state}>{phase === "requesting" ? "正在连接麦克风…" : phase === "countdown" ? `${countdown} 秒后开始录音` : phase === "recording" ? `正在录音 · ${Math.floor(elapsedMs / 1000)} 秒` : phase === "stopping" ? "正在整理录音…" : phase === "submitting" ? "正在保存录音，请等待结果…" : phase === "review" || phase === "submitted" ? `已录制 ${elapsedMs < 1000 ? "不足 1 秒" : `${Math.round(elapsedMs / 1000)} 秒`}` : "麦克风将在开始后启用"}</div>
+    <div aria-live="polite" className={styles.state}>{phase === "requesting" ? "正在连接麦克风…" : phase === "countdown" ? `${countdown} 秒后开始录音` : phase === "recording" ? `正在录音 · ${Math.floor(elapsedMs / 1000)} 秒` : phase === "stopping" ? "正在整理录音…" : phase === "submitting" ? (materialNotes ? "正在转为文字，请等待结果…" : "正在保存录音，请等待结果…") : phase === "review" || phase === "submitted" ? `已录制 ${elapsedMs < 1000 ? "不足 1 秒" : `${Math.round(elapsedMs / 1000)} 秒`}` : "麦克风将在开始后启用"}</div>
     {previewUrl ? <audio aria-label="试听本次录音" controls onError={() => setError("试听失败，请重新录音。")} preload="metadata" src={previewUrl} /> : null}
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
-    {phase === "submitted" ? <p className={styles.notice} role="status">录音已交给当前任务，保存结果以任务提示为准。</p> : null}
+    {phase === "submitted" ? <p className={styles.notice} role="status">{materialNotes ? "口述已转为文字草稿，请核对后保存本素材说明。" : "录音已交给当前任务，保存结果以任务提示为准。"}</p> : null}
     <div className={styles.actions}>
       {phase === "idle" ? <button className={styles.primaryButton} onClick={() => void start()} type="button"><Mic size={16} />开始录音</button> : null}
       {phase === "recording" ? <button className={styles.primaryButton} onClick={stop} type="button"><Square size={14} fill="currentColor" />停止录音</button> : null}
-      {phase === "review" ? <><button className={styles.primaryButton} onClick={() => void submitRecording()} type="button">使用录音</button><button className={styles.secondaryButton} onClick={() => void start()} type="button"><RotateCcw size={15} />重新录音</button></> : null}
-      {busy ? <button className={styles.primaryButton} disabled type="button">{phase === "requesting" ? "等待麦克风…" : phase === "countdown" ? "准备录音…" : phase === "stopping" ? "正在整理…" : "正在保存…"}</button> : null}
+      {phase === "review" ? <><button className={styles.primaryButton} onClick={() => void submitRecording()} type="button">{materialNotes ? "转为文字" : "使用录音"}</button><button className={styles.secondaryButton} onClick={() => void start()} type="button"><RotateCcw size={15} />重新录音</button></> : null}
+      {busy ? <button className={styles.primaryButton} disabled type="button">{phase === "requesting" ? "等待麦克风…" : phase === "countdown" ? "准备录音…" : phase === "stopping" ? "正在整理…" : materialNotes ? "正在转写…" : "正在保存…"}</button> : null}
       <button className={styles.secondaryButton} disabled={phase === "submitting"} onClick={cancel} type="button">{phase === "submitted" ? "关闭" : "取消"}</button>
     </div>
   </section>;
