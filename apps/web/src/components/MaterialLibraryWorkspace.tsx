@@ -206,6 +206,7 @@ export function MaterialLibraryWorkspace({
   const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
   const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
   const sourceVideo = useRef<HTMLVideoElement>(null);
+  const sourceAudio = useRef<HTMLAudioElement>(null);
   const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
   const intakeRevision = useRef(0);
@@ -361,12 +362,20 @@ export function MaterialLibraryWorkspace({
     setDetailError("");
   }
 
+  function seekSelectedSegment(media: HTMLMediaElement) {
+    if (media !== sourceAudio.current && media !== sourceVideo.current) return;
+    media.currentTime = selectedSegment?.start_seconds ?? 0;
+  }
+
   function selectSegment(segment: MaterialSegment) {
     selectionRevision.current += 1;
     setSelectedSegmentId(segment.id);
     setDescriptionDraft(segment.description);
     setTranscriptDraft(segment.transcript);
-    if (sourceVideo.current) sourceVideo.current.currentTime = segment.start_seconds;
+    const media = selected?.media_type === "audio" ? sourceAudio.current : sourceVideo.current;
+    if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      media.currentTime = segment.start_seconds;
+    }
     setCollectionDraft(segment.collection_ids[0] ?? "");
     setCollectionQuery("");
     setDetailError("");
@@ -682,6 +691,8 @@ export function MaterialLibraryWorkspace({
           />
         ) : selected.media_type === "audio" ? (
           <audio
+            ref={sourceAudio}
+            onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
             aria-label="原素材预览"
             controls
             key={selected.id}
@@ -692,7 +703,7 @@ export function MaterialLibraryWorkspace({
           <video
             ref={sourceVideo}
             aria-label="原素材预览"
-            onLoadedMetadata={event => { event.currentTarget.currentTime = selectedSegment?.start_seconds ?? 0; }}
+            onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
             controls
             key={selected.id}
             preload="metadata"
