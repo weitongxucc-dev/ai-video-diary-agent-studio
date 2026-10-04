@@ -26,7 +26,11 @@ from app.avatar_lipsync import (
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
 )
-from app.database_migrations import apply_production_migrations
+from app.database_migrations import (
+    CONTENT_VISIBILITY_DEFAULT,
+    apply_production_migrations,
+    ensure_content_visibility_columns,
+)
 from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
 from app.asr import SubtitleSegment as SpeechObservation
@@ -52,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
+ContentVisibility = Literal["private", "shared"]
+
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -191,6 +197,8 @@ class MaterialAsset:
     analysis_message: str = "待分析镜头和画面内容。"
     speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
+    # 新建素材默认私有：只有本人显式共享才对成员可见。存量行迁移时回填 shared。
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -673,6 +681,7 @@ class CreationPlan:
     material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -688,6 +697,7 @@ class VideoTemplate:
     settings: dict[str, object]
     source_task_id: str | None = None
     source_timeline_version_id: str | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -715,6 +725,7 @@ class CreationTask:
     stage_impact: str | None = None
     stage_repair_action: str | None = None
     stage_retryable: bool | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -1720,20 +1731,9 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
-            # Migration 13 adds the member visibility columns; these guarded
-            # ensures mirror the ctime_ns/inode pattern for databases whose
-            # version row reached 13 without the columns. Content defaults to
-            # 'shared' so existing owner content stays member-visible.
-            for table in ("creation_tasks", "material_assets"):
-                columns = {
-                    str(row["name"])
-                    for row in conn.execute(f"PRAGMA table_info({table})")
-                }
-                if "visibility" not in columns:
-                    conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN "
-                        "visibility TEXT NOT NULL DEFAULT 'shared'"
-                    )
+            # 内容可见性列：与知识资料共用同一个 PRAGMA 守卫 ensure，新增行由仓储层
+            # 显式写入，新建默认 private，存量行回填 shared 不改原语义。
+            ensure_content_visibility_columns(conn)
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -4256,12 +4256,12 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
-        return [self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows]
+        return [self._asset_from_row(row) for row in rows]
 
     def list_assets_page(
         self,
@@ -4343,15 +4343,13 @@ class ProductionRepository:
             )
             rows = conn.execute(
                 f"""
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE {where_clause} ORDER BY updated_at DESC
                 LIMIT ? OFFSET ?
                 """,
                 (*parameters, limit, offset),
             ).fetchall()
-        assets = [
-            self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows
-        ]
+        assets = [self._asset_from_row(row) for row in rows]
         return assets, total
 
     def search_material_segments(
@@ -4520,14 +4518,14 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE workspace_id = ? AND id = ?
                 """,
                 (workspace_id, asset_id),
             ).fetchone()
         if row is None:
             raise KeyError(asset_id)
-        return self._asset_from_payload(json.loads(str(row["payload"])))
+        return self._asset_from_row(row)
 
     def _asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
         with self._connect() as conn:
@@ -4646,6 +4644,83 @@ class ProductionRepository:
         if not isinstance(payload, list):
             return None
         return [float(value) for value in payload]
+
+    def set_asset_visibility(
+        self, workspace_id: str, asset_id: str, visibility: ContentVisibility
+    ) -> MaterialAsset:
+        """明确共享或收回一条素材的可见性，列与载荷一起改，回读一致。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND id=?",
+                (workspace_id, asset_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(asset_id)
+            asset = self._asset_from_row(row)
+            asset = replace(asset, visibility=visibility, updated_at=utc_now())
+            conn.execute(
+                "UPDATE material_assets SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(asset), visibility, asset.updated_at.isoformat(), workspace_id, asset_id),
+            )
+        return asset
+
+    def set_creation_task_visibility(
+        self, workspace_id: str, task_id: str, visibility: ContentVisibility
+    ) -> CreationTask:
+        """明确共享或收回一条创作任务的可见性。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        task = self.get_creation_task(workspace_id, task_id)
+        task = replace(task, visibility=visibility, updated_at=utc_now())
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE creation_tasks SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(task), visibility, task.updated_at.isoformat(), workspace_id, task_id),
+            )
+        return task
+
+    def set_creation_plan_visibility(
+        self, workspace_id: str, plan_id: str, visibility: ContentVisibility
+    ) -> CreationPlan:
+        """明确共享或收回一个创作方案的可见性。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        plan = self.get_creation_plan(workspace_id, plan_id)
+        plan = replace(plan, visibility=visibility, updated_at=utc_now())
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE creation_plans SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(plan), visibility, plan.updated_at.isoformat(), workspace_id, plan_id),
+            )
+        return plan
+
+    def set_video_template_visibility(
+        self, workspace_id: str, template_id: str, visibility: ContentVisibility
+    ) -> VideoTemplate:
+        """明确共享或收回一个用户模板的可见性，当前及历史版本一起改。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload, version FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC",
+                (workspace_id, template_id),
+            ).fetchall()
+            if not rows:
+                raise KeyError(template_id)
+            latest = None
+            for row in rows:
+                template = VideoTemplate(**_with_datetime(json.loads(str(row["payload"])), "created_at"))
+                template = replace(template, visibility=visibility)
+                conn.execute(
+                    "UPDATE video_templates SET payload=?, visibility=? WHERE workspace_id=? AND id=? AND version=?",
+                    (_json_payload(template), visibility, workspace_id, template_id, int(row["version"])),
+                )
+                if latest is None:
+                    latest = template
+        assert latest is not None
+        return latest
 
     def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
         if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
@@ -4933,15 +5008,15 @@ class ProductionRepository:
 
     def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
-        return [VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at")) for row in rows]
+            rows = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
+        return [self._template_from_row(row) for row in rows]
 
     def get_video_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
         with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
+            row = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
         if row is None:
             raise KeyError(template_id)
-        return VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at"))
+        return self._template_from_row(row)
 
     def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
@@ -4951,7 +5026,18 @@ class ProductionRepository:
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
                 raise ValueError("模板版本已变化，请刷新后重新保存。")
-            conn.execute("INSERT INTO video_templates (workspace_id, id, version, payload) VALUES (?, ?, ?, ?)", (template.workspace_id, template.id, template.version, _json_payload(template)))
+            previous = conn.execute(
+                "SELECT visibility FROM video_templates WHERE workspace_id = ? AND id = ? ORDER BY version DESC LIMIT 1",
+                (template.workspace_id, template.id),
+            ).fetchone()
+            # 新版本继承上一版的可见性：共享状态不会因为又存了一版就被收回。
+            visibility = previous["visibility"] if previous is not None else template.visibility
+            # 继承来的可见性同时进入载荷和返回值：存的和立刻拿到的必须是同一个值。
+            template = replace(template, visibility=visibility)
+            conn.execute(
+                "INSERT INTO video_templates (workspace_id, id, version, payload, visibility) VALUES (?, ?, ?, ?, ?)",
+                (template.workspace_id, template.id, template.version, _json_payload(template), visibility),
+            )
         return template
 
     def confirm_creation_plan(
@@ -5007,26 +5093,28 @@ class ProductionRepository:
                     raise ValueError("创作方案引用的素材片段不可用")
             conn.execute(
                 """
-                INSERT INTO creation_plans (id, workspace_id, payload, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     plan.id,
                     plan.workspace_id,
                     _json_payload(plan),
+                    plan.visibility,
                     plan.updated_at.isoformat(),
                 ),
             )
             conn.execute(
                 """
-                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.id,
                     task.workspace_id,
                     task.plan_id,
                     _json_payload(task),
+                    task.visibility,
                     task.updated_at.isoformat(),
                 ),
             )
@@ -5039,14 +5127,17 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM creation_plans
+                SELECT payload, visibility FROM creation_plans
                 WHERE workspace_id = ? AND id = ?
                 """,
                 (workspace_id, plan_id),
             ).fetchone()
         if row is None:
             raise KeyError(plan_id)
-        return self._creation_plan_from_payload(json.loads(str(row["payload"])))
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return self._creation_plan_from_payload(data)
 
     def get_creation_task(
         self,
@@ -5059,14 +5150,14 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             row = conn.execute(
                 f"""
-                SELECT payload FROM creation_tasks
+                SELECT payload, visibility FROM creation_tasks
                 WHERE workspace_id = ? AND id = ?{visibility_clause}
                 """,
                 (workspace_id, task_id),
             ).fetchone()
         if row is None:
             raise KeyError(task_id)
-        return self._creation_task_from_payload(json.loads(str(row["payload"])))
+        return self._task_from_row(row)
 
     def list_creation_tasks(
         self,
@@ -5078,15 +5169,12 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
-                SELECT payload FROM creation_tasks
+                SELECT payload, visibility FROM creation_tasks
                 WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
-        return [
-            self._creation_task_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
+        return [self._task_from_row(row) for row in rows]
 
     def create_timeline_version(self, version: TimelineVersion) -> TimelineVersion:
         _validate_timeline_version(version)
@@ -7963,12 +8051,12 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO creation_plans (id, workspace_id, payload, updated_at) VALUES (?, ?, ?, ?)",
-                (plan.id, workspace_id, _json_payload(plan), plan.updated_at.isoformat()),
+                "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (plan.id, workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
             )
             conn.execute(
-                "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (task.id, workspace_id, plan.id, _json_payload(task), task.updated_at.isoformat()),
+                "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task.id, workspace_id, plan.id, _json_payload(task), task.visibility, task.updated_at.isoformat()),
             )
             conn.execute(
                 "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) "
@@ -8730,10 +8818,15 @@ class ProductionRepository:
         with self._connect() as conn:
             if analysis_only:
                 conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute("SELECT payload FROM material_assets WHERE id = ? AND workspace_id = ?", (asset.id, asset.workspace_id)).fetchone()
+                # 连 visibility 一起读：分析写回时用库里那一列的当前值，
+                # 不拿分析结果里的旧值覆盖用户明确设过的共享或收回。
+                row = conn.execute(
+                    "SELECT payload, visibility FROM material_assets WHERE id = ? AND workspace_id = ?",
+                    (asset.id, asset.workspace_id),
+                ).fetchone()
                 if row is None:
                     raise ValueError("素材已移除，未保存过期的分析结果。")
-                current = self._asset_from_payload(json.loads(row["payload"]))
+                current = self._asset_from_row(row)
                 if current.size_bytes != asset.size_bytes or current.modified_at != asset.modified_at:
                     raise ValueError("分析期间素材文件发生变化，请重新分析。")
                 current_segments = {item.id: item for item in current.segments}
@@ -8768,8 +8861,8 @@ class ProductionRepository:
             conn.execute(
                 """
                 INSERT INTO material_assets
-                    (id, workspace_id, file_path, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (id, workspace_id, file_path, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(workspace_id, file_path) DO UPDATE SET
                     payload = excluded.payload,
                     updated_at = excluded.updated_at
@@ -8779,6 +8872,7 @@ class ProductionRepository:
                     asset.workspace_id,
                     asset.path,
                     _json_payload(asset),
+                    asset.visibility,
                     asset.updated_at.isoformat(),
                 ),
             )
@@ -9156,6 +9250,18 @@ class ProductionRepository:
         return MaterialCollection(**data)
 
     @staticmethod
+    def _asset_from_row(row: sqlite3.Row) -> MaterialAsset:
+        """读素材时，可见性以列为准。
+
+        存量行的 payload 里没有 visibility 字段，值只写在列上（迁移回填的
+        shared）；新行的两者一致。以列为准，读到的值和列表过滤永远同一个来源。
+        """
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return ProductionRepository._asset_from_payload(data)
+
+    @staticmethod
     def _asset_from_payload(data: dict[str, object]) -> MaterialAsset:
         # Read-only legacy boundary: old proof flags never regain mutation authority.
         data = dict(data)
@@ -9244,6 +9350,22 @@ class ProductionRepository:
                 if isinstance(item, dict)
             ],
         )
+
+    @staticmethod
+    def _template_from_row(row: sqlite3.Row) -> VideoTemplate:
+        """模板回读以列为准：存量模板的 visibility 只写在列上。"""
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return VideoTemplate(**_with_datetime(data, "created_at"))
+
+    @staticmethod
+    def _task_from_row(row: sqlite3.Row) -> CreationTask:
+        """任务回读以列为准：存量行的 visibility 只写在列上。"""
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return ProductionRepository._creation_task_from_payload(data)
 
     @staticmethod
     def _creation_task_from_payload(data: dict[str, object]) -> CreationTask:

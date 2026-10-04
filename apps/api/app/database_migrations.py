@@ -622,7 +622,13 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
 #
 # 存量行回填 shared（不改动已有数据的语义）；表结构的 DEFAULT 是 private，
 # 两者是不同的事，迁移回填不会把新建行的默认改回 shared。
-CONTENT_VISIBILITY_TABLES = ("knowledge_items", "creation_plans", "video_templates")
+CONTENT_VISIBILITY_TABLES = (
+    "knowledge_items",
+    "creation_plans",
+    "video_templates",
+    "creation_tasks",
+    "material_assets",
+)
 CONTENT_VISIBILITY_LEGACY = "shared"
 CONTENT_VISIBILITY_DEFAULT = "private"
 
