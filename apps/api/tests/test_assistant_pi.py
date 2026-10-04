@@ -75,6 +75,68 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
     assert commands[3][commands[3].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_edit"
 
 
+def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_path):
+    """已验证的本地成员令牌必须进到工具运行环境，否则工具回调会变成匿名 local 读取。"""
+    (tmp_path / "models").mkdir()
+    fake_pi = tmp_path / "pi"
+    fake_pi.touch()
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
+    settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
+                        llm_api_key_provider="minimax")
+    envs = []
+
+    def fake_run(cmd, **kwargs):
+        envs.append(kwargs["env"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            json.dumps({"type": "message_end", "message": {"role": "assistant",
+                "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
+            '{"type":"agent_settled"}',
+        ]), stderr="")
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    run_task_turn(settings, workspace_id="workspace-one", task_id="task-one", message="检查",
+                  stage="montage", selected_refs=[], playhead_ms=None,
+                  local_member_token="member-token-one", caller_user_id="user-one")
+    run_plan_turn(settings, workspace_id="workspace-one", conversation_id="conv-one", message="你好",
+                  local_member_token="member-token-plan", caller_user_id="user-two")
+    assert envs[0]["AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN"] == "member-token-one"
+    assert envs[1]["AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN"] == "member-token-plan"
+    # 没有传身份/令牌时保持旧行为：单机 local 入口不被这次改动挡住。
+    run_task_turn(settings, workspace_id="workspace-one", task_id="task-one", message="检查",
+                  stage="montage", selected_refs=[], playhead_ms=None)
+    assert envs[2]["AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN"] == ""
+
+
+def test_trusted_callers_do_not_share_the_pi_session(monkeypatch, tmp_path):
+    (tmp_path / "models").mkdir()
+    fake_pi = tmp_path / "pi"
+    fake_pi.touch()
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
+    settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
+                        llm_api_key_provider="minimax")
+    sessions = []
+
+    def fake_run(cmd, **_kwargs):
+        sessions.append(cmd[cmd.index("--session-id") + 1])
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            json.dumps({"type": "message_end", "message": {"role": "assistant",
+                "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
+            '{"type":"agent_settled"}',
+        ]), stderr="")
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    for user_id in ("user-one", "user-one", "user-two"):
+        run_plan_turn(settings, workspace_id="workspace-a", conversation_id="conv-one", message="你好",
+                      caller_user_id=user_id)
+    # 同一可信调用方沿用同一段会话；不同调用方不共用对话历史。
+    assert sessions[0] == sessions[1]
+    assert sessions[0] != sessions[2]
+    # 令牌和身份不进会话键，也不出现在命令行参数里。
+    run_plan_turn(settings, workspace_id="workspace-a", conversation_id="conv-one", message="你好",
+                  local_member_token="member-token-one", caller_user_id="user-one")
+    assert sessions[3] == sessions[0]
+
+
 def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatch, tmp_path):
     model_root = tmp_path / "models"
     model_root.mkdir()
