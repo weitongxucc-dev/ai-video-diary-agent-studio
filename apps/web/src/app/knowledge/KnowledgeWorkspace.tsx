@@ -175,14 +175,17 @@ function citedEvidence(version: KnowledgeItemVersion, locator: string) {
 
 type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "failed"; version?: KnowledgeItemVersion };
 
-/**
- * 引用上的段落定位（最小字段合同）。
- *
- * 服务端把引用绑定到具体出处时给出这一项；`lib/types.ts` 当前由 116 阶段持有，
- * 所以本单在组件侧只做可选扩展，不改动那边的既有类型。字段到达前仍按整版回查，
- * 不猜页码。
- */
-type CitedSource = ScriptLibrarySource & { locator?: string | null };
+// 引用行直接展示服务端按引用版本回填的固定版事实：原网址、抓取时刻、内容指纹，
+// 以及引用绑定的段落定位（没绑定就说没绑定，不猜页）。
+function citedFacts(source: ScriptLibrarySource) {
+  if (!source.cited_version) return null;
+  return <small className={styles.notWired}>
+    引用版本 {source.cited_version} · 指纹 {source.cited_content_hash ?? "无"}
+    {source.cited_fetched_at ? ` · 抓取于 ${formatFetchTime(source.cited_fetched_at)}` : " · 无抓取记录"}
+    {source.cited_source_url ? <> · <a href={source.cited_source_url} rel="noreferrer" target="_blank">该版原始来源</a></> : null}
+    {` · ${source.locator ? `绑定定位 ${source.locator}` : "未绑定具体段落定位"}`}
+  </small>;
+}
 
 /**
  * 一条文案引用回查到它绑定的知识版本与页码/段落出处。
@@ -193,11 +196,11 @@ type CitedSource = ScriptLibrarySource & { locator?: string | null };
  * 回查当时原文，并同时说明当前版本已经不同。真正不可读才不给回查入口。
  * 引用内容仅作为资料展示，其中的指令不会被执行。
  */
-function CitationSource({ source }: { source: CitedSource }) {
+function CitationSource({ source }: { source: ScriptLibrarySource }) {
   const [trace, setTrace] = useState<CitationTrace>({ state: "idle" });
   const reference = useMemo(() => parseKnowledgeReferenceId(source.reference_id), [source.reference_id]);
   // 引用绑定到具体段落时用它定位；服务端没给就不猜页，直接显示找不到。
-  const locator = source.locator ?? null;
+  const locator = source.locator;
 
   async function traceCitation() {
     if (!reference) return;
@@ -217,6 +220,7 @@ function CitationSource({ source }: { source: CitedSource }) {
 
   return <li className={styles.citation}>
     <p>{source.reference_id} · {statusLabel}{source.source_url ? <> · <a href={source.source_url} rel="noreferrer" target="_blank">原始来源</a></> : null}</p>
+    {citedFacts(source)}
     {reference && source.status === "version_changed"
       ? <small className={styles.notWired}>当前条目已与引用绑定的版本不同；下面的回查只读取引用当时那一版，不用当前版替代。</small>
       : null}
