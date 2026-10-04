@@ -34,6 +34,7 @@ import { AppShell } from "@/components/AppShell";
 
 function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
   return {
+    visibility: "private",
     id: "task-1",
     workspace_id: "workspace-1",
     plan_id: "plan-1",

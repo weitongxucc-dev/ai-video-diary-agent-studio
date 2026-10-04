@@ -9,6 +9,7 @@ vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTML
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush, refresh: vi.fn() }) }));
 
 const task: CreationTask = {
+  visibility: "private",
   id: "task-one", workspace_id: "workspace-one", plan_id: "plan-one", name: "设备演示",
   scenario: "演示", stage: "montage", stage_status: "waiting_for_user", status: "waiting_for_user",
   progress: 68, recovery_point: "检查画面", selected_topic_id: null, confirmed_script_id: null,
