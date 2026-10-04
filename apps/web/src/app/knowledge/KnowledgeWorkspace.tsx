@@ -73,12 +73,13 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
   }), [items, category, query, exampleMode]);
-  // 可见范围变更后重新拉取真实值，不在前端自造一个临时状态。
-  function reloadSelected() {
-    if (!selectedId) return;
-    getKnowledgeItem(selectedId).then(setDetail).catch(() => setDetail(null));
+  // 可见范围变更用 PUT 返回的服务端值回写，不另发一轮 GET：
+// 只更新同 id 的当前详情，保留已加载的版本历史；列表由页面刷新时取真实值。
+  function applyVisibilityUpdate(updated: KnowledgeItem) {
+    if (updated.id !== selectedId) return;
+    setDetail((current) => current && current.id === updated.id ? { ...current, visibility: updated.visibility } : current);
   }
-  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={reloadSelected} /> : undefined;
+  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} /> : undefined;
 
   return <AppShell inspector={inspector} inspectorTitle="来源详情">
     <div className={styles.page}>
@@ -116,15 +117,15 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   </AppShell>;
 }
 
-function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, onVisibilityChanged }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; onVisibilityChanged: () => void }) {
+function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, onVisibilityChanged }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; onVisibilityChanged: (updated: KnowledgeItem) => void }) {
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
   const visibility = detail?.visibility ?? item.visibility ?? "private";
   async function changeVisibility(next: "shared" | "private") {
     setVisibilityBusy(true); setVisibilityError(null);
     try {
-      await setKnowledgeItemVisibility(item.id, next);
-      onVisibilityChanged();
+      // 保存返回的条目就是服务端写入后的真实状态。
+      onVisibilityChanged(await setKnowledgeItemVisibility(item.id, next));
     } catch (cause) {
       setVisibilityError(sourceErrorMessage(cause));
     } finally { setVisibilityBusy(false); }
