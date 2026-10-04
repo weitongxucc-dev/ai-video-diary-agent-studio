@@ -5218,9 +5218,14 @@ class ProductionRepository:
         viewer_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> list[VideoTemplate]:
-        """列出模板。与其它内容同一判据：私有模板只对上传者本人可见。"""
+        """列出模板。与其它内容同一判据：私有模板只对上传者本人可见。
+
+        与 list_assets / list_creation_tasks 一致：只有真的带来可信读取身份时才按
+        owner 过滤。没有身份时保留旧行为（本地单机），不会因为新增字段就把原本
+        能列出的模板整列变成空。
+        """
         templates = self._list_video_templates_by_visibility(workspace_id)
-        if local_diagnostic:
+        if local_diagnostic or viewer_user_id is None:
             return templates
         return [
             item for item in templates

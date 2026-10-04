@@ -33,11 +33,26 @@ def make_repo(tmp_path: Path) -> tuple[ProductionRepository, Path]:
     return repo, library
 
 
-def register(repo: ProductionRepository, library: Path, name: str, *, workspace_id: str = WORKSPACE) -> str:
-    """登记一个真实落盘的素材并分析出片段，供使用记录指向。"""
+def register(
+    repo: ProductionRepository,
+    library: Path,
+    name: str,
+    *,
+    workspace_id: str = WORKSPACE,
+    owner_user_id: str | None = None,
+) -> str:
+    """登记一个真实落盘的素材并分析出片段，供使用记录指向。
+
+    绑定目录时给出可信身份：新入库素材的上传者就是它，沿既有创建语义写入，
+    不在事后直接改库里的 owner 字段。
+    """
     path = library / name
     path.write_bytes(b"material-bytes")
-    repo.bind_material_ingestion(workspace_id, expected_directory=str(library))
+    repo.bind_material_ingestion(
+        workspace_id,
+        expected_directory=str(library),
+        verified_owner_user_id=owner_user_id,
+    )
     repo.confirm_material_copy_complete(
         workspace_id, relative_path=name,
         expected_revision=repo.material_copy_revision(path.stat()),
@@ -191,12 +206,25 @@ def usage_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    return SimpleNamespace(client=TestClient(main_module.app), repository=repo, library=library)
+    # 私有素材只对上传者本人可读：这里给出真实成员身份，而不是靠匿名本地范围。
+    member_id = "member-uploader"
+    service = SimpleNamespace(
+        resolve_member=lambda token: (
+            SimpleNamespace(member_id=token, role="member", name="上传者", created_at=None)
+            if token == member_id else None
+        )
+    )
+    monkeypatch.setattr(main_module, "local_members_service", service)
+    monkeypatch.setattr(main_module, "_local_member_token", lambda request: "member-uploader")
+    return SimpleNamespace(
+        client=TestClient(main_module.app), repository=repo, library=library,
+        member_id=member_id,
+    )
 
 
 def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> None:
     repo, library = usage_client.repository, usage_client.library
-    asset_id = register(repo, library, "接口回查甲.mp4")
+    asset_id = register(repo, library, "接口回查甲.mp4", owner_user_id=usage_client.member_id)
     mine, theirs = repo.get_asset(WORKSPACE, asset_id).segments[:2]
     write_task(repo, "task_usage_4", current_version_id="timeline_current_4")
     write_plan(repo, "plan_usage_4", "task_usage_4", [
