@@ -14,9 +14,27 @@ const api = vi.hoisted(() => ({
   getMaterialLibraryInsights: vi.fn(),
 }));
 const identity = vi.hoisted(() => ({ state: { token: "tok-a" as string | null, ready: true } }));
-
+const rerenderRef = vi.hoisted(() => ({ current: null as null | (() => void) }));
 vi.mock("@/lib/api", () => api);
-vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => identity.state }));
+
+// 模拟既有身份钩子：令牌状态由用例控制，refresh 重新收敛一次
+// （真实实现会重新读 localStorage），页面只消费 token/ready/refresh。
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({
+  useLocalMemberIdentity: () => ({
+    token: identity.state.token,
+    ready: identity.state.ready,
+    role: null,
+    error: null,
+    refresh: () => {
+      identity.state = {
+        token: window.localStorage.getItem("ai-video-diary-local-member-token") ?? identity.state.token,
+        ready: true,
+      };
+      rerenderRef.current?.();
+    },
+  }),
+}));
+
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 
 import { HomeDashboardLive } from "@/components/HomeWorkspace";
@@ -28,8 +46,8 @@ function payload(days: 7 | 30, title: string): HomeAggregation {
     days,
     counts: [{ key: "visible_assets", label: "可见素材", value: days === 7 ? 7 : 30, meta }],
     trend: { days, points: [], meta },
-    device_queue: { counts: { ready: 2 }, total: 2, meta },
-    storage: { directory_state: "已连接", bound_to_current_workspace: true, bound_to_another_workspace: false, configured_path_changed: false, capacity: null, meta },
+    device_queue: { counts: { "job.ready": 2 }, records_total: 2, running: null, queued: null, meta },
+    storage: { directory_state: "connected", bound_to_current_workspace: true, bound_to_another_workspace: false, configured_path_changed: false, capacity: null, meta },
     entries: {
       queue: [{ task_id: "task-a", title, stage: "montage", status: "running", updated_at: "2026-10-04T00:00:00Z" }],
       todos: [], works: [], meta,
@@ -44,6 +62,7 @@ beforeEach(() => {
   api.getProductionFoundation.mockResolvedValue(null);
   api.getMaterialLibraryInsights.mockResolvedValue(null);
   identity.state = { token: "tok-a", ready: true };
+  window.localStorage.clear();
 });
 
 describe("首页真实数据容器", () => {
@@ -56,6 +75,19 @@ describe("首页真实数据容器", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在读取整机概览…");
   });
 
+  it("clears the old identity's content when another tab stores a new token", async () => {
+    api.getHomeDashboard.mockImplementation(async (days: 7 | 30) =>
+      payload(days, identity.state.token === "tok-b" ? "令牌 B 的任务" : "令牌 A 的任务"));
+    const { rerender } = render(<HomeDashboardLive />);
+    rerenderRef.current = () => rerender(<HomeDashboardLive />);
+    expect(await screen.findByRole("button", { name: /令牌 A 的任务/ })).toBeInTheDocument();
+    // 另一个标签页写入新令牌：既有钩子收敛后，旧身份的私有内容必须清掉并按新身份重读。
+    window.localStorage.setItem("ai-video-diary-local-member-token", "tok-b");
+    window.dispatchEvent(new StorageEvent("storage", { key: "ai-video-diary-local-member-token" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /令牌 B 的任务/ })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /令牌 A 的任务/ })).not.toBeInTheDocument();
+  });
+
   it("drops a late response that belongs to the previous identity", async () => {
     let releaseFirst: ((value: HomeAggregation) => void) | undefined;
     api.getHomeDashboard
@@ -64,6 +96,7 @@ describe("首页真实数据容器", () => {
     const { rerender } = render(<HomeDashboardLive />);
     // 切成员：旧身份的请求仍在途。
     identity.state = { token: "tok-b", ready: true };
+    rerenderRef.current = () => rerender(<HomeDashboardLive />);
     rerender(<HomeDashboardLive />);
     await waitFor(() => expect(screen.getByRole("button", { name: /新身份任务/ })).toBeInTheDocument());
     // 旧身份迟到响应不得把旧标题提交上来。

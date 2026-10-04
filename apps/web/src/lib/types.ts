@@ -2015,8 +2015,12 @@ export type HomeTrendFact = {
   meta: HomeFactMeta;
 };
 export type HomeDeviceQueueFact = {
+  /** 状态键形如 "job.running" / "intake.observing"；读不到时为空对象。 */
   counts: Record<string, number>;
-  total: number;
+  /** 读不到表时为 null：页面显示未知，不显示 0。 */
+  records_total: number | null;
+  running: number | null;
+  queued: number | null;
   meta: HomeFactMeta;
 };
 export type HomeStorageFact = {

@@ -203,9 +203,9 @@ describe("HomeWorkspace", () => {
       { key: "knowledge_sources", label: "知识来源", value: 4, meta },
     ],
     trend: { days: 7, points: points(7), meta },
-    device_queue: { counts: { 分析中: 1, 等待: 2 }, total: 3, meta },
+    device_queue: { counts: { "job.running": 1, "intake.observing": 2 }, records_total: 3, running: 1, queued: 2, meta },
     storage: {
-      directory_state: "已连接", bound_to_current_workspace: true,
+      directory_state: "connected", bound_to_current_workspace: true,
       bound_to_another_workspace: false, configured_path_changed: false,
       capacity: { total_bytes: 512 * 1024 ** 3, used_bytes: 128 * 1024 ** 3, free_bytes: 384 * 1024 ** 3 },
       meta,
@@ -225,7 +225,7 @@ describe("HomeWorkspace", () => {
     // 服务端没给的计数不补 0：显示未知，而不是 0。
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("未知");
     expect(screen.getByRole("img", { name: /素材接收趋势/ })).toBeInTheDocument();
-    const queue = screen.getByRole("heading", { name: "我进入得去的队列" }).closest("section") as HTMLElement;
+    const queue = screen.getByRole("heading", { name: "我的任务" }).closest("section") as HTMLElement;
     expect(within(queue).getByRole("button", { name: /设备演示/ })).toBeInTheDocument();
     const todos = screen.getByRole("heading", { name: "待处理" }).closest("section") as HTMLElement;
     expect(within(todos).getByRole("link", { name: /门店介绍/ })).toHaveAttribute("href", "/tasks/task-two");
@@ -233,6 +233,7 @@ describe("HomeWorkspace", () => {
     expect(within(works).getByRole("link", { name: /开场演示/ })).toHaveAttribute("href", "/tasks/task-three");
     const storage = screen.getByRole("heading", { name: "存储" }).closest("section") as HTMLElement;
     expect(storage).toHaveTextContent("128.0 GB");
+    expect(storage).toHaveTextContent("数据盘已连接");
     expect(storage).toHaveTextContent("整机匿名汇总");
     expect(storage).toHaveTextContent("素材库");
     // 整机匿名运行只有数量，不含归属或名称。
@@ -240,6 +241,13 @@ describe("HomeWorkspace", () => {
     // 没有真实载体的统计项按服务端给出的原因如实显示。
     const unknown = screen.getByRole("heading", { name: "没有真实数据的项" }).closest("section") as HTMLElement;
     expect(unknown).toHaveTextContent("声音库还没有接入统计口径");
+    // unknown.key 是技术键，界面上给中文说法。
+    expect(unknown).toHaveTextContent("声音库统计");
+    // 整机状态：处理中与排队分开显示，技术状态键不铺到界面。
+    const stage = screen.getByRole("heading", { name: "任务与处理阶段" }).closest("section") as HTMLElement;
+    expect(stage).toHaveTextContent("处理中 1 · 排队 2");
+    expect(stage).toHaveTextContent("素材待确认 2");
+    expect(stage).not.toHaveTextContent("job.running");
   });
 
   it("keeps a real retry action when a later read fails, and shows loading before any data", async () => {
