@@ -26,6 +26,7 @@ from app.creation_execution import (
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.host_resource_probes import HostCapacity, HostProcessProbe
+from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
                             MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
@@ -439,14 +440,36 @@ def test_cancel_at_boundary_and_revision_change_blocks_resume(tmp_path, monkeypa
         execution.retry("workspace_a", task_id)
 
 
+def _permit_scheduler(repo, tmp_path):
+    """整机许可队列 + 真实本机名册；许可身份从成员行来，不从字符串来。"""
+    owner = CreationJobOwnerVerifier(repo)
+    scheduler = DeviceScheduler(
+        repo.database_path, tmp_path / "device.lock", owners=owner,
+        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+                                  released=lambda _grant: True),
+        processes=SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
+                                  children_released=lambda _children: True,
+                                  recovery_state=lambda _holder, _children: "released"),
+    )
+    members = LocalMemberService(repo.database_path)
+    seeded_owner = members.whoami(None)[0]
+    return scheduler, members, seeded_owner
+
+
 def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
-    scheduled = []
+    scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
+        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        last_error=None, wake=lambda: None,
+    ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
-        submit=lambda *args: scheduled.append(args)))
-    client = TestClient(main_module.app)
+        submit=lambda *_args: pytest.fail("许可已接通，制作作业不得退回旧的本机线程")))
+    client = TestClient(main_module.app,
+                        headers={"X-Local-Member-Token": members.whoami(None)[1]})
     base = f"/api/creation-tasks/{task_id}/execution"
     preview = client.get(base + "/preview")
     assert preview.status_code == 200
@@ -462,28 +485,56 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     second = client.post(base + "/start", json=payload)
     assert first.status_code == second.status_code == 202
     assert first.json()["job"]["id"] == second.json()["job"]["id"]
-    assert first.json()["current_stage"] is None
-    assert first.json()["waiting_reason"] is None
     assert first.json()["status_updated_at"] is not None
     assert len(repo.list_job_runs("local", task_id)) == 1
-    assert len(scheduled) == 2  # atomic JobRun claim ensures only one worker executes
+    # 两次点击只产生一条持久许可请求，身份是名册里的真实成员行。
+    with repo._connect() as conn:
+        requests = conn.execute(
+            "SELECT member_id FROM device_work_requests WHERE owner_type='creation_job'",
+        ).fetchall()
+    assert [row["member_id"] for row in requests] == [owner_member.member_id]
+    scheduler.close()
+
+
+def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
+    """没有可核验身份时不给许可，也不退回旧线程硬跑。"""
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    scheduler, members, _owner = _permit_scheduler(repo, tmp_path)
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
+        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        last_error=None, wake=lambda: None,
+    ))
+    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
+        submit=lambda *_args: pytest.fail("身份不可核验时不得放行制作作业")))
+    base = f"/api/creation-tasks/{task_id}/execution"
+    payload = {"script_id": script_id, "input_digest": digest, "requirements_confirmed": True}
+    forged = TestClient(main_module.app, headers={"X-Local-Member-Token": "not-a-real-token"})
+    assert forged.post(base + "/start", json=payload).status_code == 401
+    assert not repo.list_job_runs("local", task_id)
+    # 另一位真实成员发起时，许可挂的是他自己的成员行，不是 owner 的，也不是一个字符串。
+    second, second_token = members.join(members.create_invite_code(), "第二位")
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": second_token})
+    assert client.post(base + "/start", json=payload).status_code == 202
+    with repo._connect() as conn:
+        rows = conn.execute(
+            "SELECT member_id FROM device_work_requests WHERE owner_type='creation_job'",
+        ).fetchall()
+    assert [row["member_id"] for row in rows] == [second.member_id]
+    scheduler.close()
 
 
 def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     execution = _execution(repo)
+    scheduler, members, seeded_owner = _permit_scheduler(repo, tmp_path)
     owner = CreationJobOwnerVerifier(repo)
-    scheduler = DeviceScheduler(
-        repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
-                                  released=lambda _grant: True),
-        processes=SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
-                                  children_released=lambda _children: True,
-                                  recovery_state=lambda _holder, _children: "released"),
-    )
     wake_calls = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", execution)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": owner}, last_error=None,
@@ -492,7 +543,8 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
         submit=lambda *_args: pytest.fail("scheduled request must not enter legacy worker"),
     ))
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app,
+                        headers={"X-Local-Member-Token": members.whoami(None)[1]})
     route = f"/api/creation-tasks/{task_id}/execution"
     payload = {"script_id": script_id, "input_digest": digest, "requirements_confirmed": True}
     first = client.post(route + "/start", json=payload)
@@ -515,7 +567,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     assert waiting.json()["current_stage"] == "narration"
     # Reproduce a crash between durable JobRun cancellation and device-request
     # cancellation. Recovery must finish the latter without resubmitting work.
-    assert execution.cancel("local", task_id, member_id="local-owner").status == "cancelled"
+    assert execution.cancel("local", task_id, member_id=seeded_owner.member_id).status == "cancelled"
     with repo._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == "blocked"
     main_module._recover_creation_executions()
@@ -606,18 +658,35 @@ def test_concurrent_duplicate_start_returns_one_job(tmp_path):
 
 def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
     execution = _execution(repo)
-    queued = execution.start("local", task_id, script_id, digest)
+    # 能被复核的作业必须带着真实成员身份落库，否则开机时就该拒绝重新申请许可。
+    queued = execution.start("local", task_id, script_id, digest,
+                              member_id=owner_member.member_id)
     submitted = []
     worker = SimpleNamespace(
         submit=lambda *args: submitted.append(args), shutdown=lambda **_kwargs: None,
     )
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", execution)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "execution_worker", worker)
     monkeypatch.setattr(main_module, "material_ingestion", None)
+    monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
+        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        last_error=None, wake=lambda: None, stop=lambda **_kwargs: True,
+    ))
     with TestClient(main_module.app) as client:
-        assert submitted and submitted[0][1:] == ("local", queued.id)
+        # 开机恢复重新申请的是整机许可，不是绕开身份和主机门禁的旧线程。
+        assert not submitted
+        with repo._connect() as conn:
+            recovered = conn.execute(
+                "SELECT member_id, owner_id FROM device_work_requests WHERE owner_type='creation_job'",
+            ).fetchall()
+        assert [(row["member_id"], row["owner_id"]) for row in recovered] == [
+            (owner_member.member_id, queued.id),
+        ]
+        scheduler.close()
         before = client.get("/api/production/materials/intake").json()
         assert before["bound_to_current_workspace"] is False
         assert before["binding_available"] is True

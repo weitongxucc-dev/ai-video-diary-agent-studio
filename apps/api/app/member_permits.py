@@ -131,20 +131,35 @@ class MemberDeviceAccess:
         return True
 
 
+def cpu_render_limits_from_budget(
+    budget: CpuRenderBudget | None,
+) -> CpuRenderLimits | None:
+    """成片预算里验证者真正用到的三项；没有标定就返回 ``None``（不放行）。"""
+    if budget is None:
+        return None
+    return CpuRenderLimits(
+        max_output_bytes=budget.max_output_bytes,
+        threads=budget.max_threads,
+        timeout_seconds=int(budget.max_timeout_seconds),
+    )
+
+
 def creation_job_registration(
     repository,
     *,
     render_action: Callable[[str, str, object], object],
     render_is_valid: Callable[[str, str, object], bool],
-    cpu_render_limits: CpuRenderLimits | None = None,
+    cpu_render_budget: CpuRenderBudget | None = None,
 ) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
-    ``cpu_render_limits`` 为 ``None`` 表示这台机器还没有标定 CPU 成片预算；
+    ``cpu_render_budget`` 为 ``None`` 表示这台机器还没有标定 CPU 成片预算；
     成片阶段会因此拒绝准入，而不是被放行。
     """
     return OwnerRegistration(
-        CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits),
+        CreationJobOwnerVerifier(
+            repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget),
+        ),
         CreationJobUnitExecutor(
             repository, render_action=render_action, render_is_valid=render_is_valid,
         ),
@@ -215,6 +230,57 @@ def host_budget_from_env(
         if field in _INT_HOST_BUDGET_FIELDS
     }
     return HostBudget(max_cpu_percent=max_cpu_percent, cpu_render=cpu_render, **numbers)
+
+
+#: CPU 成片预算的标定项。与整机预算一样，全部来自这台设备的标定结果。
+_CPU_RENDER_ENV = {
+    "max_duration_seconds": "DEVICE_CPU_RENDER_MAX_DURATION_SECONDS",
+    "max_pixel_seconds": "DEVICE_CPU_RENDER_MAX_PIXEL_SECONDS",
+    "max_width_px": "DEVICE_CPU_RENDER_MAX_WIDTH_PX",
+    "max_height_px": "DEVICE_CPU_RENDER_MAX_HEIGHT_PX",
+    "max_input_bytes": "DEVICE_CPU_RENDER_MAX_INPUT_BYTES",
+    "max_clip_count": "DEVICE_CPU_RENDER_MAX_CLIP_COUNT",
+    "max_overlay_count": "DEVICE_CPU_RENDER_MAX_OVERLAY_COUNT",
+    "max_output_bytes": "DEVICE_CPU_RENDER_MAX_OUTPUT_BYTES",
+    "max_threads": "DEVICE_CPU_RENDER_MAX_THREADS",
+    "max_timeout_seconds": "DEVICE_CPU_RENDER_MAX_TIMEOUT_SECONDS",
+    "additional_memory_bytes": "DEVICE_CPU_RENDER_ADDITIONAL_MEMORY_BYTES",
+    "additional_disk_bytes": "DEVICE_CPU_RENDER_ADDITIONAL_DISK_BYTES",
+}
+
+_FLOAT_CPU_RENDER_FIELDS = frozenset({
+    "max_duration_seconds", "max_pixel_seconds", "max_timeout_seconds",
+})
+
+
+def cpu_render_budget_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> CpuRenderBudget | None:
+    """读 CPU 成片预算；一项没标定就整体当作未标定，不做部分兜底。
+
+    部分兜底会让验证者拿到一半真实、一半猜出来的成片上限，比直接拒绝更难
+    排查，所以缺任何一项都返回 ``None``，让成片阶段在主机门禁上被拒绝。
+    """
+    source = os.environ if environ is None else environ
+    values: dict[str, float | int] = {}
+    missing: list[str] = []
+    for field, env_name in _CPU_RENDER_ENV.items():
+        raw = source.get(env_name, "").strip()
+        if not raw:
+            missing.append(env_name)
+            continue
+        try:
+            values[field] = float(raw) if field in _FLOAT_CPU_RENDER_FIELDS else int(raw)
+        except ValueError as exc:
+            raise HostBudgetUncalibrated(
+                f"CPU 成片预算尚未标定：{env_name} 不是数值"
+            ) from exc
+    if missing:
+        raise HostBudgetUncalibrated("CPU 成片预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        return CpuRenderBudget(**values)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(f"CPU 成片预算无效：{exc}") from exc
 
 
 def build_host_probes(
