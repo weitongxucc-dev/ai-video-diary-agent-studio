@@ -28,6 +28,7 @@ import {
   createMaterialBusinessObject,
   createMaterialCollection,
   getAssetBusinessObjects,
+  getAssetSegmentUsageRecords,
   getMaterialBusinessObjects,
   getMaterialLibraryInsights,
   getMaterialIntakeStatus,
@@ -58,6 +59,7 @@ import type {
   MaterialLibrary,
   MaterialLibraryInsights,
   MaterialSegment,
+  MaterialUsageRecord,
 } from "@/lib/types";
 
 type Filter = "all" | "raw" | "approved" | "rejected";
@@ -111,6 +113,12 @@ function roleLabel(asset: MaterialAsset) {
   if (role === "b_roll") return "补充画面";
   if (asset.usage_role === "exclude") return "不使用";
   return "待判断";
+}
+
+function clipRoleLabel(role: string | null) {
+  if (role === "a_roll") return "人物主镜头";
+  if (role === "b_roll") return "补充画面";
+  return "未记录用途";
 }
 
 function mediaLabel(mediaType: MaterialAsset["media_type"]) {
@@ -254,6 +262,10 @@ export function MaterialLibraryWorkspace({
   // 关联读成功之前 selectedIds 只是「还没读到」，不是「没有关联」，不能拿去保存。
   const [objectRead, setObjectRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
   const [objectReadTick, setObjectReadTick] = useState(0);
+  // 使用记录回查：按当前片段读取，读取本身不改任何计数。
+  const [usageRecords, setUsageRecords] = useState<MaterialUsageRecord[]>([]);
+  const [usageRead, setUsageRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
+  const usageLoadRevision = useRef(0);
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -468,6 +480,35 @@ export function MaterialLibraryWorkspace({
       });
     return () => { active = false; };
   }, [selected?.id, objectReadTick]);
+
+  // 按当前片段读使用记录。切片段就重读；读到的版本只是任务当前版本，
+  // 界面必须写明这一点，不能让它看起来像当次使用的版本。
+  useEffect(() => {
+    const assetId = selected?.id ?? null;
+    const segmentId = selectedSegment?.id ?? null;
+    const revision = ++usageLoadRevision.current;
+    if (!assetId || !segmentId) {
+      setUsageRecords([]);
+      setUsageRead({ status: "ready", message: "" });
+      return;
+    }
+    let active = true;
+    // 换片段就先清空上一片段的记录：加载中不能把旧记录的文案挂在当前片段上。
+    setUsageRecords([]);
+    setUsageRead({ status: "loading", message: "" });
+    getAssetSegmentUsageRecords(assetId, segmentId)
+      .then(result => {
+        if (!active || revision !== usageLoadRevision.current) return;
+        setUsageRecords(result.items);
+        setUsageRead({ status: "ready", message: "" });
+      })
+      .catch(cause => {
+        if (!active || revision !== usageLoadRevision.current) return;
+        setUsageRecords([]);
+        setUsageRead({ status: "error", message: visibleError(cause, "使用记录读取失败，请重试。") });
+      });
+    return () => { active = false; };
+  }, [selected?.id, selectedSegment?.id]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -1109,6 +1150,31 @@ export function MaterialLibraryWorkspace({
             </span>
           </div>
           <p className={styles.segmentRange}>当前片段：{duration(selectedSegment.start_seconds)}–{duration(selectedSegment.end_seconds)}。下面的标签只用于这段画面。</p>
+          <section className="library-speech-evidence" aria-label="片段使用记录">
+            <strong>使用记录</strong>
+            <p>回查这个片段进过哪条成片。只列已实际写入的使用记录，读取不会增加使用次数。用途和版本都只反映该计划当前的取值，不是当次使用时的历史值。</p>
+            {usageRead.status === "loading" ? <p>正在读取使用记录……</p> : null}
+            {usageRead.status === "error" ? <p>{usageRead.message}</p> : null}
+            {usageRead.status === "ready" && !usageRecords.length ? <p>这个片段还没有被任何成片使用过。</p> : null}
+            {usageRead.status === "ready" ? usageRecords.map(record => <article key={`${record.plan_id}:${record.clip_id}`}>
+              <p>
+                计划 {record.plan_id} · 片段 {record.clip_id} · 当前计划用途：{clipRoleLabel(record.role)}
+                {record.manually_selected === null ? "" : record.manually_selected ? " · 人工选定" : " · 自动匹配"}
+              </p>
+              <p>
+                {new Date(record.used_at).toLocaleString("zh-CN")}
+                {record.task
+                  ? ` · 任务 ${record.task.stage ?? "阶段未记录"} / ${record.task.status ?? "状态未记录"}`
+                  : " · 关联任务未记录"}
+              </p>
+              {record.task?.id ? <p><Link href={"/tasks/" + encodeURIComponent(record.task.id)}>打开任务{record.task.name ? `：${record.task.name}` : ""}</Link></p> : null}
+              <p>
+                {record.resolution === "current" && record.timeline_version_id
+                  ? `时间线版本：当前版本 ${record.timeline_version_id}（使用记录本身未记录当次版本，这里只显示该任务的当前版本）`
+                  : "时间线版本未记录"}
+              </p>
+            </article>) : null}
+          </section>
           {selectedSegment.understanding ? <section className="library-speech-evidence" aria-label="画面观察证据">
             <strong>画面观察</strong>
             {selectedSegment.understanding.status === "ready" ? <>

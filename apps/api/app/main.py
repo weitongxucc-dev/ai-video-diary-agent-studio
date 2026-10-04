@@ -289,6 +289,7 @@ from app.schemas import (
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
+    MaterialUsageRecordsResponse,
     MediaLinkCheckRequest,
     MediaLinkCheckResponse,
     MediaLinkImportRequest,
@@ -12131,6 +12132,22 @@ def save_material_asset_business_objects(
         items=[_material_business_object_response(entry) for entry in entries],
         total_count=len(entries),
     )
+
+
+@app.get(
+    "/api/production/materials/{asset_id}/usage-records",
+    response_model=MaterialUsageRecordsResponse,
+)
+def list_material_segment_usage_records(
+    request: Request, asset_id: str, segment_id: str
+) -> MaterialUsageRecordsResponse:
+    """Show what used one segment of one material, read from real render rows."""
+    workspace_id = current_workspace_id(request)
+    try:
+        records = production_repo.list_segment_usage_records(workspace_id, asset_id, segment_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
+    return MaterialUsageRecordsResponse(items=records, total_count=len(records))
 
 
 @app.get("/api/production/materials/{asset_id}/unmatched-corrections")

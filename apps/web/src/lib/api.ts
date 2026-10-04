@@ -14,6 +14,7 @@ import type {
   BusinessObjectKind,
   MaterialBusinessObject,
   MaterialBusinessObjects,
+  MaterialUsageRecords,
   MaterialIntakeStatus,
   CreationTaskScriptsResponse,
   CreationTaskScript,
@@ -360,6 +361,20 @@ export function saveAssetBusinessObjects(
   return request<MaterialBusinessObjects>(
     `/api/production/materials/${encodeURIComponent(assetId)}/business-objects`,
     { method: "PUT", body: JSON.stringify({ business_object_ids: businessObjectIds }) },
+  );
+}
+
+/**
+ * 这一个片段被哪条成片用过。只读既有渲染写入的记录，不改任何计数。
+ * 返回的 timeline_version_id 是任务当前版本，不代表当次使用时的版本。
+ */
+export function getAssetSegmentUsageRecords(
+  assetId: string,
+  segmentId: string,
+): Promise<MaterialUsageRecords> {
+  return request<MaterialUsageRecords>(
+    `/api/production/materials/${encodeURIComponent(assetId)}/usage-records` +
+      `?segment_id=${encodeURIComponent(segmentId)}`,
   );
 }
 
