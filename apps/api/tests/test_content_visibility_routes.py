@@ -42,7 +42,7 @@ def _headers(token: str) -> dict[str, str]:
     return {"X-Local-Member-Token": token}
 
 
-def _confirm_task(production, workspace_id: str):
+def _confirm_task(production, workspace_id: str, owner_user_id: str):
     from app.production import CreationPlan, CreationTask
 
     plan = CreationPlan(
@@ -55,7 +55,9 @@ def _confirm_task(production, workspace_id: str):
     )
     task = CreationTask(id="task-vis", workspace_id=workspace_id, plan_id=plan.id,
                         name="任务", scenario="talking_head")
-    production.confirm_creation_plan(plan, task)
+    production.confirm_creation_plan(
+        plan, task, verified_owner_user_id=owner_user_id
+    )
     return plan, task
 
 
@@ -64,9 +66,12 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     from app.production import MaterialAsset
     from datetime import datetime
 
+    # 归属写在素材本身上：这条用例要断言的正是「本人私有 → 共享 → 收回」，
+    # 因此给出与请求令牌同一个已验证上传者。
     production._save_asset(MaterialAsset(
         id="asset-vis", workspace_id="ws", file_name="clip.mp4", path="ws/clip.mp4",
         size_bytes=10, modified_at=datetime(2026, 1, 1),
+        owner_user_id=owner_member_id,
     ))
 
     detail = client.get("/api/production/materials/asset-vis", headers=_headers(owner_token))
@@ -87,12 +92,17 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
         headers=_headers(owner_token),
     )
     assert revoked.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
-    assert client.get("/api/production/materials/asset-vis").json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
+    # 收回后回到私有：读取仍需带上与创建同一个真实身份。
+    after_revoke = client.get(
+        "/api/production/materials/asset-vis", headers=_headers(owner_token)
+    )
+    assert after_revoke.status_code == 200
+    assert after_revoke.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
 
 
 def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
-    plan, task = _confirm_task(production, "ws")
+    plan, task = _confirm_task(production, "ws", owner_member_id)
 
     task_detail = client.get(f"/api/creation-tasks/{task.id}", headers=_headers(owner_token))
     assert task_detail.status_code == 200, task_detail.text
@@ -145,7 +155,7 @@ def test_template_visibility_round_trips_and_a_new_version_inherits(tmp_path, mo
 
 def test_visibility_route_rejects_an_unknown_value_and_another_workspace(tmp_path, monkeypatch):
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
-    _confirm_task(production, "ws")
+    _confirm_task(production, "ws", owner_member_id)
 
     rejected = client.put(
         "/api/creation-tasks/task-vis/visibility",

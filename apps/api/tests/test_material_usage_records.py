@@ -44,20 +44,19 @@ def register(
 ) -> str:
     """登记一个真实落盘的素材并分析出片段，供使用记录指向。
 
-    绑定目录时给出上传者身份：入库素材的上传者沿既有创建语义取自这次绑定的可信
-    身份，不在素材建好之后直接改库里的 owner 字段。
+    上传者身份写在复制完成确认这一步：确认才创建入库记录，沿既有创建语义把
+    已验证身份绑定为这条素材的上传者，不在素材建好之后直接改库里的 owner 字段。
     """
     path = library / name
     path.write_bytes(b"material-bytes")
     repo.bind_material_ingestion(
-        workspace_id,
-        expected_directory=str(library),
-        verified_owner_user_id=uploader_user_id,
+        workspace_id, expected_directory=str(library),
     )
     repo.confirm_material_copy_complete(
         workspace_id, relative_path=name,
         expected_revision=repo.material_copy_revision(path.stat()),
         confirmation_source="manual",
+        verified_owner_user_id=uploader_user_id,
     )
     asset_id = next(asset.id for asset in repo.scan_library(workspace_id) if asset.file_name == name)
     repo.analyze_asset(workspace_id, asset_id)

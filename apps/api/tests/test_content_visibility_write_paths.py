@@ -29,6 +29,7 @@ from app.production import (
 
 WORKSPACE = "workspace_116"
 TEMPLATE_OWNER = "member-template-owner"
+UPLOADER = "member-content-uploader"
 
 
 def _repository(tmp_path: Path, name: str = "library") -> ProductionRepository:
@@ -42,10 +43,17 @@ def _repository(tmp_path: Path, name: str = "library") -> ProductionRepository:
     )
 
 
-def _asset(workspace_id: str, *, asset_id: str = "asset-1", file_name: str = "clip.mp4") -> MaterialAsset:
+def _asset(
+    workspace_id: str,
+    *,
+    asset_id: str = "asset-1",
+    file_name: str = "clip.mp4",
+    owner_user_id: str | None = UPLOADER,
+) -> MaterialAsset:
     return MaterialAsset(
         id=asset_id,
         workspace_id=workspace_id,
+        owner_user_id=owner_user_id,
         file_name=file_name,
         path=f"{workspace_id}/{file_name}",
         size_bytes=1024,
@@ -88,7 +96,10 @@ def _task(workspace_id: str, plan_id: str, task_id: str = "task-1") -> CreationT
 
 
 def _confirm(production: ProductionRepository, plan: CreationPlan, task: CreationTask) -> None:
-    production.confirm_creation_plan(plan, task)
+    # 沿既有确认契约：方案与任务的上传者取自这次已验证身份。
+    production.confirm_creation_plan(
+        plan, task, verified_owner_user_id=UPLOADER
+    )
 
 
 def _stored_visibility(production: ProductionRepository, table: str, row_id: str, workspace_id: str) -> str:

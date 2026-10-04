@@ -46,11 +46,12 @@ def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
     production.save_video_template(replace(template, version=2, name="新版"))
     reopened = ProductionRepository(production.database_path, production.video_library_path)
     assert reopened.get_video_template("workspace_a", template.id, 1).name == template.name
+    # 仓库级读取按创建时的可信身份给出；跨工作区隔离仍要单独成立。
     listed = reopened.list_video_templates(
         "workspace_a", viewer_user_id="member-template-owner"
     )
     assert len(listed) == 2
-    assert reopened.list_video_templates("workspace_a", viewer_user_id="member-other") == []
+    assert reopened.list_video_templates("workspace_b") == []
     response = client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json={"goal": "新主题", "template_id": template.id, "template_version": 1})
     assert response.status_code == 404
 
