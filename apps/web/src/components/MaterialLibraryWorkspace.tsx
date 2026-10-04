@@ -39,6 +39,7 @@ import {
   retryMaterialIntake,
   saveAssetBusinessObjects,
   scanMaterialIntake,
+  setMaterialVisibility,
   updateProductionMaterialSegment,
   updateMaterialUseState,
   updateMaterialNotes,
@@ -54,6 +55,7 @@ import {
 } from "@/lib/media-link-api";
 import type {
   BusinessObjectKind,
+  ContentVisibility,
   MaterialAsset,
   MaterialBusinessObject,
   MaterialCollections,
@@ -77,6 +79,7 @@ type Busy =
   | "collection"
   | "retry"
   | "notes"
+  | "visibility"
   | null;
 
 const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
@@ -781,6 +784,23 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function changeVisibility(next: ContentVisibility) {
+    if (!selected) return;
+    const revision = selectionRevision.current;
+    setBusy("visibility");
+    setDetailError("");
+    try {
+      // 以服务端返回的素材为准更新；选中已变时不写入错误，避免错绑到别的素材。
+      replaceAsset(await setMaterialVisibility(selected.id, next));
+    } catch (cause) {
+      if (revision === selectionRevision.current) {
+        setDetailError(visibleError(cause, "可见范围保存失败，请重试"));
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function review(
     status: "approved" | "rejected",
     role: "b_roll" | "exclude",
@@ -1098,6 +1118,32 @@ export function MaterialLibraryWorkspace({
               ))}
             </div>
             <small className={styles.useStateImpact}>{useStateOptions.find((option) => option.value === selected.use_state)?.impact}</small>
+          </dd>
+        </div>
+        <div>
+          <dt>可见范围</dt>
+          <dd>
+            <div className={styles.useStateOptions} role="group" aria-label="素材可见范围">
+              <button
+                aria-pressed={selected.visibility === "shared"}
+                className={selected.visibility === "shared" ? styles.isSelected : ""}
+                disabled={busy !== null}
+                onClick={() => void changeVisibility("shared")}
+                type="button"
+              >{busy === "visibility" ? "保存中…" : "共享给团队"}</button>
+              <button
+                aria-pressed={selected.visibility === "private"}
+                className={selected.visibility === "private" ? styles.isSelected : ""}
+                disabled={busy !== null}
+                onClick={() => void changeVisibility("private")}
+                type="button"
+              >仅自己可见</button>
+            </div>
+            <small className={styles.useStateImpact}>
+              {selected.visibility === "shared"
+                ? "团队成员可读取这个素材。"
+                : "素材仅自己可见，成员读不到。"}
+            </small>
           </dd>
         </div>
         <div>
