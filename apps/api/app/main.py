@@ -266,6 +266,7 @@ from app.schemas import (
     FeedbackSummaryResponse,
     KnowledgeNoteResponse,
     KnowledgeItemResponse,
+    KnowledgeItemClassificationRequest,
     KnowledgeItemsResponse,
     ParameterAdjudicationResponse,
     ParameterComparisonAdjudicateRequest,
@@ -13473,11 +13474,53 @@ def get_knowledge_item_detail(
 
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
-    items = source_repository.list_knowledge_items(current_workspace_id(request))
+    """列出知识条目：可按用户选择的用途分类和主题筛选，数量按同一真实字段统计。"""
+    workspace_id = current_workspace_id(request)
+    use_category = request.query_params.get("use_category")
+    topic = request.query_params.get("topic")
+    try:
+        items = source_repository.list_knowledge_items(
+            workspace_id, use_category=use_category, topic=topic
+        )
+    except ValueError as exc:
+        # 筛选值不是合法分类时直接报错，不静默回退成全部或未分类。
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return KnowledgeItemsResponse(
         items=[_knowledge_item_response(item) for item in items],
         total_count=len(items),
+        category_counts=source_repository.count_knowledge_items_by_use_category(
+            workspace_id
+        ),
+        topics=source_repository.list_knowledge_topics(workspace_id),
     )
+
+
+@app.patch(
+    "/api/knowledge-items/{knowledge_item_id}",
+    response_model=KnowledgeItemResponse,
+)
+def update_knowledge_item_classification(
+    request: Request,
+    knowledge_item_id: str,
+    payload: KnowledgeItemClassificationRequest,
+) -> KnowledgeItemResponse:
+    """保存用户明确选择的用途分类与主题/对象关系。
+
+    两个字段都必填：null/空列表就是清空的明确动作，服务端不从内容推断补齐。
+    """
+    workspace_id = current_workspace_id(request)
+    try:
+        item = source_repository.set_knowledge_item_classification(
+            workspace_id,
+            knowledge_item_id,
+            use_category=payload.use_category,
+            topics=payload.topics,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _knowledge_item_response(item)
 
 
 @app.get("/api/sources/items", response_model=SourceItemsResponse)
