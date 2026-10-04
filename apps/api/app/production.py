@@ -26,7 +26,11 @@ from app.avatar_lipsync import (
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
 )
-from app.database_migrations import apply_production_migrations
+from app.database_migrations import (
+    CONTENT_VISIBILITY_DEFAULT,
+    apply_production_migrations,
+    ensure_content_visibility_columns,
+)
 from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
 from app.asr import SubtitleSegment as SpeechObservation
@@ -52,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
+ContentVisibility = Literal["private", "shared"]
+
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -191,6 +197,8 @@ class MaterialAsset:
     analysis_message: str = "待分析镜头和画面内容。"
     speech_analysis: MaterialSpeechAnalysis | None = None
     segments: list[MaterialSegment] = field(default_factory=list)
+    # 新建素材默认私有：只有本人显式共享才对成员可见。存量行迁移时回填 shared。
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -673,6 +681,7 @@ class CreationPlan:
     material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -688,6 +697,7 @@ class VideoTemplate:
     settings: dict[str, object]
     source_task_id: str | None = None
     source_timeline_version_id: str | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -715,6 +725,7 @@ class CreationTask:
     stage_impact: str | None = None
     stage_repair_action: str | None = None
     stage_retryable: bool | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -1720,20 +1731,9 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
-            # Migration 13 adds the member visibility columns; these guarded
-            # ensures mirror the ctime_ns/inode pattern for databases whose
-            # version row reached 13 without the columns. Content defaults to
-            # 'shared' so existing owner content stays member-visible.
-            for table in ("creation_tasks", "material_assets"):
-                columns = {
-                    str(row["name"])
-                    for row in conn.execute(f"PRAGMA table_info({table})")
-                }
-                if "visibility" not in columns:
-                    conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN "
-                        "visibility TEXT NOT NULL DEFAULT 'shared'"
-                    )
+            # 内容可见性列：与知识资料共用同一个 PRAGMA 守卫 ensure，新增行由仓储层
+            # 显式写入，新建默认 private，存量行回填 shared 不改原语义。
+            ensure_content_visibility_columns(conn)
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
@@ -2763,6 +2763,9 @@ class ProductionRepository:
         return collection
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
         if not self.video_library_path.exists() or not self.video_library_path.is_dir():
             return []
         discovered: list[MaterialAsset] = []
@@ -2775,6 +2778,10 @@ class ProductionRepository:
             ):
                 continue
             if not path.resolve().is_relative_to(self.video_library_path.resolve()):
+                continue
+            try:
+                self._require_material_copy_confirmation(workspace_id, path.resolve())
+            except ValueError:
                 continue
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
@@ -2808,6 +2815,92 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    @staticmethod
+    def material_copy_revision(stat: os.stat_result) -> dict[str, str]:
+        """Decimal strings preserve nanosecond precision in desktop/browser JSON."""
+        return {
+            "size_bytes": str(stat.st_size), "mtime_ns": str(stat.st_mtime_ns),
+            "ctime_ns": str(stat.st_ctime_ns), "inode": str(stat.st_ino),
+        }
+
+    def confirm_material_copy_complete(
+        self, workspace_id: str, *, relative_path: str,
+        expected_revision: dict[str, str], confirmation_source: Literal["manual", "app_import"],
+    ) -> None:
+        """Persist a copy declaration for this bound file revision, not media validity."""
+        import time
+
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or "_已处理" in relative.parts:
+            raise ValueError("请确认当前绑定目录内的素材文件")
+        raw_path = self.video_library_path / relative
+        if raw_path.is_symlink():
+            raise ValueError("不能确认符号链接素材")
+        if confirmation_source not in {"manual", "app_import"}:
+            raise ValueError("复制完成确认来源无效")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            binding = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1").fetchone()
+            if (binding is None or (binding["workspace_id"], binding["library_path"])
+                    != (workspace_id, str(self.video_library_path.resolve()))):
+                raise ValueError("当前工作区未绑定此素材目录")
+            if not self._material_library_available():
+                raise ValueError("素材目录当前不可用，请连接原目录后重试")
+            path = self._validated_library_file(str(raw_path))
+            stat = path.stat()
+            revision = self.material_copy_revision(stat)
+            if revision != expected_revision:
+                raise ValueError("文件修订已变化，请重新检查并确认复制完成")
+            conn.execute(
+                """INSERT INTO material_ingestion_files
+                   (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
+                    observed_at, state, confirmed_revision, confirmation_source, copy_confirmed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?, ?, ?)
+                   ON CONFLICT(workspace_id, file_path) DO UPDATE SET
+                     size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
+                     ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at,
+                     state=CASE WHEN confirmed_revision=excluded.confirmed_revision THEN state ELSE 'observing' END,
+                     confirmed_revision=excluded.confirmed_revision,
+                     confirmation_source=excluded.confirmation_source,
+                     copy_confirmed_at=excluded.copy_confirmed_at""",
+                (workspace_id, str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                 stat.st_ino, time.time(), json.dumps(revision, sort_keys=True),
+                 confirmation_source, utc_now().isoformat()),
+            )
+
+    def _require_material_copy_confirmation(self, workspace_id: str, path: Path) -> None:
+        if self.get_material_ingestion_binding() != (workspace_id, str(self.video_library_path.resolve())):
+            raise ValueError("当前工作区未绑定此素材目录")
+        revision = json.dumps(self.material_copy_revision(path.stat()), sort_keys=True)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT confirmed_revision FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
+                (workspace_id, str(path)),
+            ).fetchone()
+        if row is None or row["confirmed_revision"] != revision:
+            raise ValueError("请先确认此文件已复制完成，再开始接收或重试")
+
+    def pending_material_copies(self, workspace_id: str) -> list[dict[str, object]]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT file_path, confirmed_revision FROM material_ingestion_files WHERE workspace_id=? ORDER BY file_path",
+                (workspace_id,),
+            ).fetchall()
+        pending = []
+        for row in rows:
+            path = Path(row["file_path"])
+            if (not path.resolve().is_relative_to(self.video_library_path.resolve())
+                    or not path.is_file() or path.is_symlink()):
+                continue
+            revision = self.material_copy_revision(path.stat())
+            if row["confirmed_revision"] != json.dumps(revision, sort_keys=True):
+                pending.append({"relative_path": str(path.relative_to(self.video_library_path.resolve())),
+                                "expected_revision": revision})
+        return pending
 
     def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
         """Describe the configured directory without revealing another workspace's binding."""
@@ -3870,7 +3963,7 @@ class ProductionRepository:
         )
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
-        """Persist observations and claim stable, changed files for one serial analyzer."""
+        """Discover pending copies, then claim only explicitly confirmed revisions."""
         import time
 
         binding = self.get_material_ingestion_binding()
@@ -3914,15 +4007,15 @@ class ProductionRepository:
                     # Size, mtime, ctime and inode are the incremental boundary.
                     # Full content is hashed only on change, recovery, or retry.
                     continue
-                elif now - float(row["observed_at"]) < stable_seconds:
+                elif row["confirmed_revision"] != json.dumps(self.material_copy_revision(stat), sort_keys=True):
                     continue
             if changed:
                 try:
-                    asset = self._upsert_discovered_asset(workspace_id, resolved)
-                except FileNotFoundError:
+                    asset = self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
                     continue
                 asset.analysis_status = "blocked"
-                asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
+                asset.analysis_message = "文件已变化；请确认复制完成后重新接收。"
                 self._save_asset(asset)
                 continue
             try:
@@ -3944,6 +4037,8 @@ class ProductionRepository:
                 ) != (
                     stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
                 ):
+                    continue
+                if row["confirmed_revision"] != json.dumps(self.material_copy_revision(final_stat), sort_keys=True):
                     continue
                 if row["completed_digest"] == digest:
                     if row["state"] != "ready":
@@ -3981,7 +4076,7 @@ class ProductionRepository:
                 self._reset_changed_material_asset(asset)
             else:
                 asset.analysis_status = "pending"
-                asset.analysis_message = "文件已写入完成，正在分析。"
+                asset.analysis_message = "复制完成确认已保存，正在分析；确认不代表文件通过校验。"
                 self._save_asset(asset)
             claimed.append((asset.id, digest))
         return claimed
@@ -4007,10 +4102,11 @@ class ProductionRepository:
         binding = self.get_material_ingestion_binding()
         if binding is None or binding[0] != workspace_id:
             raise ValueError("当前工作区未绑定素材目录")
+        self._require_material_copy_confirmation(workspace_id, self._validated_library_file(asset.path))
         with self._connect() as conn:
             conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
         asset.analysis_status = "pending"
-        asset.analysis_message = "已请求重试，等待素材稳定后重新分析。"
+        asset.analysis_message = "已请求重试，将按已确认的文件修订重新分析。"
         self._save_asset(asset)
 
     def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
@@ -4256,12 +4352,12 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
-        return [self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows]
+        return [self._asset_from_row(row) for row in rows]
 
     def list_assets_page(
         self,
@@ -4343,15 +4439,13 @@ class ProductionRepository:
             )
             rows = conn.execute(
                 f"""
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE {where_clause} ORDER BY updated_at DESC
                 LIMIT ? OFFSET ?
                 """,
                 (*parameters, limit, offset),
             ).fetchall()
-        assets = [
-            self._asset_from_payload(json.loads(str(row["payload"]))) for row in rows
-        ]
+        assets = [self._asset_from_row(row) for row in rows]
         return assets, total
 
     def search_material_segments(
@@ -4520,14 +4614,14 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE workspace_id = ? AND id = ?
                 """,
                 (workspace_id, asset_id),
             ).fetchone()
         if row is None:
             raise KeyError(asset_id)
-        return self._asset_from_payload(json.loads(str(row["payload"])))
+        return self._asset_from_row(row)
 
     def _asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
         with self._connect() as conn:
@@ -4541,6 +4635,7 @@ class ProductionRepository:
         if asset.use_state == "excluded":
             raise ValueError("素材已设为不使用，请先修改使用状态再分析")
         path = self._validated_library_file(asset.path)
+        self._require_material_copy_confirmation(workspace_id, path)
         source_stat = path.stat()
         try:
             duration = float(self.duration_reader(path))
@@ -4589,7 +4684,7 @@ class ProductionRepository:
             asset.analysis_status = "failed"
             asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
         final_stat = path.stat()
-        if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+        if self.material_copy_revision(source_stat) != self.material_copy_revision(final_stat):
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
         if expected_source_digest is not None:
             with path.open("rb") as source:
@@ -4646,6 +4741,83 @@ class ProductionRepository:
         if not isinstance(payload, list):
             return None
         return [float(value) for value in payload]
+
+    def set_asset_visibility(
+        self, workspace_id: str, asset_id: str, visibility: ContentVisibility
+    ) -> MaterialAsset:
+        """明确共享或收回一条素材的可见性，列与载荷一起改，回读一致。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND id=?",
+                (workspace_id, asset_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(asset_id)
+            asset = self._asset_from_row(row)
+            asset = replace(asset, visibility=visibility, updated_at=utc_now())
+            conn.execute(
+                "UPDATE material_assets SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(asset), visibility, asset.updated_at.isoformat(), workspace_id, asset_id),
+            )
+        return asset
+
+    def set_creation_task_visibility(
+        self, workspace_id: str, task_id: str, visibility: ContentVisibility
+    ) -> CreationTask:
+        """明确共享或收回一条创作任务的可见性。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        task = self.get_creation_task(workspace_id, task_id)
+        task = replace(task, visibility=visibility, updated_at=utc_now())
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE creation_tasks SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(task), visibility, task.updated_at.isoformat(), workspace_id, task_id),
+            )
+        return task
+
+    def set_creation_plan_visibility(
+        self, workspace_id: str, plan_id: str, visibility: ContentVisibility
+    ) -> CreationPlan:
+        """明确共享或收回一个创作方案的可见性。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        plan = self.get_creation_plan(workspace_id, plan_id)
+        plan = replace(plan, visibility=visibility, updated_at=utc_now())
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE creation_plans SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(plan), visibility, plan.updated_at.isoformat(), workspace_id, plan_id),
+            )
+        return plan
+
+    def set_video_template_visibility(
+        self, workspace_id: str, template_id: str, visibility: ContentVisibility
+    ) -> VideoTemplate:
+        """明确共享或收回一个用户模板的可见性，当前及历史版本一起改。"""
+        if visibility not in ("private", "shared"):
+            raise ValueError("可见性只能是 private 或 shared。")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload, version FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC",
+                (workspace_id, template_id),
+            ).fetchall()
+            if not rows:
+                raise KeyError(template_id)
+            latest = None
+            for row in rows:
+                template = VideoTemplate(**_with_datetime(json.loads(str(row["payload"])), "created_at"))
+                template = replace(template, visibility=visibility)
+                conn.execute(
+                    "UPDATE video_templates SET payload=?, visibility=? WHERE workspace_id=? AND id=? AND version=?",
+                    (_json_payload(template), visibility, workspace_id, template_id, int(row["version"])),
+                )
+                if latest is None:
+                    latest = template
+        assert latest is not None
+        return latest
 
     def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
         if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
@@ -4933,15 +5105,15 @@ class ProductionRepository:
 
     def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
-        return [VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at")) for row in rows]
+            rows = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
+        return [self._template_from_row(row) for row in rows]
 
     def get_video_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
         with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
+            row = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
         if row is None:
             raise KeyError(template_id)
-        return VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at"))
+        return self._template_from_row(row)
 
     def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
@@ -4951,7 +5123,18 @@ class ProductionRepository:
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
                 raise ValueError("模板版本已变化，请刷新后重新保存。")
-            conn.execute("INSERT INTO video_templates (workspace_id, id, version, payload) VALUES (?, ?, ?, ?)", (template.workspace_id, template.id, template.version, _json_payload(template)))
+            previous = conn.execute(
+                "SELECT visibility FROM video_templates WHERE workspace_id = ? AND id = ? ORDER BY version DESC LIMIT 1",
+                (template.workspace_id, template.id),
+            ).fetchone()
+            # 新版本继承上一版的可见性：共享状态不会因为又存了一版就被收回。
+            visibility = previous["visibility"] if previous is not None else template.visibility
+            # 继承来的可见性同时进入载荷和返回值：存的和立刻拿到的必须是同一个值。
+            template = replace(template, visibility=visibility)
+            conn.execute(
+                "INSERT INTO video_templates (workspace_id, id, version, payload, visibility) VALUES (?, ?, ?, ?, ?)",
+                (template.workspace_id, template.id, template.version, _json_payload(template), visibility),
+            )
         return template
 
     def confirm_creation_plan(
@@ -5007,26 +5190,28 @@ class ProductionRepository:
                     raise ValueError("创作方案引用的素材片段不可用")
             conn.execute(
                 """
-                INSERT INTO creation_plans (id, workspace_id, payload, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     plan.id,
                     plan.workspace_id,
                     _json_payload(plan),
+                    plan.visibility,
                     plan.updated_at.isoformat(),
                 ),
             )
             conn.execute(
                 """
-                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.id,
                     task.workspace_id,
                     task.plan_id,
                     _json_payload(task),
+                    task.visibility,
                     task.updated_at.isoformat(),
                 ),
             )
@@ -5039,14 +5224,17 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM creation_plans
+                SELECT payload, visibility FROM creation_plans
                 WHERE workspace_id = ? AND id = ?
                 """,
                 (workspace_id, plan_id),
             ).fetchone()
         if row is None:
             raise KeyError(plan_id)
-        return self._creation_plan_from_payload(json.loads(str(row["payload"])))
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return self._creation_plan_from_payload(data)
 
     def get_creation_task(
         self,
@@ -5059,14 +5247,14 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             row = conn.execute(
                 f"""
-                SELECT payload FROM creation_tasks
+                SELECT payload, visibility FROM creation_tasks
                 WHERE workspace_id = ? AND id = ?{visibility_clause}
                 """,
                 (workspace_id, task_id),
             ).fetchone()
         if row is None:
             raise KeyError(task_id)
-        return self._creation_task_from_payload(json.loads(str(row["payload"])))
+        return self._task_from_row(row)
 
     def list_creation_tasks(
         self,
@@ -5078,15 +5266,12 @@ class ProductionRepository:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
-                SELECT payload FROM creation_tasks
+                SELECT payload, visibility FROM creation_tasks
                 WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
                 """,
                 (workspace_id,),
             ).fetchall()
-        return [
-            self._creation_task_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
+        return [self._task_from_row(row) for row in rows]
 
     def create_timeline_version(self, version: TimelineVersion) -> TimelineVersion:
         _validate_timeline_version(version)
@@ -7963,12 +8148,12 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO creation_plans (id, workspace_id, payload, updated_at) VALUES (?, ?, ?, ?)",
-                (plan.id, workspace_id, _json_payload(plan), plan.updated_at.isoformat()),
+                "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (plan.id, workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
             )
             conn.execute(
-                "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (task.id, workspace_id, plan.id, _json_payload(task), task.updated_at.isoformat()),
+                "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task.id, workspace_id, plan.id, _json_payload(task), task.visibility, task.updated_at.isoformat()),
             )
             conn.execute(
                 "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) "
@@ -8730,10 +8915,15 @@ class ProductionRepository:
         with self._connect() as conn:
             if analysis_only:
                 conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute("SELECT payload FROM material_assets WHERE id = ? AND workspace_id = ?", (asset.id, asset.workspace_id)).fetchone()
+                # 连 visibility 一起读：分析写回时用库里那一列的当前值，
+                # 不拿分析结果里的旧值覆盖用户明确设过的共享或收回。
+                row = conn.execute(
+                    "SELECT payload, visibility FROM material_assets WHERE id = ? AND workspace_id = ?",
+                    (asset.id, asset.workspace_id),
+                ).fetchone()
                 if row is None:
                     raise ValueError("素材已移除，未保存过期的分析结果。")
-                current = self._asset_from_payload(json.loads(row["payload"]))
+                current = self._asset_from_row(row)
                 if current.size_bytes != asset.size_bytes or current.modified_at != asset.modified_at:
                     raise ValueError("分析期间素材文件发生变化，请重新分析。")
                 current_segments = {item.id: item for item in current.segments}
@@ -8768,8 +8958,8 @@ class ProductionRepository:
             conn.execute(
                 """
                 INSERT INTO material_assets
-                    (id, workspace_id, file_path, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (id, workspace_id, file_path, payload, visibility, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(workspace_id, file_path) DO UPDATE SET
                     payload = excluded.payload,
                     updated_at = excluded.updated_at
@@ -8779,6 +8969,7 @@ class ProductionRepository:
                     asset.workspace_id,
                     asset.path,
                     _json_payload(asset),
+                    asset.visibility,
                     asset.updated_at.isoformat(),
                 ),
             )
@@ -9156,6 +9347,18 @@ class ProductionRepository:
         return MaterialCollection(**data)
 
     @staticmethod
+    def _asset_from_row(row: sqlite3.Row) -> MaterialAsset:
+        """读素材时，可见性以列为准。
+
+        存量行的 payload 里没有 visibility 字段，值只写在列上（迁移回填的
+        shared）；新行的两者一致。以列为准，读到的值和列表过滤永远同一个来源。
+        """
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return ProductionRepository._asset_from_payload(data)
+
+    @staticmethod
     def _asset_from_payload(data: dict[str, object]) -> MaterialAsset:
         # Read-only legacy boundary: old proof flags never regain mutation authority.
         data = dict(data)
@@ -9244,6 +9447,22 @@ class ProductionRepository:
                 if isinstance(item, dict)
             ],
         )
+
+    @staticmethod
+    def _template_from_row(row: sqlite3.Row) -> VideoTemplate:
+        """模板回读以列为准：存量模板的 visibility 只写在列上。"""
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return VideoTemplate(**_with_datetime(data, "created_at"))
+
+    @staticmethod
+    def _task_from_row(row: sqlite3.Row) -> CreationTask:
+        """任务回读以列为准：存量行的 visibility 只写在列上。"""
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return ProductionRepository._creation_task_from_payload(data)
 
     @staticmethod
     def _creation_task_from_payload(data: dict[str, object]) -> CreationTask:

@@ -234,6 +234,27 @@ class MaterialIngestionService:
         """Schedule the next scan after binding or retry without blocking the request."""
         self._wake.set()
 
+    def confirm_copy_complete(
+        self,
+        workspace_id: str,
+        *,
+        relative_path: str,
+        expected_revision: dict[str, str],
+        confirmation_source: Literal["manual", "app_import"],
+    ) -> None:
+        """Wake intake only after the repository persists this exact file revision.
+
+        The repository checks the directory binding and current stat revision.
+        A manual declaration confirms copy completion, not media validity.
+        """
+        self.repository.confirm_material_copy_complete(
+            workspace_id,
+            relative_path=relative_path,
+            expected_revision=expected_revision,
+            confirmation_source=confirmation_source,
+        )
+        self.wake()
+
     def scan_once(self) -> list[MaterialAsset]:
         """Run one bounded intake cycle; safe to call beside the background thread."""
         if self.execution_mode == "scheduled":

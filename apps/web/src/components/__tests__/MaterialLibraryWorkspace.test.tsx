@@ -8,14 +8,14 @@ vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (pro
   return <span>录音组件测试替身</span>;
 } }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -33,7 +33,7 @@ const twoAssetLibrary = { ...library, assets:[taggedAsset, otherAsset], total_co
 const intakeReady: MaterialIntakeStatus = {
   bound_to_current_workspace: false, binding_available: true, configured_directory: "/Volumes/Test/media",
   bound_directory: null, directory_state: "ready", directory_message: "素材目录可访问；文件稳定后会进入分析。",
-  repair_action: null, scan_interval_seconds: 60,
+  repair_action: null, scan_interval_seconds: 60, pending_files: [],
   file_counts: { observing: 0, running: 0, ready: 0, failed: 0, blocked_disk: 0 },
 };
 beforeEach(() => {
@@ -276,8 +276,40 @@ it("requires confirmation of the configured directory before automatic intake", 
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name:"确认接入" }));
   await waitFor(() => expect(bindMaterialIntake).toHaveBeenCalledWith("/Volumes/Test/media"));
-  expect(await screen.findByText("等待稳定 2")).toBeInTheDocument();
+  expect(await screen.findByText("待确认复制 0")).toBeInTheDocument();
   expect(screen.getByRole("button", { name:"立即检查" })).toBeInTheDocument();
+});
+
+it("confirms the displayed file revision and uses the server intake readback", async () => {
+  const file = { relative_path: "external.mp4", expected_revision: { size_bytes: "100", mtime_ns: "9007199254740999", ctime_ns: "200", inode: "3" } };
+  const pending = { ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory, pending_files: [file] };
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(pending);
+  vi.mocked(confirmMaterialCopyComplete).mockResolvedValue({ confirmed: true, intake: { ...pending, pending_files: [] } });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const button = await screen.findByRole("button", { name: "复制完成，开始接收" });
+  expect(screen.getByText(/此声明不代表文件已经通过解析或内容校验/)).toBeInTheDocument();
+  fireEvent.click(button);
+  await waitFor(() => expect(confirmMaterialCopyComplete).toHaveBeenCalledWith({ ...file, confirmation_source: "manual" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "复制完成，开始接收" })).not.toBeInTheDocument());
+  expect(scanMaterialIntake).not.toHaveBeenCalled();
+});
+
+it("keeps a failed copy confirmation visible and submits the revised file after refresh", async () => {
+  const file = { relative_path: "external.mp4", expected_revision: { size_bytes: "100", mtime_ns: "100", ctime_ns: "200", inode: "3" } };
+  const pending = { ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory, pending_files: [file] };
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(pending);
+  vi.mocked(confirmMaterialCopyComplete).mockRejectedValueOnce(new Error("文件修订已变化，请重新确认复制完成"));
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "复制完成，开始接收" }));
+  expect(await screen.findByText(/文件修订已变化，请重新确认复制完成/)).toBeInTheDocument();
+  expect(screen.getByText("external.mp4")).toBeInTheDocument();
+  const revised = { ...file, expected_revision: { ...file.expected_revision, size_bytes: "200" } };
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...pending, pending_files: [revised] });
+  fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+  await waitFor(() => expect(screen.queryByText(/文件修订已变化，请重新确认复制完成/)).not.toBeInTheDocument());
+  vi.mocked(confirmMaterialCopyComplete).mockResolvedValue({ confirmed: true, intake: { ...pending, pending_files: [] } });
+  fireEvent.click(screen.getByRole("button", { name: "复制完成，开始接收" }));
+  await waitFor(() => expect(confirmMaterialCopyComplete).toHaveBeenLastCalledWith({ ...revised, confirmation_source: "manual" }));
 });
 
 it("does not reveal or bind a directory owned by another workspace", async () => {
@@ -410,7 +442,7 @@ it("hides local import while a bound directory is not ready", async () => {
   expect(screen.queryByRole("button", { name:"导入本地素材" })).not.toBeInTheDocument();
 });
 
-it("reports copied files as waiting for registration, never as already ingested", async () => {
+it("reports copied files as confirmed for intake, never as already analyzed", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
   vi.mocked(importLocalMaterials).mockResolvedValue({
     canceled: false,
@@ -420,7 +452,7 @@ it("reports copied files as waiting for registration, never as already ingested"
   });
   renderBound();
   fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
-  const message = await screen.findByText(/等待稳定后才会登记并分析/);
+  const message = await screen.findByText(/复制完成确认已保存，等待接收并分析/);
   expect(message).toHaveTextContent("已复制 2 个文件到素材目录");
   expect(message).toHaveTextContent("a.mp4");
   expect(message).toHaveTextContent("b (1).mp4");
