@@ -47,6 +47,7 @@ import {
   getProductionMaterials,
   initializeCreationTaskTimeline,
   getCreationExecution,
+  getTaskJobProgress,
   getCreationTaskAssistantHistory,
   previewCreationExecution,
   startCreationExecution,
@@ -75,6 +76,7 @@ import type {
   CreationTaskWorkspace as WorkspaceState,
   CreationExecutionPreview,
   CreationExecutionStatus,
+  TaskJobProgress,
   CreationTaskAssistantHistory,
   MaterialAsset,
   MaterialSegmentMatch,
@@ -1972,6 +1974,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
         {error && (isEditor || activeView === "subtitle_cover" || activeView === "review") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
         {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span></div> : null}
+        <JobProgressPanel taskId={task.id} />
         {task.confirmed_script_id && (executionPreview || execution?.job) && (activeView === "script" || activeView === "narration") ? <CreationExecutionPanel preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {execution?.job && activeView !== "script" && activeView !== "narration" ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? "成片已生成" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
 
@@ -2003,4 +2006,90 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       </div>
     </AppShell>
   );
+}
+
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "未知";
+  if (seconds < 60) return `${Math.round(seconds)} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+}
+
+function jobStatusLabel(status: string): string {
+  if (status === "queued") return "已安排，等待设备";
+  if (status === "running") return "正在处理";
+  if (status === "succeeded") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "cancelled") return "已取消";
+  if (status === "interrupted") return "已中断";
+  return status;
+}
+
+/** 作业类型也用中文说明，不把内部标识直接丢给用户。 */
+function jobKindLabel(kind: string): string {
+  if (kind === "creation_task_montage_render") return "成片输出";
+  if (kind === "creation_task_execution") return "整条制作";
+  if (kind === "person_render") return "人物形象生成";
+  if (kind === "material_analysis") return "素材分析";
+  return "其他作业";
+}
+
+/**
+ * 作业进度读后台已经落库的作业行：重开应用读到同一批记录，页面关闭不改变它们。
+ * 作业还在排队或执行时按固定间隔重新读取，结束后停止；切换任务时丢弃旧结果。
+ * 读不到就明说并给出重试，不静默当成没有作业。
+ */
+function JobProgressPanel({ taskId }: { taskId: string }) {
+  const [progress, setProgress] = useState<TaskJobProgress | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    setProgress(null);
+    setReadError(null);
+    async function read() {
+      window.clearTimeout(timer);
+      try {
+        const result = await getTaskJobProgress(taskId);
+        if (!active) return;
+        setProgress(result);
+        setReadError(null);
+        // 只有还在排队或执行的作业才继续读；结束或失败后停止轮询。
+        const status = result.current?.status;
+        if (status === "queued" || status === "running") {
+          timer = window.setTimeout(() => void read(), 2500);
+        }
+      } catch (cause) {
+        if (!active) return;
+        setReadError(errorDetails(cause).message);
+      }
+    }
+    void read();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [taskId, retryTick]);
+  if (readError && !progress) return <div role="alert" className={styles.blocker}>
+    <AlertCircle size={17} />
+    <span>作业进度暂时读不到：{readError}</span>
+    <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button>
+  </div>;
+  if (!progress) return null;
+  const current = progress.current;
+  return <section aria-label="作业进度" className={styles.blocker}>
+    <strong>作业进度</strong>
+    {current ? <p>
+      {jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}
+    </p> : <p>这个任务还没有后台作业记录。</p>}
+    {current ? <p>
+      预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}（尚无可信样本，无法预计）
+    </p> : null}
+    {current?.failure_reason ? <p>失败原因：{current.failure_reason}{current.impact ? ` · ${current.impact}` : ""}</p> : null}
+    {current?.repair_action ? <p>下一步：{current.repair_action}</p> : null}
+    {readError ? <p role="alert">最新一次刷新失败：{readError}</p> : null}
+    {progress.items.length > 1 ? <ol>
+      {progress.items.map((item) => <li key={item.id}>{jobKindLabel(item.kind)} · {jobStatusLabel(item.status)} · 进度 {item.progress}% · 已耗时 {formatDuration(item.elapsed_seconds)} · 更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}{item.failure_reason ? ` · 失败原因：${item.failure_reason}${item.repair_action ? ` · 下一步：${item.repair_action}` : ""}` : ""}</li>)}
+    </ol> : null}
+  </section>;
 }

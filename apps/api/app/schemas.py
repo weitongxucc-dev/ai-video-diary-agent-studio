@@ -2417,6 +2417,36 @@ class RuntimeSettingsResponse(BaseModel):
     status: SystemStatusResponse
 
 
+class JobProgressResponse(BaseModel):
+    """一条作业在任务页上的真实读数。估时没有可信依据时就是 null。"""
+
+    id: str
+    kind: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    # 只报告作业自己写下的进度，不是阶段序号。
+    progress: int
+    attempt: int
+    started_at: datetime | None
+    finished_at: datetime | None
+    updated_at: datetime
+    elapsed_seconds: float | None
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    wait_estimate_seconds: float | None
+    processing_estimate_seconds: float | None
+    estimate_basis: str | None
+
+
+class TaskJobProgressResponse(BaseModel):
+    """任务当前作业和它的全部历史作业；页面关闭后重开读到同一批记录。"""
+
+    task_id: str
+    current: JobProgressResponse | None
+    items: list[JobProgressResponse]
+    total_count: int
+
+
 class RuntimeSettingsUpdateRequest(BaseModel):
     llm_provider: str | None = None
     llm_api_key: str | None = None

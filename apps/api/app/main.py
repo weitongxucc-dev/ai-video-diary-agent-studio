@@ -11,7 +11,7 @@ import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
@@ -95,6 +95,7 @@ from app.edit_plan import (
     safe_processed_video_path,
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
+from app.job_progress import summarize_job_progress
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
@@ -218,6 +219,8 @@ from app.workspace_settings import (
 )
 from app.source_repository import SourceRepository
 from app.schemas import (
+    JobProgressResponse,
+    TaskJobProgressResponse,
     ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
     ScriptLibrarySourceResponse, ScriptLibraryReuseRequest, ScriptLibraryReuseResponse,
     AuthorizationResponse,
@@ -14624,6 +14627,32 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
 @app.get("/api/creation-tasks/{task_id}/execution")
 def get_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     return _creation_execution_status(current_workspace_id(request), task_id)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/job-runs",
+    response_model=TaskJobProgressResponse,
+)
+def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResponse:
+    """任务作业进度：只读后台已经落库的作业行。
+
+    进度、已耗时、更新时间和失败原因都来自这些记录；重开应用读到的是同一批
+    作业，页面关闭不改变它们。等待与处理估时分开，没有可信样本就是未知。
+    """
+    workspace_id = current_workspace_id(request)
+    try:
+        runs = production_repo.list_job_runs(workspace_id, task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    items, current = summarize_job_progress(runs, now=datetime.now(UTC))
+    return TaskJobProgressResponse(
+        task_id=task_id,
+        current=JobProgressResponse.model_validate(current, from_attributes=True)
+        if current
+        else None,
+        items=[JobProgressResponse.model_validate(item, from_attributes=True) for item in items],
+        total_count=len(items),
+    )
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)
