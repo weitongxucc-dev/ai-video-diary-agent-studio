@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask, HomeAggregation } from "@/lib/types";
-import { HomeDashboardLive, HomeWorkspace, TrendChart, type HomeDashboardExample } from "@/components/HomeWorkspace";
+import { HomeWorkspace, TrendChart, type HomeDashboardExample } from "@/components/HomeWorkspace";
 
 const routerPush = vi.fn();
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
@@ -32,9 +32,11 @@ beforeEach(() => routerPush.mockReset());
 describe("HomeWorkspace", () => {
   it("keeps the v4 dashboard structure without inventing unavailable production aggregates", () => {
     render(<HomeWorkspace foundation={null} tasks={[task]} />);
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("可见素材");
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("作品记录");
-    expect(screen.getAllByText("—")).toHaveLength(5);
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("可见素材");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("作品");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("声音");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("任务");
+    expect(screen.getAllByText("—")).toHaveLength(7);
     expect(screen.getByText("尚无接收日聚合数据")).toBeInTheDocument();
     expect(screen.getByText("素材尚无可信行业分类")).toBeInTheDocument();
     expect(screen.getAllByText("标签统计未载入")).toHaveLength(2);
@@ -48,7 +50,7 @@ describe("HomeWorkspace", () => {
     render(<HomeWorkspace foundation={null} tasks={[{ ...task, output_ready: true }]} />);
     expect(screen.getByText("当前工作区的本地成片，未代表平台发布")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /设备演示.*本地成片可查看/ })).toHaveAttribute("href", "/tasks/task-one");
-    expect(screen.getAllByText("—")).toHaveLength(5);
+    expect(screen.getAllByText("—")).toHaveLength(7);
   });
 
   it.each([
@@ -90,17 +92,17 @@ describe("HomeWorkspace", () => {
   it("labels isolated sample figures and lets users inspect ranges and tag choices", () => {
     render(<HomeWorkspace foundation={null} tasks={[]} dashboard={sample} />);
     expect(screen.getByText("示例数据 · 不连接真实服务")).toBeInTheDocument();
-    const metrics = screen.getByRole("region", { name: "工作空间五项概览" });
+    const metrics = screen.getByRole("region", { name: "工作空间七项概览" });
     expect(metrics).toHaveTextContent("12");
     expect(metrics).toHaveTextContent("7");
     expect(metrics).toHaveTextContent("3");
     expect(metrics).toHaveTextContent("4");
     expect(metrics).toHaveTextContent("1");
-    const sevenCircles = screen.getByRole("img", { name: "示例素材接收趋势" }).querySelectorAll("circle");
+    const sevenCircles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
     expect([...sevenCircles].reduce((sum, circle) => sum + Number(circle.getAttribute("aria-label")?.match(/接收 (\d+)/)?.[1] ?? 0), 0)).toBe(sample.assets.length);
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
-    const chart = screen.getByRole("img", { name: "示例素材接收趋势" });
+    const chart = screen.getByRole("img", { name: "素材接收趋势" });
     const circles = chart.querySelectorAll("circle");
     expect(circles).toHaveLength(30);
     expect(Number(circles[0].getAttribute("cx"))).toBe(12);
@@ -121,11 +123,11 @@ describe("HomeWorkspace", () => {
 
   it("keeps all 0, 1 and 7 trend points inside the chart", () => {
     const zero = render(<TrendChart values={[]} />);
-    expect(screen.getByText("这段示例期间没有素材接收记录")).toBeInTheDocument();
+    expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
     zero.rerender(<TrendChart values={points(1)} />);
-    expect(screen.getByRole("img", { name: "示例素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
+    expect(screen.getByRole("img", { name: "素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
     zero.rerender(<TrendChart values={points(7)} />);
-    const circles = screen.getByRole("img", { name: "示例素材接收趋势" }).querySelectorAll("circle");
+    const circles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
     expect(circles).toHaveLength(7);
     expect(Number(circles[6].getAttribute("cx"))).toBe(274);
   });
@@ -133,12 +135,12 @@ describe("HomeWorkspace", () => {
   it("derives every example count and chart from one visible asset set", () => {
     const member = { ...sample, scopeLabel: "成员演示 · 我的及共享内容", assets: sample.assets.slice(0, 5), knowledgeSources: sample.knowledgeSources.slice(0, 2), works: sample.works.slice(0, 1) };
     render(<HomeWorkspace foundation={null} tasks={[]} dashboard={member} />);
-    const metrics = screen.getByRole("region", { name: "工作空间五项概览" });
+    const metrics = screen.getByRole("region", { name: "工作空间七项概览" });
     expect(metrics).toHaveTextContent("5可见素材");
     expect(metrics).toHaveTextContent("5分析可用");
     expect(metrics).toHaveTextContent("0待分析");
     expect(metrics).toHaveTextContent("2知识来源");
-    expect(metrics).toHaveTextContent("1作品记录");
+    expect(metrics).toHaveTextContent("1作品");
     expect(screen.getByRole("button", { name: /设备5/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /门店4/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /门店4/ }));
@@ -219,9 +221,9 @@ describe("HomeWorkspace", () => {
 
   it("renders the real anonymous overview, trend, storage and enterable entries", () => {
     render(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[]} />);
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("12");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
     // 服务端没给的计数不补 0：显示未知，而不是 0。
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("未知");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("未知");
     expect(screen.getByRole("img", { name: /素材接收趋势/ })).toBeInTheDocument();
     const queue = screen.getByRole("heading", { name: "我进入得去的队列" }).closest("section") as HTMLElement;
     expect(within(queue).getByRole("button", { name: /设备演示/ })).toBeInTheDocument();
@@ -231,9 +233,10 @@ describe("HomeWorkspace", () => {
     expect(within(works).getByRole("link", { name: /开场演示/ })).toHaveAttribute("href", "/tasks/task-three");
     const storage = screen.getByRole("heading", { name: "存储" }).closest("section") as HTMLElement;
     expect(storage).toHaveTextContent("128.0 GB");
-    expect(storage).toHaveTextContent("device_anonymous");
+    expect(storage).toHaveTextContent("整机匿名汇总");
+    expect(storage).toHaveTextContent("素材库");
     // 整机匿名运行只有数量，不含归属或名称。
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).not.toHaveTextContent("门店介绍");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).not.toHaveTextContent("门店介绍");
     // 没有真实载体的统计项按服务端给出的原因如实显示。
     const unknown = screen.getByRole("heading", { name: "没有真实数据的项" }).closest("section") as HTMLElement;
     expect(unknown).toHaveTextContent("声音库还没有接入统计口径");
@@ -245,7 +248,7 @@ describe("HomeWorkspace", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在读取整机概览…");
     rerender(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: "读取失败：503", days: 7, onDays: vi.fn(), onRetry }} tasks={[]} />);
     // 已有数据时不白屏：旧数据仍在，并给出可重试的错误。
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("12");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     expect(onRetry).toHaveBeenCalled();
   });

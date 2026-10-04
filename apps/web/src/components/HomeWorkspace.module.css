@@ -7,7 +7,7 @@
 .readiness strong { font-weight: 500; }
 .readiness a, .cardHeading a { color: var(--accent); font-size: 12px; text-decoration: none; }
 .dashboard { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(205px, .8fr); gap: 10px; align-items: start; }
-.metrics { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.metrics { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 7px; }
 .metric, .card { border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
 .metric { display: grid; align-content: center; gap: 4px; min-height: 72px; padding: 9px 11px; }
 .metric strong { font-size: 24px; font-weight: 500; line-height: 1; }
@@ -61,7 +61,7 @@ button.queueRow:hover { background: var(--surface-2); }
 .workRow > span { display: grid; width: 36px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 4px; background: var(--surface-2); color: var(--accent); }
 .workRow > div { display: grid; min-width: 0; gap: 2px; }
 .note { margin: 10px 0 0; color: var(--text-2); font-size: 11px; }
-@media (max-width: 1150px) { .home { padding: 14px 16px 22px; } .dashboard { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (max-width: 1150px) { .home { padding: 14px 16px 22px; } .dashboard { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .metric { min-height: 62px; padding-inline: 7px; } .metric strong { font-size: 21px; } .heading h1 { font-size: 20px; } }
 .homeFacts { display: grid; gap: 7px; margin: 10px 0 0; }
 .homeFacts > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 9px; font-size: 12px; }

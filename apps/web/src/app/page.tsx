@@ -1,5 +1,7 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { HomeDashboardLive } from "@/components/HomeWorkspace";
 
@@ -12,8 +14,13 @@ export const dynamic = "force-dynamic";
  * 先按 owner 预取私有任务再在客户端隐藏，等于把别人的名字发到首帧。
  * 这里不预发任何 owner 私有任务、词云或成果，只渲染容器外壳。
  */
-export default function HomePage() {
-  return <AppShell>
+function HomeShell() {
+  const params = useSearchParams();
+  return <AppShell autoFocus={params.get("new") === "1"}>
     <HomeDashboardLive />
   </AppShell>;
+}
+
+export default function HomePage() {
+  return <Suspense fallback={null}><HomeShell /></Suspense>;
 }
