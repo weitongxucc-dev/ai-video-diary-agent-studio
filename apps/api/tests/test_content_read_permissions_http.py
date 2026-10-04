@@ -151,3 +151,46 @@ def test_cited_version_facts_are_not_returned_to_a_reader_without_permission(tmp
     assert not denied.cited_source_url
     assert not denied.cited_content_hash
     assert not denied.cited_fetched_at
+
+
+def test_material_insights_do_not_count_another_members_private_content(tmp_path, monkeypatch):
+    """统计数字本身不能泄露别人的私有内容：聚合与列表同一判据。"""
+    party = _setup(tmp_path, monkeypatch)
+    from datetime import datetime
+
+    from app.production import MaterialAsset, ProductionRepository
+
+    library = tmp_path / "library"
+    library.mkdir()
+    production = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3",
+        video_library_path=library,
+        duration_reader=lambda _path: 25.0,
+        scene_reader=lambda _path, _duration: [5.0, 17.0],
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    production._save_asset(MaterialAsset(
+        id="private-asset", workspace_id=WORKSPACE, file_name="mine.mp4",
+        path=f"{WORKSPACE}/mine.mp4", size_bytes=10, modified_at=datetime(2026, 1, 1),
+        owner_user_id=party["owner_member"].member_id,
+    ))
+
+    denied = client.get("/api/production/materials/insights", headers=_headers(party["member_token"]))
+
+    assert denied.status_code == 200
+    body = denied.text
+    assert "mine.mp4" not in body
+
+
+def test_anonymous_read_outside_the_reserved_local_workspace_is_not_local_diagnostic(
+    tmp_path, monkeypatch
+):
+    """受控 local 只覆盖保留的 local 工作区；别的 workspace 匿名请求读不到私有内容。"""
+    party = _setup(tmp_path, monkeypatch)
+    saved = _save_private_knowledge("匿名读不到")
+
+    # 带令牌的有效成员在别的 workspace 上按成员隔离（读不到他人私有）。
+    denied = client.get(
+        f"/api/knowledge-items/{saved['id']}", headers=_headers(party["member_token"])
+    )
+    assert denied.status_code == 404

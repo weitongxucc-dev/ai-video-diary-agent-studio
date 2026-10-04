@@ -232,13 +232,20 @@ class SourceRepository:
         ownership: str,
         authorization: str,
         version: str = "1",
+        verified_owner_user_id: str | None = None,
     ) -> KnowledgeItem:
-        """保存为知识条目。手动来源保持原有行为，不参与文件版本链。"""
+        """保存为知识条目。手动来源保持原有行为，不参与文件版本链。
+
+        上传者归属只认 ``verified_owner_user_id``（由调用方从已验证身份或成员
+        令牌解析出）；不采信任何调用方自填的 owner_user_id。
+        """
+        owner = str(verified_owner_user_id or "").strip() or None
         source = self.get_source_item(workspace_id, source_item_id)
         if source.content_hash is None:
             # 未经过文件解析的来源（如手动链接）保持原有行为。
             return self.create_knowledge_item(
                 KnowledgeItem(
+                    owner_user_id=owner,
                     id=f"ki_{uuid4().hex}",
                     workspace_id=workspace_id,
                     content_type=source.content_type,
@@ -252,7 +259,8 @@ class SourceRepository:
                 )
             )
         return self._save_parsed_source_to_knowledge(
-            workspace_id, source, ownership=ownership, authorization=authorization
+            workspace_id, source, ownership=ownership, authorization=authorization,
+            verified_owner_user_id=owner,
         )
 
     def _save_parsed_source_to_knowledge(
@@ -262,6 +270,7 @@ class SourceRepository:
         *,
         ownership: str,
         authorization: str,
+        verified_owner_user_id: str | None = None,
     ) -> KnowledgeItem:
         """同内容不新增版本、不回滚旧版；原内容变化时保留旧版并追加新版本。
 
@@ -331,6 +340,7 @@ class SourceRepository:
                 ).fetchone()
         if parent is None:
             item = KnowledgeItem(
+                owner_user_id=str(verified_owner_user_id or "").strip() or None,
                 id=f"ki_{uuid4().hex}",
                 workspace_id=workspace_id,
                 content_type=source.content_type,
