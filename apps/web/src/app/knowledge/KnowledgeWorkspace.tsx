@@ -123,7 +123,7 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
   const shownFetchedAt = isHistorical ? selectedVersion?.fetched_at ?? null : detail?.fetched_at ?? item.fetched_at ?? null;
   return <div className={styles.inspector}>
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
-    <KnowledgeConflicts allItems={items} current={item} currentDetail={detail} exampleMode={exampleMode} />
+    <KnowledgeConflicts allItems={items} current={item} currentDetail={detail} exampleMode={exampleMode} key={item.id} />
     <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
     {versions.length ? <div className={styles.detailSection}><h3>版本</h3><label><span>查看版本</span><select aria-label="查看版本" onChange={(event) => onViewVersion(event.target.value || null)} value={viewVersion ?? ""}><option value="">当前版本 {detail?.version}</option>{versions.map((version) => <option key={version.version} value={version.version}>版本 {version.version} · {formatTime(version.saved_at)}</option>)}</select></label>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
     <div className={styles.compare}>
