@@ -2870,3 +2870,122 @@ class TimelineVersionDetailResponse(BaseModel):
     subtitle_tracks: list[SubtitleTrackResponse]
     cover_asset: CoverAssetResponse | None
     artifacts: list[TimelineVersionArtifactResponse]
+
+
+# ── 整机首页聚合 ────────────────────────────────────────────────────────
+
+
+class HomeFactMeta(BaseModel):
+    """首页每块统计的口径、事实来源和读取时点。
+
+    没有这三样，页面上的数字就无法回答「这是谁的数、按什么算的、什么时候的」。
+    """
+
+    scope: Literal[
+        "caller_visible",
+        "local_diagnostic",
+        "workspace",
+        "device_anonymous",
+        "host",
+    ]
+    source: str
+    as_of: datetime
+
+
+class HomeUnknownFact(BaseModel):
+    """如实声明没有真实载体的统计项：不猜、不填 0。"""
+
+    key: str
+    reason: str
+
+
+class HomeCountResponse(BaseModel):
+    key: str
+    label: str
+    value: int = Field(ge=0)
+    meta: HomeFactMeta
+
+
+class HomeTrendPointResponse(BaseModel):
+    date: date
+    count: int = Field(ge=0)
+
+
+class HomeTrendResponse(BaseModel):
+    days: int = Field(ge=1)
+    points: list[HomeTrendPointResponse]
+    meta: HomeFactMeta
+
+
+class HomeDeviceQueueResponse(BaseModel):
+    """整机匿名的运行与排队数量。
+
+    ``counts`` 是各真实状态表的记录数（含已成功/失败的历史），
+    ``running``/``queued`` 才是在跑和排队的数量——两者不是一回事，
+    首页不能拿记录数当队列长度。表读不到时后三项留空并说明原因，
+    不用 0 冒充「现在很空闲」。只给计数，不含路径、文件名或归属。
+    """
+
+    counts: dict[str, int]
+    records_total: int | None = Field(default=None, ge=0)
+    running: int | None = Field(default=None, ge=0)
+    queued: int | None = Field(default=None, ge=0)
+    meta: HomeFactMeta
+
+
+class HomeStorageCapacityResponse(BaseModel):
+    total_bytes: int = Field(ge=0)
+    used_bytes: int = Field(ge=0)
+    free_bytes: int = Field(ge=0)
+
+
+class HomeStorageResponse(BaseModel):
+    """真实存储事实。目录路径本身不返回，页面不需要也不该拿到。"""
+
+    directory_state: str
+    bound_to_current_workspace: bool
+    bound_to_another_workspace: bool
+    configured_path_changed: bool
+    capacity: HomeStorageCapacityResponse | None
+    meta: HomeFactMeta
+
+
+class HomeQueueEntryResponse(BaseModel):
+    task_id: str
+    title: str
+    stage: str
+    status: str
+    updated_at: datetime
+
+
+class HomeTodoEntryResponse(BaseModel):
+    task_id: str
+    title: str
+    stage: str
+    reason: str
+    repair_action: str | None
+
+
+class HomeWorkEntryResponse(BaseModel):
+    task_id: str
+    title: str
+    updated_at: datetime
+
+
+class HomeEntriesResponse(BaseModel):
+    """可进入的真实条目：每条都带真实 task_id，页面可直接跳转。"""
+
+    queue: list[HomeQueueEntryResponse]
+    todos: list[HomeTodoEntryResponse]
+    works: list[HomeWorkEntryResponse]
+    meta: HomeFactMeta
+
+
+class HomeAggregationResponse(BaseModel):
+    days: int = Field(ge=1)
+    counts: list[HomeCountResponse]
+    trend: HomeTrendResponse
+    device_queue: HomeDeviceQueueResponse
+    storage: HomeStorageResponse
+    entries: HomeEntriesResponse
+    unknown: list[HomeUnknownFact] = Field(default_factory=list)
