@@ -537,8 +537,12 @@ class DeviceScheduler:
         now = _stamp(self._now())
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            previous = conn.execute("SELECT last_interaction_at_utc FROM device_session_activity WHERE session_id=?", (trusted.session_id,)).fetchone()
-            last_interaction = now if heartbeat.interaction or previous is None else previous[0]
+            previous = conn.execute("SELECT member_id, last_interaction_at_utc FROM device_session_activity WHERE session_id=?", (trusted.session_id,)).fetchone()
+            if previous is not None and previous["member_id"] != trusted.member_id:
+                # 会话一旦记在某个成员名下就不能改挂到别人身上（auth §9：
+                # 外部身份必须绑定成员）。另一个成员重开页面会拿到新的 session_id。
+                raise PermissionError("该会话已绑定其他成员，不能重新绑定")
+            last_interaction = now if heartbeat.interaction or previous is None else previous["last_interaction_at_utc"]
             conn.execute(
                 """INSERT INTO device_session_activity
                 (session_id, workspace_id, member_id, last_heartbeat_at_utc, last_interaction_at_utc, playing, recording, editing)

@@ -64,8 +64,14 @@ from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeli
 from app.task_audio import TaskAudio
 from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
-from app.local_members import LocalMembersError, LocalMemberService
+from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
+from app.device_scheduler import SessionHeartbeat
+from app.member_permits import (
+    DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
+    build_host_probes, cpu_render_budget_from_env, creation_job_registration, find_member,
+    host_budget_from_env, permit_actor, resolve_member_token,
+)
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
     CoverGenerationRequest,
@@ -14854,55 +14860,116 @@ def _new_creation_execution() -> CreationExecution:
 
 
 def _recover_creation_executions() -> None:
+    """开机恢复：身份只取持久行，并且每次都重新对本机名册核一遍。
+
+    被移除的成员留下的作业不会被自动重新申请整机许可——它停在待处理状态等人
+    明确处理，而不是靠一个旧的字符串身份继续拿许可。
+    """
     # The repository owns the cross-workspace pending-job query. A workspace is
     # taken only from each persisted JobRun, never from the current login.
-    if creation_execution_mode == "scheduled":
-        runtime = _scheduled_creation_runtime()
-        # A crash may land after the JobRun cancellation commits but before
-        # its device request is cancelled. Reconcile from both durable rows.
-        with production_repo._connect() as conn:
-            cancelled_requests = conn.execute(
-                "SELECT r.id, r.workspace_id, r.member_id, r.owner_id FROM device_work_requests r "
-                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
-                "WHERE r.owner_type='creation_job' AND j.kind='creation_task_execution' "
-                "AND j.status='cancelled' AND r.state IN ('waiting', 'blocked', 'granted')"
-            ).fetchall()
-        for row in cancelled_requests:
-            event = production_repo.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
-            if (row["workspace_id"] != LEGACY_WORKSPACE_ID or row["member_id"] != "local-owner"
-                    or event.payload.get("member_id") != row["member_id"]):
-                raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
-            runtime.scheduler.cancel(row["id"], CreationExecutionActor(row["workspace_id"], row["member_id"]))
-        for job in production_repo.list_pending_creation_executions():
-            event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
-            member_id = event.payload.get("member_id")
-            if job.workspace_id != LEGACY_WORKSPACE_ID or member_id != "local-owner":
-                raise RuntimeError("旧制作作业缺少可复核的本机成员身份，不能自动申请设备许可")
-            submit_creation_stage(creation_execution, runtime.scheduler, job,
-                                  CreationExecutionActor(job.workspace_id, member_id))
-        runtime.wake()
-        return
-    for job in production_repo.list_pending_creation_executions():
-        execution_worker.submit(creation_execution.execute, job.workspace_id, job.id)
-
-
-def _scheduled_creation_runtime():
     runtime = device_runtime
-    if (runtime is None or runtime.last_error is not None
-            or "creation_job" not in runtime.registrations):
-        raise HTTPException(status_code=503, detail="整机制作许可尚未就绪，当前任务没有启动")
+    if runtime is None or "creation_job" not in runtime.registrations:
+        # 没有整机许可通道就不派发。退回旧的本机线程等于绕开身份和主机门禁，
+        # 那正是这张许可要挡住的事；作业停在待处理状态，等许可就绪或人明确处理。
+        pending = production_repo.list_pending_creation_executions()
+        if pending:
+            logger.warning(
+                "整机许可通道尚未就绪，%s 件制作作业留在待处理状态等待人工处理",
+                len(pending),
+            )
+        return
+    # A crash may land after the JobRun cancellation commits but before
+    # its device request is cancelled. Reconcile from both durable rows.
+    with production_repo._connect() as conn:
+        cancelled_requests = conn.execute(
+            "SELECT r.id, r.workspace_id, r.member_id, r.owner_id FROM device_work_requests r "
+            "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
+            "WHERE r.owner_type='creation_job' AND j.kind='creation_task_execution' "
+            "AND j.status='cancelled' AND r.state IN ('waiting', 'blocked', 'granted')"
+        ).fetchall()
+    for row in cancelled_requests:
+        event = production_repo.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
+        # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
+        if (row["workspace_id"] != LEGACY_WORKSPACE_ID or not row["member_id"]
+                or event.payload.get("member_id") != row["member_id"]):
+            raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
+        runtime.scheduler.cancel(row["id"], CreationExecutionActor(row["workspace_id"], row["member_id"]))
+    for job in production_repo.list_pending_creation_executions():
+        event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        member_id = event.payload.get("member_id")
+        if job.workspace_id != LEGACY_WORKSPACE_ID or not isinstance(member_id, str) or not member_id:
+            raise RuntimeError("制作作业缺少可复核的本机成员身份，不能自动申请设备许可")
+        if find_member(local_members_service, member_id) is None:
+            logger.warning(
+                "本机成员 %s 已不在名册内，跳过其制作作业 %s 的自动恢复", member_id, job.id,
+            )
+            continue
+        submit_creation_stage(creation_execution, runtime.scheduler, job,
+                              CreationExecutionActor(job.workspace_id, member_id))
+    runtime.wake()
+
+
+def _creation_runtime():
+    """交互式制作许可的这一个整机运行时，缺什么就明确说缺什么。
+
+    ``creation_execution_mode == "scheduled"`` 只管定时触发，不影响这里：
+    交互式许可已获批，不能因为定时生产通道关闭就一起被挡在门外。
+    """
+    from app.device_runtime import RuntimeUnavailable
+
+    global device_runtime
+    runtime = device_runtime
+    if runtime is None:
+        try:
+            runtime, _ = _build_device_components(repository=production_repo)
+        except HostBudgetUncalibrated as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (RuntimeUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=f"整机制作许可尚未就绪：{exc}") from exc
+        # 只有这一条驱动线程；在这里装好就直接起，免得建好却不派发。
+        runtime.start()
+        device_runtime = runtime
+    if runtime.last_error is not None or "creation_job" not in runtime.registrations:
+        raise HTTPException(status_code=503, detail="整机制作许可已停止，须核查许可后才能继续")
     return runtime
 
 
-def _scheduled_creation_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
-    # The current auth service cannot recheck remote membership inside the
-    # scheduler's SQLite admission transaction. Do not mint a durable member
-    # identity from a request whose later authority cannot be verified.
-    if auth_context.enabled:
-        raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
+def _request_member(request: Request) -> LocalMember | None:
+    """本次请求的可信本机成员。
+
+    令牌无效是凭据失败（401），不降级成「没带令牌所以按 owner 看全部」；已开
+    认证又没有令牌时没有可核验身份，返回 ``None``，不凭空造一个成员。
+    """
+    try:
+        return resolve_member_token(
+            members=local_members_service,
+            token=_local_member_token(request),
+            auth_enabled=auth_context.enabled,
+        )
+    except LocalMembersError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def _request_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor | None:
+    """本次请求在整机许可里的可信身份（真实成员行，不是字符串）。"""
+    return permit_actor(_request_member(request), workspace_id)
+
+
+def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
+    """本次请求必须带得动的整机许可身份。
+
+    成员身份只能来自本机名册里的真实成员行；工作区也必须和它绑定的那一个
+    一致。混合的 Bearer 凭据/local-token 或客户端自填的工作区都拼不出一个
+    跨空间的许可，这里直接拒绝。
+    """
     if workspace_id != LEGACY_WORKSPACE_ID:
         raise HTTPException(status_code=403, detail="本机制作身份与工作区不匹配")
-    return CreationExecutionActor(workspace_id, "local-owner")
+    actor = _request_permit_actor(request, workspace_id)
+    if actor is None:
+        # 现有认证服务无法在调度器的准入事务里复核远端成员，所以不从一次
+        # 无法事后核验的请求里铸出一个持久成员身份。
+        raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
+    return actor
 
 
 _EXECUTION_WAITING_TEXT = {
@@ -14949,14 +15016,15 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
     if (job and job.status in {"queued", "interrupted"}
             and creation_execution_mode == "scheduled" and workspace_id == LEGACY_WORKSPACE_ID):
         start_event = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
-        if start_event.payload.get("member_id") == "local-owner":
+        queued_member_id = start_event.payload.get("member_id")
+        if queued_member_id:
             with production_repo._connect() as conn:
                 row = conn.execute(
                     "SELECT unit_key, wait_reason, updated_at FROM device_work_requests "
                     "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
                     "AND input_digest=? AND state IN ('waiting', 'blocked', 'granted', 'yield_requested') "
                     "ORDER BY created_at DESC LIMIT 1",
-                    (workspace_id, "local-owner", job.id, job.input_digest),
+                    (workspace_id, queued_member_id, job.id, job.input_digest),
                 ).fetchone()
             if row is not None:
                 queued_stage = row["unit_key"].split(":", 1)[0]
@@ -15046,23 +15114,19 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
     workspace_id = current_workspace_id(request)
     if not payload.requirements_confirmed:
         raise HTTPException(status_code=409, detail="请先确认实际文案与本次制作要求")
-    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
-    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
+    runtime = _creation_runtime()
+    actor = _require_permit_actor(request, workspace_id)
     try:
         job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest,
-                                       member_id=actor.member_id if actor else None)
-        if runtime is not None and actor is not None:
-            submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
+                                       member_id=actor.member_id)
+        submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="创作任务或确认对象不存在") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if runtime is not None:
-        runtime.wake()
-    elif job.status in {"queued", "interrupted"}:
-        execution_worker.submit(creation_execution.execute, workspace_id, job.id)
+    runtime.wake()
     return _creation_execution_status(workspace_id, task_id)
 
 
@@ -15070,21 +15134,16 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
 def resume_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
-    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
-    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
+    runtime = _creation_runtime()
+    actor = _require_permit_actor(request, workspace_id)
     try:
-        job = creation_execution.retry(workspace_id, task_id,
-                                       member_id=actor.member_id if actor else None)
-        if runtime is not None and actor is not None:
-            submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
+        job = creation_execution.retry(workspace_id, task_id, member_id=actor.member_id)
+        submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if runtime is not None:
-        runtime.wake()
-    elif job.status in {"queued", "interrupted"}:
-        execution_worker.submit(creation_execution.execute, workspace_id, job.id)
+    runtime.wake()
     return _creation_execution_status(workspace_id, task_id)
 
 
@@ -15092,16 +15151,16 @@ def resume_creation_execution(task_id: str, request: Request) -> dict[str, objec
 def cancel_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
-    runtime = _scheduled_creation_runtime() if creation_execution_mode == "scheduled" else None
-    actor = _scheduled_creation_actor(request, workspace_id) if runtime is not None else None
+    # 取消不要求整机运行时在场：没有许可通道时也必须能把已经发起的作业停下来。
+    runtime = device_runtime
+    actor = _require_permit_actor(request, workspace_id)
     try:
-        job = creation_execution.cancel(workspace_id, task_id,
-                                        member_id=actor.member_id if actor else None)
+        job = creation_execution.cancel(workspace_id, task_id, member_id=actor.member_id)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if runtime is not None and actor is not None:
+    if runtime is not None:
         with production_repo._connect() as conn:
             rows = conn.execute(
                 "SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
@@ -15117,6 +15176,87 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
     return _creation_execution_status(workspace_id, task_id)
 
 
+def _creation_job_for_request(workspace_id: str, request_id: str):
+    """这条设备许可背后是不是一个制作作业；不是就返回 ``None``。"""
+    with production_repo._connect() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM device_work_requests "
+            "WHERE id=? AND workspace_id=? AND owner_type='creation_job'",
+            (request_id, workspace_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return production_repo.get_job_run(workspace_id, row["owner_id"])
+
+
+@app.post("/api/device/session/heartbeat")
+def report_device_session(payload: DeviceHeartbeatRequest, request: Request) -> dict[str, object]:
+    """上报一次真实会话活动。
+
+    身份与工作区都由服务端从本机名册判定，客户端自报的字段里没有这两项；
+    成员被移除后，下一次心跳就会因为名册里查不到而失败，旧会话不能续用。
+    """
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    runtime = _creation_runtime()
+    try:
+        runtime.scheduler.heartbeat_session(
+            SessionHeartbeat(
+                session_id=payload.session_id, workspace_id=workspace_id,
+                playing=payload.playing, recording=payload.recording,
+                editing=payload.editing, interaction=payload.interaction,
+            ),
+            actor,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"session_id": payload.session_id, "workspace_id": workspace_id,
+            "member_id": actor.member_id}
+
+
+@app.get("/api/device/queue")
+def read_device_queue(request: Request) -> dict[str, object]:
+    """本机整机队列：自己的执行单元加上匿名的忙闲汇总。"""
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    runtime = _creation_runtime()
+    try:
+        return runtime.scheduler.list_queue_for(actor)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/device/queue/{request_id}/cancel")
+def cancel_device_request(request_id: str, request: Request) -> dict[str, object]:
+    """释放一条执行单元的整机许可，并把背后的制作作业一并停下。
+
+    权限由调度器按作业归属判定：不是自己的单元就拒绝，取消方向不要求
+    成员仍在名册内——撤权必须总是可行。
+    """
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    runtime = _creation_runtime()
+    try:
+        detail = runtime.scheduler.cancel(request_id, actor)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="该执行单元不存在") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    registration = runtime.registrations.get("creation_job")
+    executor = getattr(registration, "executor", None)
+    if isinstance(executor, CreationJobUnitExecutor):
+        job = _creation_job_for_request(workspace_id, request_id)
+        if job is not None:
+            try:
+                creation_execution.cancel(workspace_id, job.task_id, member_id=actor.member_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        executor.request_cancel(request_id)
+    return detail
+
+
 creation_execution = _new_creation_execution()
 execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
 material_ingestion = None
@@ -15125,36 +15265,85 @@ creation_execution_mode: Literal["legacy", "scheduled"] = "legacy"
 device_runtime = None
 
 
-def _build_scheduled_material_components(
-    *,
-    repository: ProductionRepository,
-    device_lock_path: str | Path,
-    device_access,
-    resources,
-    processes,
-):
-    """Compose one hash-only runtime candidate without starting production work."""
+#: 整机锁文件名。锁放在生产库同目录：换一台机、换一个库，就是另一把锁。
+_DEVICE_LOCK_FILENAME = "device-permit.lock"
+
+
+class RenderStageRejected(RuntimeError):
+    """成片阶段被业务规则拒绝。转成可读原因，不把 HTTP 语义带进后台线程。"""
+
+
+def _render_creation_stage_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext):
+    try:
+        return _render_creation_task_montage_for_workspace(
+            workspace_id, task_id, render_context=grant,
+        )
+    except HTTPException as exc:
+        raise RenderStageRejected(str(exc.detail)) from exc
+
+
+def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
+    return _creation_render_is_valid(workspace_id, task_id, render_context=grant)
+
+
+def _device_lock_path() -> Path:
+    return Path(production_repo.database_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME
+
+
+def _build_device_components(*, repository: ProductionRepository):
+    """装出这台机器唯一的整机运行时：一把锁、一张队列、一个驱动线程。
+
+    ``creation_job`` 始终在这里注册——交互式许可已经获批，不能因为定时素材
+    通道关闭就一起消失。``material_asset`` 只在它自己的定时模式确实是 scheduled
+    时才注册，避免造出第二条永远等不到许可的队列。探针和预算都是真实来源：
+    没标定就抛 ``HostBudgetUncalibrated``，由调用方明确报不可用。
+    """
     from app.device_runtime import OwnerRegistration, build_device_runtime
     from app.material_ingestion import (
         MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
     )
 
-    executor = MaterialHashUnitExecutor()
+    cpu_render_budget = cpu_render_budget_from_env()
+    budget = host_budget_from_env(cpu_render=cpu_render_budget)
+    registrations = {
+        "creation_job": creation_job_registration(
+            repository,
+            render_action=_render_creation_stage_with_grant,
+            render_is_valid=_creation_stage_valid_with_grant,
+            cpu_render_budget=cpu_render_budget,
+        ),
+    }
+    material_service = None
+    material_executor = None
+    if material_execution_mode == "scheduled":
+        material_executor = MaterialHashUnitExecutor()
+        registrations["material_asset"] = OwnerRegistration(
+            MaterialHashOwnerVerifier(repository), material_executor,
+        )
+    resources, processes = build_host_probes(
+        database_path=repository.database_path,
+        disk_paths=(Path(repository.database_path).expanduser().resolve().parent,
+                    Path(settings.video_output_path).expanduser()),
+        budget=budget,
+    )
     runtime = build_device_runtime(
         database_path=repository.database_path,
-        device_lock_path=device_lock_path,
-        device_access=device_access,
-        registrations={"material_asset": OwnerRegistration(MaterialHashOwnerVerifier(repository), executor)},
+        device_lock_path=_device_lock_path(),
+        device_access=MemberDeviceAccess(local_members_service),
+        registrations=registrations,
         resources=resources,
         processes=processes,
-        activity_source_reliable=False,
+        # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
+        activity_source_reliable=True,
     )
-    service = MaterialIngestionService(
-        repository, execution_mode="scheduled", scheduler=runtime.scheduler,
-        scan_interval_seconds=60, stable_seconds=10,
-    )
-    executor.bind(service)
-    return runtime, service
+    if material_executor is not None:
+        # 素材服务要拿到同一张队列，所以只能在运行时装好之后再绑。
+        material_service = MaterialIngestionService(
+            repository, execution_mode="scheduled", scheduler=runtime.scheduler,
+            scan_interval_seconds=60, stable_seconds=10,
+        )
+        material_executor.bind(material_service)
+    return runtime, material_service
 
 
 def _new_material_ingestion():
@@ -15179,7 +15368,11 @@ def _stop_execution_worker() -> None:
 def _start_material_ingestion() -> None:
     global material_ingestion
     if material_execution_mode == "scheduled":
-        raise RuntimeError("整机调度的统一启动尚未接通，不能启动旧素材线程。")
+        # 定时素材已经在整机运行时那条队列上装配好了；这里不能再并行起一条
+        # 旧素材线程去抢同一把锁。
+        if material_ingestion is None:
+            raise RuntimeError("定时素材尚未接入整机许可运行时，不能启动旧素材线程。")
+        return
     if material_ingestion is not None:
         material_ingestion.start()
         return
@@ -15200,15 +15393,47 @@ def _stop_material_ingestion() -> None:
         service.stop()
 
 
+def _start_device_runtime() -> None:
+    """启动这一个整机驱动线程；预算没标定时明确说明，不静默降级。
+
+    启动失败不影响其它路由——整机许可是可选能力，交互式制作相关路由会自己
+    返回 503 并写清缺什么，而不是让整个服务起不来。
+    """
+    global device_runtime, material_ingestion
+    if device_runtime is not None:
+        return
+    try:
+        runtime, material_service = _build_device_components(repository=production_repo)
+    except HostBudgetUncalibrated as exc:
+        logger.warning("整机许可预算尚未标定，交互式制作许可不可用：%s", exc)
+        return
+    except Exception as exc:
+        logger.warning("整机许可运行时未能启动，交互式制作许可不可用：%s", exc)
+        return
+    device_runtime = runtime
+    if material_service is not None:
+        material_service.start()
+        material_ingestion = material_service
+    runtime.start()
+
+
+def _stop_device_runtime() -> None:
+    global device_runtime
+    runtime = device_runtime
+    device_runtime = None
+    if runtime is not None:
+        runtime.stop(timeout_seconds=30.0)
+
+
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
-    if creation_execution_mode == "scheduled":
-        raise RuntimeError("制作单元的统一许可启动尚未接通，不能同时启动旧素材与制作线程。")
     _start_execution_worker()
     try:
+        _start_device_runtime()
         _start_material_ingestion()
         _recover_creation_executions()
     except Exception:
+        _stop_device_runtime()
         _stop_material_ingestion()
         _stop_execution_worker()
         raise
@@ -15216,6 +15441,7 @@ def resume_persisted_creation_executions() -> None:
 
 @app.on_event("shutdown")
 def stop_creation_execution_worker() -> None:
+    _stop_device_runtime()
     _stop_material_ingestion()
     _stop_execution_worker()
 
