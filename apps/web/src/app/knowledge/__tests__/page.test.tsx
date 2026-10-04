@@ -3,8 +3,22 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
 
-const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), getKnowledgeItem: vi.fn(), sourceErrorMessage: vi.fn() }));
-vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, getKnowledgeItem: api.getKnowledgeItem, sourceErrorMessage: api.sourceErrorMessage }));
+const api = vi.hoisted(() => ({
+  listKnowledgeItems: vi.fn(),
+  getKnowledgeItem: vi.fn(),
+  setKnowledgeItemVisibility: vi.fn(),
+  sourceErrorMessage: vi.fn(),
+  findCitedVersion: vi.fn(),
+  parseKnowledgeReferenceId: vi.fn(),
+}));
+vi.mock("@/lib/source-api", () => ({
+  listKnowledgeItems: api.listKnowledgeItems,
+  getKnowledgeItem: api.getKnowledgeItem,
+  setKnowledgeItemVisibility: api.setKnowledgeItemVisibility,
+  sourceErrorMessage: api.sourceErrorMessage,
+  findCitedVersion: api.findCitedVersion,
+  parseKnowledgeReferenceId: api.parseKnowledgeReferenceId,
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
@@ -18,17 +32,17 @@ const item: KnowledgeItem = {
   title: "设备说明书", body: "设备运行前请先检查电源。",
   file_reference: "/local/reference/manual.pdf", authorization: "内部使用",
   ownership: "当前工作区", source_item_id: "source-one", version: "v2",
+  visibility: "private",
   content_hash: null, sections: [], parameters: [],
   fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
 };
 beforeEach(() => {
-  api.listKnowledgeItems.mockReset();
-  api.getKnowledgeItem.mockReset();
-  api.sourceErrorMessage.mockReset();
+  Object.values(api).forEach((mock) => mock.mockReset());
   api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1 });
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
+  api.parseKnowledgeReferenceId.mockReturnValue(null);
 });
 describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
@@ -126,5 +140,60 @@ describe("KnowledgePage", () => {
     fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
     fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
     expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("额定功率示例");
+  });
+
+  it("shares a private item and re-reads the real value from the server", async () => {
+    api.getKnowledgeItem.mockResolvedValue({ ...item, visibility: "private" });
+    render(<KnowledgeWorkspace error={null} items={[item]} loading={false} onRefresh={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    await waitFor(() => expect(detail).toHaveTextContent("当前仅自己可见"));
+
+    // 保存返回的条目就是服务端写入后的真实状态。
+    api.setKnowledgeItemVisibility.mockResolvedValue({ ...item, visibility: "shared" });
+    const readsBefore = api.getKnowledgeItem.mock.calls.length;
+    fireEvent.click(within(detail).getByRole("button", { name: "共享给团队" }));
+    await waitFor(() => expect(api.setKnowledgeItemVisibility).toHaveBeenCalledWith("knowledge-one", "shared"));
+    // 用 PUT 返回值回读，不再补一轮 GET。
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("当前与团队成员共享"));
+    expect(api.getKnowledgeItem.mock.calls.length).toBe(readsBefore);
+    expect(within(detail).getByRole("button", { name: "收回为仅自己可见" })).toBeInTheDocument();
+  });
+
+  it("reports a refused visibility change instead of pretending it saved", async () => {
+    api.getKnowledgeItem.mockResolvedValue({ ...item, visibility: "private" });
+    api.setKnowledgeItemVisibility.mockRejectedValue(new Error("forbidden"));
+    api.sourceErrorMessage.mockReturnValue("仅所有者可执行此操作");
+    render(<KnowledgeWorkspace error={null} items={[item]} loading={false} onRefresh={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    await waitFor(() => expect(detail).toHaveTextContent("当前仅自己可见"));
+    fireEvent.click(within(detail).getByRole("button", { name: "共享给团队" }));
+    expect(await within(detail).findByRole("alert")).toHaveTextContent("仅所有者可执行此操作");
+  });
+
+  it("offers no real visibility change in example mode", () => {
+    render(<KnowledgeWorkspace error={null} exampleMode items={[{ ...item, exampleCategory: "产品知识" }]} loading={false} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    expect(detail).toHaveTextContent("可见范围设置不会保存");
+    expect(within(detail).queryByRole("button", { name: "共享给团队" })).not.toBeInTheDocument();
+  });
+
+  it("does not apply a visibility result to a different selected item", async () => {
+    const other = { ...item, id: "knowledge-two", title: "另一份资料", visibility: "private" };
+    api.listKnowledgeItems.mockResolvedValue({ items: [item, other], total_count: 2 });
+    api.getKnowledgeItem.mockImplementation((id: string) =>
+      Promise.resolve(id === item.id ? { ...item, visibility: "private" } : { ...other, versions: [] }));
+    // 共享返回的条目 id 为 knowledge-one；若此时选中已切到另一条，不得写进去。
+    let resolvePut: (value: KnowledgeItem) => void = () => {};
+    api.setKnowledgeItemVisibility.mockReturnValue(new Promise<KnowledgeItem>((resolve) => { resolvePut = resolve; }));
+    render(<KnowledgeWorkspace error={null} items={[item, other]} loading={false} onRefresh={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "来源详情" })).getByRole("button", { name: "共享给团队" }));
+    fireEvent.click(screen.getByRole("button", { name: /另一份资料/ }));
+    resolvePut({ ...item, visibility: "shared" });
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("另一份资料"));
+    expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("当前仅自己可见");
   });
 });
