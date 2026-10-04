@@ -5093,8 +5093,20 @@ class ProductionRepository:
             )
         return records
 
-    def library_insights(self, workspace_id: str) -> dict[str, object]:
-        assets = self.list_assets(workspace_id)
+    def library_insights(
+        self,
+        workspace_id: str,
+        *,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> dict[str, object]:
+        """素材页统计。与列表同一判据：统计里的数字只包含该调用方读得到的素材，
+        否则聚合本身就会泄露别人的私有内容。"""
+        assets = self.list_assets(
+            workspace_id,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        )
         segments = [segment for asset in assets for segment in asset.segments]
         stats: dict[str, dict[str, object]] = {}
 
@@ -5170,7 +5182,28 @@ class ProductionRepository:
             raise KeyError(batch_id)
         return self._batch_from_payload(json.loads(str(row["payload"])))
 
-    def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
+    def list_video_templates(
+        self,
+        workspace_id: str,
+        *,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> list[VideoTemplate]:
+        """列出模板。与其它内容同一判据：私有模板只对上传者本人可见。"""
+        templates = self._list_video_templates_by_visibility(workspace_id)
+        if local_diagnostic:
+            return templates
+        return [
+            item for item in templates
+            if content_readable(
+                user_id=viewer_user_id,
+                local_diagnostic=False,
+                visibility=item.visibility,
+                owner_user_id=item.owner_user_id,
+            )
+        ]
+
+    def _list_video_templates_by_visibility(self, workspace_id: str) -> list[VideoTemplate]:
         with self._connect() as conn:
             rows = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
         return [self._template_from_row(row) for row in rows]

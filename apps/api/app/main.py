@@ -923,9 +923,9 @@ def _content_reader(request: Request, workspace_id: str) -> tuple[str | None, bo
     if auth_context.enabled:
         # 已开认证却没有可信身份：没有可读身份，不退回共享或 local。
         return None, False
-    # 未开认证且请求没带任何成员身份：这是本机单人使用的受控诊断范围，
-    # 本机私有内容照常可读。一旦带了成员令牌（上面已处理），就按成员隔离。
-    return None, True
+    # 受控诊断只限保留的 local 工作区：本机单人使用照常可读自己的私有内容。
+    # 其他 workspace 没有这个范围——那里的匿名请求没有可信身份，读不到私有内容。
+    return None, workspace_id == LEGACY_WORKSPACE_ID
 
 
 def _content_visible(
@@ -1176,7 +1176,16 @@ def set_video_template_visibility_route(
 @app.get("/api/video-templates")
 def list_video_templates(request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
-    return {"items": [asdict(item) for item in [*_builtin_video_templates(workspace_id), *production_repo.list_video_templates(workspace_id)]]}
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return {"items": [
+        asdict(item)
+        for item in [
+            *_builtin_video_templates(workspace_id),
+            *production_repo.list_video_templates(
+                workspace_id, viewer_user_id=user_id, local_diagnostic=local_diagnostic
+            ),
+        ]
+    ]}
 
 
 @app.post("/api/creation-tasks/{task_id}/templates")
@@ -11949,8 +11958,13 @@ def get_material_library_insights(
     for plan in montage_repo.recent(workspace_id, limit=50):
         if plan.status == "rendered":
             _record_montage_usage(workspace_id, plan)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     return MaterialLibraryInsightsResponse.model_validate(
-        production_repo.library_insights(workspace_id)
+        production_repo.library_insights(
+            workspace_id,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        )
     )
 
 
@@ -12344,6 +12358,12 @@ def list_material_segment_usage_records(
 ) -> MaterialUsageRecordsResponse:
     """Show what used one segment of one material, read from real render rows."""
     workspace_id = current_workspace_id(request)
+    try:
+        asset = production_repo.get_asset(workspace_id, asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区")
     try:
         records = production_repo.list_segment_usage_records(workspace_id, asset_id, segment_id)
     except KeyError as exc:
@@ -13549,6 +13569,7 @@ def save_source_item_to_knowledge(
             ownership=payload.ownership.strip(),
             authorization=payload.authorization.strip(),
             version=payload.version.strip(),
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="source item not found") from exc
