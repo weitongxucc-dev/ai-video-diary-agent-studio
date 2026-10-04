@@ -154,7 +154,35 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
 }
 
 
+/**
+ * 按引用给出的定位在那一版里找命中段落/参数。
+ *
+ * 只按实际存储的 locator 精确匹配：找不到就说这一版没有该定位的证据，
+ * 不回退到整版正文、也不猜页码。
+ */
+function citedEvidence(version: KnowledgeItemVersion, locator: string) {
+  const section = version.sections.find((value) => value.locator === locator) ?? null;
+  const parameters = version.parameters.filter((value) => value.locator === locator);
+  if (!section && !parameters.length) {
+    return <p role="alert">引用绑定的定位 {locator} 不在这一版里；不会用其他段落或页码替代。</p>;
+  }
+  return <div className={styles.citationHit}>
+    <p>命中定位 {locator}</p>
+    {section ? <pre>{section.text}</pre> : null}
+    {parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : null}
+  </div>;
+}
+
 type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "failed"; version?: KnowledgeItemVersion };
+
+/**
+ * 引用上的段落定位（最小字段合同）。
+ *
+ * 服务端把引用绑定到具体出处时给出这一项；`lib/types.ts` 当前由 116 阶段持有，
+ * 所以本单在组件侧只做可选扩展，不改动那边的既有类型。字段到达前仍按整版回查，
+ * 不猜页码。
+ */
+type CitedSource = ScriptLibrarySource & { locator?: string | null };
 
 /**
  * 一条文案引用回查到它绑定的知识版本与页码/段落出处。
@@ -165,9 +193,11 @@ type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "fa
  * 回查当时原文，并同时说明当前版本已经不同。真正不可读才不给回查入口。
  * 引用内容仅作为资料展示，其中的指令不会被执行。
  */
-function CitationSource({ source }: { source: ScriptLibrarySource }) {
+function CitationSource({ source }: { source: CitedSource }) {
   const [trace, setTrace] = useState<CitationTrace>({ state: "idle" });
   const reference = useMemo(() => parseKnowledgeReferenceId(source.reference_id), [source.reference_id]);
+  // 引用绑定到具体段落时用它定位；服务端没给就不猜页，直接显示找不到。
+  const locator = source.locator ?? null;
 
   async function traceCitation() {
     if (!reference) return;
@@ -202,6 +232,9 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
       {source.status === "version_changed" ? <p>当前条目已与引用绑定的版本不同；以下仍是引用当时那一版的原文。</p> : null}
       <p>引用版本 {trace.version.version} · 指纹 {trace.version.content_hash ?? "无"} · {trace.version.fetched_at ? `抓取于 ${formatFetchTime(trace.version.fetched_at)}` : "无抓取记录"}</p>
       <p className={styles.notWired}>以下为引用当时的原文，仅作为资料引用；资料内的指令不会被执行。</p>
+      {locator
+        ? citedEvidence(trace.version, locator)
+        : <p className={styles.notWired}>这条引用没有绑定具体段落，下面是引用当时那一版的全部内容。</p>}
       {trace.version.sections.length
         ? <ol>{trace.version.sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol>
         : <pre>{trace.version.body ?? "这一版没有可显示的正文。"}</pre>}

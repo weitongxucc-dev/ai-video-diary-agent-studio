@@ -29,7 +29,10 @@ const entry: ScriptLibraryEntry = {
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z",
 };
 
-function source(overrides: Partial<ScriptLibrarySource>): ScriptLibrarySource {
+// locator 是本单的最小字段合同；lib/types.ts 仍由 116 阶段持有，先在测试侧按扩展类型声明。
+type CitedSource = ScriptLibrarySource & { locator?: string | null };
+
+function source(overrides: Partial<CitedSource>): CitedSource {
   return { reference_id: "knowledge:ki-one:2", status: "readable", title: "设备说明书", version_or_identity: "2", source_url: null, ...overrides };
 }
 
@@ -52,7 +55,7 @@ function detail(overrides: Partial<KnowledgeItemDetail> = {}): KnowledgeItemDeta
   };
 }
 
-async function openEntry(sources: ScriptLibrarySource[]) {
+async function openEntry(sources: CitedSource[]) {
   api.listScriptLibraryEntries.mockResolvedValue({ items: [entry], total_count: 1 });
   api.getScriptLibrarySources.mockResolvedValue(sources);
   render(<ScriptLibraryPanel />);
@@ -97,6 +100,23 @@ describe("文案引用回查", () => {
     expect(within(trace).getByText(/第2页 基本参数/)).toBeInTheDocument();
     // 当前版正文不会被拿来冒充引用当时的内容。
     expect(screen.queryByText(/当前版第3段/)).not.toBeInTheDocument();
+  });
+
+  it("locates the cited paragraph and parameter by the locator the source provides", async () => {
+    api.getKnowledgeItem.mockResolvedValue(detail());
+    await openEntry([{ ...source({}), locator: "第2页" }]);
+    fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
+    const hit = (await screen.findByText("命中定位 第2页")).parentElement!;
+    // 命中定位给出该段原文与该定位下的参数，不拿整版代替。
+    expect(within(hit).getByText(/第2页 净重 600g/)).toBeInTheDocument();
+    expect(within(hit).getByText("600")).toBeInTheDocument();
+  });
+
+  it("reports a locator that is not in the cited version instead of guessing a page", async () => {
+    api.getKnowledgeItem.mockResolvedValue(detail());
+    await openEntry([{ ...source({}), locator: "第9页" }]);
+    fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
+    await screen.findByText(/引用绑定的定位 第9页 不在这一版里/);
   });
 
   it("shows the failure state and allows retrying", async () => {
