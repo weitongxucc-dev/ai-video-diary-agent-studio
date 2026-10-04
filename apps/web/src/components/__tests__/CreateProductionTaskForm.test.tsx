@@ -141,8 +141,9 @@ describe("CreateProductionTaskForm", () => {
       ...checked,
       id: "plan-1",
       workspace_id: "workspace-1",
+      visibility: "private",
       status: "confirmed",
-      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, current_timeline_version_id: null, timeline_sequence: 0, can_undo: false, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
+      creation_task: { id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", visibility: "private", name: "产品观察", scenario: checked.goal, stage: "topic", stage_status: "not_started", status: "created", progress: 0, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, current_timeline_version_id: null, timeline_sequence: 0, can_undo: false, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z" },
       created_at: "2026-08-29T00:00:00Z",
       confirmed_at: "2026-08-29T00:00:00Z",
       updated_at: "2026-08-29T00:00:00Z",
@@ -167,7 +168,7 @@ describe("CreateProductionTaskForm", () => {
 });
 
 it("keeps the template identity through preview and confirmation", async () => {
-  const template = { id: "template_one", version: 3, name: "我的模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-09-12", settings: { language: "zh-CN" as const, aspect_ratio: "9:16" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
+  const template = { id: "template_one", version: 3, visibility: "private" as const, name: "我的模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-09-12", settings: { language: "zh-CN" as const, aspect_ratio: "9:16" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
   mocks.previewCreationPlan.mockResolvedValue(preview());
   mocks.confirmCreationPlan.mockResolvedValue({ creation_task: { id: "new-task" } });
   render(<CreateProductionTaskForm template={template} initialGoal="新的主题" assignLocation={mocks.assignLocation} />);
@@ -181,7 +182,7 @@ it("keeps the template identity through preview and confirmation", async () => {
 });
 
 it("inherits landscape ratio through the form and preflight, then replaces it when the template changes", async () => {
-  const template = { id: "template_landscape", version: 1, name: "横版模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-10-03", settings: { language: "zh-CN" as const, aspect_ratio: "16:9" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
+  const template = { id: "template_landscape", version: 1, visibility: "private" as const, name: "横版模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "v1", created_at: "2026-10-03", settings: { language: "zh-CN" as const, aspect_ratio: "16:9" as const, duration_target_seconds: 30, voice: null, style_instruction: "短句", fit_mode: "fit" as const, subtitle_style: {} } };
   mocks.previewCreationPlan.mockReset();
   mocks.previewCreationPlan.mockResolvedValueOnce(preview({ aspect_ratio: "16:9" })).mockResolvedValueOnce(preview());
   const view = render(<CreateProductionTaskForm template={template} initialGoal="新的主题" />);

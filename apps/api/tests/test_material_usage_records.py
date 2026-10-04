@@ -37,7 +37,13 @@ def register(repo: ProductionRepository, library: Path, name: str, *, workspace_
     """登记一个真实落盘的素材并分析出片段，供使用记录指向。"""
     path = library / name
     path.write_bytes(b"material-bytes")
-    asset_id = repo._upsert_discovered_asset(workspace_id, path).id
+    repo.bind_material_ingestion(workspace_id, expected_directory=str(library))
+    repo.confirm_material_copy_complete(
+        workspace_id, relative_path=name,
+        expected_revision=repo.material_copy_revision(path.stat()),
+        confirmation_source="manual",
+    )
+    asset_id = next(asset.id for asset in repo.scan_library(workspace_id) if asset.file_name == name)
     repo.analyze_asset(workspace_id, asset_id)
     return asset_id
 
@@ -128,7 +134,12 @@ def test_another_segment_and_another_workspace_are_not_mixed_in(tmp_path: Path) 
     asset_id = register(repo, library, "回查素材丙.mp4")
     segments = repo.get_asset(WORKSPACE, asset_id).segments
     mine, theirs = segments[0], segments[1]
-    foreign = register(repo, library, "他区素材.mp4", workspace_id=OTHER_WORKSPACE)
+    foreign_root = tmp_path / "foreign"
+    foreign_root.mkdir()
+    foreign_repo, foreign_library = make_repo(foreign_root)
+    foreign = register(foreign_repo, foreign_library, "他区素材.mp4", workspace_id=OTHER_WORKSPACE)
+    # Import already-confirmed foreign facts for the read-isolation assertions.
+    repo._save_asset(foreign_repo.get_asset(OTHER_WORKSPACE, foreign))
     foreign_segment = repo.get_asset(OTHER_WORKSPACE, foreign).segments[0]
     write_task(repo, "task_usage_2", current_version_id="timeline_current_2")
     write_plan(repo, "plan_usage_2", "task_usage_2", [clip("clip_usage_3", asset_id, theirs.id)])

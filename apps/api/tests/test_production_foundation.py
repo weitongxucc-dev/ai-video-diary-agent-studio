@@ -98,6 +98,23 @@ def _repository(tmp_path: Path) -> ProductionRepository:
     )
 
 
+
+def _confirm_library_copies(production: ProductionRepository, workspace_id: str) -> None:
+    """Explicit completion declarations for this test's fully written material files."""
+    production.bind_material_ingestion(
+        workspace_id, expected_directory=str(production.video_library_path),
+    )
+    for path in production.video_library_path.rglob("*"):
+        if (path.is_file() and not path.is_symlink()
+                and path.suffix.lower() in {".mp4", ".mov", ".m4v"}
+                and "_已处理" not in path.parts):
+            production.confirm_material_copy_complete(
+                workspace_id, relative_path=str(path.relative_to(production.video_library_path)),
+                expected_revision=production.material_copy_revision(path.stat()),
+                confirmation_source="manual",
+            )
+
+
 def _save_creation_task(
     production: ProductionRepository,
     *,
@@ -331,6 +348,7 @@ def _seed_creation_plan_facts(
     )
     video = production.video_library_path / f"{workspace_id}.mp4"
     video.write_bytes(b"video")
+    _confirm_library_copies(production, workspace_id)
     asset = production.scan_library(workspace_id)[0]
     production.analyze_asset(workspace_id, asset.id)
     production.update_asset_review(
@@ -368,6 +386,7 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
     video = production.video_library_path / "demo.mp4"
     video.write_bytes(b"test video placeholder")
 
+    _confirm_library_copies(production, "workspace_a")
     assets = production.scan_library("workspace_a")
     assert len(assets) == 1
     assert assets[0].review_status == "raw"
@@ -412,6 +431,7 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
 def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use_state,usable):
     production=_repository(tmp_path)
     (production.video_library_path/'state.mp4').write_bytes(b'local fixture')
+    _confirm_library_copies(production, 'workspace_a')
     asset=production.scan_library('workspace_a')[0]
     assert asset.use_state=='available'
     asset=production.analyze_asset('workspace_a',asset.id)
@@ -452,6 +472,7 @@ def test_production_data_is_workspace_scoped_and_persistent(tmp_path):
     production = _repository(tmp_path)
     video = production.video_library_path / "shared.mov"
     video.write_bytes(b"test video placeholder")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
 
     assert production.list_assets("workspace_b") == []
@@ -473,6 +494,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     production = _repository(tmp_path)
     video = production.video_library_path / "office-demo.mp4"
     video.write_bytes(b"video")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
     asset = production.analyze_asset("workspace_a", asset.id)
     asset = production.update_asset_review(
@@ -1860,6 +1882,7 @@ def test_scene_ranges_split_long_shots_into_twelve_second_chunks(tmp_path):
     )
     video = tmp_path / "long.mp4"
     video.write_bytes(b"test video placeholder")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
 
     analyzed = production.analyze_asset("workspace_a", asset.id)
@@ -1882,6 +1905,7 @@ def test_visual_semantics_are_cached_by_file_segment_and_model(tmp_path):
     )
     video = tmp_path / "semantic.mp4"
     video.write_bytes(b"first version")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
 
     first = production.analyze_asset("workspace_a", asset.id)
@@ -1901,6 +1925,7 @@ def test_visual_semantics_are_cached_by_file_segment_and_model(tmp_path):
     ) == [0.1, 0.2, 0.3]
 
     video.write_bytes(b"second version is different")
+    _confirm_library_copies(production, "workspace_a")
     production.scan_library("workspace_a")
     production.analyze_asset("workspace_a", asset.id)
 
@@ -1936,6 +1961,7 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     )
     video = tmp_path / "mixed.mp4"
     video.write_bytes(b"mixed video")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
 
     analyzed = production.analyze_asset("workspace_a", asset.id)
@@ -2072,6 +2098,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
 
     visual = production.video_library_path / "person.mp4"
     visual.write_bytes(b"person-video")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
     visual_reference = production.workspace_media_reference_for_asset(
         "workspace_a", asset.id
@@ -3664,6 +3691,7 @@ def test_material_tags_collections_usage_and_gap_insights(tmp_path):
     production = _repository(tmp_path)
     video = production.video_library_path / "office_laptop_typing.mp4"
     video.write_bytes(b"video")
+    _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
     asset = production.analyze_asset("workspace_a", asset.id)
     segment = asset.segments[0]
@@ -3714,6 +3742,7 @@ def test_material_library_endpoint_is_paginated(tmp_path, monkeypatch):
     production = _repository(tmp_path)
     for index in range(3):
         (production.video_library_path / f"clip-{index}.mp4").write_bytes(b"video")
+    _confirm_library_copies(production, LEGACY_WORKSPACE_ID)
     production.scan_library(LEGACY_WORKSPACE_ID)
     monkeypatch.setattr(main_module, "production_repo", production)
     client = TestClient(main_module.app)
@@ -3737,6 +3766,7 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
         duration_reader=lambda _:8.0,scene_reader=lambda *_:[4.0],visual_provider=provider)
     video=tmp_path/'source.mp4'
     video.write_bytes(b'original source')
+    _confirm_library_copies(production, 'workspace_a')
     asset=production.scan_library('workspace_a')[0]
     analyzed=production.analyze_asset('workspace_a',asset.id)
     segment=analyzed.segments[0]

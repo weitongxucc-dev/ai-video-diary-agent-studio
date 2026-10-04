@@ -29,3 +29,18 @@
 .search input::placeholder {
   color: var(--text-3);
 }
+
+.visibilitySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-1);
+}
+
+.visibilitySection p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-3);
+}

@@ -758,6 +758,13 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     library = tmp_path / "library"
     (library / "one.mp4").write_bytes(b"synthetic")
     (library / "two.mp4").write_bytes(b"synthetic two")
+    repo.bind_material_ingestion("local", expected_directory=str(library))
+    for name in ("one.mp4", "two.mp4"):
+        repo.confirm_material_copy_complete(
+            "local", relative_path=name,
+            expected_revision=repo.material_copy_revision((library / name).stat()),
+            confirmation_source="manual",
+        )
     assets = repo.scan_library("local")
     monkeypatch.setattr(main_module, "production_repo", repo)
     client = TestClient(main_module.app)

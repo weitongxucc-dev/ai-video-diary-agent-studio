@@ -50,6 +50,12 @@ def _approved_asset(
     asset_tags: list[str] | None = None,
 ) -> MaterialAsset:
     (production.video_library_path / file_name).write_bytes(b"fixture")
+    production.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
+    production.confirm_material_copy_complete(
+        workspace_id, relative_path=file_name,
+        expected_revision=production.material_copy_revision((production.video_library_path / file_name).stat()),
+        confirmation_source="manual",
+    )
     production.scan_library(workspace_id)
     asset = next(item for item in production.list_assets(workspace_id) if item.file_name == file_name)
     asset = production.analyze_asset(workspace_id, asset.id)

@@ -41,6 +41,7 @@ import { CreationTaskTopicWorkspace } from "@/components/CreationTaskTopicWorksp
 function topics(overrides: Partial<CreationTaskTopicsResponse> = {}): CreationTaskTopicsResponse {
   return {
     task: {
+      visibility: "private",
       id: "task-1", workspace_id: "workspace-1", plan_id: "plan-1", name: "产品观察", scenario: "制作产品观察视频", stage: "topic", stage_status: "not_started", status: "created", progress: 10, recovery_point: "topic", selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null, montage_plan_id: null, current_timeline_version_id: null, timeline_sequence: 0, can_undo: false, output_ready: false, stage_reason: null, stage_impact: null, stage_repair_action: null, stage_retryable: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z",
     },
     candidates: [],
@@ -56,7 +57,7 @@ function topics(overrides: Partial<CreationTaskTopicsResponse> = {}): CreationTa
 function plan(overrides: Partial<CreationPlan> = {}): CreationPlan {
   const initial = topics();
   return {
-    id: "plan-1", workspace_id: "workspace-1", status: "confirmed", goal: "制作产品观察视频", name: "产品观察", target_count: 1, language: "zh-CN", aspect_ratio: "9:16", duration_target_seconds: 60,
+    id: "plan-1", workspace_id: "workspace-1", visibility: "private", status: "confirmed", goal: "制作产品观察视频", name: "产品观察", target_count: 1, language: "zh-CN", aspect_ratio: "9:16", duration_target_seconds: 60,
     knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 2, approved_clip_count: 3, material_rule_summary: "已审核素材", material_matches: [{ asset_ref: "asset:asset-1", segment_ref: "segment:segment-1", score: 0.9, reasons: ["已审核"] }], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "f".repeat(64), creation_task: initial.task,
     created_at: "2026-08-29T00:00:00Z", confirmed_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T00:00:00Z",
     ...overrides,
