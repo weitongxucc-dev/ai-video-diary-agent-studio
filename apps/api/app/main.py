@@ -342,8 +342,6 @@ from app.schemas import (
     KnowledgeFileImportRequest,
     KnowledgeItemDetailResponse,
     KnowledgeItemVersionResponse,
-    KnowledgeParameterResponse,
-    KnowledgeSectionResponse,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceRunEvidencesResponse,
