@@ -63,3 +63,7 @@ button.queueRow:hover { background: var(--surface-2); }
 .note { margin: 10px 0 0; color: var(--text-2); font-size: 11px; }
 @media (max-width: 1150px) { .home { padding: 14px 16px 22px; } .dashboard { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .metric { min-height: 62px; padding-inline: 7px; } .metric strong { font-size: 21px; } .heading h1 { font-size: 20px; } }
+.homeFacts { display: grid; gap: 7px; margin: 10px 0 0; }
+.homeFacts > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 9px; font-size: 12px; }
+.homeFacts dt { color: var(--text-2); }
+.homeFacts dd { overflow-wrap: anywhere; margin: 0; }
