@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from app.config import write_dotenv_values
+from app.workspace_settings import (
+    WORKSPACE_SECRET_FIELDS,
+    delete_workspace_secret,
+    load_workspace_config,
+    read_workspace_secret,
+    save_workspace_config,
+    save_workspace_secret,
+)
 
 LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
@@ -77,9 +85,107 @@ def apply_runtime_settings_update(
     payload: Mapping[str, object],
     reload_dependencies: Callable[[], None],
 ) -> bool:
+    """旧的全局 dotenv 写入路径，main.py 目前仍调用；本单新接线走工作区函数。"""
     updates = runtime_settings_updates(payload)
     if not updates:
         return False
     write_dotenv_values(Path(env_path), updates)
     reload_dependencies()
     return True
+
+
+LLM_KEY_DELETE_ACTION = "delete"
+
+
+def _secret_fields_for_provider(workspace_id: str) -> list[str]:
+    """当前工作区实际在用的那把钥匙串键，以及同供应商的旧备用键。
+
+    DeepSeek 安装还可能留着旧的 `deepseek_api_key`；只删 `llm_api_key` 的话，
+    删完那把旧键会继续生效。还有一种真实状态是：快照里没写 provider，只存了
+    `deepseek_api_key` —— 此时生效的供应商就是 DeepSeek，删除也得把它清掉。
+    删除按当前供应商来，别的供应商和其他平台的凭据不碰。
+    """
+    snapshot = load_workspace_config(workspace_id)
+    provider = (snapshot.get("llm_provider") or "").strip().lower()
+    owner = (snapshot.get("llm_api_key_provider") or "").strip().lower()
+    if not provider and read_workspace_secret(workspace_id, "deepseek_api_key"):
+        provider = "deepseek"
+    if provider == "deepseek":
+        fields = ["deepseek_api_key"]
+        if not owner or owner == "deepseek":
+            fields.append("llm_api_key")
+        return fields
+    return ["llm_api_key"]
+
+# 本单只接管文字服务这一组字段。模型盘、媒体目录、ASR、腾讯云、Supabase 这些
+# 设备级设置仍走原来的全局 dotenv 路径，不当成工作区文案配置处理。
+WORKSPACE_TEXT_FIELDS = ("llm_provider", "llm_base_url", "llm_model", "deepseek_model")
+
+
+def split_runtime_settings_updates(
+    payload: Mapping[str, object],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """把文字服务更新拆成「进工作区配置快照」和「进系统钥匙串」两份。
+
+    密钥只进钥匙串：快照和 dotenv 都不许出现明文。非文字服务的设置不在这份
+    拆分里，它们仍旧走原来的 dotenv 写入路径。
+    """
+    updates = runtime_settings_updates(payload)
+    config_updates: dict[str, str] = {}
+    secret_updates: dict[str, str] = {}
+    for field in WORKSPACE_TEXT_FIELDS:
+        env_key = FIELD_TO_ENV[field]
+        if env_key in updates:
+            config_updates[field] = updates[env_key]
+    for field in WORKSPACE_SECRET_FIELDS:
+        env_key = FIELD_TO_ENV[field]
+        if env_key in updates:
+            secret_updates[field] = updates[env_key]
+    if "LLM_API_KEY" in updates:
+        provider = updates.get("LLM_API_KEY_PROVIDER")
+        if provider:
+            config_updates["llm_api_key_provider"] = provider
+    return config_updates, secret_updates
+
+
+def apply_workspace_runtime_settings_update(
+    workspace_id: str,
+    payload: Mapping[str, object],
+    reload_dependencies: Callable[[], None],
+) -> bool:
+    """按工作区保存文字服务配置。
+
+    密钥先落系统钥匙串再写配置：钥匙串失败就整单失败，绝不退回明文文件，
+    也不会出现「配置显示已保存、密钥其实没存」的状态。
+
+    删除走同一个保存路由的显式动作字段 `llm_key_action=delete`。没传动作字段
+    时，密钥输入框留空表示「不改」，不能因为空输入把已存的密钥删掉。
+    """
+    config_updates, secret_updates = split_runtime_settings_updates(payload)
+    deleting = str(payload.get("llm_key_action", "")) == LLM_KEY_DELETE_ACTION
+    if deleting:
+        secret_updates.clear()
+        # 删完当前供应商真正在用的那把键，以及同供应商的旧备用键；旧键不得复活。
+        for field in _secret_fields_for_provider(workspace_id):
+            if delete_workspace_secret(workspace_id, field):
+                config_updates["llm_api_key_provider"] = ""
+    for field, value in secret_updates.items():
+        save_workspace_secret(workspace_id, field, value)
+    if config_updates:
+        save_workspace_config(workspace_id, config_updates)
+    if not config_updates and not secret_updates and not deleting:
+        return False
+    reload_dependencies()
+    return True
+
+
+def delete_workspace_runtime_secrets(
+    workspace_id: str,
+    fields: Iterable[str],
+) -> list[str]:
+    """删掉指定工作区的文字服务密钥，返回真的删掉的字段。"""
+    deleted = []
+    for field in fields:
+        if delete_workspace_secret(workspace_id, field):
+            deleted.append(field)
+    return deleted

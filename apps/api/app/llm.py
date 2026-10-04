@@ -14,6 +14,7 @@ from app.creator_profile import get_creator_profile
 from app.models import FeedbackEvent, ScriptPackage, ScriptSection, TopicCandidate
 from app.preference_memory import preference_memory_payload
 from app.repository import active_workspace_id
+from app.workspace_settings import workspace_settings
 
 
 class LLMConfigurationError(RuntimeError):
@@ -573,3 +574,15 @@ def script_generator_from_settings(settings: Settings) -> ScriptGenerator:
     if settings.llm_configured:
         return DeepSeekScriptGenerator(settings)
     return TemplateScriptGenerator()
+
+
+def script_generator_from_workspace(
+    workspace_id: str, base: Settings | None = None
+) -> ScriptGenerator:
+    """按工作区取文字服务配置再选生成器。
+
+    传入的 settings 应该是 `app.workspace_settings.workspace_settings(...)`
+    叠好的工作区配置，这样密钥、地址和模型都来自当前工作区而不是全局。
+    """
+    resolved = workspace_settings(workspace_id, base).settings
+    return script_generator_from_settings(resolved)

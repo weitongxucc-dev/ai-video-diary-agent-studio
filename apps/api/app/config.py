@@ -313,14 +313,17 @@ _llm_service_verifications: dict[str, dict[str, Any]] = {}
 _llm_service_lock = threading.Lock()
 
 
-def llm_service_fingerprint(settings: Settings) -> str:
+def llm_service_fingerprint(settings: Settings, workspace_id: str = "") -> str:
     """Identify the exact credential set an observation belongs to.
 
     Changing provider / address / model / key must invalidate an earlier
-    「可用」; otherwise a fixed key would keep an old green badge.
+    「可用」; otherwise a fixed key would keep an old green badge. The workspace
+    is part of the identity too: one workspace's verification never lights up
+    another's service state.
     """
     material = "\n".join(
         [
+            workspace_id,
             settings.effective_llm_provider,
             settings.effective_llm_base_url,
             settings.effective_llm_model,
@@ -331,7 +334,8 @@ def llm_service_fingerprint(settings: Settings) -> str:
 
 
 def record_llm_service_verification(
-    settings: Settings, *, ok: bool, cause: str, detail: str = "", repair_action: str = ""
+    settings: Settings, *, ok: bool, cause: str, detail: str = "", repair_action: str = "",
+    workspace_id: str = "",
 ) -> dict[str, Any]:
     """Record one real attempt against the external model service.
 
@@ -348,13 +352,15 @@ def record_llm_service_verification(
         "observed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     with _llm_service_lock:
-        _llm_service_verifications[llm_service_fingerprint(settings)] = record
+        _llm_service_verifications[llm_service_fingerprint(settings, workspace_id)] = record
     return record
 
 
-def llm_service_verification(settings: Settings) -> dict[str, Any] | None:
+def llm_service_verification(settings: Settings, workspace_id: str = "") -> dict[str, Any] | None:
     with _llm_service_lock:
-        record = _llm_service_verifications.get(llm_service_fingerprint(settings))
+        record = _llm_service_verifications.get(
+            llm_service_fingerprint(settings, workspace_id)
+        )
     return dict(record) if record else None
 
 
@@ -498,9 +504,22 @@ class Settings:
             return LLM_SERVICE_UNVERIFIED
         return LLM_SERVICE_AVAILABLE if record["ok"] else LLM_SERVICE_FAILED
 
-    def llm_service_status(self) -> dict[str, Any]:
-        state = self.llm_service_state
-        record = llm_service_verification(self)
+    def llm_service_status(self, workspace_id: str = "") -> dict[str, Any]:
+        """服务状态。带 workspace_id 时只看该工作区自己记录的观测。
+
+        一个工作区跑通不会给另一个工作区点亮「可用」：记录按工作区分开存。
+        """
+        if workspace_id:
+            record = llm_service_verification(self, workspace_id)
+            if not self.llm_configured:
+                state = LLM_SERVICE_MISSING
+            elif record is None:
+                state = LLM_SERVICE_UNVERIFIED
+            else:
+                state = LLM_SERVICE_AVAILABLE if record["ok"] else LLM_SERVICE_FAILED
+        else:
+            state = self.llm_service_state
+            record = llm_service_verification(self)
         if state == LLM_SERVICE_MISSING:
             detail = "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。"
         elif state == LLM_SERVICE_UNVERIFIED:
@@ -726,8 +745,8 @@ class Settings:
             },
         }
 
-    def safe_runtime_settings(self) -> dict[str, Any]:
-        llm_service = self.llm_service_status()
+    def safe_runtime_settings(self, workspace_id: str = "") -> dict[str, Any]:
+        llm_service = self.llm_service_status(workspace_id)
         return {
             "settings": [
                 {

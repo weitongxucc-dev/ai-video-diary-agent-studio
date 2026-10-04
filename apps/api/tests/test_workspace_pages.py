@@ -177,6 +177,9 @@ def test_workflow_status_exposes_langgraph_nodes():
 
 
 def test_runtime_settings_endpoint_updates_env_and_runtime(tmp_path):
+    """文字服务进工作区快照和系统安全存储，其余设备设置仍写 dotenv。"""
+    from app import workspace_settings as workspace_settings_module
+
     env_path = tmp_path / ".env"
     main_module.runtime_env_path = env_path
     main_module.settings = Settings(database_path=str(tmp_path / "old.sqlite3"))
@@ -205,7 +208,9 @@ def test_runtime_settings_endpoint_updates_env_and_runtime(tmp_path):
     assert "new-secret" not in dumped
     assert "new-tencent-id" not in dumped
     assert "new-tencent-key" not in dumped
-    assert main_module.settings.deepseek_model == "deepseek-chat"
+    # 文字服务的模型名归工作区快照，密钥归系统安全存储，两样都不再进 dotenv。
+    assert workspace_settings_module.load_workspace_config("local")["deepseek_model"] == "deepseek-chat"
+    assert workspace_settings_module.read_workspace_secret("local", "deepseek_api_key") == "new-secret"
     assert main_module.settings.tencentcloud_asr_region == "ap-guangzhou"
     assert main_module.settings.tencentcloud_asr_engine_model_type == "16k_zh"
     assert main_module.video_inbox.path == tmp_path / "inbox"
@@ -213,7 +218,8 @@ def test_runtime_settings_endpoint_updates_env_and_runtime(tmp_path):
     assert main_module.video_pipeline.processor.output_path == tmp_path / "out"
     assert main_module.draft_workspace.draft_output_path == tmp_path / "drafts"
     env_text = env_path.read_text(encoding="utf-8")
-    assert "DEEPSEEK_MODEL=deepseek-chat" in env_text
+    assert "DEEPSEEK_MODEL" not in env_text
+    assert "DEEPSEEK_API_KEY" not in env_text
     assert "TENCENTCLOUD_ASR_REGION=ap-guangzhou" in env_text
     assert f"VIDEO_INBOX_PATH={tmp_path / 'inbox'}" in env_text
     assert "TOPIC_SOURCE_URLS=https://watcha.cn/,https://example.com/radar" in env_text
