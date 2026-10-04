@@ -49,16 +49,27 @@ DOC_TWO_SECTIONS = """# 多规格资料
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def database_path(tmp_path):
+    return tmp_path / "conflict.sqlite3"
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch, database_path):
     monkeypatch.setattr(
-        main_module, "source_repository", SourceRepository(tmp_path / "conflict.sqlite3")
+        main_module, "source_repository", SourceRepository(database_path)
     )
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    return TestClient(main_module.app)
+    client = TestClient(main_module.app)
+    client.database_path = database_path  # type: ignore[attr-defined]
+    return client
+
+
+def tmp_database_path(client: TestClient) -> str:
+    return str(client.database_path)
 
 
 def _save_document(client: TestClient, filename: str, content: bytes) -> dict:
@@ -282,3 +293,47 @@ def test_the_chosen_locator_selects_the_evidence_not_the_first_match(client):
     )
     assert wrong.status_code == 422
     assert "第 99 段" in wrong.json()["detail"]
+
+
+def test_corrected_value_is_persisted_and_read_back_with_both_evidence_kept(client):
+    # 页面上的纠正值不能独自证明落库：这里从 API 存进去再读回来核实。
+    left = _save_document(client, "左资料.md", DOC_LEFT)
+    right = _save_document(client, "右资料.md", DOC_RIGHT)
+    comparison = _compare(
+        client,
+        left_knowledge_item_id=left["id"],
+        right_knowledge_item_id=right["id"],
+    ).json()
+
+    adjudicated = client.post(
+        f"/api/knowledge-items/parameter-comparisons/{comparison['id']}/adjudications",
+        json={"reason": "以右资料为准", "retained_side": "right", "corrected_value": "810"},
+    )
+    assert adjudicated.status_code == 200
+
+    # 详情回读：纠正值确实持久保留，并成为真正生效的裁定值。
+    detail = client.get(
+        f"/api/knowledge-items/parameter-comparisons/{comparison['id']}"
+    ).json()
+    assert detail["status"] == "adjudicated"
+    assert detail["adjudication"]["corrected_value"] == "810"
+    assert detail["adjudication"]["retained_value"] == "800"
+    # 双方旧版本证据都还在，未选一侧没有被删除或改写。
+    assert detail["left"]["value"] == "500"
+    assert detail["left"]["version"] == "1"
+    assert detail["right"]["value"] == "800"
+    assert detail["right"]["version"] == "1"
+    assert detail["adjudication"]["left_version_ref"] == f"{left['id']}@1"
+    assert detail["adjudication"]["right_version_ref"] == f"{right['id']}@1"
+
+    # 列表回读也是同一条：纠正值没丢，双方证据同样在。
+    listed = client.get("/api/knowledge-items/parameter-comparisons").json()
+    entry = next(item for item in listed["items"] if item["id"] == comparison["id"])
+    assert entry["adjudication"]["corrected_value"] == "810"
+    assert (entry["left"]["value"], entry["right"]["value"]) == ("500", "800")
+
+    # 重新打开同一份库后仍在，不只是内存里的结果。
+    reopened = SourceRepository(tmp_database_path(client))
+    stored = reopened.get_parameter_comparison(WORKSPACE, comparison["id"])
+    assert stored.adjudication is not None
+    assert stored.adjudication.corrected_value == "810"
