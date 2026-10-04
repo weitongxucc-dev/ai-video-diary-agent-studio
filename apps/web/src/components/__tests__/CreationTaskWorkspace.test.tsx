@@ -2375,7 +2375,7 @@ describe("作业进度读数", () => {
         { id: "job-0", kind: "creation_task_montage_render", status: "failed", progress: 10, attempt: 1,
           started_at: "2026-10-04T07:00:00Z", finished_at: "2026-10-04T07:01:00Z", updated_at: "2026-10-04T07:01:00Z",
           elapsed_seconds: 60, failure_reason: "输出磁盘写入失败", impact: "本次没有成片", repair_action: "检查磁盘空间后重新生成",
-          wait_estimate_seconds: null, processing_estimate_seconds: 60, estimate_basis: "以该作业上一次实际耗时为依据（60 秒）" },
+          wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null },
       ],
     });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
@@ -2405,5 +2405,73 @@ describe("作业进度读数", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("region", { name: "作业进度" })).toHaveTextContent("整条制作 · 已安排，等待设备");
+  });
+
+  it("re-reads after the execution poll reports a new job, even though the first read had no jobs", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", current: null, items: [], total_count: 0 });
+      mocks.getExecution.mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
+      render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+      const panel = await screen.findByRole("region", { name: "作业进度" });
+      expect(within(panel).getByText("这个任务还没有后台作业记录。")).toBeInTheDocument();
+
+      // 开始制作后，执行轮询读到新作业：面板随之重新读取，不停在空态。
+      mocks.getJobProgress.mockResolvedValue({
+        task_id: "task-1", total_count: 1,
+        current: { id: "job-new", kind: "creation_task_execution", status: "running", progress: 5, attempt: 1,
+          started_at: "2026-10-04T08:00:00Z", finished_at: null, updated_at: "2026-10-04T08:00:05Z",
+          elapsed_seconds: 5, failure_reason: null, impact: null, repair_action: null,
+          wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null },
+        items: [],
+      });
+      mocks.getWorkspace.mockResolvedValue(subtitleCoverWorkspace());
+      mocks.getExecution.mockResolvedValue({ task_id: "task-1",
+        job: { id: "job-new", kind: "creation_task_execution", status: "running", progress: 5, failure_reason: null, impact: null, repair_action: null },
+        stages: [{ stage: "render", status: "running", at: "2026-10-04T08:00:00Z" }], current_stage: "render",
+        waiting_reason: null, status_updated_at: "2026-10-04T08:00:05Z", video_ready: false, cover_status: "pending", cover_message: null });
+      await act(async () => { await vi.advanceTimersByTimeAsync(16000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(mocks.getJobProgress.mock.calls.length).toBeGreaterThan(1);
+      await within(panel).findByText(/整条制作 · 正在处理 · 进度 5%/);
+      return;
+      await within(panel).findByText(/整条制作 · 正在处理 · 进度 5%/);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps the last reading and offers the same retry when a later refresh fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.getJobProgress.mockResolvedValueOnce({
+        task_id: "task-1", total_count: 1,
+        current: { id: "job-1", kind: "creation_task_montage_render", status: "running", progress: 10, attempt: 1,
+          started_at: "2026-10-04T08:00:00Z", finished_at: null, updated_at: "2026-10-04T08:00:05Z",
+          elapsed_seconds: 5, failure_reason: null, impact: null, repair_action: null,
+          wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null },
+        items: [],
+      });
+      mocks.getExecution.mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
+      render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+      const panel = await screen.findByRole("region", { name: "作业进度" });
+      expect(within(panel).getByText(/成片输出 · 正在处理/)).toBeInTheDocument();
+
+      // 作业仍在执行，这次面板的重新读取失败：保留上次读数并给出同一个重试动作。
+      mocks.getJobProgress.mockRejectedValueOnce(new Error("本地服务未接通"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("最新一次刷新失败：本地服务未接通");
+      expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+
+      mocks.getJobProgress.mockResolvedValue({
+        task_id: "task-1", total_count: 1,
+        current: { id: "job-2", kind: "creation_task_montage_render", status: "running", progress: 20, attempt: 1,
+          started_at: "2026-10-04T08:10:00Z", finished_at: null, updated_at: "2026-10-04T08:10:05Z",
+          elapsed_seconds: 5, failure_reason: null, impact: null, repair_action: null,
+          wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null },
+        items: [],
+      });
+      fireEvent.click(screen.getByRole("button", { name: "重试" }));
+      await screen.findByText(/成片输出 · 正在处理 · 进度 20%/);
+    } finally { vi.useRealTimers(); }
   });
 });

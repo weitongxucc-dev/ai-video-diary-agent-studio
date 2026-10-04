@@ -161,3 +161,28 @@ def test_a_task_without_jobs_reports_unknown_rather_than_a_fake_progress(client)
     assert body["current"] is None
     assert body["items"] == []
     assert body["total_count"] == 0
+
+def test_an_old_interrupted_job_does_not_hide_the_later_result(client):
+    repo = client.repo
+    seed_task(repo, WORKSPACE, "task-job-5")
+    # 一次被中断的旧作业，后面重试成功。
+    repo.create_job_run(JobRun(
+        id="job-old", workspace_id=WORKSPACE, task_id="task-job-5",
+        kind="creation_task_montage_render", idempotency_key="render:old", input_digest="d-old",
+    ))
+    repo.claim_job_run(WORKSPACE, "job-old")
+    repo.finish_job_run(WORKSPACE, "job-old", status="interrupted",
+                        failure_reason="应用退出时中断", impact="本次没有成片", repair_action="重新生成")
+    repo.create_job_run(JobRun(
+        id="job-new", workspace_id=WORKSPACE, task_id="task-job-5",
+        kind="creation_task_montage_render", idempotency_key="render:new", input_digest="d-new",
+    ))
+    repo.claim_job_run(WORKSPACE, "job-new")
+    repo.finish_job_run(WORKSPACE, "job-new", status="succeeded")
+
+    body = client.get("/api/creation-tasks/task-job-5/job-runs").json()
+
+    # 旧中断不算活跃：当前读数是后来的成功结果，不是那条中断记录。
+    assert body["total_count"] == 2
+    assert body["current"]["id"] == "job-new"
+    assert body["current"]["status"] == "succeeded"

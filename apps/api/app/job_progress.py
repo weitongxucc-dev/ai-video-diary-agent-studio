@@ -16,7 +16,9 @@ from datetime import datetime
 from app.production import JobRun
 
 # 作业正在占用设备的哪种状态：这些要分开说，忙碌不是错误。
-_ACTIVE_STATUSES = frozenset({"queued", "running", "interrupted"})
+# 作业正在占用设备的哪种状态：只有这两种还活着。interrupted 表示这次执行已经
+# 终止（可另行重试），不算活跃，否则旧的中断记录会遮住后来的重试结果。
+_ACTIVE_STATUSES = frozenset({"queued", "running"})
 
 
 @dataclass(frozen=True)
