@@ -128,7 +128,8 @@ for (const required of [
   "reviewProductionMaterial",
   "素材自动接入",
   "自动接入进度",
-  "新文件稳定后自动分析",
+  "复制完成，开始接收",
+  "confirmMaterialCopyComplete",
   "立即检查",
   "/media",
 ]) {
