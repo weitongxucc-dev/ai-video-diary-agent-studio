@@ -5008,19 +5008,15 @@ class ProductionRepository:
 
     def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
-        return [VideoTemplate(**_with_datetime(json.loads(row["payload"]), "created_at")) for row in rows]
+            rows = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
+        return [self._template_from_row(row) for row in rows]
 
     def get_video_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
         with self._connect() as conn:
             row = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? AND id = ? AND version = ?", (workspace_id, template_id, version)).fetchone()
         if row is None:
             raise KeyError(template_id)
-        data = json.loads(row["payload"])
-        # 存量模板的 payload 里没有 visibility，值在列上：回读以列为准。
-        if "visibility" in row.keys():
-            data["visibility"] = str(row["visibility"])
-        return VideoTemplate(**_with_datetime(data, "created_at"))
+        return self._template_from_row(row)
 
     def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
@@ -5036,6 +5032,8 @@ class ProductionRepository:
             ).fetchone()
             # 新版本继承上一版的可见性：共享状态不会因为又存了一版就被收回。
             visibility = previous["visibility"] if previous is not None else template.visibility
+            # 继承来的可见性同时进入载荷和返回值：存的和立刻拿到的必须是同一个值。
+            template = replace(template, visibility=visibility)
             conn.execute(
                 "INSERT INTO video_templates (workspace_id, id, version, payload, visibility) VALUES (?, ?, ?, ?, ?)",
                 (template.workspace_id, template.id, template.version, _json_payload(template), visibility),
@@ -8818,19 +8816,17 @@ class ProductionRepository:
     def _save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
         asset.updated_at = utc_now()
         with self._connect() as conn:
-            stored = conn.execute(
-                "SELECT visibility FROM material_assets WHERE workspace_id = ? AND id = ?",
-                (asset.workspace_id, asset.id),
-            ).fetchone()
-            if stored is not None:
-                # 已经明确共享或收回过的素材，重扫/重分析写回时保持原值。
-                asset = replace(asset, visibility=_visibility_value(stored["visibility"]))
             if analysis_only:
                 conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute("SELECT payload FROM material_assets WHERE id = ? AND workspace_id = ?", (asset.id, asset.workspace_id)).fetchone()
+                # 连 visibility 一起读：分析写回时用库里那一列的当前值，
+                # 不拿分析结果里的旧值覆盖用户明确设过的共享或收回。
+                row = conn.execute(
+                    "SELECT payload, visibility FROM material_assets WHERE id = ? AND workspace_id = ?",
+                    (asset.id, asset.workspace_id),
+                ).fetchone()
                 if row is None:
                     raise ValueError("素材已移除，未保存过期的分析结果。")
-                current = self._asset_from_payload(json.loads(row["payload"]))
+                current = self._asset_from_row(row)
                 if current.size_bytes != asset.size_bytes or current.modified_at != asset.modified_at:
                     raise ValueError("分析期间素材文件发生变化，请重新分析。")
                 current_segments = {item.id: item for item in current.segments}
@@ -9254,7 +9250,6 @@ class ProductionRepository:
         return MaterialCollection(**data)
 
     @staticmethod
-    @staticmethod
     def _asset_from_row(row: sqlite3.Row) -> MaterialAsset:
         """读素材时，可见性以列为准。
 
@@ -9355,6 +9350,14 @@ class ProductionRepository:
                 if isinstance(item, dict)
             ],
         )
+
+    @staticmethod
+    def _template_from_row(row: sqlite3.Row) -> VideoTemplate:
+        """模板回读以列为准：存量模板的 visibility 只写在列上。"""
+        data = json.loads(str(row["payload"]))
+        if "visibility" in row.keys():
+            data["visibility"] = str(row["visibility"])
+        return VideoTemplate(**_with_datetime(data, "created_at"))
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> CreationTask:
@@ -9745,11 +9748,6 @@ class MaterialLinkProvenanceSink:
             source_url=record.url,
         )
         return asset.id
-
-
-def _visibility_value(stored: object) -> ContentVisibility:
-    """把库里的可见性读成受控值：认得的值原样返回，其余按存量默认 shared。"""
-    return "shared" if stored == "shared" else "private"
 
 
 def _json_payload(value: object) -> str:

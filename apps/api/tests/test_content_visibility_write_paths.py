@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -253,3 +254,42 @@ def test_visibility_never_crosses_workspace(tmp_path):
 
     with pytest.raises(KeyError):
         production.set_asset_visibility("ws_b", "asset-a", "private")
+
+def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp_path):
+    production = _repository(tmp_path)
+    production.save_video_template(VideoTemplate(
+        id="tpl-2", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
+        settings={"a": 1},
+    ))
+    production.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
+
+    saved = production.save_video_template(VideoTemplate(
+        id="tpl-2", workspace_id=WORKSPACE, version=2, name="模板", origin="user",
+        settings={"a": 2},
+    ))
+
+    # 存进去的、立刻拿到的、列里的，三者必须是同一个值。
+    assert saved.visibility == "shared"
+    assert _stored_visibility(production, "video_templates", "tpl-2", WORKSPACE) == "shared"
+    listed = {item.version: item.visibility for item in production.list_video_templates(WORKSPACE)}
+    assert listed == {2: "shared", 1: "shared"}
+
+    reopened = _repository(tmp_path)
+    assert {
+        item.version: item.visibility for item in reopened.list_video_templates(WORKSPACE)
+    } == {2: "shared", 1: "shared"}
+
+
+def test_analysis_only_write_keeps_an_explicitly_shared_asset_shared(tmp_path):
+    production = _repository(tmp_path)
+    production._save_asset(_asset(WORKSPACE))
+    production.set_asset_visibility(WORKSPACE, "asset-1", "shared")
+
+    analyzed = replace(
+        production.get_asset(WORKSPACE, "asset-1"),
+        analysis_message="本次分析的说明。",
+    )
+    production._save_asset(analyzed, analysis_only=True)
+
+    assert production.get_asset(WORKSPACE, "asset-1").visibility == "shared"
+    assert _stored_visibility(production, "material_assets", "asset-1", WORKSPACE) == "shared"
