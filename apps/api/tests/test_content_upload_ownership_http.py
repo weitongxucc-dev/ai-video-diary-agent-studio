@@ -76,19 +76,33 @@ def test_uploader_can_read_the_private_item_they_just_saved(tmp_path, monkeypatc
     assert saved["id"] in {item["id"] for item in listed.json()["items"]}
 
 
-def test_another_member_and_a_different_owner_cannot_read_private_content(tmp_path, monkeypatch):
-    """他人 private：另一成员读不到；同工作区的第二个 owner 也不因此获得读取。"""
+def test_another_member_and_the_owner_cannot_read_someone_elses_private_content(
+    tmp_path, monkeypatch
+):
+    """成员保存的私有内容：上传者本人读得到；另一个成员读不到，owner 也读不到。
+
+    判据按 owner_user_id 比对，不按角色一律放行——owner 身份不构成例外。
+    """
     party = _setup(tmp_path, monkeypatch)
-    saved = _save_knowledge("上传者私有", as_token=party["owner_token"])
+    saved = _save_knowledge("上传者私有", as_token=party["member_token"])
     assert saved["visibility"] == "private"
 
-    denied = client.get(f"/api/knowledge-items/{saved['id']}", headers=_headers(party["member_token"]))
+    # 上传者本人读得到。
+    owner_of_item = client.get(
+        f"/api/knowledge-items/{saved['id']}", headers=_headers(party["member_token"])
+    )
+    assert owner_of_item.status_code == 200, owner_of_item.text
+
+    # 真实 owner 令牌也不能越过「别人的私有内容」。
+    denied = client.get(
+        f"/api/knowledge-items/{saved['id']}", headers=_headers(party["owner_token"])
+    )
     assert denied.status_code == 404, denied.text
 
-    # 真实 owner 令牌也不能越过「别人的私有内容」：判据按 owner_user_id 比对，
-    # 不是按角色一律放行。
-    owner_read = client.get(f"/api/knowledge-items/{saved['id']}", headers=_headers(party["owner_token"]))
-    assert owner_read.status_code == 404, owner_read.text
+    # 列表里同样不出现：聚合不泄露别人私有内容的存在。
+    listed = client.get("/api/knowledge-items", headers=_headers(party["owner_token"]))
+    assert listed.status_code == 200
+    assert saved["id"] not in {item["id"] for item in listed.json()["items"]}
 
 
 def test_shared_is_readable_by_members_and_revoking_takes_effect_at_once(tmp_path, monkeypatch):
