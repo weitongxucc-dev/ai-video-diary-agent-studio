@@ -51,7 +51,11 @@ def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
         "workspace_a", viewer_user_id="member-template-owner"
     )
     assert len(listed) == 2
-    assert reopened.list_video_templates("workspace_b") == []
+    # 同一个创建者身份在另一个工作区读不到：空结果来自跨空间隔离，
+    # 不是来自「没给身份所以按 owner 过滤掉了」。
+    assert reopened.list_video_templates(
+        "workspace_b", viewer_user_id="member-template-owner"
+    ) == []
     response = client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json={"goal": "新主题", "template_id": template.id, "template_version": 1})
     assert response.status_code == 404
 
