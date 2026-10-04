@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.knowledge_files import KnowledgeParameter, KnowledgeSection
+
 if TYPE_CHECKING:
     from app.source_repository import SourceRepository
 
@@ -43,7 +45,29 @@ class SourceItem:
     license: str
     title: str
     file_reference: str | None = None
+    content_hash: str | None = None
+    sections: tuple[KnowledgeSection, ...] = ()
+    parameters: tuple[KnowledgeParameter, ...] = ()
+    # 网页快照的抓取时间；其他来源没有抓取动作时为空。
+    fetched_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class KnowledgeItemVersion:
+    knowledge_item_id: str
+    version: str
+    content_hash: str | None
+    title: str
+    body: str | None
+    file_reference: str | None
+    source_item_id: str | None
+    sections: tuple[KnowledgeSection, ...]
+    parameters: tuple[KnowledgeParameter, ...]
+    saved_at: datetime
+    # 这一版内容实际从哪个网址抓来、什么时候抓的。网页快照回查当时内容靠它。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +82,12 @@ class KnowledgeItem:
     ownership: str
     source_item_id: str | None
     version: str
+    content_hash: str | None = None
+    sections: tuple[KnowledgeSection, ...] = ()
+    parameters: tuple[KnowledgeParameter, ...] = ()
+    # 当前版本内容的抓取时间；不是网页快照时为空。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

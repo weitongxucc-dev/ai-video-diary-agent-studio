@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -338,6 +339,9 @@ from app.schemas import (
     SourceConnectorsResponse,
     SourceItemDetailResponse,
     SourceItemDetailsResponse,
+    KnowledgeFileImportRequest,
+    KnowledgeItemDetailResponse,
+    KnowledgeItemVersionResponse,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceRunEvidencesResponse,
@@ -371,6 +375,7 @@ from app.schemas import (
     validate_logical_media_reference,
 )
 from app.services import EpisodeService
+from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -13234,9 +13239,10 @@ def save_source_item_to_knowledge(
     request: Request,
     payload: SaveSourceItemToKnowledgeRequest,
 ) -> KnowledgeItemResponse:
+    workspace_id = current_workspace_id(request)
     try:
         item = source_repository.save_source_item_to_knowledge(
-            current_workspace_id(request),
+            workspace_id,
             source_item_id,
             ownership=payload.ownership.strip(),
             authorization=payload.authorization.strip(),
@@ -13246,7 +13252,92 @@ def save_source_item_to_knowledge(
         raise HTTPException(status_code=404, detail="source item not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _knowledge_item_response(item)
+    response = _knowledge_item_response(item)
+    # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
+    if item.content_hash is not None and response.duplicate_of_version is None:
+        source = source_repository.get_source_item(workspace_id, source_item_id)
+        if source.content_hash != item.content_hash:
+            stored = source_repository.find_version_by_content_hash(
+                workspace_id,
+                source.content_hash,
+                knowledge_item_id=item.id if source.source_label == "web_snapshot" else None,
+            )
+            response.duplicate_of_version = stored.version if stored else None
+    return response
+
+
+@app.post("/api/source-items/file", response_model=SourceItemDetailResponse)
+def import_knowledge_file(
+    request: Request,
+    payload: KnowledgeFileImportRequest,
+) -> SourceItemDetailResponse:
+    """导入 Markdown/文本/PDF 文件：保存全文、真实出处和显式参数。
+
+    解析失败（不支持格式、扫描件无文本层）直接报错，不写入伪造正文。
+    """
+    workspace_id = current_workspace_id(request)
+    try:
+        data = base64.b64decode(payload.content_base64, validate=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="文件内容不是合法的 base64") from exc
+    try:
+        parsed = parse_knowledge_file(payload.filename.strip(), data)
+    except KnowledgeFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    connector = _compat_connector(
+        workspace_id,
+        "knowledge_files",
+        platform="knowledge_files",
+        protocol="local_file",
+        account_or_rule="知识文件导入",
+    )
+    try:
+        item = source_repository.save_source_items(
+            workspace_id,
+            [
+                SourceItem(
+                    id=f"source_{uuid4().hex}",
+                    workspace_id=workspace_id,
+                    connector_id=connector.id,
+                    source_label="file_import",
+                    source_url=None,
+                    content_type=parsed.content_type,
+                    author=None,
+                    published_at=None,
+                    body=parsed.full_text,
+                    subtitles=None,
+                    media_references=(),
+                    license="user_provided",
+                    title=parsed.title,
+                    file_reference=parsed.filename,
+                    content_hash=parsed.content_hash,
+                    sections=parsed.sections,
+                    parameters=parsed.parameters,
+                )
+            ],
+        )[0]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _source_item_response(item)
+
+
+@app.get("/api/knowledge-items/{knowledge_item_id}", response_model=KnowledgeItemDetailResponse)
+def get_knowledge_item_detail(
+    knowledge_item_id: str,
+    request: Request,
+) -> KnowledgeItemDetailResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
+    detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
+    detail.versions = [
+        KnowledgeItemVersionResponse.model_validate(version, from_attributes=True)
+        for version in versions
+    ]
+    return detail
 
 
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
@@ -13328,6 +13419,73 @@ def ingest_manual_link(
         workspace_id,
         source_repository.list_source_items(workspace_id, connector.id),
     )
+
+
+@app.post("/api/source-items/link", response_model=SourceItemDetailResponse)
+def capture_web_snapshot(
+    request: Request,
+    payload: ManualLinkRequest,
+) -> SourceItemDetailResponse:
+    """抓一个普通网址的完整正文快照，保存用户输入的原网址和抓取时间。
+
+    原网址就是用户填的那个地址，并按它串版本；重定向到的地址作为附加事实记录，
+    不替换原网址。相同正文不新增版本（保存到知识库时由内容指纹判定）；网址内容
+    更新时另存新版本，旧版本及其快照保持不变。登录、不可达或没有正文按真实失败。
+    """
+    url = payload.url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    workspace_id = current_workspace_id(request)
+    connector = _compat_connector(
+        workspace_id,
+        "web_snapshot",
+        platform="web_snapshot",
+        protocol="https",
+        account_or_rule="网页快照",
+    )
+    try:
+        fetched = HtmlPageSourceClient([url]).fetch_page(url)
+    except ExternalSourceResponseError as exc:
+        failure = SourceSyncFailedError(
+            source_repository.record_sync_failure(
+                workspace_id,
+                connector.id,
+                reason=str(exc),
+                impact=exc.impact,
+                repair_action=exc.repair_action,
+                retryable=exc.retryable,
+                connection_status=exc.kind,
+            )
+        )
+        raise _source_failure_http_exception(failure) from exc
+    snapshot = fetched.snapshot
+    item = source_repository.save_source_items(
+        workspace_id,
+        [
+            SourceItem(
+                id=f"source_{uuid4().hex}",
+                workspace_id=workspace_id,
+                connector_id=connector.id,
+                source_label="web_snapshot",
+                source_url=url,
+                content_type="article",
+                author=None,
+                published_at=None,
+                body=snapshot.full_text,
+                subtitles=None,
+                media_references=(),
+                license="user_provided",
+                title=snapshot.title,
+                # 版本链按用户填的原网址串，不按重定向后的地址，也不按随机条目 id。
+                file_reference=url,
+                content_hash=snapshot.content_hash,
+                sections=snapshot.sections,
+                parameters=(),
+                fetched_at=fetched.fetched_at,
+            )
+        ],
+    )[0]
+    return _source_item_response(item)
 
 
 @app.get(

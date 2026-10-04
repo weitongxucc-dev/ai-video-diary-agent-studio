@@ -45,7 +45,25 @@ export type SourceItem = {
   license: string;
   title: string;
   file_reference: string | null;
+  content_hash: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
+  // 网页快照的抓取时间；不是网页抓取时为 null。
+  fetched_at: string | null;
   created_at: string;
+};
+
+export type KnowledgeSection = {
+  locator: string;
+  title: string;
+  text: string;
+};
+
+export type KnowledgeParameter = {
+  key: string;
+  value: string;
+  unit: string | null;
+  locator: string;
 };
 
 export type KnowledgeItem = {
@@ -59,8 +77,32 @@ export type KnowledgeItem = {
   ownership: string;
   source_item_id: string | null;
   version: string;
+  content_hash: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
+  // 当前版本的抓取时间和它实际读到的网址。
+  fetched_at: string | null;
+  source_url: string | null;
   created_at: string;
+  duplicate_of_version?: string | null;
 };
+
+export type KnowledgeItemVersion = {
+  version: string;
+  content_hash: string | null;
+  source_item_id: string | null;
+  title: string;
+  body: string | null;
+  file_reference: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
+  // 这一版是什么时候、从哪个网址取到的：回查旧版靠它回到当时的内容。
+  fetched_at: string | null;
+  source_url: string | null;
+  saved_at: string;
+};
+
+export type KnowledgeItemDetail = KnowledgeItem & { versions: KnowledgeItemVersion[] };
 
 export type SourceApiErrorDetails = {
   code?: string;
@@ -170,6 +212,24 @@ export function saveSourceItemToKnowledge(id: string, input: SaveToKnowledge) {
 
 export function listKnowledgeItems() {
   return request<{ items: KnowledgeItem[]; total_count: number }>("/api/knowledge-items");
+}
+
+export function getKnowledgeItem(id: string) {
+  return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}`);
+}
+
+export type KnowledgeFileImport = { filename: string; content_base64: string };
+
+export function importKnowledgeFile(input: KnowledgeFileImport) {
+  return request<SourceItem>("/api/source-items/file", { method: "POST", body: JSON.stringify(input) });
+}
+
+/**
+ * 抓一个普通网址的完整正文快照，保存原网址和抓取时间。
+ * 返回的是这一次的抓取结果；相同正文不新增版本由保存到知识库时判定。
+ */
+export function captureWebSnapshot(url: string) {
+  return request<SourceItem>("/api/source-items/link", { method: "POST", body: JSON.stringify({ url }) });
 }
 
 export function sourceErrorMessage(error: unknown): string {

@@ -3,8 +3,8 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
 
-const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), sourceErrorMessage: vi.fn() }));
-vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, sourceErrorMessage: api.sourceErrorMessage }));
+const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), getKnowledgeItem: vi.fn(), sourceErrorMessage: vi.fn() }));
+vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, getKnowledgeItem: api.getKnowledgeItem, sourceErrorMessage: api.sourceErrorMessage }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
@@ -18,12 +18,16 @@ const item: KnowledgeItem = {
   title: "设备说明书", body: "设备运行前请先检查电源。",
   file_reference: "/local/reference/manual.pdf", authorization: "内部使用",
   ownership: "当前工作区", source_item_id: "source-one", version: "v2",
+  content_hash: null, sections: [], parameters: [],
+  fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
 };
 beforeEach(() => {
   api.listKnowledgeItems.mockReset();
+  api.getKnowledgeItem.mockReset();
   api.sourceErrorMessage.mockReset();
   api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1 });
+  api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
 });
 describe("KnowledgePage", () => {
@@ -37,13 +41,35 @@ describe("KnowledgePage", () => {
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
-    expect(detail).toHaveTextContent("结构化参数尚未接入");
+    expect(detail).toHaveTextContent("没有显式参数格式就不生成参数");
     expect(detail).toHaveTextContent("v2");
     expect(detail).toHaveTextContent("内部使用");
     fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
     expect(screen.getByText(/不能按文件格式推断/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+  });
+
+  it("shows parsed parameters with their locators and the saved versions", async () => {
+    api.getKnowledgeItem.mockResolvedValue({
+      ...item,
+      content_hash: "hash-v2",
+      parameters: [{ key: "净重", value: "600", unit: "g", locator: "第2段" }],
+      sections: [{ locator: "第2段", title: "基本参数", text: "## 基本参数\n净重 600g" }],
+      versions: [
+        { version: "1", content_hash: "hash-v1", source_item_id: "source-one", title: item.title, body: "旧正文", file_reference: item.file_reference, sections: [], parameters: [], saved_at: "2026-09-26T08:00:00Z" },
+        { version: "2", content_hash: "hash-v2", source_item_id: "source-two", title: item.title, body: item.body, file_reference: item.file_reference, sections: [], parameters: [], saved_at: "2026-09-27T08:00:00Z" },
+      ],
+    });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    await waitFor(() => expect(detail).toHaveTextContent("净重"));
+    expect(within(detail).getByText("第2段")).toBeInTheDocument();
+    expect(detail).toHaveTextContent("600");
+    expect(detail).toHaveTextContent("hash-v2");
+    expect(detail).toHaveTextContent("版本 1 ·");
+    expect(detail).toHaveTextContent("版本 2 ·");
   });
 
   it("keeps the add-source action without an empty relation or question panel", async () => {

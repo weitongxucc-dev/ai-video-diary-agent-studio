@@ -7,7 +7,8 @@ import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEn
 import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { KnowledgeItem } from "@/lib/source-api";
+import type { KnowledgeItem, KnowledgeItemDetail } from "@/lib/source-api";
+import { getKnowledgeItem } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
 
 type KnowledgeDisplayItem = KnowledgeItem & {
@@ -35,6 +36,12 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(new Date(value));
 }
 
+// 抓取时刻精确到秒：同一天的两版快照（V1/V2）只有这样才分得开。
+function formatFetchTime(value: string | null) {
+  if (!value) return "无抓取记录";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
 export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMode = false, exampleLabel }: {
   items: KnowledgeDisplayItem[];
   loading: boolean;
@@ -44,6 +51,20 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   exampleLabel?: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<KnowledgeItemDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [viewVersion, setViewVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedId || exampleMode) { setDetail(null); setDetailError(null); setViewVersion(null); return; }
+    let active = true;
+    setDetail(null); setDetailError(null); setViewVersion(null);
+    getKnowledgeItem(selectedId)
+      .then(result => { if (active && result.id === selectedId) setDetail(result); })
+      .catch(cause => { if (active) setDetailError(cause instanceof Error ? cause.message : "知识详情读取失败"); });
+    return () => { active = false; };
+  }, [selectedId, exampleMode]);
+  // 详情可能晚于列表刷新到达；只展示与当前选中条目一致的详情。
+  const shownDetail = detail && detail.id === selectedId ? detail : null;
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("全部");
   const selected = items.find((item) => item.id === selectedId) ?? null;
@@ -52,7 +73,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
   }), [items, category, query, exampleMode]);
-  const inspector = selected ? <KnowledgeInspector exampleMode={exampleMode} item={selected} /> : undefined;
+  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} /> : undefined;
 
   return <AppShell inspector={inspector} inspectorTitle="来源详情">
     <div className={styles.page}>
@@ -90,15 +111,25 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   </AppShell>;
 }
 
-function KnowledgeInspector({ item, exampleMode }: { item: KnowledgeDisplayItem; exampleMode: boolean }) {
+function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void }) {
+  const versions = detail?.versions ?? [];
+  const selectedVersion = viewVersion ? versions.find((version) => version.version === viewVersion) ?? null : null;
+  const shown = selectedVersion ?? detail ?? item;
+  const parameters = selectedVersion?.parameters ?? detail?.parameters ?? [];
+  const sections = selectedVersion?.sections ?? detail?.sections ?? [];
+  const isHistorical = Boolean(selectedVersion);
+  // 历史版本用那一版自己的网址和抓取时间，回查时不会拿当前版本的值冒充。
+  const shownWebUrl = isHistorical ? selectedVersion?.source_url ?? null : detail?.source_url ?? item.source_url ?? null;
+  const shownFetchedAt = isHistorical ? selectedVersion?.fetched_at ?? null : detail?.fetched_at ?? item.fetched_at ?? null;
   return <div className={styles.inspector}>
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
-    <header><strong>{item.title}</strong><small>{itemType(item.content_type)} · 版本 {item.version} · {formatTime(item.created_at)}</small></header>
+    <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
+    {versions.length ? <div className={styles.detailSection}><h3>版本</h3><label><span>查看版本</span><select aria-label="查看版本" onChange={(event) => onViewVersion(event.target.value || null)} value={viewVersion ?? ""}><option value="">当前版本 {detail?.version}</option>{versions.map((version) => <option key={version.version} value={version.version}>版本 {version.version} · {formatTime(version.saved_at)}</option>)}</select></label>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
     <div className={styles.compare}>
-      <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3><p>{item.body || "这个条目没有可显示的正文。"}</p></section>
+      <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3><p>{shown.body || "这个条目没有可显示的正文。"}</p>{sections.length ? <ol>{sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol> : null}</section>
       <section><h3>{exampleMode ? "AI 摘要 · 示例" : "摘要"}</h3><p>{exampleMode ? item.exampleSummary ?? "示例暂无摘要" : "尚无可核对的摘要来源；不能把正文当作 AI 摘要。"}</p></section>
     </div>
-    <section className={styles.detailSection}><h3>参数与出处</h3><p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "结构化参数尚未接入。"}</p><dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{item.version}</dd></div></dl></section>
+    <section className={styles.detailSection}><h3>参数与出处</h3>{detailError ? <p role="alert">{detailError}</p> : parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : <p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "这个条目没有解析出的结构化参数；没有显式参数格式就不生成参数。"}</p>}<dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{shown.file_reference || "无"}</dd></div><div><dt>{isHistorical ? "该版来源条目" : "内容指纹"}</dt><dd>{isHistorical ? (selectedVersion?.source_item_id ?? "无") : ((detail?.content_hash ?? item.content_hash) ?? "无")}</dd></div><div><dt>原网址</dt><dd>{shownWebUrl ? <a href={shownWebUrl} rel="noreferrer" target="_blank">{shownWebUrl}</a> : "无网页来源"}</dd></div><div><dt>{isHistorical ? "该版抓取时间" : "抓取时间"}</dt><dd>{formatFetchTime(shownFetchedAt)}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{shown.version ?? item.version}</dd></div></dl>{versions.length > 1 ? <ol>{versions.map(version => <li key={version.version}>版本 {version.version} · {formatTime(version.saved_at)} · {version.content_hash ?? "无指纹"}</li>)}</ol> : null}</section>
     <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? `示例核对状态：${item.exampleIssue ?? "待核对"}` : "核对状态尚未接入；请核对原始来源后再用于创作。"}</p><div className={styles.correctionGrid}><div className={styles.correctionField}><span>摘要纠正</span><textarea aria-label="摘要纠正" defaultValue={exampleMode ? item.exampleSummary ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订摘要" : "纠正保存接口尚未接入"} /></div><div className={styles.correctionField}><span>参数纠正</span><textarea aria-label="参数纠正" defaultValue={exampleMode ? item.exampleParameters ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订参数" : "纠正保存接口尚未接入"} /></div></div><div className={styles.detailActions}><button disabled={!exampleMode} type="button">{exampleMode ? "保存纠正 · 示例" : "保存纠正"}</button><button disabled={!exampleMode} type="button">{exampleMode ? "用于当前任务 · 示例" : "用于当前任务"}</button><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></div>{!exampleMode ? <p className={styles.notWired}>纠正保存与任务引用接口尚未接入，以上操作暂不可用。</p> : null}</section>
   </div>;
 }

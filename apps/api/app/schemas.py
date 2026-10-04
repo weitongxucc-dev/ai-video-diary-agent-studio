@@ -1998,6 +1998,19 @@ class SourceConnectorsResponse(BaseModel):
     total_count: int
 
 
+class KnowledgeSectionResponse(BaseModel):
+    locator: str
+    title: str
+    text: str
+
+
+class KnowledgeParameterResponse(BaseModel):
+    key: str
+    value: str
+    unit: str | None = None
+    locator: str
+
+
 class SourceItemDetailResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2013,6 +2026,11 @@ class SourceItemDetailResponse(BaseModel):
     license: str
     title: str
     file_reference: str | None
+    content_hash: str | None = None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    # 网页快照的抓取时间；不是网页抓取时为空。
+    fetched_at: datetime | None = None
     created_at: datetime
 
 
@@ -2044,6 +2062,13 @@ class SaveSourceItemToKnowledgeRequest(BaseModel):
     version: str = Field(default="1", min_length=1, max_length=100)
 
 
+class KnowledgeFileImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=400)
+    content_base64: str = Field(min_length=1, max_length=40_000_000)
+
+
 class KnowledgeItemResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2055,7 +2080,34 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    content_hash: str | None = None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    # 当前版本的抓取时间和它实际读到的网址。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
     created_at: datetime
+    # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
+    duplicate_of_version: str | None = None
+
+
+class KnowledgeItemVersionResponse(BaseModel):
+    version: str
+    content_hash: str | None = None
+    source_item_id: str | None = None
+    title: str
+    body: str | None
+    file_reference: str | None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    # 这一版内容是什么时候、从哪个网址取到的：回查旧版时能回到当时的内容。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
+    saved_at: datetime
+
+
+class KnowledgeItemDetailResponse(KnowledgeItemResponse):
+    versions: list[KnowledgeItemVersionResponse] = Field(default_factory=list)
 
 
 class KnowledgeItemsResponse(BaseModel):

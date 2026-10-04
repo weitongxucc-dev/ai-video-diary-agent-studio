@@ -163,6 +163,10 @@ def test_payloads_match_the_web_source_api_contract(client):
         "id", "workspace_id", "connector_id", "source_label", "source_url",
         "content_type", "author", "published_at", "body", "subtitles",
         "media_references", "license", "title", "file_reference", "created_at",
+        # WIL-103：文件解析产出的内容指纹、出处和参数
+        "content_hash", "sections", "parameters",
+        # WIL-134：网页快照的抓取时间
+        "fetched_at",
     }
     listed_sources = client.get(
         f"/api/source-items?connector_id={source['connector_id']}"
@@ -182,6 +186,9 @@ def test_payloads_match_the_web_source_api_contract(client):
     assert set(knowledge) == {
         "id", "workspace_id", "content_type", "title", "body", "file_reference",
         "authorization", "ownership", "source_item_id", "version", "created_at",
+        "content_hash", "sections", "parameters", "duplicate_of_version",
+        # WIL-134：当前版本的抓取时间和原网址
+        "fetched_at", "source_url",
     }
     assert client.get("/api/knowledge-items").json() == {
         "items": [knowledge],
