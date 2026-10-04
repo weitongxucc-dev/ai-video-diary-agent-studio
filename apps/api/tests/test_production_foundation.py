@@ -2595,6 +2595,30 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     assert hashlib.sha256(production.database_path.read_bytes()).hexdigest() == before_list
 
 
+def _configure_workspace_text_service(
+    workspace_id: str,
+    *,
+    provider: str,
+    base_url: str,
+    model: str,
+    api_key: str,
+) -> None:
+    """给该工作区一份真实的文字服务配置。
+
+    文字服务配置按工作区隔离，patch 全局 Settings 不再决定这个工作区配置得好不好，
+    所以这里真的写工作区快照与该工作区的钥匙串条目。
+    """
+    from app import workspace_settings as workspace_settings_module
+
+    workspace_settings_module.save_workspace_config(
+        workspace_id,
+        {"llm_provider": provider, "llm_base_url": base_url, "llm_model": model,
+         "llm_api_key_provider": provider},
+    )
+    if api_key:
+        workspace_settings_module.save_workspace_secret(workspace_id, "llm_api_key", api_key)
+
+
 def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     tmp_path,
     monkeypatch,
@@ -2605,15 +2629,13 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
-    monkeypatch.setattr(
-        main_module,
-        "settings",
-        Settings(
-            llm_provider="custom",
-            llm_base_url="https://model.example/v1",
-            llm_model="topic-test",
-            llm_api_key="test-key",
-        ),
+    monkeypatch.setattr(main_module, "settings", Settings())
+    _configure_workspace_text_service(
+        "workspace_a",
+        provider="custom",
+        base_url="https://model.example/v1",
+        model="topic-test",
+        api_key="test-key",
     )
     monkeypatch.setattr(
         main_module,
@@ -2646,8 +2668,8 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
 
     monkeypatch.setattr(
         main_module,
-        "_creation_task_topic_generator_from_settings",
-        lambda: FakeGenerator(),
+        "_creation_task_topic_generator_for",
+        lambda _settings: FakeGenerator(),
     )
     client = TestClient(main_module.app)
     payload = {"goal": "用已授权内容生成一条竖屏选题", "name": "选题任务"}
@@ -2758,15 +2780,12 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
         item for item in reloaded_run.input_references if item["kind"] == "source"
     )["version_or_identity"] == confirmed_plan.source_references[0].identity
 
-    monkeypatch.setattr(
-        main_module,
-        "settings",
-        Settings(
-            llm_provider="custom",
-            llm_base_url="https://model.example/v1",
-            llm_model="topic-test-v2",
-            llm_api_key="test-key",
-        ),
+    _configure_workspace_text_service(
+        "workspace_a",
+        provider="custom",
+        base_url="https://model.example/v1",
+        model="topic-test-v2",
+        api_key="test-key",
     )
     changed_route = client.get(f"/api/creation-tasks/{task_id}/topics")
     assert changed_route.status_code == 200
@@ -2783,15 +2802,13 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
-    monkeypatch.setattr(
-        main_module,
-        "settings",
-        Settings(
-            llm_provider="custom",
-            llm_base_url="https://model.example/v1",
-            llm_model="deepseek-test",
-            llm_api_key="test-key",
-        ),
+    monkeypatch.setattr(main_module, "settings", Settings())
+    _configure_workspace_text_service(
+        "workspace_a",
+        provider="custom",
+        base_url="https://model.example/v1",
+        model="deepseek-test",
+        api_key="test-key",
     )
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace_a")
 
@@ -2832,13 +2849,13 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
 
     monkeypatch.setattr(
         main_module,
-        "_creation_task_topic_generator_from_settings",
-        lambda: FakeTopicGenerator(),
+        "_creation_task_topic_generator_for",
+        lambda _settings: FakeTopicGenerator(),
     )
     monkeypatch.setattr(
         main_module,
-        "_creation_task_script_generator_from_settings",
-        lambda: FakeScriptGenerator(),
+        "_creation_task_script_generator_for",
+        lambda _settings: FakeScriptGenerator(),
     )
     client = TestClient(main_module.app)
     payload = {"goal": "基于授权内容生成中文视频", "name": "本地真成片"}
@@ -2855,7 +2872,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         f"/api/creation-tasks/{task_id}/topics/{topic_id}/confirm", json={}
     ).status_code == 200
 
-    successful_script_generator = main_module._creation_task_script_generator_from_settings
+    successful_script_generator = main_module._creation_task_script_generator_for
 
     class FailingScriptGenerator:
         def generate(self, _input):
@@ -2865,8 +2882,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
                 impact="未生成文案。", repair_action="检查服务状态后重试。", retryable=True,
             )
 
-    monkeypatch.setattr(main_module, "_creation_task_script_generator_from_settings",
-                        lambda: FailingScriptGenerator())
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for",
+                        lambda _settings: FailingScriptGenerator())
     failed = client.post(f"/api/creation-tasks/{task_id}/scripts/generate", json={})
     assert failed.status_code == 502
     runtime = client.get("/api/settings/runtime").json()
@@ -2875,8 +2892,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert rows["LLM_SERVICE_CAUSE"] == "http_failed"
     assert rows["LLM_SERVICE_DETAIL"] == "文字模型服务拒绝了文案请求。"
     assert rows["LLM_SERVICE_REPAIR_ACTION"] == "检查服务状态后重试。"
-    assert main_module.settings.effective_llm_api_key not in json.dumps(runtime)
-    monkeypatch.setattr(main_module, "_creation_task_script_generator_from_settings",
+    assert "test-key" not in json.dumps(runtime)
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for",
                         successful_script_generator)
 
     generated = client.post(
@@ -3220,15 +3237,12 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
     assert unavailable_state.json()["latest_run"]["route_snapshot"]["availability"] == "unconfigured"
     assert unavailable_state.json()["candidates"] == []
 
-    monkeypatch.setattr(
-        main_module,
-        "settings",
-        Settings(
-            llm_provider="custom",
-            llm_base_url="https://model.example/v1",
-            llm_model="topic-test",
-            llm_api_key="test-key",
-        ),
+    _configure_workspace_text_service(
+        "workspace_a",
+        provider="custom",
+        base_url="https://model.example/v1",
+        model="topic-test",
+        api_key="test-key",
     )
     source = sources.get_source_item("workspace_a", "source-workspace_a")
     sources.save_source_items(
@@ -3261,19 +3275,17 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
                 )
             ]
 
-    monkeypatch.setattr(
-        main_module,
-        "settings",
-        Settings(
-            llm_provider="ollama",
-            llm_base_url="http://127.0.0.1:11434/v1",
-            llm_model="local-topic-test",
-        ),
+    _configure_workspace_text_service(
+        "workspace_a",
+        provider="ollama",
+        base_url="http://127.0.0.1:11434/v1",
+        model="local-topic-test",
+        api_key="",
     )
     monkeypatch.setattr(
         main_module,
-        "_creation_task_topic_generator_from_settings",
-        lambda: LocalGenerator(),
+        "_creation_task_topic_generator_for",
+        lambda _settings: LocalGenerator(),
     )
     local_allowed = client.post(
         f"/api/creation-tasks/{license_task}/topics/generate", json={}
@@ -3309,8 +3321,8 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
 
     monkeypatch.setattr(
         main_module,
-        "_creation_task_topic_generator_from_settings",
-        lambda: FailingGenerator(),
+        "_creation_task_topic_generator_for",
+        lambda _settings: FailingGenerator(),
     )
     record_llm_service_verification(main_module.settings, ok=True, cause="verified")
     failed = client.post(
@@ -3345,8 +3357,8 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
 
     monkeypatch.setattr(
         main_module,
-        "_creation_task_topic_generator_from_settings",
-        lambda: InvalidEvidenceGenerator(),
+        "_creation_task_topic_generator_for",
+        lambda _settings: InvalidEvidenceGenerator(),
     )
     invalid_evidence = client.post(
         f"/api/creation-tasks/{invalid_evidence_task}/topics/generate", json={}
