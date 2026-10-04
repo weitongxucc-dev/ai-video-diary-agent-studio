@@ -67,3 +67,6 @@ button.queueRow:hover { background: var(--surface-2); }
 .homeFacts > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 9px; font-size: 12px; }
 .homeFacts dt { color: var(--text-2); }
 .homeFacts dd { overflow-wrap: anywhere; margin: 0; }
+.metaDetails { margin: 0; color: var(--text-2); font-size: 11px; }
+.metaDetails summary { cursor: pointer; padding: 4px 0; }
+.metaDetails .homeFacts { margin-top: 6px; }

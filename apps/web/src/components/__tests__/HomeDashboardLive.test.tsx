@@ -21,7 +21,7 @@ vi.mock("@/lib/api", () => api);
 // （真实实现会重新读 localStorage），页面只消费 token/ready/refresh。
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({
   useLocalMemberIdentity: () => ({
-    token: identity.state.token,
+    token: identity.state.token ?? window.localStorage.getItem("ai-video-diary-local-member-token"),
     ready: identity.state.ready,
     role: null,
     error: null,
@@ -63,6 +63,8 @@ beforeEach(() => {
   api.getMaterialLibraryInsights.mockResolvedValue(null);
   identity.state = { token: "tok-a", ready: true };
   window.localStorage.clear();
+  // 页面会读真实的 localStorage 令牌与钩子身份比对，令牌保持一致。
+  window.localStorage.setItem("ai-video-diary-local-member-token", identity.state.token ?? "tok-a");
 });
 
 describe("首页真实数据容器", () => {
@@ -86,6 +88,17 @@ describe("首页真实数据容器", () => {
     window.dispatchEvent(new StorageEvent("storage", { key: "ai-video-diary-local-member-token" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /令牌 B 的任务/ })).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /令牌 A 的任务/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the loaded page when the window regains focus without a member change", async () => {
+    api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => payload(days, "同身份任务"));
+    render(<HomeDashboardLive />);
+    expect(await screen.findByRole("button", { name: /同身份任务/ })).toBeInTheDocument();
+    // 令牌没变：切回窗口不能把首页清空后停住，也不能重复读取。
+    window.dispatchEvent(new Event("focus"));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /同身份任务/ })).toBeInTheDocument();
+    expect(api.getHomeDashboard).toHaveBeenCalledTimes(1);
   });
 
   it("drops a late response that belongs to the previous identity", async () => {

@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { getHomeDashboard, getMaterialLibraryInsights, getProductionFoundation, listCreationTasks } from "@/lib/api";
+import { readLocalMemberToken } from "@/lib/local-member-auth";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import type { HomeAggregation } from "@/lib/types";
 import type { CreationTask, HomeCountFact, MaterialLibraryInsights, ProductionFoundation } from "@/lib/types";
@@ -163,6 +164,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
       : !foundation.readiness.ready ? <div className={styles.readiness}><strong>{readinessLabel(foundation.readiness.blockers[0]?.code)}</strong><Link href="/health">查看原因</Link></div> : null}
     <div className={styles.dashboard}>
       <section aria-label="工作空间七项概览" className={styles.metrics}>{countLabels.map((label, index) => <div className={styles.metric} key={label}><strong>{countValue(index)}</strong><small>{label}</small></div>)}</section>
+      {home ? <details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map((entry) => <div key={entry.key}><dt>{entry.label}</dt><dd>{scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details> : null}
       <section className={styles.card}><div className={styles.cardHeading}><div><h2>素材接收趋势</h2><small>{dashboard ? "示例素材接收日" : home ? `按接收日统计 · 近 ${home.trend.days} 天 · ${scopeLabel(home.trend.meta.scope)} · ${sourceLabel(home.trend.meta.source)} · 更新于 ${new Date(home.trend.meta.as_of).toLocaleString("zh-CN")}` : "尚无接收日聚合数据"}</small></div><div aria-label="趋势范围" className={styles.range}><button aria-pressed={range === 7} onClick={() => { setRange(7); live?.onDays(7); }} type="button">7 天</button><button aria-pressed={range === 30} onClick={() => { setRange(30); live?.onDays(30); }} type="button">30 天</button></div></div>{example ? <TrendChart values={range === 7 ? example.sevenDays : example.thirtyDays} /> : home ? (home.trend.points.length ? <TrendChart values={home.trend.points} /> : <div className={styles.cardEmpty}>这段时间没有素材接收记录</div>) : <div className={styles.cardEmpty}>接入按日素材统计后显示趋势</div>}</section>
       <section className={styles.card}><h2>素材行业分布</h2>{example?.industries.length ? <div className={styles.donutLayout}><IndustryDonut items={example.industries} onSelect={setSelectedFilter} selected={selectedFilter} /><div className={styles.legend}>{example.industries.map((item) => <button aria-pressed={selectedFilter?.kind === "industry" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "industry", key: item.label, label: item.label })} type="button"><i />{item.label}<strong>{item.count}</strong></button>)}</div></div> : <div className={styles.cardEmpty}>{dashboard ? "示例范围没有可见素材" : "素材尚无可信行业分类"}</div>}</section>
       <section className={styles.card}><div className={styles.cardHeading}><div><h2>任务与处理阶段</h2><small>{dashboard ? "整机队列 · 示例" : home
@@ -189,7 +191,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
       {home.unknown.length ? <section className={styles.card}><h2>没有真实数据的项</h2><dl className={styles.homeFacts}>{home.unknown.map((item) => <div key={item.key}><dt>{unknownKeyLabel(item.key)}</dt><dd>{item.reason}</dd></div>)}</dl></section> : null}
       {live?.error ? <div className={styles.readiness} role="alert"><strong>{live.error}</strong><button onClick={live.onRetry} type="button">重新读取</button></div> : null}
     </> : null}
-    <p className={styles.note}>{dashboard ? "本页数字与筛选均为隔离展示页示例；真实统计与跨空间权限尚未接入。" : home ? "口径与更新时间见各卡片；明细只含当前身份可进入的任务。行业分类仍待定义。" : "概览数字与图表等待按权限汇总的接口；现有任务只代表当前工作区。"}</p>
+    <p className={styles.note}>{dashboard ? "本页数字与筛选均为隔离展示页示例；真实统计与跨空间权限尚未接入。" : home ? "素材、知识与任务按当前身份可见，声音为工作区级计数，整机运行状态为匿名汇总；口径与更新时间见各卡片。行业分类仍待定义。" : "概览数字与图表等待按权限汇总的接口；现有任务只代表当前工作区。"}</p>
     {dashboard && selectedFilter ? <HomeCardDialog onClose={() => setSelectedFilter(null)} title="示例素材筛选">
       <div className={styles.filterResults}><p>筛选意图：{selectedFilter.kind === "industry" ? "行业" : "标签"} · {selectedFilter.label}。真实素材库精确筛选尚未接入。</p><strong>{filteredExampleAssets.length} 条对应示例素材</strong>{filteredExampleAssets.map((asset) => <div className={styles.filterResult} key={asset.id}><span>{asset.title}</span><small>{asset.industry} · {asset.tags.join("、")}</small></div>)}</div>
     </HomeCardDialog> : null}
@@ -216,14 +218,7 @@ const scopeLabels: Record<string, string> = {
   device_anonymous: "整机匿名汇总",
   host: "整机",
 };
-const sourceLabels: Record<string, string> = {
-  material_asset: "素材库",
-  knowledge_item: "知识库",
-  voice_profile: "声音库",
-  creation_task: "创作任务",
-  storage_capacity: "存储目录",
-  device_runtime: "本机运行记录",
-};
+
 // 服务端的 unknown.key 与 directory_state 是技术串，界面上给中文说法。
 const unknownKeyLabels: Record<string, string> = {
   "materials.by_industry": "素材行业分布",
@@ -247,9 +242,20 @@ function directoryStateLabel(state: string) {
 function scopeLabel(scope: string) {
   return scopeLabels[scope] ?? "未声明口径";
 }
+// 服务端 source 是具体取数函数串（内部实现文本）。按其中出现的真实取数对象
+// 给中文来源；匹配不上就说「本机记录」，不猜对应关系。
 function sourceLabel(source: string) {
-  return sourceLabels[source] ?? "本机记录";
+  if (source.includes("list_assets")) return "素材库（按既有可见性判据统计）";
+  if (source.includes("list_knowledge_items")) return "知识库（当前身份可读的条目）";
+  if (source.includes("list_versioned_voice_profiles")) return "声音库（工作区级计数，不含声纹名称）";
+  if (source.includes("output_ready")) return "创作任务中已产出本地成片的数量";
+  if (source.includes("list_creation_tasks")) return "创作任务（当前身份可见）";
+  if (source.includes("disk_usage") || source.includes("directory_state")) return "数据盘目录状态与容量";
+  if (source.includes("job_runs") || source.includes("job.")) return "本机作业记录";
+  if (source.includes("created_at")) return "当前身份可读素材的接收日期";
+  return "本机记录";
 }
+
 // 整机状态计数里的状态名用中文说明；ready 是「已就绪」，不是正在运行。
 // 状态计数的技术键（job.* / intake.*）只在这里翻成中文，不直接铺到界面上。
 // 状态全集与后端一致（job_runs 的状态 / 素材接收状态），不另造状态词。
@@ -264,12 +270,15 @@ function runtimeStateLabel(key: string) {
 }
 
 const homeStageKeys = new Set(["topic", "script", "narration", "montage", "review"]);
-const homeStatusKeys = new Set(["not_started", "running", "waiting_for_user", "completed", "failed"]);
+const homeStatusKeys = new Set(["created", "running", "waiting_for_user", "completed", "failed"]);
 // 首页条目里的 stage/status 复用既有中文映射；服务端已经给中文时直接用它的说法。
 function homeStageLabel(stage: string) {
   return homeStageKeys.has(stage) ? creationTaskStatusPresentation("running", stage as CreationTask["stage"]).stageLabel.split("：")[0] : stage;
 }
 function homeStatusLabel(status: string) {
+  // 创建后的任务还没开始执行：按任务自身状态说「等待开始」，
+  // 不能拿时间线的 not_started 冒充。
+  if (status === "created") return "等待开始";
   if (!homeStatusKeys.has(status)) return status;
   const stage: CreationTask["stage"] = "montage";
   const label = creationTaskStatusPresentation(status as CreationTask["stage_status"], stage).label;
@@ -334,10 +343,13 @@ export function HomeDashboardLive() {
     }
   }
 
-  // 跨标签页写入或切回窗口：令牌可能已经变了，而 whoami 收敛是异步的，
-  // 所以先作废在途请求并清空当前身份的私有内容，再让既有钩子重新收敛。
+  // 跨标签页写入或切回窗口：只有本地成员令牌真的变了才算换身份。
+  // 普通切回窗口令牌不变，不能把首页清空后再也不恢复。
   useEffect(() => {
     const apply = () => {
+      const stored = readLocalMemberToken();
+      if (stored === (identity.token ?? null)) return;
+      // 令牌已变：先作废在途请求并清空当前身份的私有内容，再让钩子收敛。
       requestRef.current += 1;
       setData(null); setTasks([]); setFoundation(null); setInsights(null);
       identity.refresh();
@@ -348,7 +360,7 @@ export function HomeDashboardLive() {
       window.removeEventListener("storage", apply);
       window.removeEventListener("focus", apply);
     };
-  }, [identity.refresh]);
+  }, [identity.refresh, identity.token]);
 
   const previousIdentity = useRef<string | null>(null);
   useEffect(() => {

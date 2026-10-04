@@ -198,9 +198,9 @@ describe("HomeWorkspace", () => {
   const home: HomeAggregation = {
     days: 7,
     counts: [
-      { key: "visible_assets", label: "可见素材", value: 12, meta },
-      { key: "analysis_ready", label: "分析可用", value: 9, meta },
-      { key: "knowledge_sources", label: "知识来源", value: 4, meta },
+      { key: "visible_assets", label: "可见素材", value: 12, meta: { ...meta, source: "production_repo.list_assets（既有可见性判据）" } },
+      { key: "analysis_ready", label: "分析可用", value: 9, meta: { ...meta, source: "production_repo.list_assets（既有可见性判据）" } },
+      { key: "knowledge_sources", label: "知识来源", value: 4, meta: { ...meta, source: "source_repository.list_knowledge_items_readable_by" } },
     ],
     trend: { days: 7, points: points(7), meta },
     device_queue: { counts: { "job.running": 1, "job.queued": 2, "intake.observing": 1, "job.succeeded": 4, "intake.blocked_disk": 2 }, records_total: 10, running: 2, queued: 3, meta },
@@ -208,7 +208,7 @@ describe("HomeWorkspace", () => {
       directory_state: "ready", bound_to_current_workspace: true,
       bound_to_another_workspace: false, configured_path_changed: false,
       capacity: { total_bytes: 512 * 1024 ** 3, used_bytes: 128 * 1024 ** 3, free_bytes: 384 * 1024 ** 3 },
-      meta,
+      meta: { ...meta, source: "production_repo.material_ingestion_directory_state + psutil.disk_usage(已绑定目录)" },
     },
     entries: {
       queue: [{ task_id: "task-one", title: "设备演示", stage: "视频剪辑", status: "处理中", updated_at: "2026-10-04T00:00:00Z" }],
@@ -235,7 +235,7 @@ describe("HomeWorkspace", () => {
     expect(storage).toHaveTextContent("128.0 GB");
     expect(storage).toHaveTextContent("数据盘可用");
     expect(storage).toHaveTextContent("整机匿名汇总");
-    expect(storage).toHaveTextContent("素材库");
+    expect(storage).toHaveTextContent("数据盘目录状态与容量");
     // 整机匿名运行只有数量，不含归属或名称。
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).not.toHaveTextContent("门店介绍");
     // 没有真实载体的统计项按服务端给出的原因如实显示。
@@ -250,6 +250,10 @@ describe("HomeWorkspace", () => {
     // 历史完成数单列，不混进处理中/排队。
     expect(stage).toHaveTextContent("任务已完成 4");
     expect(stage).not.toHaveTextContent("job.running");
+    // 每个数字的口径与更新时间可查，且给的是真实来源不是内部短键。
+    const details = screen.getByText("每个数字的口径与更新时间");
+    expect(details.closest("details")).toHaveTextContent("素材库（按既有可见性判据统计）");
+    expect(details.closest("details")).toHaveTextContent("知识库（当前身份可读的条目）");
     // 被数据盘阻塞的素材不是运行也不是排队，只在分布里出现。
     expect(stage).toHaveTextContent("素材被数据盘阻塞 2");
   });
