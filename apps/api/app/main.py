@@ -397,7 +397,6 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
-from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
