@@ -77,6 +77,8 @@ export type KnowledgeItem = {
   ownership: string;
   source_item_id: string | null;
   version: string;
+  // 当前可见范围：shared / private，与服务端同一列。
+  visibility?: string;
   content_hash: string | null;
   sections: KnowledgeSection[];
   parameters: KnowledgeParameter[];
@@ -253,6 +255,13 @@ export function listKnowledgeItems() {
 
 export function getKnowledgeItem(id: string) {
   return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}`);
+}
+
+export function setKnowledgeItemVisibility(id: string, visibility: "shared" | "private") {
+  return request<KnowledgeItem>(`/api/knowledge-items/${encodeURIComponent(id)}/visibility`, {
+    method: "PUT",
+    body: JSON.stringify({ visibility }),
+  });
 }
 
 export type KnowledgeFileImport = { filename: string; content_base64: string };
