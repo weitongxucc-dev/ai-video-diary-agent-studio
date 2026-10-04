@@ -94,27 +94,38 @@ def _bind(token: str, library: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def _confirm_pending_copies(token: str, source: str = "manual") -> None:
-    """按 126 的复制完成确认门，逐个确认当前待入库文件（真实 HTTP）。"""
+def _observe(token: str) -> None:
+    """先扫描发现目录里的新文件：未确认的文件此时不会入库。"""
+    response = client.post("/api/production/materials/intake/scan", headers=_headers(token))
+    assert response.status_code == 200, response.text
+
+
+def _confirm_pending_copies(token: str, source: str = "manual") -> list[dict]:
+    """按 126 的复制完成确认门，逐个确认已发现但未入库的文件（真实 HTTP）。"""
     status = client.get("/api/production/materials/intake", headers=_headers(token))
     assert status.status_code == 200, status.text
-    for pending in status.json()["pending_files"]:
+    pending_files = status.json()["pending_files"]
+    for pending in pending_files:
         confirmed = client.post(
             "/api/production/materials/intake/copy-complete",
             json={**pending, "confirmation_source": source},
             headers=_headers(token),
         )
         assert confirmed.status_code == 200, confirmed.text
+    return pending_files
 
 
 def _drop(name: str, library: str) -> None:
     (Path(library) / name).write_bytes(SUPPORTED)
 
 
-def _scan(token: str) -> None:
-    _confirm_pending_copies(token)
+def _ingest(token: str, source: str = "manual") -> list[dict]:
+    """真实界面顺序：先扫描发现 → 取待确认 revision → 确认 → 再扫描入库。"""
+    _observe(token)
+    pending_files = _confirm_pending_copies(token, source)
     response = client.post("/api/production/materials/scan", headers=_headers(token))
     assert response.status_code == 200, response.text
+    return pending_files
 
 
 def _asset_by_file(file_name: str, token: str) -> dict:
@@ -132,7 +143,7 @@ def test_asset_imported_by_second_member_belongs_to_that_member(tmp_path, monkey
     _bind(party["token_a"], party["library"])
     _drop("乙导入的素材.mp4", party["library"])
 
-    _scan(party["token_b"])
+    _ingest(party["token_b"])
 
     asset = _asset_by_file("乙导入的素材.mp4", party["token_b"])
     assert asset["visibility"] == "private"
@@ -147,7 +158,7 @@ def test_binder_cannot_read_another_members_private_material_even_as_owner(tmp_p
     party = _setup(tmp_path, monkeypatch)
     _bind(party["token_a"], party["library"])
     _drop("乙的私有素材.mp4", party["library"])
-    _scan(party["token_b"])
+    _ingest(party["token_b"])
 
     asset = _asset_by_file("乙的私有素材.mp4", party["token_b"])
 
@@ -172,12 +183,12 @@ def test_existing_private_material_keeps_its_original_uploader(tmp_path, monkeyp
     party = _setup(tmp_path, monkeypatch)
     _bind(party["token_a"], party["library"])
     _drop("甲的素材.mp4", party["library"])
-    _scan(party["token_a"])
+    _ingest(party["token_a"])
     original = _asset_by_file("甲的素材.mp4", party["token_a"])
 
     # 乙再扫一次，并尝试重新绑定同一个目录。
     _drop("乙的后续素材.mp4", party["library"])
-    _scan(party["token_b"])
+    _ingest(party["token_b"])
     _bind(party["token_b"], party["library"])
 
     still_mine = client.get(
@@ -253,18 +264,9 @@ def test_app_import_confirmation_branch_keeps_the_confirming_member_identity(
     _bind(party["token_a"], party["library"])
     _drop("乙应用内导入.mp4", party["library"])
 
-    status = client.get("/api/production/materials/intake", headers=_headers(party["token_b"]))
-    assert status.status_code == 200, status.text
-    pending = status.json()["pending_files"]
-    assert pending, status.text
-    for item in pending:
-        confirmed = client.post(
-            "/api/production/materials/intake/copy-complete",
-            json={**item, "confirmation_source": "app_import"},
-            headers=_headers(party["token_b"]),
-        )
-        assert confirmed.status_code == 200, confirmed.text
-
+    _observe(party["token_b"])
+    pending_files = _confirm_pending_copies(party["token_b"], "app_import")
+    assert pending_files, f"未发现待确认文件：{pending_files}"
     scanned = client.post("/api/production/materials/scan", headers=_headers(party["token_b"]))
     assert scanned.status_code == 200, scanned.text
 

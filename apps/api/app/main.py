@@ -219,6 +219,7 @@ from app.workspace_settings import (
     workspace_settings,
 )
 from app.source_repository import SourceRepository
+from app.home_aggregation import aggregate_home
 from app.schemas import (
     JobProgressResponse,
     TaskJobProgressResponse,
@@ -307,6 +308,7 @@ from app.schemas import (
     MaterialCollectionsResponse,
     MaterialLibraryInsightsResponse,
     MaterialLibraryResponse,
+    HomeAggregationResponse,
     MaterialReviewRequest,
     MaterialUseStateRequest,
     MaterialSegmentMatchResponse,
@@ -11977,6 +11979,35 @@ def get_creation_task_cover_image(
         raise HTTPException(status_code=404, detail="creation task cover not found") from exc
     media_type = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
     return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@app.get(
+    "/api/production/home",
+    response_model=HomeAggregationResponse,
+)
+def get_production_home(
+    request: Request,
+    days: int = 7,
+) -> HomeAggregationResponse:
+    """首页一次取齐：当前身份可见的统计、真实日趋势、可进入的队列/待办/成果、
+    整机匿名接收数量和真实存储事实。
+
+    身份解析完全沿用既有读过滤（`_content_reader` 与 `_content_include_private`），
+    聚合模块不另写可见性判据。`days` 只影响日趋势跨度，不改变其他统计口径。
+    """
+    if days not in {7, 30}:
+        raise HTTPException(status_code=422, detail="首页统计只支持 days=7 或 days=30")
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return aggregate_home(
+        workspace_id=workspace_id,
+        repository=production_repo,
+        source_repository=source_repository,
+        days=days,
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
+        include_private=_content_include_private(request),
+    )
 
 
 @app.get(

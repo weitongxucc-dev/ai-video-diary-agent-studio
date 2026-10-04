@@ -12,7 +12,7 @@ from app.production import ProductionRepository
 
 
 def _request() -> Request:
-    return Request({"type": "http", "method": "POST", "path": "/api/production/materials"})
+    return Request({"type": "http", "method": "POST", "path": "/api/production/materials", "headers": []})
 
 
 def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Mock:
