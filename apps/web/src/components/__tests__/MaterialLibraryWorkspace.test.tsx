@@ -8,14 +8,14 @@ vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (pro
   return <span>录音组件测试替身</span>;
 } }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn(), setMaterialVisibility: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords, setMaterialVisibility } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -1216,4 +1216,54 @@ it("keeps the previous segment's records off screen while the next one loads", a
   expect(screen.queryByText(/第一条成片/)).not.toBeInTheDocument();
   expect(screen.queryByText(/plan-1/)).not.toBeInTheDocument();
   expect(screen.getByText("正在读取使用记录……")).toBeInTheDocument();
+});
+
+it("shares the selected material and shows the value returned by the server", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByText(/素材仅自己可见，成员读不到/);
+  vi.mocked(setMaterialVisibility).mockResolvedValue({ ...asset, visibility: "shared" });
+
+  fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+  await waitFor(() => expect(setMaterialVisibility).toHaveBeenCalledWith("asset", "shared"));
+  await screen.findByText(/团队成员可读取这个素材/);
+  expect(screen.getByRole("button", { name: "共享给团队" })).toHaveAttribute("aria-pressed", "true");
+});
+
+it("revokes a shared material back to private from the same control", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [{ ...asset, visibility: "shared" }] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByText(/团队成员可读取这个素材/);
+  vi.mocked(setMaterialVisibility).mockResolvedValue({ ...asset, visibility: "private" });
+
+  fireEvent.click(screen.getByRole("button", { name: "仅自己可见" }));
+
+  await waitFor(() => expect(setMaterialVisibility).toHaveBeenCalledWith("asset", "private"));
+  await screen.findByText(/素材仅自己可见，成员读不到/);
+});
+
+it("keeps the previous visibility and gives a retryable message when the save fails", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByText(/素材仅自己可见，成员读不到/);
+  vi.mocked(setMaterialVisibility).mockRejectedValue(new Error("仅所有者可执行此操作"));
+
+  fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+  await waitFor(() => expect(screen.getByText(/仅所有者可执行此操作/)).toBeInTheDocument());
+  // 失败后仍是服务端原来的值，不做乐观改动。
+  expect(screen.getByText(/素材仅自己可见，成员读不到/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "共享给团队" })).toHaveAttribute("aria-pressed", "false");
+});
+
+it("does not show another material's failure after switching selection", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByRole("button", { name: /自造素材B/ });
+  let rejectSave: (reason?: unknown) => void = () => {};
+  vi.mocked(setMaterialVisibility).mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject; }));
+
+  fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+  rejectSave(new Error("仅所有者可执行此操作"));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "仅自己可见" })).toBeInTheDocument());
+  expect(screen.queryByText(/仅所有者可执行此操作/)).not.toBeInTheDocument();
 });
