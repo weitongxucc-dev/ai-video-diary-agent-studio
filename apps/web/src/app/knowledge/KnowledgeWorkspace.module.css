@@ -65,6 +65,9 @@
 .citation button { justify-self: start; min-height: 30px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; cursor: pointer; }
 .citation button:hover { border-color: var(--accent); }
 .citationTrace { display: grid; gap: 6px; min-width: 0; }
+.citationHit { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid var(--accent); border-radius: 6px; }
+.citationHit pre { overflow: auto; max-height: 220px; margin: 0; padding: 7px; border-radius: 6px; background: var(--surface-2); color: var(--text-1); font-size: 12px; white-space: pre-wrap; }
+.citationHit table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .citationTrace pre, .citationTrace ol { overflow: auto; max-height: 260px; margin: 0; padding: 7px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-2); color: var(--text-1); font-size: 12px; white-space: pre-wrap; }
 .citationTrace table { width: 100%; border-collapse: collapse; font-size: 12px; }
 @media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

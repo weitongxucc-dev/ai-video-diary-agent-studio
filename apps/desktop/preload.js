@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openWavFile: () => ipcRenderer.invoke('open-wav-file'),
   // No path argument: the shell resolves the destination from the controlled
   // intake binding, so the renderer cannot name a write target.
-  importMaterials: () => ipcRenderer.invoke('import-materials'),
+  importMaterials: (identity) => ipcRenderer.invoke('import-materials', identity),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   saveRenderedVideo: (taskId) => ipcRenderer.invoke('save-rendered-video', taskId),
   saveCoverImage: (taskId, coverId) => ipcRenderer.invoke('save-cover-image', taskId, coverId),

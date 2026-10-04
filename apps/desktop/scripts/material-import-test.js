@@ -100,6 +100,11 @@ async function main() {
   const plain = (value) => JSON.parse(JSON.stringify(value));
 
   const server = http.createServer((request, reply) => {
+    if (request.method === 'POST' && request.url === '/api/production/materials/intake/copy-complete') {
+      reply.writeHead(200, { 'content-type': 'application/json' });
+      reply.end(JSON.stringify({ confirmed: true }));
+      return;
+    }
     requestedPaths.push(request.url);
     readsThisImport += 1;
     if (bindingMode === 'hang') return; // never responds: exercises the timeout

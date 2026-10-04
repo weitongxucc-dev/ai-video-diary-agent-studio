@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 WORKSPACE = "workspace-usage"
@@ -33,11 +34,31 @@ def make_repo(tmp_path: Path) -> tuple[ProductionRepository, Path]:
     return repo, library
 
 
-def register(repo: ProductionRepository, library: Path, name: str, *, workspace_id: str = WORKSPACE) -> str:
-    """登记一个真实落盘的素材并分析出片段，供使用记录指向。"""
+def register(
+    repo: ProductionRepository,
+    library: Path,
+    name: str,
+    *,
+    workspace_id: str = WORKSPACE,
+    uploader_user_id: str | None = None,
+) -> str:
+    """登记一个真实落盘的素材并分析出片段，供使用记录指向。
+
+    上传者身份写在复制完成确认这一步：确认才创建入库记录，沿既有创建语义把
+    已验证身份绑定为这条素材的上传者，不在素材建好之后直接改库里的 owner 字段。
+    """
     path = library / name
     path.write_bytes(b"material-bytes")
-    asset_id = repo._upsert_discovered_asset(workspace_id, path).id
+    repo.bind_material_ingestion(
+        workspace_id, expected_directory=str(library),
+    )
+    repo.confirm_material_copy_complete(
+        workspace_id, relative_path=name,
+        expected_revision=repo.material_copy_revision(path.stat()),
+        confirmation_source="manual",
+        verified_owner_user_id=uploader_user_id,
+    )
+    asset_id = next(asset.id for asset in repo.scan_library(workspace_id) if asset.file_name == name)
     repo.analyze_asset(workspace_id, asset_id)
     return asset_id
 
@@ -128,7 +149,12 @@ def test_another_segment_and_another_workspace_are_not_mixed_in(tmp_path: Path) 
     asset_id = register(repo, library, "回查素材丙.mp4")
     segments = repo.get_asset(WORKSPACE, asset_id).segments
     mine, theirs = segments[0], segments[1]
-    foreign = register(repo, library, "他区素材.mp4", workspace_id=OTHER_WORKSPACE)
+    foreign_root = tmp_path / "foreign"
+    foreign_root.mkdir()
+    foreign_repo, foreign_library = make_repo(foreign_root)
+    foreign = register(foreign_repo, foreign_library, "他区素材.mp4", workspace_id=OTHER_WORKSPACE)
+    # Import already-confirmed foreign facts for the read-isolation assertions.
+    repo._save_asset(foreign_repo.get_asset(OTHER_WORKSPACE, foreign))
     foreign_segment = repo.get_asset(OTHER_WORKSPACE, foreign).segments[0]
     write_task(repo, "task_usage_2", current_version_id="timeline_current_2")
     write_plan(repo, "plan_usage_2", "task_usage_2", [clip("clip_usage_3", asset_id, theirs.id)])
@@ -180,12 +206,28 @@ def usage_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    return SimpleNamespace(client=TestClient(main_module.app), repository=repo, library=library)
+    # 真实成员服务与真实令牌：私有素材只对上传者本人可读，匿名请求读不到。
+    service = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", service)
+    uploader, uploader_token = service.join(service.create_invite_code(), "上传者")
+    return SimpleNamespace(
+        client=TestClient(main_module.app),
+        repository=repo,
+        library=library,
+        uploader_user_id=uploader.member_id,
+        uploader_token=uploader_token,
+    )
+
+
+def _uploader_headers(usage_client) -> dict[str, str]:
+    return {"X-Local-Member-Token": usage_client.uploader_token}
 
 
 def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> None:
     repo, library = usage_client.repository, usage_client.library
-    asset_id = register(repo, library, "接口回查甲.mp4")
+    asset_id = register(
+        repo, library, "接口回查甲.mp4", uploader_user_id=usage_client.uploader_user_id
+    )
     mine, theirs = repo.get_asset(WORKSPACE, asset_id).segments[:2]
     write_task(repo, "task_usage_4", current_version_id="timeline_current_4")
     write_plan(repo, "plan_usage_4", "task_usage_4", [
@@ -199,6 +241,7 @@ def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> N
     response = usage_client.client.get(
         f"/api/production/materials/{asset_id}/usage-records",
         params={"segment_id": mine.id},
+        headers=_uploader_headers(usage_client),
     )
 
     assert response.status_code == 200
@@ -212,5 +255,6 @@ def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> N
     missing = usage_client.client.get(
         f"/api/production/materials/{asset_id}/usage-records",
         params={"segment_id": "segment-not-here"},
+        headers=_uploader_headers(usage_client),
     )
     assert missing.status_code == 404

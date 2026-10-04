@@ -30,7 +30,13 @@ const entry: ScriptLibraryEntry = {
 };
 
 function source(overrides: Partial<ScriptLibrarySource>): ScriptLibrarySource {
-  return { reference_id: "knowledge:ki-one:2", status: "readable", title: "设备说明书", version_or_identity: "2", source_url: null, ...overrides };
+  return {
+    reference_id: "knowledge:ki-one:2", status: "readable", title: "设备说明书",
+    version_or_identity: "2", source_url: null,
+    cited_version: "2", cited_source_url: null, cited_fetched_at: null,
+    cited_content_hash: "hash-v2", locator: null,
+    ...overrides,
+  };
 }
 
 function detail(overrides: Partial<KnowledgeItemDetail> = {}): KnowledgeItemDetail {
@@ -90,13 +96,41 @@ describe("文案引用回查", () => {
     // version_changed 只是当前版本不同或授权变化，不等于引用不可读：
     // 旧版快照还在时就应该能回查当时原文，不能拿授权失效当理由阻断。
     api.getKnowledgeItem.mockResolvedValue(detail());
-    await openEntry([source({ status: "version_changed", version_or_identity: "3" })]);
+    // 该场景只看回查本身，摘要行不重复断言。
+    await openEntry([source({ status: "version_changed", version_or_identity: "3", cited_version: null, cited_content_hash: null })]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
     await screen.findByText(/以下仍是引用当时那一版的原文/);
     const trace = screen.getByText(/引用版本 2 · 指纹 hash-v2/).parentElement!;
     expect(within(trace).getByText(/第2页 基本参数/)).toBeInTheDocument();
     // 当前版正文不会被拿来冒充引用当时的内容。
     expect(screen.queryByText(/当前版第3段/)).not.toBeInTheDocument();
+  });
+
+  it("shows the fixed cited version facts and the unbound locator state on the row", async () => {
+    // 摘要行直接显示服务端按引用版本回填的事实；没有绑定定位时明说未绑定。
+    await openEntry([source({ cited_source_url: "https://example.test/v2", cited_fetched_at: "2026-10-02T08:00:00Z" })]);
+    const row = screen.getByText(/knowledge:ki-one:2 · 设备说明书/).parentElement!;
+    expect(within(row).getByText(/引用版本 2 · 指纹 hash-v2/)).toBeInTheDocument();
+    expect(within(row).getByText(/抓取于/)).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "该版原始来源" })).toHaveAttribute("href", "https://example.test/v2");
+    expect(within(row).getByText(/未绑定具体段落定位/)).toBeInTheDocument();
+  });
+
+  it("locates the cited paragraph and parameter by the locator the source provides", async () => {
+    api.getKnowledgeItem.mockResolvedValue(detail());
+    await openEntry([{ ...source({}), locator: "第2页" }]);
+    fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
+    const hit = (await screen.findByText("命中定位 第2页")).parentElement!;
+    // 命中定位给出该段原文与该定位下的参数，不拿整版代替。
+    expect(within(hit).getByText(/第2页 净重 600g/)).toBeInTheDocument();
+    expect(within(hit).getByText("600")).toBeInTheDocument();
+  });
+
+  it("reports a locator that is not in the cited version instead of guessing a page", async () => {
+    api.getKnowledgeItem.mockResolvedValue(detail());
+    await openEntry([{ ...source({}), locator: "第9页" }]);
+    fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
+    await screen.findByText(/引用绑定的定位 第9页 不在这一版里/);
   });
 
   it("shows the failure state and allows retrying", async () => {

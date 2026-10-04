@@ -138,6 +138,7 @@ from app.scheduled_tasks import (
 )
 from app.production import (
     ScriptLibraryEntry,
+    content_readable,
     ArtifactRecord,
     CreationPlan,
     VideoTemplate,
@@ -218,6 +219,7 @@ from app.workspace_settings import (
     workspace_settings,
 )
 from app.source_repository import SourceRepository
+from app.home_aggregation import aggregate_home
 from app.schemas import (
     JobProgressResponse,
     TaskJobProgressResponse,
@@ -292,6 +294,8 @@ from app.schemas import (
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
+    MaterialCopyCompleteRequest,
+    MaterialCopyCompleteResponse,
     MaterialUsageRecordsResponse,
     MediaLinkCheckRequest,
     MediaLinkCheckResponse,
@@ -304,6 +308,7 @@ from app.schemas import (
     MaterialCollectionsResponse,
     MaterialLibraryInsightsResponse,
     MaterialLibraryResponse,
+    HomeAggregationResponse,
     MaterialReviewRequest,
     MaterialUseStateRequest,
     MaterialSegmentMatchResponse,
@@ -392,7 +397,6 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
-from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -892,6 +896,52 @@ def _content_include_private(request: Request) -> bool:
     return member.role == "owner"
 
 
+def _content_reader(request: Request, workspace_id: str) -> tuple[str | None, bool]:
+    """解析这次调用的可信内容读取身份：`(user_id, local_diagnostic)`。
+
+    两种既有身份归一成一个 id 参与判据，不新造第二套：
+    - 已验证的 Bearer 身份：`request.state.principal.user_id`；
+    - 本地成员令牌：`local_members_service.resolve_member` 的 `member_id`。
+    令牌无效按 401 处理，不降级成「没带令牌所以按 owner 看全部」。
+
+    `local_diagnostic` 只在保留的 local 工作区、且请求确实没有任何认证身份时为真：
+    单机本地正常使用不受影响，但这不是多人隔离——带了无效身份或已开认证的请求
+    不得借此看到别人的私有内容。
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is not None and principal.user_id:
+        return str(principal.user_id), False
+
+    token = _local_member_token(request)
+    if token:
+        try:
+            member = local_members_service.resolve_member(token)
+        except LocalMembersError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        assert member is not None
+        return str(member.member_id), False
+
+    if auth_context.enabled:
+        # 已开认证却没有可信身份：没有可读身份，不退回共享或 local。
+        return None, False
+    # 受控诊断只限保留的 local 工作区：本机单人使用照常可读自己的私有内容。
+    # 其他 workspace 没有这个范围——那里的匿名请求没有可信身份，读不到私有内容。
+    return None, workspace_id == LEGACY_WORKSPACE_ID
+
+
+def _content_visible(
+    request: Request, workspace_id: str, visibility: str, owner_user_id: str | None
+) -> bool:
+    """内容可见范围判据，与仓储层共用同一规则（app.production.content_readable）。"""
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return content_readable(
+        user_id=user_id,
+        local_diagnostic=local_diagnostic,
+        visibility=visibility,
+        owner_user_id=owner_user_id,
+    )
+
+
 @app.get("/api/members")
 def list_local_members() -> MemberListResponse:
     return MemberListResponse(
@@ -1127,7 +1177,16 @@ def set_video_template_visibility_route(
 @app.get("/api/video-templates")
 def list_video_templates(request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
-    return {"items": [asdict(item) for item in [*_builtin_video_templates(workspace_id), *production_repo.list_video_templates(workspace_id)]]}
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return {"items": [
+        asdict(item)
+        for item in [
+            *_builtin_video_templates(workspace_id),
+            *production_repo.list_video_templates(
+                workspace_id, viewer_user_id=user_id, local_diagnostic=local_diagnostic
+            ),
+        ]
+    ]}
 
 
 @app.post("/api/creation-tasks/{task_id}/templates")
@@ -1176,8 +1235,14 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
                   "color_style": common_color,
                   "subtitle_style": dict(source_track.style) if source_track else _default_subtitle_style()},
     )
+    # 新模板的归属只认这次请求解析出的可信身份；已有模板沿用库里那一版。
+    _, template_local_diagnostic = _content_reader(request, current_workspace_id(request))
     try:
-        return asdict(production_repo.save_video_template(template))
+        return asdict(production_repo.save_video_template(
+            template,
+            verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
+            local_diagnostic=template_local_diagnostic,
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -2989,7 +3054,11 @@ def _creation_task_topic_inputs(
             "version_or_identity": item.version,
             "title": item.title,
             "authorization_or_license": item.authorization,
-            "source_url": None,
+            # 真实回查证据：网页快照才带原网址和抓取时间；文件与手填条目为空。
+            # 不编造链接，也不拿当前版冒充引用当时那一版。
+            "source_url": _safe_topic_source_url(item.source_url),
+            "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
+            "content_hash": item.content_hash,
         }
     for reference in plan.source_references:
         try:
@@ -4158,10 +4227,13 @@ def workspace_assistant_plan_turn(
 ) -> WorkspaceAssistantPlanTurnResponse:
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
+    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
     try:
         reply, preview = run_plan_turn(
             workspace_settings_for_turn,
             workspace_id=workspace_id,
+            local_member_token=_local_member_token(request) or None,
+            caller_user_id=caller_user_id if not local_diagnostic else None,
             conversation_id=str(payload.conversation_id),
             message=payload.message.strip(),
             authorization=request.headers.get("authorization"),
@@ -4237,7 +4309,12 @@ def confirm_creation_plan(
         updated_at=now,
     )
     try:
-        saved_plan, saved_task = production_repo.confirm_creation_plan(plan, task)
+        # 方案与任务的归属只认这次请求的可信身份，调用方自填的值不参与判断。
+        saved_plan, saved_task = production_repo.confirm_creation_plan(
+            plan, task,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=409,
@@ -4295,12 +4372,42 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
 
 
 def _script_library_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
+    """读文案库引用的来源任务：可见范围按可信身份判，读不到按不存在处理。"""
     try:
-        return production_repo.get_creation_task(
-            workspace_id, task_id, include_private=_content_include_private(request),
-        )
+        task = production_repo.get_creation_task(workspace_id, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="文案来源任务不可读")
+    return task
+
+
+def _attach_cited_version_facts(
+    state: ScriptLibrarySourceResponse,
+    source_repository: SourceRepository,
+    workspace_id: str,
+    item_id: str,
+    version: str,
+) -> None:
+    """回填引用绑定那一版的真实快照事实，供前端回查当时内容。
+
+    只读版本快照里已经存下的来源链接、抓取时刻和指纹；引用本身只记到条目与
+    版本，没有段落定位，所以 `locator` 留空，不拿第一段冒充引用定位。
+    """
+    try:
+        versions = source_repository.list_knowledge_item_versions(workspace_id, item_id)
+    except KeyError:
+        return
+    snapshot = next(
+        (value for value in versions if value.version == version),
+        None,
+    )
+    if snapshot is None:
+        return
+    state.cited_version = snapshot.version
+    state.cited_source_url = snapshot.source_url
+    state.cited_fetched_at = snapshot.fetched_at
+    state.cited_content_hash = snapshot.content_hash
 
 
 def _script_library_sources(
@@ -4320,15 +4427,22 @@ def _script_library_sources(
             parts = ref.removeprefix("knowledge:").rsplit(":", 1)
             if len(parts) == 2:
                 item_id, version = parts
+                user_id, local_diagnostic = _content_reader(request, workspace_id)
                 try:
-                    item = source_repository.get_knowledge_item(workspace_id, item_id)
-                    visible = (_content_include_private(request)
-                               or source_repository.get_knowledge_item_visibility(workspace_id, item_id) == "shared")
-                except KeyError:
+                    # 与知识域读取同一个判据：私有只对上传者本人，读不到当不存在。
+                    item = source_repository.get_knowledge_item_readable_by(
+                        workspace_id, item_id,
+                        user_id=user_id, local_diagnostic=local_diagnostic,
+                    )
+                except (KeyError, ValueError):
                     item = None
-                    visible = False
                 original = knowledge.get(item_id)
-                if visible and item is not None and original is not None:
+                if item is not None and original is not None:
+                    # 有权读到这一版（无论是当前版还是历史版）才回填快照事实；
+                    # 读不到就不给来源链接、抓取时刻和指纹。
+                    _attach_cited_version_facts(
+                        state, source_repository, workspace_id, item_id, version
+                    )
                     if (item.version != version or item.version != original.version
                             or item.authorization != original.authorization or item.ownership != original.ownership):
                         state.status = "version_changed"
@@ -4436,9 +4550,13 @@ def reuse_script_library(entry_id: str, request: Request, payload: ScriptLibrary
 
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
 def list_creation_tasks(request: Request) -> CreationTasksResponse:
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     tasks = production_repo.list_creation_tasks(
-        current_workspace_id(request),
+        workspace_id,
         include_private=_content_include_private(request),
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
     )
     return CreationTasksResponse(
         items=[item.__dict__ for item in tasks],
@@ -4998,6 +5116,10 @@ def creation_task_assistant_turn(
 ) -> CreationTaskAssistantTurnResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
+    # 先按可信身份确认这条任务读得到，再让助手碰它：读不到的任务不应被助手读到。
+    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="creation task not found")
     trusted_stage, trusted_refs = _assistant_turn_scope(workspace_id, task, payload)
     message = payload.message.strip()
     if _assistant_text_without_credentials(message, workspace_id) != message:
@@ -5012,6 +5134,8 @@ def creation_task_assistant_turn(
         reply, preview = run_task_turn(
             _workspace_settings_for(workspace_id),
             workspace_id=workspace_id,
+            local_member_token=_local_member_token(request) or None,
+            caller_user_id=caller_user_id if not local_diagnostic else None,
             task_id=task_id,
             message=message,
             stage=trusted_stage,
@@ -6209,6 +6333,8 @@ def _creation_task_montage_candidates(
     clip: MontageClip,
     *,
     automation_only: bool = False,
+    viewer_user_id: str | None = None,
+    local_diagnostic: bool = False,
 ) -> list[MontageClipCandidateResponse]:
     # `automation_only` marks the callers where the machine, not the user, picks
     # the winner from this list. Only those hide material the user marked
@@ -6217,7 +6343,9 @@ def _creation_task_montage_candidates(
     cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
-    for asset in production_repo.list_assets(workspace_id):
+    for asset in production_repo.list_assets(
+        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
+    ):
         if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         if automation_only and not material_allows_automation(asset):
@@ -6283,7 +6411,11 @@ def get_creation_task_montage_clip_candidates(
         clip = next(item for item in plan.clips if item.id == clip_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    return _creation_task_montage_candidates(workspace_id, plan, clip)
+    return _creation_task_montage_candidates(
+        workspace_id, plan, clip,
+        viewer_user_id=_content_reader(request, workspace_id)[0],
+        local_diagnostic=_content_reader(request, workspace_id)[1],
+    )
 
 
 def _edit_preview_response(
@@ -8016,7 +8148,11 @@ def preview_creation_task_edit(
     invalidated_refs = _logical_montage_output_refs(plan)
     candidates = [
         candidate
-        for candidate in _creation_task_montage_candidates(workspace_id, plan, clip, automation_only=True)
+        for candidate in _creation_task_montage_candidates(
+            workspace_id, plan, clip, automation_only=True,
+            viewer_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
+        )
         if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id)
     ]
     material_constraint = _edit_material_constraint(command)
@@ -11845,6 +11981,35 @@ def get_creation_task_cover_image(
 
 
 @app.get(
+    "/api/production/home",
+    response_model=HomeAggregationResponse,
+)
+def get_production_home(
+    request: Request,
+    days: int = 7,
+) -> HomeAggregationResponse:
+    """首页一次取齐：当前身份可见的统计、真实日趋势、可进入的队列/待办/成果、
+    整机匿名接收数量和真实存储事实。
+
+    身份解析完全沿用既有读过滤（`_content_reader` 与 `_content_include_private`），
+    聚合模块不另写可见性判据。`days` 只影响日趋势跨度，不改变其他统计口径。
+    """
+    if days not in {7, 30}:
+        raise HTTPException(status_code=422, detail="首页统计只支持 days=7 或 days=30")
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return aggregate_home(
+        workspace_id=workspace_id,
+        repository=production_repo,
+        source_repository=source_repository,
+        days=days,
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
+        include_private=_content_include_private(request),
+    )
+
+
+@app.get(
     "/api/production/materials/insights",
     response_model=MaterialLibraryInsightsResponse,
 )
@@ -11855,8 +12020,13 @@ def get_material_library_insights(
     for plan in montage_repo.recent(workspace_id, limit=50):
         if plan.status == "rendered":
             _record_montage_usage(workspace_id, plan)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     return MaterialLibraryInsightsResponse.model_validate(
-        production_repo.library_insights(workspace_id)
+        production_repo.library_insights(
+            workspace_id,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        )
     )
 
 
@@ -11879,15 +12049,19 @@ def list_production_materials(
         raise HTTPException(status_code=422, detail="invalid material review status")
     if media_type not in {None, "video", "audio", "image"}:
         raise HTTPException(status_code=422, detail="invalid material media type")
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     assets, total = production_repo.list_assets_page(
-        current_workspace_id(request),
+        workspace_id,
         limit=limit,
         offset=offset,
         query=q,
         tag=tag,
         review_status=review_status,
         media_type=media_type,
-        include_private=_content_include_private(request),
+        include_private=local_diagnostic,
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
     )
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],
@@ -11914,7 +12088,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
     else:
         state = str(directory["status"])
         message, repair = {
-            "ready": (("素材目录可访问；文件稳定后会进入分析。" if bound else
+            "ready": (("素材目录可访问；确认复制完成后才接收并分析。" if bound else
                        "素材目录可访问，等待关联到当前工作区。"), None),
             "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
             "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
@@ -11932,6 +12106,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
         scan_interval_seconds=60,
         file_counts=(repository.material_ingestion_state_counts(workspace_id) if bound else
                      {"observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0}),
+        pending_files=repository.pending_material_copies(workspace_id) if bound else [],
     )
 
 
@@ -11961,7 +12136,9 @@ def _material_ingestion_for(repository: ProductionRepository):
 @app.get("/api/production/materials/intake", response_model=MaterialIntakeStatusResponse)
 def get_material_intake_status(request: Request) -> MaterialIntakeStatusResponse:
     repository = production_repo
-    return _material_binding_status(current_workspace_id(request), repository)
+    workspace_id = current_workspace_id(request)
+    _content_reader(request, workspace_id)
+    return _material_binding_status(workspace_id, repository)
 
 
 @app.post("/api/production/materials/intake/bind", response_model=MaterialIntakeStatusResponse)
@@ -11970,16 +12147,42 @@ def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -
     repository = production_repo
     service = _material_ingestion_for(repository)
     try:
-        repository.bind_material_ingestion(workspace_id, expected_directory=payload.expected_directory)
+        repository.bind_material_ingestion(
+            workspace_id,
+            expected_directory=payload.expected_directory,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     service.wake()
     return _material_binding_status(workspace_id, repository)
 
 
+@app.post("/api/production/materials/intake/copy-complete", response_model=MaterialCopyCompleteResponse)
+def confirm_material_copy_complete(request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:
+    workspace_id = current_workspace_id(request)
+    repository = production_repo
+    service = _material_ingestion_for(repository)
+    try:
+        service.confirm_copy_complete(
+            workspace_id, relative_path=payload.relative_path,
+            expected_revision=payload.expected_revision.model_dump(),
+            confirmation_source=payload.confirmation_source,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="文件已移除，请重新检查素材目录。") from exc
+    return MaterialCopyCompleteResponse(
+        confirmed=True, intake=_material_binding_status(workspace_id, repository),
+    )
+
+
 @app.post("/api/production/materials/intake/scan")
 def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     repository = production_repo
     status = _material_binding_status(workspace_id, repository)
     if not status.bound_to_current_workspace:
@@ -11987,14 +12190,21 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     if status.directory_state != "ready":
         raise HTTPException(status_code=409, detail=status.directory_message)
     _material_ingestion_for(repository).scan_once()
-    assets, total = repository.list_assets_page(workspace_id, limit=24, offset=0)
+    assets, total = repository.list_assets_page(
+        workspace_id, limit=24, offset=0,
+        include_private=local_diagnostic,
+        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+    )
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],
         total_count=total, limit=24, offset=0, has_more=len(assets) < total,
     )
 
 
-def _media_link_service(workspace_id: str) -> MediaLinkImportService:
+def _media_link_service(
+    workspace_id: str, verified_owner_user_id: str | None = None,
+    local_diagnostic: bool = False,
+) -> MediaLinkImportService:
     """Build the direct-link importer on top of the existing intake binding."""
     repository = production_repo
     try:
@@ -12007,7 +12217,9 @@ def _media_link_service(workspace_id: str) -> MediaLinkImportService:
             follow_redirects=False, timeout=60.0, trust_env=False
         ),
         intake_root=intake_root,
-        provenance=MaterialLinkProvenanceSink(repository, workspace_id),
+        provenance=MaterialLinkProvenanceSink(
+            repository, workspace_id, verified_owner_user_id, local_diagnostic,
+        ),
         max_bytes=DEFAULT_MAX_BYTES,
     )
 
@@ -12055,7 +12267,9 @@ def import_production_material_link(
     payload: MediaLinkImportRequest,
 ) -> MediaLinkImportResponse:
     workspace_id = current_workspace_id(request)
-    service = _media_link_service(workspace_id)
+    # 导入的素材归属这次请求的可信身份，不采信任何自填值。
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    service = _media_link_service(workspace_id, viewer_user_id, local_diagnostic)
     try:
         result = service.import_link(payload.url)
         asset = production_repo.get_asset(workspace_id, result.asset_id)
@@ -12226,6 +12440,12 @@ def list_material_segment_usage_records(
     """Show what used one segment of one material, read from real render rows."""
     workspace_id = current_workspace_id(request)
     try:
+        asset = production_repo.get_asset(workspace_id, asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区")
+    try:
         records = production_repo.list_segment_usage_records(workspace_id, asset_id, segment_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
@@ -12307,20 +12527,26 @@ def get_production_material(
     asset_id: str,
     request: Request,
 ) -> MaterialAssetResponse:
+    workspace_id = current_workspace_id(request)
     try:
-        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+        asset = production_repo.get_asset(workspace_id, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="material asset not found")
     return _material_asset_response(asset)
 
 
 @app.get("/api/production/materials/{asset_id}/media")
 def stream_production_material(asset_id: str, request: Request) -> FileResponse:
     """Stream a workspace-scoped library asset for the desktop review player."""
+    workspace_id = current_workspace_id(request)
     try:
-        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+        asset = production_repo.get_asset(workspace_id, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="material asset not found")
     root = Path(settings.video_inbox_path).expanduser().resolve()
     path = Path(asset.path).expanduser().resolve()
     try:
@@ -12353,11 +12579,15 @@ def stream_production_material(asset_id: str, request: Request) -> FileResponse:
 )
 def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     if material_execution_mode == "scheduled":
         _material_ingestion_for(production_repo).scan_once()
     else:
         production_repo.scan_library(workspace_id)
-    assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
+    assets, total = production_repo.list_assets_page(
+        workspace_id, limit=24, offset=0, include_private=local_diagnostic,
+        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+    )
     return MaterialLibraryResponse(
         assets=[
             _material_asset_response(asset)
@@ -12731,7 +12961,10 @@ def list_production_montage_clip_candidates(
     cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
-    for asset in production_repo.list_assets(workspace_id):
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    for asset in production_repo.list_assets(
+        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
+    ):
         if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         for segment in asset.segments:
@@ -13430,6 +13663,7 @@ def save_source_item_to_knowledge(
             ownership=payload.ownership.strip(),
             authorization=payload.authorization.strip(),
             version=payload.version.strip(),
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="source item not found") from exc
@@ -13517,8 +13751,9 @@ def get_knowledge_item_detail(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
     visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
-    if not _content_include_private(request) and visibility != CONTENT_VISIBILITY_LEGACY:
-        # 与列表、文案库引用同一规则：成员读不到别人的私有内容，按不存在处理。
+    if not _content_visible(request, workspace_id, visibility, item.owner_user_id):
+        # 与列表、文案库引用同一规则：读不到别人的私有内容按不存在处理，
+        # 不用 403 暴露「它存在只是你不能看」。
         raise HTTPException(status_code=404, detail="knowledge item not found")
     versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
@@ -13559,8 +13794,14 @@ def set_knowledge_item_visibility_route(
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
     workspace_id = current_workspace_id(request)
-    visibilities = None if _content_include_private(request) else (CONTENT_VISIBILITY_LEGACY,)
-    items = source_repository.list_knowledge_items(workspace_id, visibilities=visibilities)
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    try:
+        items = source_repository.list_knowledge_items_readable_by(
+            workspace_id, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+    except ValueError as exc:
+        # 已开认证却没有可信身份：没有可读身份就是没有可读内容，不退回只看共享。
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     return KnowledgeItemsResponse(
         items=[
             _knowledge_item_response(

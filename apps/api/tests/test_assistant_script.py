@@ -80,7 +80,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(monkey
     calls = []
     task = SimpleNamespace(id="task-one", stage="review", confirmed_script_id="script-one",
                            narration_cache_key="narration-one", current_timeline_version_id=None,
-                           montage_plan_id="plan-one")
+                           montage_plan_id="plan-one", visibility="private", owner_user_id=None)
     montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
                               status="rendered", output_path="rendered-video", duration_seconds=30,
                               clips=[SimpleNamespace(id="clip-current")], graphic_overlays=[])

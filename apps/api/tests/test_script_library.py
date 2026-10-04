@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from datetime import UTC, datetime
 import json
 
 from fastapi.testclient import TestClient
@@ -10,7 +11,8 @@ from app.production import (
     CreationTaskScriptSection, ProductionRepository,
 )
 from app.source_repository import SourceRepository
-from app.sources import KnowledgeItem
+from app.knowledge_files import parse_knowledge_file
+from app.sources import KnowledgeItem, SourceConnector, SourceItem
 
 
 @pytest.fixture
@@ -135,6 +137,75 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
         conn.execute("UPDATE knowledge_items SET workspace_id='other' WHERE id='knowledge_own'")
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
     assert states[0]["status"] == "missing" and states[0]["title"] is None
+
+
+def test_citation_reports_the_cited_version_facts_after_the_current_version_moved(library):
+    """引用回查必须给引用绑定那一版的真实快照事实，而不是当前版。"""
+    client, repo, sources = library
+    entry = save(client)
+    sources.upsert_connector(SourceConnector(
+        id="c1", workspace_id="local", platform="knowledge_files", protocol="local_file",
+        account_or_rule="知识文件导入", frequency="manual", permissions=(), cursor="",
+        connection_status="ready", latest_run_id=None,
+        created_at=datetime(2026, 10, 1, tzinfo=UTC),
+    ))
+    # 用真实解析链造出有版本快照的资料：同文件更新内容后头推进到第2版，第1版仍在。
+    parsed = parse_knowledge_file("manual.md", "# 参数\n\n## 规格\n\n- 净重: 600（g）\n".encode("utf-8"))
+    first = SourceItem(
+        id="source_versioned", workspace_id="local", connector_id="c1", source_label="file_import",
+        source_url=None, content_type=parsed.content_type, author=None, published_at=None,
+        body=parsed.full_text, subtitles=None, media_references=(), license="user_provided",
+        title=parsed.title, file_reference=parsed.filename, content_hash=parsed.content_hash,
+        sections=parsed.sections, parameters=parsed.parameters,
+    )
+    sources.save_source_items("local", [first])
+    sources.save_source_item_to_knowledge("local", first.id, ownership="本人", authorization="本人允许引用")
+    with sources._connect() as conn:
+        conn.execute("UPDATE knowledge_item_versions SET source_url='https://example.test/v1' "
+                     "WHERE knowledge_item_id IN (SELECT id FROM knowledge_items WHERE file_reference='manual.md')")
+    updated_body = "# 参数\n\n## 规格\n\n- 净重: 700（g）\n"
+    updated = parse_knowledge_file("manual.md", updated_body.encode("utf-8"))
+    second = SourceItem(
+        id="source_versioned_2", workspace_id="local", connector_id="c1", source_label="file_import",
+        source_url=None, content_type=updated.content_type, author=None, published_at=None,
+        body=updated.full_text, subtitles=None, media_references=(), license="user_provided",
+        title=updated.title, file_reference=updated.filename, content_hash=updated.content_hash,
+        sections=updated.sections, parameters=updated.parameters,
+    )
+    sources.save_source_items("local", [second])
+    versioned = sources.save_source_item_to_knowledge(
+        "local", second.id, ownership="本人", authorization="本人允许引用"
+    )
+    assert versioned.version == "2"
+    # 让已确认文案的引用指向这条真正有版本快照的资料，并同步方案的引用版本。
+    with repo._connect() as conn:
+        row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id='script_original'").fetchone()
+        payload = json.loads(row[0])
+        payload["sections"][0]["evidence_reference_ids"] = [f"knowledge:{versioned.id}:1"]
+        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (json.dumps(payload),))
+        conn.execute(
+            "UPDATE creation_plans SET payload=? WHERE id='plan_original'",
+            (json.dumps({**json.loads(
+                conn.execute("SELECT payload FROM creation_plans WHERE id='plan_original'").fetchone()[0]
+            ), "knowledge_references": [asdict(CreationPlanKnowledgeReference(
+                id=versioned.id, version="1", title=versioned.title,
+                authorization=versioned.authorization, ownership=versioned.ownership,
+            ))]}),),
+        )
+    repo.confirm_creation_task_script(
+        "local", "task_original", "script_original", title="模块化介绍",
+        sections=[CreationTaskScriptSection(**section) for section in payload["sections"]],
+    )
+    entry = save(client)
+    states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
+    assert states[0]["reference_id"] == f"knowledge:{versioned.id}:1"
+    # 引用绑定第1版，而当前头已是第2版：状态如实反映版本推进，回查事实仍是第1版。
+    assert states[0]["status"] == "version_changed"
+    assert states[0]["cited_version"] == "1"
+    assert states[0]["cited_content_hash"] == parsed.content_hash
+    assert states[0]["cited_source_url"] == "https://example.test/v1"
+    # 引用只记到条目与版本，没有段落定位：不猜第一段。
+    assert states[0]["locator"] is None
 
 
 def test_cross_workspace_cannot_search_or_reuse(library, monkeypatch):

@@ -260,12 +260,15 @@ def run_task_turn(
     playhead_ms: int | None,
     authorization: str | None = None,
     cookie: str | None = None,
+    local_member_token: str | None = None,
+    caller_user_id: str | None = None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     return _run_turn(
         settings, workspace_id=workspace_id, task_id=task_id, message=message,
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
         authorization=authorization, cookie=cookie,
+        local_member_token=local_member_token, caller_user_id=caller_user_id,
         prompt=SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
         tool_names=("read_current_task,find_knowledge,preview_script_draft"
                     if script_turn else "read_current_task,find_knowledge,find_materials,preview_edit"),
@@ -282,11 +285,14 @@ def run_plan_turn(
     message: str,
     authorization: str | None = None,
     cookie: str | None = None,
+    local_member_token: str | None = None,
+    caller_user_id: str | None = None,
 ) -> tuple[str, dict | None]:
     return _run_turn(
         settings, workspace_id=workspace_id, task_id="", message=message,
         stage="", selected_refs=[], playhead_ms=None,
         authorization=authorization, cookie=cookie,
+        local_member_token=local_member_token, caller_user_id=caller_user_id,
         prompt=PLAN_PROMPT, tool_names="read_workspace_context,read_video_templates,find_knowledge,find_materials,preview_creation_plan",
         preview_kind="plan_preview", session_key=f"new-plan:{conversation_id}",
     )
@@ -303,6 +309,8 @@ def _run_turn(
     playhead_ms: int | None,
     authorization: str | None,
     cookie: str | None,
+    local_member_token: str | None,
+    caller_user_id: str | None,
     prompt: str,
     tool_names: str,
     preview_kind: str,
@@ -319,7 +327,10 @@ def _run_turn(
         )
     base_url, model, key = _configured_model(settings)
     root = _agent_root(settings, workspace_id)
-    session_id = uuid5(NAMESPACE_URL, f"ai-video-diary:{workspace_id}:{session_key or task_id}")
+    # 已解析的可信调用方身份参与会话键：不同成员不共用同一段对话历史。
+    # 没有身份时沿用既有单机行为，不额外造第二套隔离。
+    caller_scope = f":{caller_user_id}" if caller_user_id else ""
+    session_id = uuid5(NAMESPACE_URL, f"ai-video-diary:{workspace_id}:{session_key or task_id}{caller_scope}")
     runtime_root = root / "runtimes" / str(session_id)
     runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     (runtime_root / "models.json").write_text(json.dumps({
@@ -344,6 +355,8 @@ def _run_turn(
         "AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS": "" if playhead_ms is None else str(playhead_ms),
         "AI_VIDEO_DIARY_AGENT_AUTHORIZATION": authorization or "",
         "AI_VIDEO_DIARY_AGENT_COOKIE": cookie or "",
+        # 已验证的本地成员令牌：工具回调必须带上，否则会退化成匿名 local 诊断读取。
+        "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN": local_member_token or "",
     }
     cmd = [
         str(pi_executable), "--print", "--mode", "json", "--model", f"ai-video-diary/{model}",

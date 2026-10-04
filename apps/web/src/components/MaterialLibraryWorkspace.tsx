@@ -34,10 +34,12 @@ import {
   getMaterialIntakeStatus,
   getProductionMaterials,
   bindMaterialIntake,
+  confirmMaterialCopyComplete,
   reviewProductionMaterial,
   retryMaterialIntake,
   saveAssetBusinessObjects,
   scanMaterialIntake,
+  setMaterialVisibility,
   updateProductionMaterialSegment,
   updateMaterialUseState,
   updateMaterialNotes,
@@ -53,11 +55,13 @@ import {
 } from "@/lib/media-link-api";
 import type {
   BusinessObjectKind,
+  ContentVisibility,
   MaterialAsset,
   MaterialBusinessObject,
   MaterialCollections,
   MaterialLibrary,
   MaterialLibraryInsights,
+  MaterialPendingCopy,
   MaterialSegment,
   MaterialUsageRecord,
 } from "@/lib/types";
@@ -75,6 +79,7 @@ type Busy =
   | "collection"
   | "retry"
   | "notes"
+  | "visibility"
   | null;
 
 const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
@@ -226,7 +231,7 @@ export function MaterialLibraryWorkspace({
   const [error, setError] = useState("");
   const [intake, setIntake] = useState<IntakeStatus | null>(null);
   const [intakeError, setIntakeError] = useState("");
-  const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | null>("refresh");
+  const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | "confirm" | null>("refresh");
   const [importBusy, setImportBusy] = useState(false);
   const [importResult, setImportResult] = useState<{
     copied: { sourceName: string; fileName: string }[];
@@ -590,6 +595,21 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function confirmCopy(file: MaterialPendingCopy) {
+    ++intakeRevision.current;
+    setIntakeBusy("confirm");
+    setIntakeError("");
+    try {
+      const result = await confirmMaterialCopyComplete({ ...file, confirmation_source: "manual" });
+      ++intakeRevision.current;
+      setIntake(result.intake);
+    } catch (cause) {
+      setIntakeError(visibleError(cause, "复制完成确认未保存，请重新检查文件后重试。"));
+    } finally {
+      setIntakeBusy(null);
+    }
+  }
+
   async function scan() {
     if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
     setBusy("scan");
@@ -759,6 +779,23 @@ export function MaterialLibraryWorkspace({
       await refreshInsights();
     } catch (cause) {
       if (revision === selectionRevision.current) setDetailError(visibleError(cause, "使用状态保存失败，请重试"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function changeVisibility(next: ContentVisibility) {
+    if (!selected) return;
+    const revision = selectionRevision.current;
+    setBusy("visibility");
+    setDetailError("");
+    try {
+      // 以服务端返回的素材为准更新；选中已变时不写入错误，避免错绑到别的素材。
+      replaceAsset(await setMaterialVisibility(selected.id, next));
+    } catch (cause) {
+      if (revision === selectionRevision.current) {
+        setDetailError(visibleError(cause, "可见范围保存失败，请重试"));
+      }
     } finally {
       setBusy(null);
     }
@@ -1084,6 +1121,32 @@ export function MaterialLibraryWorkspace({
           </dd>
         </div>
         <div>
+          <dt>可见范围</dt>
+          <dd>
+            <div className={styles.useStateOptions} role="group" aria-label="素材可见范围">
+              <button
+                aria-pressed={selected.visibility === "shared"}
+                className={selected.visibility === "shared" ? styles.isSelected : ""}
+                disabled={busy !== null}
+                onClick={() => void changeVisibility("shared")}
+                type="button"
+              >{busy === "visibility" ? "保存中…" : "共享给团队"}</button>
+              <button
+                aria-pressed={selected.visibility === "private"}
+                className={selected.visibility === "private" ? styles.isSelected : ""}
+                disabled={busy !== null}
+                onClick={() => void changeVisibility("private")}
+                type="button"
+              >仅自己可见</button>
+            </div>
+            <small className={styles.useStateImpact}>
+              {selected.visibility === "shared"
+                ? "团队成员可读取这个素材。"
+                : "素材仅自己可见，成员读不到。"}
+            </small>
+          </dd>
+        </div>
+        <div>
           <dt>识别片段</dt>
           <dd>{selected.segments.length}</dd>
         </div>
@@ -1341,7 +1404,7 @@ export function MaterialLibraryWorkspace({
           ) : !intake.bound_to_current_workspace ? (
             <div className={styles.intakeRow}>
               <p className={styles.intakeDescription}>
-                确认将 <code title={intake.configured_directory}>{intake.configured_directory}</code> 接入当前工作区。接入后每 {intake.scan_interval_seconds} 秒检查新文件并分析，不会自动创建视频任务。
+                确认将 <code title={intake.configured_directory}>{intake.configured_directory}</code> 接入当前工作区。接入后每 {intake.scan_interval_seconds} 秒检查新文件，确认复制完成后才接收并分析，不会自动创建视频任务。
                 {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : ""}
               </p>
               <button className={styles.intakePrimary} disabled={intakeBusy !== null || intake.directory_state !== "ready"} onClick={() => void bindIntake()} type="button">
@@ -1353,7 +1416,7 @@ export function MaterialLibraryWorkspace({
               <div className={styles.intakeRow}>
                 <p className={styles.intakeDescription}>
                   已接入 <code title={intake.bound_directory ?? ""}>{intake.bound_directory}</code>，每 {intake.scan_interval_seconds} 秒自动检查。
-                  {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : " 新文件稳定后自动分析。"}
+                  {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : " 外部文件须确认复制完成后才接收；应用内导入在复制结束后自动确认。"}
                 </p>
                 {intake.directory_state === "ready" ? (
                   <span className={styles.intakeRow}>
@@ -1368,6 +1431,19 @@ export function MaterialLibraryWorkspace({
                   </span>
                 ) : null}
               </div>
+              {intake.directory_state === "ready" && intake.pending_files.length > 0 ? (
+                <section aria-label="待确认复制完成的文件">
+                  <p className={styles.intakeDescription}>请确认这些文件已复制完成。此声明不代表文件已经通过解析或内容校验。</p>
+                  {intake.pending_files.map((file) => (
+                    <div className={styles.intakeRow} key={file.relative_path}>
+                      <code>{file.relative_path}</code>
+                      <button className={styles.intakePrimary} disabled={intakeBusy !== null || importBusy || busy !== null} onClick={() => void confirmCopy(file)} type="button">
+                        复制完成，开始接收
+                      </button>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
               {importResult ? (
                 <p
                   className={styles.intakeDescription}
@@ -1376,7 +1452,7 @@ export function MaterialLibraryWorkspace({
                   {importResult.canceled ? "已取消导入，源文件保持不变。" : null}
                   {!importResult.canceled && importResult.error ? importResult.error : null}
                   {!importResult.error && importResult.copied.length > 0
-                    ? `已复制 ${importResult.copied.length} 个文件到素材目录：${importResult.copied.map((entry) => entry.fileName).join("、")}。等待稳定后才会登记并分析，源文件保持不变。`
+                    ? `已复制 ${importResult.copied.length} 个文件到素材目录：${importResult.copied.map((entry) => entry.fileName).join("、")}。复制完成确认已保存，等待接收并分析，源文件保持不变。`
                     : null}
                   {!importResult.error && importResult.copied.length === 0 && !importResult.canceled
                     && importResult.failures.length === 0 && importResult.skipped.length > 0
@@ -1439,7 +1515,7 @@ export function MaterialLibraryWorkspace({
                 </p>
               ) : null}
               <div className={styles.intakeCounts} aria-label="自动接入进度">
-                <span>等待稳定 {intake.file_counts.observing}</span>
+                <span>待确认复制 {intake.pending_files.length}</span>
                 <span>分析中 {intake.file_counts.running}</span>
                 <span>已分析 {intake.file_counts.ready}</span>
                 <span>失败 {intake.file_counts.failed}</span>

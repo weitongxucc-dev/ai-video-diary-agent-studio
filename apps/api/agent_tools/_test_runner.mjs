@@ -12,6 +12,7 @@ const fakePi = { registerTool: (t) => { tools[t.name] = t; } };
 const mod = await import(EXT);
 mod.default(fakePi);
 
+let requestedHeaders = [];
 let requestedUrls = [];
 
 // 后端真实的入参校验（照 main.py）：
@@ -46,8 +47,22 @@ function backendRejects(urlString) {
 
 function installFetchStub(routes, opts) {
   const strict = Boolean(opts && opts.strictQuery);
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init) => {
     requestedUrls.push(String(url));
+    // 顺带记录实际发出的请求头：断言工具真的带上了成员令牌等头，
+    // 而不是只靠读源码推断。只记录头名与值，不落盘、不写日志。
+    const headerEntries = [];
+    const rawHeaders = init && init.headers;
+    if (rawHeaders) {
+      if (typeof rawHeaders.forEach === "function") {
+        rawHeaders.forEach((value, name) => headerEntries.push([String(name), String(value)]));
+      } else if (Array.isArray(rawHeaders)) {
+        for (const pair of rawHeaders) headerEntries.push([String(pair[0]), String(pair[1])]);
+      } else {
+        for (const [name, value] of Object.entries(rawHeaders)) headerEntries.push([String(name), String(value)]);
+      }
+    }
+    requestedHeaders.push(Object.fromEntries(headerEntries));
     const urlString = String(url);
     const rejected = backendRejects(urlString);
     if (rejected) {
@@ -95,12 +110,13 @@ for await (const line of rl) {
     } else if (cmd.op === "call") {
       installFetchStub(cmd.routes || {}, cmd.options || {});
       requestedUrls = [];
+      requestedHeaders = [];
       const tool = tools[cmd.tool];
       if (!tool) throw new Error("no such tool: " + cmd.tool);
       const result = await tool.execute("id", cmd.params || {});
       // requests 只是附带信息，供测试断言工具实际请求了什么 URL（例如分页
       // limit 是否越界）；call() 仍只读 result。
-      process.stdout.write(JSON.stringify({ ok: true, result: (result && result.details) ?? result, requests: requestedUrls }) + "\n");
+      process.stdout.write(JSON.stringify({ ok: true, result: (result && result.details) ?? result, requests: requestedUrls, requestHeaders: requestedHeaders }) + "\n");
     } else if (cmd.op === "probe") {
       // 直接拿桩去请求一个 URL（不经过任何工具），用来验证「桩现在会不会报错」。
       // 上一包那个洞就是：工具写了 ?limit=200，桩却回 200，全绿溜过去。

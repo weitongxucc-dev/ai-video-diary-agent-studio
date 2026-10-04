@@ -77,11 +77,18 @@ def _insert_material_asset(
     workspace_id: str,
     asset_id: str,
     visibility: str,
+    owner_user_id: str | None = None,
 ) -> None:
+    """写入一条素材记录。
+
+    `owner_user_id` 是这条素材的上传者：私有内容只对上传者本人可读，因此要断言
+    「成员只看到共享」就必须给私有素材一个真实的他人归属。
+    """
     payload = json.dumps(
         {
             "id": asset_id,
             "workspace_id": workspace_id,
+            "owner_user_id": owner_user_id,
             "file_name": f"{asset_id}.mp4",
             "path": f"inbox/{asset_id}.mp4",
             "size_bytes": 12,
@@ -206,12 +213,17 @@ def test_member_sees_only_shared_creation_tasks(tmp_path, monkeypatch):
 
 
 def test_member_sees_only_shared_materials(tmp_path, monkeypatch):
-    _member_service(tmp_path, monkeypatch)
+    service = _member_service(tmp_path, monkeypatch)
+    owner_member, _owner_token = service.whoami(None)
+    owner_member_id = owner_member.member_id
     repo = _test_repo(tmp_path, monkeypatch)
     workspace_id = main_module.active_workspace_id()
     _insert_material_asset(repo.database_path, workspace_id, "asset-shared", "shared")
-    _insert_material_asset(repo.database_path, workspace_id, "asset-private", "private")
-    _, token = _joined_member(LocalMemberService(tmp_path / "agent.sqlite3"))
+    _insert_material_asset(
+        repo.database_path, workspace_id, "asset-private", "private",
+        owner_user_id=owner_member_id,
+    )
+    member_id, token = _joined_member(LocalMemberService(tmp_path / "agent.sqlite3"))
 
     member_view = client.get(
         "/api/production/materials", headers=_member_headers(token)
@@ -224,7 +236,8 @@ def test_member_sees_only_shared_materials(tmp_path, monkeypatch):
     assert owner_view.json()["total_count"] == 2
     # The page count query filters together with the rows.
     _, member_total = repo.list_assets_page(
-        workspace_id, limit=24, offset=0, include_private=False
+        workspace_id, limit=24, offset=0,
+        viewer_user_id=member_id,
     )
     assert member_total == 1
 
@@ -322,6 +335,24 @@ def test_migration_13_applies_twice_without_error(tmp_path):
     # touching creation_tasks/material_assets, so it stays safe on the bare
     # standalone chain (test_device_runtime). The visibility columns are added
     # by ProductionRepository._init_database's PRAGMA-guarded ensures instead.
+
+
+def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
+    database_path = tmp_path / "intake-later.sqlite3"
+    _chain_base_database(database_path)
+    with sqlite3.connect(database_path) as conn:
+        apply_production_migrations(conn)
+        conn.execute("CREATE TABLE material_ingestion_files (file_path TEXT PRIMARY KEY, state TEXT)")
+        conn.execute("INSERT INTO material_ingestion_files VALUES ('old.mp4', 'ready')")
+        conn.commit()
+        apply_production_migrations(conn)
+        apply_production_migrations(conn)
+        assert conn.execute(
+            "SELECT file_path, state, confirmed_revision, confirmation_source, copy_confirmed_at FROM material_ingestion_files"
+        ).fetchone() == ("old.mp4", "ready", None, None, None)
+    with sqlite3.connect(database_path) as conn:
+        apply_production_migrations(conn)
+        assert len(conn.execute("PRAGMA table_info(material_ingestion_files)").fetchall()) == 5
 
 
 def test_visibility_columns_are_provisioned_not_migrated(tmp_path, monkeypatch):

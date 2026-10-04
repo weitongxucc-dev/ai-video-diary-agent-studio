@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.database_migrations import (
+    CONTENT_VISIBILITY_DEFAULT as CONTENT_VISIBILITY_PRIVATE,
+    CONTENT_VISIBILITY_LEGACY as CONTENT_VISIBILITY_SHARED,
+)
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection
 
 if TYPE_CHECKING:
@@ -85,6 +89,9 @@ class KnowledgeItem:
     content_hash: str | None = None
     sections: tuple[KnowledgeSection, ...] = ()
     parameters: tuple[KnowledgeParameter, ...] = ()
+    # 上传者身份（已验证的 user_id）。这是「私有内容只属于上传者」的判据；
+    # 旧行或本地无身份写入留空，读取时按可见范围处理，不猜归属。
+    owner_user_id: str | None = None
     # 当前版本内容的抓取时间；不是网页快照时为空。
     fetched_at: datetime | None = None
     source_url: str | None = None
@@ -106,6 +113,43 @@ class SourceRunEvidence:
     impact: str | None = None
     repair_action: str | None = None
     retryable: bool | None = None
+
+
+def knowledge_item_readable(
+    *,
+    user_id: str | None,
+    local_diagnostic: bool,
+    visibility: str,
+    owner_user_id: str | None,
+) -> bool:
+    """判断一条知识能否被当前调用方读到。
+
+    ``user_id`` 是**已经解析出的可信调用方标识**，来源有两种既有身份，都归一到
+    这一个字符串参与判定，不新造第二套身份框架：
+    - 已验证的 Bearer 身份（AuthPrincipal.user_id，来自 Supabase Auth）；
+    - 本地成员令牌（local_members_service.resolve_member 返回的 member_id）。
+    两者都不是客户端自报。local 模式的多名成员同处一个 workspace，正是靠这个
+    id 区分各自的私有上传。
+
+    ``local_diagnostic`` 只在保留的 local workspace、未开认证的受控诊断下为真：
+    这时本机自己的私有内容照常可读，产品在单机上仍然可用——但这不是多人隔离，
+    认证态或已带成员令牌的请求缺可信身份时不得借此降级到 local。
+
+    共享内容对本工作区成员可读；私有内容只对上传者本人可读。可见范围未知时按
+    更保守的一侧处理，不当作共享。
+    """
+    if local_diagnostic:
+        return True
+    # 认证范围内缺可信身份就是没有可用身份：不因为缺身份就只退到共享范围。
+    if not user_id:
+        return False
+    if visibility == CONTENT_VISIBILITY_SHARED:
+        return True
+    if visibility != CONTENT_VISIBILITY_PRIVATE:
+        return False
+    if not owner_user_id:
+        return False
+    return user_id == owner_user_id
 
 
 class SourceBoundaryError(RuntimeError):

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CreationTask } from "@/lib/types";
+import type { CreationTask, HomeAggregation } from "@/lib/types";
 import { HomeWorkspace, TrendChart, type HomeDashboardExample } from "@/components/HomeWorkspace";
 
 const routerPush = vi.fn();
@@ -32,9 +32,11 @@ beforeEach(() => routerPush.mockReset());
 describe("HomeWorkspace", () => {
   it("keeps the v4 dashboard structure without inventing unavailable production aggregates", () => {
     render(<HomeWorkspace foundation={null} tasks={[task]} />);
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("可见素材");
-    expect(screen.getByRole("region", { name: "工作空间五项概览" })).toHaveTextContent("作品记录");
-    expect(screen.getAllByText("—")).toHaveLength(5);
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("可见素材");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("作品");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("声音");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("任务");
+    expect(screen.getAllByText("—")).toHaveLength(7);
     expect(screen.getByText("尚无接收日聚合数据")).toBeInTheDocument();
     expect(screen.getByText("素材尚无可信行业分类")).toBeInTheDocument();
     expect(screen.getAllByText("标签统计未载入")).toHaveLength(2);
@@ -48,7 +50,7 @@ describe("HomeWorkspace", () => {
     render(<HomeWorkspace foundation={null} tasks={[{ ...task, output_ready: true }]} />);
     expect(screen.getByText("当前工作区的本地成片，未代表平台发布")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /设备演示.*本地成片可查看/ })).toHaveAttribute("href", "/tasks/task-one");
-    expect(screen.getAllByText("—")).toHaveLength(5);
+    expect(screen.getAllByText("—")).toHaveLength(7);
   });
 
   it.each([
@@ -90,17 +92,17 @@ describe("HomeWorkspace", () => {
   it("labels isolated sample figures and lets users inspect ranges and tag choices", () => {
     render(<HomeWorkspace foundation={null} tasks={[]} dashboard={sample} />);
     expect(screen.getByText("示例数据 · 不连接真实服务")).toBeInTheDocument();
-    const metrics = screen.getByRole("region", { name: "工作空间五项概览" });
+    const metrics = screen.getByRole("region", { name: "工作空间七项概览" });
     expect(metrics).toHaveTextContent("12");
     expect(metrics).toHaveTextContent("7");
     expect(metrics).toHaveTextContent("3");
     expect(metrics).toHaveTextContent("4");
     expect(metrics).toHaveTextContent("1");
-    const sevenCircles = screen.getByRole("img", { name: "示例素材接收趋势" }).querySelectorAll("circle");
+    const sevenCircles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
     expect([...sevenCircles].reduce((sum, circle) => sum + Number(circle.getAttribute("aria-label")?.match(/接收 (\d+)/)?.[1] ?? 0), 0)).toBe(sample.assets.length);
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
-    const chart = screen.getByRole("img", { name: "示例素材接收趋势" });
+    const chart = screen.getByRole("img", { name: "素材接收趋势" });
     const circles = chart.querySelectorAll("circle");
     expect(circles).toHaveLength(30);
     expect(Number(circles[0].getAttribute("cx"))).toBe(12);
@@ -121,11 +123,11 @@ describe("HomeWorkspace", () => {
 
   it("keeps all 0, 1 and 7 trend points inside the chart", () => {
     const zero = render(<TrendChart values={[]} />);
-    expect(screen.getByText("这段示例期间没有素材接收记录")).toBeInTheDocument();
+    expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
     zero.rerender(<TrendChart values={points(1)} />);
-    expect(screen.getByRole("img", { name: "示例素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
+    expect(screen.getByRole("img", { name: "素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
     zero.rerender(<TrendChart values={points(7)} />);
-    const circles = screen.getByRole("img", { name: "示例素材接收趋势" }).querySelectorAll("circle");
+    const circles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
     expect(circles).toHaveLength(7);
     expect(Number(circles[6].getAttribute("cx"))).toBe(274);
   });
@@ -133,12 +135,12 @@ describe("HomeWorkspace", () => {
   it("derives every example count and chart from one visible asset set", () => {
     const member = { ...sample, scopeLabel: "成员演示 · 我的及共享内容", assets: sample.assets.slice(0, 5), knowledgeSources: sample.knowledgeSources.slice(0, 2), works: sample.works.slice(0, 1) };
     render(<HomeWorkspace foundation={null} tasks={[]} dashboard={member} />);
-    const metrics = screen.getByRole("region", { name: "工作空间五项概览" });
+    const metrics = screen.getByRole("region", { name: "工作空间七项概览" });
     expect(metrics).toHaveTextContent("5可见素材");
     expect(metrics).toHaveTextContent("5分析可用");
     expect(metrics).toHaveTextContent("0待分析");
     expect(metrics).toHaveTextContent("2知识来源");
-    expect(metrics).toHaveTextContent("1作品记录");
+    expect(metrics).toHaveTextContent("1作品");
     expect(screen.getByRole("button", { name: /设备5/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /门店4/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /门店4/ }));
@@ -190,5 +192,80 @@ describe("HomeWorkspace", () => {
     const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
     expect(within(cloud).getAllByText("标签统计读取失败，请刷新重试")).toHaveLength(2);
     expect(within(cloud).queryByText("当前工作区还没有素材标签")).not.toBeInTheDocument();
+  });
+
+  const meta = { scope: "device_anonymous" as const, source: "material_asset", as_of: "2026-10-04T00:00:00Z" };
+  const home: HomeAggregation = {
+    days: 7,
+    counts: [
+      { key: "visible_assets", label: "可见素材", value: 12, meta: { ...meta, source: "production_repo.list_assets（既有可见性判据）" } },
+      { key: "analysis_ready", label: "分析可用", value: 9, meta: { ...meta, source: "production_repo.list_assets（既有可见性判据）" } },
+      { key: "knowledge_sources", label: "知识来源", value: 4, meta: { ...meta, source: "source_repository.list_knowledge_items_readable_by" } },
+    ],
+    trend: { days: 7, points: points(7), meta },
+    device_queue: { counts: { "job.running": 1, "job.queued": 2, "intake.observing": 1, "job.succeeded": 4, "intake.blocked_disk": 2 }, records_total: 10, running: 2, queued: 3, meta },
+    storage: {
+      directory_state: "ready", bound_to_current_workspace: true,
+      bound_to_another_workspace: false, configured_path_changed: false,
+      capacity: { total_bytes: 512 * 1024 ** 3, used_bytes: 128 * 1024 ** 3, free_bytes: 384 * 1024 ** 3 },
+      meta: { ...meta, source: "production_repo.material_ingestion_directory_state + psutil.disk_usage(已绑定目录)" },
+    },
+    entries: {
+      queue: [{ task_id: "task-one", title: "设备演示", stage: "视频剪辑", status: "处理中", updated_at: "2026-10-04T00:00:00Z" }],
+      todos: [{ task_id: "task-two", title: "门店介绍", stage: "画面确认", reason: "需要确认镜头", repair_action: "打开任务确认" }],
+      works: [{ task_id: "task-three", title: "开场演示", updated_at: "2026-10-03T00:00:00Z" }],
+      meta: { scope: "caller_visible", source: "creation_task", as_of: "2026-10-04T00:00:00Z" },
+    },
+    unknown: [{ key: "materials.by_industry", reason: "行业分类仍待定义，未统计" }],
+  };
+
+  it("renders the real anonymous overview, trend, storage and enterable entries", () => {
+    render(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[]} />);
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
+    // 服务端没给的计数不补 0：显示未知，而不是 0。
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("未知");
+    expect(screen.getByRole("img", { name: /素材接收趋势/ })).toBeInTheDocument();
+    const queue = screen.getByRole("heading", { name: "我的任务" }).closest("section") as HTMLElement;
+    expect(within(queue).getByRole("button", { name: /设备演示/ })).toBeInTheDocument();
+    const todos = screen.getByRole("heading", { name: "待处理" }).closest("section") as HTMLElement;
+    expect(within(todos).getByRole("link", { name: /门店介绍/ })).toHaveAttribute("href", "/tasks/task-two");
+    const works = screen.getByRole("heading", { name: "近期成果" }).closest("section") as HTMLElement;
+    expect(within(works).getByRole("link", { name: /开场演示/ })).toHaveAttribute("href", "/tasks/task-three");
+    const storage = screen.getByRole("heading", { name: "存储" }).closest("section") as HTMLElement;
+    expect(storage).toHaveTextContent("128.0 GB");
+    expect(storage).toHaveTextContent("数据盘可用");
+    expect(storage).toHaveTextContent("整机匿名汇总");
+    expect(storage).toHaveTextContent("数据盘目录状态与容量");
+    // 整机匿名运行只有数量，不含归属或名称。
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).not.toHaveTextContent("门店介绍");
+    // 没有真实载体的统计项按服务端给出的原因如实显示。
+    const unknown = screen.getByRole("heading", { name: "没有真实数据的项" }).closest("section") as HTMLElement;
+    expect(unknown).toHaveTextContent("行业分类仍待定义，未统计");
+    // unknown.key 是技术键，界面上给中文说法。
+    expect(unknown).toHaveTextContent("素材行业分布");
+    // 整机状态：处理中与排队分开显示，技术状态键不铺到界面。
+    const stage = screen.getByRole("heading", { name: "任务与处理阶段" }).closest("section") as HTMLElement;
+    expect(stage).toHaveTextContent("处理中 2 · 排队 3");
+    expect(stage).toHaveTextContent("素材待确认 1");
+    // 历史完成数单列，不混进处理中/排队。
+    expect(stage).toHaveTextContent("任务已完成 4");
+    expect(stage).not.toHaveTextContent("job.running");
+    // 每个数字的口径与更新时间可查，且给的是真实来源不是内部短键。
+    const details = screen.getByText("每个数字的口径与更新时间");
+    expect(details.closest("details")).toHaveTextContent("素材库（按既有可见性判据统计）");
+    expect(details.closest("details")).toHaveTextContent("知识库（当前身份可读的条目）");
+    // 被数据盘阻塞的素材不是运行也不是排队，只在分布里出现。
+    expect(stage).toHaveTextContent("素材被数据盘阻塞 2");
+  });
+
+  it("keeps a real retry action when a later read fails, and shows loading before any data", async () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(<HomeWorkspace foundation={null} live={{ data: null, loading: true, error: null, days: 7, onDays: vi.fn(), onRetry }} tasks={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取整机概览…");
+    rerender(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: "读取失败：503", days: 7, onDays: vi.fn(), onRetry }} tasks={[]} />);
+    // 已有数据时不白屏：旧数据仍在，并给出可重试的错误。
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(onRetry).toHaveBeenCalled();
   });
 });

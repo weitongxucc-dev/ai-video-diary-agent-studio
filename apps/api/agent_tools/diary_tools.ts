@@ -20,6 +20,11 @@ async function request(path: string, init?: RequestInit) {
   if (process.env.AI_VIDEO_DIARY_AGENT_COOKIE) {
     headers.set("Cookie", process.env.AI_VIDEO_DIARY_AGENT_COOKIE);
   }
+  // 已验证的本地成员令牌与服务端读入口同名：缺失时读取会按匿名 local 诊断处理，
+  // 所以这里原样透传，不另造鉴权通道。
+  if (process.env.AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN) {
+    headers.set("X-Local-Member-Token", process.env.AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN);
+  }
   const response = await fetch(`${apiBase}${path}`, { ...init, headers, signal: AbortSignal.timeout(120000) });
   const body = await response.json();
   if (!response.ok) {

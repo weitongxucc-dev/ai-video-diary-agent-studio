@@ -2,12 +2,13 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
+const [design, globals, overrides, shell, home, homeWorkspace, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
   read("src/components/AppShell.tsx"),
   read("src/app/page.tsx"),
+  read("src/components/HomeWorkspace.tsx"),
   read("src/components/HomeCommandComposer.tsx"),
   read("src/lib/api.ts"),
   read("src/components/MaterialLibraryWorkspace.tsx"),
@@ -76,9 +77,14 @@ for (const [name, source] of [["home", home], ["composer", composer], ["library"
   if (/Pixel(?:Icon|Panel|Button|Status|Mascot|Agent)/.test(source)) failures.push(`${name} north-star UI imports Pixel components`);
 }
 
-for (const required of ["HomeWorkspace", "listCreationTasks"]) {
-  if (!home.includes(required)) failures.push(`modern home is missing: ${required}`);
+// 首页真实取数现在在浏览器端的容器里：页面挂容器，容器读真实聚合与身份。
+for (const required of ["HomeDashboardLive"]) {
+  if (!home.includes(required)) failures.push(`modern home page is missing: ${required}`);
 }
+for (const required of ["getHomeDashboard(", "listCreationTasks(", "useLocalMemberIdentity(", "readLocalMemberToken("]) {
+  if (!homeWorkspace.includes(required)) failures.push(`modern home data boundary is missing a real read: ${required}`);
+}
+if (home.includes("listCreationTasks")) failures.push("home page must not fetch owner-private tasks during server rendering");
 for (const retired of ["recent_batches", "ProductionBatch", "production?batch="]) {
   if (home.includes(retired)) failures.push(`home still projects legacy Batch tasks: ${retired}`);
 }
@@ -128,7 +134,8 @@ for (const required of [
   "reviewProductionMaterial",
   "素材自动接入",
   "自动接入进度",
-  "新文件稳定后自动分析",
+  "复制完成，开始接收",
+  "confirmMaterialCopyComplete",
   "立即检查",
   "/media",
 ]) {

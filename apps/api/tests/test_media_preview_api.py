@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.local_members import LocalMemberService
 from app.avatar_lipsync import (
     Authorization,
     AvatarPreviewService,
@@ -133,6 +134,10 @@ def preview_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace-a"),
     )
+    # 真实成员服务：内容以真实身份入库，读取也用同一可信身份。
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    owner_member, owner_token = members.whoami(None)
     person, voice, avatar_authorization, reference = _save_media_profiles(repository, "workspace-a")
     return (
         TestClient(main_module.app),
@@ -143,6 +148,7 @@ def preview_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         avatar_authorization,
         reference,
         output_root,
+        SimpleNamespace(owner_token=owner_token, owner_member_id=owner_member.member_id),
     )
 
 
@@ -173,12 +179,25 @@ def _avatar_payload(voice_identity: str, *, retry: bool = False) -> dict[str, ob
 
 def test_materials_expose_workspace_reference_without_absolute_submission(preview_client):
     client, repository, *_rest = preview_client
+    identity = _rest[-1]
+    headers = {"X-Local-Member-Token": identity.owner_token}
     video = repository.video_library_path / "approved" / "demo.mp4"
     video.parent.mkdir(exist_ok=True)
     video.write_bytes(b"media")
+    repository.bind_material_ingestion(
+        "workspace-a",
+        expected_directory=str(repository.video_library_path),
+        verified_owner_user_id=identity.owner_member_id,
+    )
+    repository.confirm_material_copy_complete(
+        "workspace-a", relative_path="approved/demo.mp4",
+        expected_revision=repository.material_copy_revision(video.stat()),
+        confirmation_source="manual",
+        verified_owner_user_id=identity.owner_member_id,
+    )
     repository.scan_library("workspace-a")
 
-    response = client.get("/api/production/materials")
+    response = client.get("/api/production/materials", headers=headers)
 
     assert response.status_code == 200
     asset = next(item for item in response.json()["assets"] if item["file_name"] == "demo.mp4")
@@ -187,7 +206,7 @@ def test_materials_expose_workspace_reference_without_absolute_submission(previe
 
 
 def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview_client):
-    client, _repository, provider, _person, _voice, _authorization, reference, _output = preview_client
+    client, _repository, provider, _person, _voice, _authorization, reference, _output, *_ = preview_client
 
     first = client.post("/api/media/previews/voice", json=_voice_payload())
     second = client.post("/api/media/previews/voice", json=_voice_payload())
@@ -211,7 +230,7 @@ def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview
 
 
 def test_voice_preview_unavailable_failure_retry_and_attempt_order(preview_client, monkeypatch):
-    client, repository, provider, *_rest, output_root = preview_client
+    client, repository, provider, *_rest, output_root, _identity = preview_client
     monkeypatch.setattr(
         main_module,
         "voice_preview_service",
@@ -248,7 +267,7 @@ def test_voice_preview_unavailable_failure_retry_and_attempt_order(preview_clien
 def test_avatar_preview_requires_same_workspace_succeeded_voice_and_rejects_client_audio_path(
     preview_client,
 ):
-    client, _repository, provider, _person, _voice, _authorization, _reference, _output = preview_client
+    client, _repository, provider, _person, _voice, _authorization, _reference, _output, *_ = preview_client
     voice = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="avatar"))
     identity = voice.json()["identity"]
     forged_audio = client.post(

@@ -636,7 +636,7 @@ function materialImportError(message) {
   return new MaterialImportError(message);
 }
 
-function httpGetJson(port, requestPath, timeoutMs) {
+function httpMaterialJson(port, requestPath, timeoutMs, payload, identity = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (error, value) => {
@@ -646,15 +646,22 @@ function httpGetJson(port, requestPath, timeoutMs) {
       if (error) reject(error); else resolve(value);
     };
     const timer = setTimeout(() => {
-      const error = materialImportError('本地服务没有及时返回素材接入目录，已取消本次导入，请重试。');
+      const error = materialImportError('本地服务没有及时返回素材接收结果，请重试。');
       request.destroy(error);
       finish(error);
     }, timeoutMs);
-    const request = http.get({
+    const body = payload === undefined ? undefined : JSON.stringify(payload);
+    const request = http.request({
       hostname: '127.0.0.1',
       port,
       path: requestPath,
-      headers: { Accept: 'application/json' },
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        Accept: 'application/json',
+        ...(identity.localMemberToken ? { 'X-Local-Member-Token': identity.localMemberToken } : {}),
+        ...(identity.authorization ? { Authorization: identity.authorization } : {}),
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }),
+      },
     }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
@@ -665,11 +672,12 @@ function httpGetJson(port, requestPath, timeoutMs) {
       response.on('error', (error) => finish(error));
     });
     request.on('error', (error) => finish(error));
+    request.end(body);
   });
 }
 
-async function readMaterialBinding(port, timeoutMs = MATERIAL_BINDING_TIMEOUT_MS) {
-  const response = await httpGetJson(port, '/api/production/materials/intake', timeoutMs);
+async function readMaterialBinding(port, timeoutMs = MATERIAL_BINDING_TIMEOUT_MS, identity = {}) {
+  const response = await httpMaterialJson(port, '/api/production/materials/intake', timeoutMs, undefined, identity);
   if (response.status === 401 || response.status === 403) {
     throw materialImportError('本地服务要求登录，桌面端当前没有可用凭据，无法确认素材接入目录。本次未导入，源文件保持不变。');
   }
@@ -683,6 +691,33 @@ async function readMaterialBinding(port, timeoutMs = MATERIAL_BINDING_TIMEOUT_MS
     throw materialImportError('本地服务返回的素材接入目录状态无法解析，已取消本次导入。');
   }
   return binding;
+}
+
+async function confirmImportedMaterial(port, committedPath, timeoutMs, identity) {
+  const stat = await fs.promises.stat(committedPath, { bigint: true });
+  const payload = {
+    relative_path: path.basename(committedPath),
+    expected_revision: {
+      size_bytes: stat.size.toString(), mtime_ns: stat.mtimeNs.toString(),
+      ctime_ns: stat.ctimeNs.toString(), inode: stat.ino.toString(),
+    },
+    confirmation_source: 'app_import',
+  };
+  const response = await httpMaterialJson(
+    port, '/api/production/materials/intake/copy-complete', timeoutMs, payload, identity,
+  );
+  if (response.status !== 200) {
+    throw materialImportError(`接收确认失败（HTTP ${response.status}）。请在素材页确认接收。`);
+  }
+  let result;
+  try {
+    result = JSON.parse(response.body);
+  } catch {
+    throw materialImportError('接收确认结果无法解析，请在素材页确认接收。');
+  }
+  if (result.confirmed !== true) {
+    throw materialImportError('服务端未确认接收，请在素材页确认接收。');
+  }
 }
 
 // The API already resolves disk availability (`directory_state`), including the
@@ -977,10 +1012,10 @@ async function createRunDirectory(trustedRoot, runId) {
 // long copy or a slow native picker can span a rebind, a volume swap, or a
 // directory rename, and writing to the directory chosen at the start would then
 // be a write the current binding never authorized.
-async function revalidateTargetDirectory(port, bindingTimeoutMs, expected) {
+async function revalidateTargetDirectory(port, bindingTimeoutMs, expected, identity) {
   let current;
   try {
-    current = await readMaterialBinding(port, bindingTimeoutMs);
+    current = await readMaterialBinding(port, bindingTimeoutMs, identity);
   } catch (error) {
     throw materialImportError(
       `导入过程中无法再次确认素材接入目录（${error.message || '本地服务没有响应'}），已停止导入，源文件保持不变。`,
@@ -1019,8 +1054,8 @@ async function removeEmptyRunDirectory(runDirectory) {
 }
 
 async function importMaterials(options) {
-  const { port, pickSources, bindingTimeoutMs = MATERIAL_BINDING_TIMEOUT_MS } = options;
-  const binding = await readMaterialBinding(port, bindingTimeoutMs);
+  const { port, pickSources, bindingTimeoutMs = MATERIAL_BINDING_TIMEOUT_MS, identity = {} } = options;
+  const binding = await readMaterialBinding(port, bindingTimeoutMs, identity);
   const targetDirectory = resolveTrustedMaterialDirectory(binding);
   const picked = await pickSources();
   if (!Array.isArray(picked) || picked.length === 0) {
@@ -1042,7 +1077,7 @@ async function importMaterials(options) {
     // the hard-link probe, and the first staged copy all come after this point.
     // A changed target aborts the import with zero writes; the re-check before
     // each commit covers the rest of the run, not this window.
-    await revalidateTargetDirectory(port, bindingTimeoutMs, targetDirectory);
+    await revalidateTargetDirectory(port, bindingTimeoutMs, targetDirectory, identity);
     runDirectory = await createRunDirectory(targetDirectory, runId);
     await assertHardLinkSupported(runDirectory);
     for (const sourcePath of picked) {
@@ -1053,13 +1088,17 @@ async function importMaterials(options) {
       }
       const stagingPath = path.join(runDirectory, `${runId}-${createdFiles.length}-${fileName}.partial`);
       createdFiles.push(stagingPath);
+      let committed;
       try {
         await copyMaterialSourceToStaging(sourcePath, stagingPath);
-        await revalidateTargetDirectory(port, bindingTimeoutMs, targetDirectory);
-        const committed = await commitMaterialStaging(stagingPath, targetDirectory, fileName);
+        await revalidateTargetDirectory(port, bindingTimeoutMs, targetDirectory, identity);
+        committed = await commitMaterialStaging(stagingPath, targetDirectory, fileName);
+        await confirmImportedMaterial(port, committed, bindingTimeoutMs, identity);
         copied.push({ sourceName: fileName, fileName: path.basename(committed) });
       } catch (error) {
-        failures.push({ sourceName: fileName, error: error.message || '导入失败。' });
+        failures.push({ sourceName: fileName, error: committed
+          ? `文件已复制为“${path.basename(committed)}”，但接收确认未保存：${error.message}`
+          : error.message || '导入失败。' });
       }
     }
   } finally {
@@ -1210,12 +1249,12 @@ function registerIpcHandlers() {
 
   // Takes no path argument on purpose: the destination comes from the
   // controlled intake binding, never from the renderer.
-  ipcMain.handle('import-materials', async () => {
+  ipcMain.handle('import-materials', async (_event, identity = {}) => {
     if (!Number.isInteger(apiPort) || apiPort <= 0 || serviceStates.api.state !== 'ready') {
       return { canceled: false, copied: [], skipped: [], failures: [], error: '本地视频服务尚未就绪，请等待服务恢复后重试。' };
     }
     try {
-      const result = await importMaterials({ port: apiPort, pickSources: pickMaterialSources });
+      const result = await importMaterials({ port: apiPort, pickSources: pickMaterialSources, identity });
       recordLifecycle('material-import-finished', {
         copied: result.copied.length,
         skipped: result.skipped.length,

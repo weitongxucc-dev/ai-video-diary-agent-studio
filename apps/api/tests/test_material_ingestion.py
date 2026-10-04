@@ -38,6 +38,17 @@ def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[
     return repo, library
 
 
+def confirm_files(repo: ProductionRepository, library: Path) -> None:
+    """Declare completion of the complete synthetic files used by these tests."""
+    for path in library.glob("*.mp4"):
+        if not path.is_symlink():
+            repo.confirm_material_copy_complete(
+                "one", relative_path=path.name,
+                expected_revision=repo.material_copy_revision(path.stat()),
+                confirmation_source="manual",
+            )
+
+
 class HashResources:
     def __init__(self, admit: bool | None = True):
         self.admit_value = admit
@@ -50,6 +61,76 @@ class HashResources:
 
     def released(self, grant):
         return True
+
+
+def test_copy_confirmation_persists_revision_before_waking() -> None:
+    repository = Mock()
+    service = MaterialIngestionService(repository)
+    revision = {"size_bytes": "12", "mtime_ns": "100", "ctime_ns": "200", "inode": "3"}
+    repository.confirm_material_copy_complete.side_effect = lambda *args, **kwargs: (
+        pytest.fail("woke before persistence") if service._wake.is_set() else None
+    )
+    service.confirm_copy_complete(
+        "one", relative_path="clip.mp4", expected_revision=revision,
+        confirmation_source="manual",
+    )
+    repository.confirm_material_copy_complete.assert_called_once_with(
+        "one", relative_path="clip.mp4", expected_revision=revision,
+        confirmation_source="manual",
+        verified_owner_user_id=None,
+    )
+    assert service._wake.is_set()
+
+
+def test_copy_uploader_survives_restart_without_claiming_unknown_or_existing_assets(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.bind_material_ingestion("one", expected_directory=str(library), verified_owner_user_id="binder")
+    assert repo.get_material_ingestion_owner() is None
+    uploaded = library / "uploaded.mp4"
+    uploaded.write_bytes(b"complete application copy")
+    repo.confirm_material_copy_complete(
+        "one", relative_path=uploaded.name,
+        expected_revision=repo.material_copy_revision(uploaded.stat()),
+        confirmation_source="app_import", verified_owner_user_id="uploader",
+    )
+    restarted = ProductionRepository(repo.database_path, library)
+    asset = restarted.scan_library("one")[0]
+    assert asset.owner_user_id == "uploader"
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=uploaded.name,
+        expected_revision=restarted.material_copy_revision(uploaded.stat()),
+        confirmation_source="app_import", verified_owner_user_id="another-member",
+    )
+    assert restarted.scan_library("one")[0].owner_user_id == "uploader"
+
+    external = library / "external.mp4"
+    external.write_bytes(b"external file without uploader identity")
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=external.name,
+        expected_revision=restarted.material_copy_revision(external.stat()), confirmation_source="manual",
+    )
+    unknown = next(item for item in restarted.scan_library("one") if item.file_name == external.name)
+    assert unknown.owner_user_id is None
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=external.name,
+        expected_revision=restarted.material_copy_revision(external.stat()),
+        confirmation_source="app_import", verified_owner_user_id="another-member",
+    )
+    assert restarted.get_asset("one", unknown.id).owner_user_id is None
+    assert next(item for item in restarted.scan_library("one") if item.id == unknown.id).owner_user_id is None
+
+
+def test_copy_confirmation_failure_does_not_wake() -> None:
+    repository = Mock()
+    repository.confirm_material_copy_complete.side_effect = ValueError("文件修订已变化")
+    service = MaterialIngestionService(repository)
+    with pytest.raises(ValueError, match="修订已变化"):
+        service.confirm_copy_complete(
+            "one", relative_path="clip.mp4", expected_revision={},
+            confirmation_source="app_import",
+        )
+    assert not service._wake.is_set()
 
 
 class HashProcesses:
@@ -285,7 +366,7 @@ def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: s
     repo.confirm_creation_plan(plan, task)
 
 
-def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> None:
+def test_unbound_copy_confirmation_restart_and_changed_content(tmp_path: Path) -> None:
     duration = Mock(return_value=1.0)
     repo, library = make_repo(tmp_path, duration)
     source = library / "clip.mp4"
@@ -295,9 +376,10 @@ def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> N
     assert repo.list_assets("one") == []
     repo.bind_material_ingestion("one", expected_directory=str(library))
     assert service.scan_once() == []
-    assert repo.list_assets("one")[0].analysis_status == "blocked"
+    assert repo.list_assets("one") == []
     source.write_bytes(b"finished")
     assert service.scan_once() == []
+    confirm_files(repo, library)
     analyzed = service.scan_once()
     assert len(analyzed) == 1 and analyzed[0].analysis_status == "ready"
     assert analyzed[0].review_status == "raw"
@@ -315,6 +397,8 @@ def test_unbound_copy_stability_restart_and_changed_content(tmp_path: Path) -> N
     assert source.stat().st_ctime_ns != prior_stat.st_ctime_ns
     changed_service = MaterialIngestionService(restarted, stable_seconds=0)
     assert changed_service.scan_once() == []
+    assert changed_service.scan_once() == []
+    confirm_files(restarted, library)
     assert len(changed_service.scan_once()) == 1
     assert duration.call_count == 2
     assert restarted.list_assets("other") == []
@@ -332,6 +416,7 @@ def test_failure_is_isolated_and_retry_is_explicit(tmp_path: Path) -> None:
     (library / "good.mp4").write_bytes(b"good")
     (library / "bad.mp4").write_bytes(b"bad")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -353,6 +438,7 @@ def test_unchanged_ready_and_failed_files_do_not_rehash_each_scan(tmp_path: Path
     (library / "ready.mp4").write_bytes(b"ready")
     (library / "failed.mp4").write_bytes(b"failed")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -384,7 +470,7 @@ def test_existing_ingestion_observations_gain_lightweight_stat_columns(tmp_path:
     assert row == (5, 0, 0)
 
 
-def test_copy_waits_for_stable_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_copy_waits_for_confirmation_instead_of_stable_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [1000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     duration = Mock(return_value=1.0)
@@ -403,6 +489,9 @@ def test_copy_waits_for_stable_window(tmp_path: Path, monkeypatch: pytest.Monkey
     assert service.scan_once() == []
     assert duration.call_count == 0
     clock[0] = 1061
+    assert service.scan_once() == []
+    assert duration.call_count == 0
+    confirm_files(repo, library)
     assert service.scan_once()[0].analysis_status == "ready"
 
 
@@ -421,10 +510,15 @@ def test_binding_wakes_background_scan_without_waiting_for_interval(tmp_path: Pa
         repo.bind_material_ingestion("one", expected_directory=str(library))
         service.wake()
         deadline = time.monotonic() + 2
-        while not repo.list_assets("one") and time.monotonic() < deadline:
+        while not repo.pending_material_copies("one") and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert repo.list_assets("one")
-        service.wake()
+        assert repo.pending_material_copies("one")
+        assert not analyzed.is_set()
+        service.confirm_copy_complete(
+            "one", relative_path="new.mp4",
+            expected_revision=repo.material_copy_revision((library / "new.mp4").stat()),
+            confirmation_source="manual",
+        )
         assert analyzed.wait(2)
     finally:
         service.stop()
@@ -438,6 +532,7 @@ def test_missing_disk_and_symlink_escape(tmp_path: Path) -> None:
     outside.write_bytes(b"outside")
     (library / "escape.mp4").symlink_to(outside)
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -460,6 +555,7 @@ def test_ingestion_state_counts_are_workspace_scoped_and_path_free(tmp_path: Pat
     (library / "ready.mp4").write_bytes(b"ready")
     (library / "failed.mp4").write_bytes(b"failed")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -515,8 +611,8 @@ def test_directory_state_and_confirmation_reject_stale_or_foreign_binding(tmp_pa
     assert unmounted.material_ingestion_directory_state("one")["status"] == "unmounted"
 
     (library / "video.mp4").write_bytes(b"fixture")
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
-    service.scan_once()
     assert service.scan_once()[0].analysis_status == "ready"
 
 
@@ -529,8 +625,8 @@ def test_material_failure_messages_do_not_expose_exception_paths(tmp_path: Path)
     repo, library = make_repo(tmp_path, bad_media)
     (library / "bad.mp4").write_bytes(b"broken")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
-    service.scan_once()
     asset = service.scan_once()[0]
     assert asset.analysis_status == "failed"
     assert "格式或内容无效" in asset.analysis_message
@@ -548,8 +644,8 @@ def test_reanalysis_preserves_unmatched_manual_correction(tmp_path: Path) -> Non
     source = library / "clip.mp4"
     source.write_bytes(b"video")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
-    service.scan_once()
     asset = service.scan_once()[0]
     first = asset.segments[0]
     repo.update_segment("one", asset.id, first.id, description="人工事实", transcript="人工文字", review_status="raw", user_tags=["手工标签"])
@@ -566,6 +662,7 @@ def test_asset_tags_are_atomic_workspace_scoped_and_searchable(tmp_path: Path) -
     (library / "one.mp4").write_bytes(b"one")
     (library / "two.mp4").write_bytes(b"two")
     repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
     service.scan_once()
     service.scan_once()
@@ -586,6 +683,8 @@ def test_segment_usage_change_updates_persisted_tags_and_search(tmp_path: Path) 
     repo, library = make_repo(tmp_path)
     (library / "one.mp4").write_bytes(b"one")
     (library / "two.mp4").write_bytes(b"two")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     assets = repo.scan_library("one")
     for asset in assets:
         repo.analyze_asset("one", asset.id)
@@ -625,6 +724,8 @@ def test_segment_usage_change_updates_persisted_tags_and_search(tmp_path: Path) 
 def test_manual_edit_during_analysis_survives_merge(tmp_path: Path) -> None:
     repo, library = make_repo(tmp_path)
     (library / "clip.mp4").write_bytes(b"video")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(repo, library)
     asset = repo.scan_library("one")[0]
     repo.analyze_asset("one", asset.id)
     segment_id = repo.get_asset("one", asset.id).segments[0].id
@@ -651,8 +752,8 @@ def test_generated_video_uses_real_probe_and_scene_tools(tmp_path: Path) -> None
     )
     real_repo = ProductionRepository(tmp_path / "real.sqlite", library)
     real_repo.bind_material_ingestion("one", expected_directory=str(library))
+    confirm_files(real_repo, library)
     service = MaterialIngestionService(real_repo, stable_seconds=0)
-    service.scan_once()
     analyzed = service.scan_once()
     assert len(analyzed) == 1
     assert analyzed[0].analysis_status == "ready"

@@ -58,6 +58,39 @@ AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
 ContentVisibility = Literal["private", "shared"]
 
+
+def content_owner(verified_user_id: str | None) -> str | None:
+    """把一次已验证身份归一成内容的上传者标识。
+
+    来源是 Supabase 已验证的 AuthPrincipal.user_id 或本地成员令牌解析出的
+    member_id——两种既有身份在此归一，不新造第二套规则。dataclass 里已有的
+    owner_user_id 不作数（那是调用方能自填的字段）。没有可解析身份时留空：
+    这条内容不会被算成任何成员的私有资产。
+    """
+    return str(verified_user_id or "").strip() or None
+
+
+def content_readable(
+    *,
+    user_id: str | None,
+    local_diagnostic: bool,
+    visibility: str,
+    owner_user_id: str | None,
+) -> bool:
+    """内容可读判据。与知识域共用同一套规则（转发到 app.sources）。
+
+    私有只对上传者本人可读，共享对成员可读；认证态缺可信身份不可读，不降级
+    local；保留的 local workspace 受控诊断下本机私有照常可读（非成员隔离）。
+    """
+    from app.sources import knowledge_item_readable
+
+    return knowledge_item_readable(
+        user_id=user_id,
+        local_diagnostic=local_diagnostic,
+        visibility=visibility,
+        owner_user_id=owner_user_id,
+    )
+
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -199,6 +232,8 @@ class MaterialAsset:
     segments: list[MaterialSegment] = field(default_factory=list)
     # 新建素材默认私有：只有本人显式共享才对成员可见。存量行迁移时回填 shared。
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    # 上传者：来源是已验证身份（Bearer user_id 或本地成员 member_id），不采信客户端自报。
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -682,6 +717,7 @@ class CreationPlan:
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -698,6 +734,7 @@ class VideoTemplate:
     source_task_id: str | None = None
     source_timeline_version_id: str | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -726,6 +763,7 @@ class CreationTask:
     stage_repair_action: str | None = None
     stage_retryable: bool | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -1441,6 +1479,7 @@ class ProductionRepository:
                     completed_digest TEXT,
                     attempted_digest TEXT,
                     state TEXT NOT NULL,
+                    copy_uploader_user_id TEXT,
                     PRIMARY KEY (workspace_id, file_path)
                 );
                 CREATE TABLE IF NOT EXISTS material_unmatched_corrections (
@@ -1731,6 +1770,15 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
+            if "copy_uploader_user_id" not in ingestion_columns:
+                conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN copy_uploader_user_id TEXT")
+            # 保留历史绑定者记录；目录绑定不决定逐文件上传者。
+            binding_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(material_ingestion_binding)")
+            }
+            if "intake_owner_user_id" not in binding_columns:
+                conn.execute("ALTER TABLE material_ingestion_binding ADD COLUMN intake_owner_user_id TEXT")
             # 内容可见性列：与知识资料共用同一个 PRAGMA 守卫 ensure，新增行由仓储层
             # 显式写入，新建默认 private，存量行回填 shared 不改原语义。
             ensure_content_visibility_columns(conn)
@@ -2763,6 +2811,9 @@ class ProductionRepository:
         return collection
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
         if not self.video_library_path.exists() or not self.video_library_path.is_dir():
             return []
         discovered: list[MaterialAsset] = []
@@ -2776,10 +2827,20 @@ class ProductionRepository:
                 continue
             if not path.resolve().is_relative_to(self.video_library_path.resolve()):
                 continue
+            try:
+                self._require_material_copy_confirmation(workspace_id, path.resolve())
+            except ValueError:
+                continue
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
 
-    def bind_material_ingestion(self, workspace_id: str, *, expected_directory: str) -> None:
+    def bind_material_ingestion(
+        self,
+        workspace_id: str,
+        *,
+        expected_directory: str,
+        verified_owner_user_id: str | None = None,
+    ) -> None:
         """Bind the configured inbox to one authenticated workspace, never to the current login."""
         if not workspace_id.strip():
             raise ValueError("必须先选择已验证的工作区")
@@ -2796,18 +2857,125 @@ class ProductionRepository:
             expected_path = str(Path(expected_directory).expanduser().resolve())
             if expected_path != root_path:
                 raise ValueError("素材目录配置已变化，请刷新后重新确认")
-            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+            row = conn.execute(
+                "SELECT workspace_id, library_path, intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
+            ).fetchone()
             if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
                 raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
+            # 已绑定同一目录时保留当时绑定者的身份，不因再次确认而改写归属。
+            intake_owner = (row["intake_owner_user_id"] if row is not None
+                            else str(verified_owner_user_id or "").strip() or None)
             conn.execute(
-                "INSERT OR REPLACE INTO material_ingestion_binding (id, workspace_id, library_path) VALUES (1, ?, ?)",
-                (workspace_id, root_path),
+                "INSERT OR REPLACE INTO material_ingestion_binding "
+                "(id, workspace_id, library_path, intake_owner_user_id) VALUES (1, ?, ?, ?)",
+                (workspace_id, root_path, intake_owner),
             )
+
+    def get_material_ingestion_owner(self) -> str | None:
+        """历史目录绑定者；不用于推断文件上传者。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
+            ).fetchone()
+        if row is None or "intake_owner_user_id" not in row.keys():
+            return None
+        return str(row["intake_owner_user_id"] or "").strip() or None
 
     def get_material_ingestion_binding(self) -> tuple[str, str] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    @staticmethod
+    def material_copy_revision(stat: os.stat_result) -> dict[str, str]:
+        """Decimal strings preserve nanosecond precision in desktop/browser JSON."""
+        return {
+            "size_bytes": str(stat.st_size), "mtime_ns": str(stat.st_mtime_ns),
+            "ctime_ns": str(stat.st_ctime_ns), "inode": str(stat.st_ino),
+        }
+
+    def confirm_material_copy_complete(
+        self, workspace_id: str, *, relative_path: str,
+        expected_revision: dict[str, str], confirmation_source: Literal["manual", "app_import"],
+        verified_owner_user_id: str | None = None,
+    ) -> None:
+        """Persist a copy declaration for this bound file revision, not media validity."""
+        import time
+
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or "_已处理" in relative.parts:
+            raise ValueError("请确认当前绑定目录内的素材文件")
+        raw_path = self.video_library_path / relative
+        if raw_path.is_symlink():
+            raise ValueError("不能确认符号链接素材")
+        if confirmation_source not in {"manual", "app_import"}:
+            raise ValueError("复制完成确认来源无效")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            binding = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1").fetchone()
+            if (binding is None or (binding["workspace_id"], binding["library_path"])
+                    != (workspace_id, str(self.video_library_path.resolve()))):
+                raise ValueError("当前工作区未绑定此素材目录")
+            if not self._material_library_available():
+                raise ValueError("素材目录当前不可用，请连接原目录后重试")
+            path = self._validated_library_file(str(raw_path))
+            stat = path.stat()
+            revision = self.material_copy_revision(stat)
+            if revision != expected_revision:
+                raise ValueError("文件修订已变化，请重新检查并确认复制完成")
+            conn.execute(
+                """INSERT INTO material_ingestion_files
+                   (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
+                    observed_at, state, confirmed_revision, confirmation_source, copy_confirmed_at,
+                    copy_uploader_user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?, ?, ?, ?)
+                   ON CONFLICT(workspace_id, file_path) DO UPDATE SET
+                     size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
+                     ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at,
+                     state=CASE WHEN confirmed_revision=excluded.confirmed_revision THEN state ELSE 'observing' END,
+                     copy_uploader_user_id=CASE WHEN confirmed_revision=excluded.confirmed_revision
+                       THEN copy_uploader_user_id ELSE excluded.copy_uploader_user_id END,
+                     confirmed_revision=excluded.confirmed_revision,
+                     confirmation_source=excluded.confirmation_source,
+                     copy_confirmed_at=excluded.copy_confirmed_at""",
+                (workspace_id, str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                 stat.st_ino, time.time(), json.dumps(revision, sort_keys=True),
+                 confirmation_source, utc_now().isoformat(),
+                 str(verified_owner_user_id or "").strip() or None),
+            )
+
+    def _require_material_copy_confirmation(self, workspace_id: str, path: Path) -> None:
+        if self.get_material_ingestion_binding() != (workspace_id, str(self.video_library_path.resolve())):
+            raise ValueError("当前工作区未绑定此素材目录")
+        revision = json.dumps(self.material_copy_revision(path.stat()), sort_keys=True)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT confirmed_revision FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
+                (workspace_id, str(path)),
+            ).fetchone()
+        if row is None or row["confirmed_revision"] != revision:
+            raise ValueError("请先确认此文件已复制完成，再开始接收或重试")
+
+    def pending_material_copies(self, workspace_id: str) -> list[dict[str, object]]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT file_path, confirmed_revision FROM material_ingestion_files WHERE workspace_id=? ORDER BY file_path",
+                (workspace_id,),
+            ).fetchall()
+        pending = []
+        for row in rows:
+            path = Path(row["file_path"])
+            if (not path.resolve().is_relative_to(self.video_library_path.resolve())
+                    or not path.is_file() or path.is_symlink()):
+                continue
+            revision = self.material_copy_revision(path.stat())
+            if row["confirmed_revision"] != json.dumps(revision, sort_keys=True):
+                pending.append({"relative_path": str(path.relative_to(self.video_library_path.resolve())),
+                                "expected_revision": revision})
+        return pending
 
     def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
         """Describe the configured directory without revealing another workspace's binding."""
@@ -3870,7 +4038,7 @@ class ProductionRepository:
         )
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
-        """Persist observations and claim stable, changed files for one serial analyzer."""
+        """Discover pending copies, then claim only explicitly confirmed revisions."""
         import time
 
         binding = self.get_material_ingestion_binding()
@@ -3914,15 +4082,15 @@ class ProductionRepository:
                     # Size, mtime, ctime and inode are the incremental boundary.
                     # Full content is hashed only on change, recovery, or retry.
                     continue
-                elif now - float(row["observed_at"]) < stable_seconds:
+                elif row["confirmed_revision"] != json.dumps(self.material_copy_revision(stat), sort_keys=True):
                     continue
             if changed:
                 try:
-                    asset = self._upsert_discovered_asset(workspace_id, resolved)
-                except FileNotFoundError:
+                    asset = self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
                     continue
                 asset.analysis_status = "blocked"
-                asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
+                asset.analysis_message = "文件已变化；请确认复制完成后重新接收。"
                 self._save_asset(asset)
                 continue
             try:
@@ -3944,6 +4112,8 @@ class ProductionRepository:
                 ) != (
                     stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
                 ):
+                    continue
+                if row["confirmed_revision"] != json.dumps(self.material_copy_revision(final_stat), sort_keys=True):
                     continue
                 if row["completed_digest"] == digest:
                     if row["state"] != "ready":
@@ -3981,7 +4151,7 @@ class ProductionRepository:
                 self._reset_changed_material_asset(asset)
             else:
                 asset.analysis_status = "pending"
-                asset.analysis_message = "文件已写入完成，正在分析。"
+                asset.analysis_message = "复制完成确认已保存，正在分析；确认不代表文件通过校验。"
                 self._save_asset(asset)
             claimed.append((asset.id, digest))
         return claimed
@@ -4007,10 +4177,11 @@ class ProductionRepository:
         binding = self.get_material_ingestion_binding()
         if binding is None or binding[0] != workspace_id:
             raise ValueError("当前工作区未绑定素材目录")
+        self._require_material_copy_confirmation(workspace_id, self._validated_library_file(asset.path))
         with self._connect() as conn:
             conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
         asset.analysis_status = "pending"
-        asset.analysis_message = "已请求重试，等待素材稳定后重新分析。"
+        asset.analysis_message = "已请求重试，将按已确认的文件修订重新分析。"
         self._save_asset(asset)
 
     def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
@@ -4251,15 +4422,28 @@ class ProductionRepository:
         workspace_id: str,
         *,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> list[MaterialAsset]:
+        """列出素材。与分页同一判据：可信身份下私有素材只对上传者本人可见。"""
+        clauses = ["workspace_id = ?"]
+        parameters: list[object] = [workspace_id]
+        if not local_diagnostic and not (viewer_user_id is None and include_private):
+            clauses.append(
+                "(visibility = 'shared' OR (visibility = 'private' "
+                "AND json_extract(payload, '$.owner_user_id') IS NOT NULL "
+                "AND json_extract(payload, '$.owner_user_id') = ?))"
+            )
+            parameters.append(viewer_user_id)
+        elif not include_private:
+            clauses.append("visibility = 'shared'")
         with self._connect() as conn:
-            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
                 SELECT payload, visibility FROM material_assets
-                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
+                WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC
                 """,
-                (workspace_id,),
+                parameters,
             ).fetchall()
         return [self._asset_from_row(row) for row in rows]
 
@@ -4274,10 +4458,28 @@ class ProductionRepository:
         review_status: str | None = None,
         media_type: str | None = None,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> tuple[list[MaterialAsset], int]:
+        """列出素材页。
+
+        给出可信读取身份时按同一判据在 SQL 里过滤（保证分页总数与条目一致）：
+        私有素材只对上传者本人可见，shared 对成员可见，可见范围未知的按不可见处理。
+        """
+        if not local_diagnostic and viewer_user_id is None and not include_private:
+            return [], 0
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
-        if not include_private:
+        owner_scoped = not local_diagnostic and not (viewer_user_id is None and include_private)
+        if owner_scoped:
+            # 私有只有 owner 是本人时才可见；其余（含没有 owner 的私有行）不返回。
+            clauses.append(
+                "(visibility = 'shared' OR (visibility = 'private' "
+                "AND json_extract(payload, '$.owner_user_id') IS NOT NULL "
+                "AND json_extract(payload, '$.owner_user_id') = ?))"
+            )
+            parameters.append(viewer_user_id)
+        elif not include_private:
             clauses.append("visibility = 'shared'")
         if query:
             clauses.append("""(
@@ -4539,6 +4741,7 @@ class ProductionRepository:
         if asset.use_state == "excluded":
             raise ValueError("素材已设为不使用，请先修改使用状态再分析")
         path = self._validated_library_file(asset.path)
+        self._require_material_copy_confirmation(workspace_id, path)
         source_stat = path.stat()
         try:
             duration = float(self.duration_reader(path))
@@ -4587,7 +4790,7 @@ class ProductionRepository:
             asset.analysis_status = "failed"
             asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
         final_stat = path.stat()
-        if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+        if self.material_copy_revision(source_stat) != self.material_copy_revision(final_stat):
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
         if expected_source_digest is not None:
             with path.open("rb") as source:
@@ -4929,8 +5132,20 @@ class ProductionRepository:
             )
         return records
 
-    def library_insights(self, workspace_id: str) -> dict[str, object]:
-        assets = self.list_assets(workspace_id)
+    def library_insights(
+        self,
+        workspace_id: str,
+        *,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> dict[str, object]:
+        """素材页统计。与列表同一判据：统计里的数字只包含该调用方读得到的素材，
+        否则聚合本身就会泄露别人的私有内容。"""
+        assets = self.list_assets(
+            workspace_id,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        )
         segments = [segment for asset in assets for segment in asset.segments]
         stats: dict[str, dict[str, object]] = {}
 
@@ -5006,7 +5221,28 @@ class ProductionRepository:
             raise KeyError(batch_id)
         return self._batch_from_payload(json.loads(str(row["payload"])))
 
-    def list_video_templates(self, workspace_id: str) -> list[VideoTemplate]:
+    def list_video_templates(
+        self,
+        workspace_id: str,
+        *,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> list[VideoTemplate]:
+        """列出模板。与其它内容同一判据：私有模板只对上传者本人可见。"""
+        templates = self._list_video_templates_by_visibility(workspace_id)
+        if local_diagnostic:
+            return templates
+        return [
+            item for item in templates
+            if content_readable(
+                user_id=viewer_user_id,
+                local_diagnostic=False,
+                visibility=item.visibility,
+                owner_user_id=item.owner_user_id,
+            )
+        ]
+
+    def _list_video_templates_by_visibility(self, workspace_id: str) -> list[VideoTemplate]:
         with self._connect() as conn:
             rows = conn.execute("SELECT payload, visibility FROM video_templates WHERE workspace_id = ? ORDER BY id, version DESC", (workspace_id,)).fetchall()
         return [self._template_from_row(row) for row in rows]
@@ -5018,11 +5254,33 @@ class ProductionRepository:
             raise KeyError(template_id)
         return self._template_from_row(row)
 
-    def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
+    def save_video_template(
+        self,
+        template: VideoTemplate,
+        *,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
             raise ValueError("用户模板必须有名称和有效版本。")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            prior_owner = conn.execute(
+                "SELECT payload FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC LIMIT 1",
+                (template.workspace_id, template.id),
+            ).fetchone()
+            if prior_owner is not None:
+                # 已有模板沿用库里那一版的归属（legacy 空值也照旧保留）；
+                # 新版本不因换人保存而改归属。
+                owner = str(
+                    json.loads(str(prior_owner["payload"])).get("owner_user_id") or ""
+                ).strip() or None
+            else:
+                # 新模板只取已验证身份；输入里的 owner_user_id 不继承。
+                owner = content_owner(verified_owner_user_id)
+                if owner is None and not local_diagnostic:
+                    owner = None
+            template = replace(template, owner_user_id=owner)
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
                 raise ValueError("模板版本已变化，请刷新后重新保存。")
@@ -5044,6 +5302,9 @@ class ProductionRepository:
         self,
         plan: CreationPlan,
         task: CreationTask,
+        *,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> tuple[CreationPlan, CreationTask]:
         if not plan.workspace_id.strip() or not task.workspace_id.strip():
             raise ValueError("创作方案和任务必须属于工作区")
@@ -5058,6 +5319,17 @@ class ProductionRepository:
         if plan.approved_clip_count > 0 and not plan.material_matches:
             raise ValueError("新创作方案必须固化本次实际命中的素材片段")
         _validate_plan_material_matches(plan.material_matches)
+        # 上传者只认已验证身份。dataclass 里的 owner_user_id 是调用方能自填的
+        # 字段，新建时一律以这里解析出的身份覆盖：自填的归属不参与判断，
+        # 没有可验证身份就不算任何成员的私有内容。
+        owner = content_owner(verified_owner_user_id)
+        if owner is None and not local_diagnostic:
+            # 认证范围里解析不出身份：不算任何成员的私有内容，也不采信输入值。
+            plan = replace(plan, owner_user_id=None)
+            task = replace(task, owner_user_id=None)
+        elif owner:
+            plan = replace(plan, owner_user_id=owner)
+            task = replace(task, owner_user_id=owner)
 
         now = utc_now()
         plan.creation_task_id = task.id
@@ -5164,6 +5436,29 @@ class ProductionRepository:
         workspace_id: str,
         *,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> list[CreationTask]:
+        """列出创作任务。给出可信读取身份时，私有任务只对上传者本人可见。
+
+        `include_private` 是旧的粗粒度开关（本地单机用）；一旦传入可信身份，
+        判据就换成与内容域同一套规则：私有按 owner 过滤，不因为「没带令牌」
+        就把别人的私有任务也算进来。
+        """
+        if local_diagnostic or (viewer_user_id is None and include_private):
+            return self._list_creation_tasks_by_visibility(workspace_id, include_private)
+        return [
+            task for task in self._list_creation_tasks_by_visibility(workspace_id, True)
+            if content_readable(
+                user_id=viewer_user_id,
+                local_diagnostic=False,
+                visibility=task.visibility,
+                owner_user_id=task.owner_user_id,
+            )
+        ]
+
+    def _list_creation_tasks_by_visibility(
+        self, workspace_id: str, include_private: bool
     ) -> list[CreationTask]:
         with self._connect() as conn:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
@@ -8606,6 +8901,7 @@ class ProductionRepository:
         *,
         media_type: MaterialMediaType | None = None,
         source_url: str = "",
+        owner_user_id: str | None = None,
     ) -> MaterialAsset:
         resolved = path.resolve()
         try:
@@ -8615,23 +8911,34 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload
+                SELECT payload, visibility
                 FROM material_assets
                 WHERE workspace_id = ? AND file_path = ?
                 """,
                 (workspace_id, str(resolved)),
             ).fetchone()
         existing = (
-            self._asset_from_payload(json.loads(str(row["payload"])))
+            self._asset_from_row(row)
             if row is not None
             else None
         )
         stat = resolved.stat()
         if existing is None:
+            # 可信接收身份随这一文件修订的确认持久化；无身份外部文件不猜上传者。
+            with self._connect() as conn:
+                confirmation = conn.execute(
+                    "SELECT copy_uploader_user_id FROM material_ingestion_files "
+                    "WHERE workspace_id=? AND file_path=? AND confirmed_revision=?",
+                    (workspace_id, str(resolved), json.dumps(self.material_copy_revision(stat), sort_keys=True)),
+                ).fetchone()
             digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
             existing = MaterialAsset(
                 id=f"asset_{digest}",
                 workspace_id=workspace_id,
+                owner_user_id=(
+                    str(owner_user_id or "").strip()
+                    or (confirmation["copy_uploader_user_id"] if confirmation is not None else None)
+                ) or None,
                 file_name=resolved.name,
                 path=str(resolved),
                 size_bytes=stat.st_size,
@@ -8672,14 +8979,14 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM material_assets
+                SELECT payload, visibility FROM material_assets
                 WHERE workspace_id = ? AND json_extract(payload, '$.source_url') = ?
                 ORDER BY updated_at DESC LIMIT 1
                 """,
                 (workspace_id, source_url),
             ).fetchone()
         return (
-            self._asset_from_payload(json.loads(str(row["payload"])))
+            self._asset_from_row(row)
             if row is not None
             else None
         )
@@ -8705,7 +9012,8 @@ class ProductionRepository:
             return False
 
     def existing_link_material(
-        self, workspace_id: str, source_url: str
+        self, workspace_id: str, source_url: str, *,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> MaterialAsset | None:
         """The material already registered for one original direct link.
 
@@ -8714,6 +9022,11 @@ class ProductionRepository:
         again over the top of it.
         """
         asset = self._asset_by_source_url(workspace_id, source_url)
+        if asset is not None and not content_readable(
+            user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+            visibility=asset.visibility, owner_user_id=asset.owner_user_id,
+        ):
+            raise KeyError("material asset not found")
         if asset is None or not self._material_file_intact(asset):
             return None
         return asset
@@ -8762,6 +9075,8 @@ class ProductionRepository:
         *,
         media_type: MaterialMediaType,
         source_url: str,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> MaterialAsset:
         """Register one fully downloaded direct link as a workspace material asset.
 
@@ -8779,6 +9094,11 @@ class ProductionRepository:
             raise ValueError("素材文件不存在或为空，未登记。")
         recorded = self._asset_by_source_url(workspace_id, source_url)
         if recorded is not None:
+            if not content_readable(
+                user_id=verified_owner_user_id, local_diagnostic=local_diagnostic,
+                visibility=recorded.visibility, owner_user_id=recorded.owner_user_id,
+            ):
+                raise KeyError("material asset not found")
             if self._material_file_intact(recorded):
                 # 原记录和原文件都还在：复用它们，这次下载的那份不再需要。
                 if Path(recorded.path).resolve() != resolved.resolve():
@@ -8797,7 +9117,8 @@ class ProductionRepository:
             self._repoint_asset(recorded)
             return self._apply_media_analysis_status(recorded)
         asset = self._upsert_discovered_asset(
-            workspace_id, resolved, media_type=media_type, source_url=source_url
+            workspace_id, resolved, media_type=media_type, source_url=source_url,
+            owner_user_id=verified_owner_user_id,
         )
         return self._apply_media_analysis_status(asset)
 
@@ -9723,12 +10044,23 @@ class MaterialLinkProvenanceSink:
     parallel store is introduced.
     """
 
-    def __init__(self, repository: ProductionRepository, workspace_id: str) -> None:
+    def __init__(
+        self,
+        repository: ProductionRepository,
+        workspace_id: str,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> None:
         self._repository = repository
         self._workspace_id = workspace_id
+        self._owner_user_id = verified_owner_user_id
+        self._local_diagnostic = local_diagnostic
 
     def existing_link_import(self, url: str):
-        asset = self._repository.existing_link_material(self._workspace_id, url)
+        asset = self._repository.existing_link_material(
+            self._workspace_id, url, viewer_user_id=self._owner_user_id,
+            local_diagnostic=self._local_diagnostic,
+        )
         if asset is None:
             return None
         return RegisteredLink(
@@ -9746,6 +10078,8 @@ class MaterialLinkProvenanceSink:
             Path(record.file_path),
             media_type=record.media_type,
             source_url=record.url,
+            verified_owner_user_id=self._owner_user_id,
+            local_diagnostic=self._local_diagnostic,
         )
         return asset.id
 
