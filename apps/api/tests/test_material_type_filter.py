@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.local_members import LocalMemberService
 from app.production import MaterialSegment, ProductionRepository
 
 WORKSPACE = "workspace-types"
@@ -38,6 +39,7 @@ def register(
     library: Path,
     name: str,
     *,
+    owner_user_id: str,
     workspace_id: str = WORKSPACE,
     user_tags: list[str] | None = None,
     review_status: str = "raw",
@@ -45,7 +47,7 @@ def register(
     """登记一个素材。类型来自文件名后缀，所以 .mp4/.mp3/.jpg 就是三种类型。"""
     path = library / name
     path.write_bytes(b"material-bytes")
-    asset = repo._upsert_discovered_asset(workspace_id, path)
+    asset = repo._upsert_discovered_asset(workspace_id, path, owner_user_id=owner_user_id)
     asset.user_tags = list(user_tags or [])
     asset.review_status = review_status
     asset.segments = [
@@ -64,6 +66,7 @@ def register_legacy_without_media_type(
     library: Path,
     name: str,
     *,
+    owner_user_id: str,
     workspace_id: str = WORKSPACE,
 ) -> str:
     """造一条直链导入之前存的旧记录：payload 里没有 media_type 这个键。
@@ -71,7 +74,7 @@ def register_legacy_without_media_type(
     它是旧扫描白名单唯一收过的类型，加载回来时 MaterialAsset 默认 video，
     所以筛选也必须当它是视频，否则它会从「视频」里凭空消失。
     """
-    asset_id = register(repo, library, name, workspace_id=workspace_id)
+    asset_id = register(repo, library, name, workspace_id=workspace_id, owner_user_id=owner_user_id)
     with repo._connect() as conn:
         row = conn.execute(
             "SELECT payload FROM material_assets WHERE id = ?", (asset_id,)
@@ -88,6 +91,9 @@ def register_legacy_without_media_type(
 @pytest.fixture
 def type_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     repo, library = make_repo(tmp_path)
+    members = LocalMemberService(tmp_path / "members.sqlite")
+    member, token = members.whoami(None)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(
         main_module,
@@ -95,7 +101,8 @@ def type_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
     return SimpleNamespace(
-        client=TestClient(main_module.app), repository=repo, library=library
+        client=TestClient(main_module.app, headers={"X-Local-Member-Token": token}),
+        repository=repo, library=library, creator_user_id=member.member_id,
     )
 
 
@@ -115,9 +122,9 @@ def test_each_type_returns_only_its_own_materials(type_client) -> None:
         type_client.repository,
         type_client.library,
     )
-    register(repo, library, "镜头一.mp4")
-    register(repo, library, "旁白.mp3")
-    register(repo, library, "剧照.jpg")
+    register(repo, library, "镜头一.mp4", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "旁白.mp3", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "剧照.jpg", owner_user_id=type_client.creator_user_id)
 
     video = page(client, media_type="video")
     audio = page(client, media_type="audio")
@@ -137,9 +144,9 @@ def test_omitting_the_type_keeps_every_material(type_client) -> None:
         type_client.repository,
         type_client.library,
     )
-    register(repo, library, "镜头一.mp4")
-    register(repo, library, "旁白.mp3")
-    register(repo, library, "剧照.jpg")
+    register(repo, library, "镜头一.mp4", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "旁白.mp3", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "剧照.jpg", owner_user_id=type_client.creator_user_id)
 
     everything = page(client)
 
@@ -153,8 +160,8 @@ def test_legacy_material_without_media_type_stays_video(type_client) -> None:
         type_client.repository,
         type_client.library,
     )
-    legacy = register_legacy_without_media_type(repo, library, "老素材.mp4")
-    register(repo, library, "旁白.mp3")
+    legacy = register_legacy_without_media_type(repo, library, "老素材.mp4", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "旁白.mp3", owner_user_id=type_client.creator_user_id)
 
     video = page(client, media_type="video")
 
@@ -172,8 +179,8 @@ def test_count_and_paging_share_the_same_type_clause(type_client) -> None:
         type_client.library,
     )
     for index in range(5):
-        register(repo, library, f"镜头{index}.mp4")
-    register(repo, library, "旁白.mp3")
+        register(repo, library, f"镜头{index}.mp4", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "旁白.mp3", owner_user_id=type_client.creator_user_id)
 
     first = page(client, media_type="video", limit=2, offset=0)
     second = page(client, media_type="video", limit=2, offset=2)
@@ -197,9 +204,9 @@ def test_type_combines_with_query_review_status_and_tag(type_client) -> None:
         type_client.repository,
         type_client.library,
     )
-    register(repo, library, "红烧肉镜头.mp4", user_tags=["红烧肉"], review_status="approved")
-    register(repo, library, "红烧肉旁白.mp3", user_tags=["红烧肉"])
-    register(repo, library, "别的镜头.mp4")
+    register(repo, library, "红烧肉镜头.mp4", user_tags=["红烧肉"], review_status="approved", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "红烧肉旁白.mp3", user_tags=["红烧肉"], owner_user_id=type_client.creator_user_id)
+    register(repo, library, "别的镜头.mp4", owner_user_id=type_client.creator_user_id)
 
     assert names(page(client, media_type="video", q="红烧肉")) == ["红烧肉镜头.mp4"]
     assert names(page(client, media_type="audio", q="红烧肉")) == ["红烧肉旁白.mp3"]
@@ -216,13 +223,20 @@ def test_type_never_reaches_another_workspace(type_client) -> None:
         type_client.repository,
         type_client.library,
     )
-    register(repo, library, "本工作区.mp4")
-    register(repo, library, "别的工作区.mp4", workspace_id=OTHER_WORKSPACE)
+    register(repo, library, "本工作区.mp4", owner_user_id=type_client.creator_user_id)
+    register(repo, library, "别的工作区.mp4", workspace_id=OTHER_WORKSPACE, owner_user_id=type_client.creator_user_id)
 
     result = page(client, media_type="video")
 
     assert names(result) == ["本工作区.mp4"]
     assert result["total_count"] == 1
+    other = client.get(
+        "/api/production/materials", params={"media_type": "video"},
+        headers={"x-test-workspace": OTHER_WORKSPACE},
+    )
+    assert other.status_code == 200, other.text
+    assert names(other.json()) == ["别的工作区.mp4"]
+    assert other.json()["total_count"] == 1
 
 
 def test_unknown_type_is_rejected(type_client) -> None:

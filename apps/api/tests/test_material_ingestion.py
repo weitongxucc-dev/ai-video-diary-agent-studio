@@ -77,8 +77,48 @@ def test_copy_confirmation_persists_revision_before_waking() -> None:
     repository.confirm_material_copy_complete.assert_called_once_with(
         "one", relative_path="clip.mp4", expected_revision=revision,
         confirmation_source="manual",
+        verified_owner_user_id=None,
     )
     assert service._wake.is_set()
+
+
+def test_copy_uploader_survives_restart_without_claiming_unknown_or_existing_assets(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.bind_material_ingestion("one", expected_directory=str(library), verified_owner_user_id="binder")
+    assert repo.get_material_ingestion_owner() is None
+    uploaded = library / "uploaded.mp4"
+    uploaded.write_bytes(b"complete application copy")
+    repo.confirm_material_copy_complete(
+        "one", relative_path=uploaded.name,
+        expected_revision=repo.material_copy_revision(uploaded.stat()),
+        confirmation_source="app_import", verified_owner_user_id="uploader",
+    )
+    restarted = ProductionRepository(repo.database_path, library)
+    asset = restarted.scan_library("one")[0]
+    assert asset.owner_user_id == "uploader"
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=uploaded.name,
+        expected_revision=restarted.material_copy_revision(uploaded.stat()),
+        confirmation_source="app_import", verified_owner_user_id="another-member",
+    )
+    assert restarted.scan_library("one")[0].owner_user_id == "uploader"
+
+    external = library / "external.mp4"
+    external.write_bytes(b"external file without uploader identity")
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=external.name,
+        expected_revision=restarted.material_copy_revision(external.stat()), confirmation_source="manual",
+    )
+    unknown = next(item for item in restarted.scan_library("one") if item.file_name == external.name)
+    assert unknown.owner_user_id is None
+    restarted.confirm_material_copy_complete(
+        "one", relative_path=external.name,
+        expected_revision=restarted.material_copy_revision(external.stat()),
+        confirmation_source="app_import", verified_owner_user_id="another-member",
+    )
+    assert restarted.get_asset("one", unknown.id).owner_user_id is None
+    assert next(item for item in restarted.scan_library("one") if item.id == unknown.id).owner_user_id is None
 
 
 def test_copy_confirmation_failure_does_not_wake() -> None:

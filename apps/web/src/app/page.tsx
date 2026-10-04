@@ -1,32 +1,26 @@
+"use client";
+
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
-import { HomeWorkspace } from "@/components/HomeWorkspace";
-import { getMaterialLibraryInsights, getProductionFoundation, listCreationTasks } from "@/lib/api.server";
-import type { MaterialLibraryInsights, ProductionFoundation } from "@/lib/types";
+import { HomeDashboardLive } from "@/components/HomeWorkspace";
 
 export const dynamic = "force-dynamic";
 
-async function loadFoundation(): Promise<ProductionFoundation | null> {
-  try {
-    return await getProductionFoundation();
-  } catch {
-    return null;
-  }
+/**
+ * 首页。
+ *
+ * 真实数据一律在浏览器端读取：服务端渲染拿不到 localStorage 里的成员令牌，
+ * 先按 owner 预取私有任务再在客户端隐藏，等于把别人的名字发到首帧。
+ * 这里不预发任何 owner 私有任务、词云或成果，只渲染容器外壳。
+ */
+function HomeShell() {
+  const params = useSearchParams();
+  return <AppShell autoFocus={params.get("new") === "1"}>
+    <HomeDashboardLive />
+  </AppShell>;
 }
 
-export default async function HomePage({ searchParams }: { searchParams?: Promise<{ new?: string }> }) {
-  const params = searchParams ? await searchParams : {};
-  const [foundation, creationTaskResponse, insights] = await Promise.all([
-    loadFoundation(),
-    listCreationTasks().catch(() => null),
-    getMaterialLibraryInsights().catch(() => null),
-  ]);
-  const creationTasks = creationTaskResponse?.items ?? [];
-
-  return <AppShell
-    autoFocus={params.new === "1"}
-    creationTasks={creationTasks}
-    workspaceStatus={foundation?.readiness.ready ? { kind: "connected", label: "可以开工" } : { kind: "attention", label: "需要处理" }}
-  >
-    <HomeWorkspace foundation={foundation} tasks={creationTasks} insights={insights} />
-  </AppShell>;
+export default function HomePage() {
+  return <Suspense fallback={null}><HomeShell /></Suspense>;
 }

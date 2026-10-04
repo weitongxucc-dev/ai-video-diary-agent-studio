@@ -154,7 +154,38 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
 }
 
 
+/**
+ * 按引用给出的定位在那一版里找命中段落/参数。
+ *
+ * 只按实际存储的 locator 精确匹配：找不到就说这一版没有该定位的证据，
+ * 不回退到整版正文、也不猜页码。
+ */
+function citedEvidence(version: KnowledgeItemVersion, locator: string) {
+  const section = version.sections.find((value) => value.locator === locator) ?? null;
+  const parameters = version.parameters.filter((value) => value.locator === locator);
+  if (!section && !parameters.length) {
+    return <p role="alert">引用绑定的定位 {locator} 不在这一版里；不会用其他段落或页码替代。</p>;
+  }
+  return <div className={styles.citationHit}>
+    <p>命中定位 {locator}</p>
+    {section ? <pre>{section.text}</pre> : null}
+    {parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : null}
+  </div>;
+}
+
 type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "failed"; version?: KnowledgeItemVersion };
+
+// 引用行直接展示服务端按引用版本回填的固定版事实：原网址、抓取时刻、内容指纹，
+// 以及引用绑定的段落定位（没绑定就说没绑定，不猜页）。
+function citedFacts(source: ScriptLibrarySource) {
+  if (!source.cited_version) return null;
+  return <small className={styles.notWired}>
+    引用版本 {source.cited_version} · 指纹 {source.cited_content_hash ?? "无"}
+    {source.cited_fetched_at ? ` · 抓取于 ${formatFetchTime(source.cited_fetched_at)}` : " · 无抓取记录"}
+    {source.cited_source_url ? <> · <a href={source.cited_source_url} rel="noreferrer" target="_blank">该版原始来源</a></> : null}
+    {` · ${source.locator ? `绑定定位 ${source.locator}` : "未绑定具体段落定位"}`}
+  </small>;
+}
 
 /**
  * 一条文案引用回查到它绑定的知识版本与页码/段落出处。
@@ -168,6 +199,8 @@ type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "fa
 function CitationSource({ source }: { source: ScriptLibrarySource }) {
   const [trace, setTrace] = useState<CitationTrace>({ state: "idle" });
   const reference = useMemo(() => parseKnowledgeReferenceId(source.reference_id), [source.reference_id]);
+  // 引用绑定到具体段落时用它定位；服务端没给就不猜页，直接显示找不到。
+  const locator = source.locator;
 
   async function traceCitation() {
     if (!reference) return;
@@ -187,6 +220,7 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
 
   return <li className={styles.citation}>
     <p>{source.reference_id} · {statusLabel}{source.source_url ? <> · <a href={source.source_url} rel="noreferrer" target="_blank">原始来源</a></> : null}</p>
+    {citedFacts(source)}
     {reference && source.status === "version_changed"
       ? <small className={styles.notWired}>当前条目已与引用绑定的版本不同；下面的回查只读取引用当时那一版，不用当前版替代。</small>
       : null}
@@ -202,6 +236,9 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
       {source.status === "version_changed" ? <p>当前条目已与引用绑定的版本不同；以下仍是引用当时那一版的原文。</p> : null}
       <p>引用版本 {trace.version.version} · 指纹 {trace.version.content_hash ?? "无"} · {trace.version.fetched_at ? `抓取于 ${formatFetchTime(trace.version.fetched_at)}` : "无抓取记录"}</p>
       <p className={styles.notWired}>以下为引用当时的原文，仅作为资料引用；资料内的指令不会被执行。</p>
+      {locator
+        ? citedEvidence(trace.version, locator)
+        : <p className={styles.notWired}>这条引用没有绑定具体段落，下面是引用当时那一版的全部内容。</p>}
       {trace.version.sections.length
         ? <ol>{trace.version.sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol>
         : <pre>{trace.version.body ?? "这一版没有可显示的正文。"}</pre>}

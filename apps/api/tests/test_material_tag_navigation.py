@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.local_members import LocalMemberService
 from app.production import MaterialSegment, ProductionRepository
 
 WORKSPACE = "workspace-tags"
@@ -43,6 +44,7 @@ def register(
     workspace_id: str = WORKSPACE,
     user_tags: list[str] | None = None,
     segments: list[dict[str, list[str]]] | None = None,
+    uploader_user_id: str | None = None,
 ) -> str:
     """登记一个素材，并直接带上它自己的标签和每个片段的标签。
 
@@ -51,7 +53,10 @@ def register(
     """
     path = library / name
     path.write_bytes(b"material-bytes")
-    asset = repo._upsert_discovered_asset(workspace_id, path)
+    # 上传者只认显式传入的真实身份；目录绑定身份不等于上传者。
+    asset = repo._upsert_discovered_asset(
+        workspace_id, path, owner_user_id=uploader_user_id
+    )
     asset.user_tags = list(user_tags or [])
     asset.segments = [
         MaterialSegment(
@@ -76,11 +81,22 @@ def tag_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    return SimpleNamespace(client=TestClient(main_module.app), repository=repo, library=library)
+    # 真实成员身份：私有素材只对上传者本人可读，匿名请求看不到任何一行。
+    # 这里绑定目录时给出上传者身份，读取时带上同一个真实令牌。
+    service = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", service)
+    uploader, uploader_token = service.join(service.create_invite_code(), "上传者")
+    return SimpleNamespace(
+        client=TestClient(main_module.app),
+        repository=repo,
+        library=library,
+        uploader_user_id=uploader.member_id,
+        headers={"X-Local-Member-Token": uploader_token},
+    )
 
 
-def tag_counts(client: TestClient) -> dict[str, dict[str, int]]:
-    response = client.get("/api/production/materials/insights")
+def tag_counts(client: TestClient, headers: dict[str, str] | None = None) -> dict[str, dict[str, int]]:
+    response = client.get("/api/production/materials/insights", headers=headers or {})
     assert response.status_code == 200
     return {item["tag"]: item for item in response.json()["tags"]}
 
@@ -91,6 +107,7 @@ def test_a_material_is_counted_once_even_when_the_tag_repeats(tag_client) -> Non
         tag_client.repository,
         tag_client.library,
         "重复标签素材.mp4",
+        uploader_user_id=tag_client.uploader_user_id,
         user_tags=[RED_BRAISED],
         segments=[
             {"user_tags": [RED_BRAISED]},
@@ -101,10 +118,11 @@ def test_a_material_is_counted_once_even_when_the_tag_repeats(tag_client) -> Non
         tag_client.repository,
         tag_client.library,
         "另一个素材.mp4",
+        uploader_user_id=tag_client.uploader_user_id,
         segments=[{"system_tags": [RED_BRAISED]}],
     )
 
-    counts = tag_counts(tag_client.client)
+    counts = tag_counts(tag_client.client, tag_client.headers)
     assert counts[RED_BRAISED]["asset_count"] == 2
     # 片段数说的是片段，不是素材：第一个素材两个片段，第二个一个。
     assert counts[RED_BRAISED]["segment_count"] == 3
@@ -114,14 +132,14 @@ def test_a_similar_tag_and_a_differently_spelled_one_are_not_the_same(tag_client
     """相似标签、以及只是大小写不同的英文标签，都不能混进同一个数。"""
     register(
         tag_client.repository,
-        tag_client.library,
-        "特写素材.mp4",
+        tag_client.library,        "特写素材.mp4",
+        uploader_user_id=tag_client.uploader_user_id,
         user_tags=[RED_BRAISED_CLOSEUP],
     )
-    register(tag_client.repository, tag_client.library, "大写素材.mp4", user_tags=[HERO_SHOT])
-    register(tag_client.repository, tag_client.library, "小写素材.mp4", user_tags=[HERO_SHOT.lower()])
+    register(tag_client.repository, tag_client.library, "大写素材.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[HERO_SHOT])
+    register(tag_client.repository, tag_client.library, "小写素材.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[HERO_SHOT.lower()])
 
-    counts = tag_counts(tag_client.client)
+    counts = tag_counts(tag_client.client, tag_client.headers)
     assert counts[RED_BRAISED_CLOSEUP]["asset_count"] == 1
     assert RED_BRAISED not in counts or counts[RED_BRAISED]["asset_count"] == 0
     # 大小写是两个标签名，各自只算自己那一个素材。
@@ -132,13 +150,13 @@ def test_a_similar_tag_and_a_differently_spelled_one_are_not_the_same(tag_client
 def test_the_number_shown_beside_a_tag_is_the_number_of_rows_behind_it(tag_client) -> None:
     """点标签拿到的行数，必须等于词云上写着的素材数。"""
     for index in range(3):
-        register(tag_client.repository, tag_client.library, f"成片-{index}.mp4", user_tags=[RED_BRAISED])
-    register(tag_client.repository, tag_client.library, "特写成片.mp4", user_tags=[RED_BRAISED_CLOSEUP])
-    register(tag_client.repository, tag_client.library, "英文成片.mp4", user_tags=[HERO_SHOT])
+        register(tag_client.repository, tag_client.library, f"成片-{index}.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[RED_BRAISED])
+    register(tag_client.repository, tag_client.library, "特写成片.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[RED_BRAISED_CLOSEUP])
+    register(tag_client.repository, tag_client.library, "英文成片.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[HERO_SHOT])
 
     for name in (RED_BRAISED, RED_BRAISED_CLOSEUP, HERO_SHOT):
-        shown = tag_counts(tag_client.client)[name]["asset_count"]
-        rows = tag_client.client.get("/api/production/materials", params={"tag": name}).json()
+        shown = tag_counts(tag_client.client, tag_client.headers)[name]["asset_count"]
+        rows = tag_client.client.get("/api/production/materials", params={"tag": name}, headers=tag_client.headers).json()
         assert rows["total_count"] == shown
         assert len(rows["assets"]) == shown
 
@@ -146,12 +164,12 @@ def test_the_number_shown_beside_a_tag_is_the_number_of_rows_behind_it(tag_clien
 def test_the_tag_filter_narrows_the_count_before_paging(tag_client) -> None:
     """筛选发生在计数和分页之前，跨页也要一个不漏、一样不多。"""
     for index in range(5):
-        register(tag_client.repository, tag_client.library, f"分页-命中-{index}.mp4", user_tags=[RED_BRAISED])
+        register(tag_client.repository, tag_client.library, f"分页-命中-{index}.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[RED_BRAISED])
     for index in range(3):
         register(
             tag_client.repository,
-            tag_client.library,
-            f"分页-未命中-{index}.mp4",
+            tag_client.library,            f"分页-未命中-{index}.mp4",
+            uploader_user_id=tag_client.uploader_user_id,
             user_tags=[RED_BRAISED_CLOSEUP],
         )
 
@@ -159,6 +177,7 @@ def test_the_tag_filter_narrows_the_count_before_paging(tag_client) -> None:
         tag_client.client.get(
             "/api/production/materials",
             params={"tag": RED_BRAISED, "limit": 2, "offset": offset},
+            headers=tag_client.headers,
         ).json()
         for offset in (0, 2, 4)
     ]
@@ -172,22 +191,25 @@ def test_the_tag_filter_narrows_the_count_before_paging(tag_client) -> None:
 
 def test_another_workspace_never_appears_in_either_the_count_or_the_rows(tag_client) -> None:
     """别人工作区的素材，既不进我的词云，也不出现在我点标签的结果里。"""
-    register(tag_client.repository, tag_client.library, "我的素材.mp4", user_tags=[RED_BRAISED])
+    register(tag_client.repository, tag_client.library, "我的素材.mp4", uploader_user_id=tag_client.uploader_user_id, user_tags=[RED_BRAISED])
     register(
         tag_client.repository,
         tag_client.library,
         "他人素材.mp4",
         workspace_id=OTHER_WORKSPACE,
+        uploader_user_id=tag_client.uploader_user_id,
         user_tags=[RED_BRAISED],
     )
 
-    assert tag_counts(tag_client.client)[RED_BRAISED]["asset_count"] == 1
+    assert tag_counts(tag_client.client, tag_client.headers)[RED_BRAISED]["asset_count"] == 1
 
     mine = tag_client.client.get(
-        "/api/production/materials", params={"tag": RED_BRAISED}, headers={"x-test-workspace": WORKSPACE}
+        "/api/production/materials", params={"tag": RED_BRAISED},
+        headers={**tag_client.headers, "x-test-workspace": WORKSPACE},
     ).json()
     theirs = tag_client.client.get(
-        "/api/production/materials", params={"tag": RED_BRAISED}, headers={"x-test-workspace": OTHER_WORKSPACE}
+        "/api/production/materials", params={"tag": RED_BRAISED},
+        headers={**tag_client.headers, "x-test-workspace": OTHER_WORKSPACE},
     ).json()
     assert [asset["file_name"] for asset in mine["assets"]] == ["我的素材.mp4"]
     assert [asset["file_name"] for asset in theirs["assets"]] == ["他人素材.mp4"]

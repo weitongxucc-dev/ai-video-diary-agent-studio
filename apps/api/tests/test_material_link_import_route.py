@@ -20,6 +20,7 @@ from PIL import Image
 import app.main as main_module
 from app import main as _main_placeholder  # noqa: F401  (ensure app import happens first)
 from app.media_link_import import MediaLinkImportService
+from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 PUBLIC = "93.184.216.34"
@@ -53,6 +54,9 @@ def link_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     repository.bind_material_ingestion("workspace-a", expected_directory=str(library))
     monkeypatch.setattr(main_module, "production_repo", repository)
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    _, token = members.whoami(None)
     monkeypatch.setattr(
         main_module,
         "settings",
@@ -77,7 +81,7 @@ def link_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(main_module, "MediaLinkImportService", service_factory)
     return SimpleNamespace(
-        client=TestClient(main_module.app),
+        client=TestClient(main_module.app, headers={"X-Local-Member-Token": token}),
         repository=repository,
         library=library,
         state=state,
@@ -99,6 +103,37 @@ def tmp_png() -> bytes:
     stream = BytesIO()
     Image.new("RGB", (8, 6), (12, 90, 200)).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def test_link_reuse_and_restore_follow_current_visibility_without_transferring_owner(link_client) -> None:
+    repo = link_client.repository
+    source = link_client.library / "link-original.png"
+    source.write_bytes(tmp_png())
+    asset = repo.register_link_material(
+        "workspace-a", source, media_type="image", source_url=PNG_URL,
+        verified_owner_user_id="uploader",
+    )
+    with pytest.raises(KeyError):
+        repo.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member")
+    shared = repo.set_asset_visibility("workspace-a", asset.id, "shared")
+    assert repo.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member").id == shared.id
+    repo.set_asset_visibility("workspace-a", asset.id, "private")
+    source.unlink()
+    replacement = link_client.library / "link-replacement.png"
+    replacement.write_bytes(tmp_png())
+    with pytest.raises(KeyError):
+        repo.register_link_material(
+            "workspace-a", replacement, media_type="image", source_url=PNG_URL,
+            verified_owner_user_id="other-member",
+        )
+    assert replacement.is_file()
+    restored = repo.register_link_material(
+        "workspace-a", replacement, media_type="image", source_url=PNG_URL,
+        verified_owner_user_id="uploader",
+    )
+    assert restored.id == asset.id
+    assert restored.owner_user_id == "uploader"
+    assert restored.visibility == "private"
 
 
 def test_image_link_registers_a_real_material_asset(link_client) -> None:
