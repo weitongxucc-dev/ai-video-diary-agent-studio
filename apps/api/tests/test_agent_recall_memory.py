@@ -46,6 +46,13 @@ def call(tool: str, params: dict, routes: dict, env_extra: dict | None = None) -
     return result["result"]
 
 
+def call_with_headers(tool: str, params: dict, routes: dict, env_extra: dict | None = None) -> tuple[dict, list[dict]]:
+    """同 call()，但额外返回工具实际发出的请求头（用于断言成员令牌真的发出）。"""
+    [result] = run_ops({"op": "call", "tool": tool, "params": params, "routes": routes}, env_extra=env_extra)
+    assert result.get("ok"), f"tool {tool} raised: {result.get('error')}"
+    return result["result"], result.get("requestHeaders", [])
+
+
 def call_with_requests(tool: str, params: dict, routes: dict) -> tuple[dict, list[str]]:
     """同 call()，但额外返回工具实际发出的请求 URL（用于断言分页 limit 等）。"""
     [result] = run_ops({"op": "call", "tool": tool, "params": params, "routes": routes})
@@ -507,3 +514,24 @@ class TestCrossWorkspaceIsolation:
         first = result["candidates"][0]
         assert first["file_name"] == "mine.mp4"
         assert result["evidence_complete"] is True
+
+
+def test_tools_send_the_verified_local_member_token_to_the_backend():
+    """助手工具的读取请求必须带上已验证的成员令牌，否则会退化成匿名 local 诊断读取。"""
+    routes = {
+        "/api/creation-tasks/": {"id": "task-one", "name": "任务", "stage": "montage"},
+    }
+    env = {
+        "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",
+        "AI_VIDEO_DIARY_AGENT_STAGE": "montage",
+        "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN": "member-token-one",
+    }
+    _, headers = call_with_headers("read_current_task", {}, routes, env_extra=env)
+    assert headers
+    # 每个后端请求都带上同名成员令牌头，与服务端读入口一致。
+    assert all(header.get("x-local-member-token") == "member-token-one" for header in headers)
+    # 没有令牌的环境不会伪造这个头：服务端按匿名 local 诊断处理，而不是假装已验证。
+    _, anonymous = call_with_headers("read_current_task", {}, routes, env_extra={
+        "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one", "AI_VIDEO_DIARY_AGENT_STAGE": "montage",
+    })
+    assert all("x-local-member-token" not in header for header in anonymous)
