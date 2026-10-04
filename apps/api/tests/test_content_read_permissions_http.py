@@ -28,10 +28,12 @@ def _setup(tmp_path, monkeypatch):
         main_module, "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    owner = service.add_member("所有者", "owner")
+    # 所有者用真实成员令牌：空字符串只是匿名本机诊断，不能拿来当 owner 身份。
+    owner, owner_token = service.join(service.create_invite_code(), "所有者")
+    service.set_role(owner.member_id, "owner")
     member, member_token = service.join(service.create_invite_code(), "小王")
     return {
-        "owner_token": "",
+        "owner_token": owner_token,
         "owner_member": owner,
         "member_token": member_token,
         "member": member,
@@ -42,15 +44,19 @@ def _headers(token: str) -> dict[str, str]:
     return {"X-Local-Member-Token": token}
 
 
-def _save_private_knowledge(title: str) -> dict:
+def _save_private_knowledge(title: str, token: str) -> dict:
+    """以该令牌的真实身份保存一条私有资料，归属绑定到这次身份。"""
+    headers = _headers(token)
     source = client.post(
         "/api/source-items/manual",
         json={"title": f"{title}来源", "content_type": "text", "body": "正文", "license": "owned"},
+        headers=headers,
     )
     assert source.status_code == 200, source.text
     saved = client.post(
         f"/api/source-items/{source.json()['id']}/save-to-knowledge",
         json={"ownership": "自有", "authorization": "自有"},
+        headers=headers,
     )
     assert saved.status_code == 200, saved.text
     return saved.json()
@@ -58,24 +64,42 @@ def _save_private_knowledge(title: str) -> dict:
 
 def test_owner_token_does_not_grant_another_members_private_content(tmp_path, monkeypatch):
     party = _setup(tmp_path, monkeypatch)
-    saved = _save_private_knowledge("所有者私有")
-    assert saved["visibility"] == "private"
+    owner_saved = _save_private_knowledge("所有者私有", party["owner_token"])
+    member_saved = _save_private_knowledge("小王的私有", party["member_token"])
+    assert owner_saved["visibility"] == "private"
+    assert member_saved["visibility"] == "private"
 
-    # 成员令牌读不到：按不存在处理，不用 403 暴露「它存在」。
+    # 上传者本人读得到自己刚存的私有内容。
+    assert client.get(
+        f"/api/knowledge-items/{member_saved['id']}", headers=_headers(party["member_token"])
+    ).status_code == 200
+    assert client.get(
+        f"/api/knowledge-items/{owner_saved['id']}", headers=_headers(party["owner_token"])
+    ).status_code == 200
+
+    # owner 身份读不到别人的私有内容：读权限只跟上传者本人绑定。
+    owner_denied = client.get(
+        f"/api/knowledge-items/{member_saved['id']}", headers=_headers(party["owner_token"])
+    )
+    assert owner_denied.status_code == 404
+
+    # 成员之间也互相读不到，按不存在处理而不是 403。
     denied = client.get(
-        f"/api/knowledge-items/{saved['id']}", headers=_headers(party["member_token"])
+        f"/api/knowledge-items/{owner_saved['id']}", headers=_headers(party["member_token"])
     )
     assert denied.status_code == 404
 
-    # 列表里同样不出现。
+    # 列表里同样不出现别人的私有条目。
     listed = client.get("/api/knowledge-items", headers=_headers(party["member_token"]))
     assert listed.status_code == 200
-    assert all(item["id"] != saved["id"] for item in listed.json()["items"])
+    member_ids = {item["id"] for item in listed.json()["items"]}
+    assert member_saved["id"] in member_ids
+    assert owner_saved["id"] not in member_ids
 
 
 def test_shared_becomes_readable_and_revoke_takes_effect_immediately(tmp_path, monkeypatch):
     party = _setup(tmp_path, monkeypatch)
-    saved = _save_private_knowledge("共享后可见")
+    saved = _save_private_knowledge("共享后可见", party["owner_token"])
 
     client.put(
         f"/api/knowledge-items/{saved['id']}/visibility",
@@ -101,8 +125,8 @@ def test_shared_becomes_readable_and_revoke_takes_effect_immediately(tmp_path, m
 
 
 def test_invalid_member_token_is_rejected_and_never_treated_as_owner(tmp_path, monkeypatch):
-    _setup(tmp_path, monkeypatch)
-    saved = _save_private_knowledge("私有内容")
+    party = _setup(tmp_path, monkeypatch)
+    saved = _save_private_knowledge("私有内容", party["owner_token"])
 
     denied = client.get(
         f"/api/knowledge-items/{saved['id']}",
@@ -117,7 +141,7 @@ def test_invalid_member_token_is_rejected_and_never_treated_as_owner(tmp_path, m
 def test_cited_version_facts_are_not_returned_to_a_reader_without_permission(tmp_path, monkeypatch):
     """引用回查不得把无权读取的私有快照的来源链接与指纹带出去。"""
     party = _setup(tmp_path, monkeypatch)
-    saved = _save_private_knowledge("被引用的私有资料")
+    saved = _save_private_knowledge("被引用的私有资料", party["owner_token"])
     item_id, version = saved["id"], saved["version"]
     item = main_module.source_repository.get_knowledge_item(WORKSPACE, item_id)
 
@@ -136,12 +160,14 @@ def test_cited_version_facts_are_not_returned_to_a_reader_without_permission(tmp
         member_request, WORKSPACE, "private", "somebody-else"
     ) is False
 
-    # 这条经该路由保存时没有可解析身份，owner 为空：不算任何成员的私有内容，
-    # 认证态读取一律按不可见处理（local 受控诊断除外）。
-    assert item.owner_user_id is None
+    # 这条以所有者身份保存，归属就是所有者本人：本人读得到，别人读不到。
+    assert item.owner_user_id == party["owner_member"].member_id
     assert main_module._content_visible(
         member_request, WORKSPACE, "private", item.owner_user_id
     ) is False
+    assert main_module._content_visible(
+        reader(party["owner_token"]), WORKSPACE, "private", item.owner_user_id
+    ) is True
 
     # 无权读取的一版不给出任何快照事实：来源链接、抓取时刻和指纹都为空。
     denied = main_module.ScriptLibrarySourceResponse(
@@ -187,7 +213,7 @@ def test_anonymous_read_outside_the_reserved_local_workspace_is_not_local_diagno
 ):
     """受控 local 只覆盖保留的 local 工作区；别的 workspace 匿名请求读不到私有内容。"""
     party = _setup(tmp_path, monkeypatch)
-    saved = _save_private_knowledge("匿名读不到")
+    saved = _save_private_knowledge("匿名读不到", party["owner_token"])
 
     # 带令牌的有效成员在别的 workspace 上按成员隔离（读不到他人私有）。
     denied = client.get(
