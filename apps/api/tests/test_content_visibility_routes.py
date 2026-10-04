@@ -32,11 +32,14 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main_module, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", "ws")
     )
-    return production, service
+    # 真实成员令牌：私有内容只对上传者本人可读，匿名请求读不到自己的私有条目。
+    owner, owner_token = service.join(service.create_invite_code(), "所有者")
+    service.set_role(owner.member_id, "owner")
+    return production, service, owner_token, owner.member_id
 
 
-def _headers() -> dict[str, str]:
-    return {}
+def _headers(token: str) -> dict[str, str]:
+    return {"X-Local-Member-Token": token}
 
 
 def _confirm_task(production, workspace_id: str):
@@ -57,7 +60,7 @@ def _confirm_task(production, workspace_id: str):
 
 
 def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch):
-    production, _service = _setup(tmp_path, monkeypatch)
+    production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     from app.production import MaterialAsset
     from datetime import datetime
 
@@ -66,14 +69,14 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
         size_bytes=10, modified_at=datetime(2026, 1, 1),
     ))
 
-    detail = client.get("/api/production/materials/asset-vis", headers=_headers())
+    detail = client.get("/api/production/materials/asset-vis", headers=_headers(owner_token))
     assert detail.status_code == 200
     assert detail.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
 
     shared = client.put(
         "/api/production/materials/asset-vis/visibility",
         json={"visibility": "shared"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert shared.status_code == 200, shared.text
     assert shared.json()["visibility"] == CONTENT_VISIBILITY_LEGACY
@@ -81,24 +84,24 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     revoked = client.put(
         "/api/production/materials/asset-vis/visibility",
         json={"visibility": "private"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert revoked.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
     assert client.get("/api/production/materials/asset-vis").json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
 
 
 def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
-    production, _service = _setup(tmp_path, monkeypatch)
+    production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     plan, task = _confirm_task(production, "ws")
 
-    task_detail = client.get(f"/api/creation-tasks/{task.id}", headers=_headers())
+    task_detail = client.get(f"/api/creation-tasks/{task.id}", headers=_headers(owner_token))
     assert task_detail.status_code == 200, task_detail.text
     assert task_detail.json()["task"]["visibility"] == CONTENT_VISIBILITY_DEFAULT
 
     shared_task = client.put(
         f"/api/creation-tasks/{task.id}/visibility",
         json={"visibility": "shared"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert shared_task.status_code == 200, shared_task.text
     assert shared_task.json()["task"]["visibility"] == CONTENT_VISIBILITY_LEGACY
@@ -106,48 +109,48 @@ def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
     shared_plan = client.put(
         f"/api/creation-plans/{plan.id}/visibility",
         json={"visibility": "shared"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert shared_plan.status_code == 200, shared_plan.text
     assert shared_plan.json()["visibility"] == CONTENT_VISIBILITY_LEGACY
 
-    plan_detail = client.get(f"/api/creation-plans/{plan.id}", headers=_headers())
+    plan_detail = client.get(f"/api/creation-plans/{plan.id}", headers=_headers(owner_token))
     assert plan_detail.json()["visibility"] == CONTENT_VISIBILITY_LEGACY
 
 
 def test_template_visibility_round_trips_and_a_new_version_inherits(tmp_path, monkeypatch):
-    production, _service = _setup(tmp_path, monkeypatch)
+    production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     from app.production import VideoTemplate
 
     production.save_video_template(VideoTemplate(
         id="tpl-vis", workspace_id="ws", version=1, name="模板", origin="user",
         settings={"a": 1},
-    ))
+    ), verified_owner_user_id=owner_member_id)
 
     shared = client.put(
         "/api/video-templates/tpl-vis/visibility",
         json={"visibility": "shared"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert shared.status_code == 200, shared.text
     assert shared.json()["item"]["visibility"] == CONTENT_VISIBILITY_LEGACY
 
     listed = {
         item["version"]: item["visibility"]
-        for item in client.get("/api/video-templates", headers=_headers()).json()["items"]
+        for item in client.get("/api/video-templates", headers=_headers(owner_token)).json()["items"]
         if item["id"] == "tpl-vis"
     }
     assert listed == {1: CONTENT_VISIBILITY_LEGACY}
 
 
 def test_visibility_route_rejects_an_unknown_value_and_another_workspace(tmp_path, monkeypatch):
-    production, _service = _setup(tmp_path, monkeypatch)
+    production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     _confirm_task(production, "ws")
 
     rejected = client.put(
         "/api/creation-tasks/task-vis/visibility",
         json={"visibility": "everyone"},
-        headers=_headers(),
+        headers=_headers(owner_token),
     )
     assert rejected.status_code == 422
 

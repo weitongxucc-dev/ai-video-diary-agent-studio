@@ -28,6 +28,7 @@ from app.production import (
 
 
 WORKSPACE = "workspace_116"
+TEMPLATE_OWNER = "member-template-owner"
 
 
 def _repository(tmp_path: Path, name: str = "library") -> ProductionRepository:
@@ -234,7 +235,7 @@ def test_template_visibility_applies_to_new_versions(tmp_path):
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     )
-    production.save_video_template(template)
+    production.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
     production.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
 
     production.save_video_template(VideoTemplate(
@@ -260,7 +261,7 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     production.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
-    ))
+    ), verified_owner_user_id=TEMPLATE_OWNER)
     production.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
 
     saved = production.save_video_template(VideoTemplate(
@@ -271,12 +272,17 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     # 存进去的、立刻拿到的、列里的，三者必须是同一个值。
     assert saved.visibility == "shared"
     assert _stored_visibility(production, "video_templates", "tpl-2", WORKSPACE) == "shared"
-    listed = {item.version: item.visibility for item in production.list_video_templates(WORKSPACE)}
+    # 列出是带读取身份的读：这里用与创建同一条可信身份。
+    listed = {
+        item.version: item.visibility
+        for item in production.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+    }
     assert listed == {2: "shared", 1: "shared"}
 
     reopened = _repository(tmp_path)
     assert {
-        item.version: item.visibility for item in reopened.list_video_templates(WORKSPACE)
+        item.version: item.visibility
+        for item in reopened.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     } == {2: "shared", 1: "shared"}
 
 
