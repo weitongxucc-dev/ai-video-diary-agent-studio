@@ -28,6 +28,8 @@ from app.production import (
 
 
 WORKSPACE = "workspace_116"
+TEMPLATE_OWNER = "member-template-owner"
+UPLOADER = "member-content-uploader"
 
 
 def _repository(tmp_path: Path, name: str = "library") -> ProductionRepository:
@@ -41,10 +43,17 @@ def _repository(tmp_path: Path, name: str = "library") -> ProductionRepository:
     )
 
 
-def _asset(workspace_id: str, *, asset_id: str = "asset-1", file_name: str = "clip.mp4") -> MaterialAsset:
+def _asset(
+    workspace_id: str,
+    *,
+    asset_id: str = "asset-1",
+    file_name: str = "clip.mp4",
+    owner_user_id: str | None = UPLOADER,
+) -> MaterialAsset:
     return MaterialAsset(
         id=asset_id,
         workspace_id=workspace_id,
+        owner_user_id=owner_user_id,
         file_name=file_name,
         path=f"{workspace_id}/{file_name}",
         size_bytes=1024,
@@ -87,7 +96,10 @@ def _task(workspace_id: str, plan_id: str, task_id: str = "task-1") -> CreationT
 
 
 def _confirm(production: ProductionRepository, plan: CreationPlan, task: CreationTask) -> None:
-    production.confirm_creation_plan(plan, task)
+    # 沿既有确认契约：方案与任务的上传者取自这次已验证身份。
+    production.confirm_creation_plan(
+        plan, task, verified_owner_user_id=UPLOADER
+    )
 
 
 def _stored_visibility(production: ProductionRepository, table: str, row_id: str, workspace_id: str) -> str:
@@ -234,7 +246,7 @@ def test_template_visibility_applies_to_new_versions(tmp_path):
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     )
-    production.save_video_template(template)
+    production.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
     production.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
 
     production.save_video_template(VideoTemplate(
@@ -260,7 +272,7 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     production.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
-    ))
+    ), verified_owner_user_id=TEMPLATE_OWNER)
     production.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
 
     saved = production.save_video_template(VideoTemplate(
@@ -271,12 +283,17 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     # 存进去的、立刻拿到的、列里的，三者必须是同一个值。
     assert saved.visibility == "shared"
     assert _stored_visibility(production, "video_templates", "tpl-2", WORKSPACE) == "shared"
-    listed = {item.version: item.visibility for item in production.list_video_templates(WORKSPACE)}
+    # 列出是带读取身份的读：这里用与创建同一条可信身份。
+    listed = {
+        item.version: item.visibility
+        for item in production.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+    }
     assert listed == {2: "shared", 1: "shared"}
 
     reopened = _repository(tmp_path)
     assert {
-        item.version: item.visibility for item in reopened.list_video_templates(WORKSPACE)
+        item.version: item.visibility
+        for item in reopened.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     } == {2: "shared", 1: "shared"}
 
 

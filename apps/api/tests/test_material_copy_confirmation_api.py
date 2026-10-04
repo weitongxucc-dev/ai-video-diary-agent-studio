@@ -10,6 +10,7 @@ import pytest
 
 import app.main as main_module
 from app.material_ingestion import MaterialIngestionService
+from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 
@@ -27,7 +28,10 @@ def intake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_module, "material_ingestion", service)
     monkeypatch.setattr(main_module, "material_execution_mode", "legacy")
     monkeypatch.setattr(main_module, "active_workspace_id", lambda: "one")
-    return TestClient(main_module.app), repo, service, duration
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    _, token = members.whoami(None)
+    return TestClient(main_module.app, headers={"X-Local-Member-Token": token}), repo, service, duration
 
 
 def bind(client: TestClient, repo: ProductionRepository) -> None:
@@ -104,3 +108,26 @@ def test_committed_app_copy_confirms_before_discovery_and_scan_receives_it(intak
     assert len(scanned.json()["assets"]) == 1
     assert scanned.json()["assets"][0]["analysis_status"] == "ready"
     assert duration.call_count == 1 and path.read_bytes() == payload
+
+
+def test_confirmed_member_copy_is_not_readable_without_identity_outside_local(intake) -> None:
+    client, repo, service, duration = intake
+    bind(client, repo)
+    source = repo.video_library_path / "member.mp4"
+    source.write_bytes(b"complete member copy")
+    confirmed = client.post("/api/production/materials/intake/copy-complete", json={
+        "relative_path": source.name, "expected_revision": repo.material_copy_revision(source.stat()),
+        "confirmation_source": "app_import",
+    })
+    assert confirmed.status_code == 200, confirmed.text
+    scanned = client.post("/api/production/materials/scan")
+    assert scanned.status_code == 200, scanned.text
+    asset_id = scanned.json()["assets"][0]["id"]
+    anonymous = TestClient(main_module.app)
+    assert anonymous.get(f"/api/production/materials/{asset_id}").status_code == 404
+    assert anonymous.get(f"/api/production/materials/{asset_id}/media").status_code == 404
+    assert anonymous.get("/api/production/materials").json()["total_count"] == 0
+    assert anonymous.post("/api/production/materials/scan").json()["assets"] == []
+    assert anonymous.post("/api/production/materials/intake/scan").json()["assets"] == []
+    invalid = client.get("/api/production/materials/intake", headers={"X-Local-Member-Token": "invalid"})
+    assert invalid.status_code == 401

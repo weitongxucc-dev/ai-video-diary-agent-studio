@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main as main_module
+from app.local_members import LocalMemberService
 from app.artifact_store import ArtifactStore
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import (
@@ -39,9 +40,14 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     ], check=True, capture_output=True)
 
     workspace_id, task_id = "workspace-a", "task-trim-media"
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    owner_member, owner_token = members.whoami(None)
+    creator_id = owner_member.member_id
+    member_headers = {"X-Local-Member-Token": owner_token}
     repository = ProductionRepository(tmp_path / "production.sqlite", tmp_path)
     asset = MaterialAsset(
-        id="asset-trim", workspace_id=workspace_id, file_name=video.name, path=str(video),
+        id="asset-trim", workspace_id=workspace_id, owner_user_id=creator_id,
+        file_name=video.name, path=str(video),
         size_bytes=video.stat().st_size, modified_at=main_module.utc_now(), duration_seconds=2.4,
         usage_role="b_roll", review_status="approved", analysis_status="ready",
         segments=[MaterialSegment(
@@ -66,6 +72,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name,
         scenario=plan.goal, stage="montage", stage_status="waiting_for_user",
         status="waiting_for_user", progress=70, recovery_point="montage",
+        owner_user_id=creator_id,
     )
     repository.confirm_creation_plan(plan, task)
     repository.save_narration_artifact(NarrationArtifactRecord(
@@ -96,6 +103,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         video_inbox_path=str(tmp_path), effective_temporary_root_path=tmp_path / "temp",
     ))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(
         repository, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
     )
@@ -104,13 +112,13 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     route = f"/api/creation-tasks/{task_id}/edits/exact/preview"
     initial = client.post(route, json={
         "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
-    })
+    }, headers=member_headers)
     assert initial.status_code == 409
     assert initial.json()["detail"]["error"] == "timeline_version_required"
     assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
     assert repository.list_edit_proposals(workspace_id, task_id) == []
     assert repository.list_job_runs(workspace_id, task_id) == []
-    initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize")
+    initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize", headers=member_headers)
     assert initialized.status_code == 200, initialized.text
     assert initialized.json()["version_id"] == repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert repository.get_creation_task_montage_plan(workspace_id, task_id)["clips"][0]["source_start_seconds"] == 0
@@ -130,7 +138,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         missing_after.setattr(repository, "resolve_clip_media_reference", unavailable_after)
         incomplete = client.post(route, json={
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
-        })
+        }, headers=member_headers)
     assert incomplete.status_code == 422
     assert repository.list_edit_proposals(workspace_id, task_id) == []
     assert repository.list_job_runs(workspace_id, task_id) == []
@@ -142,7 +150,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         )
         preview = client.post(route, json={
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
-        })
+        }, headers=member_headers)
     assert preview.status_code == 200, preview.text
     assert "原视频画面和原声" in preview.json()["proposal"]["external_effects"][0]
     version_after_preview = repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
@@ -151,7 +159,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         url = preview.json()["proposal"]["preview"][side]["video_url"]
         fragment = urlsplit(url)
         assert fragment.fragment == f"t={start:.3f},{end:.3f}"
-        media = client.get(fragment.path)
+        media = client.get(fragment.path, headers=member_headers)
         assert media.status_code == 200 and media.headers["content-type"].startswith("video/mp4")
         output = tmp_path / f"{side}.mp4"
         output.write_bytes(media.content)
@@ -179,6 +187,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
 
     # A detached legacy task must not silently attach an older, different snapshot.
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     changed_montage = creation_task_montage_plan_from_payload(
         repository.get_creation_task_montage_plan(workspace_id, task_id)
     )

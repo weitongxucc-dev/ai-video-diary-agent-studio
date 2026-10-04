@@ -1,3 +1,11 @@
+import { readLocalMemberToken } from "./local-member-auth";
+import { isLocalAuthMode } from "./auth/routing";
+
+export type MaterialImportIdentity = {
+  localMemberToken?: string;
+  authorization?: string;
+};
+
 /**
  * Shared directory-picking bridge.
  *
@@ -14,7 +22,7 @@ declare global {
     electronAPI?: {
       openDirectory?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;
-      importMaterials?: () => Promise<MaterialImportResult>;
+      importMaterials?: (identity: MaterialImportIdentity) => Promise<MaterialImportResult>;
       saveRenderedVideo?: (taskId: string) => Promise<{
         saved: boolean;
         canceled?: boolean;
@@ -77,7 +85,15 @@ export async function importLocalMaterials(): Promise<
     return { kind: "unavailable" };
   }
   try {
-    return (await window.electronAPI?.importMaterials?.()) ?? { canceled: true };
+    const token = readLocalMemberToken();
+    const identity: MaterialImportIdentity = token ? { localMemberToken: token } : {};
+    if (!isLocalAuthMode()) {
+      const { createClient } = await import("./supabase/client");
+      const { data, error } = await createClient().auth.getSession();
+      if (error || !data.session) return { error: "请先登录，再导入素材。" };
+      identity.authorization = `Bearer ${data.session.access_token}`;
+    }
+    return (await window.electronAPI?.importMaterials?.(identity)) ?? { canceled: true };
   } catch {
     return { error: "导入失败，源文件保持不变。" };
   }
