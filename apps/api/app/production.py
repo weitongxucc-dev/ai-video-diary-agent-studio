@@ -5164,14 +5164,16 @@ class ProductionRepository:
                 "SELECT payload FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC LIMIT 1",
                 (template.workspace_id, template.id),
             ).fetchone()
-            inherited = ""
             if prior_owner is not None:
-                inherited = str(
+                # 已有模板沿用库里那一版的归属（legacy 空值也照旧保留）；
+                # 新版本不因换人保存而改归属。
+                owner = str(
                     json.loads(str(prior_owner["payload"])).get("owner_user_id") or ""
-                ).strip()
-            owner = inherited or content_owner(verified_owner_user_id)
-            if owner and not template.owner_user_id:
-                template = replace(template, owner_user_id=owner)
+                ).strip() or None
+            else:
+                # 新模板只取已验证身份；输入里的 owner_user_id 不继承。
+                owner = content_owner(verified_owner_user_id)
+            template = replace(template, owner_user_id=owner)
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
                 raise ValueError("模板版本已变化，请刷新后重新保存。")
@@ -5209,13 +5211,12 @@ class ProductionRepository:
         if plan.approved_clip_count > 0 and not plan.material_matches:
             raise ValueError("新创作方案必须固化本次实际命中的素材片段")
         _validate_plan_material_matches(plan.material_matches)
-        # 上传者绑定到已验证身份；已有归属不覆盖。legacy 调用不传即保持原样。
+        # 上传者只认已验证身份。dataclass 里的 owner_user_id 是调用方能自填的
+        # 字段，新建时一律以这里解析出的身份覆盖：自填的归属不参与判断，
+        # 没有可验证身份就不算任何成员的私有内容。
         owner = content_owner(verified_owner_user_id)
-        if owner:
-            if not plan.owner_user_id:
-                plan = replace(plan, owner_user_id=owner)
-            if not task.owner_user_id:
-                task = replace(task, owner_user_id=owner)
+        plan = replace(plan, owner_user_id=owner)
+        task = replace(task, owner_user_id=owner)
 
         now = utc_now()
         plan.creation_task_id = task.id

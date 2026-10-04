@@ -153,3 +153,38 @@ def test_content_readable_matches_the_knowledge_domain_rule() -> None:
     assert content_readable(
         user_id="x", local_diagnostic=False, visibility="private", owner_user_id=None
     ) is False
+
+def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
+    production: ProductionRepository,
+) -> None:
+    """调用方自填的 owner_user_id 不得成为归属：只认已验证身份。"""
+    from dataclasses import replace
+
+    forged = replace(plan_for(WORKSPACE), owner_user_id=ALICE)
+    forged_task = replace(task_for(WORKSPACE, "plan-1"), owner_user_id=ALICE)
+    plan, task = production.confirm_creation_plan(
+        forged, forged_task, verified_owner_user_id=BOB
+    )
+
+    assert plan.owner_user_id == BOB
+    assert task.owner_user_id == BOB
+    assert production.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
+    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
+
+    # 没有可验证身份时，自填的归属也不算数：不算任何成员的私有内容。
+    other = replace(plan_for("ws-2", plan_id="plan-unowned"), owner_user_id=ALICE)
+    other_task = replace(task_for("ws-2", "plan-unowned", task_id="task-unowned"), owner_user_id=ALICE)
+    unowned_plan, unowned_task = production.confirm_creation_plan(other, other_task)
+    assert unowned_plan.owner_user_id is None
+    assert unowned_task.owner_user_id is None
+
+    # 新模板同样不继承输入里的 owner_user_id。
+    saved = production.save_video_template(
+        VideoTemplate(
+            id="tpl-forged", workspace_id=WORKSPACE, version=1, name="伪造归属",
+            origin="user", settings={}, owner_user_id=ALICE,
+        ),
+        verified_owner_user_id=BOB,
+    )
+    assert saved.owner_user_id == BOB
+    assert production.get_video_template(WORKSPACE, "tpl-forged", 1).owner_user_id == BOB
