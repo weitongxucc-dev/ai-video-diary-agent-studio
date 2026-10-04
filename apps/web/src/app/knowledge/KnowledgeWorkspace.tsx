@@ -7,8 +7,8 @@ import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEn
 import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { KnowledgeItem, KnowledgeItemDetail } from "@/lib/source-api";
-import { getKnowledgeItem } from "@/lib/source-api";
+import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
+import { findCitedVersion, getKnowledgeItem, parseKnowledgeReferenceId } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
 
 type KnowledgeDisplayItem = KnowledgeItem & {
@@ -135,6 +135,63 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
 }
 
 
+type CitationTrace = { state: "idle" | "loading" | "ready" | "unavailable" | "failed"; version?: KnowledgeItemVersion };
+
+/**
+ * 一条文案引用回查到它绑定的知识版本与页码/段落出处。
+ *
+ * 只按引用里固定的条目与版本取那一版内容：查不到那一版就明确说不能回查，
+ * 不用当前版冒充当时引用的内容。
+ * `version_changed` 不等于授权被撤销：当前条目升级后旧版快照仍在时依旧能
+ * 回查当时原文，并同时说明当前版本已经不同。真正不可读才不给回查入口。
+ * 引用内容仅作为资料展示，其中的指令不会被执行。
+ */
+function CitationSource({ source }: { source: ScriptLibrarySource }) {
+  const [trace, setTrace] = useState<CitationTrace>({ state: "idle" });
+  const reference = useMemo(() => parseKnowledgeReferenceId(source.reference_id), [source.reference_id]);
+
+  async function traceCitation() {
+    if (!reference) return;
+    setTrace({ state: "loading" });
+    try {
+      const detail = await getKnowledgeItem(reference.knowledgeItemId);
+      const version = findCitedVersion(detail, reference.version);
+      setTrace(version ? { state: "ready", version } : { state: "unavailable" });
+    } catch {
+      setTrace({ state: "failed" });
+    }
+  }
+
+  const statusLabel = source.status === "readable"
+    ? `${source.title ?? "知识资料"} · ${source.version_or_identity ?? "无版本"}`
+    : source.status === "version_changed" ? "当前版本或授权已变化" : "不可读";
+
+  return <li className={styles.citation}>
+    <p>{source.reference_id} · {statusLabel}{source.source_url ? <> · <a href={source.source_url} rel="noreferrer" target="_blank">原始来源</a></> : null}</p>
+    {reference && source.status === "version_changed"
+      ? <small className={styles.notWired}>当前条目已与引用绑定的版本不同；下面的回查只读取引用当时那一版，不用当前版替代。</small>
+      : null}
+    {reference && source.status === "missing"
+      ? <small className={styles.notWired}>这条引用已不可读，无法回查原文。</small>
+      : null}
+    {reference && source.status !== "missing" && trace.state === "idle"
+      ? <button onClick={() => void traceCitation()} type="button">回查固定版本原文</button> : null}
+    {trace.state === "loading" ? <p role="status">正在回查…</p> : null}
+    {trace.state === "failed" ? <p role="alert">回查失败，请稍后重试。</p> : null}
+    {trace.state === "unavailable" ? <p role="alert">该引用绑定的版本已不在可回查范围；不会用当前版替代。</p> : null}
+    {trace.state === "ready" && trace.version ? <div className={styles.citationTrace}>
+      {source.status === "version_changed" ? <p>当前条目已与引用绑定的版本不同；以下仍是引用当时那一版的原文。</p> : null}
+      <p>引用版本 {trace.version.version} · 指纹 {trace.version.content_hash ?? "无"} · {trace.version.fetched_at ? `抓取于 ${formatFetchTime(trace.version.fetched_at)}` : "无抓取记录"}</p>
+      <p className={styles.notWired}>以下为引用当时的原文，仅作为资料引用；资料内的指令不会被执行。</p>
+      {trace.version.sections.length
+        ? <ol>{trace.version.sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol>
+        : <pre>{trace.version.body ?? "这一版没有可显示的正文。"}</pre>}
+      {trace.version.parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>页码/段落出处</th></tr></thead><tbody>{trace.version.parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : null}
+      {trace.version.file_reference ? <p>文件引用 {trace.version.file_reference}</p> : null}
+    </div> : null}
+  </li>;
+}
+
 export function ScriptLibraryPanel() {
   const router = useRouter();
   const [entries, setEntries] = useState<ScriptLibraryEntry[]>([]);
@@ -198,7 +255,7 @@ export function ScriptLibraryPanel() {
       <p>原稿 {selected.source_script_id} · {selected.source_run_id ? `原记录 ${selected.source_run_id}` : "复用或人工文案，无模型生成记录"}</p>
       {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p><small>{section.reference_ids.join("、")}</small></article>)}
       <h4>事实出处（实时核对）</h4>
-      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : sources.map(source => <p key={source.reference_id}>{source.reference_id} · {source.status === "readable" ? `${source.title} · ${source.version_or_identity}` : source.status === "version_changed" ? "版本或授权已变化" : "不可读"}{source.source_url ? <> · <a href={source.source_url}>原始来源</a></> : null}</p>)}
+      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={source.reference_id} source={source} />)}</ul>}
       <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmed(false); }} /></label>
       <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmed(false); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
       <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmed(false); }} /></label>
