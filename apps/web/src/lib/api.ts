@@ -16,6 +16,7 @@ import type {
   MaterialBusinessObjects,
   MaterialUsageRecords,
   MaterialIntakeStatus,
+  MaterialCopyCompleteInput,
   CreationTaskScriptsResponse,
   CreationTaskScript,
   CreationTaskScriptSection,
@@ -267,6 +268,13 @@ export function scanProductionMaterials(): Promise<MaterialLibrary> {
 
 export function getMaterialIntakeStatus(): Promise<MaterialIntakeStatus> {
   return request("/api/production/materials/intake");
+}
+
+export function confirmMaterialCopyComplete(input: MaterialCopyCompleteInput): Promise<{ confirmed: true; intake: MaterialIntakeStatus }> {
+  return request("/api/production/materials/intake/copy-complete", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function bindMaterialIntake(expectedDirectory: string): Promise<MaterialIntakeStatus> {
