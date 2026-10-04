@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   syncSourceConnector: vi.fn(),
   saveSourceItemToKnowledge: vi.fn(),
   importKnowledgeFile: vi.fn(),
+  captureWebSnapshot: vi.fn(),
   sourceErrorMessage: vi.fn(),
 }));
 vi.mock("@/lib/source-api", () => ({
@@ -20,6 +21,7 @@ vi.mock("@/lib/source-api", () => ({
   syncSourceConnector: api.syncSourceConnector,
   saveSourceItemToKnowledge: api.saveSourceItemToKnowledge,
   importKnowledgeFile: api.importKnowledgeFile,
+  captureWebSnapshot: api.captureWebSnapshot,
   sourceErrorMessage: api.sourceErrorMessage,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -84,5 +86,34 @@ describe("sources file import", () => {
     await waitFor(() => expect(api.importKnowledgeFile).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("alert")).toHaveTextContent("扫描件没有文本层");
     expect(screen.queryByText(/已解析/)).not.toBeInTheDocument();
+  });
+});
+describe("sources web snapshot", () => {
+  it("captures the page body with the original url and the fetched time", async () => {
+    const snapshot = {
+      ...parsed,
+      id: "source-web", source_label: "web_snapshot", content_type: "article",
+      source_url: "https://example.com/v1", file_reference: "https://example.com/v1",
+      fetched_at: "2026-10-04T10:00:00Z", title: "曜核一体机发布",
+      body: "第一段：设备支持本地成片。",
+      sections: [{ locator: "「曜核一体机发布」第 1 段", title: "曜核一体机发布", text: "第一段：设备支持本地成片。" }],
+      parameters: [],
+    };
+    api.captureWebSnapshot.mockResolvedValue(snapshot);
+    // 快照落库后刷新列表读到的就是它自己：选中它的连接器不会跳回旧的第一个信息源。
+    api.listSourceItems.mockResolvedValue({ items: [snapshot], total_count: 1 });
+    render(<SourcesPage />);
+    await screen.findByRole("heading", { name: "网页快照" });
+    const urlInput = screen.getByPlaceholderText("https://example.com/article") as HTMLInputElement;
+    fireEvent.change(urlInput, { target: { value: "https://example.com/v1" } });
+    fireEvent.submit(urlInput.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(api.captureWebSnapshot).toHaveBeenCalledWith("https://example.com/v1"));
+    expect(await screen.findByText(/网页正文已存为快照/)).toBeInTheDocument();
+    const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
+    expect(within(inspector).getByRole("link", { name: /打开原文/ })).toHaveAttribute("href", "https://example.com/v1");
+    // 抓取时刻精确到秒；同一天的两次抓取要能分辨。
+    expect(within(inspector).getByText(/2026\/10\/04/)).toHaveTextContent(/\d{2}:\d{2}:\d{2}/);
+    // 快照列表项不会被刷新掉：选中的是快照自己的连接器。
+    expect((await screen.findAllByText("曜核一体机发布")).length).toBeGreaterThan(0);
   });
 });

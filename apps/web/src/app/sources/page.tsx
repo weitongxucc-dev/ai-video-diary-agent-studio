@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import {
   createManualSourceItem,
   createSourceConnector,
+  captureWebSnapshot,
   importKnowledgeFile,
   listSourceConnectors,
   listSourceItems,
@@ -63,6 +64,12 @@ function formatTime(value: string | null) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
+// 抓取时刻要精确到秒：同一天的两次抓取（V1/V2）只有这样才分得开。
+function formatFetchTime(value: string | null) {
+  if (!value) return "无抓取记录";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
 export default function SourcesPage() {
   const [connectors, setConnectors] = useState<SourceConnector[]>([]);
   const [items, setItems] = useState<SourceItem[]>([]);
@@ -117,6 +124,22 @@ export default function SourcesPage() {
     try {
       const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, license: String(form.get("license") ?? "使用范围待确认") });
       setSelectedConnectorId(null); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，确认授权后可保存到知识库。"); event.currentTarget.reset();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setBusy(null); }
+  }
+
+  async function captureWebPage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // 先记住表单：await 之后 currentTarget 已经失效，reset 会报错。
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setBusy("web-snapshot"); setError(null); setNotice(null);
+    try {
+      const item = await captureWebSnapshot(String(form.get("url") ?? ""));
+      // 选中快照自己的连接器，否则列表刷新会跳回第一个旧信息源，快照立刻被刷掉。
+      setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id);
+      setNotice("网页正文已存为快照，确认授权后可保存到知识库。");
+      formElement.reset();
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -182,6 +205,7 @@ export default function SourcesPage() {
           <section className="source-panel source-panel--form"><header><h2>添加信息源</h2></header><form onSubmit={addConnector}><label><span>平台</span><select defaultValue="external_urls" name="platform">{platforms.map((platform) => <option key={platform.key} value={platform.key}>{platform.label}{platform.available ? "" : "（尚未支持）"}</option>)}</select></label><label><span>地址或规则</span><input name="account_or_rule" placeholder="粘贴网页地址" required /></label><label><span>同步频率</span><select defaultValue="每天" name="frequency"><option>每天</option><option>每周</option><option>手动</option></select></label><button disabled={busy === "create-connector"} type="submit"><Plus size={15} />保存信息源</button></form></section>
         </div>
         <section className="source-manual-entry"><header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF；扫描件会明确报错，不做 OCR 或猜参数。</p></div><span><Upload size={15} />解析全文、出处与参数</span></header><form onSubmit={importFile}><label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf" name="file" required type="file" /></label><button disabled={busy === "import-file"} type="submit"><Upload size={15} />解析并导入</button></form></section>
+        <section className="source-manual-entry"><header><div><h2>网页快照</h2><p>粘贴一个普通网址，保存当时的完整正文、原网址和抓取时间；以后内容更新会另存新版本，旧版本保留。</p></div><span><Link2 size={15} />网页快照</span></header><form onSubmit={captureWebPage}><label><span>网页地址</span><input name="url" placeholder="https://example.com/article" required type="url" /></label><button disabled={busy === "web-snapshot"} type="submit"><Link2 size={15} />抓取网页快照</button></form></section>
         <section className="source-manual-entry"><header><div><h2>手工添加内容</h2><p>也可以直接登记文字、链接、视频或本机文件引用。</p></div><span><FileText size={15} />手工登记</span></header><form onSubmit={addManualItem}><label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label><label><span>类型</span><select defaultValue="text" name="content_type"><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件</option></select></label><label><span>链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label><label><span>文件引用（可选）</span><input name="file_reference" placeholder="例如：本机导入目录中的文件路径" /></label><label className="source-manual-entry__body"><span>正文或说明（可选）</span><textarea name="body" placeholder="粘贴文字，或说明视频、文件的内容与出处。" rows={3} /></label><label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label><button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button></form></section>
         <section className="source-items"><header><h2>{selectedConnector ? `${platformLabel(selectedConnector.platform)}最近获取` : "最近获取"}</h2><small>{items.length} 条</small></header>{loading ? null : items.length ? <div className="source-item-list">{items.map((item) => <button data-open-details className={`source-item${selectedItemId === item.id ? " is-selected" : ""}`} key={item.id} onClick={() => setSelectedItemId(item.id)} type="button"><span className="source-item__type">{{text:"文字",video:"视频",file:"文件",link:"链接"}[item.content_type] ?? "内容"}</span><div><strong>{item.title}</strong><p>{item.body || item.subtitles || item.source_url || item.file_reference || "没有可预览的正文。"}</p><small>{sourceLabel(item.source_label)} · {formatTime(item.created_at)} · {item.license}</small></div><Save size={15} /></button>)}</div> : <Empty icon={<FileText size={20} />} title="还没有信息条目" text="同步已配置的信息源，或手工添加已有内容。" />}</section>
       </div>
@@ -198,5 +222,5 @@ function SourceInspector({ connector, lastRun }: { connector: SourceConnector | 
 }
 
 function SourceItemInspector({ item, busy, onSave }: { item: SourceItem; busy: string | null; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div className="source-inspector"><span className="source-inspector__status">信息条目</span><h3>{item.title}</h3><dl><div><dt>来源</dt><dd>{sourceLabel(item.source_label)}</dd></div><div><dt>原始地址</dt><dd>{item.source_url ? <a href={item.source_url} rel="noreferrer" target="_blank">打开原文 <ExternalLink size={12} /></a> : "无"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div><div><dt>当前使用范围</dt><dd>{item.license}</dd></div></dl><form className="source-save-form" onSubmit={(event) => void onSave(event)}><h4>保存到知识库</h4><label><span>归属</span><input defaultValue="我的内容" name="ownership" required /></label><label><span>授权/使用范围</span><input defaultValue={item.license === "unknown" ? "使用范围待确认" : item.license} name="authorization" required /></label><label><span>版本</span><input defaultValue="1" name="version" required /></label><button disabled={busy === `save-${item.id}`} type="submit"><CheckCircle2 size={14} />保存到知识库</button></form></div>;
+  return <div className="source-inspector"><span className="source-inspector__status">信息条目</span><h3>{item.title}</h3><dl><div><dt>来源</dt><dd>{sourceLabel(item.source_label)}</dd></div><div><dt>原始地址</dt><dd>{item.source_url ? <a href={item.source_url} rel="noreferrer" target="_blank">打开原文 <ExternalLink size={12} /></a> : "无"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div>{item.fetched_at ? <div><dt>抓取时间</dt><dd>{formatFetchTime(item.fetched_at)}</dd></div> : null}<div><dt>当前使用范围</dt><dd>{item.license}</dd></div></dl><form className="source-save-form" onSubmit={(event) => void onSave(event)}><h4>保存到知识库</h4><label><span>归属</span><input defaultValue="我的内容" name="ownership" required /></label><label><span>授权/使用范围</span><input defaultValue={item.license === "unknown" ? "使用范围待确认" : item.license} name="authorization" required /></label><label><span>版本</span><input defaultValue="1" name="version" required /></label><button disabled={busy === `save-${item.id}`} type="submit"><CheckCircle2 size={14} />保存到知识库</button></form></div>;
 }
