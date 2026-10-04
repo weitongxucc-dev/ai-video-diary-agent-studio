@@ -138,6 +138,7 @@ from app.scheduled_tasks import (
 )
 from app.production import (
     ScriptLibraryEntry,
+    content_readable,
     ArtifactRecord,
     CreationPlan,
     VideoTemplate,
@@ -892,6 +893,52 @@ def _content_include_private(request: Request) -> bool:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     assert member is not None  # a present, valid token always resolves
     return member.role == "owner"
+
+
+def _content_reader(request: Request, workspace_id: str) -> tuple[str | None, bool]:
+    """解析这次调用的可信内容读取身份：`(user_id, local_diagnostic)`。
+
+    两种既有身份归一成一个 id 参与判据，不新造第二套：
+    - 已验证的 Bearer 身份：`request.state.principal.user_id`；
+    - 本地成员令牌：`local_members_service.resolve_member` 的 `member_id`。
+    令牌无效按 401 处理，不降级成「没带令牌所以按 owner 看全部」。
+
+    `local_diagnostic` 只在保留的 local 工作区、且请求确实没有任何认证身份时为真：
+    单机本地正常使用不受影响，但这不是多人隔离——带了无效身份或已开认证的请求
+    不得借此看到别人的私有内容。
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is not None and principal.user_id:
+        return str(principal.user_id), False
+
+    token = _local_member_token(request)
+    if token:
+        try:
+            member = local_members_service.resolve_member(token)
+        except LocalMembersError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        assert member is not None
+        return str(member.member_id), False
+
+    if auth_context.enabled:
+        # 已开认证却没有可信身份：没有可读身份，不退回共享或 local。
+        return None, False
+    # 未开认证且请求没带任何成员身份：这是本机单人使用的受控诊断范围，
+    # 本机私有内容照常可读。一旦带了成员令牌（上面已处理），就按成员隔离。
+    return None, True
+
+
+def _content_visible(
+    request: Request, workspace_id: str, visibility: str, owner_user_id: str | None
+) -> bool:
+    """内容可见范围判据，与仓储层共用同一规则（app.production.content_readable）。"""
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    return content_readable(
+        user_id=user_id,
+        local_diagnostic=local_diagnostic,
+        visibility=visibility,
+        owner_user_id=owner_user_id,
+    )
 
 
 @app.get("/api/members")
@@ -4301,12 +4348,14 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
 
 
 def _script_library_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
+    """读文案库引用的来源任务：可见范围按可信身份判，读不到按不存在处理。"""
     try:
-        return production_repo.get_creation_task(
-            workspace_id, task_id, include_private=_content_include_private(request),
-        )
+        task = production_repo.get_creation_task(workspace_id, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="文案来源任务不可读")
+    return task
 
 
 def _attach_cited_version_facts(
@@ -4354,15 +4403,22 @@ def _script_library_sources(
             parts = ref.removeprefix("knowledge:").rsplit(":", 1)
             if len(parts) == 2:
                 item_id, version = parts
+                user_id, local_diagnostic = _content_reader(request, workspace_id)
                 try:
-                    item = source_repository.get_knowledge_item(workspace_id, item_id)
-                    visible = (_content_include_private(request)
-                               or source_repository.get_knowledge_item_visibility(workspace_id, item_id) == "shared")
-                except KeyError:
+                    # 与知识域读取同一个判据：私有只对上传者本人，读不到当不存在。
+                    item = source_repository.get_knowledge_item_readable_by(
+                        workspace_id, item_id,
+                        user_id=user_id, local_diagnostic=local_diagnostic,
+                    )
+                except (KeyError, ValueError):
                     item = None
-                    visible = False
                 original = knowledge.get(item_id)
-                if visible and item is not None and original is not None:
+                if item is not None and original is not None:
+                    # 有权读到这一版（无论是当前版还是历史版）才回填快照事实；
+                    # 读不到就不给来源链接、抓取时刻和指纹。
+                    _attach_cited_version_facts(
+                        state, source_repository, workspace_id, item_id, version
+                    )
                     if (item.version != version or item.version != original.version
                             or item.authorization != original.authorization or item.ownership != original.ownership):
                         state.status = "version_changed"
@@ -4371,7 +4427,6 @@ def _script_library_sources(
                         state.title = item.title
                         state.version_or_identity = item.version
                         resolved_knowledge.append(original)
-                    _attach_cited_version_facts(state, source_repository, workspace_id, item_id, version)
         elif ref.startswith("source:"):
             item_id = ref.removeprefix("source:")
             try:
@@ -4471,9 +4526,13 @@ def reuse_script_library(entry_id: str, request: Request, payload: ScriptLibrary
 
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
 def list_creation_tasks(request: Request) -> CreationTasksResponse:
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     tasks = production_repo.list_creation_tasks(
-        current_workspace_id(request),
+        workspace_id,
         include_private=_content_include_private(request),
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
     )
     return CreationTasksResponse(
         items=[item.__dict__ for item in tasks],
@@ -11914,8 +11973,10 @@ def list_production_materials(
         raise HTTPException(status_code=422, detail="invalid material review status")
     if media_type not in {None, "video", "audio", "image"}:
         raise HTTPException(status_code=422, detail="invalid material media type")
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     assets, total = production_repo.list_assets_page(
-        current_workspace_id(request),
+        workspace_id,
         limit=limit,
         offset=offset,
         query=q,
@@ -11923,6 +11984,8 @@ def list_production_materials(
         review_status=review_status,
         media_type=media_type,
         include_private=_content_include_private(request),
+        viewer_user_id=viewer_user_id,
+        local_diagnostic=local_diagnostic,
     )
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],
@@ -13573,8 +13636,9 @@ def get_knowledge_item_detail(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
     visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
-    if not _content_include_private(request) and visibility != CONTENT_VISIBILITY_LEGACY:
-        # 与列表、文案库引用同一规则：成员读不到别人的私有内容，按不存在处理。
+    if not _content_visible(request, workspace_id, visibility, item.owner_user_id):
+        # 与列表、文案库引用同一规则：读不到别人的私有内容按不存在处理，
+        # 不用 403 暴露「它存在只是你不能看」。
         raise HTTPException(status_code=404, detail="knowledge item not found")
     versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
@@ -13615,8 +13679,14 @@ def set_knowledge_item_visibility_route(
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
     workspace_id = current_workspace_id(request)
-    visibilities = None if _content_include_private(request) else (CONTENT_VISIBILITY_LEGACY,)
-    items = source_repository.list_knowledge_items(workspace_id, visibilities=visibilities)
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
+    try:
+        items = source_repository.list_knowledge_items_readable_by(
+            workspace_id, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+    except ValueError as exc:
+        # 已开认证却没有可信身份：没有可读身份就是没有可读内容，不退回只看共享。
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     return KnowledgeItemsResponse(
         items=[
             _knowledge_item_response(

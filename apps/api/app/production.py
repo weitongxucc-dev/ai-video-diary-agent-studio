@@ -4385,15 +4385,28 @@ class ProductionRepository:
         workspace_id: str,
         *,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> list[MaterialAsset]:
+        """列出素材。与分页同一判据：可信身份下私有素材只对上传者本人可见。"""
+        clauses = ["workspace_id = ?"]
+        parameters: list[object] = [workspace_id]
+        if not local_diagnostic and not (viewer_user_id is None and include_private):
+            clauses.append(
+                "(visibility = 'shared' OR (visibility = 'private' "
+                "AND json_extract(payload, '$.owner_user_id') IS NOT NULL "
+                "AND json_extract(payload, '$.owner_user_id') = ?))"
+            )
+            parameters.append(viewer_user_id)
+        elif not include_private:
+            clauses.append("visibility = 'shared'")
         with self._connect() as conn:
-            visibility_clause = "" if include_private else " AND visibility = 'shared'"
             rows = conn.execute(
                 f"""
                 SELECT payload, visibility FROM material_assets
-                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
+                WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC
                 """,
-                (workspace_id,),
+                parameters,
             ).fetchall()
         return [self._asset_from_row(row) for row in rows]
 
@@ -4408,10 +4421,26 @@ class ProductionRepository:
         review_status: str | None = None,
         media_type: str | None = None,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> tuple[list[MaterialAsset], int]:
+        """列出素材页。
+
+        给出可信读取身份时按同一判据在 SQL 里过滤（保证分页总数与条目一致）：
+        私有素材只对上传者本人可见，shared 对成员可见，可见范围未知的按不可见处理。
+        """
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
-        if not include_private:
+        owner_scoped = not local_diagnostic and not (viewer_user_id is None and include_private)
+        if owner_scoped:
+            # 私有只有 owner 是本人时才可见；其余（含没有 owner 的私有行）不返回。
+            clauses.append(
+                "(visibility = 'shared' OR (visibility = 'private' "
+                "AND json_extract(payload, '$.owner_user_id') IS NOT NULL "
+                "AND json_extract(payload, '$.owner_user_id') = ?))"
+            )
+            parameters.append(viewer_user_id)
+        elif not include_private:
             clauses.append("visibility = 'shared'")
         if query:
             clauses.append("""(
@@ -5323,6 +5352,29 @@ class ProductionRepository:
         workspace_id: str,
         *,
         include_private: bool = True,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> list[CreationTask]:
+        """列出创作任务。给出可信读取身份时，私有任务只对上传者本人可见。
+
+        `include_private` 是旧的粗粒度开关（本地单机用）；一旦传入可信身份，
+        判据就换成与内容域同一套规则：私有按 owner 过滤，不因为「没带令牌」
+        就把别人的私有任务也算进来。
+        """
+        if local_diagnostic or (viewer_user_id is None and include_private):
+            return self._list_creation_tasks_by_visibility(workspace_id, include_private)
+        return [
+            task for task in self._list_creation_tasks_by_visibility(workspace_id, True)
+            if content_readable(
+                user_id=viewer_user_id,
+                local_diagnostic=False,
+                visibility=task.visibility,
+                owner_user_id=task.owner_user_id,
+            )
+        ]
+
+    def _list_creation_tasks_by_visibility(
+        self, workspace_id: str, include_private: bool
     ) -> list[CreationTask]:
         with self._connect() as conn:
             visibility_clause = "" if include_private else " AND visibility = 'shared'"
