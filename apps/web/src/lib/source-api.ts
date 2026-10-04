@@ -232,6 +232,78 @@ export function captureWebSnapshot(url: string) {
   return request<SourceItem>("/api/source-items/link", { method: "POST", body: JSON.stringify({ url }) });
 }
 
+/** 参数比较的一侧证据：固定到知识条目版本和页码/段落出处。 */
+export type ParameterComparisonSide = {
+  knowledge_item_id: string;
+  version: string;
+  value: string;
+  locator: string;
+};
+
+export type ParameterAdjudication = {
+  id: string;
+  operator: string;
+  reason: string;
+  decided_at: string;
+  left_version_ref: string;
+  right_version_ref: string;
+  retained_side: string;
+  retained_value: string;
+  corrected_value: string | null;
+};
+
+/** status 为 pending 时两侧证据都成立，不能当成唯一事实。 */
+export type ParameterComparison = {
+  id: string;
+  workspace_id: string;
+  object_label: string;
+  parameter_key: string;
+  unit: string;
+  condition: string;
+  left: ParameterComparisonSide;
+  right: ParameterComparisonSide;
+  created_at: string;
+  status: "agreed" | "pending" | "adjudicated";
+  is_conflict: boolean;
+  adjudication: ParameterAdjudication | null;
+};
+
+export type ParameterComparisonCreate = {
+  object_label: string;
+  parameter_key: string;
+  unit: string;
+  condition: string;
+  left_knowledge_item_id: string;
+  left_version: string;
+  left_locator: string;
+  right_knowledge_item_id: string;
+  right_version: string;
+  right_locator: string;
+};
+
+export function listParameterComparisons(knowledgeItemId?: string) {
+  const suffix = knowledgeItemId ? `?knowledge_item_id=${encodeURIComponent(knowledgeItemId)}` : "";
+  return request<{ items: ParameterComparison[]; total_count: number }>(
+    `/api/knowledge-items/parameter-comparisons${suffix}`,
+  );
+}
+
+export function createParameterComparison(input: ParameterComparisonCreate) {
+  return request<ParameterComparison>("/api/knowledge-items/parameter-comparisons", {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+/** 裁定人由当前已解析的身份决定，这里只提交理由和保留哪一侧。 */
+export function adjudicateParameterComparison(id: string, input: {
+  reason: string; retained_side: "left" | "right"; retained_value?: string; corrected_value?: string;
+}) {
+  return request<ParameterComparison>(
+    `/api/knowledge-items/parameter-comparisons/${encodeURIComponent(id)}/adjudications`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export function sourceErrorMessage(error: unknown): string {
   if (!(error instanceof SourceApiError)) return "同步失败，请稍后重试。";
   if (error.status === 0) return "本地服务未接通。";

@@ -19,6 +19,15 @@ from app.database_migrations import (
     CONTENT_VISIBILITY_LEGACY,
     ensure_content_visibility_columns,
 )
+from app.knowledge_conflicts import (
+    KnowledgeConflictError,
+    ParameterAdjudication,
+    ParameterConflict,
+    ParameterScope,
+    ParameterSide,
+    adjudicate_parameter_conflict,
+    build_parameter_conflict,
+)
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection
 
 
@@ -824,6 +833,43 @@ class SourceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_source_runs_workspace
                     ON source_runs(workspace_id, connector_id, finished_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_parameter_comparisons (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    object_label TEXT NOT NULL,
+                    parameter_key TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    condition TEXT NOT NULL,
+                    left_knowledge_item_id TEXT NOT NULL,
+                    left_version TEXT NOT NULL,
+                    left_value TEXT NOT NULL,
+                    left_locator TEXT NOT NULL,
+                    right_knowledge_item_id TEXT NOT NULL,
+                    right_version TEXT NOT NULL,
+                    right_value TEXT NOT NULL,
+                    right_locator TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(left_knowledge_item_id) REFERENCES knowledge_items(id),
+                    FOREIGN KEY(right_knowledge_item_id) REFERENCES knowledge_items(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_parameter_comparisons_workspace
+                    ON knowledge_parameter_comparisons(workspace_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_parameter_adjudications (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    conflict_id TEXT NOT NULL,
+                    operator TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    decided_at TEXT NOT NULL,
+                    left_version_ref TEXT NOT NULL,
+                    right_version_ref TEXT NOT NULL,
+                    retained_side TEXT NOT NULL,
+                    retained_value TEXT NOT NULL,
+                    corrected_value TEXT,
+                    FOREIGN KEY(conflict_id) REFERENCES knowledge_parameter_comparisons(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_parameter_adjudications_conflict
+                    ON knowledge_parameter_adjudications(conflict_id, decided_at DESC);
                 """
             )
             columns = {
@@ -1033,9 +1079,304 @@ class SourceRepository:
         ):
             raise ValueError("source item requires content, source_url, or file_reference")
 
+    def create_parameter_comparison(
+        self,
+        workspace_id: str,
+        *,
+        object_label: str,
+        parameter_key: str,
+        unit: str,
+        condition: str,
+        left_knowledge_item_id: str,
+        left_version: str,
+        left_locator: str,
+        right_knowledge_item_id: str,
+        right_version: str,
+        right_locator: str,
+    ) -> ParameterConflict:
+        """建立一次参数比较：两侧证据固定到指定知识条目的指定版本。
+
+        两侧的值由用户明确给出（来自那两个版本的真实参数），范围也由用户确认；
+        这里只负责落库，不猜对象、同义词或单位换算。
+        """
+        self._require_workspace(workspace_id)
+        missing = [
+            name
+            for name, value in (
+                ("object_label", object_label),
+                ("parameter_key", parameter_key),
+                ("unit", unit),
+                ("condition", condition),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise KnowledgeConflictError(
+                "比较范围需要明确的对象、参数名、单位和适用条件，缺少：" + "、".join(missing)
+            )
+        left = self._parameter_side(
+            workspace_id,
+            left_knowledge_item_id,
+            left_version,
+            parameter_key=parameter_key,
+            unit=unit,
+            locator=left_locator,
+        )
+        right = self._parameter_side(
+            workspace_id,
+            right_knowledge_item_id,
+            right_version,
+            parameter_key=parameter_key,
+            unit=unit,
+            locator=right_locator,
+        )
+        conflict = build_parameter_conflict(
+            workspace_id,
+            object_label=object_label,
+            parameter_key=parameter_key,
+            unit=unit,
+            condition=condition,
+            left=left,
+            right=right,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_parameter_comparisons (
+                    id, workspace_id, object_label, parameter_key, unit, condition,
+                    left_knowledge_item_id, left_version, left_value, left_locator,
+                    right_knowledge_item_id, right_version, right_value, right_locator,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conflict.id,
+                    workspace_id,
+                    conflict.scope.object_label,
+                    conflict.scope.parameter_key,
+                    conflict.scope.unit,
+                    conflict.scope.condition,
+                    left.knowledge_item_id,
+                    left.version,
+                    left.value,
+                    left.locator,
+                    right.knowledge_item_id,
+                    right.version,
+                    right.value,
+                    right.locator,
+                    conflict.created_at.isoformat(),
+                ),
+            )
+        return conflict
+
+    def _parameter_side(
+        self,
+        workspace_id: str,
+        knowledge_item_id: str,
+        version: str,
+        *,
+        parameter_key: str,
+        unit: str,
+        locator: str,
+    ) -> ParameterSide:
+        """取某一侧证据：必须真实存在于当前工作区的那一版，且参数名、单位和
+        用户选中的那条出处都对得上。
+
+        单位对不上就是另一个比较范围，不并进来也不换算；同名同单位出现在多个
+        段落时以用户选中的出处为准，不自动挑第一条。
+        """
+        self.get_knowledge_item(workspace_id, knowledge_item_id)
+        for stored in self.list_knowledge_item_versions(workspace_id, knowledge_item_id):
+            if stored.version != version:
+                continue
+            for parameter in stored.parameters:
+                if parameter.key.strip() != parameter_key.strip():
+                    continue
+                if (parameter.unit or "").strip() != unit.strip():
+                    continue
+                if parameter.locator.strip() != locator.strip():
+                    continue
+                return ParameterSide(
+                    knowledge_item_id=knowledge_item_id,
+                    version=stored.version,
+                    value=parameter.value,
+                    locator=parameter.locator,
+                    title=stored.title,
+                )
+            raise KnowledgeConflictError(
+                f"版本 {version} 里没有参数「{parameter_key}」（单位 {unit}，"
+                f"出处 {locator}）"
+            )
+        raise KnowledgeConflictError(f"知识条目没有版本 {version}")
+
+    def get_parameter_comparison(
+        self, workspace_id: str, comparison_id: str
+    ) -> ParameterConflict:
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM knowledge_parameter_comparisons WHERE id = ? AND workspace_id = ?",
+                (comparison_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(comparison_id)
+            adjudication_row = conn.execute(
+                """
+                SELECT * FROM knowledge_parameter_adjudications
+                WHERE conflict_id = ? AND workspace_id = ?
+                ORDER BY decided_at DESC LIMIT 1
+                """,
+                (comparison_id, workspace_id),
+            ).fetchone()
+        return _comparison_from_row(row, adjudication_row)
+
+    def list_parameter_comparisons(
+        self,
+        workspace_id: str,
+        *,
+        knowledge_item_id: str | None = None,
+    ) -> list[ParameterConflict]:
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            if knowledge_item_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM knowledge_parameter_comparisons
+                    WHERE workspace_id = ?
+                      AND (left_knowledge_item_id = ? OR right_knowledge_item_id = ?)
+                    ORDER BY created_at DESC
+                    """,
+                    (workspace_id, knowledge_item_id, knowledge_item_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM knowledge_parameter_comparisons
+                    WHERE workspace_id = ? ORDER BY created_at DESC
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+            adjudications = {
+                item["conflict_id"]: item
+                for item in conn.execute(
+                    """
+                    SELECT a.* FROM knowledge_parameter_adjudications a
+                    JOIN knowledge_parameter_comparisons c ON c.id = a.conflict_id
+                    WHERE a.workspace_id = ? ORDER BY a.decided_at
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+            }
+        return [
+            _comparison_from_row(row, adjudications.get(str(row["id"])))
+            for row in rows
+        ]
+
+    def adjudicate_parameter_comparison(
+        self,
+        workspace_id: str,
+        comparison_id: str,
+        *,
+        operator: str,
+        reason: str,
+        retained_side: str,
+        retained_value: str | None = None,
+        corrected_value: str | None = None,
+    ) -> ParameterConflict:
+        """记录一次人工裁定。历史裁定不覆盖：新裁定追加，旧证据保留。
+
+        裁定绑定在当时的两个版本上；任一侧出现新版本时，比较是新冲突，
+        不会自动沿用这里的结论。
+        """
+        conflict = self.get_parameter_comparison(workspace_id, comparison_id)
+        adjudicated = adjudicate_parameter_conflict(
+            workspace_id,
+            conflict,
+            operator=operator,
+            reason=reason,
+            retained_side=retained_side,
+            retained_value=retained_value,
+            corrected_value=corrected_value,
+        )
+        assert adjudicated.adjudication is not None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_parameter_adjudications (
+                    id, workspace_id, conflict_id, operator, reason, decided_at,
+                    left_version_ref, right_version_ref, retained_side,
+                    retained_value, corrected_value
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    adjudicated.adjudication.id,
+                    workspace_id,
+                    comparison_id,
+                    adjudicated.adjudication.operator,
+                    adjudicated.adjudication.reason,
+                    adjudicated.adjudication.decided_at.isoformat(),
+                    adjudicated.adjudication.left_version_ref,
+                    adjudicated.adjudication.right_version_ref,
+                    adjudicated.adjudication.retained_side,
+                    adjudicated.adjudication.retained_value,
+                    adjudicated.adjudication.corrected_value,
+                ),
+            )
+        return self.get_parameter_comparison(workspace_id, comparison_id)
+
     def _require_workspace(self, workspace_id: str) -> None:
         if not workspace_id.strip():
             raise ValueError("workspace_id is required")
+
+
+def _comparison_from_row(
+    row: sqlite3.Row, adjudication_row: sqlite3.Row | None
+) -> ParameterConflict:
+    adjudication = (
+        ParameterAdjudication(
+            id=str(adjudication_row["id"]),
+            workspace_id=str(adjudication_row["workspace_id"]),
+            conflict_id=str(adjudication_row["conflict_id"]),
+            operator=str(adjudication_row["operator"]),
+            reason=str(adjudication_row["reason"]),
+            decided_at=_parse_datetime(adjudication_row["decided_at"]),
+            left_version_ref=str(adjudication_row["left_version_ref"]),
+            right_version_ref=str(adjudication_row["right_version_ref"]),
+            retained_side=str(adjudication_row["retained_side"]),
+            retained_value=str(adjudication_row["retained_value"]),
+            corrected_value=(
+                str(adjudication_row["corrected_value"])
+                if adjudication_row["corrected_value"]
+                else None
+            ),
+        )
+        if adjudication_row is not None
+        else None
+    )
+    return ParameterConflict(
+        id=str(row["id"]),
+        workspace_id=str(row["workspace_id"]),
+        scope=ParameterScope(
+            object_label=str(row["object_label"]),
+            parameter_key=str(row["parameter_key"]),
+            unit=str(row["unit"]),
+            condition=str(row["condition"]),
+        ),
+        left=ParameterSide(
+            knowledge_item_id=str(row["left_knowledge_item_id"]),
+            version=str(row["left_version"]),
+            value=str(row["left_value"]),
+            locator=str(row["left_locator"]),
+        ),
+        right=ParameterSide(
+            knowledge_item_id=str(row["right_knowledge_item_id"]),
+            version=str(row["right_version"]),
+            value=str(row["right_value"]),
+            locator=str(row["right_locator"]),
+        ),
+        created_at=_parse_datetime(row["created_at"]),
+        adjudication=adjudication,
+    )
 
 
 def _utc_now() -> datetime:

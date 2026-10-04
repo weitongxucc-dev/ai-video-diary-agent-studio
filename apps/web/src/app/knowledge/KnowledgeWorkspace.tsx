@@ -7,8 +7,8 @@ import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEn
 import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { KnowledgeItem, KnowledgeItemDetail } from "@/lib/source-api";
-import { getKnowledgeItem } from "@/lib/source-api";
+import type { KnowledgeItem, KnowledgeItemDetail, ParameterComparison } from "@/lib/source-api";
+import { getKnowledgeItem, listParameterComparisons, adjudicateParameterComparison, createParameterComparison, sourceErrorMessage } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
 
 type KnowledgeDisplayItem = KnowledgeItem & {
@@ -73,7 +73,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
   }), [items, category, query, exampleMode]);
-  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} /> : undefined;
+  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} items={items} viewVersion={viewVersion} onViewVersion={setViewVersion} /> : undefined;
 
   return <AppShell inspector={inspector} inspectorTitle="来源详情">
     <div className={styles.page}>
@@ -111,7 +111,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   </AppShell>;
 }
 
-function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void }) {
+function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, items }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; items: KnowledgeDisplayItem[] }) {
   const versions = detail?.versions ?? [];
   const selectedVersion = viewVersion ? versions.find((version) => version.version === viewVersion) ?? null : null;
   const shown = selectedVersion ?? detail ?? item;
@@ -123,6 +123,7 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
   const shownFetchedAt = isHistorical ? selectedVersion?.fetched_at ?? null : detail?.fetched_at ?? item.fetched_at ?? null;
   return <div className={styles.inspector}>
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
+    <KnowledgeConflicts allItems={items} current={item} currentDetail={detail} exampleMode={exampleMode} />
     <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
     {versions.length ? <div className={styles.detailSection}><h3>版本</h3><label><span>查看版本</span><select aria-label="查看版本" onChange={(event) => onViewVersion(event.target.value || null)} value={viewVersion ?? ""}><option value="">当前版本 {detail?.version}</option>{versions.map((version) => <option key={version.version} value={version.version}>版本 {version.version} · {formatTime(version.saved_at)}</option>)}</select></label>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
     <div className={styles.compare}>
@@ -206,5 +207,102 @@ export function ScriptLibraryPanel() {
       <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
       <button disabled={busy || !confirmed || !readable || !name.trim() || duration < 15 || duration > 600} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
     </section> : null}
+  </section>;
+}
+
+function statusLabel(comparison: ParameterComparison) {
+  if (comparison.status === "agreed") return "两侧一致";
+  if (comparison.status === "adjudicated") return "已裁定";
+  return "待裁定";
+}
+
+function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
+  allItems: KnowledgeDisplayItem[];
+  current: KnowledgeDisplayItem;
+  currentDetail: KnowledgeItemDetail | null;
+  exampleMode: boolean;
+}) {
+  const [comparisons, setComparisons] = useState<ParameterComparison[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+
+  async function refresh() {
+    setLoading(true); setError(null);
+    try {
+      const result = await listParameterComparisons(current.id);
+      setComparisons(result.items);
+    } catch (cause) { setComparisons([]); setError(sourceErrorMessage(cause)); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { if (!exampleMode) void refresh(); }, [current.id, exampleMode]);
+
+  async function create(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setLoading(true); setError(null); setNotice(null);
+    try {
+      await createParameterComparison({
+        object_label: String(form.get("object_label") ?? ""),
+        parameter_key: String(form.get("parameter_key") ?? ""),
+        unit: String(form.get("unit") ?? ""),
+        condition: String(form.get("condition") ?? ""),
+        left_knowledge_item_id: current.id,
+        left_version: current.version,
+        left_locator: String(form.get("left_locator") ?? ""),
+        right_knowledge_item_id: String(form.get("right_knowledge_item_id") ?? ""),
+        right_version: String(form.get("right_version") ?? ""),
+        right_locator: String(form.get("right_locator") ?? ""),
+      });
+      setNotice("已建立比较。值不同即为待裁定，两侧证据都已保留。");
+      await refresh();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setLoading(false); }
+  }
+
+  async function decide(comparison: ParameterComparison, side: "left" | "right") {
+    const reason = reasons[comparison.id]?.trim();
+    if (!reason) { setError("裁定需要写明理由。"); return; }
+    setLoading(true); setError(null); setNotice(null);
+    try {
+      await adjudicateParameterComparison(comparison.id, { reason, retained_side: side });
+      setNotice("已记录裁定：操作者、理由、时间和双方版本都已留存，未选的一侧仍保留。");
+      await refresh();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setLoading(false); }
+  }
+
+  if (exampleMode) return null;
+  const currentParameters = currentDetail?.parameters ?? [];
+  const counterparts = allItems.filter((entry) => entry.id !== current.id);
+
+  return <section className={styles.detailSection} aria-label="参数比较与裁定">
+    <h3>参数比较与裁定</h3>
+    <p>比较范围只按你确认的对象、参数名、单位和适用条件判定；不猜对象、同义词或单位换算。值不同即为待裁定，未裁定时不作为唯一事实。</p>
+    {comparisons.length ? <ul>{comparisons.map((comparison) => <li key={comparison.id}>
+      <p>{comparison.object_label} · {comparison.parameter_key}（{comparison.unit}）· 条件：{comparison.condition} · {statusLabel(comparison)}</p>
+      <p>左：{comparison.left.value} · 版本 {comparison.left.version} · 出处 {comparison.left.locator}</p>
+      <p>右：{comparison.right.value} · 版本 {comparison.right.version} · 出处 {comparison.right.locator}</p>
+      {comparison.adjudication ? <p>裁定：保留{comparison.adjudication.retained_side === "left" ? "左" : "右"}侧 {comparison.adjudication.retained_value} · {comparison.adjudication.operator} · {formatFetchTime(comparison.adjudication.decided_at)} · 理由：{comparison.adjudication.reason} · 依据版本 {comparison.adjudication.left_version_ref} / {comparison.adjudication.right_version_ref}</p>
+        : comparison.status === "pending" ? <div><label><span>裁定理由</span><input aria-label={`裁定理由 ${comparison.id}`} onChange={(event) => setReasons((current_) => ({ ...current_, [comparison.id]: event.target.value }))} value={reasons[comparison.id] ?? ""} /></label>
+          <button disabled={loading} onClick={() => void decide(comparison, "left")} type="button">保留左侧 {comparison.left.value}</button>
+          <button disabled={loading} onClick={() => void decide(comparison, "right")} type="button">保留右侧 {comparison.right.value}</button></div>
+        : null}
+    </li>)}</ul> : <p>{loading ? "正在读取参数比较…" : "还没有与这个条目相关的参数比较。"}</p>}
+    {error ? <p role="alert">{error}</p> : null}
+    {notice ? <p>{notice}</p> : null}
+    <form onSubmit={create}>
+      <h4>与另一条目比较同一参数</h4>
+      <label><span>对象</span><input name="object_label" required /></label>
+      <label><span>参数名</span><input name="parameter_key" required /></label>
+      <label><span>单位</span><input name="unit" required /></label>
+      <label><span>适用条件</span><input name="condition" required /></label>
+      <label><span>本条目出处</span><select name="left_locator" required>{currentParameters.map((parameter) => <option key={`${parameter.locator}-${parameter.key}`} value={parameter.locator}>{parameter.key} · {parameter.value}{parameter.unit ? `（${parameter.unit}）` : ""} · {parameter.locator}</option>)}</select></label>
+      <label><span>对比条目</span><select name="right_knowledge_item_id" required>{counterparts.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}</select></label>
+      <label><span>对比条目版本</span><input name="right_version" defaultValue="1" required /></label>
+      <label><span>对比条目出处</span><input name="right_locator" required /></label>
+      <button disabled={loading || !currentParameters.length || !counterparts.length} type="submit">建立比较</button>
+    </form>
   </section>;
 }

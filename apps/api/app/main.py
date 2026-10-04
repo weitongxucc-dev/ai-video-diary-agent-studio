@@ -267,6 +267,12 @@ from app.schemas import (
     KnowledgeNoteResponse,
     KnowledgeItemResponse,
     KnowledgeItemsResponse,
+    ParameterAdjudicationResponse,
+    ParameterComparisonAdjudicateRequest,
+    ParameterComparisonCreateRequest,
+    ParameterComparisonResponse,
+    ParameterComparisonSideResponse,
+    ParameterComparisonsResponse,
     ManualSourceItemRequest,
     ManualLinkRequest,
     MaterialAssetResponse,
@@ -376,6 +382,7 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.knowledge_conflicts import KnowledgeConflictError, ParameterConflict
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -12878,6 +12885,39 @@ def _knowledge_item_response(item: KnowledgeItem) -> KnowledgeItemResponse:
     return KnowledgeItemResponse.model_validate(item, from_attributes=True)
 
 
+def _parameter_comparison_response(
+    comparison: ParameterConflict,
+) -> ParameterComparisonResponse:
+    return ParameterComparisonResponse(
+        id=comparison.id,
+        workspace_id=comparison.workspace_id,
+        object_label=comparison.scope.object_label,
+        parameter_key=comparison.scope.parameter_key,
+        unit=comparison.scope.unit,
+        condition=comparison.scope.condition,
+        left=ParameterComparisonSideResponse(
+            knowledge_item_id=comparison.left.knowledge_item_id,
+            version=comparison.left.version,
+            value=comparison.left.value,
+            locator=comparison.left.locator,
+        ),
+        right=ParameterComparisonSideResponse(
+            knowledge_item_id=comparison.right.knowledge_item_id,
+            version=comparison.right.version,
+            value=comparison.right.value,
+            locator=comparison.right.locator,
+        ),
+        created_at=comparison.created_at,
+        status=comparison.status,
+        is_conflict=comparison.is_conflict,
+        adjudication=ParameterAdjudicationResponse.model_validate(
+            comparison.adjudication, from_attributes=True
+        )
+        if comparison.adjudication
+        else None,
+    )
+
+
 def _source_run_response(run) -> SourceRunEvidenceResponse:
     return SourceRunEvidenceResponse.model_validate(run, from_attributes=True)
 
@@ -13319,6 +13359,97 @@ def import_knowledge_file(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _source_item_response(item)
+
+
+@app.get(
+    "/api/knowledge-items/parameter-comparisons",
+    response_model=ParameterComparisonsResponse,
+)
+def list_parameter_comparisons(request: Request) -> ParameterComparisonsResponse:
+    """列出参数比较。值不同且未裁定的保持待裁定，不当成唯一事实。"""
+    workspace_id = current_workspace_id(request)
+    knowledge_item_id = request.query_params.get("knowledge_item_id") or None
+    comparisons = source_repository.list_parameter_comparisons(
+        workspace_id, knowledge_item_id=knowledge_item_id
+    )
+    return ParameterComparisonsResponse(
+        items=[_parameter_comparison_response(item) for item in comparisons],
+        total_count=len(comparisons),
+    )
+
+
+@app.post(
+    "/api/knowledge-items/parameter-comparisons",
+    response_model=ParameterComparisonResponse,
+)
+def create_parameter_comparison(
+    request: Request, payload: ParameterComparisonCreateRequest
+) -> ParameterComparisonResponse:
+    """按用户确认的范围比较两个知识版本的同名参数。"""
+    workspace_id = current_workspace_id(request)
+    try:
+        comparison = source_repository.create_parameter_comparison(
+            workspace_id, **payload.model_dump()
+        )
+    except KnowledgeConflictError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    return _parameter_comparison_response(comparison)
+
+
+@app.get(
+    "/api/knowledge-items/parameter-comparisons/{comparison_id}",
+    response_model=ParameterComparisonResponse,
+)
+def get_parameter_comparison(
+    comparison_id: str, request: Request
+) -> ParameterComparisonResponse:
+    workspace_id = current_workspace_id(request)
+    try:
+        comparison = source_repository.get_parameter_comparison(workspace_id, comparison_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="parameter comparison not found") from exc
+    return _parameter_comparison_response(comparison)
+
+
+def current_parameter_operator(request: Request) -> str:
+    """裁定人取当前已解析的身份，不接受客户端自报。
+
+    本地未开认证时没有可解析的身份，明确标为「本地未认证」，而不是记下任何人
+    随手写的名字。
+    """
+    principal = getattr(request.state, "principal", None)
+    user_id = str(getattr(principal, "user_id", "") or "").strip()
+    return user_id or "本地未认证"
+
+
+@app.post(
+    "/api/knowledge-items/parameter-comparisons/{comparison_id}/adjudications",
+    response_model=ParameterComparisonResponse,
+)
+def adjudicate_parameter_comparison(
+    comparison_id: str,
+    request: Request,
+    payload: ParameterComparisonAdjudicateRequest,
+) -> ParameterComparisonResponse:
+    """记录一次人工裁定：理由、时间和双方版本。未选的一侧不删除。"""
+    workspace_id = current_workspace_id(request)
+    try:
+        comparison = source_repository.adjudicate_parameter_comparison(
+            workspace_id,
+            comparison_id,
+            operator=current_parameter_operator(request),
+            reason=payload.reason,
+            retained_side=payload.retained_side,
+            retained_value=payload.retained_value,
+            corrected_value=payload.corrected_value,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="parameter comparison not found") from exc
+    except KnowledgeConflictError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _parameter_comparison_response(comparison)
 
 
 @app.get("/api/knowledge-items/{knowledge_item_id}", response_model=KnowledgeItemDetailResponse)

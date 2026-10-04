@@ -3,8 +3,10 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
 
-const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), getKnowledgeItem: vi.fn(), sourceErrorMessage: vi.fn() }));
-vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, getKnowledgeItem: api.getKnowledgeItem, sourceErrorMessage: api.sourceErrorMessage }));
+const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), getKnowledgeItem: vi.fn(), sourceErrorMessage: vi.fn(),
+  listParameterComparisons: vi.fn(), adjudicateParameterComparison: vi.fn(), createParameterComparison: vi.fn() }));
+vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, getKnowledgeItem: api.getKnowledgeItem, sourceErrorMessage: api.sourceErrorMessage,
+  listParameterComparisons: api.listParameterComparisons, adjudicateParameterComparison: api.adjudicateParameterComparison, createParameterComparison: api.createParameterComparison }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
@@ -26,6 +28,7 @@ beforeEach(() => {
   api.listKnowledgeItems.mockReset();
   api.getKnowledgeItem.mockReset();
   api.sourceErrorMessage.mockReset();
+  api.listParameterComparisons.mockResolvedValue({ items: [], total_count: 0 });
   api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1 });
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
@@ -126,5 +129,42 @@ describe("KnowledgePage", () => {
     fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
     fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
     expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("额定功率示例");
+  });
+});
+
+describe("参数比较与人工裁定", () => {
+  const comparison = {
+    id: "conflict-1", workspace_id: "workspace-one",
+    object_label: "曜核一体机", parameter_key: "净重", unit: "g", condition: "标准版",
+    left: { knowledge_item_id: "knowledge-one", version: "1", value: "500", locator: "「规格」第 2 段" },
+    right: { knowledge_item_id: "knowledge-two", version: "1", value: "800", locator: "「规格」第 2 段" },
+    created_at: "2026-10-04T08:00:00Z", status: "pending", is_conflict: true, adjudication: null,
+  };
+  const decided = { ...comparison, status: "adjudicated", adjudication: {
+    id: "adj-1", operator: "本地未认证", reason: "以右资料为准", decided_at: "2026-10-04T09:00:00Z",
+    left_version_ref: "knowledge-one@1", right_version_ref: "knowledge-two@1",
+    retained_side: "right", retained_value: "800", corrected_value: null } };
+
+  it("keeps both sides visible while pending and records the adjudication", async () => {
+    api.listParameterComparisons.mockResolvedValue({ items: [comparison], total_count: 1 });
+    api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
+    render(<KnowledgePage />);
+    await screen.findByText("设备说明书");
+    fireEvent.click(screen.getByText("设备说明书"));
+    const panel = await screen.findByRole("region", { name: "参数比较与裁定" });
+    // 待裁定：两侧证据和各自出处都在，没有单一下结论。
+    expect(within(panel).getByText(/左：500 · 版本 1 · 出处/)).toBeInTheDocument();
+    expect(within(panel).getByText(/右：800 · 版本 1 · 出处/)).toBeInTheDocument();
+    expect(within(panel).getAllByText(/待裁定/).length).toBeGreaterThan(0);
+
+    api.adjudicateParameterComparison.mockResolvedValue(decided);
+    api.listParameterComparisons.mockResolvedValue({ items: [decided], total_count: 1 });
+    fireEvent.change(within(panel).getByLabelText("裁定理由 conflict-1"), { target: { value: "以右资料为准" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "保留右侧 800" }));
+
+    await waitFor(() => expect(api.adjudicateParameterComparison).toHaveBeenCalledWith("conflict-1", { reason: "以右资料为准", retained_side: "right" }));
+    // 裁定留痕：操作者、理由、双方版本；未选的一侧仍在。
+    await within(panel).findByText(/裁定：保留右侧 800 · 本地未认证/);
+    expect(within(panel).getByText(/左：500/)).toBeInTheDocument();
   });
 });

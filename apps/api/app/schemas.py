@@ -2110,6 +2110,74 @@ class KnowledgeItemDetailResponse(KnowledgeItemResponse):
     versions: list[KnowledgeItemVersionResponse] = Field(default_factory=list)
 
 
+class ParameterComparisonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # 比较范围完全由用户明确确认；缺项直接报错，不猜对象或换算。
+    object_label: str = Field(min_length=1)
+    parameter_key: str = Field(min_length=1)
+    unit: str = Field(min_length=1)
+    condition: str = Field(min_length=1)
+    left_knowledge_item_id: str = Field(min_length=1)
+    left_version: str = Field(min_length=1)
+    # 同一文档里同名同单位的参数可能出现在不同段落；由用户选中具体那条，服务端
+    # 核对它确实属于这一版，不自动挑第一条。
+    left_locator: str = Field(min_length=1)
+    right_knowledge_item_id: str = Field(min_length=1)
+    right_version: str = Field(min_length=1)
+    right_locator: str = Field(min_length=1)
+
+
+class ParameterComparisonSideResponse(BaseModel):
+    knowledge_item_id: str
+    version: str
+    value: str
+    locator: str
+
+
+class ParameterAdjudicationResponse(BaseModel):
+    id: str
+    operator: str
+    reason: str
+    decided_at: datetime
+    left_version_ref: str
+    right_version_ref: str
+    retained_side: str
+    retained_value: str
+    corrected_value: str | None = None
+
+
+class ParameterComparisonResponse(BaseModel):
+    id: str
+    workspace_id: str
+    object_label: str
+    parameter_key: str
+    unit: str
+    condition: str
+    left: ParameterComparisonSideResponse
+    right: ParameterComparisonSideResponse
+    created_at: datetime
+    # pending 表示尚未裁定：两侧证据都在，不能当成唯一事实。
+    status: Literal["agreed", "pending", "adjudicated"]
+    is_conflict: bool
+    adjudication: ParameterAdjudicationResponse | None = None
+
+
+class ParameterComparisonAdjudicateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # 裁定人由当前已解析的身份决定，不从请求体收。
+    reason: str = Field(min_length=1)
+    retained_side: Literal["left", "right"]
+    retained_value: str | None = None
+    corrected_value: str | None = None
+
+
+class ParameterComparisonsResponse(BaseModel):
+    items: list[ParameterComparisonResponse]
+    total_count: int
+
+
 class KnowledgeItemsResponse(BaseModel):
     items: list[KnowledgeItemResponse]
     total_count: int
