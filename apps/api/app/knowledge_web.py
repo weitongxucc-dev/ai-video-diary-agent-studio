@@ -106,6 +106,10 @@ class _ContentCollector(HTMLParser):
         if name == "title":
             self._in_title = True
             return
+        # 普通 <br> 和自闭合 <br/> 一样：只作分隔，不丢字也不虚构成新段落。
+        if name == "br" and self._open_blocks:
+            self._open_blocks[-1][1].append(" ")
+            return
         if name in _BLOCK_TAGS or name in _CONTAINER_TAGS:
             # 容器自己直接写的文字也是正文；它出现在下一个内层块之前，先结算出来，
             # 这样 <div>正文<br>后文<p>内层</p></div> 里容器那段不会被丢掉，

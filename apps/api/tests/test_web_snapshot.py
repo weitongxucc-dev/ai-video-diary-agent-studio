@@ -59,6 +59,7 @@ INLINE_HTML = (
     "<html><body><article><h1>标题</h1>"
     "<p>这是一条<strong>关键</strong>规格说明。</p>"
     "<p>前半<br/>后半</p>"
+    "<p>Hello<br>world</p>"
     "</article></body></html>"
 )
 LOGIN_HTML = "<html><body><nav>请登录</nav></body></html>"
@@ -208,8 +209,9 @@ def test_inline_markup_stays_one_paragraph_and_br_keeps_text(client, monkeypatch
     texts = [section["text"] for section in item["sections"]]
     # <strong> 是行内标签：合成同一段，不虚构成多段。
     assert "这是一条关键规格说明。" in texts
-    # <br/> 不丢字：前后文字都在同一段。
+    # <br/> 和普通 <br> 都不丢字：前后文字都在同一段。
     assert "前半 后半" in texts
+    assert "Hello world" in texts
     assert item["body"].count("这是一条") == 1
 
 def test_same_body_under_two_urls_stays_two_separate_origins(client, monkeypatch):
