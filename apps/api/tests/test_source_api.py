@@ -189,10 +189,17 @@ def test_payloads_match_the_web_source_api_contract(client):
         "content_hash", "sections", "parameters", "duplicate_of_version",
         # WIL-134：当前版本的抓取时间和原网址
         "fetched_at", "source_url",
+        # WIL-105：用途分类、主题关系和真实解析状态
+        "use_category", "topics", "parse_status",
     }
     assert client.get("/api/knowledge-items").json() == {
         "items": [knowledge],
         "total_count": 1,
+        # WIL-105：数量与主题列表来自同一真实字段
+        "category_counts": {
+            "产品知识": 0, "公司文档": 0, "菜单条目": 0, "销售话术": 0, "未分类": 1,
+        },
+        "topics": [],
     }
 
 

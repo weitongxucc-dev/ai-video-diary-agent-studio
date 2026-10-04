@@ -8,6 +8,8 @@ from typing import Sequence
 from uuid import uuid4
 
 from app.sources import (
+    KNOWLEDGE_UNCLASSIFIED,
+    KNOWLEDGE_USE_CATEGORIES,
     KnowledgeItem,
     KnowledgeItemVersion,
     SourceConnector,
@@ -18,6 +20,15 @@ from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
     CONTENT_VISIBILITY_LEGACY,
     ensure_content_visibility_columns,
+)
+from app.knowledge_conflicts import (
+    KnowledgeConflictError,
+    ParameterAdjudication,
+    ParameterConflict,
+    ParameterScope,
+    ParameterSide,
+    adjudicate_parameter_conflict,
+    build_parameter_conflict,
 )
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection
 
@@ -178,8 +189,9 @@ class SourceRepository:
             INSERT INTO knowledge_items (
                 id, workspace_id, content_type, title, body, file_reference,
                 authorization, ownership, source_item_id, version, created_at,
-                visibility, content_hash, sections, parameters, fetched_at, source_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                visibility, content_hash, sections, parameters, fetched_at, source_url,
+                use_category, topics, parse_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -201,6 +213,9 @@ class SourceRepository:
                 _parameters_json(item.parameters),
                 item.fetched_at.isoformat() if item.fetched_at else None,
                 item.source_url,
+                _validated_use_category(item.use_category),
+                _topics_json(item.topics),
+                item.parse_status or _parse_status(item.sections, item.parameters),
             ),
         )
 
@@ -375,7 +390,8 @@ class SourceRepository:
                 UPDATE knowledge_items SET
                     content_type = ?, title = ?, body = ?, file_reference = ?,
                     version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?, fetched_at = ?, source_url = ?
+                    source_item_id = ?, fetched_at = ?, source_url = ?,
+                    parse_status = ?
                 WHERE id = ? AND workspace_id = ?
                 """,
                 (
@@ -390,6 +406,7 @@ class SourceRepository:
                     source.id,
                     source.fetched_at.isoformat() if source.fetched_at else None,
                     source.source_url,
+                    _parse_status(source.sections, source.parameters),
                     previous.id,
                     workspace_id,
                 ),
@@ -552,8 +569,10 @@ class SourceRepository:
         workspace_id: str,
         *,
         visibilities: Sequence[str] | None = None,
+        use_category: str | None = None,
+        topic: str | None = None,
     ) -> list[KnowledgeItem]:
-        """列出知识条目，可按可见范围过滤。
+        """列出知识条目，可按可见范围、用户选择的用途分类和主题筛选。
 
         ``visibilities=None`` 表示不过滤（保持旧行为，调用方自己负责）。
         传入如 ``("shared",)`` 时，private 行取不到——这就是「可见范围」在
@@ -565,22 +584,94 @@ class SourceRepository:
         """
         self._require_workspace(workspace_id)
         with self._connect() as conn:
-            if visibilities is None:
-                rows = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
-                    (workspace_id,),
-                ).fetchall()
-            else:
+            conditions = ["workspace_id = ?"]
+            values: list[object] = [workspace_id]
+            if visibilities is not None:
                 wanted = [str(value).strip() for value in visibilities if str(value).strip()]
                 if not wanted:
                     return []
-                placeholders = ", ".join("?" for _ in wanted)
-                rows = conn.execute(
-                    f"SELECT * FROM knowledge_items WHERE workspace_id = ? "
-                    f"AND visibility IN ({placeholders}) ORDER BY created_at DESC",
-                    (workspace_id, *wanted),
-                ).fetchall()
+                conditions.append(
+                    f"visibility IN ({', '.join('?' for _ in wanted)})"
+                )
+                values.extend(wanted)
+            if use_category is not None:
+                # 空字符串就是未分类：只取还没有用户选择的分类的行。
+                conditions.append(
+                    "use_category IS NULL" if not use_category.strip() else "use_category = ?"
+                )
+                if use_category.strip():
+                    values.append(_validated_use_category(use_category))
+            if topic is not None and topic.strip():
+                # 主题关系存在 topics JSON 里，按精确值匹配而不是模糊包含。
+                conditions.append("EXISTS (SELECT 1 FROM json_each(knowledge_items.topics) WHERE json_each.value = ?)")
+                values.append(topic.strip())
+            rows = conn.execute(
+                "SELECT * FROM knowledge_items WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY created_at DESC",
+                values,
+            ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
+
+    def count_knowledge_items_by_use_category(self, workspace_id: str) -> dict[str, int]:
+        """按真实用途分类统计。
+
+        只有真正的 NULL（还没选分类）计入未分类；不把任何其他值静默兜底成
+        未分类——出现枚举外的值就按它本名单列，不隐藏异常数据。
+        """
+        self._require_workspace(workspace_id)
+        counts = {name: 0 for name in KNOWLEDGE_USE_CATEGORIES}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT use_category, COUNT(*) AS total FROM knowledge_items "
+                "WHERE workspace_id = ? GROUP BY use_category",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            raw = row["use_category"]
+            label = KNOWLEDGE_UNCLASSIFIED if raw is None else str(raw)
+            counts[label] = counts.get(label, 0) + int(row["total"])
+        return counts
+
+    def list_knowledge_topics(self, workspace_id: str) -> list[str]:
+        """列出用户已登记的全部主题/对象关系，按真实使用顺序去重。"""
+        self._require_workspace(workspace_id)
+        seen: dict[str, None] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT topics FROM knowledge_items WHERE workspace_id = ? "
+                "ORDER BY created_at DESC",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            for topic in json.loads(row["topics"] or "[]"):
+                seen.setdefault(str(topic), None)
+        return list(seen)
+
+    def set_knowledge_item_classification(
+        self,
+        workspace_id: str,
+        item_id: str,
+        *,
+        use_category: str | None,
+        topics: Sequence[str],
+    ) -> KnowledgeItem:
+        """保存用户明确选择的用途分类与主题/对象关系。
+
+        两个入参都是用户确认的结果；``None``/空列表表示清空，不从内容推断补齐。
+        """
+        self._require_workspace(workspace_id)
+        category = _validated_use_category(use_category)
+        cleaned = _clean_topics(topics)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE knowledge_items SET use_category = ?, topics = ? "
+                "WHERE id = ? AND workspace_id = ?",
+                (category, _topics_json(cleaned), item_id, workspace_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(item_id)
+        return self.get_knowledge_item(workspace_id, item_id)
 
     def get_knowledge_item_visibility(self, workspace_id: str, item_id: str) -> str:
         """读单条知识的可见性。
@@ -783,6 +874,10 @@ class SourceRepository:
                     -- 只管 fresh 库的 INSERT；升级库的存量行由
                     -- ensure_content_visibility_columns 回填为 shared。
                     visibility TEXT NOT NULL DEFAULT 'private',
+                    -- 用途分类与主题/对象关系：用户明确选择后落库，不按格式推断。
+                    use_category TEXT,
+                    topics TEXT NOT NULL DEFAULT '[]',
+                    parse_status TEXT,
                     FOREIGN KEY(source_item_id) REFERENCES source_items(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
@@ -824,6 +919,43 @@ class SourceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_source_runs_workspace
                     ON source_runs(workspace_id, connector_id, finished_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_parameter_comparisons (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    object_label TEXT NOT NULL,
+                    parameter_key TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    condition TEXT NOT NULL,
+                    left_knowledge_item_id TEXT NOT NULL,
+                    left_version TEXT NOT NULL,
+                    left_value TEXT NOT NULL,
+                    left_locator TEXT NOT NULL,
+                    right_knowledge_item_id TEXT NOT NULL,
+                    right_version TEXT NOT NULL,
+                    right_value TEXT NOT NULL,
+                    right_locator TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(left_knowledge_item_id) REFERENCES knowledge_items(id),
+                    FOREIGN KEY(right_knowledge_item_id) REFERENCES knowledge_items(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_parameter_comparisons_workspace
+                    ON knowledge_parameter_comparisons(workspace_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_parameter_adjudications (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    conflict_id TEXT NOT NULL,
+                    operator TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    decided_at TEXT NOT NULL,
+                    left_version_ref TEXT NOT NULL,
+                    right_version_ref TEXT NOT NULL,
+                    retained_side TEXT NOT NULL,
+                    retained_value TEXT NOT NULL,
+                    corrected_value TEXT,
+                    FOREIGN KEY(conflict_id) REFERENCES knowledge_parameter_comparisons(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_parameter_adjudications_conflict
+                    ON knowledge_parameter_adjudications(conflict_id, decided_at DESC);
                 """
             )
             columns = {
@@ -868,6 +1000,18 @@ class SourceRepository:
                     conn.execute(
                         f"ALTER TABLE knowledge_item_versions ADD COLUMN {column} TEXT"
                     )
+            # 本卡（WIL-105）知识用途分类、主题关系与解析状态。
+            # 升级库只补列：存量行留NULL表示「还没有用户选择的分类」，不按格式回填。
+            knowledge_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(knowledge_items)")
+            }
+            for column, ddl in (
+                ("use_category", "TEXT"),
+                ("topics", "TEXT NOT NULL DEFAULT '[]'"),
+                ("parse_status", "TEXT"),
+            ):
+                if column not in knowledge_columns:
+                    conn.execute(f"ALTER TABLE knowledge_items ADD COLUMN {column} {ddl}")
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(
@@ -1002,6 +1146,9 @@ class SourceRepository:
             fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
             source_url=row["source_url"],
             created_at=_parse_datetime(row["created_at"]),
+            use_category=row["use_category"],
+            topics=tuple(json.loads(row["topics"] or "[]")),
+            parse_status=row["parse_status"],
         )
 
     def _run_from_row(self, row: sqlite3.Row) -> SourceRunEvidence:
@@ -1033,13 +1180,351 @@ class SourceRepository:
         ):
             raise ValueError("source item requires content, source_url, or file_reference")
 
+    def create_parameter_comparison(
+        self,
+        workspace_id: str,
+        *,
+        object_label: str,
+        parameter_key: str,
+        unit: str,
+        condition: str,
+        left_knowledge_item_id: str,
+        left_version: str,
+        left_locator: str,
+        right_knowledge_item_id: str,
+        right_version: str,
+        right_locator: str,
+    ) -> ParameterConflict:
+        """建立一次参数比较：两侧证据固定到指定知识条目的指定版本。
+
+        两侧的值由用户明确给出（来自那两个版本的真实参数），范围也由用户确认；
+        这里只负责落库，不猜对象、同义词或单位换算。
+        """
+        self._require_workspace(workspace_id)
+        missing = [
+            name
+            for name, value in (
+                ("object_label", object_label),
+                ("parameter_key", parameter_key),
+                ("unit", unit),
+                ("condition", condition),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise KnowledgeConflictError(
+                "比较范围需要明确的对象、参数名、单位和适用条件，缺少：" + "、".join(missing)
+            )
+        left = self._parameter_side(
+            workspace_id,
+            left_knowledge_item_id,
+            left_version,
+            parameter_key=parameter_key,
+            unit=unit,
+            locator=left_locator,
+        )
+        right = self._parameter_side(
+            workspace_id,
+            right_knowledge_item_id,
+            right_version,
+            parameter_key=parameter_key,
+            unit=unit,
+            locator=right_locator,
+        )
+        conflict = build_parameter_conflict(
+            workspace_id,
+            object_label=object_label,
+            parameter_key=parameter_key,
+            unit=unit,
+            condition=condition,
+            left=left,
+            right=right,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_parameter_comparisons (
+                    id, workspace_id, object_label, parameter_key, unit, condition,
+                    left_knowledge_item_id, left_version, left_value, left_locator,
+                    right_knowledge_item_id, right_version, right_value, right_locator,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conflict.id,
+                    workspace_id,
+                    conflict.scope.object_label,
+                    conflict.scope.parameter_key,
+                    conflict.scope.unit,
+                    conflict.scope.condition,
+                    left.knowledge_item_id,
+                    left.version,
+                    left.value,
+                    left.locator,
+                    right.knowledge_item_id,
+                    right.version,
+                    right.value,
+                    right.locator,
+                    conflict.created_at.isoformat(),
+                ),
+            )
+        return conflict
+
+    def _parameter_side(
+        self,
+        workspace_id: str,
+        knowledge_item_id: str,
+        version: str,
+        *,
+        parameter_key: str,
+        unit: str,
+        locator: str,
+    ) -> ParameterSide:
+        """取某一侧证据：必须真实存在于当前工作区的那一版，且参数名、单位和
+        用户选中的那条出处都对得上。
+
+        单位对不上就是另一个比较范围，不并进来也不换算；同名同单位出现在多个
+        段落时以用户选中的出处为准，不自动挑第一条。
+        """
+        self.get_knowledge_item(workspace_id, knowledge_item_id)
+        for stored in self.list_knowledge_item_versions(workspace_id, knowledge_item_id):
+            if stored.version != version:
+                continue
+            for parameter in stored.parameters:
+                if parameter.key.strip() != parameter_key.strip():
+                    continue
+                if (parameter.unit or "").strip() != unit.strip():
+                    continue
+                if parameter.locator.strip() != locator.strip():
+                    continue
+                return ParameterSide(
+                    knowledge_item_id=knowledge_item_id,
+                    version=stored.version,
+                    value=parameter.value,
+                    locator=parameter.locator,
+                    title=stored.title,
+                )
+            raise KnowledgeConflictError(
+                f"版本 {version} 里没有参数「{parameter_key}」（单位 {unit}，"
+                f"出处 {locator}）"
+            )
+        raise KnowledgeConflictError(f"知识条目没有版本 {version}")
+
+    def get_parameter_comparison(
+        self, workspace_id: str, comparison_id: str
+    ) -> ParameterConflict:
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM knowledge_parameter_comparisons WHERE id = ? AND workspace_id = ?",
+                (comparison_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(comparison_id)
+            adjudication_row = conn.execute(
+                """
+                SELECT * FROM knowledge_parameter_adjudications
+                WHERE conflict_id = ? AND workspace_id = ?
+                ORDER BY decided_at DESC LIMIT 1
+                """,
+                (comparison_id, workspace_id),
+            ).fetchone()
+        return _comparison_from_row(row, adjudication_row)
+
+    def list_parameter_comparisons(
+        self,
+        workspace_id: str,
+        *,
+        knowledge_item_id: str | None = None,
+    ) -> list[ParameterConflict]:
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            if knowledge_item_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM knowledge_parameter_comparisons
+                    WHERE workspace_id = ?
+                      AND (left_knowledge_item_id = ? OR right_knowledge_item_id = ?)
+                    ORDER BY created_at DESC
+                    """,
+                    (workspace_id, knowledge_item_id, knowledge_item_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM knowledge_parameter_comparisons
+                    WHERE workspace_id = ? ORDER BY created_at DESC
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+            adjudications = {
+                item["conflict_id"]: item
+                for item in conn.execute(
+                    """
+                    SELECT a.* FROM knowledge_parameter_adjudications a
+                    JOIN knowledge_parameter_comparisons c ON c.id = a.conflict_id
+                    WHERE a.workspace_id = ? ORDER BY a.decided_at
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+            }
+        return [
+            _comparison_from_row(row, adjudications.get(str(row["id"])))
+            for row in rows
+        ]
+
+    def adjudicate_parameter_comparison(
+        self,
+        workspace_id: str,
+        comparison_id: str,
+        *,
+        operator: str,
+        reason: str,
+        retained_side: str,
+        retained_value: str | None = None,
+        corrected_value: str | None = None,
+    ) -> ParameterConflict:
+        """记录一次人工裁定。历史裁定不覆盖：新裁定追加，旧证据保留。
+
+        裁定绑定在当时的两个版本上；任一侧出现新版本时，比较是新冲突，
+        不会自动沿用这里的结论。
+        """
+        conflict = self.get_parameter_comparison(workspace_id, comparison_id)
+        adjudicated = adjudicate_parameter_conflict(
+            workspace_id,
+            conflict,
+            operator=operator,
+            reason=reason,
+            retained_side=retained_side,
+            retained_value=retained_value,
+            corrected_value=corrected_value,
+        )
+        assert adjudicated.adjudication is not None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO knowledge_parameter_adjudications (
+                    id, workspace_id, conflict_id, operator, reason, decided_at,
+                    left_version_ref, right_version_ref, retained_side,
+                    retained_value, corrected_value
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    adjudicated.adjudication.id,
+                    workspace_id,
+                    comparison_id,
+                    adjudicated.adjudication.operator,
+                    adjudicated.adjudication.reason,
+                    adjudicated.adjudication.decided_at.isoformat(),
+                    adjudicated.adjudication.left_version_ref,
+                    adjudicated.adjudication.right_version_ref,
+                    adjudicated.adjudication.retained_side,
+                    adjudicated.adjudication.retained_value,
+                    adjudicated.adjudication.corrected_value,
+                ),
+            )
+        return self.get_parameter_comparison(workspace_id, comparison_id)
+
     def _require_workspace(self, workspace_id: str) -> None:
         if not workspace_id.strip():
             raise ValueError("workspace_id is required")
 
 
+def _comparison_from_row(
+    row: sqlite3.Row, adjudication_row: sqlite3.Row | None
+) -> ParameterConflict:
+    adjudication = (
+        ParameterAdjudication(
+            id=str(adjudication_row["id"]),
+            workspace_id=str(adjudication_row["workspace_id"]),
+            conflict_id=str(adjudication_row["conflict_id"]),
+            operator=str(adjudication_row["operator"]),
+            reason=str(adjudication_row["reason"]),
+            decided_at=_parse_datetime(adjudication_row["decided_at"]),
+            left_version_ref=str(adjudication_row["left_version_ref"]),
+            right_version_ref=str(adjudication_row["right_version_ref"]),
+            retained_side=str(adjudication_row["retained_side"]),
+            retained_value=str(adjudication_row["retained_value"]),
+            corrected_value=(
+                str(adjudication_row["corrected_value"])
+                if adjudication_row["corrected_value"]
+                else None
+            ),
+        )
+        if adjudication_row is not None
+        else None
+    )
+    return ParameterConflict(
+        id=str(row["id"]),
+        workspace_id=str(row["workspace_id"]),
+        scope=ParameterScope(
+            object_label=str(row["object_label"]),
+            parameter_key=str(row["parameter_key"]),
+            unit=str(row["unit"]),
+            condition=str(row["condition"]),
+        ),
+        left=ParameterSide(
+            knowledge_item_id=str(row["left_knowledge_item_id"]),
+            version=str(row["left_version"]),
+            value=str(row["left_value"]),
+            locator=str(row["left_locator"]),
+        ),
+        right=ParameterSide(
+            knowledge_item_id=str(row["right_knowledge_item_id"]),
+            version=str(row["right_version"]),
+            value=str(row["right_value"]),
+            locator=str(row["right_locator"]),
+        ),
+        created_at=_parse_datetime(row["created_at"]),
+        adjudication=adjudication,
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validated_use_category(value: str | None) -> str | None:
+    """校验用户选择的用途分类；空值就是未分类。
+
+    不按文件格式、来源类型或标题推断分类，也不接受列表外的自由文本。
+    """
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned not in KNOWLEDGE_USE_CATEGORIES:
+        raise ValueError(
+            "use_category must be one of: " + ", ".join(KNOWLEDGE_USE_CATEGORIES)
+        )
+    return cleaned
+
+
+def _clean_topics(topics: Sequence[str]) -> list[str]:
+    """主题/对象关系只接受用户明确登记的非空文本，去重但不改写。"""
+    cleaned: list[str] = []
+    for topic in topics:
+        text = str(topic).strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _topics_json(topics: Sequence[str]) -> str:
+    return json.dumps(_clean_topics(topics), ensure_ascii=False)
+
+
+def _parse_status(
+    sections: Sequence[KnowledgeSection], parameters: Sequence[KnowledgeParameter]
+) -> str:
+    """解析状态按这一版真实解析结果落库。
+
+    只要解析出了带定位的小节或显式参数就是 parsed：单个段落定位同样是真实
+    结构，不能因为“只有一段”降成纯文本。
+    完全没有任何结构记录的行（例如普通手填文本）才记 text_only。
+    """
+    return "parsed" if (tuple(sections) or tuple(parameters)) else "text_only"
 
 
 def _sections_json(sections: Sequence[KnowledgeSection]) -> str:
