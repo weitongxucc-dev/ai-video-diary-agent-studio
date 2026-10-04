@@ -70,6 +70,11 @@ class KnowledgeItemVersion:
     source_url: str | None = None
 
 
+# 知识用途分类：只认用户明确选择，不按文件格式或来源类型推断。
+KNOWLEDGE_USE_CATEGORIES = ("产品知识", "公司文档", "菜单条目", "销售话术")
+KNOWLEDGE_UNCLASSIFIED = "未分类"
+
+
 @dataclass(frozen=True)
 class KnowledgeItem:
     id: str
@@ -89,6 +94,12 @@ class KnowledgeItem:
     fetched_at: datetime | None = None
     source_url: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # 用户明确选择的用途分类；None 就是未分类，不猜。
+    use_category: str | None = None
+    # 用户明确登记的主题/对象关系；空列表表示还没有。
+    topics: tuple[str, ...] = ()
+    # 解析状态：写入时按真实解析结果落库（parsed/text_only），不回填猜测值。
+    parse_status: str | None = None
 
 
 @dataclass(frozen=True)

@@ -2089,6 +2089,12 @@ class KnowledgeItemResponse(BaseModel):
     created_at: datetime
     # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
     duplicate_of_version: str | None = None
+    # 用户明确选择的用途分类；None 就是未分类，不按格式推断。
+    use_category: str | None = None
+    # 用户明确登记的主题/对象关系。
+    topics: list[str] = Field(default_factory=list)
+    # 这一版的真实解析结果：parsed 有结构化出处，text_only 只是纯文本。
+    parse_status: str | None = None
 
 
 class KnowledgeItemVersionResponse(BaseModel):
@@ -2181,6 +2187,19 @@ class ParameterComparisonsResponse(BaseModel):
 class KnowledgeItemsResponse(BaseModel):
     items: list[KnowledgeItemResponse]
     total_count: int
+    # 概览数量按真实用途分类字段统计；未分类是单列，不摊到各分类里。
+    category_counts: dict[str, int] = Field(default_factory=dict)
+    # 用户已登记的全部主题/对象关系，供筛选使用。
+    topics: list[str] = Field(default_factory=list)
+
+
+class KnowledgeItemClassificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # 两个字段都必填：null/[] 就是清空的明确动作，不靠缺省隐式清掉另一半。
+    # 分类由用户明确选择；null 表示回到未分类。合法取值由服务端枚举校验。
+    use_category: str | None = Field(max_length=40)
+    topics: list[str] = Field(max_length=50)
 
 
 class SourceSyncResponse(BaseModel):

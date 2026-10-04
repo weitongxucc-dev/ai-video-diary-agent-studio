@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
 
 const api = vi.hoisted(() => ({ listKnowledgeItems: vi.fn(), getKnowledgeItem: vi.fn(), sourceErrorMessage: vi.fn(),
-  listParameterComparisons: vi.fn(), adjudicateParameterComparison: vi.fn(), createParameterComparison: vi.fn() }));
+  listParameterComparisons: vi.fn(), adjudicateParameterComparison: vi.fn(), createParameterComparison: vi.fn(),
+  updateKnowledgeItemClassification: vi.fn() }));
 vi.mock("@/lib/source-api", () => ({ listKnowledgeItems: api.listKnowledgeItems, getKnowledgeItem: api.getKnowledgeItem, sourceErrorMessage: api.sourceErrorMessage,
-  listParameterComparisons: api.listParameterComparisons, adjudicateParameterComparison: api.adjudicateParameterComparison, createParameterComparison: api.createParameterComparison }));
+  listParameterComparisons: api.listParameterComparisons, adjudicateParameterComparison: api.adjudicateParameterComparison, createParameterComparison: api.createParameterComparison,
+  updateKnowledgeItemClassification: api.updateKnowledgeItemClassification }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
@@ -23,32 +25,36 @@ const item: KnowledgeItem = {
   content_hash: null, sections: [], parameters: [],
   fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
+  // WIL-105：真实分类/主题/解析状态；新保存的条目默认未分类且无主题。
+  use_category: null, topics: [], parse_status: "text_only",
 };
 beforeEach(() => {
   api.listKnowledgeItems.mockReset();
   api.getKnowledgeItem.mockReset();
   api.sourceErrorMessage.mockReset();
+  api.updateKnowledgeItemClassification.mockReset();
   api.listParameterComparisons.mockResolvedValue({ items: [], total_count: 0 });
-  api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1 });
+  api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1, category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 1 }, topics: [] });
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
 });
 describe("KnowledgePage", () => {
-  it("shows actual source content and leaves unsupported use categories unclassified", async () => {
+  it("shows actual source content and the real unclassified state", async () => {
     render(<KnowledgePage />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
-    expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
-    expect(screen.getByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).toBeInTheDocument();
+    expect(screen.getByText(/参数冲突核对可在上方入口使用/)).toBeInTheDocument();
+    // 新保存的条目显示未分类与真实解析状态，不显示示例占位。
     expect(screen.getAllByText(/未分类/)).not.toHaveLength(0);
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
     expect(detail).toHaveTextContent("没有显式参数格式就不生成参数");
+    expect(detail).toHaveTextContent("仅纯文本");
     expect(detail).toHaveTextContent("v2");
     expect(detail).toHaveTextContent("内部使用");
     fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
-    expect(screen.getByText(/不能按文件格式推断/)).toBeInTheDocument();
+    expect(screen.getByText("这个分类下没有匹配的来源")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
   });
@@ -84,11 +90,130 @@ describe("KnowledgePage", () => {
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
   });
 
+  it("shows the real saved category, topics and parse status instead of example guesses", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [{ ...item, use_category: "产品知识", topics: ["曜核一体机"], parse_status: "parsed" }], total_count: 1,
+      category_counts: { 产品知识: 1, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 0 }, topics: ["曜核一体机"] });
+    api.getKnowledgeItem.mockResolvedValue({ ...item, use_category: "产品知识", topics: ["曜核一体机"], parse_status: "parsed",
+      parameters: [{ key: "净重", value: "600", unit: "g", locator: "第2段" }], versions: [] });
+    render(<KnowledgePage />);
+    const nav = screen.getByRole("navigation", { name: "知识用途分类" });
+    // 概览数量读真实字段，未分类独立一格。
+    await waitFor(() => expect(within(nav).getByRole("button", { name: /产品知识/ })).toHaveTextContent("1 条"));
+    expect(within(nav).getByRole("button", { name: /未分类/ })).toHaveTextContent("0 条");
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    expect(detail).toHaveTextContent("已解析结构");
+    expect((screen.getByLabelText("用途分类") as HTMLSelectElement).value).toBe("产品知识");
+    expect(within(detail).getByText("曜核一体机")).toBeInTheDocument();
+    // 按分类筛选后只显示该分类下的真实条目。
+    fireEvent.click(within(nav).getByRole("button", { name: /公司文档/ }));
+    expect(screen.getByText("这个分类下没有匹配的来源")).toBeInTheDocument();
+  });
+
+  it("saves the user chosen category and topic through the real endpoint", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1,
+      category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 1 }, topics: [] });
+    // 详情跟着保存结果变，避免第二次写入把刚存的分类当成未分类。
+    let saved: KnowledgeItem = item;
+    api.getKnowledgeItem.mockImplementation(async () => ({ ...saved, versions: [] }));
+    api.updateKnowledgeItemClassification.mockImplementation(async (_id, input) => {
+      saved = { ...saved, use_category: input.use_category, topics: input.topics };
+      return saved;
+    });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    fireEvent.change(screen.getByLabelText("用途分类"), { target: { value: "销售话术" } });
+    await waitFor(() => expect(api.updateKnowledgeItemClassification).toHaveBeenCalledWith("knowledge-one", { use_category: "销售话术", topics: [] }));
+    // 等上一次写入结束再发下一次：保存期间分类控件禁用。
+    await waitFor(() => expect(screen.getByLabelText("用途分类")).not.toBeDisabled());
+    fireEvent.change(screen.getByRole("textbox", { name: "新增主题或对象" }), { target: { value: "曜核一体机" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(api.updateKnowledgeItemClassification).toHaveBeenCalledWith("knowledge-one", { use_category: "销售话术", topics: ["曜核一体机"] }));
+  });
+
+  it("keeps the topic draft and shows the error when the save fails, then succeeds on retry", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1,
+      category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 1 }, topics: [] });
+    api.getKnowledgeItem.mockResolvedValue({ ...item, versions: [] });
+    api.updateKnowledgeItemClassification
+      .mockRejectedValueOnce(new Error("保存失败：后端拒绝"))
+      .mockResolvedValueOnce({ ...item, topics: ["曜核一体机"] });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "新增主题或对象" }), { target: { value: "曜核一体机" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("请求失败：502"));
+    // 失败时草稿保留，用户可以直接重试。
+    expect((screen.getByRole("textbox", { name: "新增主题或对象" }) as HTMLInputElement).value).toBe("曜核一体机");
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(api.updateKnowledgeItemClassification).toHaveBeenCalledTimes(2));
+  });
+
+  it("filters the real items by an exact registered topic", async () => {
+    api.listKnowledgeItems.mockResolvedValue({
+      items: [
+        { ...item, id: "knowledge-one", use_category: "产品知识", topics: ["曜核一体机"] },
+        { ...item, id: "knowledge-two", title: "另一份资料", use_category: "公司文档", topics: [] },
+      ],
+      total_count: 2,
+      category_counts: { 产品知识: 1, 公司文档: 1, 菜单条目: 0, 销售话术: 0, 未分类: 0 },
+      topics: ["曜核一体机"],
+    });
+    api.getKnowledgeItem.mockResolvedValue({ ...item, use_category: "产品知识", topics: ["曜核一体机"], versions: [] });
+    render(<KnowledgePage />);
+    await screen.findByRole("button", { name: /设备说明书/ });
+    expect(screen.getByRole("button", { name: /另一份资料/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("按主题筛选"), { target: { value: "曜核一体机" } });
+    expect(screen.queryByRole("button", { name: /另一份资料/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+    // 没有登记主题时给出添加主题的指引，而不是空白。
+    api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1,
+      category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 1 }, topics: [] });
+    fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
+    await waitFor(() => expect(screen.getByText(/还没有登记任何主题/)).toBeInTheDocument());
+  });
+
+  it("does not report a real zero count before the counts load", async () => {
+    let release: () => void = () => {};
+    api.listKnowledgeItems.mockImplementation(() => new Promise((resolve) => { release = () => resolve({ items: [item], total_count: 1,
+      category_counts: { 产品知识: 1, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 0 }, topics: [] }); }));
+    render(<KnowledgePage />);
+    expect(screen.getByRole("navigation", { name: "知识用途分类" })).toHaveTextContent("读取中");
+    release();
+    await waitFor(() => expect(screen.getByRole("navigation", { name: "知识用途分类" })).toHaveTextContent("1 条"));
+  });
+
+  it("describes the historical version from that version's own content", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [{ ...item, parse_status: "parsed" }], total_count: 1,
+      category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 1 }, topics: [] });
+    api.getKnowledgeItem.mockResolvedValue({ ...item, parse_status: "parsed",
+      parameters: [{ key: "净重", value: "600", unit: "g", locator: "第2段" }],
+      versions: [{ version: "1", content_hash: "hash-v1", source_item_id: "source-one", title: item.title,
+        body: "旧正文", file_reference: item.file_reference, sections: [], parameters: [],
+        fetched_at: null, source_url: null, saved_at: "2026-09-26T08:00:00Z" }] });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    const detail = screen.getByRole("complementary", { name: "来源详情" });
+    await waitFor(() => expect(detail).toHaveTextContent("已解析结构"));
+    fireEvent.change(screen.getByLabelText("查看版本"), { target: { value: "1" } });
+    // 旧版只有整段正文：不拿当前版的已解析状态冒充。
+    expect(detail).toHaveTextContent("该版只有整段正文");
+  });
+
+  it("keeps the empty classification state actionable", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [], total_count: 0,
+      category_counts: { 产品知识: 0, 公司文档: 0, 菜单条目: 0, 销售话术: 0, 未分类: 0 }, topics: [] });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /产品知识/ }));
+    expect(screen.getByText(/这个分类下还没有来源/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "去信息源添加内容" })).toHaveAttribute("href", "/sources");
+  });
+
   it("keeps search and refresh connected to the real list endpoint", async () => {
     render(<KnowledgePage />);
     await screen.findByRole("button", { name: /设备说明书/ });
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "找不到" } });
-    expect(screen.getByText("没有匹配的来源")).toBeInTheDocument();
+    expect(screen.getByText("这个分类下没有匹配的来源")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "电源" } });
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
@@ -103,15 +228,15 @@ describe("KnowledgePage", () => {
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
   });
 
-  it("renders correction and task-reference actions honestly while interfaces are absent", async () => {
+  it("keeps only the real conflict entry and drops the disabled correction shell", async () => {
     render(<KnowledgePage />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
     const detail = screen.getByRole("complementary", { name: "来源详情" });
-    expect(detail).toHaveTextContent("纠正保存与任务引用接口尚未接入");
-    expect(screen.getByRole("button", { name: "保存纠正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "用于当前任务" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "摘要纠正" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "参数纠正" })).toBeDisabled();
+    // 135 的冲突核对入口是真实可用的，不再配一个禁用的示例壳。
+    expect(detail).toHaveTextContent("参数冲突核对");
+    expect(screen.queryByRole("textbox", { name: "摘要纠正" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "参数纠正" })).not.toBeInTheDocument();
+    expect(detail).toHaveTextContent("知识条目本身的摘要纠正、任务引用和问答尚未接入");
   });
 
   it("shows example correction and task-reference actions in example mode", () => {

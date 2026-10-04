@@ -85,6 +85,20 @@ export type KnowledgeItem = {
   source_url: string | null;
   created_at: string;
   duplicate_of_version?: string | null;
+  // 用户明确选择的用途分类；null 就是未分类，不按格式推断。
+  use_category: KnowledgeUseCategory | null;
+  // 用户明确登记的主题/对象关系。
+  topics: string[];
+  // 这一版的真实解析结果：parsed 有可用结构，text_only 只是整段纯文本。
+  parse_status: "parsed" | "text_only" | null;
+};
+
+/** 知识用途分类：服务端枚举，不接受自由文本。 */
+export type KnowledgeUseCategory = "产品知识" | "公司文档" | "菜单条目" | "销售话术";
+
+/** 概览按真实用途分类统计；未分类单列。 */
+export type KnowledgeCategoryCounts = Record<string, number> & {
+  未分类: number;
 };
 
 export type KnowledgeItemVersion = {
@@ -210,8 +224,27 @@ export function saveSourceItemToKnowledge(id: string, input: SaveToKnowledge) {
   return request<KnowledgeItem>(`/api/source-items/${encodeURIComponent(id)}/save-to-knowledge`, { method: "POST", body: JSON.stringify(input) });
 }
 
-export function listKnowledgeItems() {
-  return request<{ items: KnowledgeItem[]; total_count: number }>("/api/knowledge-items");
+export function listKnowledgeItems(filter?: { use_category?: string; topic?: string }) {
+  const params = new URLSearchParams();
+  if (filter?.use_category !== undefined) params.set("use_category", filter.use_category);
+  if (filter?.topic) params.set("topic", filter.topic);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{
+    items: KnowledgeItem[];
+    total_count: number;
+    category_counts: KnowledgeCategoryCounts;
+    topics: string[];
+  }>(`/api/knowledge-items${suffix}`);
+}
+
+/** 保存用户明确选择的用途分类与主题/对象关系；null/空列表就是清空。 */
+export function updateKnowledgeItemClassification(
+  id: string,
+  input: { use_category: KnowledgeUseCategory | null; topics: string[] },
+) {
+  return request<KnowledgeItem>(`/api/knowledge-items/${encodeURIComponent(id)}`, {
+    method: "PATCH", body: JSON.stringify(input),
+  });
 }
 
 export function getKnowledgeItem(id: string) {

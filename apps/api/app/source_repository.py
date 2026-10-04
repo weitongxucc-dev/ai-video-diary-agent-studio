@@ -8,6 +8,8 @@ from typing import Sequence
 from uuid import uuid4
 
 from app.sources import (
+    KNOWLEDGE_UNCLASSIFIED,
+    KNOWLEDGE_USE_CATEGORIES,
     KnowledgeItem,
     KnowledgeItemVersion,
     SourceConnector,
@@ -187,8 +189,9 @@ class SourceRepository:
             INSERT INTO knowledge_items (
                 id, workspace_id, content_type, title, body, file_reference,
                 authorization, ownership, source_item_id, version, created_at,
-                visibility, content_hash, sections, parameters, fetched_at, source_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                visibility, content_hash, sections, parameters, fetched_at, source_url,
+                use_category, topics, parse_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -210,6 +213,9 @@ class SourceRepository:
                 _parameters_json(item.parameters),
                 item.fetched_at.isoformat() if item.fetched_at else None,
                 item.source_url,
+                _validated_use_category(item.use_category),
+                _topics_json(item.topics),
+                item.parse_status or _parse_status(item.sections, item.parameters),
             ),
         )
 
@@ -384,7 +390,8 @@ class SourceRepository:
                 UPDATE knowledge_items SET
                     content_type = ?, title = ?, body = ?, file_reference = ?,
                     version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?, fetched_at = ?, source_url = ?
+                    source_item_id = ?, fetched_at = ?, source_url = ?,
+                    parse_status = ?
                 WHERE id = ? AND workspace_id = ?
                 """,
                 (
@@ -399,6 +406,7 @@ class SourceRepository:
                     source.id,
                     source.fetched_at.isoformat() if source.fetched_at else None,
                     source.source_url,
+                    _parse_status(source.sections, source.parameters),
                     previous.id,
                     workspace_id,
                 ),
@@ -561,8 +569,10 @@ class SourceRepository:
         workspace_id: str,
         *,
         visibilities: Sequence[str] | None = None,
+        use_category: str | None = None,
+        topic: str | None = None,
     ) -> list[KnowledgeItem]:
-        """列出知识条目，可按可见范围过滤。
+        """列出知识条目，可按可见范围、用户选择的用途分类和主题筛选。
 
         ``visibilities=None`` 表示不过滤（保持旧行为，调用方自己负责）。
         传入如 ``("shared",)`` 时，private 行取不到——这就是「可见范围」在
@@ -574,22 +584,94 @@ class SourceRepository:
         """
         self._require_workspace(workspace_id)
         with self._connect() as conn:
-            if visibilities is None:
-                rows = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
-                    (workspace_id,),
-                ).fetchall()
-            else:
+            conditions = ["workspace_id = ?"]
+            values: list[object] = [workspace_id]
+            if visibilities is not None:
                 wanted = [str(value).strip() for value in visibilities if str(value).strip()]
                 if not wanted:
                     return []
-                placeholders = ", ".join("?" for _ in wanted)
-                rows = conn.execute(
-                    f"SELECT * FROM knowledge_items WHERE workspace_id = ? "
-                    f"AND visibility IN ({placeholders}) ORDER BY created_at DESC",
-                    (workspace_id, *wanted),
-                ).fetchall()
+                conditions.append(
+                    f"visibility IN ({', '.join('?' for _ in wanted)})"
+                )
+                values.extend(wanted)
+            if use_category is not None:
+                # 空字符串就是未分类：只取还没有用户选择的分类的行。
+                conditions.append(
+                    "use_category IS NULL" if not use_category.strip() else "use_category = ?"
+                )
+                if use_category.strip():
+                    values.append(_validated_use_category(use_category))
+            if topic is not None and topic.strip():
+                # 主题关系存在 topics JSON 里，按精确值匹配而不是模糊包含。
+                conditions.append("EXISTS (SELECT 1 FROM json_each(knowledge_items.topics) WHERE json_each.value = ?)")
+                values.append(topic.strip())
+            rows = conn.execute(
+                "SELECT * FROM knowledge_items WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY created_at DESC",
+                values,
+            ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
+
+    def count_knowledge_items_by_use_category(self, workspace_id: str) -> dict[str, int]:
+        """按真实用途分类统计。
+
+        只有真正的 NULL（还没选分类）计入未分类；不把任何其他值静默兜底成
+        未分类——出现枚举外的值就按它本名单列，不隐藏异常数据。
+        """
+        self._require_workspace(workspace_id)
+        counts = {name: 0 for name in KNOWLEDGE_USE_CATEGORIES}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT use_category, COUNT(*) AS total FROM knowledge_items "
+                "WHERE workspace_id = ? GROUP BY use_category",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            raw = row["use_category"]
+            label = KNOWLEDGE_UNCLASSIFIED if raw is None else str(raw)
+            counts[label] = counts.get(label, 0) + int(row["total"])
+        return counts
+
+    def list_knowledge_topics(self, workspace_id: str) -> list[str]:
+        """列出用户已登记的全部主题/对象关系，按真实使用顺序去重。"""
+        self._require_workspace(workspace_id)
+        seen: dict[str, None] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT topics FROM knowledge_items WHERE workspace_id = ? "
+                "ORDER BY created_at DESC",
+                (workspace_id,),
+            ).fetchall()
+        for row in rows:
+            for topic in json.loads(row["topics"] or "[]"):
+                seen.setdefault(str(topic), None)
+        return list(seen)
+
+    def set_knowledge_item_classification(
+        self,
+        workspace_id: str,
+        item_id: str,
+        *,
+        use_category: str | None,
+        topics: Sequence[str],
+    ) -> KnowledgeItem:
+        """保存用户明确选择的用途分类与主题/对象关系。
+
+        两个入参都是用户确认的结果；``None``/空列表表示清空，不从内容推断补齐。
+        """
+        self._require_workspace(workspace_id)
+        category = _validated_use_category(use_category)
+        cleaned = _clean_topics(topics)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE knowledge_items SET use_category = ?, topics = ? "
+                "WHERE id = ? AND workspace_id = ?",
+                (category, _topics_json(cleaned), item_id, workspace_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(item_id)
+        return self.get_knowledge_item(workspace_id, item_id)
 
     def get_knowledge_item_visibility(self, workspace_id: str, item_id: str) -> str:
         """读单条知识的可见性。
@@ -792,6 +874,10 @@ class SourceRepository:
                     -- 只管 fresh 库的 INSERT；升级库的存量行由
                     -- ensure_content_visibility_columns 回填为 shared。
                     visibility TEXT NOT NULL DEFAULT 'private',
+                    -- 用途分类与主题/对象关系：用户明确选择后落库，不按格式推断。
+                    use_category TEXT,
+                    topics TEXT NOT NULL DEFAULT '[]',
+                    parse_status TEXT,
                     FOREIGN KEY(source_item_id) REFERENCES source_items(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
@@ -914,6 +1000,18 @@ class SourceRepository:
                     conn.execute(
                         f"ALTER TABLE knowledge_item_versions ADD COLUMN {column} TEXT"
                     )
+            # 本卡（WIL-105）知识用途分类、主题关系与解析状态。
+            # 升级库只补列：存量行留NULL表示「还没有用户选择的分类」，不按格式回填。
+            knowledge_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(knowledge_items)")
+            }
+            for column, ddl in (
+                ("use_category", "TEXT"),
+                ("topics", "TEXT NOT NULL DEFAULT '[]'"),
+                ("parse_status", "TEXT"),
+            ):
+                if column not in knowledge_columns:
+                    conn.execute(f"ALTER TABLE knowledge_items ADD COLUMN {column} {ddl}")
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(
@@ -1048,6 +1146,9 @@ class SourceRepository:
             fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
             source_url=row["source_url"],
             created_at=_parse_datetime(row["created_at"]),
+            use_category=row["use_category"],
+            topics=tuple(json.loads(row["topics"] or "[]")),
+            parse_status=row["parse_status"],
         )
 
     def _run_from_row(self, row: sqlite3.Row) -> SourceRunEvidence:
@@ -1381,6 +1482,49 @@ def _comparison_from_row(
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validated_use_category(value: str | None) -> str | None:
+    """校验用户选择的用途分类；空值就是未分类。
+
+    不按文件格式、来源类型或标题推断分类，也不接受列表外的自由文本。
+    """
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned not in KNOWLEDGE_USE_CATEGORIES:
+        raise ValueError(
+            "use_category must be one of: " + ", ".join(KNOWLEDGE_USE_CATEGORIES)
+        )
+    return cleaned
+
+
+def _clean_topics(topics: Sequence[str]) -> list[str]:
+    """主题/对象关系只接受用户明确登记的非空文本，去重但不改写。"""
+    cleaned: list[str] = []
+    for topic in topics:
+        text = str(topic).strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _topics_json(topics: Sequence[str]) -> str:
+    return json.dumps(_clean_topics(topics), ensure_ascii=False)
+
+
+def _parse_status(
+    sections: Sequence[KnowledgeSection], parameters: Sequence[KnowledgeParameter]
+) -> str:
+    """解析状态按这一版真实解析结果落库。
+
+    只要解析出了带定位的小节或显式参数就是 parsed：单个段落定位同样是真实
+    结构，不能因为“只有一段”降成纯文本。
+    完全没有任何结构记录的行（例如普通手填文本）才记 text_only。
+    """
+    return "parsed" if (tuple(sections) or tuple(parameters)) else "text_only"
 
 
 def _sections_json(sections: Sequence[KnowledgeSection]) -> str:

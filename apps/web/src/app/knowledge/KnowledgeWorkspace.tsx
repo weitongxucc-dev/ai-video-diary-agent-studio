@@ -7,7 +7,7 @@ import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEn
 import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { KnowledgeItem, KnowledgeItemDetail, ParameterComparison } from "@/lib/source-api";
+import type { KnowledgeCategoryCounts, KnowledgeItem, KnowledgeItemDetail, KnowledgeUseCategory, ParameterComparison } from "@/lib/source-api";
 import { getKnowledgeItem, listParameterComparisons, adjudicateParameterComparison, createParameterComparison, sourceErrorMessage } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
 
@@ -18,6 +18,14 @@ type KnowledgeDisplayItem = KnowledgeItem & {
   exampleIssue?: string;
 };
 const categories = ["产品知识", "公司文档", "菜单条目", "销售话术"] as const;
+const unclassifiedLabel = "未分类";
+const useCategoryOptions = [...categories, unclassifiedLabel] as const;
+// 解析状态只反映真实解析产物；没有记录时明说未知，不当成已解析。
+function parseStatusText(status: KnowledgeItem["parse_status"]) {
+  if (status === "parsed") return "已解析结构";
+  if (status === "text_only") return "仅纯文本";
+  return "未记录解析状态";
+}
 
 function itemIcon(type: string) {
   if (type === "video") return <Video size={21} />;
@@ -42,13 +50,21 @@ function formatFetchTime(value: string | null) {
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
 }
 
-export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMode = false, exampleLabel }: {
+export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMode = false, exampleLabel, categoryCounts = null, topics = [], onUpdateClassification, reloadToken = 0 }: {
   items: KnowledgeDisplayItem[];
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
   exampleMode?: boolean;
   exampleLabel?: string;
+  // 真实概览数量：来自服务端按用途分类字段的统计，不在前端估算。
+  categoryCounts?: KnowledgeCategoryCounts | null;
+  // 用户已登记的全部主题；只做精确匹配，不做语义归并。
+  topics?: string[];
+  // 保存用户明确选择的分类与主题；服务端校验后才落库。
+  onUpdateClassification?: (item: KnowledgeDisplayItem, input: { use_category: KnowledgeUseCategory | null; topics: string[] }) => Promise<void>;
+  // 分类/主题写成功后自增，促使重新读取当前详情。
+  reloadToken?: number;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<KnowledgeItemDetail | null>(null);
@@ -62,56 +78,86 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
       .then(result => { if (active && result.id === selectedId) setDetail(result); })
       .catch(cause => { if (active) setDetailError(cause instanceof Error ? cause.message : "知识详情读取失败"); });
     return () => { active = false; };
-  }, [selectedId, exampleMode]);
+  }, [selectedId, exampleMode, reloadToken]);
   // 详情可能晚于列表刷新到达；只展示与当前选中条目一致的详情。
   const shownDetail = detail && detail.id === selectedId ? detail : null;
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("全部");
+  // 用户已登记的真实主题；只做精确匹配筛选，不建图谱语义。
+  const [topic, setTopic] = useState("");
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const visibleItems = useMemo(() => items.filter((item) => {
-    const matchesCategory = category === "全部" || (exampleMode && item.exampleCategory === category);
+    // 真实模式按用户保存的用途分类字段筛选；未分类单列，不按格式推断。
+    const matchesCategory = category === "全部"
+      || (exampleMode ? item.exampleCategory === category : (item.use_category ?? unclassifiedLabel) === category);
+    // 主题筛选只认条目上真实登记的值，不做同义或语义推断。
+    const matchesTopic = topic === "" || (item.topics ?? []).some((value) => value === topic);
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
-    return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
-  }), [items, category, query, exampleMode]);
-  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} items={items} viewVersion={viewVersion} onViewVersion={setViewVersion} /> : undefined;
+    return matchesCategory && matchesTopic && searchable.includes(query.trim().toLocaleLowerCase());
+  }), [items, category, topic, query, exampleMode]);
+  const inspector = selected ? <KnowledgeInspector key={selected.id} detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} items={items} viewVersion={viewVersion} onViewVersion={setViewVersion} onUpdateClassification={onUpdateClassification} /> : undefined;
 
   return <AppShell inspector={inspector} inspectorTitle="来源详情">
     <div className={styles.page}>
       {exampleMode ? <div className={styles.exampleBanner}>{exampleLabel ?? "隔离视觉示例"} · 所有名称、分类、摘要和状态均非真实服务数据</div> : null}
       <div className={styles.top}>
         <nav aria-label="知识用途分类" className={styles.categories}>
-          {categories.map((name, index) => <button aria-pressed={category === name} className={styles.category} key={name} onClick={() => setCategory(category === name ? "全部" : name)} type="button">
-            <span className={styles.categoryIcon}>{[<BookOpen key="a" size={20} />, <FileText key="b" size={20} />, <FileText key="c" size={20} />, <BookOpen key="d" size={20} />][index]}</span>
+          {[...categories, unclassifiedLabel].map((name, index) => <button aria-pressed={category === name} className={styles.category} key={name} onClick={() => setCategory(category === name ? "全部" : name)} type="button">
+            <span className={styles.categoryIcon}>{[<BookOpen key="a" size={20} />, <FileText key="b" size={20} />, <FileText key="c" size={20} />, <BookOpen key="d" size={20} />, <FileText key="e" size={20} />][index]}</span>
             <strong>{name}</strong>
-            <small>{exampleMode ? items.filter((item) => item.exampleCategory === name).length + " 条示例来源" : "未分类"}</small>
+            <small>{exampleMode ? items.filter((item) => item.exampleCategory === name).length + " 条示例来源" : loading ? "读取中" : error || !categoryCounts ? "数量未知" : (categoryCounts[name] ?? 0) + " 条"}</small>
           </button>)}
         </nav>
         <div className={styles.actions}><Link href="/sources">添加内容 <Link2 size={14} /></Link></div>
       </div>
       <div className={styles.searchBar}>
         <label><Search size={16} /><input aria-label="查找来源" onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文或文件引用" value={query} /></label>
+        {!exampleMode && topics.length ? <label>主题<select aria-label="按主题筛选" onChange={(event) => setTopic(event.target.value)} value={topic}><option value="">全部主题</option>{topics.map((value) => <option key={value} value={value}>{value}</option>)}</select></label> : null}
+        {!exampleMode && !topics.length ? <small className={styles.notWired}>还没有登记任何主题；选一条来源后在详情里添加主题，就能按主题找到相关资料。</small> : null}
         <button aria-pressed={category === "全部"} onClick={() => setCategory("全部")} type="button">全部来源</button>
         <button aria-label="刷新知识库" disabled={loading} onClick={onRefresh} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={16} /></button>
       </div>
       {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>本地服务恢复或工作区授权确认后再刷新。</p></div></section> : null}
       <section className={styles.card}>
-          <div className={styles.cardHeading}><div><h2>来源封面</h2><small>{loading ? "正在读取" : error ? "读取失败" : category !== "全部" && !exampleMode ? "用途分类尚未接入" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选来源查看内容</small></div></div>
+          <div className={styles.cardHeading}><div><h2>来源封面</h2><small>{loading ? "正在读取" : error ? "读取失败" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选来源查看内容</small></div></div>
+          {topic !== "" && !visibleItems.length && !loading && !error ? <div className={styles.empty}>这个主题下暂时没有来源。<button onClick={() => setTopic("")} type="button">查看全部主题</button></div> : null}
           {loading ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
-            : category !== "全部" && !exampleMode ? <div className={styles.empty}>现有知识条目没有用途分类字段，不能按文件格式推断“{category}”。<button onClick={() => setCategory("全部")} type="button">查看全部来源</button></div>
+            : category !== "全部" && !exampleMode && !visibleItems.length && !items.length ? <div className={styles.empty}>这个分类下还没有来源。在信息源导入后回到这里选择用途分类。<Link href="/sources">去信息源添加内容</Link></div>
             : visibleItems.length ? <div className={styles.grid}>{visibleItems.map((item) => <button className={styles.cover} data-open-details key={item.id} onClick={() => setSelectedId(item.id)} type="button">
                 <span className={styles.coverArt}>{itemIcon(item.content_type)}<small>{itemType(item.content_type)}</small></span>
-                <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : "未分类"} · 版本 {item.version}</small>
-                <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : "核对状态未接入"}</span>
+                <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : (item.use_category ?? unclassifiedLabel)} · 版本 {item.version}</small>
+                <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : parseStatusText(item.parse_status)}</span>
               </button>)}</div>
-            : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
+            : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "这个分类下没有匹配的来源" : "知识库还没有内容"}{category !== "全部" && !exampleMode ? <button onClick={() => setCategory("全部")} type="button">查看全部来源</button> : null}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
       </section>
       {!exampleMode ? <ScriptLibraryPanel /> : null}
-      <p className={styles.notWired}>主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入；当前可查看已保存的来源正文。</p>
+      <p className={styles.notWired}>参数冲突核对可在上方入口使用；任务引用、问答和来源召回尚未接入。</p>
     </div>
   </AppShell>;
 }
 
-function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, items }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; items: KnowledgeDisplayItem[] }) {
+function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, items, onUpdateClassification }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; items: KnowledgeDisplayItem[]; onUpdateClassification?: (item: KnowledgeDisplayItem, input: { use_category: KnowledgeUseCategory | null; topics: string[] }) => Promise<void> }) {
+  const [topicDraft, setTopicDraft] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const currentTopics = detail?.topics ?? item.topics ?? [];
+  const currentCategory = detail?.use_category ?? item.use_category ?? null;
+  // 保存期间禁用写控件：否则旧分类和新增主题的并发写会互相覆盖。
+  async function saveClassification(use_category: KnowledgeUseCategory | null, topics: string[]) {
+    if (!onUpdateClassification || saving) return false;
+    setSaving(true); setSaveError(null);
+    try { await onUpdateClassification(item, { use_category, topics }); return true; }
+    catch (cause) { setSaveError(cause instanceof Error ? cause.message : "保存失败"); return false; }
+    finally { setSaving(false); }
+  }
+  async function addTopic(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = topicDraft.trim();
+    // 主题只接受用户明确输入的文本，不从标题或正文推断。
+    if (!value || currentTopics.includes(value)) { setTopicDraft(""); return; }
+    // 保存失败时保留草稿，让用户能直接重试而不用重打。
+    if (await saveClassification(currentCategory, [...currentTopics, value])) setTopicDraft("");
+  }
   const versions = detail?.versions ?? [];
   const selectedVersion = viewVersion ? versions.find((version) => version.version === viewVersion) ?? null : null;
   const shown = selectedVersion ?? detail ?? item;
@@ -125,13 +171,18 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
     <KnowledgeConflicts allItems={items} current={item} currentDetail={detail} exampleMode={exampleMode} key={item.id} />
     <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
+    {exampleMode ? null : <section aria-label="用途分类与主题关系" className={styles.detailSection}><h3>用途与主题</h3><label><span>用途分类</span><select aria-label="用途分类" disabled={!onUpdateClassification || saving} onChange={(event) => { void saveClassification(event.target.value === unclassifiedLabel ? null : event.target.value as KnowledgeUseCategory, currentTopics); }} value={currentCategory ?? unclassifiedLabel}><option value={unclassifiedLabel}>{unclassifiedLabel}</option>{categories.map((name) => <option key={name} value={name}>{name}</option>)}</select></label><p>分类只由你选择，系统不按文件格式或来源类型推断。</p><div className={styles.topicList}>{currentTopics.map((topic) => <span className={styles.topicChip} key={topic}>{topic}<button aria-label={`移除主题 ${topic}`} disabled={!onUpdateClassification || saving} onClick={() => { void saveClassification(currentCategory, currentTopics.filter((value) => value !== topic)); }} type="button">×</button></span>)}</div><form className={styles.searchBar} onSubmit={(event) => { void addTopic(event); }}><label><Search size={15} /><input aria-label="新增主题或对象" disabled={saving} onChange={(event) => setTopicDraft(event.target.value)} placeholder="输入主题或对象后回车" value={topicDraft} /></label><button disabled={saving || !topicDraft.trim()} type="submit">{saving ? "保存中…" : "添加"}</button></form>{saveError ? <p role="alert">{saveError}</p> : null}</section>}
     {versions.length ? <div className={styles.detailSection}><h3>版本</h3><label><span>查看版本</span><select aria-label="查看版本" onChange={(event) => onViewVersion(event.target.value || null)} value={viewVersion ?? ""}><option value="">当前版本 {detail?.version}</option>{versions.map((version) => <option key={version.version} value={version.version}>版本 {version.version} · {formatTime(version.saved_at)}</option>)}</select></label>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
     <div className={styles.compare}>
       <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3><p>{shown.body || "这个条目没有可显示的正文。"}</p>{sections.length ? <ol>{sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol> : null}</section>
       <section><h3>{exampleMode ? "AI 摘要 · 示例" : "摘要"}</h3><p>{exampleMode ? item.exampleSummary ?? "示例暂无摘要" : "尚无可核对的摘要来源；不能把正文当作 AI 摘要。"}</p></section>
     </div>
-    <section className={styles.detailSection}><h3>参数与出处</h3>{detailError ? <p role="alert">{detailError}</p> : parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : <p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "这个条目没有解析出的结构化参数；没有显式参数格式就不生成参数。"}</p>}<dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{shown.file_reference || "无"}</dd></div><div><dt>{isHistorical ? "该版来源条目" : "内容指纹"}</dt><dd>{isHistorical ? (selectedVersion?.source_item_id ?? "无") : ((detail?.content_hash ?? item.content_hash) ?? "无")}</dd></div><div><dt>原网址</dt><dd>{shownWebUrl ? <a href={shownWebUrl} rel="noreferrer" target="_blank">{shownWebUrl}</a> : "无网页来源"}</dd></div><div><dt>{isHistorical ? "该版抓取时间" : "抓取时间"}</dt><dd>{formatFetchTime(shownFetchedAt)}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{shown.version ?? item.version}</dd></div></dl>{versions.length > 1 ? <ol>{versions.map(version => <li key={version.version}>版本 {version.version} · {formatTime(version.saved_at)} · {version.content_hash ?? "无指纹"}</li>)}</ol> : null}</section>
-    <section className={styles.detailSection}><h3>核对与人工纠正</h3><p>{exampleMode ? `示例核对状态：${item.exampleIssue ?? "待核对"}` : "核对状态尚未接入；请核对原始来源后再用于创作。"}</p><div className={styles.correctionGrid}><div className={styles.correctionField}><span>摘要纠正</span><textarea aria-label="摘要纠正" defaultValue={exampleMode ? item.exampleSummary ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订摘要" : "纠正保存接口尚未接入"} /></div><div className={styles.correctionField}><span>参数纠正</span><textarea aria-label="参数纠正" defaultValue={exampleMode ? item.exampleParameters ?? "" : ""} disabled={!exampleMode} placeholder={exampleMode ? "示例：修订参数" : "纠正保存接口尚未接入"} /></div></div><div className={styles.detailActions}><button disabled={!exampleMode} type="button">{exampleMode ? "保存纠正 · 示例" : "保存纠正"}</button><button disabled={!exampleMode} type="button">{exampleMode ? "用于当前任务 · 示例" : "用于当前任务"}</button><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></div>{!exampleMode ? <p className={styles.notWired}>纠正保存与任务引用接口尚未接入，以上操作暂不可用。</p> : null}</section>
+    <section className={styles.detailSection}><h3>参数与出处</h3>{detailError ? <p role="alert">{detailError}</p> : parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : <p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "这个条目没有解析出的结构化参数；没有显式参数格式就不生成参数。"}</p>}<dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{shown.file_reference || "无"}</dd></div><div><dt>{isHistorical ? "该版来源条目" : "内容指纹"}</dt><dd>{isHistorical ? (selectedVersion?.source_item_id ?? "无") : ((detail?.content_hash ?? item.content_hash) ?? "无")}</dd></div><div><dt>原网址</dt><dd>{shownWebUrl ? <a href={shownWebUrl} rel="noreferrer" target="_blank">{shownWebUrl}</a> : "无网页来源"}</dd></div><div><dt>{isHistorical ? "该版抓取时间" : "抓取时间"}</dt><dd>{formatFetchTime(shownFetchedAt)}</dd></div><div><dt>归属</dt><dd>{item.ownership}</dd></div><div><dt>解析状态</dt><dd>{isHistorical
+          // 历史版只按那一版真实解析出的内容说明，不用当前版状态冒充旧版。
+          ? (parameters.length || sections.length ? "该版有结构化出处" : "该版只有整段正文")
+          : parseStatusText(detail?.parse_status ?? item.parse_status)}</dd></div><div><dt>授权范围</dt><dd>{item.authorization}</dd></div><div><dt>版本</dt><dd>{shown.version ?? item.version}</dd></div></dl>{versions.length > 1 ? <ol>{versions.map(version => <li key={version.version}>版本 {version.version} · {formatTime(version.saved_at)} · {version.content_hash ?? "无指纹"}</li>)}</ol> : null}</section>
+    {exampleMode ? <section className={styles.detailSection}><h3>核对与人工纠正 · 示例</h3><p>示例核对状态：{item.exampleIssue ?? "待核对"}</p><div className={styles.correctionGrid}><div className={styles.correctionField}><span>摘要纠正</span><textarea aria-label="摘要纠正" defaultValue={item.exampleSummary ?? ""} placeholder="示例：修订摘要" /></div><div className={styles.correctionField}><span>参数纠正</span><textarea aria-label="参数纠正" defaultValue={item.exampleParameters ?? ""} placeholder="示例：修订参数" /></div></div><div className={styles.detailActions}><button type="button">保存纠正 · 示例</button><button type="button">用于当前任务 · 示例</button></div></section>
+      : <section className={styles.detailSection}><h3>参数冲突核对</h3><p>上方冲突面板按固定版本和页码出处比较参数，可查看原文、裁定与纠正。</p><div className={styles.detailActions}><Link href="/sources">查看信息源 <ArrowRight size={14} /></Link></div><p className={styles.notWired}>知识条目本身的摘要纠正、任务引用和问答尚未接入。</p></section>}
   </div>;
 }
 

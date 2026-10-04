@@ -59,6 +59,10 @@
 .detailActions button:disabled { color: var(--text-2); opacity: .6; cursor: not-allowed; }
 .detailActions a { margin-top: 0; }
 .notWired { margin: 8px 0 0; color: var(--text-2); font-size: 11px; }
+.topicList { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.topicChip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface-2); color: var(--text-1); font-size: 12px; }
+.topicChip button { border: 0; background: none; color: var(--text-2); font: inherit; cursor: pointer; }
+.topicChip button:disabled { cursor: default; opacity: .6; }
 @media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .top { flex-direction: column; } .actions { justify-content: flex-end; } .category { padding: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
