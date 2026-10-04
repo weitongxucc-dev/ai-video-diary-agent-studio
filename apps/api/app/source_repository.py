@@ -178,8 +178,9 @@ class SourceRepository:
             INSERT INTO knowledge_items (
                 id, workspace_id, content_type, title, body, file_reference,
                 authorization, ownership, source_item_id, version, created_at,
-                visibility, content_hash, sections, parameters, fetched_at, source_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                visibility, content_hash, sections, parameters, fetched_at, source_url,
+                owner_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -201,6 +202,8 @@ class SourceRepository:
                 _parameters_json(item.parameters),
                 item.fetched_at.isoformat() if item.fetched_at else None,
                 item.source_url,
+                # 上传者身份随内容落库，读取时据此判断私有内容归属。
+                item.owner_user_id,
             ),
         )
 
@@ -582,6 +585,112 @@ class SourceRepository:
                 ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
 
+    def list_knowledge_items_readable_by(
+        self,
+        workspace_id: str,
+        *,
+        user_id: str | None,
+        local_diagnostic: bool = False,
+    ) -> list[KnowledgeItem]:
+        """按已验证身份列出可读的知识条目。
+
+        ``user_id`` 取自已验证的 AuthPrincipal；``local_diagnostic`` 只在保留的
+        local workspace 受控诊断下为真（见 knowledge_item_readable 的诚实边界）。
+        认证态传不到 user_id 时不会退化成只看共享：那是调用方的错误，应当失败。
+        """
+        self._require_workspace(workspace_id)
+        if user_id is None and not local_diagnostic:
+            raise ValueError("读取知识必须带已验证身份，或显式的本地受控诊断范围")
+        with self._connect() as conn:
+            if local_diagnostic:
+                rows = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
+                    (workspace_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM knowledge_items
+                    WHERE workspace_id = ?
+                      AND (visibility = ? OR (visibility = ? AND owner_user_id = ?))
+                    ORDER BY created_at DESC
+                    """,
+                    (
+                        workspace_id,
+                        CONTENT_VISIBILITY_LEGACY,
+                        CONTENT_VISIBILITY_DEFAULT,
+                        user_id,
+                    ),
+                ).fetchall()
+        return [self._knowledge_item_from_row(row) for row in rows]
+
+    def get_knowledge_item_readable_by(
+        self,
+        workspace_id: str,
+        item_id: str,
+        *,
+        user_id: str | None,
+        local_diagnostic: bool = False,
+    ) -> KnowledgeItem:
+        """按已验证身份读单条知识；读不到时抛 KeyError（对外是 404）。
+
+        属于其他 workspace、或属于本 workspace 但既不共享也不是本人上传的，
+        一律当读不到，不用 403 暴露「存在但你不能看」。
+        """
+        self._require_workspace(workspace_id)
+        if user_id is None and not local_diagnostic:
+            raise ValueError("读取知识必须带已验证身份，或显式的本地受控诊断范围")
+        with self._connect() as conn:
+            if local_diagnostic:
+                row = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND id = ?",
+                    (workspace_id, item_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM knowledge_items
+                    WHERE workspace_id = ? AND id = ?
+                      AND (
+                        visibility = ?
+                        OR (visibility = ? AND owner_user_id IS NOT NULL AND owner_user_id = ?)
+                      )
+                    """,
+                    (
+                        workspace_id,
+                        item_id,
+                        CONTENT_VISIBILITY_LEGACY,
+                        CONTENT_VISIBILITY_DEFAULT,
+                        user_id,
+                    ),
+                ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
+        return self._knowledge_item_from_row(row)
+
+    def set_knowledge_item_owner(
+        self, workspace_id: str, item_id: str, owner_user_id: str | None
+    ) -> str:
+        """记录这条知识的上传者身份；只写空值或本人，不改已有归属。"""
+        self._require_workspace(workspace_id)
+        owner = str(owner_user_id or "").strip() or None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_user_id FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                (item_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(item_id)
+            existing = str(row["owner_user_id"] or "").strip()
+            if existing:
+                # 已经有归属就不覆盖：归属不是可随意改写的字段。
+                return existing
+            conn.execute(
+                "UPDATE knowledge_items SET owner_user_id = ? WHERE id = ? AND workspace_id = ?",
+                (owner, item_id, workspace_id),
+            )
+        return owner or ""
+
     def get_knowledge_item_visibility(self, workspace_id: str, item_id: str) -> str:
         """读单条知识的可见性。
 
@@ -783,6 +892,8 @@ class SourceRepository:
                     -- 只管 fresh 库的 INSERT；升级库的存量行由
                     -- ensure_content_visibility_columns 回填为 shared。
                     visibility TEXT NOT NULL DEFAULT 'private',
+                    -- 上传者身份（已验证的 user_id）；旧行与本地无身份写入留空。
+                    owner_user_id TEXT,
                     FOREIGN KEY(source_item_id) REFERENCES source_items(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
@@ -848,6 +959,12 @@ class SourceRepository:
                 ):
                     if column not in existing:
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            # 本卡（WIL-110）新增上传者身份列：私有内容据此只对上传者可读。
+            knowledge_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(knowledge_items)")
+            }
+            if "owner_user_id" not in knowledge_columns:
+                conn.execute("ALTER TABLE knowledge_items ADD COLUMN owner_user_id TEXT")
             # 本卡（WIL-134）新增网页快照列：抓取时间和当次读到的网址。
             for table in ("source_items", "knowledge_items"):
                 existing = {
@@ -1001,6 +1118,7 @@ class SourceRepository:
             parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
             fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
             source_url=row["source_url"],
+            owner_user_id=str(row["owner_user_id"]) if row["owner_user_id"] else None,
             created_at=_parse_datetime(row["created_at"]),
         )
 
