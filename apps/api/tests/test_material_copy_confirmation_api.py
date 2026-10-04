@@ -10,6 +10,7 @@ import pytest
 
 import app.main as main_module
 from app.material_ingestion import MaterialIngestionService
+from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 
@@ -27,7 +28,10 @@ def intake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_module, "material_ingestion", service)
     monkeypatch.setattr(main_module, "material_execution_mode", "legacy")
     monkeypatch.setattr(main_module, "active_workspace_id", lambda: "one")
-    return TestClient(main_module.app), repo, service, duration
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    _, token = members.whoami(None)
+    return TestClient(main_module.app, headers={"X-Local-Member-Token": token}), repo, service, duration
 
 
 def bind(client: TestClient, repo: ProductionRepository) -> None:
