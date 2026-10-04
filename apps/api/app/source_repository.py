@@ -7,12 +7,19 @@ from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
-from app.sources import KnowledgeItem, SourceConnector, SourceItem, SourceRunEvidence
+from app.sources import (
+    KnowledgeItem,
+    KnowledgeItemVersion,
+    SourceConnector,
+    SourceItem,
+    SourceRunEvidence,
+)
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
     CONTENT_VISIBILITY_LEGACY,
     ensure_content_visibility_columns,
 )
+from app.knowledge_files import KnowledgeParameter, KnowledgeSection
 
 
 class SourceRepository:
@@ -138,49 +145,62 @@ class SourceRepository:
         item: KnowledgeItem,
     ) -> KnowledgeItem:
         self._require_workspace(item.workspace_id)
-        ownership = item.ownership.strip()
-        authorization = item.authorization.strip()
-        version = item.version.strip()
-        if not item.title.strip() or not all((ownership, authorization, version)):
+        self._validate_knowledge_item(item)
+        if item.source_item_id:
+            self.get_source_item(item.workspace_id, item.source_item_id)
+        with self._connect() as conn:
+            self._insert_knowledge_item(conn, item)
+        return self.get_knowledge_item(item.workspace_id, item.id)
+
+    def _validate_knowledge_item(self, item: KnowledgeItem) -> None:
+        if (
+            not item.title.strip()
+            or not all(
+                (item.ownership.strip(), item.authorization.strip(), item.version.strip())
+            )
+        ):
             raise ValueError(
                 "knowledge item requires title, ownership, authorization, and version"
             )
         if not item.body and not item.file_reference:
             raise ValueError("knowledge item requires body or file_reference")
-        if item.source_item_id:
-            self.get_source_item(item.workspace_id, item.source_item_id)
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT workspace_id FROM knowledge_items WHERE id = ?", (item.id,)
-            ).fetchone()
-            if existing is not None:
-                raise ValueError("knowledge item id already exists")
-            conn.execute(
-                """
-                INSERT INTO knowledge_items (
-                    id, workspace_id, content_type, title, body, file_reference,
-                    authorization, ownership, source_item_id, version, created_at,
-                    visibility
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item.id,
-                    item.workspace_id,
-                    item.content_type,
-                    item.title,
-                    item.body,
-                    item.file_reference,
-                    authorization,
-                    ownership,
-                    item.source_item_id,
-                    version,
-                    item.created_at.isoformat(),
-                    # 新建内容默认私有（用户 2026-09-29 拍板），显式写入而不是只靠
-                    # DDL 默认值：升级来的库没有那个 DEFAULT。
-                    CONTENT_VISIBILITY_DEFAULT,
-                ),
-            )
-        return self.get_knowledge_item(item.workspace_id, item.id)
+
+    def _insert_knowledge_item(
+        self, conn: sqlite3.Connection, item: KnowledgeItem
+    ) -> None:
+        existing = conn.execute(
+            "SELECT workspace_id FROM knowledge_items WHERE id = ?", (item.id,)
+        ).fetchone()
+        if existing is not None:
+            raise ValueError("knowledge item id already exists")
+        conn.execute(
+            """
+            INSERT INTO knowledge_items (
+                id, workspace_id, content_type, title, body, file_reference,
+                authorization, ownership, source_item_id, version, created_at,
+                visibility, content_hash, sections, parameters
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.id,
+                item.workspace_id,
+                item.content_type,
+                item.title,
+                item.body,
+                item.file_reference,
+                item.authorization.strip(),
+                item.ownership.strip(),
+                item.source_item_id,
+                item.version.strip(),
+                item.created_at.isoformat(),
+                # 新建内容默认私有（用户 2026-09-29 拍板），显式写入而不是只靠
+                # DDL 默认值：升级来的库没有那个 DEFAULT。
+                CONTENT_VISIBILITY_DEFAULT,
+                item.content_hash,
+                _sections_json(item.sections),
+                _parameters_json(item.parameters),
+            ),
+        )
 
     def save_source_item_to_knowledge(
         self,
@@ -191,9 +211,97 @@ class SourceRepository:
         authorization: str,
         version: str = "1",
     ) -> KnowledgeItem:
+        """保存为知识条目。手动来源保持原有行为，不参与文件版本链。"""
         source = self.get_source_item(workspace_id, source_item_id)
-        return self.create_knowledge_item(
-            KnowledgeItem(
+        if source.content_hash is None:
+            # 未经过文件解析的来源（如手动链接）保持原有行为。
+            return self.create_knowledge_item(
+                KnowledgeItem(
+                    id=f"ki_{uuid4().hex}",
+                    workspace_id=workspace_id,
+                    content_type=source.content_type,
+                    title=source.title,
+                    body=source.body,
+                    file_reference=source.file_reference,
+                    authorization=authorization,
+                    ownership=ownership,
+                    source_item_id=source.id,
+                    version=version,
+                )
+            )
+        return self._save_parsed_source_to_knowledge(
+            workspace_id, source, ownership=ownership, authorization=authorization
+        )
+
+    def _save_parsed_source_to_knowledge(
+        self,
+        workspace_id: str,
+        source: SourceItem,
+        *,
+        ownership: str,
+        authorization: str,
+    ) -> KnowledgeItem:
+        """同内容不新增版本、不回滚旧版；原文件内容更新时保留旧版并追加新版本。
+
+        重复判断按内容指纹，不按随机 source_item_id：同一文件被导入两次、不同
+        文件名下同一内容、以及重新导入某个历史版本的内容，都命中已有指纹。
+        版本链只接文件解析出来的条目，手动保存的资料不并入同一条链。
+        """
+        with self._connect() as conn:
+            same_head = conn.execute(
+                """
+                SELECT * FROM knowledge_items
+                WHERE workspace_id = ? AND content_hash = ?
+                ORDER BY created_at LIMIT 1
+                """,
+                (workspace_id, source.content_hash),
+            ).fetchone()
+            if same_head is not None:
+                return self._knowledge_item_from_row(same_head)
+            # 指纹已存在于历史版本：不新建、不改写旧快照，也不把当前版本回滚到旧内容。
+            stored_version = conn.execute(
+                """
+                SELECT v.knowledge_item_id AS knowledge_item_id, v.version AS version
+                FROM knowledge_item_versions v
+                JOIN knowledge_items k ON k.id = v.knowledge_item_id
+                WHERE v.workspace_id = ? AND v.content_hash = ?
+                  AND k.workspace_id = ? AND k.content_hash <> v.content_hash
+                ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
+                """,
+                (workspace_id, source.content_hash, workspace_id),
+            ).fetchone()
+            if stored_version is not None:
+                head = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                    (stored_version["knowledge_item_id"], workspace_id),
+                ).fetchone()
+                return self._knowledge_item_from_row(head)
+            # 原文件更新沿用同一知识条目：链按文件引用串，不按每次导入的 source_item_id。
+            parent = (
+                conn.execute(
+                    """
+                    SELECT * FROM knowledge_items
+                    WHERE workspace_id = ? AND file_reference = ?
+                      AND content_hash IS NOT NULL
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (workspace_id, source.file_reference),
+                ).fetchone()
+                if source.file_reference
+                else None
+            )
+            if parent is None:
+                parent = conn.execute(
+                    """
+                    SELECT * FROM knowledge_items
+                    WHERE workspace_id = ? AND source_item_id = ?
+                      AND content_hash IS NOT NULL
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (workspace_id, source.id),
+                ).fetchone()
+        if parent is None:
+            item = KnowledgeItem(
                 id=f"ki_{uuid4().hex}",
                 workspace_id=workspace_id,
                 content_type=source.content_type,
@@ -203,8 +311,194 @@ class SourceRepository:
                 authorization=authorization,
                 ownership=ownership,
                 source_item_id=source.id,
-                version=version,
+                version="1",
+                content_hash=source.content_hash,
+                sections=source.sections,
+                parameters=source.parameters,
             )
+            self._validate_knowledge_item(item)
+            # 知识条目头与它的第一版快照在同一事务写入，回查不会看到没有版本的条目。
+            with self._connect() as conn:
+                self._insert_knowledge_item(conn, item)
+                self._insert_knowledge_version(
+                    conn,
+                    workspace_id=workspace_id,
+                    knowledge_item_id=item.id,
+                    version=item.version,
+                    title=item.title,
+                    body=item.body,
+                    file_reference=item.file_reference,
+                    content_hash=item.content_hash,
+                    source_item_id=source.id,
+                    sections=item.sections,
+                    parameters=item.parameters,
+                    saved_at=item.created_at,
+                )
+            return self.get_knowledge_item(workspace_id, item.id)
+        previous = self._knowledge_item_from_row(parent)
+        next_version = str(int(previous.version) + 1)
+        # 新版本沿用已保存的归属和授权；校验与手工保存入口走同一条现有规则。
+        self._validate_knowledge_item(
+            KnowledgeItem(
+                id=previous.id,
+                workspace_id=workspace_id,
+                content_type=source.content_type,
+                title=source.title,
+                body=source.body,
+                file_reference=source.file_reference,
+                authorization=previous.authorization,
+                ownership=previous.ownership,
+                source_item_id=source.id,
+                version=next_version,
+                content_hash=source.content_hash,
+                sections=source.sections,
+                parameters=source.parameters,
+            )
+        )
+        # 当前版本头与新版本快照在同一个事务里写入，回查不会看到半套状态。
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE knowledge_items SET
+                    content_type = ?, title = ?, body = ?, file_reference = ?,
+                    version = ?, content_hash = ?, sections = ?, parameters = ?,
+                    source_item_id = ?
+                WHERE id = ? AND workspace_id = ?
+                """,
+                (
+                    source.content_type,
+                    source.title,
+                    source.body,
+                    source.file_reference,
+                    next_version,
+                    source.content_hash,
+                    _sections_json(source.sections),
+                    _parameters_json(source.parameters),
+                    source.id,
+                    previous.id,
+                    workspace_id,
+                ),
+            )
+            self._insert_knowledge_version(
+                conn,
+                workspace_id=workspace_id,
+                knowledge_item_id=previous.id,
+                version=next_version,
+                title=source.title,
+                body=source.body,
+                file_reference=source.file_reference,
+                content_hash=source.content_hash,
+                source_item_id=source.id,
+                sections=source.sections,
+                parameters=source.parameters,
+                saved_at=_utc_now(),
+            )
+        return self.get_knowledge_item(workspace_id, previous.id)
+
+    def find_version_by_content_hash(
+        self, workspace_id: str, content_hash: str
+    ) -> KnowledgeItemVersion | None:
+        """查出某个内容指纹对应的已保存历史版本（重复结果定位）。"""
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM knowledge_item_versions
+                WHERE workspace_id = ? AND content_hash = ?
+                ORDER BY saved_at DESC LIMIT 1
+                """,
+                (workspace_id, content_hash),
+            ).fetchone()
+        if row is None:
+            return None
+        return KnowledgeItemVersion(
+            knowledge_item_id=row["knowledge_item_id"],
+            version=row["version"],
+            content_hash=row["content_hash"],
+            source_item_id=row["source_item_id"],
+            title=row["title"],
+            body=row["body"],
+            file_reference=row["file_reference"],
+            sections=tuple(
+                KnowledgeSection(**section) for section in json.loads(row["sections"])
+            ),
+            parameters=tuple(
+                KnowledgeParameter(**parameter)
+                for parameter in json.loads(row["parameters"])
+            ),
+            saved_at=_parse_datetime(row["saved_at"]),
+        )
+
+    def list_knowledge_item_versions(
+        self, workspace_id: str, knowledge_item_id: str
+    ) -> list[KnowledgeItemVersion]:
+        self._require_workspace(workspace_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM knowledge_item_versions
+                WHERE workspace_id = ? AND knowledge_item_id = ?
+                ORDER BY CAST(version AS INTEGER), saved_at
+                """,
+                (workspace_id, knowledge_item_id),
+            ).fetchall()
+        return [
+            KnowledgeItemVersion(
+                knowledge_item_id=row["knowledge_item_id"],
+                version=row["version"],
+                content_hash=row["content_hash"],
+                source_item_id=row["source_item_id"],
+                title=row["title"],
+                body=row["body"],
+                file_reference=row["file_reference"],
+                sections=tuple(
+                    KnowledgeSection(**section) for section in json.loads(row["sections"])
+                ),
+                parameters=tuple(
+                    KnowledgeParameter(**parameter)
+                    for parameter in json.loads(row["parameters"])
+                ),
+                saved_at=_parse_datetime(row["saved_at"]),
+            )
+            for row in rows
+        ]
+
+    def _insert_knowledge_version(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        knowledge_item_id: str,
+        version: str,
+        title: str,
+        body: str | None,
+        file_reference: str | None,
+        content_hash: str | None,
+        source_item_id: str | None,
+        sections: tuple[KnowledgeSection, ...],
+        parameters: tuple[KnowledgeParameter, ...],
+        saved_at: datetime,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO knowledge_item_versions (
+                knowledge_item_id, workspace_id, version, content_hash, title,
+                body, file_reference, source_item_id, sections, parameters, saved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                knowledge_item_id,
+                workspace_id,
+                version,
+                content_hash,
+                title,
+                body,
+                file_reference,
+                source_item_id,
+                _sections_json(sections),
+                _parameters_json(parameters),
+                saved_at.isoformat(),
+            ),
         )
 
     def get_knowledge_item(self, workspace_id: str, item_id: str) -> KnowledgeItem:
@@ -457,6 +751,23 @@ class SourceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
                     ON knowledge_items(workspace_id, created_at);
+                CREATE TABLE IF NOT EXISTS knowledge_item_versions (
+                    knowledge_item_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    content_hash TEXT,
+                    title TEXT NOT NULL,
+                    body TEXT,
+                    file_reference TEXT,
+                    source_item_id TEXT,
+                    sections TEXT NOT NULL DEFAULT '[]',
+                    parameters TEXT NOT NULL DEFAULT '[]',
+                    saved_at TEXT NOT NULL,
+                    PRIMARY KEY (knowledge_item_id, version),
+                    FOREIGN KEY(knowledge_item_id) REFERENCES knowledge_items(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_workspace
+                    ON knowledge_item_versions(workspace_id, saved_at DESC);
                 CREATE TABLE IF NOT EXISTS source_runs (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -487,6 +798,18 @@ class SourceRepository:
             # 补齐内容可见性列（knowledge_items 属于本段；另两张表由
             # ProductionRepository 打开时补，本段不写 production.py）。
             ensure_content_visibility_columns(conn)
+            # 本卡（WIL-103）新增列；升级库在缺列时补齐，fresh 库由上面 DDL 直接建。
+            for table in ("source_items", "knowledge_items"):
+                existing = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                for column, ddl in (
+                    ("content_hash", "TEXT"),
+                    ("sections", "TEXT NOT NULL DEFAULT '[]'"),
+                    ("parameters", "TEXT NOT NULL DEFAULT '[]'"),
+                ):
+                    if column not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(
@@ -533,8 +856,9 @@ class SourceRepository:
                 INSERT INTO source_items (
                     id, workspace_id, connector_id, source_label, source_url, content_type,
                     author, published_at, body, subtitles, media_references,
-                    license, title, file_reference, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    license, title, file_reference, created_at, content_hash,
+                    sections, parameters
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_label = excluded.source_label,
                     source_url = excluded.source_url,
@@ -546,7 +870,10 @@ class SourceRepository:
                     media_references = excluded.media_references,
                     license = excluded.license,
                     title = excluded.title,
-                    file_reference = excluded.file_reference
+                    file_reference = excluded.file_reference,
+                    content_hash = excluded.content_hash,
+                    sections = excluded.sections,
+                    parameters = excluded.parameters
                 WHERE source_items.workspace_id = excluded.workspace_id
                 """,
                 (
@@ -565,6 +892,9 @@ class SourceRepository:
                     item.title,
                     item.file_reference,
                     item.created_at.isoformat(),
+                    item.content_hash,
+                    _sections_json(item.sections),
+                    _parameters_json(item.parameters),
                 ),
             )
 
@@ -593,6 +923,9 @@ class SourceRepository:
             body=row["body"], subtitles=row["subtitles"],
             media_references=tuple(json.loads(row["media_references"])),
             license=row["license"], title=row["title"], file_reference=row["file_reference"],
+            content_hash=row["content_hash"],
+            sections=tuple(KnowledgeSection(**section) for section in json.loads(row["sections"])),
+            parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
             created_at=_parse_datetime(row["created_at"]),
         )
 
@@ -602,6 +935,9 @@ class SourceRepository:
             title=row["title"], body=row["body"], file_reference=row["file_reference"],
             authorization=row["authorization"], ownership=row["ownership"],
             source_item_id=row["source_item_id"], version=row["version"],
+            content_hash=row["content_hash"],
+            sections=tuple(KnowledgeSection(**section) for section in json.loads(row["sections"])),
+            parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
             created_at=_parse_datetime(row["created_at"]),
         )
 
@@ -641,6 +977,31 @@ class SourceRepository:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _sections_json(sections: Sequence[KnowledgeSection]) -> str:
+    return json.dumps(
+        [
+            {"locator": section.locator, "title": section.title, "text": section.text}
+            for section in sections
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _parameters_json(parameters: Sequence[KnowledgeParameter]) -> str:
+    return json.dumps(
+        [
+            {
+                "key": parameter.key,
+                "value": parameter.value,
+                "unit": parameter.unit,
+                "locator": parameter.locator,
+            }
+            for parameter in parameters
+        ],
+        ensure_ascii=False,
+    )
 
 
 def _parse_datetime(value: str) -> datetime:

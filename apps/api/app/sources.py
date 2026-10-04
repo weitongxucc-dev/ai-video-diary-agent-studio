@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.knowledge_files import KnowledgeParameter, KnowledgeSection
+
 if TYPE_CHECKING:
     from app.source_repository import SourceRepository
 
@@ -43,7 +45,24 @@ class SourceItem:
     license: str
     title: str
     file_reference: str | None = None
+    content_hash: str | None = None
+    sections: tuple[KnowledgeSection, ...] = ()
+    parameters: tuple[KnowledgeParameter, ...] = ()
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class KnowledgeItemVersion:
+    knowledge_item_id: str
+    version: str
+    content_hash: str | None
+    title: str
+    body: str | None
+    file_reference: str | None
+    source_item_id: str | None
+    sections: tuple[KnowledgeSection, ...]
+    parameters: tuple[KnowledgeParameter, ...]
+    saved_at: datetime
 
 
 @dataclass(frozen=True)
@@ -58,6 +77,9 @@ class KnowledgeItem:
     ownership: str
     source_item_id: str | None
     version: str
+    content_hash: str | None = None
+    sections: tuple[KnowledgeSection, ...] = ()
+    parameters: tuple[KnowledgeParameter, ...] = ()
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

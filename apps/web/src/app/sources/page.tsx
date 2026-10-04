@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import {
   createManualSourceItem,
   createSourceConnector,
+  importKnowledgeFile,
   listSourceConnectors,
   listSourceItems,
   saveSourceItemToKnowledge,
@@ -120,6 +121,32 @@ export default function SourcesPage() {
     finally { setBusy(null); }
   }
 
+  async function importFile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const input = formElement.elements.namedItem("file") as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) { setError("请先选择一个 Markdown、文本或 PDF 文件。"); return; }
+    setBusy("import-file"); setError(null); setNotice(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buffer);
+      const chunk = 0x8000;
+      for (let index = 0; index < bytes.length; index += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+      }
+      const item = await importKnowledgeFile({ filename: file.name, content_base64: btoa(binary) });
+      setItems((current) => [item, ...current]);
+      // 列表按当前平台筛选，导入后要落在文件所属的来源上。
+      setSelectedConnectorId(item.connector_id);
+      setSelectedItemId(item.id);
+      setNotice(`已解析《${item.title}》：全文 ${(item.body ?? "").length} 字，出处 ${item.sections.length} 处，参数 ${item.parameters.length} 项。确认授权后保存到知识库。`);
+      formElement.reset();
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setBusy(null); }
+  }
+
   async function sync(connector: SourceConnector) {
     setBusy(`sync-${connector.id}`); setError(null); setNotice(null);
     try {
@@ -154,7 +181,8 @@ export default function SourcesPage() {
           <section className="source-panel"><header><h2>已配置信息源</h2><small>{connectors.length} 个</small></header>{loading ? <p className="source-panel__state"><LoaderCircle className="is-spinning" size={16} />正在读取本地服务…</p> : connectors.length ? <div className="source-connector-list">{connectors.map((connector) => { const state = connectorState(connector); const run = lastRuns[connector.id]; return <article className={`source-connector${selectedConnectorId === connector.id ? " is-selected" : ""}`} key={connector.id}><button onClick={() => { setSelectedConnectorId(connector.id); setSelectedItemId(null); }} type="button"><span className={`source-state-dot status-${state.tone}`} /><div><strong>{platformLabel(connector.platform)}</strong><p>{connector.account_or_rule === "user-provided content" ? "由你手工添加的内容" : connector.account_or_rule}</p><small>{state.label} · 最近运行 {run ? formatTime(run.finished_at) : connector.latest_run_id ? "有记录" : "暂无记录"}</small></div></button><button aria-label={`同步 ${platformLabel(connector.platform)}`} className="source-sync-button" disabled={busy === `sync-${connector.id}`} onClick={() => void sync(connector)} type="button"><RefreshCw className={busy === `sync-${connector.id}` ? "is-spinning" : ""} size={14} />同步</button></article>; })}</div> : <Empty icon={<Link2 size={20} />} title="还没有信息源" text="选择平台并填写可访问的地址或规则。" />}</section>
           <section className="source-panel source-panel--form"><header><h2>添加信息源</h2></header><form onSubmit={addConnector}><label><span>平台</span><select defaultValue="external_urls" name="platform">{platforms.map((platform) => <option key={platform.key} value={platform.key}>{platform.label}{platform.available ? "" : "（尚未支持）"}</option>)}</select></label><label><span>地址或规则</span><input name="account_or_rule" placeholder="粘贴网页地址" required /></label><label><span>同步频率</span><select defaultValue="每天" name="frequency"><option>每天</option><option>每周</option><option>手动</option></select></label><button disabled={busy === "create-connector"} type="submit"><Plus size={15} />保存信息源</button></form></section>
         </div>
-        <section className="source-manual-entry"><header><div><h2>手工添加内容</h2><p>文件上传尚未接入；可以登记文字、链接、视频或本机文件引用。</p></div><span><Upload size={15} />上传待接入</span></header><form onSubmit={addManualItem}><label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label><label><span>类型</span><select defaultValue="text" name="content_type"><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件</option></select></label><label><span>链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label><label><span>文件引用（可选）</span><input name="file_reference" placeholder="例如：本机导入目录中的文件路径" /></label><label className="source-manual-entry__body"><span>正文或说明（可选）</span><textarea name="body" placeholder="粘贴文字，或说明视频、文件的内容与出处。" rows={3} /></label><label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label><button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button></form></section>
+        <section className="source-manual-entry"><header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF；扫描件会明确报错，不做 OCR 或猜参数。</p></div><span><Upload size={15} />解析全文、出处与参数</span></header><form onSubmit={importFile}><label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf" name="file" required type="file" /></label><button disabled={busy === "import-file"} type="submit"><Upload size={15} />解析并导入</button></form></section>
+        <section className="source-manual-entry"><header><div><h2>手工添加内容</h2><p>也可以直接登记文字、链接、视频或本机文件引用。</p></div><span><FileText size={15} />手工登记</span></header><form onSubmit={addManualItem}><label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label><label><span>类型</span><select defaultValue="text" name="content_type"><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件</option></select></label><label><span>链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label><label><span>文件引用（可选）</span><input name="file_reference" placeholder="例如：本机导入目录中的文件路径" /></label><label className="source-manual-entry__body"><span>正文或说明（可选）</span><textarea name="body" placeholder="粘贴文字，或说明视频、文件的内容与出处。" rows={3} /></label><label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label><button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button></form></section>
         <section className="source-items"><header><h2>{selectedConnector ? `${platformLabel(selectedConnector.platform)}最近获取` : "最近获取"}</h2><small>{items.length} 条</small></header>{loading ? null : items.length ? <div className="source-item-list">{items.map((item) => <button data-open-details className={`source-item${selectedItemId === item.id ? " is-selected" : ""}`} key={item.id} onClick={() => setSelectedItemId(item.id)} type="button"><span className="source-item__type">{{text:"文字",video:"视频",file:"文件",link:"链接"}[item.content_type] ?? "内容"}</span><div><strong>{item.title}</strong><p>{item.body || item.subtitles || item.source_url || item.file_reference || "没有可预览的正文。"}</p><small>{sourceLabel(item.source_label)} · {formatTime(item.created_at)} · {item.license}</small></div><Save size={15} /></button>)}</div> : <Empty icon={<FileText size={20} />} title="还没有信息条目" text="同步已配置的信息源，或手工添加已有内容。" />}</section>
       </div>
     </AppShell>

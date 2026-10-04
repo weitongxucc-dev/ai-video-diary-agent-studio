@@ -45,7 +45,23 @@ export type SourceItem = {
   license: string;
   title: string;
   file_reference: string | null;
+  content_hash: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
   created_at: string;
+};
+
+export type KnowledgeSection = {
+  locator: string;
+  title: string;
+  text: string;
+};
+
+export type KnowledgeParameter = {
+  key: string;
+  value: string;
+  unit: string | null;
+  locator: string;
 };
 
 export type KnowledgeItem = {
@@ -59,8 +75,26 @@ export type KnowledgeItem = {
   ownership: string;
   source_item_id: string | null;
   version: string;
+  content_hash: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
   created_at: string;
+  duplicate_of_version?: string | null;
 };
+
+export type KnowledgeItemVersion = {
+  version: string;
+  content_hash: string | null;
+  source_item_id: string | null;
+  title: string;
+  body: string | null;
+  file_reference: string | null;
+  sections: KnowledgeSection[];
+  parameters: KnowledgeParameter[];
+  saved_at: string;
+};
+
+export type KnowledgeItemDetail = KnowledgeItem & { versions: KnowledgeItemVersion[] };
 
 export type SourceApiErrorDetails = {
   code?: string;
@@ -170,6 +204,16 @@ export function saveSourceItemToKnowledge(id: string, input: SaveToKnowledge) {
 
 export function listKnowledgeItems() {
   return request<{ items: KnowledgeItem[]; total_count: number }>("/api/knowledge-items");
+}
+
+export function getKnowledgeItem(id: string) {
+  return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}`);
+}
+
+export type KnowledgeFileImport = { filename: string; content_base64: string };
+
+export function importKnowledgeFile(input: KnowledgeFileImport) {
+  return request<SourceItem>("/api/source-items/file", { method: "POST", body: JSON.stringify(input) });
 }
 
 export function sourceErrorMessage(error: unknown): string {

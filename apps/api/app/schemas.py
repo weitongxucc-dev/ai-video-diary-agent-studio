@@ -1998,6 +1998,19 @@ class SourceConnectorsResponse(BaseModel):
     total_count: int
 
 
+class KnowledgeSectionResponse(BaseModel):
+    locator: str
+    title: str
+    text: str
+
+
+class KnowledgeParameterResponse(BaseModel):
+    key: str
+    value: str
+    unit: str | None = None
+    locator: str
+
+
 class SourceItemDetailResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2013,6 +2026,9 @@ class SourceItemDetailResponse(BaseModel):
     license: str
     title: str
     file_reference: str | None
+    content_hash: str | None = None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -2044,6 +2060,13 @@ class SaveSourceItemToKnowledgeRequest(BaseModel):
     version: str = Field(default="1", min_length=1, max_length=100)
 
 
+class KnowledgeFileImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=400)
+    content_base64: str = Field(min_length=1, max_length=40_000_000)
+
+
 class KnowledgeItemResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2055,7 +2078,28 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    content_hash: str | None = None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
     created_at: datetime
+    # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
+    duplicate_of_version: str | None = None
+
+
+class KnowledgeItemVersionResponse(BaseModel):
+    version: str
+    content_hash: str | None = None
+    source_item_id: str | None = None
+    title: str
+    body: str | None
+    file_reference: str | None
+    sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
+    parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    saved_at: datetime
+
+
+class KnowledgeItemDetailResponse(KnowledgeItemResponse):
+    versions: list[KnowledgeItemVersionResponse] = Field(default_factory=list)
 
 
 class KnowledgeItemsResponse(BaseModel):
