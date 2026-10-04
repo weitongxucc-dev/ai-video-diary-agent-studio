@@ -4220,10 +4220,13 @@ def workspace_assistant_plan_turn(
 ) -> WorkspaceAssistantPlanTurnResponse:
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
+    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
     try:
         reply, preview = run_plan_turn(
             workspace_settings_for_turn,
             workspace_id=workspace_id,
+            local_member_token=_local_member_token(request) or None,
+            caller_user_id=caller_user_id if not local_diagnostic else None,
             conversation_id=str(payload.conversation_id),
             message=payload.message.strip(),
             authorization=request.headers.get("authorization"),
@@ -5101,6 +5104,10 @@ def creation_task_assistant_turn(
 ) -> CreationTaskAssistantTurnResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
+    # 先按可信身份确认这条任务读得到，再让助手碰它：读不到的任务不应被助手读到。
+    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="creation task not found")
     trusted_stage, trusted_refs = _assistant_turn_scope(workspace_id, task, payload)
     message = payload.message.strip()
     if _assistant_text_without_credentials(message, workspace_id) != message:
@@ -5115,6 +5122,8 @@ def creation_task_assistant_turn(
         reply, preview = run_task_turn(
             _workspace_settings_for(workspace_id),
             workspace_id=workspace_id,
+            local_member_token=_local_member_token(request) or None,
+            caller_user_id=caller_user_id if not local_diagnostic else None,
             task_id=task_id,
             message=message,
             stage=trusted_stage,
@@ -6312,6 +6321,8 @@ def _creation_task_montage_candidates(
     clip: MontageClip,
     *,
     automation_only: bool = False,
+    viewer_user_id: str | None = None,
+    local_diagnostic: bool = False,
 ) -> list[MontageClipCandidateResponse]:
     # `automation_only` marks the callers where the machine, not the user, picks
     # the winner from this list. Only those hide material the user marked
@@ -6320,7 +6331,9 @@ def _creation_task_montage_candidates(
     cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
-    for asset in production_repo.list_assets(workspace_id):
+    for asset in production_repo.list_assets(
+        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
+    ):
         if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         if automation_only and not material_allows_automation(asset):
@@ -6386,7 +6399,11 @@ def get_creation_task_montage_clip_candidates(
         clip = next(item for item in plan.clips if item.id == clip_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    return _creation_task_montage_candidates(workspace_id, plan, clip)
+    return _creation_task_montage_candidates(
+        workspace_id, plan, clip,
+        viewer_user_id=_content_reader(request, workspace_id)[0],
+        local_diagnostic=_content_reader(request, workspace_id)[1],
+    )
 
 
 def _edit_preview_response(
@@ -8119,7 +8136,11 @@ def preview_creation_task_edit(
     invalidated_refs = _logical_montage_output_refs(plan)
     candidates = [
         candidate
-        for candidate in _creation_task_montage_candidates(workspace_id, plan, clip, automation_only=True)
+        for candidate in _creation_task_montage_candidates(
+            workspace_id, plan, clip, automation_only=True,
+            viewer_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
+        )
         if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id)
     ]
     material_constraint = _edit_material_constraint(command)
@@ -12083,7 +12104,11 @@ def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -
     repository = production_repo
     service = _material_ingestion_for(repository)
     try:
-        repository.bind_material_ingestion(workspace_id, expected_directory=payload.expected_directory)
+        repository.bind_material_ingestion(
+            workspace_id,
+            expected_directory=payload.expected_directory,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     service.wake()
@@ -12127,7 +12152,9 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     )
 
 
-def _media_link_service(workspace_id: str) -> MediaLinkImportService:
+def _media_link_service(
+    workspace_id: str, verified_owner_user_id: str | None = None
+) -> MediaLinkImportService:
     """Build the direct-link importer on top of the existing intake binding."""
     repository = production_repo
     try:
@@ -12140,7 +12167,7 @@ def _media_link_service(workspace_id: str) -> MediaLinkImportService:
             follow_redirects=False, timeout=60.0, trust_env=False
         ),
         intake_root=intake_root,
-        provenance=MaterialLinkProvenanceSink(repository, workspace_id),
+        provenance=MaterialLinkProvenanceSink(repository, workspace_id, verified_owner_user_id),
         max_bytes=DEFAULT_MAX_BYTES,
     )
 
@@ -12188,7 +12215,8 @@ def import_production_material_link(
     payload: MediaLinkImportRequest,
 ) -> MediaLinkImportResponse:
     workspace_id = current_workspace_id(request)
-    service = _media_link_service(workspace_id)
+    # 导入的素材归属这次请求的可信身份，不采信任何自填值。
+    service = _media_link_service(workspace_id, _content_reader(request, workspace_id)[0])
     try:
         result = service.import_link(payload.url)
         asset = production_repo.get_asset(workspace_id, result.asset_id)
@@ -12870,7 +12898,10 @@ def list_production_montage_clip_candidates(
     cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
-    for asset in production_repo.list_assets(workspace_id):
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    for asset in production_repo.list_assets(
+        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
+    ):
         if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
         for segment in asset.segments:

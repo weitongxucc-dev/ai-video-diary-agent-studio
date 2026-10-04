@@ -1769,6 +1769,13 @@ class ProductionRepository:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN ctime_ns INTEGER NOT NULL DEFAULT 0")
             if "inode" not in ingestion_columns:
                 conn.execute("ALTER TABLE material_ingestion_files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0")
+            # 目录绑定记录这次绑定的可信身份：新入库素材的上传者用它。
+            binding_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(material_ingestion_binding)")
+            }
+            if "intake_owner_user_id" not in binding_columns:
+                conn.execute("ALTER TABLE material_ingestion_binding ADD COLUMN intake_owner_user_id TEXT")
             # 内容可见性列：与知识资料共用同一个 PRAGMA 守卫 ensure，新增行由仓储层
             # 显式写入，新建默认 private，存量行回填 shared 不改原语义。
             ensure_content_visibility_columns(conn)
@@ -2824,7 +2831,13 @@ class ProductionRepository:
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
 
-    def bind_material_ingestion(self, workspace_id: str, *, expected_directory: str) -> None:
+    def bind_material_ingestion(
+        self,
+        workspace_id: str,
+        *,
+        expected_directory: str,
+        verified_owner_user_id: str | None = None,
+    ) -> None:
         """Bind the configured inbox to one authenticated workspace, never to the current login."""
         if not workspace_id.strip():
             raise ValueError("必须先选择已验证的工作区")
@@ -2841,13 +2854,29 @@ class ProductionRepository:
             expected_path = str(Path(expected_directory).expanduser().resolve())
             if expected_path != root_path:
                 raise ValueError("素材目录配置已变化，请刷新后重新确认")
-            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
+            row = conn.execute(
+                "SELECT workspace_id, library_path, intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
+            ).fetchone()
             if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
                 raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
+            # 已绑定同一目录时保留当时绑定者的身份，不因再次确认而改写归属。
+            previous_owner = row["intake_owner_user_id"] if row is not None else None
+            intake_owner = str(previous_owner or verified_owner_user_id or "").strip() or None
             conn.execute(
-                "INSERT OR REPLACE INTO material_ingestion_binding (id, workspace_id, library_path) VALUES (1, ?, ?)",
-                (workspace_id, root_path),
+                "INSERT OR REPLACE INTO material_ingestion_binding "
+                "(id, workspace_id, library_path, intake_owner_user_id) VALUES (1, ?, ?, ?)",
+                (workspace_id, root_path, intake_owner),
             )
+
+    def get_material_ingestion_owner(self) -> str | None:
+        """目录绑定者的可信身份：新入库素材的上传者。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
+            ).fetchone()
+        if row is None or "intake_owner_user_id" not in row.keys():
+            return None
+        return str(row["intake_owner_user_id"] or "").strip() or None
 
     def get_material_ingestion_binding(self) -> tuple[str, str] | None:
         with self._connect() as conn:
@@ -8850,6 +8879,7 @@ class ProductionRepository:
         *,
         media_type: MaterialMediaType | None = None,
         source_url: str = "",
+        owner_user_id: str | None = None,
     ) -> MaterialAsset:
         resolved = path.resolve()
         try:
@@ -8876,6 +8906,9 @@ class ProductionRepository:
             existing = MaterialAsset(
                 id=f"asset_{digest}",
                 workspace_id=workspace_id,
+                owner_user_id=(
+                    str(owner_user_id or "").strip() or self.get_material_ingestion_owner()
+                ) or None,
                 file_name=resolved.name,
                 path=str(resolved),
                 size_bytes=stat.st_size,
@@ -9006,6 +9039,7 @@ class ProductionRepository:
         *,
         media_type: MaterialMediaType,
         source_url: str,
+        verified_owner_user_id: str | None = None,
     ) -> MaterialAsset:
         """Register one fully downloaded direct link as a workspace material asset.
 
@@ -9041,7 +9075,8 @@ class ProductionRepository:
             self._repoint_asset(recorded)
             return self._apply_media_analysis_status(recorded)
         asset = self._upsert_discovered_asset(
-            workspace_id, resolved, media_type=media_type, source_url=source_url
+            workspace_id, resolved, media_type=media_type, source_url=source_url,
+            owner_user_id=verified_owner_user_id,
         )
         return self._apply_media_analysis_status(asset)
 
@@ -9967,9 +10002,15 @@ class MaterialLinkProvenanceSink:
     parallel store is introduced.
     """
 
-    def __init__(self, repository: ProductionRepository, workspace_id: str) -> None:
+    def __init__(
+        self,
+        repository: ProductionRepository,
+        workspace_id: str,
+        verified_owner_user_id: str | None = None,
+    ) -> None:
         self._repository = repository
         self._workspace_id = workspace_id
+        self._owner_user_id = verified_owner_user_id
 
     def existing_link_import(self, url: str):
         asset = self._repository.existing_link_material(self._workspace_id, url)
@@ -9990,6 +10031,7 @@ class MaterialLinkProvenanceSink:
             Path(record.file_path),
             media_type=record.media_type,
             source_url=record.url,
+            verified_owner_user_id=self._owner_user_id,
         )
         return asset.id
 
