@@ -611,15 +611,11 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
     (
         14,
-        """
-        ALTER TABLE material_ingestion_files ADD COLUMN confirmed_revision TEXT;
-        ALTER TABLE material_ingestion_files ADD COLUMN confirmation_source TEXT;
-        ALTER TABLE material_ingestion_files ADD COLUMN copy_confirmed_at TEXT;
-        """,
+        "",
     ),
 )
 
-# 版本 14 标记「内容可见性」的地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
+# 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
 # 与 version 13 同一原因：这三张表都在迁移链之外创建（knowledge_items 由
 # SourceRepository._init_database，creation_plans / video_templates 由
 # ProductionRepository._init_database），迁移链本身也会被独立应用到裸库
@@ -746,3 +742,14 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
         except sqlite3.Error:
             conn.rollback()
             raise
+    # Intake is created by ProductionRepository, outside this migration chain.
+    # A standalone database may record version 14 before that table exists.
+    # Ensure the columns on each repository open, including that later creation.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='material_ingestion_files'"
+    ).fetchone() is not None:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(material_ingestion_files)")}
+        with conn:
+            for name in ("confirmed_revision", "confirmation_source", "copy_confirmed_at"):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE material_ingestion_files ADD COLUMN {name} TEXT")

@@ -324,6 +324,24 @@ def test_migration_13_applies_twice_without_error(tmp_path):
     # by ProductionRepository._init_database's PRAGMA-guarded ensures instead.
 
 
+def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
+    database_path = tmp_path / "intake-later.sqlite3"
+    _chain_base_database(database_path)
+    with sqlite3.connect(database_path) as conn:
+        apply_production_migrations(conn)
+        conn.execute("CREATE TABLE material_ingestion_files (file_path TEXT PRIMARY KEY, state TEXT)")
+        conn.execute("INSERT INTO material_ingestion_files VALUES ('old.mp4', 'ready')")
+        conn.commit()
+        apply_production_migrations(conn)
+        apply_production_migrations(conn)
+        assert conn.execute(
+            "SELECT file_path, state, confirmed_revision, confirmation_source, copy_confirmed_at FROM material_ingestion_files"
+        ).fetchone() == ("old.mp4", "ready", None, None, None)
+    with sqlite3.connect(database_path) as conn:
+        apply_production_migrations(conn)
+        assert len(conn.execute("PRAGMA table_info(material_ingestion_files)").fetchall()) == 5
+
+
 def test_visibility_columns_are_provisioned_not_migrated(tmp_path, monkeypatch):
     # The content visibility columns come from ProductionRepository._init_database's
     # PRAGMA-guarded ensures, not from static migration SQL — SQLite has no

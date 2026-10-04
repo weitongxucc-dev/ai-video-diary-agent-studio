@@ -176,6 +176,12 @@ def test_materials_expose_workspace_reference_without_absolute_submission(previe
     video = repository.video_library_path / "approved" / "demo.mp4"
     video.parent.mkdir(exist_ok=True)
     video.write_bytes(b"media")
+    repository.bind_material_ingestion("workspace-a", expected_directory=str(repository.video_library_path))
+    repository.confirm_material_copy_complete(
+        "workspace-a", relative_path="approved/demo.mp4",
+        expected_revision=repository.material_copy_revision(video.stat()),
+        confirmation_source="manual",
+    )
     repository.scan_library("workspace-a")
 
     response = client.get("/api/production/materials")
