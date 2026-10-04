@@ -11,7 +11,7 @@ import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
@@ -95,6 +95,7 @@ from app.edit_plan import (
     safe_processed_video_path,
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
+from app.job_progress import summarize_job_progress
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
@@ -218,6 +219,8 @@ from app.workspace_settings import (
 )
 from app.source_repository import SourceRepository
 from app.schemas import (
+    JobProgressResponse,
+    TaskJobProgressResponse,
     ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
     ScriptLibrarySourceResponse, ScriptLibraryReuseRequest, ScriptLibraryReuseResponse,
     AuthorizationResponse,
@@ -289,6 +292,8 @@ from app.schemas import (
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
+    MaterialCopyCompleteRequest,
+    MaterialCopyCompleteResponse,
     MaterialUsageRecordsResponse,
     MediaLinkCheckRequest,
     MediaLinkCheckResponse,
@@ -353,6 +358,8 @@ from app.schemas import (
     KnowledgeFileImportRequest,
     KnowledgeItemDetailResponse,
     KnowledgeItemVersionResponse,
+    ContentVisibilityRequest,
+    KnowledgeItemVisibilityRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceRunEvidencesResponse,
@@ -387,6 +394,7 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -1095,6 +1103,27 @@ def _video_template_or_404(workspace_id: str, template_id: str, version: int) ->
         return production_repo.get_video_template(workspace_id, template_id, version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="当前工作区找不到这个模板版本。") from exc
+
+
+@app.put("/api/video-templates/{template_id}/visibility")
+def set_video_template_visibility_route(
+    template_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> dict[str, object]:
+    """显式共享或收回一个用户模板；返回同一列的回读值。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    try:
+        template = production_repo.set_video_template_visibility(
+            current_workspace_id(request), template_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="video template not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"item": asdict(template)}
 
 
 @app.get("/api/video-templates")
@@ -2801,6 +2830,8 @@ def _creation_plan_response(
         {
             "id": plan.id,
             "workspace_id": plan.workspace_id,
+            # 回读列上的当前可见范围：写进去的和读出来的必须是同一个值。
+            "visibility": plan.visibility,
             "status": plan.status,
             "creation_task": task.__dict__,
             "created_at": plan.created_at,
@@ -2960,7 +2991,11 @@ def _creation_task_topic_inputs(
             "version_or_identity": item.version,
             "title": item.title,
             "authorization_or_license": item.authorization,
-            "source_url": None,
+            # 真实回查证据：网页快照才带原网址和抓取时间；文件与手填条目为空。
+            # 不编造链接，也不拿当前版冒充引用当时那一版。
+            "source_url": _safe_topic_source_url(item.source_url),
+            "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
+            "content_hash": item.content_hash,
         }
     for reference in plan.source_references:
         try:
@@ -4222,6 +4257,33 @@ def confirm_creation_plan(
     return _creation_plan_response(saved_plan, saved_task)
 
 
+@app.put(
+    "/api/creation-plans/{plan_id}/visibility",
+    response_model=CreationPlanResponse,
+)
+def set_creation_plan_visibility_route(
+    plan_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> CreationPlanResponse:
+    """显式共享或收回一个创作方案；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.set_creation_plan_visibility(workspace_id, plan_id, payload.visibility)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation plan not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan = production_repo.get_creation_plan(workspace_id, plan_id)
+    if plan.creation_task_id is None:
+        raise HTTPException(status_code=404, detail="creation plan not found")
+    task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
+    return _creation_plan_response(plan, task)
+
+
 @app.get(
     "/api/creation-plans/{plan_id}",
     response_model=CreationPlanResponse,
@@ -4245,6 +4307,34 @@ def _script_library_task_access(request: Request, workspace_id: str, task_id: st
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
+
+
+def _attach_cited_version_facts(
+    state: ScriptLibrarySourceResponse,
+    source_repository: SourceRepository,
+    workspace_id: str,
+    item_id: str,
+    version: str,
+) -> None:
+    """回填引用绑定那一版的真实快照事实，供前端回查当时内容。
+
+    只读版本快照里已经存下的来源链接、抓取时刻和指纹；引用本身只记到条目与
+    版本，没有段落定位，所以 `locator` 留空，不拿第一段冒充引用定位。
+    """
+    try:
+        versions = source_repository.list_knowledge_item_versions(workspace_id, item_id)
+    except KeyError:
+        return
+    snapshot = next(
+        (value for value in versions if value.version == version),
+        None,
+    )
+    if snapshot is None:
+        return
+    state.cited_version = snapshot.version
+    state.cited_source_url = snapshot.source_url
+    state.cited_fetched_at = snapshot.fetched_at
+    state.cited_content_hash = snapshot.content_hash
 
 
 def _script_library_sources(
@@ -4281,6 +4371,7 @@ def _script_library_sources(
                         state.title = item.title
                         state.version_or_identity = item.version
                         resolved_knowledge.append(original)
+                    _attach_cited_version_facts(state, source_repository, workspace_id, item_id, version)
         elif ref.startswith("source:"):
             item_id = ref.removeprefix("source:")
             try:
@@ -4685,6 +4776,32 @@ def confirm_creation_task_topic(
             retryable=False,
         ) from exc
     return _creation_task_topic_response(workspace_id, task)
+
+
+@app.put(
+    "/api/creation-tasks/{task_id}/visibility",
+    response_model=CreationTaskWorkspaceResponse,
+)
+def set_creation_task_visibility_route(
+    task_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> CreationTaskWorkspaceResponse:
+    """显式共享或收回一条创作任务；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.set_creation_task_visibility(workspace_id, task_id, payload.visibility)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _creation_task_workspace_response(
+        workspace_id,
+        _creation_task_or_404(workspace_id, task_id),
+    )
 
 
 @app.get(
@@ -11832,7 +11949,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
     else:
         state = str(directory["status"])
         message, repair = {
-            "ready": (("素材目录可访问；文件稳定后会进入分析。" if bound else
+            "ready": (("素材目录可访问；确认复制完成后才接收并分析。" if bound else
                        "素材目录可访问，等待关联到当前工作区。"), None),
             "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
             "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
@@ -11850,6 +11967,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
         scan_interval_seconds=60,
         file_counts=(repository.material_ingestion_state_counts(workspace_id) if bound else
                      {"observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0}),
+        pending_files=repository.pending_material_copies(workspace_id) if bound else [],
     )
 
 
@@ -11893,6 +12011,26 @@ def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     service.wake()
     return _material_binding_status(workspace_id, repository)
+
+
+@app.post("/api/production/materials/intake/copy-complete", response_model=MaterialCopyCompleteResponse)
+def confirm_material_copy_complete(request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:
+    workspace_id = current_workspace_id(request)
+    repository = production_repo
+    service = _material_ingestion_for(repository)
+    try:
+        service.confirm_copy_complete(
+            workspace_id, relative_path=payload.relative_path,
+            expected_revision=payload.expected_revision.model_dump(),
+            confirmation_source=payload.confirmation_source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="文件已移除，请重新检查素材目录。") from exc
+    return MaterialCopyCompleteResponse(
+        confirmed=True, intake=_material_binding_status(workspace_id, repository),
+    )
 
 
 @app.post("/api/production/materials/intake/scan")
@@ -12191,6 +12329,30 @@ def search_production_material_segments(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
+
+
+@app.put(
+    "/api/production/materials/{asset_id}/visibility",
+    response_model=MaterialAssetResponse,
+)
+def set_production_material_visibility(
+    asset_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> MaterialAssetResponse:
+    """显式共享或收回一条素材；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    try:
+        asset = production_repo.set_asset_visibility(
+            current_workspace_id(request), asset_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _material_asset_response(asset)
 
 
 @app.get(
@@ -12949,8 +13111,10 @@ def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
     return SourceItemDetailResponse.model_validate(item, from_attributes=True)
 
 
-def _knowledge_item_response(item: KnowledgeItem) -> KnowledgeItemResponse:
-    return KnowledgeItemResponse.model_validate(item, from_attributes=True)
+def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeItemResponse:
+    response = KnowledgeItemResponse.model_validate(item, from_attributes=True)
+    response.visibility = visibility
+    return response
 
 
 def _source_run_response(run) -> SourceRunEvidenceResponse:
@@ -13327,7 +13491,9 @@ def save_source_item_to_knowledge(
         raise HTTPException(status_code=404, detail="source item not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    response = _knowledge_item_response(item)
+    response = _knowledge_item_response(
+        item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    )
     # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
     if item.content_hash is not None and response.duplicate_of_version is None:
         source = source_repository.get_source_item(workspace_id, source_item_id)
@@ -13406,8 +13572,13 @@ def get_knowledge_item_detail(
         item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    if not _content_include_private(request) and visibility != CONTENT_VISIBILITY_LEGACY:
+        # 与列表、文案库引用同一规则：成员读不到别人的私有内容，按不存在处理。
+        raise HTTPException(status_code=404, detail="knowledge item not found")
     versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
+    detail.visibility = visibility
     detail.versions = [
         KnowledgeItemVersionResponse.model_validate(version, from_attributes=True)
         for version in versions
@@ -13415,11 +13586,44 @@ def get_knowledge_item_detail(
     return detail
 
 
+@app.put(
+    "/api/knowledge-items/{knowledge_item_id}/visibility",
+    response_model=KnowledgeItemResponse,
+)
+def set_knowledge_item_visibility_route(
+    knowledge_item_id: str,
+    request: Request,
+    payload: KnowledgeItemVisibilityRequest,
+) -> KnowledgeItemResponse:
+    """显式共享或收回：把私有内容放进/移出团队共享范围。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        visibility = source_repository.set_knowledge_item_visibility(
+            workspace_id, knowledge_item_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
+    return _knowledge_item_response(item, visibility)
+
+
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
-    items = source_repository.list_knowledge_items(current_workspace_id(request))
+    workspace_id = current_workspace_id(request)
+    visibilities = None if _content_include_private(request) else (CONTENT_VISIBILITY_LEGACY,)
+    items = source_repository.list_knowledge_items(workspace_id, visibilities=visibilities)
     return KnowledgeItemsResponse(
-        items=[_knowledge_item_response(item) for item in items],
+        items=[
+            _knowledge_item_response(
+                item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+            )
+            for item in items
+        ],
         total_count=len(items),
     )
 
@@ -14624,6 +14828,32 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
 @app.get("/api/creation-tasks/{task_id}/execution")
 def get_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     return _creation_execution_status(current_workspace_id(request), task_id)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/job-runs",
+    response_model=TaskJobProgressResponse,
+)
+def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResponse:
+    """任务作业进度：只读后台已经落库的作业行。
+
+    进度、已耗时、更新时间和失败原因都来自这些记录；重开应用读到的是同一批
+    作业，页面关闭不改变它们。等待与处理估时分开，没有可信样本就是未知。
+    """
+    workspace_id = current_workspace_id(request)
+    try:
+        runs = production_repo.list_job_runs(workspace_id, task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    items, current = summarize_job_progress(runs, now=datetime.now(UTC))
+    return TaskJobProgressResponse(
+        task_id=task_id,
+        current=JobProgressResponse.model_validate(current, from_attributes=True)
+        if current
+        else None,
+        items=[JobProgressResponse.model_validate(item, from_attributes=True) for item in items],
+        total_count=len(items),
+    )
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)

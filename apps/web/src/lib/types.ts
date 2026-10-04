@@ -1482,6 +1482,32 @@ export type CreationExecutionStatus = {
   cover_message: string | null;
 };
 
+/** 一条后台作业在任务页上的真实读数。估时没有可信依据时为 null。 */
+export type JobProgress = {
+  id: string;
+  kind: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  progress: number;
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+  elapsed_seconds: number | null;
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  wait_estimate_seconds: number | null;
+  processing_estimate_seconds: number | null;
+  estimate_basis: string | null;
+};
+
+export type TaskJobProgress = {
+  task_id: string;
+  current: JobProgress | null;
+  items: JobProgress[];
+  total_count: number;
+};
+
 export type CreationTaskEditIntent = {
   id: string;
   workspace_id: string;

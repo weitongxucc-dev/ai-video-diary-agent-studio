@@ -11,6 +11,7 @@ import type {
   CreationTaskWorkspace,
   CreationExecutionPreview,
   CreationExecutionStatus,
+  TaskJobProgress,
   BusinessObjectKind,
   MaterialBusinessObject,
   MaterialBusinessObjects,
@@ -571,6 +572,13 @@ export function previewCreationExecution(taskId: string): Promise<CreationExecut
 export function getCreationExecution(taskId: string): Promise<CreationExecutionStatus> {
   return creationPlanRequest<CreationExecutionStatus>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/execution`,
+  );
+}
+
+/** 任务作业进度：只读后台已落库的作业；重开应用读到同一批记录。 */
+export function getTaskJobProgress(taskId: string): Promise<TaskJobProgress> {
+  return request<TaskJobProgress>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/job-runs`,
   );
 }
 

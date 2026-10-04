@@ -276,7 +276,7 @@ it("requires confirmation of the configured directory before automatic intake", 
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name:"确认接入" }));
   await waitFor(() => expect(bindMaterialIntake).toHaveBeenCalledWith("/Volumes/Test/media"));
-  expect(await screen.findByText("待确认复制 2")).toBeInTheDocument();
+  expect(await screen.findByText("待确认复制 0")).toBeInTheDocument();
   expect(screen.getByRole("button", { name:"立即检查" })).toBeInTheDocument();
 });
 

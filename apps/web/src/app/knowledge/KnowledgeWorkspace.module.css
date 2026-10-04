@@ -59,6 +59,17 @@
 .detailActions button:disabled { color: var(--text-2); opacity: .6; cursor: not-allowed; }
 .detailActions a { margin-top: 0; }
 .notWired { margin: 8px 0 0; color: var(--text-2); font-size: 11px; }
+.citationList { display: grid; gap: 9px; margin: 8px 0 0; padding: 0; list-style: none; }
+.citation { display: grid; gap: 5px; min-width: 0; padding: 9px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); }
+.citation p { margin: 0; }
+.citation button { justify-self: start; min-height: 30px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; cursor: pointer; }
+.citation button:hover { border-color: var(--accent); }
+.citationTrace { display: grid; gap: 6px; min-width: 0; }
+.citationHit { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid var(--accent); border-radius: 6px; }
+.citationHit pre { overflow: auto; max-height: 220px; margin: 0; padding: 7px; border-radius: 6px; background: var(--surface-2); color: var(--text-1); font-size: 12px; white-space: pre-wrap; }
+.citationHit table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.citationTrace pre, .citationTrace ol { overflow: auto; max-height: 260px; margin: 0; padding: 7px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-2); color: var(--text-1); font-size: 12px; white-space: pre-wrap; }
+.citationTrace table { width: 100%; border-collapse: collapse; font-size: 12px; }
 @media (max-width: 1150px) { .page { padding: 14px 16px 22px; } .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1090px) { .top { flex-direction: column; } .actions { justify-content: flex-end; } .category { padding: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }

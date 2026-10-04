@@ -1469,7 +1469,7 @@ export function MaterialLibraryWorkspace({
                 </p>
               ) : null}
               <div className={styles.intakeCounts} aria-label="自动接入进度">
-                <span>待确认复制 {intake.file_counts.observing}</span>
+                <span>待确认复制 {intake.pending_files.length}</span>
                 <span>分析中 {intake.file_counts.running}</span>
                 <span>已分析 {intake.file_counts.ready}</span>
                 <span>失败 {intake.file_counts.failed}</span>

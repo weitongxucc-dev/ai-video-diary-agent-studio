@@ -189,6 +189,8 @@ def test_payloads_match_the_web_source_api_contract(client):
         "content_hash", "sections", "parameters", "duplicate_of_version",
         # WIL-134：当前版本的抓取时间和原网址
         "fetched_at", "source_url",
+        # WIL-112：可见性回读同一列
+        "visibility",
     }
     assert client.get("/api/knowledge-items").json() == {
         "items": [knowledge],

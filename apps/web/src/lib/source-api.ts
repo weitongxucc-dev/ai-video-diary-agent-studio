@@ -77,6 +77,8 @@ export type KnowledgeItem = {
   ownership: string;
   source_item_id: string | null;
   version: string;
+  // 当前可见范围：shared / private，与服务端同一列。
+  visibility?: string;
   content_hash: string | null;
   sections: KnowledgeSection[];
   parameters: KnowledgeParameter[];
@@ -103,6 +105,43 @@ export type KnowledgeItemVersion = {
 };
 
 export type KnowledgeItemDetail = KnowledgeItem & { versions: KnowledgeItemVersion[] };
+
+/** 文案引用里绑定的知识条目与固定版本。 */
+export type KnowledgeReferenceId = { knowledgeItemId: string; version: string };
+
+/**
+ * 解析 `knowledge:{item_id}:{version}` 形式的引用。
+ * 不用正则猜分隔位置：版本号在最后一段，按最后一个冒号切，
+ * 免得条目 id 本身带冒号时把版本读错。
+ */
+export function parseKnowledgeReferenceId(referenceId: string): KnowledgeReferenceId | null {
+  const prefix = "knowledge:";
+  if (!referenceId.startsWith(prefix)) return null;
+  const rest = referenceId.slice(prefix.length);
+  const separator = rest.lastIndexOf(":");
+  if (separator <= 0 || separator === rest.length - 1) return null;
+  return { knowledgeItemId: rest.slice(0, separator), version: rest.slice(separator + 1) };
+}
+
+/**
+ * 在已读到的全部版本里找出引用绑定的那一版。
+ * 找不到就返回 null：不拿当前版冒充当时引用的内容。
+ */
+export function findCitedVersion(
+  detail: KnowledgeItemDetail,
+  version: string,
+): KnowledgeItemVersion | null {
+  // 当前头本身就是引用绑定的那一版时用头，否则查版本快照；查不到就返回 null。
+  if (detail.version === version) {
+    return {
+      version: detail.version, content_hash: detail.content_hash, source_item_id: detail.source_item_id,
+      title: detail.title, body: detail.body, file_reference: detail.file_reference,
+      sections: detail.sections, parameters: detail.parameters,
+      fetched_at: detail.fetched_at, source_url: detail.source_url, saved_at: detail.created_at,
+    };
+  }
+  return detail.versions.find((value) => value.version === version) ?? null;
+}
 
 export type SourceApiErrorDetails = {
   code?: string;
@@ -216,6 +255,13 @@ export function listKnowledgeItems() {
 
 export function getKnowledgeItem(id: string) {
   return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}`);
+}
+
+export function setKnowledgeItemVisibility(id: string, visibility: "shared" | "private") {
+  return request<KnowledgeItem>(`/api/knowledge-items/${encodeURIComponent(id)}/visibility`, {
+    method: "PUT",
+    body: JSON.stringify({ visibility }),
+  });
 }
 
 export type KnowledgeFileImport = { filename: string; content_base64: string };
