@@ -2763,6 +2763,9 @@ class ProductionRepository:
         return collection
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
         if not self.video_library_path.exists() or not self.video_library_path.is_dir():
             return []
         discovered: list[MaterialAsset] = []
@@ -2775,6 +2778,10 @@ class ProductionRepository:
             ):
                 continue
             if not path.resolve().is_relative_to(self.video_library_path.resolve()):
+                continue
+            try:
+                self._require_material_copy_confirmation(workspace_id, path.resolve())
+            except ValueError:
                 continue
             discovered.append(self._upsert_discovered_asset(workspace_id, path))
         return discovered
@@ -2808,6 +2815,92 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
         return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+
+    @staticmethod
+    def material_copy_revision(stat: os.stat_result) -> dict[str, str]:
+        """Decimal strings preserve nanosecond precision in desktop/browser JSON."""
+        return {
+            "size_bytes": str(stat.st_size), "mtime_ns": str(stat.st_mtime_ns),
+            "ctime_ns": str(stat.st_ctime_ns), "inode": str(stat.st_ino),
+        }
+
+    def confirm_material_copy_complete(
+        self, workspace_id: str, *, relative_path: str,
+        expected_revision: dict[str, str], confirmation_source: Literal["manual", "app_import"],
+    ) -> None:
+        """Persist a copy declaration for this bound file revision, not media validity."""
+        import time
+
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or "_已处理" in relative.parts:
+            raise ValueError("请确认当前绑定目录内的素材文件")
+        raw_path = self.video_library_path / relative
+        if raw_path.is_symlink():
+            raise ValueError("不能确认符号链接素材")
+        if confirmation_source not in {"manual", "app_import"}:
+            raise ValueError("复制完成确认来源无效")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            binding = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1").fetchone()
+            if (binding is None or (binding["workspace_id"], binding["library_path"])
+                    != (workspace_id, str(self.video_library_path.resolve()))):
+                raise ValueError("当前工作区未绑定此素材目录")
+            if not self._material_library_available():
+                raise ValueError("素材目录当前不可用，请连接原目录后重试")
+            path = self._validated_library_file(str(raw_path))
+            stat = path.stat()
+            revision = self.material_copy_revision(stat)
+            if revision != expected_revision:
+                raise ValueError("文件修订已变化，请重新检查并确认复制完成")
+            conn.execute(
+                """INSERT INTO material_ingestion_files
+                   (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
+                    observed_at, state, confirmed_revision, confirmation_source, copy_confirmed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?, ?, ?)
+                   ON CONFLICT(workspace_id, file_path) DO UPDATE SET
+                     size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
+                     ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at,
+                     state=CASE WHEN confirmed_revision=excluded.confirmed_revision THEN state ELSE 'observing' END,
+                     confirmed_revision=excluded.confirmed_revision,
+                     confirmation_source=excluded.confirmation_source,
+                     copy_confirmed_at=excluded.copy_confirmed_at""",
+                (workspace_id, str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                 stat.st_ino, time.time(), json.dumps(revision, sort_keys=True),
+                 confirmation_source, utc_now().isoformat()),
+            )
+
+    def _require_material_copy_confirmation(self, workspace_id: str, path: Path) -> None:
+        if self.get_material_ingestion_binding() != (workspace_id, str(self.video_library_path.resolve())):
+            raise ValueError("当前工作区未绑定此素材目录")
+        revision = json.dumps(self.material_copy_revision(path.stat()), sort_keys=True)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT confirmed_revision FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
+                (workspace_id, str(path)),
+            ).fetchone()
+        if row is None or row["confirmed_revision"] != revision:
+            raise ValueError("请先确认此文件已复制完成，再开始接收或重试")
+
+    def pending_material_copies(self, workspace_id: str) -> list[dict[str, object]]:
+        if (not self._material_library_available() or self.get_material_ingestion_binding()
+                != (workspace_id, str(self.video_library_path.resolve()))):
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT file_path, confirmed_revision FROM material_ingestion_files WHERE workspace_id=? ORDER BY file_path",
+                (workspace_id,),
+            ).fetchall()
+        pending = []
+        for row in rows:
+            path = Path(row["file_path"])
+            if (not path.resolve().is_relative_to(self.video_library_path.resolve())
+                    or not path.is_file() or path.is_symlink()):
+                continue
+            revision = self.material_copy_revision(path.stat())
+            if row["confirmed_revision"] != json.dumps(revision, sort_keys=True):
+                pending.append({"relative_path": str(path.relative_to(self.video_library_path.resolve())),
+                                "expected_revision": revision})
+        return pending
 
     def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
         """Describe the configured directory without revealing another workspace's binding."""
@@ -3870,7 +3963,7 @@ class ProductionRepository:
         )
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
-        """Persist observations and claim stable, changed files for one serial analyzer."""
+        """Discover pending copies, then claim only explicitly confirmed revisions."""
         import time
 
         binding = self.get_material_ingestion_binding()
@@ -3914,15 +4007,15 @@ class ProductionRepository:
                     # Size, mtime, ctime and inode are the incremental boundary.
                     # Full content is hashed only on change, recovery, or retry.
                     continue
-                elif now - float(row["observed_at"]) < stable_seconds:
+                elif row["confirmed_revision"] != json.dumps(self.material_copy_revision(stat), sort_keys=True):
                     continue
             if changed:
                 try:
-                    asset = self._upsert_discovered_asset(workspace_id, resolved)
-                except FileNotFoundError:
+                    asset = self._asset_by_path(workspace_id, str(resolved))
+                except KeyError:
                     continue
                 asset.analysis_status = "blocked"
-                asset.analysis_message = "文件仍在复制或变化；写入稳定后自动分析。"
+                asset.analysis_message = "文件已变化；请确认复制完成后重新接收。"
                 self._save_asset(asset)
                 continue
             try:
@@ -3944,6 +4037,8 @@ class ProductionRepository:
                 ) != (
                     stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
                 ):
+                    continue
+                if row["confirmed_revision"] != json.dumps(self.material_copy_revision(final_stat), sort_keys=True):
                     continue
                 if row["completed_digest"] == digest:
                     if row["state"] != "ready":
@@ -3981,7 +4076,7 @@ class ProductionRepository:
                 self._reset_changed_material_asset(asset)
             else:
                 asset.analysis_status = "pending"
-                asset.analysis_message = "文件已写入完成，正在分析。"
+                asset.analysis_message = "复制完成确认已保存，正在分析；确认不代表文件通过校验。"
                 self._save_asset(asset)
             claimed.append((asset.id, digest))
         return claimed
@@ -4007,10 +4102,11 @@ class ProductionRepository:
         binding = self.get_material_ingestion_binding()
         if binding is None or binding[0] != workspace_id:
             raise ValueError("当前工作区未绑定素材目录")
+        self._require_material_copy_confirmation(workspace_id, self._validated_library_file(asset.path))
         with self._connect() as conn:
             conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
         asset.analysis_status = "pending"
-        asset.analysis_message = "已请求重试，等待素材稳定后重新分析。"
+        asset.analysis_message = "已请求重试，将按已确认的文件修订重新分析。"
         self._save_asset(asset)
 
     def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
@@ -4539,6 +4635,7 @@ class ProductionRepository:
         if asset.use_state == "excluded":
             raise ValueError("素材已设为不使用，请先修改使用状态再分析")
         path = self._validated_library_file(asset.path)
+        self._require_material_copy_confirmation(workspace_id, path)
         source_stat = path.stat()
         try:
             duration = float(self.duration_reader(path))
@@ -4587,7 +4684,7 @@ class ProductionRepository:
             asset.analysis_status = "failed"
             asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
         final_stat = path.stat()
-        if (source_stat.st_size, source_stat.st_mtime_ns) != (final_stat.st_size, final_stat.st_mtime_ns):
+        if self.material_copy_revision(source_stat) != self.material_copy_revision(final_stat):
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
         if expected_source_digest is not None:
             with path.open("rb") as source:

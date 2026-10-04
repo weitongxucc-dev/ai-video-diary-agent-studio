@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 13
+PRODUCTION_SCHEMA_VERSION = 14
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -608,6 +608,14 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
         13,
         "",
+    ),
+    (
+        14,
+        """
+        ALTER TABLE material_ingestion_files ADD COLUMN confirmed_revision TEXT;
+        ALTER TABLE material_ingestion_files ADD COLUMN confirmation_source TEXT;
+        ALTER TABLE material_ingestion_files ADD COLUMN copy_confirmed_at TEXT;
+        """,
     ),
 )
 
