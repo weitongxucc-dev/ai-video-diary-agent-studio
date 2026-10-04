@@ -1737,6 +1737,22 @@ export type MaterialSegment = {
   updated_at: string;
 };
 
+export type MaterialFileRevision = {
+  size_bytes: string;
+  mtime_ns: string;
+  ctime_ns: string;
+  inode: string;
+};
+
+export type MaterialPendingCopy = {
+  relative_path: string;
+  expected_revision: MaterialFileRevision;
+};
+
+export type MaterialCopyCompleteInput = MaterialPendingCopy & {
+  confirmation_source: "manual" | "app_import";
+};
+
 export type MaterialIntakeStatus = {
   bound_to_current_workspace: boolean;
   binding_available: boolean;
@@ -1746,6 +1762,7 @@ export type MaterialIntakeStatus = {
   directory_message: string;
   repair_action: string | null;
   scan_interval_seconds: number;
+  pending_files: MaterialPendingCopy[];
   file_counts: { observing: number; running: number; ready: number; failed: number; blocked_disk: number };
 };
 

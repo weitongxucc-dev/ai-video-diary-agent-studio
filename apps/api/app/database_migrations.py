@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 13
+PRODUCTION_SCHEMA_VERSION = 14
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -609,6 +609,14 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         13,
         "",
     ),
+    (
+        14,
+        """
+        ALTER TABLE material_ingestion_files ADD COLUMN confirmed_revision TEXT;
+        ALTER TABLE material_ingestion_files ADD COLUMN confirmation_source TEXT;
+        ALTER TABLE material_ingestion_files ADD COLUMN copy_confirmed_at TEXT;
+        """,
+    ),
 )
 
 # 版本 14 标记「内容可见性」的地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
@@ -622,7 +630,13 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
 #
 # 存量行回填 shared（不改动已有数据的语义）；表结构的 DEFAULT 是 private，
 # 两者是不同的事，迁移回填不会把新建行的默认改回 shared。
-CONTENT_VISIBILITY_TABLES = ("knowledge_items", "creation_plans", "video_templates")
+CONTENT_VISIBILITY_TABLES = (
+    "knowledge_items",
+    "creation_plans",
+    "video_templates",
+    "creation_tasks",
+    "material_assets",
+)
 CONTENT_VISIBILITY_LEGACY = "shared"
 CONTENT_VISIBILITY_DEFAULT = "private"
 

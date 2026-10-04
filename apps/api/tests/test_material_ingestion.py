@@ -52,6 +52,36 @@ class HashResources:
         return True
 
 
+def test_copy_confirmation_persists_revision_before_waking() -> None:
+    repository = Mock()
+    service = MaterialIngestionService(repository)
+    revision = {"size_bytes": "12", "mtime_ns": "100", "ctime_ns": "200", "inode": "3"}
+    repository.confirm_material_copy_complete.side_effect = lambda *args, **kwargs: (
+        pytest.fail("woke before persistence") if service._wake.is_set() else None
+    )
+    service.confirm_copy_complete(
+        "one", relative_path="clip.mp4", expected_revision=revision,
+        confirmation_source="manual",
+    )
+    repository.confirm_material_copy_complete.assert_called_once_with(
+        "one", relative_path="clip.mp4", expected_revision=revision,
+        confirmation_source="manual",
+    )
+    assert service._wake.is_set()
+
+
+def test_copy_confirmation_failure_does_not_wake() -> None:
+    repository = Mock()
+    repository.confirm_material_copy_complete.side_effect = ValueError("文件修订已变化")
+    service = MaterialIngestionService(repository)
+    with pytest.raises(ValueError, match="修订已变化"):
+        service.confirm_copy_complete(
+            "one", relative_path="clip.mp4", expected_revision={},
+            confirmation_source="app_import",
+        )
+    assert not service._wake.is_set()
+
+
 class HashProcesses:
     def current(self):
         return ProcessIdentity(os.getpid(), f"test-{os.getpid()}", "test-boot")
