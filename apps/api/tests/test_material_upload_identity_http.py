@@ -94,14 +94,14 @@ def _bind(token: str, library: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def _confirm_pending_copies(token: str) -> None:
+def _confirm_pending_copies(token: str, source: str = "manual") -> None:
     """按 126 的复制完成确认门，逐个确认当前待入库文件（真实 HTTP）。"""
     status = client.get("/api/production/materials/intake", headers=_headers(token))
     assert status.status_code == 200, status.text
     for pending in status.json()["pending_files"]:
         confirmed = client.post(
             "/api/production/materials/intake/copy-complete",
-            json={**pending, "confirmation_source": "manual"},
+            json={**pending, "confirmation_source": source},
             headers=_headers(token),
         )
         assert confirmed.status_code == 200, confirmed.text
@@ -216,8 +216,8 @@ def test_repeated_import_of_same_link_does_not_expose_private_details(tmp_path, 
         assert body["asset_id"] != asset_id
         assert body.get("file_path") != first.json().get("file_path")
     else:
-        # 沿既有拒绝路径（409/403 等）同样满足：没有泄露就是正确结果。
-        assert repeated.status_code in (403, 409)
+        # 沿既有拒绝路径（403/404/409）同样满足：没有回传甲的私有标识即可。
+        assert repeated.status_code in (403, 404, 409)
 
     # 无论哪种结果，乙都读不到甲的私有素材。
     denied = client.get(
@@ -243,3 +243,33 @@ def tmp_png() -> bytes:
     stream = BytesIO()
     Image.new("RGB", (8, 6), (12, 90, 200)).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def test_app_import_confirmation_branch_keeps_the_confirming_member_identity(
+    tmp_path, monkeypatch
+):
+    """应用内导入确认分支：确认人也必须以本次身份判定归属，不落回绑定者。"""
+    party = _setup(tmp_path, monkeypatch)
+    _bind(party["token_a"], party["library"])
+    _drop("乙应用内导入.mp4", party["library"])
+
+    status = client.get("/api/production/materials/intake", headers=_headers(party["token_b"]))
+    assert status.status_code == 200, status.text
+    pending = status.json()["pending_files"]
+    assert pending, status.text
+    for item in pending:
+        confirmed = client.post(
+            "/api/production/materials/intake/copy-complete",
+            json={**item, "confirmation_source": "app_import"},
+            headers=_headers(party["token_b"]),
+        )
+        assert confirmed.status_code == 200, confirmed.text
+
+    scanned = client.post("/api/production/materials/scan", headers=_headers(party["token_b"]))
+    assert scanned.status_code == 200, scanned.text
+
+    # 与 manual 确认同一判据：确认后入库的素材归本次确认人，乙本人可读。
+    listed = client.get("/api/production/materials", headers=_headers(party["token_b"]))
+    assert listed.status_code == 200, listed.text
+    names = [item["file_name"] for item in listed.json()["assets"]]
+    assert "乙应用内导入.mp4" in names, listed.json()
