@@ -356,6 +356,7 @@ from app.schemas import (
     KnowledgeFileImportRequest,
     KnowledgeItemDetailResponse,
     KnowledgeItemVersionResponse,
+    ContentVisibilityRequest,
     KnowledgeItemVisibilityRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
@@ -1100,6 +1101,27 @@ def _video_template_or_404(workspace_id: str, template_id: str, version: int) ->
         return production_repo.get_video_template(workspace_id, template_id, version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="当前工作区找不到这个模板版本。") from exc
+
+
+@app.put("/api/video-templates/{template_id}/visibility")
+def set_video_template_visibility_route(
+    template_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> dict[str, object]:
+    """显式共享或收回一个用户模板；返回同一列的回读值。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    try:
+        template = production_repo.set_video_template_visibility(
+            current_workspace_id(request), template_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="video template not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"item": asdict(template)}
 
 
 @app.get("/api/video-templates")
@@ -2806,6 +2828,8 @@ def _creation_plan_response(
         {
             "id": plan.id,
             "workspace_id": plan.workspace_id,
+            # 回读列上的当前可见范围：写进去的和读出来的必须是同一个值。
+            "visibility": plan.visibility,
             "status": plan.status,
             "creation_task": task.__dict__,
             "created_at": plan.created_at,
@@ -4227,6 +4251,33 @@ def confirm_creation_plan(
     return _creation_plan_response(saved_plan, saved_task)
 
 
+@app.put(
+    "/api/creation-plans/{plan_id}/visibility",
+    response_model=CreationPlanResponse,
+)
+def set_creation_plan_visibility_route(
+    plan_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> CreationPlanResponse:
+    """显式共享或收回一个创作方案；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.set_creation_plan_visibility(workspace_id, plan_id, payload.visibility)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation plan not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan = production_repo.get_creation_plan(workspace_id, plan_id)
+    if plan.creation_task_id is None:
+        raise HTTPException(status_code=404, detail="creation plan not found")
+    task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
+    return _creation_plan_response(plan, task)
+
+
 @app.get(
     "/api/creation-plans/{plan_id}",
     response_model=CreationPlanResponse,
@@ -4690,6 +4741,32 @@ def confirm_creation_task_topic(
             retryable=False,
         ) from exc
     return _creation_task_topic_response(workspace_id, task)
+
+
+@app.put(
+    "/api/creation-tasks/{task_id}/visibility",
+    response_model=CreationTaskWorkspaceResponse,
+)
+def set_creation_task_visibility_route(
+    task_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> CreationTaskWorkspaceResponse:
+    """显式共享或收回一条创作任务；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        production_repo.set_creation_task_visibility(workspace_id, task_id, payload.visibility)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _creation_task_workspace_response(
+        workspace_id,
+        _creation_task_or_404(workspace_id, task_id),
+    )
 
 
 @app.get(
@@ -12196,6 +12273,30 @@ def search_production_material_segments(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
+
+
+@app.put(
+    "/api/production/materials/{asset_id}/visibility",
+    response_model=MaterialAssetResponse,
+)
+def set_production_material_visibility(
+    asset_id: str,
+    request: Request,
+    payload: ContentVisibilityRequest,
+) -> MaterialAssetResponse:
+    """显式共享或收回一条素材；响应回读同一列。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    try:
+        asset = production_repo.set_asset_visibility(
+            current_workspace_id(request), asset_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="material asset not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _material_asset_response(asset)
 
 
 @app.get(

@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
-from app.database_migrations import CONTENT_VISIBILITY_LEGACY
+from app.database_migrations import CONTENT_VISIBILITY_DEFAULT, CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -458,6 +458,8 @@ class MaterialSpeechAnalysisResponse(BaseModel):
 class MaterialAssetResponse(BaseModel):
     id: str
     workspace_id: str
+    # 当前可见范围：private / shared。回读同一列，与显式共享/收回写入的值一致。
+    visibility: str = CONTENT_VISIBILITY_DEFAULT
     file_name: str
     path: str
     workspace_reference: str | None = None
@@ -924,6 +926,8 @@ class CreationTaskResponse(BaseModel):
     id: str
     workspace_id: str
     plan_id: str
+    # 当前可见范围：private / shared。回读同一列，与显式共享/收回写入的值一致。
+    visibility: str = CONTENT_VISIBILITY_DEFAULT
     name: str
     scenario: str
     stage: Literal["topic", "script", "narration", "montage", "review"]
@@ -1595,6 +1599,8 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
 class CreationPlanResponse(CreationPlanPreviewResponse):
     id: str
     workspace_id: str
+    # 当前可见范围：private / shared。回读同一列，与显式共享/收回写入的值一致。
+    visibility: str = CONTENT_VISIBILITY_DEFAULT
     status: Literal["confirmed"]
     creation_task: CreationTaskResponse
     created_at: datetime
@@ -2118,10 +2124,14 @@ class KnowledgeItemResponse(BaseModel):
     duplicate_of_version: str | None = None
 
 
-class KnowledgeItemVisibilityRequest(BaseModel):
+class ContentVisibilityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     visibility: Literal["shared", "private"]
+
+
+class KnowledgeItemVisibilityRequest(ContentVisibilityRequest):
+    """知识条目的可见范围请求；任务、方案、模板与素材共用同一形状。"""
 
 
 class KnowledgeItemVersionResponse(BaseModel):
