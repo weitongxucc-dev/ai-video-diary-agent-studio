@@ -56,6 +56,7 @@ import HomePage from "@/app/page";
 
 function task(stageStatus: CreationTask["stage_status"]): CreationTask {
   return {
+    visibility: "private",
     id: `task-${stageStatus}`,
     workspace_id: "workspace-1",
     plan_id: `plan-${stageStatus}`,

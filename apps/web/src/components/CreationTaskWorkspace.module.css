@@ -682,3 +682,26 @@
 @media (prefers-reduced-motion: reduce) {
   .topicList label { transition: none; }
 }
+
+.taskVisibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.taskVisibility button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.taskVisibility button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

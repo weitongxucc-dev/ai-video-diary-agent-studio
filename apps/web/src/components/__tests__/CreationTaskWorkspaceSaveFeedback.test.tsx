@@ -56,6 +56,9 @@ vi.mock("@/lib/api", () => ({
   apiUrl: (path: string) => path,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
   getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
+  getCreationPlan: vi.fn().mockRejectedValue(new Error("no plan in this fixture")),
+  setCreationTaskVisibility: vi.fn(),
+  setCreationPlanVisibility: vi.fn(),
   applyCreationTaskExactEdit: vi.fn(),
   confirmCreationTaskEdit: vi.fn(),
   confirmCreationTaskScript: vi.fn(),
@@ -95,6 +98,7 @@ vi.mock("@/lib/api", () => ({
 // （defaultWorkspaceView 因此返回 "review" 而不是 "subtitle_cover"）。
 function reviewWorkspace(): WorkspaceState {
   const task: CreationTask = {
+    visibility: "private",
     id: "task-1",
     workspace_id: "local",
     plan_id: "plan-1",

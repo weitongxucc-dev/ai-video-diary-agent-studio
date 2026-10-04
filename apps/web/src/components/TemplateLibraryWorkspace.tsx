@@ -4,7 +4,8 @@ import Link from "next/link";
 import { ArrowRight, History, Layers3, Library, Search, WifiOff } from "lucide-react";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import type { VideoTemplate } from "@/lib/types";
+import { setVideoTemplateVisibility } from "@/lib/api";
+import type { ContentVisibility, VideoTemplate } from "@/lib/types";
 import styles from "./ProductWorkspace.module.css";
 import own from "./TemplateLibraryWorkspace.module.css";
 
@@ -40,6 +41,29 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
   const [view, setView] = useState<TemplateView>("mine");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // 以服务端回读的值为准：保存成功才改这里，失败保持原值不动。
+  const [visibilityByTemplate, setVisibilityByTemplate] = useState<Record<string, ContentVisibility>>({});
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  const visibilityOf = (item: VideoTemplate): ContentVisibility =>
+    visibilityByTemplate[item.id] ?? item.visibility;
+
+  async function changeTemplateVisibility(item: VideoTemplate, next: ContentVisibility) {
+    setVisibilityBusy(true);
+    setVisibilityError(null);
+    try {
+      const saved = await setVideoTemplateVisibility(item.id, next);
+      // 用接口返回值，不猜：服务端说存成什么，界面就显示什么。
+      setVisibilityByTemplate((current) => ({
+        ...current,
+        [item.id]: saved.item.visibility,
+      }));
+    } catch (err) {
+      setVisibilityError(err instanceof Error ? err.message : "共享设置没有保存成功，请再试一次。");
+    } finally {
+      setVisibilityBusy(false);
+    }
+  }
   const canAct = !offline;
   const candidates = templates.filter((item) => view === "built-in" ? item.origin === "built_in" : item.origin === "user");
   const byVersion = view === "versions" ? candidates : candidates.filter((item) => !candidates.some((other) => other.id === item.id && other.version > item.version));
@@ -62,7 +86,14 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
       <div><dt>调色</dt><dd>{settings.color_style ? `曝光 ${settings.color_style.exposure} · 对比度 ${settings.color_style.contrast} · 饱和度 ${settings.color_style.saturation} · 冷暖 ${settings.color_style.temperature}` : settings.color_style === null ? "原镜头调色不同，不统一复用" : "未保存调色，使用新素材原色"}</dd></div>
       <div><dt>字幕</dt><dd>复用字幕样式；正文与时轴重新生成</dd></div>
       <div><dt>素材与审核</dt><dd>按新主题检索；选题、文案和生成仍需确认</dd></div>
+      <div><dt>可见范围</dt><dd>{visibilityOf(selected) === "shared" ? "团队共享" : "仅自己可见"}</dd></div>
     </dl>
+    {selected.origin === "user" ? <section className={own.visibilitySection}>
+      {visibilityOf(selected) === "shared"
+        ? <button disabled={visibilityBusy} onClick={() => void changeTemplateVisibility(selected, "private")} type="button">收回为仅自己可见</button>
+        : <button disabled={visibilityBusy} onClick={() => void changeTemplateVisibility(selected, "shared")} type="button">共享给团队</button>}
+      {visibilityError ? <p role="alert">{visibilityError}</p> : null}
+    </section> : <section className={own.visibilitySection}><p>内置模板由系统提供，不单独设置可见范围。</p></section>}
     <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、音轨编排、转场、图文叠加、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
   </div> : null;
 

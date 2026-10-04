@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
-import { confirmCreationTaskTopic } from "@/lib/api";
+import { confirmCreationTaskTopic, setCreationTaskVisibility } from "@/lib/api";
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -47,6 +47,9 @@ const mocks = vi.hoisted(() => {
     previewAudioEdit: vi.fn(),
     getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
     listTimelineVersions: vi.fn().mockResolvedValue({ task_id: "task-1", current_version_id: null, items: [] }),
+    setCreationTaskVisibility: vi.fn(),
+    setCreationPlanVisibility: vi.fn(),
+    getCreationPlan: vi.fn().mockRejectedValue(new Error("no plan loaded in this test")),
     getTimelineVersion: vi.fn(),
   };
 });
@@ -82,6 +85,9 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getCreationPlan: mocks.getCreationPlan,
+  setCreationTaskVisibility: mocks.setCreationTaskVisibility,
+  setCreationPlanVisibility: mocks.setCreationPlanVisibility,
   initializeCreationTaskTimeline: mocks.initializeTimeline,
   getCreationTaskAssistantHistory: mocks.getAssistantHistory,
   getCreationExecution: mocks.getExecution,
@@ -107,6 +113,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const baseTask: CreationTask = {
+  visibility: "private",
   id: "task-1",
   workspace_id: "local",
   plan_id: "plan-1",
@@ -2473,5 +2480,28 @@ describe("作业进度读数", () => {
       fireEvent.click(screen.getByRole("button", { name: "重试" }));
       await screen.findByText(/成片输出 · 正在处理 · 进度 20%/);
     } finally { vi.useRealTimers(); }
+  });
+  it("shares the task and shows the visibility the API returned", async () => {
+    const shared = { ...baseTask, visibility: "shared" as const };
+    mocks.setCreationTaskVisibility.mockResolvedValue({ ...workspace(baseTask), task: shared });
+    render(<CreationTaskWorkspace initialTopics={null} initialTasks={[baseTask]} initialWorkspace={workspace(baseTask)} />);
+
+    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+    await screen.findByText("团队共享");
+    expect(mocks.setCreationTaskVisibility).toHaveBeenCalledWith("task-1", "shared");
+  });
+
+  it("keeps the current value and reports the reason when sharing fails", async () => {
+    mocks.setCreationTaskVisibility.mockRejectedValue(new Error("本地服务拒绝了这次保存"));
+    render(<CreationTaskWorkspace initialTopics={null} initialTasks={[baseTask]} initialWorkspace={workspace(baseTask)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+    await screen.findByRole("alert");
+    expect(screen.getByText("本地服务拒绝了这次保存")).toBeInTheDocument();
+    // 没有保存成功就不能显示成已共享。
+    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
   });
 });
