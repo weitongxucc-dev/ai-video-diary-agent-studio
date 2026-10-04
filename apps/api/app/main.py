@@ -64,8 +64,13 @@ from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeli
 from app.task_audio import TaskAudio
 from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_preview, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
-from app.local_members import LocalMembersError, LocalMemberService
+from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
+from app.member_permits import (
+    DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
+    build_host_probes, creation_job_registration, find_member, host_budget_from_env,
+    permit_actor, resolve_member_token,
+)
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
     CoverGenerationRequest,
@@ -14894,15 +14899,37 @@ def _scheduled_creation_runtime():
     return runtime
 
 
+def _request_member(request: Request) -> LocalMember | None:
+    """本次请求的可信本机成员。
+
+    令牌无效是凭据失败（401），不降级成「没带令牌所以按 owner 看全部」；已开
+    认证又没有令牌时没有可核验身份，返回 ``None``，不凭空造一个成员。
+    """
+    try:
+        return resolve_member_token(
+            members=local_members_service,
+            token=_local_member_token(request),
+            auth_enabled=auth_context.enabled,
+        )
+    except LocalMembersError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def _request_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor | None:
+    """本次请求在整机许可里的可信身份（真实成员行，不是字符串）。"""
+    return permit_actor(_request_member(request), workspace_id)
+
+
 def _scheduled_creation_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
-    # The current auth service cannot recheck remote membership inside the
-    # scheduler's SQLite admission transaction. Do not mint a durable member
-    # identity from a request whose later authority cannot be verified.
-    if auth_context.enabled:
-        raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
     if workspace_id != LEGACY_WORKSPACE_ID:
         raise HTTPException(status_code=403, detail="本机制作身份与工作区不匹配")
-    return CreationExecutionActor(workspace_id, "local-owner")
+    actor = _request_permit_actor(request, workspace_id)
+    if actor is None:
+        # The current auth service cannot recheck remote membership inside the
+        # scheduler's SQLite admission transaction. Do not mint a durable member
+        # identity from a request whose later authority cannot be verified.
+        raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
+    return actor
 
 
 _EXECUTION_WAITING_TEXT = {
@@ -14949,14 +14976,15 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
     if (job and job.status in {"queued", "interrupted"}
             and creation_execution_mode == "scheduled" and workspace_id == LEGACY_WORKSPACE_ID):
         start_event = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
-        if start_event.payload.get("member_id") == "local-owner":
+        queued_member_id = start_event.payload.get("member_id")
+        if queued_member_id:
             with production_repo._connect() as conn:
                 row = conn.execute(
                     "SELECT unit_key, wait_reason, updated_at FROM device_work_requests "
                     "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
                     "AND input_digest=? AND state IN ('waiting', 'blocked', 'granted', 'yield_requested') "
                     "ORDER BY created_at DESC LIMIT 1",
-                    (workspace_id, "local-owner", job.id, job.input_digest),
+                    (workspace_id, queued_member_id, job.id, job.input_digest),
                 ).fetchone()
             if row is not None:
                 queued_stage = row["unit_key"].split(":", 1)[0]

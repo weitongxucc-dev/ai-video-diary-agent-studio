@@ -1,0 +1,240 @@
+"""真实本机成员到整机许可的接入（WIL-159）。
+
+这一层只做一件事：把「谁在请求整机许可」这件事从字符串换成服务端可核验的
+成员身份，并把它接到设备许可的既有入口上。
+
+四条规矩：
+
+1. 身份只来自 ``local_members`` 的成员行。客户端永远不能自报身份；路由读
+   ``X-Local-Member-Token``，这里只负责把令牌解析成 ``member_id`` 并在每次
+   校验时**重新读一次名册**——被移除的成员在下一次心跳/队列/取消时立刻失效，
+   不靠旧会话继续操作（auth-workspace-boundary §9）。
+2. 不保存原始令牌，也不伪造 ``VerifiedSession``。``VerifiedSession`` 只在成员
+   行当下仍然存在时才由服务端签发。
+3. 交互式的 ``creation_job`` 注册进**同一个**整机运行时：和 ``material_asset``
+   共用一个锁、一张队列、一个驱动线程，不另起第二套许可状态。
+4. 整机预算与探针是真实来源（``host_resource_probes``）。没有标定预算就明确
+   报「尚未标定」，不造默认值、不造一个永远返回 None 的假探针，也不改动既有
+   资源门禁。
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Callable, Mapping
+
+from pydantic import BaseModel, Field
+
+from app.creation_execution import (
+    CreationExecutionActor,
+    CreationJobOwnerVerifier,
+    CreationJobUnitExecutor,
+    CpuRenderLimits,
+)
+from app.device_runtime import OwnerRegistration
+from app.device_scheduler import SessionHeartbeat, VerifiedSession
+from app.host_resource_probes import (
+    CpuRenderBudget,
+    HostBudget,
+    HostProcessProbe,
+    HostResourceProbe,
+)
+from app.local_members import LocalMember, LocalMemberService
+
+
+class PermitIdentityUnavailable(RuntimeError):
+    """这次调用没有可核验的本机成员身份，不签发任何持久许可。"""
+
+
+class HostBudgetUncalibrated(RuntimeError):
+    """整机许可预算没有真实标定值；不猜默认值，直接说明不可用。"""
+
+
+def find_member(members: LocalMemberService, member_id: str) -> LocalMember | None:
+    """按 ``member_id`` 取当前仍然存在的成员行。
+
+    名册上限五人（auth §9），逐行比对比新造一张索引更实在；成员被移除后这里
+    返回 ``None``，调用方据此判定身份已失效。
+    """
+    for member in members.list_members():
+        if member.member_id == member_id:
+            return member
+    return None
+
+
+def resolve_member_token(
+    *,
+    members: LocalMemberService,
+    token: str,
+    auth_enabled: bool,
+) -> LocalMember | None:
+    """把本次请求的本地成员令牌解析成真实成员行。
+
+    带令牌：无效令牌是凭据失败（抛 ``LocalMembersError``），不降级成匿名。
+    不带令牌且认证已开：没有可核验身份，返回 ``None``——不凭空造一个成员。
+    不带令牌且认证未开（本机单人的兼容态）：取名册里真实存在的主账号行。
+    它是一条可被移除、可被改角色的数据库记录，比一个字符串身份更严。
+    """
+    if token:
+        member = members.resolve_member(token)
+        assert member is not None  # 带有效令牌必然解析出成员
+        return member
+    if auth_enabled:
+        return None
+    return members.whoami(None)[0]
+
+
+def permit_actor(member: LocalMember | None, workspace_id: str) -> CreationExecutionActor | None:
+    """成员行 → 设备许可使用的可信身份；没有成员就不签发身份。"""
+    if member is None:
+        return None
+    return CreationExecutionActor(workspace_id, member.member_id)
+
+
+class MemberDeviceAccess:
+    """把 ``DeviceAccess`` 接到本机成员名册上。
+
+    每次校验都重新读名册：成员被移除后，旧 ``session_id`` 和旧令牌都不能
+    继续拿到 ``VerifiedSession``，也不能再读整机摘要。
+    """
+
+    def __init__(self, members: LocalMemberService) -> None:
+        self._members = members
+
+    def _current_member(self, actor: object) -> LocalMember:
+        if not isinstance(actor, CreationExecutionActor) or not actor.member_id:
+            raise PermissionError("整机许可身份未知")
+        member = find_member(self._members, actor.member_id)
+        if member is None:
+            # 成员已被移除：旧会话不得继续凭旧身份操作整机。
+            raise PermissionError("本机成员已不存在，许可身份失效")
+        return member
+
+    def verify_session(self, heartbeat: SessionHeartbeat, actor: object) -> VerifiedSession:
+        member = self._current_member(actor)
+        if heartbeat.workspace_id != actor.workspace_id:
+            raise PermissionError("会话工作区与许可身份不匹配")
+        if not heartbeat.session_id:
+            raise PermissionError("会话标识不能为空")
+        return VerifiedSession(
+            session_id=heartbeat.session_id,
+            workspace_id=heartbeat.workspace_id,
+            member_id=member.member_id,
+        )
+
+    def can_view_device_summary(self, actor: object) -> bool:
+        try:
+            self._current_member(actor)
+        except PermissionError:
+            return False
+        return True
+
+
+def creation_job_registration(
+    repository,
+    *,
+    render_action: Callable[[str, str, object], object],
+    render_is_valid: Callable[[str, str, object], bool],
+    cpu_render_limits: CpuRenderLimits | None = None,
+) -> OwnerRegistration:
+    """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
+
+    ``cpu_render_limits`` 为 ``None`` 表示这台机器还没有标定 CPU 成片预算；
+    成片阶段会因此拒绝准入，而不是被放行。
+    """
+    return OwnerRegistration(
+        CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits),
+        CreationJobUnitExecutor(
+            repository, render_action=render_action, render_is_valid=render_is_valid,
+        ),
+    )
+
+
+#: 整机预算的标定项。这些值必须由这台设备的标定结果显式给出，没有内置默认值。
+_HOST_BUDGET_ENV = {
+    "max_cpu_percent": "DEVICE_HOST_MAX_CPU_PERCENT",
+    "min_available_memory_bytes": "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES",
+    "max_swap_used_bytes": "DEVICE_HOST_MAX_SWAP_USED_BYTES",
+    "min_free_disk_bytes": "DEVICE_HOST_MIN_FREE_DISK_BYTES",
+    "max_disk_io_bytes_per_second": "DEVICE_HOST_MAX_DISK_IO_BYTES_PER_SECOND",
+    "max_unit_input_bytes": "DEVICE_HOST_MAX_UNIT_INPUT_BYTES",
+}
+
+_INT_HOST_BUDGET_FIELDS = frozenset({
+    "min_available_memory_bytes", "max_swap_used_bytes", "min_free_disk_bytes",
+    "max_disk_io_bytes_per_second", "max_unit_input_bytes",
+})
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise HostBudgetUncalibrated(f"整机许可预算尚未标定：缺少环境变量 {name}")
+    return value
+
+
+def _positive_int(name: str, raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(f"整机许可预算尚未标定：{name} 不是整数") from exc
+    if value <= 0:
+        raise HostBudgetUncalibrated(f"整机许可预算尚未标定：{name} 必须为正整数")
+    return value
+
+
+def host_budget_from_env(
+    environ: Mapping[str, str] | None = None,
+    *,
+    cpu_render: CpuRenderBudget | None = None,
+) -> HostBudget:
+    """从显式标定值读出整机预算。
+
+    缺任何一项都直接报未标定，不做兜底默认——猜出来的阈值会让整机许可在
+    没有标定的情况下也放行重活，那比不放行更危险。
+    """
+    source = os.environ if environ is None else environ
+    raw = {field: source.get(env_name, "").strip() for field, env_name in _HOST_BUDGET_ENV.items()}
+    missing = [env for env, value in zip(_HOST_BUDGET_ENV.values(), raw.values()) if not value]
+    if missing:
+        raise HostBudgetUncalibrated(
+            "整机许可预算尚未标定：缺少 " + "、".join(missing)
+        )
+    try:
+        max_cpu_percent = float(raw["max_cpu_percent"])
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(
+            f"整机许可预算尚未标定：{_HOST_BUDGET_ENV['max_cpu_percent']} 不是数值"
+        ) from exc
+    if not 0 < max_cpu_percent <= 100:
+        raise HostBudgetUncalibrated("整机许可预算尚未标定：CPU 上限必须在 0 与 100 之间")
+    numbers = {
+        field: _positive_int(_HOST_BUDGET_ENV[field], value)
+        for field, value in raw.items()
+        if field in _INT_HOST_BUDGET_FIELDS
+    }
+    return HostBudget(max_cpu_percent=max_cpu_percent, cpu_render=cpu_render, **numbers)
+
+
+def build_host_probes(
+    *,
+    database_path: str | Path,
+    disk_paths: tuple[str | Path, ...],
+    budget: HostBudget,
+) -> tuple[HostResourceProbe, HostProcessProbe]:
+    """真实整机探针：资源采样 + POSIX 进程身份，不提供任何替代实现。"""
+    return (
+        HostResourceProbe(database_path, disk_paths=disk_paths, budget=budget),
+        HostProcessProbe(),
+    )
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    """客户端上报的会话活动；身份与工作区一律由服务端判定，不接受自报。"""
+
+    session_id: str = Field(min_length=1, max_length=200)
+    playing: bool = False
+    recording: bool = False
+    editing: bool = False
+    interaction: bool = False
