@@ -4466,6 +4466,8 @@ class ProductionRepository:
         给出可信读取身份时按同一判据在 SQL 里过滤（保证分页总数与条目一致）：
         私有素材只对上传者本人可见，shared 对成员可见，可见范围未知的按不可见处理。
         """
+        if not local_diagnostic and viewer_user_id is None and not include_private:
+            return [], 0
         clauses = ["workspace_id = ?"]
         parameters: list[object] = [workspace_id]
         owner_scoped = not local_diagnostic and not (viewer_user_id is None and include_private)

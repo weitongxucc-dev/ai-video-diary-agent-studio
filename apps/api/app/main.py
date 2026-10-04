@@ -12029,7 +12029,7 @@ def list_production_materials(
         tag=tag,
         review_status=review_status,
         media_type=media_type,
-        include_private=_content_include_private(request),
+        include_private=local_diagnostic,
         viewer_user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
@@ -12162,7 +12162,7 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     _material_ingestion_for(repository).scan_once()
     assets, total = repository.list_assets_page(
         workspace_id, limit=24, offset=0,
-        include_private=_content_include_private(request),
+        include_private=local_diagnostic,
         viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
     )
     return MaterialLibraryResponse(
@@ -12555,7 +12555,7 @@ def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     else:
         production_repo.scan_library(workspace_id)
     assets, total = production_repo.list_assets_page(
-        workspace_id, limit=24, offset=0, include_private=_content_include_private(request),
+        workspace_id, limit=24, offset=0, include_private=local_diagnostic,
         viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
     )
     return MaterialLibraryResponse(
