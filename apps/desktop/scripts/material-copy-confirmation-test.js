@@ -24,8 +24,10 @@ async function main() {
     directory_state: 'ready', bound_directory: materials, configured_directory: materials,
   };
   const confirmations = [];
+  const receivedIdentities = [];
   let status = 200;
   const server = http.createServer((request, reply) => {
+    receivedIdentities.push({ member: request.headers['x-local-member-token'], authorization: request.headers.authorization });
     if (request.method === 'GET' && request.url === '/api/production/materials/intake') {
       reply.writeHead(200, { 'content-type': 'application/json' });
       reply.end(JSON.stringify(binding));
@@ -57,10 +59,17 @@ async function main() {
       recordLifecycle: () => {},
     };
     vm.runInNewContext(sourceCode.slice(start, end) + '\nglobalThis.runImport = importMaterials;', context);
-    const options = { port: server.address().port, pickSources: async () => [source] };
+    const options = { port: server.address().port, pickSources: async () => [source],
+      identity: { localMemberToken: 'isolated-member-token', authorization: 'Bearer isolated-access-token' },
+    };
     const first = await context.runImport(options);
     assert.equal(first.copied.length, 1);
     assert.equal(first.failures.length, 0);
+    assert.ok(receivedIdentities.length >= 4);
+    for (const identity of receivedIdentities) {
+      assert.equal(identity.member, options.identity.localMemberToken);
+      assert.equal(identity.authorization, options.identity.authorization);
+    }
     const confirmation = confirmations[0];
     assert.equal(confirmation.relative_path, 'clip (1).mp4');
     assert.equal(confirmation.confirmation_source, 'app_import');
@@ -71,7 +80,7 @@ async function main() {
       size_bytes: copiedStat.size.toString(), mtime_ns: copiedStat.mtimeNs.toString(),
       ctime_ns: copiedStat.ctimeNs.toString(), inode: copiedStat.ino.toString(),
     });
-    console.log('PASS copy committed before confirmation; exact destination revision and collision name');
+    console.log('PASS current credentials on binding/revalidation/confirmation; committed exact revision and collision name');
 
     status = 409;
     const second = await context.runImport(options);

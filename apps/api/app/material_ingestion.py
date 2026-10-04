@@ -241,6 +241,7 @@ class MaterialIngestionService:
         relative_path: str,
         expected_revision: dict[str, str],
         confirmation_source: Literal["manual", "app_import"],
+        verified_owner_user_id: str | None = None,
     ) -> None:
         """Wake intake only after the repository persists this exact file revision.
 
@@ -252,6 +253,7 @@ class MaterialIngestionService:
             relative_path=relative_path,
             expected_revision=expected_revision,
             confirmation_source=confirmation_source,
+            verified_owner_user_id=verified_owner_user_id,
         )
         self.wake()
 
