@@ -36,6 +36,7 @@ import type {
   LocalModelCatalog,
   ModelInstallJob,
   OnboardingCompletionResponse,
+  ContentVisibility,
   MaterialAsset,
   MaterialCollection,
   MaterialCollections,
@@ -401,6 +402,46 @@ export function reviewProductionMaterial(
     method: "PUT",
     body: JSON.stringify(input),
   });
+}
+
+export function setMaterialVisibility(
+  assetId: string,
+  visibility: ContentVisibility,
+): Promise<MaterialAsset> {
+  return request<MaterialAsset>(
+    `/api/production/materials/${encodeURIComponent(assetId)}/visibility`,
+    { method: "PUT", body: JSON.stringify({ visibility }) },
+  );
+}
+
+export function setCreationTaskVisibility(
+  taskId: string,
+  visibility: ContentVisibility,
+): Promise<CreationTaskWorkspace> {
+  return request<CreationTaskWorkspace>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/visibility`,
+    { method: "PUT", body: JSON.stringify({ visibility }) },
+  );
+}
+
+export function setCreationPlanVisibility(
+  planId: string,
+  visibility: ContentVisibility,
+): Promise<CreationPlan> {
+  return request<CreationPlan>(
+    `/api/creation-plans/${encodeURIComponent(planId)}/visibility`,
+    { method: "PUT", body: JSON.stringify({ visibility }) },
+  );
+}
+
+export function setVideoTemplateVisibility(
+  templateId: string,
+  visibility: ContentVisibility,
+): Promise<{ item: VideoTemplate }> {
+  return request<{ item: VideoTemplate }>(
+    `/api/video-templates/${encodeURIComponent(templateId)}/visibility`,
+    { method: "PUT", body: JSON.stringify({ visibility }) },
+  );
 }
 
 export function updateMaterialUseState(assetId: string, useState: MaterialAsset["use_state"]): Promise<MaterialAsset> {

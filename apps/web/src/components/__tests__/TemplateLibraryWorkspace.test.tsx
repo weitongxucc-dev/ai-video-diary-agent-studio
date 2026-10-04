@@ -1,9 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { VideoTemplate } from "@/lib/types";
+const setVisibility = vi.fn();
+vi.mock("@/lib/api", () => ({ setVideoTemplateVisibility: (...args: unknown[]) => setVisibility(...args) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
 const template: VideoTemplate = {
+  visibility: "private",
   id: "template_1", version: 1, name: "视频日记", origin: "user", source_task_id: "task_1", source_timeline_version_id: "timeline_1", created_at: "2026-09-12",
   settings: { language: "zh-CN", aspect_ratio: "9:16", duration_target_seconds: 30, voice: null, style_instruction: "先讲结论", script_section_count: 3, fit_mode: "fit", subtitle_style: {} },
 };
@@ -94,5 +97,33 @@ describe("TemplateLibraryWorkspace", () => {
     render(<TemplateLibraryWorkspace offline={false} templates={[]} />);
     fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
     expect(screen.getByText(/还没有模板版本记录。/)).toBeInTheDocument();
+  });
+  it("shares a user template with the team and shows the visibility the API returned", async () => {
+    setVisibility.mockResolvedValue({ item: { ...template, visibility: "shared" } });
+    render(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
+
+    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+    expect(await screen.findByText("团队共享")).toBeInTheDocument();
+    expect(setVisibility).toHaveBeenCalledWith("template_1", "shared");
+  });
+
+  it("does not show a template as shared when the save fails", async () => {
+    setVisibility.mockRejectedValue(new Error("本地服务没有保存成功"));
+    render(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("本地服务没有保存成功");
+    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
+  });
+
+  it("offers revocation only for user templates", () => {
+    render(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, origin: "built_in" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /内置模板/ }));
+
+    expect(screen.queryByRole("button", { name: "共享给团队" })).not.toBeInTheDocument();
+    expect(screen.getByText("内置模板由系统提供，不单独设置可见范围。")).toBeInTheDocument();
   });
 });

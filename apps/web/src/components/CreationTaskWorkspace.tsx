@@ -43,7 +43,10 @@ import {
   generateCreationTaskTopics,
   getCreationTaskMontageClipCandidates,
   getCreationTaskTopics,
+  getCreationPlan,
   getCreationTaskWorkspace,
+  setCreationPlanVisibility,
+  setCreationTaskVisibility,
   getProductionMaterials,
   initializeCreationTaskTimeline,
   getCreationExecution,
@@ -1212,6 +1215,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [error, setError] = useState<ReturnType<typeof errorDetails> | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 共享/收回只用接口回读的值：保存失败就保持原样，不显示成已保存。
+  async function changeTaskVisibility(next: "private" | "shared") {
+    setVisibilityBusy(true);
+    setVisibilityError(null);
+    try {
+      const saved = await setCreationTaskVisibility(task.id, next);
+      setWorkspace((current) => ({ ...current, task: saved.task }));
+    } catch (err) {
+      setVisibilityError(err instanceof Error ? err.message : "共享设置没有保存成功，请再试一次。");
+    } finally {
+      setVisibilityBusy(false);
+    }
+  }
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(
     initialWorkspace.plan.selected_voice?.profile_id
       ?? initialWorkspace.available_voices.find((voice) => voice.runnable)?.profile_id
@@ -1259,6 +1275,33 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }).catch(() => undefined);
   }, []);
   const task = workspace.task;
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  // 方案可见范围回读值：接口返回什么就显示什么。
+  const [planVisibility, setPlanVisibility] = useState<"private" | "shared" | null>(null);
+
+  // 方案可见范围以方案自身的读取结果为准；读不到就显示未知，不假装是私有。
+  useEffect(() => {
+    let cancelled = false;
+    void getCreationPlan(task.plan_id)
+      .then((plan) => { if (!cancelled) setPlanVisibility(plan.visibility); })
+      .catch(() => { if (!cancelled) setPlanVisibility(null); });
+    return () => { cancelled = true; };
+  }, [task.plan_id]);
+
+  async function changePlanVisibility(next: "private" | "shared") {
+    setVisibilityBusy(true);
+    setVisibilityError(null);
+    try {
+      const saved = await setCreationPlanVisibility(task.plan_id, next);
+      setPlanVisibility(saved.visibility);
+    } catch (err) {
+      setVisibilityError(err instanceof Error ? err.message : "方案共享设置没有保存成功，请再试一次。");
+    } finally {
+      setVisibilityBusy(false);
+    }
+  }
+
   useEffect(() => {
     let active = true;
     setAssistantTurns([]);
@@ -1952,7 +1995,20 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     : <Inspector activeView={activeView} busy={busy !== null} error={error} onPreparePersonEdit={preparePersonEdit} selectedContext={selectedEditContext} workspace={workspace} />;
 
   return (
-    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button><button className={editorUi.iconButton} aria-label="电脑录音替换旁白" title="用本机录音替换整条旁白" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={17} /></button><button className={editorUi.iconButton} aria-label="历史时间线版本" title="查看这个任务的历史时间线版本" onClick={() => setHistoryOpen((open) => !open)} type="button"><History size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
+    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span><span className={styles.taskVisibility}>
+      <span>{task.visibility === "shared" ? "团队共享" : "仅自己可见"}</span>
+      {task.visibility === "shared"
+        ? <button disabled={visibilityBusy || busy !== null} onClick={() => void changeTaskVisibility("private")} type="button">收回</button>
+        : <button disabled={visibilityBusy || busy !== null} onClick={() => void changeTaskVisibility("shared")} type="button">共享给团队</button>}
+      {visibilityError ? <span role="alert">{visibilityError}</span> : null}
+    </span><span className={styles.taskVisibility}>
+      <span>方案：{planVisibility === null ? "—" : planVisibility === "shared" ? "团队共享" : "仅自己可见"}</span>
+      {planVisibility === "shared"
+        ? <button disabled={visibilityBusy || busy !== null} onClick={() => void changePlanVisibility("private")} type="button">方案收回</button>
+        : planVisibility === "private"
+          ? <button disabled={visibilityBusy || busy !== null} onClick={() => void changePlanVisibility("shared")} type="button">方案共享给团队</button>
+          : null}
+    </span></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button><button className={editorUi.iconButton} aria-label="电脑录音替换旁白" title="用本机录音替换整条旁白" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={17} /></button><button className={editorUi.iconButton} aria-label="历史时间线版本" title="查看这个任务的历史时间线版本" onClick={() => setHistoryOpen((open) => !open)} type="button"><History size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <div className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
         <nav className={editorUi.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage) => {
           const presentation = productStageState(

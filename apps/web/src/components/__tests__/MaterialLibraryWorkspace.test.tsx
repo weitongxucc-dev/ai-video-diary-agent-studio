@@ -19,7 +19,7 @@ import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeSt
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
-const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
+const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", visibility:"private", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
 const library={ assets:[asset], total_count:1, limit:24, offset:0, has_more:false };

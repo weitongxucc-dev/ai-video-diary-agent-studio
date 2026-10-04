@@ -311,6 +311,7 @@ export type VideoTemplateSettings = {
 export type VideoTemplate = {
   id: string;
   version: number;
+  visibility: ContentVisibility;
   name: string;
   origin: "built_in" | "user";
   settings: VideoTemplateSettings;
@@ -1043,10 +1044,14 @@ export type MaterialSegmentMatch = {
   reasons: string[];
 };
 
+/** 内容可见范围：private 仅自己，shared 与团队成员共享。回读同一列。 */
+export type ContentVisibility = "private" | "shared";
+
 export type CreationTask = {
   id: string;
   workspace_id: string;
   plan_id: string;
+  visibility: ContentVisibility;
   name: string;
   scenario: string;
   stage: "topic" | "script" | "narration" | "montage" | "review";
@@ -1664,6 +1669,7 @@ export type WorkspaceAssistantPlanTurnResponse = {
 export type CreationPlan = CreationPlanPreview & {
   id: string;
   workspace_id: string;
+  visibility: ContentVisibility;
   status: "confirmed";
   creation_task: CreationTask;
   created_at: string;
@@ -1778,6 +1784,7 @@ export type MaterialIntakeStatus = {
 export type MaterialAsset = {
   id: string;
   workspace_id: string;
+  visibility: ContentVisibility;
   file_name: string;
   path: string;
   size_bytes: number;
