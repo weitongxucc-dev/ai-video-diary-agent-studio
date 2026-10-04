@@ -12029,7 +12029,7 @@ def list_production_materials(
         tag=tag,
         review_status=review_status,
         media_type=media_type,
-        include_private=_content_include_private(request),
+        include_private=local_diagnostic,
         viewer_user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
@@ -12106,7 +12106,9 @@ def _material_ingestion_for(repository: ProductionRepository):
 @app.get("/api/production/materials/intake", response_model=MaterialIntakeStatusResponse)
 def get_material_intake_status(request: Request) -> MaterialIntakeStatusResponse:
     repository = production_repo
-    return _material_binding_status(current_workspace_id(request), repository)
+    workspace_id = current_workspace_id(request)
+    _content_reader(request, workspace_id)
+    return _material_binding_status(workspace_id, repository)
 
 
 @app.post("/api/production/materials/intake/bind", response_model=MaterialIntakeStatusResponse)
@@ -12136,6 +12138,7 @@ def confirm_material_copy_complete(request: Request, payload: MaterialCopyComple
             workspace_id, relative_path=payload.relative_path,
             expected_revision=payload.expected_revision.model_dump(),
             confirmation_source=payload.confirmation_source,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -12149,6 +12152,7 @@ def confirm_material_copy_complete(request: Request, payload: MaterialCopyComple
 @app.post("/api/production/materials/intake/scan")
 def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     repository = production_repo
     status = _material_binding_status(workspace_id, repository)
     if not status.bound_to_current_workspace:
@@ -12156,7 +12160,11 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
     if status.directory_state != "ready":
         raise HTTPException(status_code=409, detail=status.directory_message)
     _material_ingestion_for(repository).scan_once()
-    assets, total = repository.list_assets_page(workspace_id, limit=24, offset=0)
+    assets, total = repository.list_assets_page(
+        workspace_id, limit=24, offset=0,
+        include_private=local_diagnostic,
+        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+    )
     return MaterialLibraryResponse(
         assets=[_material_asset_response(asset) for asset in assets],
         total_count=total, limit=24, offset=0, has_more=len(assets) < total,
@@ -12164,7 +12172,8 @@ def scan_material_intake(request: Request) -> MaterialLibraryResponse:
 
 
 def _media_link_service(
-    workspace_id: str, verified_owner_user_id: str | None = None
+    workspace_id: str, verified_owner_user_id: str | None = None,
+    local_diagnostic: bool = False,
 ) -> MediaLinkImportService:
     """Build the direct-link importer on top of the existing intake binding."""
     repository = production_repo
@@ -12178,7 +12187,9 @@ def _media_link_service(
             follow_redirects=False, timeout=60.0, trust_env=False
         ),
         intake_root=intake_root,
-        provenance=MaterialLinkProvenanceSink(repository, workspace_id, verified_owner_user_id),
+        provenance=MaterialLinkProvenanceSink(
+            repository, workspace_id, verified_owner_user_id, local_diagnostic,
+        ),
         max_bytes=DEFAULT_MAX_BYTES,
     )
 
@@ -12227,7 +12238,8 @@ def import_production_material_link(
 ) -> MediaLinkImportResponse:
     workspace_id = current_workspace_id(request)
     # 导入的素材归属这次请求的可信身份，不采信任何自填值。
-    service = _media_link_service(workspace_id, _content_reader(request, workspace_id)[0])
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    service = _media_link_service(workspace_id, viewer_user_id, local_diagnostic)
     try:
         result = service.import_link(payload.url)
         asset = production_repo.get_asset(workspace_id, result.asset_id)
@@ -12485,20 +12497,26 @@ def get_production_material(
     asset_id: str,
     request: Request,
 ) -> MaterialAssetResponse:
+    workspace_id = current_workspace_id(request)
     try:
-        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+        asset = production_repo.get_asset(workspace_id, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="material asset not found")
     return _material_asset_response(asset)
 
 
 @app.get("/api/production/materials/{asset_id}/media")
 def stream_production_material(asset_id: str, request: Request) -> FileResponse:
     """Stream a workspace-scoped library asset for the desktop review player."""
+    workspace_id = current_workspace_id(request)
     try:
-        asset = production_repo.get_asset(current_workspace_id(request), asset_id)
+        asset = production_repo.get_asset(workspace_id, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="material asset not found") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=404, detail="material asset not found")
     root = Path(settings.video_inbox_path).expanduser().resolve()
     path = Path(asset.path).expanduser().resolve()
     try:
@@ -12531,11 +12549,15 @@ def stream_production_material(asset_id: str, request: Request) -> FileResponse:
 )
 def scan_production_materials(request: Request) -> MaterialLibraryResponse:
     workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     if material_execution_mode == "scheduled":
         _material_ingestion_for(production_repo).scan_once()
     else:
         production_repo.scan_library(workspace_id)
-    assets, total = production_repo.list_assets_page(workspace_id, limit=24, offset=0)
+    assets, total = production_repo.list_assets_page(
+        workspace_id, limit=24, offset=0, include_private=local_diagnostic,
+        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+    )
     return MaterialLibraryResponse(
         assets=[
             _material_asset_response(asset)

@@ -24,8 +24,10 @@ async function main() {
     directory_state: 'ready', bound_directory: materials, configured_directory: materials,
   };
   const confirmations = [];
+  const receivedIdentities = [];
   let status = 200;
   const server = http.createServer((request, reply) => {
+    receivedIdentities.push({ member: request.headers['x-local-member-token'], authorization: request.headers.authorization });
     if (request.method === 'GET' && request.url === '/api/production/materials/intake') {
       reply.writeHead(200, { 'content-type': 'application/json' });
       reply.end(JSON.stringify(binding));
@@ -57,10 +59,37 @@ async function main() {
       recordLifecycle: () => {},
     };
     vm.runInNewContext(sourceCode.slice(start, end) + '\nglobalThis.runImport = importMaterials;', context);
-    const options = { port: server.address().port, pickSources: async () => [source] };
-    const first = await context.runImport(options);
+    let importHandler;
+    context.ipcMain = { handle: (_name, callback) => { importHandler = callback; } };
+    context.apiPort = server.address().port;
+    context.serviceStates = { api: { state: 'ready' } };
+    context.pickMaterialSources = async () => [source];
+    const handlerStart = sourceCode.indexOf("ipcMain.handle('import-materials'");
+    const handlerEnd = sourceCode.indexOf("ipcMain.handle('", handlerStart + 10);
+    assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+    vm.runInNewContext(sourceCode.slice(handlerStart, handlerEnd), context);
+    let bridge;
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), {
+      process: { platform: 'darwin' },
+      require: () => ({
+        contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
+        ipcRenderer: { invoke: (name, identity) => {
+          assert.equal(name, 'import-materials');
+          return importHandler({}, identity);
+        } },
+      }),
+    });
+    const options = { port: server.address().port, pickSources: async () => [source],
+      identity: { localMemberToken: 'isolated-member-token', authorization: 'Bearer isolated-access-token' },
+    };
+    const first = await bridge.importMaterials(options.identity);
     assert.equal(first.copied.length, 1);
     assert.equal(first.failures.length, 0);
+    assert.ok(receivedIdentities.length >= 4);
+    for (const identity of receivedIdentities) {
+      assert.equal(identity.member, options.identity.localMemberToken);
+      assert.equal(identity.authorization, options.identity.authorization);
+    }
     const confirmation = confirmations[0];
     assert.equal(confirmation.relative_path, 'clip (1).mp4');
     assert.equal(confirmation.confirmation_source, 'app_import');
@@ -71,10 +100,10 @@ async function main() {
       size_bytes: copiedStat.size.toString(), mtime_ns: copiedStat.mtimeNs.toString(),
       ctime_ns: copiedStat.ctimeNs.toString(), inode: copiedStat.ino.toString(),
     });
-    console.log('PASS copy committed before confirmation; exact destination revision and collision name');
+    console.log('PASS current credentials on binding/revalidation/confirmation; committed exact revision and collision name');
 
     status = 409;
-    const second = await context.runImport(options);
+    const second = await bridge.importMaterials(options.identity);
     assert.equal(second.copied.length, 0);
     assert.equal(second.failures.length, 1);
     assert.match(second.failures[0].error, /文件已复制.*接收确认未保存.*HTTP 409/);
