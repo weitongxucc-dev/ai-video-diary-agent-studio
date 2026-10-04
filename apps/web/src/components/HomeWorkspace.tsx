@@ -171,7 +171,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
                 ? ` · ${Object.entries(home.device_queue.counts).map(([key, value]) => `${runtimeStateLabel(key)} ${value}`).join(" · ")}`
                 : " · 状态分布未读到")
               + ` · ${scopeLabel(home.device_queue.meta.scope)} · 更新于 ${new Date(home.device_queue.meta.as_of).toLocaleString("zh-CN")}`
-            : "当前工作区任务；整机队列待接入"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard ? dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>) : home ? <div className={styles.cardEmpty}>整机状态见本页其他卡片；本人可进入的任务见下方「我的任务」。</div> : tasks.length ? tasks.slice(0, 5).map((task) => { const state = creationTaskStatusPresentation(task.stage_status, task.stage); return <button className={styles.queueRow} key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button"><span className={styles.queueDot} /><div><strong>{taskName(task.name)}</strong><small>{state.stageLabel} · {state.label}</small></div><ArrowRight size={14} /></button>; }) : <div className={styles.cardEmpty}>还没有创作任务。可以在左侧告诉助手要做什么。</div>}</section>
+            : "当前工作区任务；整机队列待接入"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard ? dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>) : home ? <div className={styles.cardEmpty}>没有本人正在处理的任务</div> : tasks.length ? tasks.slice(0, 5).map((task) => { const state = creationTaskStatusPresentation(task.stage_status, task.stage); return <button className={styles.queueRow} key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button"><span className={styles.queueDot} /><div><strong>{taskName(task.name)}</strong><small>{state.stageLabel} · {state.label}</small></div><ArrowRight size={14} /></button>; }) : <div className={styles.cardEmpty}>还没有创作任务。可以在左侧告诉助手要做什么。</div>}</section>
       <section className={styles.card}><div className={styles.cardHeading}><div><h2>内容标签词云</h2><small>{dashboard ? "按示例可见素材去重计数" : realTags.length ? "按素材去重计数 · 点击进入素材库" : insights === undefined ? "标签统计未载入" : insights === null ? "标签统计读取失败，请刷新重试" : "当前工作区还没有素材标签"}</small></div></div>{example?.tags.length ? <div className={styles.cloudField}>{example.tags.map((item) => <button aria-pressed={selectedFilter?.kind === "tag" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "tag", key: item.label, label: item.label })} style={{ fontSize: 12 + Math.min(12, item.count * 2) }} type="button">{item.label}<sup>{item.count}</sup></button>)}</div> : realTags.length ? <div className={styles.cloudField}>{realTags.map((item) => <Link className={styles.cloudLink} href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} style={{ fontSize: 12 + Math.min(12, item.asset_count * 2) }}>{item.tag}<sup>{item.asset_count}</sup></Link>)}</div> : <div className={styles.cardEmpty}>{dashboard ? "示例范围没有可见素材标签" : insights === null ? "标签统计读取失败，请刷新重试" : insights === undefined ? "标签统计未载入" : "当前工作区还没有素材标签"}</div>}</section>
       <section className={styles.card}>{home ? null : <><h2>近期作品</h2>{dashboard ? dashboard.works.map((item) => <div className={styles.workRow} key={item.id}><span><PlayCircle size={16} /></span><div><strong>{item.title}</strong><small>{item.status}</small></div></div>) : readyTasks.length ? <><small>当前工作区的本地成片，未代表平台发布</small>{readyTasks.slice(0, 3).map((task) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(task.id)} key={task.id}><span><PlayCircle size={16} /></span><div><strong>{taskName(task.name)}</strong><small>本地成片可查看</small></div></Link>)}</> : <div className={styles.cardEmpty}>还没有可查看的本地成片</div>}</>}</section>
     </div>
@@ -189,7 +189,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
       {home.unknown.length ? <section className={styles.card}><h2>没有真实数据的项</h2><dl className={styles.homeFacts}>{home.unknown.map((item) => <div key={item.key}><dt>{unknownKeyLabel(item.key)}</dt><dd>{item.reason}</dd></div>)}</dl></section> : null}
       {live?.error ? <div className={styles.readiness} role="alert"><strong>{live.error}</strong><button onClick={live.onRetry} type="button">重新读取</button></div> : null}
     </> : null}
-    <p className={styles.note}>{dashboard ? "本页数字与筛选均为隔离展示页示例；真实统计与跨空间权限尚未接入。" : home ? "整机数字为匿名汇总；明细只含当前身份可进入的任务。行业分类仍待定义。" : "概览数字与图表等待按权限汇总的接口；现有任务只代表当前工作区。"}</p>
+    <p className={styles.note}>{dashboard ? "本页数字与筛选均为隔离展示页示例；真实统计与跨空间权限尚未接入。" : home ? "口径与更新时间见各卡片；明细只含当前身份可进入的任务。行业分类仍待定义。" : "概览数字与图表等待按权限汇总的接口；现有任务只代表当前工作区。"}</p>
     {dashboard && selectedFilter ? <HomeCardDialog onClose={() => setSelectedFilter(null)} title="示例素材筛选">
       <div className={styles.filterResults}><p>筛选意图：{selectedFilter.kind === "industry" ? "行业" : "标签"} · {selectedFilter.label}。真实素材库精确筛选尚未接入。</p><strong>{filteredExampleAssets.length} 条对应示例素材</strong>{filteredExampleAssets.map((asset) => <div className={styles.filterResult} key={asset.id}><span>{asset.title}</span><small>{asset.industry} · {asset.tags.join("、")}</small></div>)}</div>
     </HomeCardDialog> : null}
@@ -226,6 +226,10 @@ const sourceLabels: Record<string, string> = {
 };
 // 服务端的 unknown.key 与 directory_state 是技术串，界面上给中文说法。
 const unknownKeyLabels: Record<string, string> = {
+  "materials.by_industry": "素材行业分布",
+  "device_queue.analysis": "分析任务的运行与排队数",
+  device_queue: "整机运行与排队统计",
+  "storage.capacity": "存储容量",
   voices: "声音库统计", tasks: "任务统计", works: "作品统计",
   knowledge_sources: "知识来源统计", analysis_ready: "分析可用数",
   analysis_pending: "待分析数", visible_assets: "可见素材数",
@@ -234,8 +238,8 @@ function unknownKeyLabel(key: string) {
   return unknownKeyLabels[key] ?? "其他统计";
 }
 const directoryStateLabels: Record<string, string> = {
-  connected: "数据盘已连接", missing: "数据盘未连接", unwritable: "数据盘不可写",
-  unknown: "数据盘状态未知",
+  missing: "数据盘目录不存在", unmounted: "数据盘未挂载",
+  invalid: "数据盘路径无效", read_only: "数据盘只读", ready: "数据盘可用",
 };
 function directoryStateLabel(state: string) {
   return directoryStateLabels[state] ?? "数据盘状态未知";
@@ -248,11 +252,12 @@ function sourceLabel(source: string) {
 }
 // 整机状态计数里的状态名用中文说明；ready 是「已就绪」，不是正在运行。
 // 状态计数的技术键（job.* / intake.*）只在这里翻成中文，不直接铺到界面上。
+// 状态全集与后端一致（job_runs 的状态 / 素材接收状态），不另造状态词。
 const runtimeStateLabels: Record<string, string> = {
-  "job.ready": "任务已就绪", "job.running": "任务处理中", "job.queued": "任务排队中",
-  "job.waiting": "任务等待中", "job.waiting_for_user": "任务等待确认", "job.failed": "任务需要处理",
-  "intake.receiving": "素材接收中", "intake.pending": "素材待接收",
-  "intake.observing": "素材待确认", "intake.analyzing": "素材分析中", "intake.failed": "素材需要处理",
+  "job.queued": "任务排队中", "job.running": "任务处理中", "job.succeeded": "任务已完成",
+  "job.failed": "任务失败", "job.cancelled": "任务已取消", "job.interrupted": "任务中断待恢复",
+  "intake.observing": "素材待确认", "intake.running": "素材接收中", "intake.ready": "素材已就绪",
+  "intake.failed": "素材接收失败", "intake.blocked_disk": "素材被数据盘阻塞",
 };
 function runtimeStateLabel(key: string) {
   return runtimeStateLabels[key] ?? "其他状态";
@@ -329,9 +334,14 @@ export function HomeDashboardLive() {
     }
   }
 
-  // 跨标签页写入与切回窗口时，让既有钩子重新收敛身份。
+  // 跨标签页写入或切回窗口：令牌可能已经变了，而 whoami 收敛是异步的，
+  // 所以先作废在途请求并清空当前身份的私有内容，再让既有钩子重新收敛。
   useEffect(() => {
-    const apply = () => identity.refresh();
+    const apply = () => {
+      requestRef.current += 1;
+      setData(null); setTasks([]); setFoundation(null); setInsights(null);
+      identity.refresh();
+    };
     window.addEventListener("storage", apply);
     window.addEventListener("focus", apply);
     return () => {

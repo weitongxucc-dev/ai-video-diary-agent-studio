@@ -47,7 +47,7 @@ function payload(days: 7 | 30, title: string): HomeAggregation {
     counts: [{ key: "visible_assets", label: "可见素材", value: days === 7 ? 7 : 30, meta }],
     trend: { days, points: [], meta },
     device_queue: { counts: { "job.ready": 2 }, records_total: 2, running: null, queued: null, meta },
-    storage: { directory_state: "connected", bound_to_current_workspace: true, bound_to_another_workspace: false, configured_path_changed: false, capacity: null, meta },
+    storage: { directory_state: "ready", bound_to_current_workspace: true, bound_to_another_workspace: false, configured_path_changed: false, capacity: null, meta },
     entries: {
       queue: [{ task_id: "task-a", title, stage: "montage", status: "running", updated_at: "2026-10-04T00:00:00Z" }],
       todos: [], works: [], meta,
