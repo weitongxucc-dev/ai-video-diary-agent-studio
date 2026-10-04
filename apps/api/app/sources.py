@@ -48,6 +48,8 @@ class SourceItem:
     content_hash: str | None = None
     sections: tuple[KnowledgeSection, ...] = ()
     parameters: tuple[KnowledgeParameter, ...] = ()
+    # 网页快照的抓取时间；其他来源没有抓取动作时为空。
+    fetched_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -63,6 +65,9 @@ class KnowledgeItemVersion:
     sections: tuple[KnowledgeSection, ...]
     parameters: tuple[KnowledgeParameter, ...]
     saved_at: datetime
+    # 这一版内容实际从哪个网址抓来、什么时候抓的。网页快照回查当时内容靠它。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,9 @@ class KnowledgeItem:
     content_hash: str | None = None
     sections: tuple[KnowledgeSection, ...] = ()
     parameters: tuple[KnowledgeParameter, ...] = ()
+    # 当前版本内容的抓取时间；不是网页快照时为空。
+    fetched_at: datetime | None = None
+    source_url: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

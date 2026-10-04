@@ -19,6 +19,7 @@ const item: KnowledgeItem = {
   file_reference: "/local/reference/manual.pdf", authorization: "内部使用",
   ownership: "当前工作区", source_item_id: "source-one", version: "v2",
   content_hash: null, sections: [], parameters: [],
+  fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
 };
 beforeEach(() => {

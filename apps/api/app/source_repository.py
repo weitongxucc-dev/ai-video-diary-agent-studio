@@ -178,8 +178,8 @@ class SourceRepository:
             INSERT INTO knowledge_items (
                 id, workspace_id, content_type, title, body, file_reference,
                 authorization, ownership, source_item_id, version, created_at,
-                visibility, content_hash, sections, parameters
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                visibility, content_hash, sections, parameters, fetched_at, source_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -199,6 +199,8 @@ class SourceRepository:
                 item.content_hash,
                 _sections_json(item.sections),
                 _parameters_json(item.parameters),
+                item.fetched_at.isoformat() if item.fetched_at else None,
+                item.source_url,
             ),
         )
 
@@ -241,34 +243,40 @@ class SourceRepository:
         ownership: str,
         authorization: str,
     ) -> KnowledgeItem:
-        """同内容不新增版本、不回滚旧版；原文件内容更新时保留旧版并追加新版本。
+        """同内容不新增版本、不回滚旧版；原内容变化时保留旧版并追加新版本。
 
-        重复判断按内容指纹，不按随机 source_item_id：同一文件被导入两次、不同
-        文件名下同一内容、以及重新导入某个历史版本的内容，都命中已有指纹。
-        版本链只接文件解析出来的条目，手动保存的资料不并入同一条链。
+        文件来源：重复判断按内容指纹，不按随机 source_item_id；同一文件被导入两次、
+        不同文件名下同一内容、以及重新导入某个历史版本的内容，都命中已有指纹。
+
+        网页快照：按原网址分组。两个不同网址即使正文完全一样，也是两条独立出处，
+        不能把后来的网址存进前一个网址的版本链丢掉它自己的原网址。
         """
         with self._connect() as conn:
+            is_web_snapshot = source.source_label == "web_snapshot"
+            scope_sql = "AND file_reference = ?" if is_web_snapshot else ""
+            scope = (source.file_reference,) if is_web_snapshot else ()
             same_head = conn.execute(
-                """
+                f"""
                 SELECT * FROM knowledge_items
-                WHERE workspace_id = ? AND content_hash = ?
+                WHERE workspace_id = ? AND content_hash = ? {scope_sql}
                 ORDER BY created_at LIMIT 1
                 """,
-                (workspace_id, source.content_hash),
+                (workspace_id, source.content_hash, *scope),
             ).fetchone()
             if same_head is not None:
                 return self._knowledge_item_from_row(same_head)
             # 指纹已存在于历史版本：不新建、不改写旧快照，也不把当前版本回滚到旧内容。
             stored_version = conn.execute(
-                """
+                f"""
                 SELECT v.knowledge_item_id AS knowledge_item_id, v.version AS version
                 FROM knowledge_item_versions v
                 JOIN knowledge_items k ON k.id = v.knowledge_item_id
                 WHERE v.workspace_id = ? AND v.content_hash = ?
                   AND k.workspace_id = ? AND k.content_hash <> v.content_hash
+                  {"AND k.file_reference = ?" if is_web_snapshot else ""}
                 ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
                 """,
-                (workspace_id, source.content_hash, workspace_id),
+                (workspace_id, source.content_hash, workspace_id, *scope),
             ).fetchone()
             if stored_version is not None:
                 head = conn.execute(
@@ -276,7 +284,8 @@ class SourceRepository:
                     (stored_version["knowledge_item_id"], workspace_id),
                 ).fetchone()
                 return self._knowledge_item_from_row(head)
-            # 原文件更新沿用同一知识条目：链按文件引用串，不按每次导入的 source_item_id。
+            # 原内容更新沿用同一知识条目：链按文件引用（网页即原网址）串，不按每次导入的
+            # source_item_id。
             parent = (
                 conn.execute(
                     """
@@ -315,6 +324,8 @@ class SourceRepository:
                 content_hash=source.content_hash,
                 sections=source.sections,
                 parameters=source.parameters,
+                fetched_at=source.fetched_at,
+                source_url=source.source_url,
             )
             self._validate_knowledge_item(item)
             # 知识条目头与它的第一版快照在同一事务写入，回查不会看到没有版本的条目。
@@ -333,6 +344,8 @@ class SourceRepository:
                     sections=item.sections,
                     parameters=item.parameters,
                     saved_at=item.created_at,
+                    fetched_at=source.fetched_at,
+                    source_url=source.source_url,
                 )
             return self.get_knowledge_item(workspace_id, item.id)
         previous = self._knowledge_item_from_row(parent)
@@ -362,7 +375,7 @@ class SourceRepository:
                 UPDATE knowledge_items SET
                     content_type = ?, title = ?, body = ?, file_reference = ?,
                     version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?
+                    source_item_id = ?, fetched_at = ?, source_url = ?
                 WHERE id = ? AND workspace_id = ?
                 """,
                 (
@@ -375,6 +388,8 @@ class SourceRepository:
                     _sections_json(source.sections),
                     _parameters_json(source.parameters),
                     source.id,
+                    source.fetched_at.isoformat() if source.fetched_at else None,
+                    source.source_url,
                     previous.id,
                     workspace_id,
                 ),
@@ -392,22 +407,33 @@ class SourceRepository:
                 sections=source.sections,
                 parameters=source.parameters,
                 saved_at=_utc_now(),
+                fetched_at=source.fetched_at,
+                source_url=source.source_url,
             )
         return self.get_knowledge_item(workspace_id, previous.id)
 
     def find_version_by_content_hash(
-        self, workspace_id: str, content_hash: str
+        self,
+        workspace_id: str,
+        content_hash: str,
+        *,
+        knowledge_item_id: str | None = None,
     ) -> KnowledgeItemVersion | None:
-        """查出某个内容指纹对应的已保存历史版本（重复结果定位）。"""
+        """查出某个内容指纹对应的已保存历史版本（重复结果定位）。
+
+        网页快照传 knowledge_item_id：只在自己的版本链里找，不会把另一个网址的
+        版本当成这里的重复结果。
+        """
         self._require_workspace(workspace_id)
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT * FROM knowledge_item_versions
                 WHERE workspace_id = ? AND content_hash = ?
+                {"AND knowledge_item_id = ?" if knowledge_item_id else ""}
                 ORDER BY saved_at DESC LIMIT 1
                 """,
-                (workspace_id, content_hash),
+                (workspace_id, content_hash, *((knowledge_item_id,) if knowledge_item_id else ())),
             ).fetchone()
         if row is None:
             return None
@@ -427,6 +453,8 @@ class SourceRepository:
                 for parameter in json.loads(row["parameters"])
             ),
             saved_at=_parse_datetime(row["saved_at"]),
+            fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
+            source_url=row["source_url"],
         )
 
     def list_knowledge_item_versions(
@@ -459,6 +487,8 @@ class SourceRepository:
                     for parameter in json.loads(row["parameters"])
                 ),
                 saved_at=_parse_datetime(row["saved_at"]),
+                fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
+                source_url=row["source_url"],
             )
             for row in rows
         ]
@@ -478,13 +508,16 @@ class SourceRepository:
         sections: tuple[KnowledgeSection, ...],
         parameters: tuple[KnowledgeParameter, ...],
         saved_at: datetime,
+        fetched_at: datetime | None = None,
+        source_url: str | None = None,
     ) -> None:
         conn.execute(
             """
             INSERT INTO knowledge_item_versions (
                 knowledge_item_id, workspace_id, version, content_hash, title,
-                body, file_reference, source_item_id, sections, parameters, saved_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                body, file_reference, source_item_id, sections, parameters, saved_at,
+                fetched_at, source_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 knowledge_item_id,
@@ -498,6 +531,8 @@ class SourceRepository:
                 _sections_json(sections),
                 _parameters_json(parameters),
                 saved_at.isoformat(),
+                fetched_at.isoformat() if fetched_at else None,
+                source_url,
             ),
         )
 
@@ -726,6 +761,7 @@ class SourceRepository:
                     license TEXT NOT NULL,
                     title TEXT NOT NULL,
                     file_reference TEXT,
+                    fetched_at TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(connector_id) REFERENCES source_connectors(id)
                 );
@@ -762,6 +798,8 @@ class SourceRepository:
                     source_item_id TEXT,
                     sections TEXT NOT NULL DEFAULT '[]',
                     parameters TEXT NOT NULL DEFAULT '[]',
+                    fetched_at TEXT,
+                    source_url TEXT,
                     saved_at TEXT NOT NULL,
                     PRIMARY KEY (knowledge_item_id, version),
                     FOREIGN KEY(knowledge_item_id) REFERENCES knowledge_items(id)
@@ -810,6 +848,26 @@ class SourceRepository:
                 ):
                     if column not in existing:
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            # 本卡（WIL-134）新增网页快照列：抓取时间和当次读到的网址。
+            for table in ("source_items", "knowledge_items"):
+                existing = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                for column, ddl in (
+                    ("fetched_at", "TEXT"),
+                    ("source_url", "TEXT"),
+                ):
+                    if column not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            version_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(knowledge_item_versions)")
+            }
+            for column in ("fetched_at", "source_url"):
+                if column not in version_columns:
+                    conn.execute(
+                        f"ALTER TABLE knowledge_item_versions ADD COLUMN {column} TEXT"
+                    )
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(
@@ -857,8 +915,8 @@ class SourceRepository:
                     id, workspace_id, connector_id, source_label, source_url, content_type,
                     author, published_at, body, subtitles, media_references,
                     license, title, file_reference, created_at, content_hash,
-                    sections, parameters
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sections, parameters, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_label = excluded.source_label,
                     source_url = excluded.source_url,
@@ -873,7 +931,8 @@ class SourceRepository:
                     file_reference = excluded.file_reference,
                     content_hash = excluded.content_hash,
                     sections = excluded.sections,
-                    parameters = excluded.parameters
+                    parameters = excluded.parameters,
+                    fetched_at = excluded.fetched_at
                 WHERE source_items.workspace_id = excluded.workspace_id
                 """,
                 (
@@ -895,6 +954,7 @@ class SourceRepository:
                     item.content_hash,
                     _sections_json(item.sections),
                     _parameters_json(item.parameters),
+                    item.fetched_at.isoformat() if item.fetched_at else None,
                 ),
             )
 
@@ -926,6 +986,7 @@ class SourceRepository:
             content_hash=row["content_hash"],
             sections=tuple(KnowledgeSection(**section) for section in json.loads(row["sections"])),
             parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
+            fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
             created_at=_parse_datetime(row["created_at"]),
         )
 
@@ -938,6 +999,8 @@ class SourceRepository:
             content_hash=row["content_hash"],
             sections=tuple(KnowledgeSection(**section) for section in json.loads(row["sections"])),
             parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
+            fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
+            source_url=row["source_url"],
             created_at=_parse_datetime(row["created_at"]),
         )
 

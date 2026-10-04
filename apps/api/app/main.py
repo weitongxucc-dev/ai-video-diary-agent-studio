@@ -13253,12 +13253,14 @@ def save_source_item_to_knowledge(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response = _knowledge_item_response(item)
-    # 重复结果只来自文件解析链：内容指纹命中已有历史版本时给出对应版本号。
+    # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
     if item.content_hash is not None and response.duplicate_of_version is None:
         source = source_repository.get_source_item(workspace_id, source_item_id)
         if source.content_hash != item.content_hash:
             stored = source_repository.find_version_by_content_hash(
-                workspace_id, source.content_hash
+                workspace_id,
+                source.content_hash,
+                knowledge_item_id=item.id if source.source_label == "web_snapshot" else None,
             )
             response.duplicate_of_version = stored.version if stored else None
     return response
@@ -13417,6 +13419,73 @@ def ingest_manual_link(
         workspace_id,
         source_repository.list_source_items(workspace_id, connector.id),
     )
+
+
+@app.post("/api/source-items/link", response_model=SourceItemDetailResponse)
+def capture_web_snapshot(
+    request: Request,
+    payload: ManualLinkRequest,
+) -> SourceItemDetailResponse:
+    """抓一个普通网址的完整正文快照，保存用户输入的原网址和抓取时间。
+
+    原网址就是用户填的那个地址，并按它串版本；重定向到的地址作为附加事实记录，
+    不替换原网址。相同正文不新增版本（保存到知识库时由内容指纹判定）；网址内容
+    更新时另存新版本，旧版本及其快照保持不变。登录、不可达或没有正文按真实失败。
+    """
+    url = payload.url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+    workspace_id = current_workspace_id(request)
+    connector = _compat_connector(
+        workspace_id,
+        "web_snapshot",
+        platform="web_snapshot",
+        protocol="https",
+        account_or_rule="网页快照",
+    )
+    try:
+        fetched = HtmlPageSourceClient([url]).fetch_page(url)
+    except ExternalSourceResponseError as exc:
+        failure = SourceSyncFailedError(
+            source_repository.record_sync_failure(
+                workspace_id,
+                connector.id,
+                reason=str(exc),
+                impact=exc.impact,
+                repair_action=exc.repair_action,
+                retryable=exc.retryable,
+                connection_status=exc.kind,
+            )
+        )
+        raise _source_failure_http_exception(failure) from exc
+    snapshot = fetched.snapshot
+    item = source_repository.save_source_items(
+        workspace_id,
+        [
+            SourceItem(
+                id=f"source_{uuid4().hex}",
+                workspace_id=workspace_id,
+                connector_id=connector.id,
+                source_label="web_snapshot",
+                source_url=url,
+                content_type="article",
+                author=None,
+                published_at=None,
+                body=snapshot.full_text,
+                subtitles=None,
+                media_references=(),
+                license="user_provided",
+                title=snapshot.title,
+                # 版本链按用户填的原网址串，不按重定向后的地址，也不按随机条目 id。
+                file_reference=url,
+                content_hash=snapshot.content_hash,
+                sections=snapshot.sections,
+                parameters=(),
+                fetched_at=fetched.fetched_at,
+            )
+        ],
+    )[0]
+    return _source_item_response(item)
 
 
 @app.get(
