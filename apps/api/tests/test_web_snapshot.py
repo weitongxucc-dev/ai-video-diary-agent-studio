@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app import external_sources as external_sources_module
+from app.local_members import LocalMemberService
 from app.source_repository import SourceRepository
 
 WORKSPACE = "workspace-web"
@@ -70,12 +71,17 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main_module, "source_repository", SourceRepository(tmp_path / "web.sqlite3")
     )
+    # 读取知识必须带已验证身份：用真实成员令牌，不拿空令牌当 owner。
+    service = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", service)
+    owner, owner_token = service.join(service.create_invite_code(), "所有者")
+    service.set_role(owner.member_id, "owner")
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    return TestClient(main_module.app)
+    return TestClient(main_module.app, headers={"X-Local-Member-Token": owner_token})
 
 
 def _install_pages(monkeypatch, pages: dict[str, _Page]) -> None:

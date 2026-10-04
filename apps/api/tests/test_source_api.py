@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.external_sources import ExternalSourceResponseError
+from app.local_members import LocalMemberService
 from app.source_repository import SourceRepository
 from app.sources import TopicSourceItem
 
@@ -12,14 +13,19 @@ from app.sources import TopicSourceItem
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        main_module, "source_repository", SourceRepository(tmp_path / "agent.sqlite3")
+        main_module, "source_repository", SourceRepository(tmp_path / "sources.sqlite3")
     )
+    # 读取信息源与知识必须带已验证身份：用真实成员令牌，不拿空令牌当 owner。
+    service = LocalMemberService(tmp_path / "agent.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", service)
+    owner, owner_token = service.join(service.create_invite_code(), "所有者")
+    service.set_role(owner.member_id, "owner")
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace-a"),
     )
-    return TestClient(main_module.app)
+    return TestClient(main_module.app, headers={"X-Local-Member-Token": owner_token})
 
 
 def _create_connector(client: TestClient, platform: str = "not_implemented") -> dict:
