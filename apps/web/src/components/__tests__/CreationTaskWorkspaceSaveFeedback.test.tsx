@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
   getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
   getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
+  getJobProgress: vi.fn().mockResolvedValue({ task_id: "task-1", current: null, items: [], total_count: 0 }),
   previewExecution: vi.fn().mockResolvedValue(null),
   };
 });
@@ -70,6 +71,7 @@ vi.mock("@/lib/api", () => ({
   initializeCreationTaskTimeline: vi.fn(),
   getCreationTaskAssistantHistory: mocks.getAssistantHistory,
   getCreationExecution: mocks.getExecution,
+  getTaskJobProgress: mocks.getJobProgress,
   previewCreationExecution: mocks.previewExecution,
   startCreationExecution: vi.fn(),
   resumeCreationExecution: vi.fn(),
