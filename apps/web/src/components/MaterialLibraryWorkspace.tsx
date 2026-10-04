@@ -273,6 +273,7 @@ export function MaterialLibraryWorkspace({
   const [newCollectionName, setNewCollectionName] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
   const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
+  const [usageRoleDraft, setUsageRoleDraft] = useState<MaterialSegment["usage_role"]>(initialLibrary.assets[0]?.segments[0]?.usage_role ?? "unassigned");
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const sourceAudio = useRef<HTMLAudioElement>(null);
   const isComposingTag = useRef(false);
@@ -524,6 +525,7 @@ export function MaterialLibraryWorkspace({
     const first = asset.segments[0];
     setDescriptionDraft(first?.description ?? "");
     setTranscriptDraft(first?.transcript ?? "");
+    setUsageRoleDraft(first?.usage_role ?? "unassigned");
     setSelectedId(asset.id);
     setSelectedSegmentId(first?.id ?? "");
     setCollectionDraft(first?.collection_ids[0] ?? "");
@@ -541,6 +543,7 @@ export function MaterialLibraryWorkspace({
     setSelectedSegmentId(segment.id);
     setDescriptionDraft(segment.description);
     setTranscriptDraft(segment.transcript);
+    setUsageRoleDraft(segment.usage_role);
     const media = selected?.media_type === "audio" ? sourceAudio.current : sourceVideo.current;
     if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) {
       media.currentTime = segment.start_seconds;
@@ -796,12 +799,15 @@ export function MaterialLibraryWorkspace({
           description: descriptionDraft,
           transcript: transcriptDraft,
           review_status: selectedSegment.review_status,
-          usage_role: selectedSegment.usage_role,
+          usage_role: usageRoleDraft,
           user_tags: selectedSegment.user_tags,
           collection_ids: collectionDraft ? [collectionDraft] : [],
         },
       );
       replaceAsset(updated);
+      if (revision === selectionRevision.current) {
+        setUsageRoleDraft(updated.segments.find((segment) => segment.id === selectedSegment.id)!.usage_role);
+      }
       await refreshInsights();
     } catch (cause) {
       if (revision === selectionRevision.current) setDetailError(visibleError(cause, "片段修改保存失败，请重试"));
@@ -1199,6 +1205,19 @@ export function MaterialLibraryWorkspace({
           </section> : null}
           <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => setDescriptionDraft(event.target.value)} /></label>
           <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => setTranscriptDraft(event.target.value)} /></label>
+          <label>
+            <span>片段用途</span>
+            <select
+              disabled={busy !== null}
+              value={usageRoleDraft}
+              onChange={(event) => setUsageRoleDraft(event.target.value as MaterialSegment["usage_role"])}
+            >
+              {usageRoleDraft === "unassigned" ? <option value="unassigned" disabled>未指定（当前用途）</option> : null}
+              {usageRoleDraft === "exclude" ? <option value="exclude" disabled>不使用（已排除）</option> : null}
+              <option value="a_roll">人物主镜头</option>
+              <option value="b_roll">补充画面</option>
+            </select>
+          </label>
           {selected.speech_analysis ? <section className="library-speech-evidence" aria-label="原片语音证据">
             <strong>原片语音</strong>
             {selected.speech_analysis.status !== "ready" || !selected.speech_analysis.observations.length ? <p>{selected.speech_analysis.message}</p> : null}

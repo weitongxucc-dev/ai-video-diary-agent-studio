@@ -166,6 +166,108 @@ it("filters folders and saves the selected folder for the current segment", asyn
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ collection_ids:["folder-2"] })));
 });
 
+it.each([
+  ["b_roll", "a_roll", "补充画面", "人物主镜头"],
+  ["a_roll", "b_roll", "人物主镜头", "补充画面"],
+] as const)("saves segment usage from %s to %s and displays the returned tags after refresh", async (original, chosen, oldLabel, newLabel) => {
+  const initial = { ...taggedLibrary, assets: [{ ...taggedAsset, segments: [{ ...segment, usage_role: original, system_tags: [`用途:${original}`] }] }] };
+  const saved = { ...taggedAsset, segments: [{ ...segment, usage_role: chosen, system_tags: [`用途:${chosen}`] }] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(initial);
+  let resolveSave!: (value: MaterialAsset) => void;
+  vi.mocked(updateProductionMaterialSegment).mockImplementationOnce(() => new Promise(resolve => { resolveSave = resolve; }));
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  });
+  const usage = screen.getByRole("combobox", { name: "片段用途" });
+  expect(usage).toHaveValue(original);
+  fireEvent.change(usage, { target: { value: chosen } });
+  expect(updateProductionMaterialSegment).not.toHaveBeenCalled();
+  expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${oldLabel}`)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", {
+    description: segment.description, transcript: segment.transcript, review_status: segment.review_status,
+    usage_role: chosen, user_tags: segment.user_tags, collection_ids: [],
+  }));
+  expect(usage).toBeDisabled();
+  await act(async () => resolveSave(saved));
+  await waitFor(() => expect(usage).not.toBeDisabled());
+  const tags = within(screen.getByLabelText("系统标签"));
+  expect(tags.getByText(`用途:${newLabel}`)).toBeInTheDocument();
+  expect(tags.queryByText(`用途:${oldLabel}`)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("片段描述")).toHaveValue(segment.description);
+  expect(screen.getByLabelText("移除标签 旧标签")).toBeInTheDocument();
+  view.unmount();
+  const refreshed = { ...initial, assets: [saved] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(refreshed);
+  await act(async () => {
+    render(<MaterialLibraryWorkspace initialLibrary={refreshed} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  });
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(chosen);
+  expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${newLabel}`)).toBeInTheDocument();
+});
+
+it("preserves the segment usage choice and existing error when saving fails, then allows retry", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
+  vi.mocked(updateProductionMaterialSegment)
+    .mockRejectedValueOnce(new Error('{"detail":"片段暂时不可写"}'))
+    .mockResolvedValueOnce({ ...taggedAsset, segments: [{ ...segment, usage_role: "a_roll", system_tags: ["用途:a_roll"] }] });
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "a_roll" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await screen.findByText("片段暂时不可写");
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
+  expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled();
+  expect(within(screen.getByLabelText("系统标签")).queryByText("用途:人物主镜头")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await screen.findByText("用途:人物主镜头");
+  expect(screen.queryByText("片段暂时不可写")).not.toBeInTheDocument();
+  expect(updateProductionMaterialSegment).toHaveBeenLastCalledWith("asset", "segment", expect.objectContaining({ usage_role: "a_roll" }));
+});
+
+it("rebinds the usage draft when switching segments or assets instead of saving another segment's choice", async () => {
+  const second: MaterialSegment = { ...segment, id: "second", start_seconds: 3, end_seconds: 4, description: "第二片段", usage_role: "a_roll" };
+  const firstAsset = { ...taggedAsset, segments: [segment, second] };
+  const initial = { ...twoAssetLibrary, assets: [firstAsset, { ...otherAsset, segments: [{ ...otherSegment, usage_role: "exclude" as const }] }] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(initial);
+  vi.mocked(updateProductionMaterialSegment).mockResolvedValueOnce({ ...firstAsset, segments: [segment, { ...second, usage_role: "b_roll" }] });
+  render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "a_roll" } });
+  fireEvent.click(screen.getByRole("button", { name: /第二片段/ }));
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
+  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "b_roll" } });
+  fireEvent.click(screen.getByRole("button", { name: /画面说明/ }));
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("b_roll");
+  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("exclude");
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /第二片段/ }));
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
+  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "b_roll" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "second", expect.objectContaining({ usage_role: "b_roll", description: "第二片段" })));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled());
+});
+
+it.each([
+  ["unassigned", "未指定（当前用途）"],
+  ["exclude", "不使用（已排除）"],
+] as const)("preserves the existing %s segment usage until the user explicitly chooses a new role", async (role, label) => {
+  const preserved = { ...taggedAsset, segments: [{ ...segment, usage_role: role }] };
+  const initial = { ...taggedLibrary, assets: [preserved] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(initial);
+  vi.mocked(updateProductionMaterialSegment).mockResolvedValueOnce(preserved);
+  render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(role);
+  expect(screen.getByRole("option", { name: label })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "人物主镜头" })).not.toBeDisabled();
+  expect(screen.getByRole("option", { name: "补充画面" })).not.toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ usage_role: role })));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled());
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(role);
+});
+
 it("requires confirmation of the configured directory before automatic intake", async () => {
   const bound = { ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory, file_counts: { observing: 2, running: 1, ready: 3, failed: 0, blocked_disk: 0 } };
   vi.mocked(bindMaterialIntake).mockResolvedValue(bound);
