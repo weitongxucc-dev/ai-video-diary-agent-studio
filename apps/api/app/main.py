@@ -356,6 +356,7 @@ from app.schemas import (
     KnowledgeFileImportRequest,
     KnowledgeItemDetailResponse,
     KnowledgeItemVersionResponse,
+    KnowledgeItemVisibilityRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceRunEvidencesResponse,
@@ -390,6 +391,7 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -12952,8 +12954,10 @@ def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
     return SourceItemDetailResponse.model_validate(item, from_attributes=True)
 
 
-def _knowledge_item_response(item: KnowledgeItem) -> KnowledgeItemResponse:
-    return KnowledgeItemResponse.model_validate(item, from_attributes=True)
+def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeItemResponse:
+    response = KnowledgeItemResponse.model_validate(item, from_attributes=True)
+    response.visibility = visibility
+    return response
 
 
 def _source_run_response(run) -> SourceRunEvidenceResponse:
@@ -13330,7 +13334,9 @@ def save_source_item_to_knowledge(
         raise HTTPException(status_code=404, detail="source item not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    response = _knowledge_item_response(item)
+    response = _knowledge_item_response(
+        item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    )
     # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
     if item.content_hash is not None and response.duplicate_of_version is None:
         source = source_repository.get_source_item(workspace_id, source_item_id)
@@ -13409,8 +13415,13 @@ def get_knowledge_item_detail(
         item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    if not _content_include_private(request) and visibility != CONTENT_VISIBILITY_LEGACY:
+        # 与列表、文案库引用同一规则：成员读不到别人的私有内容，按不存在处理。
+        raise HTTPException(status_code=404, detail="knowledge item not found")
     versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
+    detail.visibility = visibility
     detail.versions = [
         KnowledgeItemVersionResponse.model_validate(version, from_attributes=True)
         for version in versions
@@ -13418,11 +13429,44 @@ def get_knowledge_item_detail(
     return detail
 
 
+@app.put(
+    "/api/knowledge-items/{knowledge_item_id}/visibility",
+    response_model=KnowledgeItemResponse,
+)
+def set_knowledge_item_visibility_route(
+    knowledge_item_id: str,
+    request: Request,
+    payload: KnowledgeItemVisibilityRequest,
+) -> KnowledgeItemResponse:
+    """显式共享或收回：把私有内容放进/移出团队共享范围。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        visibility = source_repository.set_knowledge_item_visibility(
+            workspace_id, knowledge_item_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
+    return _knowledge_item_response(item, visibility)
+
+
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
-    items = source_repository.list_knowledge_items(current_workspace_id(request))
+    workspace_id = current_workspace_id(request)
+    visibilities = None if _content_include_private(request) else (CONTENT_VISIBILITY_LEGACY,)
+    items = source_repository.list_knowledge_items(workspace_id, visibilities=visibilities)
     return KnowledgeItemsResponse(
-        items=[_knowledge_item_response(item) for item in items],
+        items=[
+            _knowledge_item_response(
+                item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+            )
+            for item in items
+        ],
         total_count=len(items),
     )
 

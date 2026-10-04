@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
+from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -2104,6 +2105,8 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    # 当前可见范围：shared / private。回读同一列，与保存时写入的值一致。
+    visibility: str = CONTENT_VISIBILITY_LEGACY
     content_hash: str | None = None
     sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
     parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
@@ -2113,6 +2116,12 @@ class KnowledgeItemResponse(BaseModel):
     created_at: datetime
     # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
     duplicate_of_version: str | None = None
+
+
+class KnowledgeItemVisibilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visibility: Literal["shared", "private"]
 
 
 class KnowledgeItemVersionResponse(BaseModel):
