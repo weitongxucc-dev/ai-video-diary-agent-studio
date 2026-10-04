@@ -2799,6 +2799,14 @@ class ScriptLibrarySourceResponse(BaseModel):
     title: str | None = None
     version_or_identity: str | None = None
     source_url: str | None = None
+    # 引用绑定那一版（reference_id 里的版本）的真实快照事实，供回查当时内容：
+    # 原网页链接、抓取时刻与内容指纹。状态取值沿用既有三条，不新增枚举。
+    cited_version: str | None = None
+    cited_source_url: str | None = None
+    cited_fetched_at: datetime | None = None
+    cited_content_hash: str | None = None
+    # 引用绑定到具体段落/参数时的定位；引用只记到条目与版本时为 None。
+    locator: str | None = None
 
 
 class ScriptLibraryReuseRequest(BaseModel):

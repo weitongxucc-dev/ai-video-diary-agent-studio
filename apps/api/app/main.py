@@ -2991,7 +2991,11 @@ def _creation_task_topic_inputs(
             "version_or_identity": item.version,
             "title": item.title,
             "authorization_or_license": item.authorization,
-            "source_url": None,
+            # 真实回查证据：网页快照才带原网址和抓取时间；文件与手填条目为空。
+            # 不编造链接，也不拿当前版冒充引用当时那一版。
+            "source_url": _safe_topic_source_url(item.source_url),
+            "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
+            "content_hash": item.content_hash,
         }
     for reference in plan.source_references:
         try:
@@ -4305,6 +4309,34 @@ def _script_library_task_access(request: Request, workspace_id: str, task_id: st
         raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
 
 
+def _attach_cited_version_facts(
+    state: ScriptLibrarySourceResponse,
+    source_repository: SourceRepository,
+    workspace_id: str,
+    item_id: str,
+    version: str,
+) -> None:
+    """回填引用绑定那一版的真实快照事实，供前端回查当时内容。
+
+    只读版本快照里已经存下的来源链接、抓取时刻和指纹；引用本身只记到条目与
+    版本，没有段落定位，所以 `locator` 留空，不拿第一段冒充引用定位。
+    """
+    try:
+        versions = source_repository.list_knowledge_item_versions(workspace_id, item_id)
+    except KeyError:
+        return
+    snapshot = next(
+        (value for value in versions if value.version == version),
+        None,
+    )
+    if snapshot is None:
+        return
+    state.cited_version = snapshot.version
+    state.cited_source_url = snapshot.source_url
+    state.cited_fetched_at = snapshot.fetched_at
+    state.cited_content_hash = snapshot.content_hash
+
+
 def _script_library_sources(
     request: Request, workspace_id: str, entry: ScriptLibraryEntry,
 ) -> tuple[list[ScriptLibrarySourceResponse], list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
@@ -4339,6 +4371,7 @@ def _script_library_sources(
                         state.title = item.title
                         state.version_or_identity = item.version
                         resolved_knowledge.append(original)
+                    _attach_cited_version_facts(state, source_repository, workspace_id, item_id, version)
         elif ref.startswith("source:"):
             item_id = ref.removeprefix("source:")
             try:
