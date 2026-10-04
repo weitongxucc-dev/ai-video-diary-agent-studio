@@ -1,6 +1,9 @@
 import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import pytest
 
 # app.main initializes repositories during import, before per-test monkeypatches.
 # Keep those initializers away from every developer/app database and output tree.
@@ -46,7 +49,6 @@ def pytest_sessionfinish(session, exitstatus):
 # 普通用例不该碰这台机器的登录钥匙串：Linux CI 上也没有 `security`。这里统一把
 # 工作区配置根指向临时目录，并把钥匙串调用换成内存实现；需要真实系统安全存储
 # 实证的用例单独自建临时钥匙串，只在 macOS 上跑。
-import pytest as _pytest
 
 
 class _InMemorySecretTool:
@@ -83,8 +85,6 @@ class _InMemorySecretTool:
 
 
 def _completed(arguments, returncode, stdout, stderr):
-    import subprocess
-
     return subprocess.CompletedProcess(arguments, returncode, stdout, stderr)
 
 
@@ -95,7 +95,7 @@ def _not_found(arguments, verb):
     )
 
 
-@_pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def workspace_secrets_tool_double(tmp_path_factory, monkeypatch):
     from app import workspace_settings as workspace_settings_module
 

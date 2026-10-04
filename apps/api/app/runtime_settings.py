@@ -6,7 +6,6 @@ from pathlib import Path
 from app.config import write_dotenv_values
 from app.workspace_settings import (
     WORKSPACE_SECRET_FIELDS,
-    WorkspaceSecretStoreError,
     delete_workspace_secret,
     load_workspace_config,
     read_workspace_secret,
