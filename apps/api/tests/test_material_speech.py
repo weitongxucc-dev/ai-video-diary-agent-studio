@@ -24,6 +24,12 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     transcribe = Mock(return_value=ASRTranscription("local_whisper", "USB port", [SubtitleSegment(0, 1300, "USB port")]))
     analyzer.transcriber = SimpleNamespace(configured=True, transcribe=transcribe)
     repo = ProductionRepository(tmp_path / "db.sqlite", library, scene_reader=lambda path, duration: [], speech_analyzer=analyzer)
+    repo.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.confirm_material_copy_complete(
+        "workspace", relative_path="sample.mp4",
+        expected_revision=repo.material_copy_revision(source.stat()),
+        confirmation_source="manual",
+    )
     asset = repo.scan_library("workspace")[0]
     analyzed = repo.analyze_asset("workspace", asset.id)
     assert analyzed.speech_analysis.status == "ready"

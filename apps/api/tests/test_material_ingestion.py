@@ -571,8 +571,8 @@ def test_directory_state_and_confirmation_reject_stale_or_foreign_binding(tmp_pa
     assert unmounted.material_ingestion_directory_state("one")["status"] == "unmounted"
 
     (library / "video.mp4").write_bytes(b"fixture")
+    confirm_files(repo, library)
     service = MaterialIngestionService(repo, stable_seconds=0)
-    service.scan_once()
     assert service.scan_once()[0].analysis_status == "ready"
 
 
