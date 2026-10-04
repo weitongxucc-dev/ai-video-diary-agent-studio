@@ -11,10 +11,13 @@
 """
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import app.main as main_module
 from app.local_members import LocalMemberService
@@ -24,6 +27,8 @@ from app.production import ProductionRepository
 client = TestClient(main_module.app)
 WORKSPACE = "ws-110-material"
 SUPPORTED = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+PUBLIC = "93.184.216.34"
+IMAGE_URL = "https://media.example.com/still.png"
 
 
 def _setup(tmp_path, monkeypatch) -> dict[str, str]:
@@ -46,6 +51,21 @@ def _setup(tmp_path, monkeypatch) -> dict[str, str]:
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
     monkeypatch.setattr(main_module, "material_execution_mode", "legacy")
+    # 直链导入：只替换出网传输与域名解析（返回公开地址，隔离 DNS），其余走产品代码。
+    state = SimpleNamespace(handler=None)
+
+    def client_factory() -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(state.handler), follow_redirects=False)
+
+    def service_factory(**kwargs):
+        from app.media_link_import import MediaLinkImportService
+
+        return MediaLinkImportService(
+            **{**kwargs, "client_factory": client_factory, "resolver": lambda _host: [PUBLIC]}
+        )
+
+    monkeypatch.setattr(main_module, "MediaLinkImportService", service_factory)
+
     owner_member, owner_token = service.whoami(None)
     member_a, token_a = service.join(service.create_invite_code(), "甲")
     member_b, token_b = service.join(service.create_invite_code(), "乙")
@@ -57,6 +77,7 @@ def _setup(tmp_path, monkeypatch) -> dict[str, str]:
         "token_b": token_b,
         "member_b_id": member_b.member_id,
         "library": str(library),
+        "link_state": state,
     }
 
 
@@ -170,25 +191,14 @@ def test_existing_private_material_keeps_its_original_uploader(tmp_path, monkeyp
 
 
 def test_repeated_import_of_same_link_does_not_expose_private_details(tmp_path, monkeypatch):
-    """同一链接重复导入：已登记素材详情仍按可见范围判据，不因此放宽。"""
+    """同一链接重复导入：不得把甲私有素材的 id/路径/详情带给乙。"""
     party = _setup(tmp_path, monkeypatch)
     _bind(party["token_a"], party["library"])
-
-    def fake_client(**_kwargs):
-        return httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, content=SUPPORTED)
-            ),
-            follow_redirects=False,
-            timeout=60.0,
-            trust_env=False,
-        )
-
-    monkeypatch.setattr(httpx, "Client", fake_client)
+    party["link_state"].handler = serve(tmp_png(), "image/png")
 
     first = client.post(
         "/api/production/materials/link/import",
-        json={"url": "https://example.com/clip-1.mp4"},
+        json={"url": IMAGE_URL},
         headers=_headers(party["token_a"]),
     )
     assert first.status_code == 200, first.text
@@ -196,15 +206,40 @@ def test_repeated_import_of_same_link_does_not_expose_private_details(tmp_path, 
 
     repeated = client.post(
         "/api/production/materials/link/import",
-        json={"url": "https://example.com/clip-1.mp4"},
+        json={"url": IMAGE_URL},
         headers=_headers(party["token_b"]),
     )
-    assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["asset_id"] == asset_id
 
+    if repeated.status_code == 200:
+        # 若服务端选择为乙建独立对象，不得回传甲的私有标识。
+        body = repeated.json()
+        assert body["asset_id"] != asset_id
+        assert body.get("file_path") != first.json().get("file_path")
+    else:
+        # 沿既有拒绝路径（409/403 等）同样满足：没有泄露就是正确结果。
+        assert repeated.status_code in (403, 409)
+
+    # 无论哪种结果，乙都读不到甲的私有素材。
     denied = client.get(
         f"/api/production/materials/{asset_id}", headers=_headers(party["token_b"])
     )
     assert denied.status_code == 404, denied.text
     listed = client.get("/api/production/materials", headers=_headers(party["token_b"]))
     assert all(item["id"] != asset_id for item in listed.json()["assets"])
+
+
+def serve(body: bytes, content_type: str):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"content-type": content_type, "content-length": str(len(body))},
+        )
+
+    return handler
+
+
+def tmp_png() -> bytes:
+    stream = BytesIO()
+    Image.new("RGB", (8, 6), (12, 90, 200)).save(stream, format="PNG")
+    return stream.getvalue()
