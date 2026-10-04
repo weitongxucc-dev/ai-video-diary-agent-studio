@@ -164,7 +164,91 @@ describe("参数比较与人工裁定", () => {
 
     await waitFor(() => expect(api.adjudicateParameterComparison).toHaveBeenCalledWith("conflict-1", { reason: "以右资料为准", retained_side: "right" }));
     // 裁定留痕：操作者、理由、双方版本；未选的一侧仍在。
-    await within(panel).findByText(/裁定：保留右侧 800 · 本地未认证/);
+    await within(panel).findByText(/裁定值：800 · 保留右侧来源 · 本地未认证/);
     expect(within(panel).getByText(/左：500/)).toBeInTheDocument();
+  });
+});
+
+describe("参数比较闭环操作", () => {
+  const counterpart = { ...item, id: "knowledge-two", title: "右资料", version: "v2" };
+  const counterpartDetail = {
+    ...item, id: "knowledge-two", title: "右资料", version: "2",
+    versions: [
+      { version: "1", content_hash: "h1", source_item_id: "s2", title: "右资料", body: "旧版正文 800", file_reference: null,
+        sections: [{ locator: "「规格」第 2 段", title: "规格", text: "旧版净重 800 g" }],
+        parameters: [{ key: "净重", value: "800", unit: "g", locator: "「规格」第 2 段" }],
+        fetched_at: "2026-10-04T08:00:00Z", source_url: null, saved_at: "2026-10-04T08:00:00Z" },
+      { version: "2", content_hash: "h2", source_item_id: "s2", title: "右资料", body: "新版正文 820", file_reference: null,
+        sections: [{ locator: "「规格」第 2 段", title: "规格", text: "新版净重 820 g" }],
+        parameters: [{ key: "净重", value: "820", unit: "g", locator: "「规格」第 2 段" }],
+        fetched_at: "2026-10-04T09:00:00Z", source_url: null, saved_at: "2026-10-04T09:00:00Z" },
+    ],
+  };
+  const currentDetail = {
+    ...item, parameters: [{ key: "净重", value: "500", unit: "g", locator: "「规格」第 2 段" }],
+    versions: [{ version: "v2", content_hash: "h0", source_item_id: "s1", title: "设备说明书", body: "当前正文 500", file_reference: null,
+      sections: [{ locator: "「规格」第 2 段", title: "规格", text: "当前净重 500 g" }],
+      parameters: [{ key: "净重", value: "500", unit: "g", locator: "「规格」第 2 段" }],
+      fetched_at: null, source_url: null, saved_at: "2026-09-27T08:00:00Z" }],
+  };
+
+  it("selects a counterpart, creates the comparison from real options, shows the fixed-version source and applies a correction", async () => {
+    api.listKnowledgeItems.mockResolvedValue({ items: [item, counterpart], total_count: 2 });
+    api.getKnowledgeItem.mockImplementation((id: string) =>
+      Promise.resolve(id === "knowledge-two" ? counterpartDetail : currentDetail));
+    const pending = {
+      id: "conflict-1", workspace_id: "workspace-one",
+      object_label: "曜核一体机", parameter_key: "净重", unit: "g", condition: "标准版",
+      left: { knowledge_item_id: "knowledge-one", version: "v2", value: "500", locator: "「规格」第 2 段" },
+      right: { knowledge_item_id: "knowledge-two", version: "1", value: "800", locator: "「规格」第 2 段" },
+      created_at: "2026-10-04T08:00:00Z", status: "pending", is_conflict: true, adjudication: null,
+    };
+    api.listParameterComparisons.mockResolvedValue({ items: [pending], total_count: 1 });
+    api.createParameterComparison.mockResolvedValue(pending);
+    const adjudicatedItem = { ...pending, status: "adjudicated", adjudication: {
+      id: "adj-2", operator: "本地未认证", reason: "以右资料为准", decided_at: "2026-10-04T10:00:00Z",
+      left_version_ref: "knowledge-one@v2", right_version_ref: "knowledge-two@1",
+      retained_side: "right", retained_value: "800", corrected_value: "810" } };
+    api.adjudicateParameterComparison.mockImplementation(() => {
+      api.listParameterComparisons.mockResolvedValue({ items: [adjudicatedItem], total_count: 1 });
+      return Promise.resolve(adjudicatedItem);
+    });
+
+    render(<KnowledgePage />);
+    await screen.findByText("设备说明书");
+    fireEvent.click(screen.getByText("设备说明书"));
+    const panel = await screen.findByRole("region", { name: "参数比较与裁定" });
+
+    // 未选对比资料时明确占位，不会显示出一个看似已选的条目。
+    const counterpartSelect = within(panel).getByLabelText("对比条目") as HTMLSelectElement;
+    expect(counterpartSelect.value).toBe("");
+    fireEvent.change(counterpartSelect, { target: { value: "knowledge-two" } });
+    // 版本和参数都来自该条目的真实详情，不要求用户手填出处串。
+    await waitFor(() => expect((within(panel).getByLabelText("对比条目版本") as HTMLSelectElement).options.length).toBe(2));
+    expect([...(within(panel).getByLabelText("对比条目参数") as HTMLSelectElement).options].map((option) => option.textContent)).toEqual(["净重 · 820（g） · 「规格」第 2 段"]);
+    fireEvent.change(within(panel).getByLabelText("对比条目版本"), { target: { value: "1" } });
+    fireEvent.change(within(panel).getByLabelText("对象"), { target: { value: "曜核一体机" } });
+    fireEvent.change(within(panel).getByLabelText("参数名"), { target: { value: "净重" } });
+    fireEvent.change(within(panel).getByLabelText("单位"), { target: { value: "g" } });
+    fireEvent.change(within(panel).getByLabelText("适用条件"), { target: { value: "标准版" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "建立比较" }));
+    await waitFor(() => expect(api.createParameterComparison).toHaveBeenCalledWith({
+      object_label: "曜核一体机", parameter_key: "净重", unit: "g", condition: "标准版",
+      left_knowledge_item_id: "knowledge-one", left_version: "v2", left_locator: "「规格」第 2 段",
+      right_knowledge_item_id: "knowledge-two", right_version: "1", right_locator: "「规格」第 2 段",
+    }));
+
+    // 查看右侧来源读的是那一版的原文，不是当前版。
+    fireEvent.click(within(panel).getByRole("button", { name: "查看右侧来源" }));
+    const source = await within(panel).findByRole("group", { name: "来源原文" });
+    expect(within(source).getByText(/版本 1 ·/)).toBeInTheDocument();
+    expect(within(source).getByText("旧版净重 800 g")).toBeInTheDocument();
+
+    // 纠正值优先于保留侧取值。
+    fireEvent.change(within(panel).getByLabelText("裁定理由 conflict-1"), { target: { value: "以右资料为准" } });
+    fireEvent.change(within(panel).getByLabelText("纠正值 conflict-1"), { target: { value: "810" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "保留右侧 800" }));
+    await waitFor(() => expect(api.adjudicateParameterComparison).toHaveBeenCalledWith("conflict-1", { reason: "以右资料为准", retained_side: "right", corrected_value: "810" }));
+    await within(panel).findByText(/裁定值：810（人工纠正）/);
   });
 });

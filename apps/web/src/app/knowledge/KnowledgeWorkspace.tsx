@@ -216,6 +216,11 @@ function statusLabel(comparison: ParameterComparison) {
   return "待裁定";
 }
 
+function adjudicatedValue(adjudication: { retained_value: string; corrected_value: string | null }) {
+  // 纠正值优先：真正生效的裁定值以纠正为准，没有纠正才是保留的那一侧。
+  return adjudication.corrected_value?.trim() ? adjudication.corrected_value : adjudication.retained_value;
+}
+
 function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
   allItems: KnowledgeDisplayItem[];
   current: KnowledgeDisplayItem;
@@ -227,6 +232,13 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [corrections, setCorrections] = useState<Record<string, string>>({});
+  // 对比条目的真实详情：版本和参数都从这里来，不让用户记机器出处串。
+  const [counterpartId, setCounterpartId] = useState<string>("");
+  const [counterpartDetail, setCounterpartDetail] = useState<KnowledgeItemDetail | null>(null);
+  const [counterpartVersion, setCounterpartVersion] = useState<string>("");
+  // 打开某一侧的真实原文：固定到那一版，不拿当前版冒充。
+  const [evidence, setEvidence] = useState<{ key: string; version: string; source_url: string | null; body: string; section: string } | null>(null);
 
   async function refresh() {
     setLoading(true); setError(null);
@@ -237,6 +249,27 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
     finally { setLoading(false); }
   }
   useEffect(() => { if (!exampleMode) void refresh(); }, [current.id, exampleMode]);
+
+  useEffect(() => {
+    if (!counterpartId || exampleMode) { setCounterpartDetail(null); setCounterpartVersion(""); return; }
+    let active = true;
+    setCounterpartDetail(null); setCounterpartVersion("");
+    getKnowledgeItem(counterpartId)
+      .then((result) => {
+        if (!active) return;
+        setCounterpartDetail(result);
+        setCounterpartVersion(result.version);
+      })
+      .catch((cause) => { if (active) setError(sourceErrorMessage(cause)); });
+    return () => { active = false; };
+  }, [counterpartId, exampleMode]);
+
+  const counterpartParameters = (() => {
+    if (!counterpartDetail) return [];
+    const chosen = counterpartDetail.versions.find((version) => version.version === counterpartVersion);
+    return chosen ? chosen.parameters : counterpartDetail.parameters;
+  })();
+  const currentParameters = currentDetail?.parameters ?? [];
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -251,8 +284,8 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
         left_knowledge_item_id: current.id,
         left_version: current.version,
         left_locator: String(form.get("left_locator") ?? ""),
-        right_knowledge_item_id: String(form.get("right_knowledge_item_id") ?? ""),
-        right_version: String(form.get("right_version") ?? ""),
+        right_knowledge_item_id: counterpartId,
+        right_version: counterpartVersion,
         right_locator: String(form.get("right_locator") ?? ""),
       });
       setNotice("已建立比较。值不同即为待裁定，两侧证据都已保留。");
@@ -264,17 +297,37 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
   async function decide(comparison: ParameterComparison, side: "left" | "right") {
     const reason = reasons[comparison.id]?.trim();
     if (!reason) { setError("裁定需要写明理由。"); return; }
+    const correction = corrections[comparison.id]?.trim() || undefined;
     setLoading(true); setError(null); setNotice(null);
     try {
-      await adjudicateParameterComparison(comparison.id, { reason, retained_side: side });
-      setNotice("已记录裁定：操作者、理由、时间和双方版本都已留存，未选的一侧仍保留。");
+      await adjudicateParameterComparison(comparison.id, {
+        reason, retained_side: side, ...(correction ? { corrected_value: correction } : {}),
+      });
+      setNotice("已记录裁定：身份、理由、时间和双方版本都已留存，未选的一侧仍保留。");
       await refresh();
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setLoading(false); }
   }
 
+  async function openEvidence(itemId: string, version: string, locator: string, key: string) {
+    setLoading(true); setError(null);
+    try {
+      const detail = await getKnowledgeItem(itemId);
+      const chosen = detail.versions.find((entry) => entry.version === version);
+      // 只在这一版里找正文：当前版换了内容也不能拿来冒充旧版。
+      if (!chosen) { setError(`这个条目没有版本 ${version}`); return; }
+      const section = chosen.sections.find((entry) => entry.locator === locator);
+      setEvidence({
+        key, version,
+        source_url: chosen.source_url,
+        body: section ? section.text : (chosen.body ?? "这一版没有正文。"),
+        section: section ? `${section.locator}${section.title ? ` ${section.title}` : ""}` : "该出处没有单独分段，显示这一版全文",
+      });
+    } catch (cause) { setError(sourceErrorMessage(cause)); }
+    finally { setLoading(false); }
+  }
+
   if (exampleMode) return null;
-  const currentParameters = currentDetail?.parameters ?? [];
   const counterparts = allItems.filter((entry) => entry.id !== current.id);
 
   return <section className={styles.detailSection} aria-label="参数比较与裁定">
@@ -284,8 +337,17 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
       <p>{comparison.object_label} · {comparison.parameter_key}（{comparison.unit}）· 条件：{comparison.condition} · {statusLabel(comparison)}</p>
       <p>左：{comparison.left.value} · 版本 {comparison.left.version} · 出处 {comparison.left.locator}</p>
       <p>右：{comparison.right.value} · 版本 {comparison.right.version} · 出处 {comparison.right.locator}</p>
-      {comparison.adjudication ? <p>裁定：保留{comparison.adjudication.retained_side === "left" ? "左" : "右"}侧 {comparison.adjudication.retained_value} · {comparison.adjudication.operator} · {formatFetchTime(comparison.adjudication.decided_at)} · 理由：{comparison.adjudication.reason} · 依据版本 {comparison.adjudication.left_version_ref} / {comparison.adjudication.right_version_ref}</p>
-        : comparison.status === "pending" ? <div><label><span>裁定理由</span><input aria-label={`裁定理由 ${comparison.id}`} onChange={(event) => setReasons((current_) => ({ ...current_, [comparison.id]: event.target.value }))} value={reasons[comparison.id] ?? ""} /></label>
+      <p><button onClick={() => void openEvidence(comparison.left.knowledge_item_id, comparison.left.version, comparison.left.locator, `${comparison.id}:left`)} type="button">查看左侧来源</button>
+        <button onClick={() => void openEvidence(comparison.right.knowledge_item_id, comparison.right.version, comparison.right.locator, `${comparison.id}:right`)} type="button">查看右侧来源</button></p>
+      {evidence && (evidence.key === `${comparison.id}:left` || evidence.key === `${comparison.id}:right`) ? <div aria-label="来源原文" role="group">
+        <p>版本 {evidence.version} · {evidence.section}</p>
+        {evidence.source_url ? <p><a href={evidence.source_url} rel="noreferrer" target="_blank">原网址</a></p> : null}
+        <pre>{evidence.body}</pre>
+      </div> : null}
+      {comparison.adjudication ? <p>裁定值：{adjudicatedValue(comparison.adjudication)}{comparison.adjudication.corrected_value ? "（人工纠正）" : ""} · 保留{comparison.adjudication.retained_side === "left" ? "左" : "右"}侧来源 · {comparison.adjudication.operator} · {formatFetchTime(comparison.adjudication.decided_at)} · 理由：{comparison.adjudication.reason} · 依据版本 {comparison.adjudication.left_version_ref} / {comparison.adjudication.right_version_ref}</p>
+        : comparison.status === "pending" ? <div>
+          <label><span>裁定理由</span><input aria-label={`裁定理由 ${comparison.id}`} onChange={(event) => setReasons((current_) => ({ ...current_, [comparison.id]: event.target.value }))} value={reasons[comparison.id] ?? ""} /></label>
+          <label><span>纠正值（可选，留空表示直接采用保留侧的值）</span><input aria-label={`纠正值 ${comparison.id}`} onChange={(event) => setCorrections((current_) => ({ ...current_, [comparison.id]: event.target.value }))} value={corrections[comparison.id] ?? ""} /></label>
           <button disabled={loading} onClick={() => void decide(comparison, "left")} type="button">保留左侧 {comparison.left.value}</button>
           <button disabled={loading} onClick={() => void decide(comparison, "right")} type="button">保留右侧 {comparison.right.value}</button></div>
         : null}
@@ -298,11 +360,11 @@ function KnowledgeConflicts({ allItems, current, currentDetail, exampleMode }: {
       <label><span>参数名</span><input name="parameter_key" required /></label>
       <label><span>单位</span><input name="unit" required /></label>
       <label><span>适用条件</span><input name="condition" required /></label>
-      <label><span>本条目出处</span><select name="left_locator" required>{currentParameters.map((parameter) => <option key={`${parameter.locator}-${parameter.key}`} value={parameter.locator}>{parameter.key} · {parameter.value}{parameter.unit ? `（${parameter.unit}）` : ""} · {parameter.locator}</option>)}</select></label>
-      <label><span>对比条目</span><select name="right_knowledge_item_id" required>{counterparts.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}</select></label>
-      <label><span>对比条目版本</span><input name="right_version" defaultValue="1" required /></label>
-      <label><span>对比条目出处</span><input name="right_locator" required /></label>
-      <button disabled={loading || !currentParameters.length || !counterparts.length} type="submit">建立比较</button>
+      <label><span>对比条目</span><select aria-label="对比条目" onChange={(event) => setCounterpartId(event.target.value)} required value={counterpartId}><option value="">请选择对比资料</option>{counterparts.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}</select></label>
+      <label><span>对比条目版本</span><select aria-label="对比条目版本" onChange={(event) => setCounterpartVersion(event.target.value)} required value={counterpartVersion}>{(counterpartDetail?.versions ?? []).map((version) => <option key={version.version} value={version.version}>版本 {version.version}</option>)}</select></label>
+      <label><span>本条目参数（出处）</span><select aria-label="本条目参数" name="left_locator" required>{currentParameters.map((parameter) => <option key={`${parameter.locator}-${parameter.key}`} value={parameter.locator}>{parameter.key} · {parameter.value}{parameter.unit ? `（${parameter.unit}）` : ""} · {parameter.locator}</option>)}</select></label>
+      <label><span>对比条目参数（出处）</span><select aria-label="对比条目参数" name="right_locator" required>{counterpartParameters.map((parameter) => <option key={`${parameter.locator}-${parameter.key}`} value={parameter.locator}>{parameter.key} · {parameter.value}{parameter.unit ? `（${parameter.unit}）` : ""} · {parameter.locator}</option>)}</select></label>
+      <button disabled={loading || !currentParameters.length || !counterpartParameters.length} type="submit">建立比较</button>
     </form>
   </section>;
 }
