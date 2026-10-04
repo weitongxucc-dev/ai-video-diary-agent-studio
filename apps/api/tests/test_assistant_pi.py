@@ -187,9 +187,25 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
         if workspace_id != "workspace-a" or task_id != "task-a":
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="task not found")
-        return object()
+        # 助手入口会先按可信身份确认这条任务读得到，因此替身也要带上
+        # visibility / owner_user_id 这两个真实字段。
+        return SimpleNamespace(
+            id="task-a", workspace_id=workspace_id, visibility="private",
+            owner_user_id="member-caller", stage="script",
+        )
     monkeypatch.setattr(main_module, "current_workspace_id",
                         lambda request: request.headers.get("x-test-workspace", "workspace-a"))
+    # 助手只在请求带可信身份时读私有任务：这里用真实成员令牌表明调用方。
+    monkeypatch.setattr(
+        main_module, "_local_member_token",
+        lambda request: request.headers.get("x-test-member", "member-caller"),
+    )
+    monkeypatch.setattr(
+        main_module, "local_members_service",
+        SimpleNamespace(resolve_member=lambda token: SimpleNamespace(
+            member_id=token, role="member", name="调用方", created_at=None,
+        )),
+    )
     monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
