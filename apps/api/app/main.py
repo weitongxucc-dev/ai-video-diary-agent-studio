@@ -11,7 +11,7 @@ import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
@@ -95,6 +95,7 @@ from app.edit_plan import (
     safe_processed_video_path,
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
+from app.job_progress import summarize_job_progress
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
@@ -218,6 +219,8 @@ from app.workspace_settings import (
 )
 from app.source_repository import SourceRepository
 from app.schemas import (
+    JobProgressResponse,
+    TaskJobProgressResponse,
     ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
     ScriptLibrarySourceResponse, ScriptLibraryReuseRequest, ScriptLibraryReuseResponse,
     AuthorizationResponse,
@@ -353,6 +356,7 @@ from app.schemas import (
     KnowledgeFileImportRequest,
     KnowledgeItemDetailResponse,
     KnowledgeItemVersionResponse,
+    KnowledgeItemVisibilityRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceRunEvidencesResponse,
@@ -387,6 +391,7 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -12949,8 +12954,10 @@ def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
     return SourceItemDetailResponse.model_validate(item, from_attributes=True)
 
 
-def _knowledge_item_response(item: KnowledgeItem) -> KnowledgeItemResponse:
-    return KnowledgeItemResponse.model_validate(item, from_attributes=True)
+def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeItemResponse:
+    response = KnowledgeItemResponse.model_validate(item, from_attributes=True)
+    response.visibility = visibility
+    return response
 
 
 def _source_run_response(run) -> SourceRunEvidenceResponse:
@@ -13327,7 +13334,9 @@ def save_source_item_to_knowledge(
         raise HTTPException(status_code=404, detail="source item not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    response = _knowledge_item_response(item)
+    response = _knowledge_item_response(
+        item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    )
     # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
     if item.content_hash is not None and response.duplicate_of_version is None:
         source = source_repository.get_source_item(workspace_id, source_item_id)
@@ -13406,8 +13415,13 @@ def get_knowledge_item_detail(
         item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+    if not _content_include_private(request) and visibility != CONTENT_VISIBILITY_LEGACY:
+        # 与列表、文案库引用同一规则：成员读不到别人的私有内容，按不存在处理。
+        raise HTTPException(status_code=404, detail="knowledge item not found")
     versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
+    detail.visibility = visibility
     detail.versions = [
         KnowledgeItemVersionResponse.model_validate(version, from_attributes=True)
         for version in versions
@@ -13415,11 +13429,44 @@ def get_knowledge_item_detail(
     return detail
 
 
+@app.put(
+    "/api/knowledge-items/{knowledge_item_id}/visibility",
+    response_model=KnowledgeItemResponse,
+)
+def set_knowledge_item_visibility_route(
+    knowledge_item_id: str,
+    request: Request,
+    payload: KnowledgeItemVisibilityRequest,
+) -> KnowledgeItemResponse:
+    """显式共享或收回：把私有内容放进/移出团队共享范围。"""
+    denied = _local_member_write_guard(request)
+    if denied is not None:
+        return denied
+    workspace_id = current_workspace_id(request)
+    try:
+        visibility = source_repository.set_knowledge_item_visibility(
+            workspace_id, knowledge_item_id, payload.visibility
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
+    return _knowledge_item_response(item, visibility)
+
+
 @app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
 def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
-    items = source_repository.list_knowledge_items(current_workspace_id(request))
+    workspace_id = current_workspace_id(request)
+    visibilities = None if _content_include_private(request) else (CONTENT_VISIBILITY_LEGACY,)
+    items = source_repository.list_knowledge_items(workspace_id, visibilities=visibilities)
     return KnowledgeItemsResponse(
-        items=[_knowledge_item_response(item) for item in items],
+        items=[
+            _knowledge_item_response(
+                item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+            )
+            for item in items
+        ],
         total_count=len(items),
     )
 
@@ -14624,6 +14671,32 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
 @app.get("/api/creation-tasks/{task_id}/execution")
 def get_creation_execution(task_id: str, request: Request) -> dict[str, object]:
     return _creation_execution_status(current_workspace_id(request), task_id)
+
+
+@app.get(
+    "/api/creation-tasks/{task_id}/job-runs",
+    response_model=TaskJobProgressResponse,
+)
+def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResponse:
+    """任务作业进度：只读后台已经落库的作业行。
+
+    进度、已耗时、更新时间和失败原因都来自这些记录；重开应用读到的是同一批
+    作业，页面关闭不改变它们。等待与处理估时分开，没有可信样本就是未知。
+    """
+    workspace_id = current_workspace_id(request)
+    try:
+        runs = production_repo.list_job_runs(workspace_id, task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="creation task not found") from exc
+    items, current = summarize_job_progress(runs, now=datetime.now(UTC))
+    return TaskJobProgressResponse(
+        task_id=task_id,
+        current=JobProgressResponse.model_validate(current, from_attributes=True)
+        if current
+        else None,
+        items=[JobProgressResponse.model_validate(item, from_attributes=True) for item in items],
+        total_count=len(items),
+    )
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)

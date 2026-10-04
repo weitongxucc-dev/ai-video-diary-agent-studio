@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
+from app.database_migrations import CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
@@ -2104,6 +2105,8 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    # 当前可见范围：shared / private。回读同一列，与保存时写入的值一致。
+    visibility: str = CONTENT_VISIBILITY_LEGACY
     content_hash: str | None = None
     sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
     parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
@@ -2113,6 +2116,12 @@ class KnowledgeItemResponse(BaseModel):
     created_at: datetime
     # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
     duplicate_of_version: str | None = None
+
+
+class KnowledgeItemVisibilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visibility: Literal["shared", "private"]
 
 
 class KnowledgeItemVersionResponse(BaseModel):
@@ -2415,6 +2424,36 @@ class RuntimeSettingItemResponse(BaseModel):
 class RuntimeSettingsResponse(BaseModel):
     settings: list[RuntimeSettingItemResponse]
     status: SystemStatusResponse
+
+
+class JobProgressResponse(BaseModel):
+    """一条作业在任务页上的真实读数。估时没有可信依据时就是 null。"""
+
+    id: str
+    kind: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    # 只报告作业自己写下的进度，不是阶段序号。
+    progress: int
+    attempt: int
+    started_at: datetime | None
+    finished_at: datetime | None
+    updated_at: datetime
+    elapsed_seconds: float | None
+    failure_reason: str | None
+    impact: str | None
+    repair_action: str | None
+    wait_estimate_seconds: float | None
+    processing_estimate_seconds: float | None
+    estimate_basis: str | None
+
+
+class TaskJobProgressResponse(BaseModel):
+    """任务当前作业和它的全部历史作业；页面关闭后重开读到同一批记录。"""
+
+    task_id: str
+    current: JobProgressResponse | None
+    items: list[JobProgressResponse]
+    total_count: int
 
 
 class RuntimeSettingsUpdateRequest(BaseModel):
