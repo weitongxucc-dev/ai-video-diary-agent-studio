@@ -5245,7 +5245,11 @@ class ProductionRepository:
         return self._template_from_row(row)
 
     def save_video_template(
-        self, template: VideoTemplate, *, verified_owner_user_id: str | None = None
+        self,
+        template: VideoTemplate,
+        *,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
             raise ValueError("用户模板必须有名称和有效版本。")
@@ -5264,6 +5268,8 @@ class ProductionRepository:
             else:
                 # 新模板只取已验证身份；输入里的 owner_user_id 不继承。
                 owner = content_owner(verified_owner_user_id)
+                if owner is None and not local_diagnostic:
+                    owner = None
             template = replace(template, owner_user_id=owner)
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
@@ -5288,6 +5294,7 @@ class ProductionRepository:
         task: CreationTask,
         *,
         verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> tuple[CreationPlan, CreationTask]:
         if not plan.workspace_id.strip() or not task.workspace_id.strip():
             raise ValueError("创作方案和任务必须属于工作区")
@@ -5306,8 +5313,13 @@ class ProductionRepository:
         # 字段，新建时一律以这里解析出的身份覆盖：自填的归属不参与判断，
         # 没有可验证身份就不算任何成员的私有内容。
         owner = content_owner(verified_owner_user_id)
-        plan = replace(plan, owner_user_id=owner)
-        task = replace(task, owner_user_id=owner)
+        if owner is None and not local_diagnostic:
+            # 认证范围里解析不出身份：不算任何成员的私有内容，也不采信输入值。
+            plan = replace(plan, owner_user_id=None)
+            task = replace(task, owner_user_id=None)
+        elif owner:
+            plan = replace(plan, owner_user_id=owner)
+            task = replace(task, owner_user_id=owner)
 
         now = utc_now()
         plan.creation_task_id = task.id

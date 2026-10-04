@@ -1234,8 +1234,14 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
                   "color_style": common_color,
                   "subtitle_style": dict(source_track.style) if source_track else _default_subtitle_style()},
     )
+    # 新模板的归属只认这次请求解析出的可信身份；已有模板沿用库里那一版。
+    _, template_local_diagnostic = _content_reader(request, current_workspace_id(request))
     try:
-        return asdict(production_repo.save_video_template(template))
+        return asdict(production_repo.save_video_template(
+            template,
+            verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
+            local_diagnostic=template_local_diagnostic,
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -4302,7 +4308,12 @@ def confirm_creation_plan(
         updated_at=now,
     )
     try:
-        saved_plan, saved_task = production_repo.confirm_creation_plan(plan, task)
+        # 方案与任务的归属只认这次请求的可信身份，调用方自填的值不参与判断。
+        saved_plan, saved_task = production_repo.confirm_creation_plan(
+            plan, task,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=409,
