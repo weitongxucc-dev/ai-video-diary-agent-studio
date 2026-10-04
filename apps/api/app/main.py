@@ -292,6 +292,8 @@ from app.schemas import (
     MaterialAssetTagsRequest,
     MaterialIntakeBindRequest,
     MaterialIntakeStatusResponse,
+    MaterialCopyCompleteRequest,
+    MaterialCopyCompleteResponse,
     MaterialUsageRecordsResponse,
     MediaLinkCheckRequest,
     MediaLinkCheckResponse,
@@ -11914,7 +11916,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
     else:
         state = str(directory["status"])
         message, repair = {
-            "ready": (("素材目录可访问；文件稳定后会进入分析。" if bound else
+            "ready": (("素材目录可访问；确认复制完成后才接收并分析。" if bound else
                        "素材目录可访问，等待关联到当前工作区。"), None),
             "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
             "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
@@ -11932,6 +11934,7 @@ def _material_binding_status(workspace_id: str, repository: ProductionRepository
         scan_interval_seconds=60,
         file_counts=(repository.material_ingestion_state_counts(workspace_id) if bound else
                      {"observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0}),
+        pending_files=repository.pending_material_copies(workspace_id) if bound else [],
     )
 
 
@@ -11975,6 +11978,26 @@ def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     service.wake()
     return _material_binding_status(workspace_id, repository)
+
+
+@app.post("/api/production/materials/intake/copy-complete", response_model=MaterialCopyCompleteResponse)
+def confirm_material_copy_complete(request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:
+    workspace_id = current_workspace_id(request)
+    repository = production_repo
+    service = _material_ingestion_for(repository)
+    try:
+        service.confirm_copy_complete(
+            workspace_id, relative_path=payload.relative_path,
+            expected_revision=payload.expected_revision.model_dump(),
+            confirmation_source=payload.confirmation_source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="文件已移除，请重新检查素材目录。") from exc
+    return MaterialCopyCompleteResponse(
+        confirmed=True, intake=_material_binding_status(workspace_id, repository),
+    )
 
 
 @app.post("/api/production/materials/intake/scan")

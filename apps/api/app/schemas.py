@@ -602,6 +602,24 @@ class MaterialIntakeBindRequest(BaseModel):
     expected_directory: str = Field(min_length=1)
 
 
+class MaterialFileRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    size_bytes: str = Field(pattern=r"^[0-9]+$")
+    mtime_ns: str = Field(pattern=r"^[0-9]+$")
+    ctime_ns: str = Field(pattern=r"^[0-9]+$")
+    inode: str = Field(pattern=r"^[0-9]+$")
+
+
+class MaterialPendingCopyResponse(BaseModel):
+    relative_path: str
+    expected_revision: MaterialFileRevision
+
+
+class MaterialCopyCompleteRequest(MaterialPendingCopyResponse):
+    model_config = ConfigDict(extra="forbid")
+    confirmation_source: Literal["manual", "app_import"]
+
+
 class MaterialIntakeStatusResponse(BaseModel):
     bound_to_current_workspace: bool
     binding_available: bool
@@ -612,6 +630,12 @@ class MaterialIntakeStatusResponse(BaseModel):
     repair_action: str | None
     scan_interval_seconds: int
     file_counts: dict[str, int]
+    pending_files: list[MaterialPendingCopyResponse]
+
+
+class MaterialCopyCompleteResponse(BaseModel):
+    confirmed: Literal[True]
+    intake: MaterialIntakeStatusResponse
 
 
 class MaterialBatchTagsRequest(BaseModel):
