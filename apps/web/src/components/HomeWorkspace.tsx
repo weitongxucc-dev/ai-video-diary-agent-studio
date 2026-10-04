@@ -352,6 +352,7 @@ export function HomeDashboardLive() {
       // 令牌已变：先作废在途请求并清空当前身份的私有内容，再让钩子收敛。
       requestRef.current += 1;
       setData(null); setTasks([]); setFoundation(null); setInsights(null);
+      setLoading(true); setError(null);
       identity.refresh();
     };
     window.addEventListener("storage", apply);
@@ -368,6 +369,7 @@ export function HomeDashboardLive() {
       // 换身份：让在途请求全部作废，旧身份的私有标题不得留在页面上。
       requestRef.current += 1;
       setData(null); setTasks([]); setFoundation(null); setInsights(null);
+      setLoading(true); setError(null);
     }
     previousIdentity.current = identityKey;
   }, [identityKey]);
@@ -395,4 +397,3 @@ export function HomeDashboardLive() {
   }
   return <HomeWorkspace foundation={foundation} insights={insights} live={live} tasks={tasks} />;
 }
-
