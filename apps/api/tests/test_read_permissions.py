@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -153,3 +154,57 @@ def test_policy_helper_matches_the_query_boundary() -> None:
     assert knowledge_item_readable(
         user_id=ALICE, local_diagnostic=False, visibility="unexpected", owner_user_id=ALICE
     ) is False
+
+def test_local_members_in_one_workspace_get_per_member_private_isolation(
+    repo: SourceRepository,
+) -> None:
+    # 本地产品：多名成员同在 local workspace。私有隔离靠各自的 member_id，
+    # 而不是「有令牌就当 owner 全私有可见」。
+    owner_upload = make_item(repo, "ki-by-owner", "member-owner", workspace_id=LOCAL)
+    other_upload = make_item(repo, "ki-by-other", "member-other", workspace_id=LOCAL)
+    repo.set_knowledge_item_visibility(LOCAL, owner_upload, "shared")
+    repo.set_knowledge_item_visibility(LOCAL, other_upload, "shared")
+
+    # 另一位成员看得到共享的两条。
+    other_reads = [
+        item.id for item in repo.list_knowledge_items_readable_by(LOCAL, user_id="member-other")
+    ]
+    assert set(other_reads) == {owner_upload, other_upload}
+    # 私有隔离：把其中一条转回私有后，只对上传者本人可见。
+    repo.set_knowledge_item_visibility(LOCAL, other_upload, "private")
+    assert repo.get_knowledge_item_readable_by(LOCAL, other_upload, user_id="member-other").id == other_upload
+    with pytest.raises(KeyError):
+        repo.get_knowledge_item_readable_by(LOCAL, other_upload, user_id="member-owner")
+
+
+def test_member_scoped_reads_require_the_member_id_not_local_diagnostic(
+    repo: SourceRepository,
+) -> None:
+    # 已进入成员范围（认证态或带成员令牌）就必须给出可信 id；缺 id 是错误，
+    # 不会静默走 local 诊断全私有绕行。
+    item_id = make_item(repo, "ki-member-only", "member-owner", workspace_id=LOCAL)
+    with pytest.raises(ValueError):
+        repo.list_knowledge_items_readable_by(LOCAL, user_id=None, local_diagnostic=False)
+    with pytest.raises(ValueError):
+        repo.get_knowledge_item_readable_by(LOCAL, item_id, user_id=None, local_diagnostic=False)
+
+
+def test_ownership_is_bound_from_the_verified_identity_not_the_dataclass_field(
+    repo: SourceRepository,
+) -> None:
+    # 调用方可以在 dataclass 里随便填 owner_user_id，但归属只认显式的已验证身份。
+    item = KnowledgeItem(
+        id="ki-bound", workspace_id=WORKSPACE, content_type="text", title="绑定测试",
+        body="正文", file_reference=None, authorization="内部参考", ownership="我的内容",
+        source_item_id=None, version="1", owner_user_id="forged-owner",
+    )
+
+    created = repo.create_knowledge_item_owned(item, verified_user_id=ALICE)
+
+    assert created.owner_user_id == ALICE
+    assert repo.get_knowledge_item(WORKSPACE, "ki-bound").owner_user_id == ALICE
+    # 没有可解析身份时归属留空：不算任何成员的私有资产。
+    anonymous = repo.create_knowledge_item_owned(
+        replace(item, id="ki-unbound"), verified_user_id=None
+    )
+    assert anonymous.owner_user_id is None

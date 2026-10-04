@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
@@ -151,6 +152,22 @@ class SourceRepository:
         with self._connect() as conn:
             self._insert_knowledge_item(conn, item)
         return self.get_knowledge_item(item.workspace_id, item.id)
+
+    def create_knowledge_item_owned(
+        self, item: KnowledgeItem, *, verified_user_id: str | None
+    ) -> KnowledgeItem:
+        """保存知识条目，并把上传者归属绑定到这次已验证的身份。
+
+        ``verified_user_id`` 由调用方从实际来源取到——已验证的 Bearer 身份，或
+        local_members_service.resolve_member 返回的 member_id。归属不在这里猜，也不
+        采信 dataclass 里自带的 owner_user_id：那是调用方可以随便填的字段。
+        只有这个显式参数能决定归属。
+
+        归属留空只允许在没有可解析身份的受控本地诊断写入；那种情况下这条内容对
+        本机照常可读，但不会被算成任何成员的私有资产。
+        """
+        owner = str(verified_user_id or "").strip() or None
+        return self.create_knowledge_item(replace(item, owner_user_id=owner))
 
     def _validate_knowledge_item(self, item: KnowledgeItem) -> None:
         if (

@@ -124,10 +124,16 @@ def knowledge_item_readable(
 ) -> bool:
     """判断一条知识能否被当前调用方读到。
 
-    ``user_id`` 来自已验证的 Bearer 身份（AuthPrincipal.user_id），不是客户端自报。
+    ``user_id`` 是**已经解析出的可信调用方标识**，来源有两种既有身份，都归一到
+    这一个字符串参与判定，不新造第二套身份框架：
+    - 已验证的 Bearer 身份（AuthPrincipal.user_id，来自 Supabase Auth）；
+    - 本地成员令牌（local_members_service.resolve_member 返回的 member_id）。
+    两者都不是客户端自报。local 模式的多名成员同处一个 workspace，正是靠这个
+    id 区分各自的私有上传。
+
     ``local_diagnostic`` 只在保留的 local workspace、未开认证的受控诊断下为真：
     这时本机自己的私有内容照常可读，产品在单机上仍然可用——但这不是多人隔离，
-    认证态缺可信身份时不得借此降级到 local。
+    认证态或已带成员令牌的请求缺可信身份时不得借此降级到 local。
 
     共享内容对本工作区成员可读；私有内容只对上传者本人可读。可见范围未知时按
     更保守的一侧处理，不当作共享。
