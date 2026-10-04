@@ -58,6 +58,39 @@ AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
 ContentVisibility = Literal["private", "shared"]
 
+
+def content_owner(verified_user_id: str | None) -> str | None:
+    """把一次已验证身份归一成内容的上传者标识。
+
+    来源是 Supabase 已验证的 AuthPrincipal.user_id 或本地成员令牌解析出的
+    member_id——两种既有身份在此归一，不新造第二套规则。dataclass 里已有的
+    owner_user_id 不作数（那是调用方能自填的字段）。没有可解析身份时留空：
+    这条内容不会被算成任何成员的私有资产。
+    """
+    return str(verified_user_id or "").strip() or None
+
+
+def content_readable(
+    *,
+    user_id: str | None,
+    local_diagnostic: bool,
+    visibility: str,
+    owner_user_id: str | None,
+) -> bool:
+    """内容可读判据。与知识域共用同一套规则（转发到 app.sources）。
+
+    私有只对上传者本人可读，共享对成员可读；认证态缺可信身份不可读，不降级
+    local；保留的 local workspace 受控诊断下本机私有照常可读（非成员隔离）。
+    """
+    from app.sources import knowledge_item_readable
+
+    return knowledge_item_readable(
+        user_id=user_id,
+        local_diagnostic=local_diagnostic,
+        visibility=visibility,
+        owner_user_id=owner_user_id,
+    )
+
 AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
 SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
 AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
@@ -199,6 +232,8 @@ class MaterialAsset:
     segments: list[MaterialSegment] = field(default_factory=list)
     # 新建素材默认私有：只有本人显式共享才对成员可见。存量行迁移时回填 shared。
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    # 上传者：来源是已验证身份（Bearer user_id 或本地成员 member_id），不采信客户端自报。
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -682,6 +717,7 @@ class CreationPlan:
     status: Literal["confirmed"] = "confirmed"
     creation_task_id: str | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -698,6 +734,7 @@ class VideoTemplate:
     source_task_id: str | None = None
     source_timeline_version_id: str | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -726,6 +763,7 @@ class CreationTask:
     stage_repair_action: str | None = None
     stage_retryable: bool | None = None
     visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -5115,11 +5153,25 @@ class ProductionRepository:
             raise KeyError(template_id)
         return self._template_from_row(row)
 
-    def save_video_template(self, template: VideoTemplate) -> VideoTemplate:
+    def save_video_template(
+        self, template: VideoTemplate, *, verified_owner_user_id: str | None = None
+    ) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
             raise ValueError("用户模板必须有名称和有效版本。")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            prior_owner = conn.execute(
+                "SELECT payload FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC LIMIT 1",
+                (template.workspace_id, template.id),
+            ).fetchone()
+            inherited = ""
+            if prior_owner is not None:
+                inherited = str(
+                    json.loads(str(prior_owner["payload"])).get("owner_user_id") or ""
+                ).strip()
+            owner = inherited or content_owner(verified_owner_user_id)
+            if owner and not template.owner_user_id:
+                template = replace(template, owner_user_id=owner)
             row = conn.execute("SELECT COALESCE(MAX(version), 0) AS version FROM video_templates WHERE workspace_id = ? AND id = ?", (template.workspace_id, template.id)).fetchone()
             if template.version != row["version"] + 1:
                 raise ValueError("模板版本已变化，请刷新后重新保存。")
@@ -5141,6 +5193,8 @@ class ProductionRepository:
         self,
         plan: CreationPlan,
         task: CreationTask,
+        *,
+        verified_owner_user_id: str | None = None,
     ) -> tuple[CreationPlan, CreationTask]:
         if not plan.workspace_id.strip() or not task.workspace_id.strip():
             raise ValueError("创作方案和任务必须属于工作区")
@@ -5155,6 +5209,13 @@ class ProductionRepository:
         if plan.approved_clip_count > 0 and not plan.material_matches:
             raise ValueError("新创作方案必须固化本次实际命中的素材片段")
         _validate_plan_material_matches(plan.material_matches)
+        # 上传者绑定到已验证身份；已有归属不覆盖。legacy 调用不传即保持原样。
+        owner = content_owner(verified_owner_user_id)
+        if owner:
+            if not plan.owner_user_id:
+                plan = replace(plan, owner_user_id=owner)
+            if not task.owner_user_id:
+                task = replace(task, owner_user_id=owner)
 
         now = utc_now()
         plan.creation_task_id = task.id
