@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案，当前执行线程写入与模型操作权零；其修复及隔离夹具保留，实际配音受内存外部条件阻断，后续由主控在资源具备后复用同可见终端的新具名Dispatch与START，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；当前仅任务33具名真实配音准备/验收权，无产品源码写权，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：任务32源码已接受，真实配音待内存条件 | 写入/操作权零；c7cea50与组合f71fde44、新pressure-recovery夹具保留 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务33：资源释放后继续首次真实配音 | 仅下方33隔离验收；无产品源码写权，模型等新Dispatch START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -212,6 +212,16 @@ A32.1主控明确本轮实验参数：配音I/O持续窗口3秒，cap仍128MiB/s
 一次START是一个原job的有界真实验收，允许正常资源等待后最多一次重新Grant（总generation最多2、180秒总限，不改cap/重新造job）；每次均fresh准入/真实登记先于exec ACK/持续身份资源组检查，不mock，不强制造资源压力或并行重活。源码专项模拟压力与真实自然运行分开报告，真实未发生等待不可称该场景真机验证。只验narration，不自动执行montage/render/人物，后续阶段保持原queued/blocked，不称整job succeeded。出现真正模型错误/unknown/总限停止交首因，不擅装依赖或修旧根重试。
 
 最终音频ffprobe/hash或准确首因、原job/request真实等待/成功单阶段/失败状态、每次真实Grant/exec/phase/逐盘窗口/RSS/threads/available/swap/间隔、MLX不可测边界、全部父子PID/组退出/held lock EX|NB可重获/ledgerSQLpermit free、源码/13stat/runtime未变与双clean后worker_done一次。不把短句成功当生产配置标定/音质/Intel/全流程，不关闭WIL26或合main。若本单有新真实依赖缺口，主控继续决定最小必要差额，不停在CODE_FROZEN或派工结果。
+
+## A：资源释放后首次真实配音（任务33）
+
+`MAIN-QWENPRESSURE-20261007-33`：用户明确“可以啊，你试试吧”，批准暂停3163另一UI工作树的预览服务并继续实际配音。主控复核cwd/当前PID后仅SIGTERM其75454/75470，两者已退出，实际available8.84GiB；不停止其它应用/线程，不删除文件，不恢复预览至模型释放前。32 failed只表示准入准备受资源阻断，模型零次；原修复c7cea50与主控组合 **f71fde442b9654681a617065553f59ace171f157** 已审，双clean且tree相等，不重复30项专项或其它GUI/服务/模型。
+
+仅复用manta现有可见终端的新Dispatch，先语义REBASE_ACK。无产品/测试/共享权威写权，不改预算或下载/安装/网络/真实Key/用户库。允许继续32的首次未启动隔离根 `/tmp/main-acceptance-20261007/qwen-pressure-recovery/`：先将32已接受的具名report.md/measurement.json/release-evidence.json分别保留为prepared32-report.md/prepared32-measurement.json/prepared32-release-evidence.json（仅这3份证据，不删除或复制整根），确认measurement-attempt/measurement-launch/registered-children/grants/commands等实际执行marker不存在；原合法job仍queued、无request、SQLpermit free/generation0、lock/ledger未创建，使用同一个原job，不造新job或清理旧attempt。106源码归档/13stat/runtime/精确DEVNULL profile/六个AST消费者及已修验收栅栏保持，来源只读；可修改隔离验收harness仅本次直接必要报告/计数，不能改source/产品保护。
+
+先做一次新的无模型连续准入观察（必须真实完整≥3秒窗口、短单次采样0.1秒、当次freshswap+64MiB），提交PREPARED actual decision及预算、源/模型未变、原job/许可与拟命令，等**本新Dispatch START_RUNTIME_MEASURE**。所有32实验cap逐字段不变，IO128MiB/s/3秒有限384MiB初始字节量，准入memory3.5GiB、组RSS2GiB/线程128、阶段120秒/父180秒、快速取消/持续身份。无重复DEVNULL负向/专项或GUI，既有准备子组释放证据复用。
+
+START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前身份输入/实际现有配音消费者；真实参考与目标仅原短句。自然压力最多generation2、实际释放后30秒fresh再准入，未知/模型错/时间限准确止，不自动增cap/新job。仅narration，后续montage/render不执行。成功须原narration请求done、job queued、permit free与真实有效audio cache同时成立，再停止driver；不可看到文件就取消成功request。最后真实WAV ffprobe/hash或首因/阶段/同次逐盘decision、遥测与所有父子/组、锁/ledger/SQLpermit释放、source/model/runtime与双clean证明，worker_done一次。未发生自然等待不称真机恢复已验；不称音质/Intel/生产标定/完整制作已过，不关闭WIL26/合main。新真实依赖缺口回证据，主控继续最小授权目标。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
