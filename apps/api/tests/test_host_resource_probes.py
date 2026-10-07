@@ -396,8 +396,8 @@ def test_isolated_cpu_ffmpeg_render_uses_measured_admission_and_real_grant(tmp_p
         scheduler.close()
 
 
-@pytest.mark.parametrize("unavailable", [False, True])
-def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monkeypatch, unavailable):
+@pytest.mark.parametrize("refusal", ["rss_bytes", "threads", "unavailable"])
+def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monkeypatch, refusal):
     resources = _scene_resources()
 
     class Owner:
@@ -418,8 +418,11 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
             observed_at REAL NOT NULL, completed_digest TEXT, attempted_digest TEXT,
             state TEXT NOT NULL, PRIMARY KEY (workspace_id, file_path))""")
         apply_production_migrations(conn)
-    scene_budget = replace(_scene_budget(), max_process_rss_bytes=24 * 1024 * 1024,
-                           additional_memory_bytes=24 * 1024 * 1024)
+    unavailable = refusal == "unavailable"
+    scene_budget = replace(_scene_budget(),
+                           max_process_rss_bytes=(256 if refusal == "threads" else 24) * 1024 * 1024,
+                           max_process_threads=1 if refusal == "threads" else 128,
+                           additional_memory_bytes=(256 if refusal == "threads" else 24) * 1024 * 1024)
     probe = HostResourceProbe(
         database, disk_paths=(tmp_path,),
         budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024, 0.02,
@@ -439,14 +442,26 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
             monkeypatch.setattr(psutil.Process, "memory_info", missing_memory)
         start = time.monotonic()
         expected = GrantedCommandResourceUnavailable if unavailable else GrantedCommandResourceLimit
-        with pytest.raises(expected):
+        with pytest.raises(expected) as caught:
             run_granted_command(
                 scheduler, grant,
-                [sys.executable, "-c", "import os,time; os.close(1); os.close(2); "
-                 "held=bytearray(80_000_000); time.sleep(5)"],
+                [sys.executable, "-c", "import os,time,threading; os.close(1); os.close(2); "
+                 "held=bytearray(80_000_000); "
+                 "threading.Thread(target=lambda:time.sleep(5),daemon=True).start(); time.sleep(5)"],
                 timeout_seconds=3, max_stdout_bytes=100, max_stderr_bytes=100,
             )
         assert time.monotonic() - start < 2
+        assert caught.value.command_diagnostics["group_released"] is True
+        if not unavailable:
+            sample = caught.value.resource_sample
+            assert sample["limits"] == {"rss_bytes": scene_budget.max_process_rss_bytes,
+                                        "threads": scene_budget.max_process_threads}
+            assert sample["exceeded"] == [refusal]
+            assert sample["measured"][refusal] > sample["limits"][refusal]
+            assert sample["measured"]["rss_bytes"] > 0
+            assert sample["measured"]["threads"] >= 1
+            assert str(sample["measured"][refusal]) in str(caught.value)
+            assert str(sample["limits"][refusal]) in str(caught.value)
         if unavailable:
             scheduler.defer_unit(grant, reason="resource_pressure",
                                  retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1))

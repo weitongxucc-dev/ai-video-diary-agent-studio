@@ -62,6 +62,16 @@ class GrantedCommandOutputLimit(GrantedCommandError):
 class GrantedCommandResourceLimit(GrantedCommandError):
     """Measured process RSS or thread count exceeded the calibrated scene cap."""
 
+    def __init__(self, *, rss: int, threads: int, limits: SceneRuntimeLimits):
+        measured = {"rss_bytes": rss, "threads": threads}
+        caps = {"rss_bytes": limits.max_process_rss_bytes,
+                "threads": limits.max_process_threads}
+        exceeded = [key for key in measured if measured[key] > caps[key]]
+        self.resource_sample = {"measured": measured, "limits": caps, "exceeded": exceeded}
+        labels = {"rss_bytes": "进程组内存（字节）", "threads": "进程组线程数"}
+        detail = "；".join(f"{labels[key]} {measured[key]} > 上限 {caps[key]}" for key in exceeded)
+        super().__init__(f"{detail}。请核对本次实测与场景预算后再运行。")
+
 
 class GrantedCommandResourceUnavailable(GrantedCommandError):
     """Host pressure or an unavailable scene process sample stopped execution."""
@@ -92,7 +102,7 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                 if current.pid == process.pid and process.poll() is None:
                     raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling")
         if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
-            raise GrantedCommandResourceLimit("Scene process exceeded RSS or thread budget")
+            raise GrantedCommandResourceLimit(rss=rss, threads=threads, limits=limits)
         if (psutil.virtual_memory().available < limits.min_host_available_memory_bytes
                 or psutil.swap_memory().used > limits.max_host_swap_used_bytes):
             raise GrantedCommandResourceUnavailable("Host memory pressure during scene decode")
