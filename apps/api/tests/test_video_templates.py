@@ -9,7 +9,7 @@ import app.main as main
 from app.production import ProductionRepository, VideoTemplate
 from app.source_repository import SourceRepository
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator, CreationTaskScriptGenerationError
-from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, _save_versioned_voice, plan_owner
+from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, _save_versioned_voice, plan_owner as plan_owner
 from test_creation_task_topic_provider import _script_input, _script_document, _response
 
 
