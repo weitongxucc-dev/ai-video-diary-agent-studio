@@ -46,6 +46,12 @@ B初段允许只读源码追踪、具名文件实现及最小无外部模型测�
 
 任务36/37有界补充（C1，目标不变）：A已定位`production.py:ProductionRepository.fail_creation_task_stage`自行连接，与`fail_unit`事务嵌套会导致同库写锁；追加A owned `apps/api/app/production.py`仅该方法和复用现有事务所需的最小直接接线，保留旧直接消费者行为，不重构整库。B追加owned `apps/api/tests/test_assistant_pi.py`仅`test_edit_tool_separates_action_and_projects_actual_preview`及直接工具边界专项，禁止改运行器/API专项。B可落实`preview_edit`已声明的先读取任务、每轮失败不自行重试边界：须以执行真实TS工具的未读取拒绝及失败后第二次POST零发送证明，不添加其他猜测防护。
 
+任务36有界追加：用户已批准的“一次Pi修改并重出”进入Migrate，沿既有[架构§5.3/§5.5](../docs/system-architecture.md#53-自然语言局部修改)及领域TimelineVersion权威实施，不变更产品对象或默认业务入口。A仍为纵向负责人，B仅负责具名工作台消费。已定位退役目标为`cpu_render_facts`对所有`created_by_operation_id`的泛化拒绝、`CreationExecution.retry`对已失效输出的succeeded直接返回，以及工作台相应不可重出分支；新路径为用户确认编辑→当前已持久TimelineVersion/计划/字幕事实→既有继续制作设备队列仅render→新产物及新parent版本，原配音与故事板保留。追加A owned `apps/api/tests/test_montage_pipeline.py`仅当前版本、受许可重出直接专项；无需新增montage/renderer写权。A须先冻结失败状态小候选，再实现重出差额，不顺手扩大到人物/独立音轨/图层。
+
+Migrate验收：纯素材crop编辑确认后以真实现有start/resume接线得到新render Grant，新输出属于当前版本、前后可播放且画面变化符合提案；没有新增配音/编排模型运行，重复重出幂等。旧版本/并发版本或源输入变动、失效许可无错误产物/Grant，取消释放、旧输出只作历史不可冒充当前；受许可执行中自产新版本的合法推进不能因新版本摘要反过来误判自身stale。现有拒绝人物/未接音轨/图层保护保留。源码层正负及不存在证明后方可声明旧泛化拒绝RETIRED；整体仍需同一冻结候选真实软件/产物。不得靠只删guard或调用无许可旧render入口完成，不删除用户版本/素材，不静默回滚到旧执行器。临时共存仅冻结候选前的独立分支与历史输出；集成后活跃纯素材重新输出入口全部走同一队列，GUI旧不可用分支也须退役。B在A报告真实后端能力后追加现有工作台动作，不提前写假能力。
+
+任务37设置GUI窗口（非模型，冻结f9ed34c7a57c894711507d253cac81062058c11e）：主控已审PREPARED、521源码blob清单、真实app.main入口及exact新store wrapper。主控可在新`creation36`控制证据根创建/解锁`/tmp/main-acceptance-20261008/pi-entry37/config/task37.keychain-db`空临时钥匙串，保持用户search list/default前后相同；只读取既有具名`minimax-validation-20261007`条目到RAM，以原生密码输入stdin交软件页面保存，不预先用API/脚本写入task37工作区Key。B在本Dispatch具名START_SETTINGS_GUI后仅运行所报services.py start、隔离Chrome新profile与原生GUI非秘密操作；API4567/Web3167、30分钟lease，重启API仅同env/DB/store，允许一次保存后重启及一次空Key保存验证保留。主控输入Key、审安全状态/非秘密配置、RAM秘密扫描并最终锁定新store；B不读取Key、剪贴板、文档或登录store。模型/制作/Pi文字请求/测试连接均不在此窗口内；A只静态源码工作，不执行重模型。两方记录自己的准确PID/PGID，B最后停止服务与浏览器、证明端口释放。保存重启通过仅证明当前软件配置GUI，不证明包内或整链。
+
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
