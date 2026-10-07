@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CreationTaskWorkspace, PreviewVideo } from "../CreationTaskWorkspace";
+import { CreationTaskWorkspace, FinalVideoQualityCheck, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import { confirmCreationTaskTopic, setCreationTaskVisibility } from "@/lib/api";
 
@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => {
     generatePersonRender: vi.fn(),
     getCandidates: vi.fn(),
     getWorkspace: vi.fn(),
+    getQualityCheck: vi.fn().mockResolvedValue({ check_state: "none", result_status: null,
+      stale: false, timeline_version_id: null, findings: [], unavailable: [] }),
+    checkQuality: vi.fn(),
     initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
@@ -85,6 +88,8 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getCreationTaskQualityCheck: mocks.getQualityCheck,
+  checkCreationTaskQuality: mocks.checkQuality,
   getCreationPlan: mocks.getCreationPlan,
   setCreationTaskVisibility: mocks.setCreationTaskVisibility,
   setCreationPlanVisibility: mocks.setCreationPlanVisibility,
@@ -139,6 +144,111 @@ const baseTask: CreationTask = {
   created_at: "2026-08-30T00:00:00Z",
   updated_at: "2026-08-30T00:00:00Z",
 };
+
+describe("persisted final video quality checks", () => {
+  const completed = { check_state: "done", result_status: "issues_found", stale: false,
+    timeline_version_id: "timeline-version-6", check_id: "check-1", render_ref: "hash",
+    checked_at: null, error: null, validation_scope: "deterministic_media_errors_only",
+    findings: [{ kind: "black_frame", start_seconds: 3.25, end_seconds: 4.1,
+      duration_seconds: .85, detail: "真实黑场", clip_ids: ["clip-2"] }],
+    unavailable: [{ kind: "clipping", reason: "音频无法测量", status: "unavailable" }] };
+
+  it.each([
+    [{ check_state: "checking", result_status: null }, "成片检查中"],
+    [{ check_state: "failed", result_status: null, error: "解码失败" }, "成片检查失败"],
+    [{ result_status: "unavailable", findings: [] }, "部分检测不可用"],
+    [{ result_status: "clean", findings: [], unavailable: [] }, "未发现确定性媒体问题"],
+    [{ stale: true }, "旧检查已失效，请检查当前成片"],
+  ])("separates persisted states %s", async (overrides, label) => {
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, ...overrides });
+    render(<FinalVideoQualityCheck taskId="task-1" versionId="timeline-version-6"
+      outputUrl="/video" onLocate={vi.fn()} />);
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    if (label !== "未发现确定性媒体问题") expect(screen.queryByText("未发现确定性媒体问题")).not.toBeInTheDocument();
+    if (label.includes("失效")) expect(screen.queryByText("真实黑场")).not.toBeInTheDocument();
+  });
+
+  it("shows issues and unavailable together, seeks exact interval on current player and selects its clip", async () => {
+    const initial = subtitleCoverWorkspace();
+    const clip = { id: "clip-1", cue_id: "cue", asset_id: "asset", segment_id: "segment",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: 1, match_reasons: [],
+      needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false };
+    initial.montage!.clips = [clip, { ...clip, id: "clip-2", timeline_start_seconds: 3, timeline_end_seconds: 6 }];
+    mocks.getQualityCheck.mockResolvedValue(completed);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
+    expect(await screen.findByText("成片发现问题")).toBeInTheDocument();
+    expect(screen.getByText("检测不可用：音频无法测量")).toBeInTheDocument();
+    const player = screen.getByLabelText("成片预览") as HTMLVideoElement;
+    const pause = vi.spyOn(player, "pause").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "定位 3.25–4.10 秒" }));
+    expect(pause).toHaveBeenCalled();
+    expect(player.currentTime).toBe(3.25);
+    expect(screen.getByLabelText("局部修改要求")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+    const editor = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    fireEvent.loadedMetadata(editor);
+    expect(editor.currentTime).toBe(3.25);
+    pause.mockRestore();
+  });
+
+  it("posts only task identity, polls checking to done and reloads persisted result after remount", async () => {
+    mocks.getQualityCheck.mockResolvedValueOnce({ ...completed, check_state: "none", result_status: null,
+      findings: [], unavailable: [] }).mockResolvedValue(completed);
+    mocks.checkQuality.mockResolvedValue({ ...completed, check_state: "checking", result_status: null,
+      findings: [], unavailable: [] });
+    const props = { taskId: "task-1", versionId: "timeline-version-6", outputUrl: "/video", onLocate: vi.fn() };
+    const view = render(<FinalVideoQualityCheck {...props} />);
+    expect(await screen.findByText("当前成片尚未检查")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查成片" }));
+    expect(await screen.findByText("成片检查中")).toBeInTheDocument();
+    expect(mocks.checkQuality).toHaveBeenCalledWith("task-1");
+    expect(await screen.findByText("成片发现问题", {}, { timeout: 2000 })).toBeInTheDocument();
+    view.unmount();
+    render(<FinalVideoQualityCheck {...props} />);
+    expect(await screen.findByText("真实黑场")).toBeInTheDocument();
+  });
+
+  it("discards a late response after version change and never shows an old clean result", async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.getQualityCheck.mockReturnValueOnce(new Promise(done => { resolve = done; }))
+      .mockResolvedValue({ ...completed, stale: true, timeline_version_id: "v7", findings: [], unavailable: [] });
+    const view = render(<FinalVideoQualityCheck taskId="task-1" versionId="timeline-version-6" outputUrl="/video" onLocate={vi.fn()} />);
+    view.rerender(<FinalVideoQualityCheck taskId="task-1" versionId="v7" outputUrl={null} onLocate={vi.fn()} />);
+    expect(await screen.findByText("旧检查已失效，请检查当前成片")).toBeInTheDocument();
+    await act(async () => resolve({ ...completed, result_status: "clean", findings: [], unavailable: [] }));
+    expect(screen.queryByText("未发现确定性媒体问题")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^定位/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新检查成片" })).toBeDisabled();
+  });
+
+  it("shows clipping totals and separate evidence limits only when a current summary exists", async () => {
+    const clipping_summary = {
+      event_count: 2001, total_clipped_seconds: 20.01,
+      first_start_seconds: 0, last_end_seconds: 40, full_scale_duty: .25,
+      event_list_limit: 50, events: [{ start_seconds: 0, end_seconds: .01, duration_seconds: .01 }],
+      events_truncated: true, truncated_event_count: 1951,
+      findings_event_limit: 2000, findings_truncated: true, findings_truncated_count: 1,
+    };
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary });
+    const props = { taskId: "task-1", versionId: "timeline-version-6", outputUrl: "/video", onLocate: vi.fn() };
+    const view = render(<FinalVideoQualityCheck {...props} />);
+    const summary = await screen.findByLabelText("音频削平摘要");
+    expect(summary).toHaveTextContent("音频削平共 2001 段，累计 20.01 秒。");
+    expect(summary).toHaveTextContent("削平问题明细已限流至 2000 条，另有 1 段未逐条列出；总量包含这些事件。");
+    expect(summary).toHaveTextContent("削平区间摘要仅保留 50 条，另有 1951 段未在区间摘要中列举；总量仍完整。");
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary: null });
+    view.rerender(<FinalVideoQualityCheck {...props} outputUrl="/new-video" />);
+    await waitFor(() => expect(screen.queryByLabelText("音频削平摘要")).not.toBeInTheDocument());
+    expect(await screen.findByText("成片发现问题")).toBeInTheDocument();
+    expect(screen.queryByText(/音频削平共/)).not.toBeInTheDocument();
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary, stale: true });
+    view.rerender(<FinalVideoQualityCheck {...props} outputUrl="/stale-video" />);
+    expect(await screen.findByText("旧检查已失效，请检查当前成片")).toBeInTheDocument();
+    expect(screen.queryByLabelText("音频削平摘要")).not.toBeInTheDocument();
+  });
+});
 
 function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null): WorkspaceState {
   return {
@@ -282,6 +392,9 @@ function workspaceWithCover() {
 afterEach(() => {
   mocks.showQuickInspector = false;
   vi.clearAllMocks();
+  mocks.getQualityCheck.mockReset().mockResolvedValue({ check_state: "none", result_status: null,
+    stale: false, timeline_version_id: null, findings: [], unavailable: [] });
+  mocks.checkQuality.mockReset();
   mocks.previewExecution.mockResolvedValue(null);
   mocks.getExecution.mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null });
   mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", current: null, items: [], total_count: 0 });
@@ -722,7 +835,7 @@ describe("CreationTaskWorkspace", () => {
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
     expect(saveRenderedVideo).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole("status")).toHaveTextContent("成片.mp4");
+    expect(await screen.findByRole("status", { name: "" })).toHaveTextContent("成片.mp4");
     fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成成片" }));

@@ -31,6 +31,8 @@ import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { AppShell } from "@/components/AppShell";
 import {
   apiUrl,
+  checkCreationTaskQuality,
+  getCreationTaskQualityCheck,
   confirmCreationTaskEdit,
   confirmCreationTaskScript,
   saveScriptLibraryEntry,
@@ -68,6 +70,7 @@ import {
 } from "@/lib/api";
 import type {
   CreationTask,
+  CreationTaskQualityCheck,
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
   CreationTaskNarrationSegment,
@@ -1202,6 +1205,80 @@ function PublishStageView({ workspace, onOpenReview }: { workspace: WorkspaceSta
   );
 }
 
+export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate }: {
+  taskId: string; versionId: string | null; outputUrl: string | null;
+  onLocate: (finding: CreationTaskQualityCheck["findings"][number]) => void;
+}) {
+  const [result, setResult] = useState<CreationTaskQualityCheck | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const revision = useRef(0);
+  useEffect(() => {
+    const current = ++revision.current;
+    setResult(null); setError(null); setSubmitting(false);
+    void getCreationTaskQualityCheck(taskId).then(value => {
+      if (current === revision.current) setResult(value);
+    }).catch(cause => { if (current === revision.current) setError(errorDetails(cause).message); });
+    return () => { revision.current += 1; };
+  }, [taskId, versionId, outputUrl]);
+  useEffect(() => {
+    if (result?.check_state !== "checking" || result.stale) return;
+    const current = revision.current;
+    const timer = window.setTimeout(() => {
+      void getCreationTaskQualityCheck(taskId).then(value => {
+        if (current === revision.current) setResult(value);
+      }).catch(cause => { if (current === revision.current) setError(errorDetails(cause).message); });
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [result, taskId]);
+  async function check() {
+    const current = revision.current;
+    setSubmitting(true); setError(null);
+    try {
+      const next = await checkCreationTaskQuality(taskId);
+      if (current === revision.current) setResult(next);
+    } catch (cause) {
+      if (current === revision.current) setError(errorDetails(cause).message);
+    } finally {
+      if (current === revision.current) setSubmitting(false);
+    }
+  }
+  const stale = result && (result.stale || result.timeline_version_id !== versionId
+    || (result.check_state === "done" && !outputUrl));
+  const current = !error && !stale ? result : null;
+  const label = error ? "检查结果读取失败" : stale ? "旧检查已失效，请检查当前成片"
+    : !current ? "正在读取检查结果" : current.check_state === "checking" ? "成片检查中"
+    : current.check_state === "failed" ? "成片检查失败"
+    : current.result_status === "issues_found" ? "成片发现问题"
+    : current.result_status === "unavailable" ? "部分检测不可用"
+    : current.result_status === "clean" ? "未发现确定性媒体问题" : "当前成片尚未检查";
+  return <section className={styles.qualityCheck} aria-label="成片质量检查">
+    <div className={styles.qualityHeading}><strong role="status" aria-label="成片质量检查状态">{label}</strong>
+      <button className={styles.secondaryButton} type="button"
+        disabled={!outputUrl || submitting || current?.check_state === "checking"}
+        onClick={() => void check()}>重新检查成片</button></div>
+    <p>检查黑帧、尾部截断、音频削波和起点时间戳错位；内容质量仍需人工确认。</p>
+    {error || current?.error ? <p role="alert">{error ?? current?.error}</p> : null}
+    {current?.checked_at ? <small>检查时间：{new Date(current.checked_at).toLocaleString()}</small> : null}
+    {current?.check_state === "done" && current.clipping_summary ? <div aria-label="音频削平摘要">
+      <p>音频削平共 {current.clipping_summary.event_count} 段，累计 {current.clipping_summary.total_clipped_seconds} 秒。</p>
+      {current.clipping_summary.findings_truncated ? <p>
+        削平问题明细已限流至 {current.clipping_summary.findings_event_limit} 条，另有 {current.clipping_summary.findings_truncated_count} 段未逐条列出；总量包含这些事件。
+      </p> : null}
+      {current.clipping_summary.events_truncated ? <p>
+        削平区间摘要仅保留 {current.clipping_summary.event_list_limit} 条，另有 {current.clipping_summary.truncated_event_count} 段未在区间摘要中列举；总量仍完整。
+      </p> : null}
+    </div> : null}
+    {current?.findings.map((finding, index) => <article key={`${finding.kind}:${index}`}>
+      <button type="button" onClick={() => onLocate(finding)}>
+        定位 {finding.start_seconds.toFixed(2)}–{finding.end_seconds.toFixed(2)} 秒
+      </button><span>{finding.detail}</span>
+    </article>)}
+    {current?.unavailable.map((item, index) => <p key={`${item.kind}:${index}`}>
+      检测不可用：{item.reason}</p>)}
+  </section>;
+}
+
 export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initialTasks }: Props) {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [workspace, setWorkspace] = useState(initialWorkspace);
@@ -1637,6 +1714,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  function locateQualityFinding(finding: CreationTaskQualityCheck["findings"][number]) {
+    const clip = workspace.montage?.clips.find(item => finding.clip_ids.includes(item.id));
+    if (clip) selectClip(clip.id);
+    playheadRef.current = finding.start_seconds;
+    if (montageVideoRef.current) {
+      montageVideoRef.current.pause();
+      montageVideoRef.current.currentTime = finding.start_seconds;
+    }
+  }
+
   function selectPlayingClip(video: HTMLVideoElement) {
     playheadRef.current = video.currentTime;
     if (selectedOverlayId) return;
@@ -2052,6 +2139,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
+        {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
