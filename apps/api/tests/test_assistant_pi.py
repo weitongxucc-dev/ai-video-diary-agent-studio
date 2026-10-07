@@ -52,6 +52,10 @@ globalThis.fetch = async (url, init) => {
 };
 const {default: register} = await import(input.extension);
 register({registerTool: tool => tools.set(tool.name, tool)});
+let unreadError;
+try { await tools.get('preview_edit').execute('unread', {command: '水平裁剪到40%'}); }
+catch (e) { unreadError = e.message; }
+const unreadPostCount = calls.length;
 await tools.get('read_current_task').execute('read', {});
 let result, error, duplicateError;
 try {
@@ -59,11 +63,9 @@ try {
     command: '水平裁剪到40%', context_stage: 'montage', selected_refs: ['clip:clip-1'],
   });
 } catch (e) { error = e.message; }
-if (result) {
-  try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
-  catch (e) { duplicateError = e.message; }
-}
-console.log(JSON.stringify({calls, result, error, duplicateError}));
+try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
+catch (e) { duplicateError = e.message; }
+console.log(JSON.stringify({calls, result, error, duplicateError, unreadError, unreadPostCount}));
 """
     result = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -76,6 +78,9 @@ console.log(JSON.stringify({calls, result, error, duplicateError}));
              "AI_VIDEO_DIARY_AGENT_SELECTED_REFS": '["clip:clip-2"]'},
     )
     observed = json.loads(result.stdout)
+    assert observed["unreadError"] == "请先读取当前创作任务，再预览修改"
+    assert observed["unreadPostCount"] == 0
+    assert "本轮已请求修改预览" in observed["duplicateError"]
     assert observed["calls"] == [{
         "url": "http://127.0.0.1:1/api/creation-tasks/task-one/edits/preview",
         "body": {"raw_command": "水平裁剪到40%", "context_stage": "montage",
@@ -96,7 +101,6 @@ console.log(JSON.stringify({calls, result, error, duplicateError}));
     assert "/private/" not in observed["result"]["content"][0]["text"]
     assert "source.mp4" not in observed["result"]["content"][0]["text"]
     assert observed["result"]["details"] == {"kind": "edit_preview", "preview": preview}
-    assert "本轮已生成" in observed["duplicateError"]
 
 
 @pytest.mark.parametrize("operation_type,before,after", [

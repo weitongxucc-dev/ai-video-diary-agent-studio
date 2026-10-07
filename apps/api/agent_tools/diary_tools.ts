@@ -431,10 +431,12 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
       additionalProperties: false,
     },
     execute: async (_id: string, params: { command: string; context_stage?: string; selected_refs?: string[] }) => {
+      if (!taskId || !currentTaskRead) throw new Error("请先读取当前创作任务，再预览修改");
       const effectiveStage = params.context_stage || stage;
       const effectiveRefs = params.selected_refs?.length ? params.selected_refs : selectedRefs;
       if (!effectiveStage) throw new Error("请先选择要修改的任务阶段");
-      if (previewCreated) throw new Error("本轮已生成修改预览，请用户检查后再决定下一步");
+      if (previewCreated) throw new Error("本轮已请求修改预览，请向用户说明结果后再决定下一步");
+      previewCreated = true;
       const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/edits/preview`, {
         method: "POST",
         body: JSON.stringify({
@@ -444,7 +446,6 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
           playhead_ms: playheadMs,
         }),
       });
-      previewCreated = true;
       return {
         content: [{ type: "text", text: JSON.stringify({
           proposal_id: preview.proposal.id,
