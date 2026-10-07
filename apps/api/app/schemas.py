@@ -1261,6 +1261,61 @@ class AudioTimelineResponse(AudioTimeline):
     tracks: list[TimelineAudioTrackResponse] = Field(default_factory=list)
 
 
+class CreationTaskQualityFindingResponse(BaseModel):
+    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset"]
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    detail: str
+    clip_ids: list[str]
+
+
+class CreationTaskQualityUnavailableResponse(BaseModel):
+    kind: str
+    reason: str
+    status: Literal["unavailable"]
+
+
+class CreationTaskClippingEventResponse(BaseModel):
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+
+
+class CreationTaskClippingSummaryResponse(BaseModel):
+    event_count: int
+    total_clipped_seconds: float
+    first_start_seconds: float
+    last_end_seconds: float
+    full_scale_duty: float | None
+    event_list_limit: int
+    events: list[CreationTaskClippingEventResponse]
+    events_truncated: bool
+    truncated_event_count: int
+    findings_event_limit: int
+    findings_truncated: bool
+    findings_truncated_count: int
+
+
+class CreationTaskQualityCheckResponse(BaseModel):
+    check_state: Literal["none", "checking", "failed", "done"]
+    result_status: Literal["clean", "issues_found", "unavailable"] | None
+    stale: bool
+    check_id: str | None
+    timeline_version_id: str | None
+    render_ref: str | None
+    checked_at: str | None
+    error: str | None
+    findings: list[CreationTaskQualityFindingResponse]
+    unavailable: list[CreationTaskQualityUnavailableResponse]
+    clipping_summary: CreationTaskClippingSummaryResponse | None = None
+    validation_scope: Literal["deterministic_media_errors_only"]
+
+
+class CreationTaskQualityCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class CreationTaskMontagePlanResponse(BaseModel):
     graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"

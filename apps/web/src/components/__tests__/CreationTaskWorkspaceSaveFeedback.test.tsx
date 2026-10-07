@@ -2,7 +2,7 @@ import { useState } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace } from "../CreationTaskWorkspace";
-import type { CreationTask, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import type { CreationTask, CreationTaskQualityCheck, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 
 // WIL-175 专项：输出页（activeView === "review"）原生保存的成功/取消/失败三种结果，
 // 失败必须同时给出「没有保存成」「为什么」「接下来怎么做」，取消必须安静，
@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
   return {
     MockCreationPlanApiError,
     getWorkspace: vi.fn(),
+    getQualityCheck: vi.fn(),
+    checkQuality: vi.fn(),
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
   getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
   getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
@@ -71,6 +73,8 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: vi.fn(),
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  getCreationTaskQualityCheck: mocks.getQualityCheck,
+  checkCreationTaskQuality: mocks.checkQuality,
   initializeCreationTaskTimeline: vi.fn(),
   getCreationTaskAssistantHistory: mocks.getAssistantHistory,
   getCreationExecution: mocks.getExecution,
@@ -185,6 +189,14 @@ function useElectronSave(saveRenderedVideo: ReturnType<typeof vi.fn>) {
 
 beforeEach(() => {
   mocks.getWorkspace.mockResolvedValue(reviewWorkspace());
+  const qualityCheck: CreationTaskQualityCheck = {
+    check_state: "none", result_status: null, stale: false, check_id: null,
+    timeline_version_id: "timeline-version-1", render_ref: null, checked_at: null,
+    error: null, findings: [], unavailable: [], clipping_summary: null,
+    validation_scope: "deterministic_media_errors_only",
+  };
+  mocks.getQualityCheck.mockResolvedValue(qualityCheck);
+  mocks.checkQuality.mockResolvedValue({ ...qualityCheck, check_state: "checking", check_id: "quality-check-1" });
 });
 
 afterEach(() => {
@@ -213,7 +225,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     // 3) 可执行下一步
     expect(alert).toHaveTextContent(/再次点击「保存到本地」/);
     // 失败不得留下成功提示
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "成片质量检查状态" })).toHaveTextContent("当前成片尚未检查");
   });
 
   it("本地服务没返回成片时，提示不会只让用户去查磁盘", async () => {
@@ -236,7 +249,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     // 下一步必须同时覆盖「当前成片/本地服务」和「保存位置」，不能只归因磁盘
     expect(alert).toHaveTextContent(/当前成片和本地服务/);
     expect(alert).toHaveTextContent(/保存位置是否可写/);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
   });
 
   it("用户取消保存时保持安静，既不报成功也不报失败", async () => {
@@ -249,7 +262,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
     await waitFor(() => expect(screen.getByRole("button", { name: "保存到本地" })).toBeEnabled());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
     // 打开「任务详情」也不该出现错误：取消是「什么都没发生」，不是「出了错但藏起来」。
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
     const inspector = await screen.findByRole("complementary", { name: "任务详情" });
@@ -266,12 +279,13 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await screen.findByRole("alert");
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
     const retry = screen.getByRole("button", { name: "保存到本地" });
     expect(retry).toBeEnabled();
     fireEvent.click(retry);
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole("status")).toHaveTextContent("成片.mp4");
+    expect(await screen.findByText("已保存：成片.mp4")).toHaveAttribute("role", "status");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -284,7 +298,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/没有保存到本地/);
     expect(alert).toHaveTextContent("请在桌面客户端中使用原生保存功能");
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
   });
 });
 
