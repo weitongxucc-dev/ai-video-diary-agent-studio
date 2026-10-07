@@ -34,7 +34,7 @@
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
 
-目标：真实命令从已确认文案的 start/resume 经唯一设备调度器推进配音、故事板、成片；原始账号/设备/workspace 持续核验及恢复不伪造 local 成员，不靠预先生成上游或旧执行器绕过许可。主控唯一集成者，WIL-26/142 和关联 35/159 的边界分别保留。
+目标：真实命令从已确认文案的 start/resume 经唯一设备调度器推进配音、故事板、成片；原始账号/设备/workspace 持续核验及恢复不伪造 local 成员，不靠预先生成上游或旧执行器绕过许可。主控唯一集成者，WIL-26/142 和关联 35/159 的边界分别保留。 A 已 ACK 并进入本单实施后，主控将 WIL-26 从 Backlog 移到 In Progress；WIL-165 既有 In Review 保持，未经对应验收不关闭任何卡。
 
 owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_accounts.py`、`main.py`；直接既有 `tests/test_creation_execution.py`、`test_member_permits.py`、`test_device_accounts.py`、`test_device_runtime_wiring.py`。有界修订 A11.1：根据 A 已回报的真实配音子进程缺口，追加 owned `apps/api/app/narration.py`、`voice_clone.py`、`host_resource_probes.py`、`granted_subprocess.py`，以及既有 `tests/test_narration_commands.py`、`test_voice_clone.py`、`test_host_resource_probes.py`、`test_granted_subprocess.py`（若存在）的本单直接消费者；不得扩大到未列的模型 worker、montage 或 renderer，必要差额先报主控。允许新增一份由 `supabase migration new device_creation_permit` 创建的具名 SQL 文件，回报准确路径；不改已有迁移。其他调度器/运行时/资源/接口路径如确有必要，先交具体证据由主控修订，不顺手扩写。禁止写 B 的 Pi/体检文件、Web、桌面、共享权威、真实配置/数据。
 
