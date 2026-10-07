@@ -20,15 +20,29 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；33/34/35已结案，两个执行线程当前待命，产品写入与模型操作权均零，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26至35均已结案，旧Dispatch不复活；当前权利仅见任务36/37，模型和GUI仍按其资源门禁错峰。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：35精确诊断及真实短配音分项已验收 | 写入/操作权零；297c2de与b2dc699候选、两轮证据保留 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务36：软件连续制作与失败恢复 | 下节具名后端及直接测试；不写B文件，旧候选/证据保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务37：软件配置与Pi业务工具入口 | 下节具名Pi/设置/页面及直接测试；不写A文件，旧候选/证据保留 |
+
+## 当前任务36/37：main 已合并后的完整用户结果
+
+用户于2026-10-08批准“可以，你开始吧”：执行已说明的完整成片及一次修改重出计划。PR95已由用户合入；两线程从产品基线 **fec1d13d8583d5c7e37de2467c4705713a0d3d2c** 新建独立分支，原A297c2de、B643c227及所有证据保留，不整体merge旧分支、不覆盖脏树。主控本地e4457a3已含该main；其共享说明仍由主控持有，不要求执行线程复制旧合同全文。语义REBASE_ACK说明目标、所有权和门禁后，直接开始下述已授权实现/最小验证；重模型和GUI需具名资源窗口。
+
+整体可见目标：在真实软件中确认文案、连续生成真实配音/故事板/字幕/可播放视频，再由Pi形成一个修改提案，经用户确认进入后端并产生新输出。先明确选纯素材验基础链，再验现有默认20%人物/口型，不能把纯素材通过当默认组合完成，不能擅改默认。一次失败须显示真实原因并从失败处恢复，取消须释放自有进程和唯一设备许可；保留上游。源代码、HTTP/SQL、模型产物、GUI、音质及真实发布分别记证据，不冒称整体完成。WIL26/142/165保持未完，未满足全部验收不关闭。
+
+**任务36 / A（MAIN-CREATION-20261008-36）**：A对制作结果纵向负责。先复现已证实的普通配音失败仅job/request失败而任务仍running的消费者缺口，按现有领域状态/仓库写入路径修正失败和恢复，不创造另一套状态机。追踪真实app.main的start/resume→DeviceRuntime→narration/montage/render；准备隔离软件入口、有限且显式的本次设备预算，缺少预算须可执行提示，不能将任务35的4GiB实验参数写成生产/Intel标定。owned仅`apps/api/app/creation_execution.py`、`main.py`、`member_permits.py`、`device_accounts.py`、`device_scheduler.py`、`narration.py`、`voice_clone.py`、`host_resource_probes.py`、`granted_subprocess.py`及它们已有的直接测试。montage/renderer/TimelineVersion消费或其它文件发现必要差额时，报准确符号和实际缺口，由主控有界追加；不得先改。禁止改Pi、runtime_settings、Web、桌面、共享文档/SQL/真实配置。最小验证用既有测试复现失败→恢复保留上游及取消释放；不重跑无关全量。提供clean候选、准确diff和首因、真实软件验收准备及资源释放方案。
+
+A可写新`/tmp/main-acceptance-20261008/creation36/`准备文件，旧35只定向读合法参考音频和无秘密方法。env -i且导入前完整隔离HOME/XDG/config/DB/cache/output/temp；只读复用已安装API虚拟环境、模型运行时及唯一Qwen3-TTS0.6B8bit模型，不下载、不安装、不改权重/缓存。先静态准备、最小不加载模型测试，提交PREPARED包含本次精确Narration/Montage/Render/Host全部预算、合法合成文案/素材/参考来源、完整app.main入口和有限命令；不使用AST提取替代软件入口证据。模型、合成参考/FFmpeg媒体准备、产品服务或GUI需主控对本Dispatch的具名窗口放行；每窗口有限次数/时限、实际原元组身份、真实Grant、持续资源检查、自有子组注册和退出/设备锁与permit释放证明。未知/超限停止并报首因，不擅放宽预算或循环重试。默认人物路径与编辑重出有依赖的差额在其具体证据明确后继续安排，不复活旧实验。
+
+**任务37 / B（MAIN-PIENTRY-20261008-37）**：沿现有软件设置和Pi业务工具链追踪“设置国内MiniMax→保存→重启回读→Pi创建任务/提出编辑→确认→后端执行”。先查真实创建/开始工具是否存在、调用哪条现有API、Key实际储存位置与读取路径，给出可执行GUI步骤；发现本范围真实缺口直接修复，不能只有假页面或将自然语言回复当执行结果。owned仅`apps/api/agent_tools/diary_tools.ts`及其现有直接测试、`apps/api/app/runtime_settings.py`及`tests/test_runtime_settings.py`/`test_workspace_llm_secrets.py`，`apps/web/src/app/settings/page.tsx`及其同目录样式/既有测试、`apps/web/src/components/CreationTaskWorkspace.tsx`/同名CSS及已有直接测试。不写A后端、secret底层/安全权威、桌面、共享文档/Linear。其它Pi运行器或共享API缺口报准确差额给主控，不能越界。遵守DESIGN及相关领域章节。复用业务命令/鉴权/设备许可，不把产品Pi任务等同任意操作系统执行线程，不增任意shell/文件/绕过用户确认能力。DeepSeek保留现有支持，不伪称已真实调用。
+
+B初段允许只读源码追踪、具名文件实现及最小无外部模型测试、新`/tmp/main-acceptance-20261008/pi-entry37/`验收准备；不读Key文档/Keychain/真实用户数据、不起GUI/产品服务、不调用收费API/加载本地模型。真实Key仅主控按既有具名授权处理隔离验证；后续冻结候选、A资源释放后由主控在本Dispatch给出GUI/国内MiniMax窗口和秘密输入方式。输出准确业务工具清单、实现候选/专项证据、真实保存重启验收步骤及首次实际缺口。准备或派工不是最终交付节点；主控审核后继续必要集成和完整成片/修改重出验收，PR合入仍逐次批准。
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
