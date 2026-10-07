@@ -36,17 +36,19 @@
 
 目标：真实命令从已确认文案的 start/resume 经唯一设备调度器推进配音、故事板、成片；原始账号/设备/workspace 持续核验及恢复不伪造 local 成员，不靠预先生成上游或旧执行器绕过许可。主控唯一集成者，WIL-26/142 和关联 35/159 的边界分别保留。
 
-owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_accounts.py`、`main.py`；直接既有 `tests/test_creation_execution.py`、`test_member_permits.py`、`test_device_accounts.py`、`test_device_runtime_wiring.py`。必要单元资源测量可使用 `host_resource_probes.py` 及其既有专项，但先回报具体不变量；不猜默认预算。允许新增一份由 `supabase migration new device_creation_permit` 创建的具名 SQL 文件，回报准确路径；不改已有迁移。其他调度器/运行时/资源/接口路径如确有必要，先交具体证据由主控修订，不顺手扩写。禁止写 B 的 Pi/体检文件、Web、桌面、共享权威、真实配置/数据。
+owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_accounts.py`、`main.py`；直接既有 `tests/test_creation_execution.py`、`test_member_permits.py`、`test_device_accounts.py`、`test_device_runtime_wiring.py`。有界修订 A11.1：根据 A 已回报的真实配音子进程缺口，追加 owned `apps/api/app/narration.py`、`voice_clone.py`、`host_resource_probes.py`、`granted_subprocess.py`，以及既有 `tests/test_narration_commands.py`、`test_voice_clone.py`、`test_host_resource_probes.py`、`test_granted_subprocess.py`（若存在）的本单直接消费者；不得扩大到未列的模型 worker、montage 或 renderer，必要差额先报主控。允许新增一份由 `supabase migration new device_creation_permit` 创建的具名 SQL 文件，回报准确路径；不改已有迁移。其他调度器/运行时/资源/接口路径如确有必要，先交具体证据由主控修订，不顺手扩写。禁止写 B 的 Pi/体检文件、Web、桌面、共享权威、真实配置/数据。
 
 账号权限冻结：仅 native 后端可用当前设备 proof + 原作业设备/账号/workspace 元组读取许可结果；新 RPC 可以明确授予 anon/authenticated 的仅该函数执行权，调用必须校验高熵 proof、设备未退役、成员 active、有效 workspace membership。固定 search_path、撤销 PUBLIC 执行、无表读取 grants、无私人内容/名册/proof/hash 返回；交互命令始终先验证 JWT，后台不持久保存 JWT/refresh token/proof。所有原元组持久化于现有事件及作业，不创建第二名册。云未知阻断新执行/成功提交，授权失效保留任务/资产；取消释放即使成员失效也必须完成。仅消费现有 paused/left，不新增管理 UI 或停用写 RPC，不宣称新设备自动注册或真实云权限通过。
 
-阶段执行与退役：补充配音/故事板在同一调度/资源授权下的实际执行、持续核验、子进程/许可释放及结果检查；严禁直接删除非render保护或把不支持的动作放到旧线程。受影响 narration/montage/render 消费者统一；旧无许可执行只允许已有诊断专项继续保留，不成为产品默认回退。人物/音轨/图层/独立编辑组合发现资源执行缺口时提交证据和最小下一差额，不放宽预算或冒称支持完整渲染。
+阶段执行与退役：A 为纵向迁移负责人。新阶段必须使用专属的显式设备预算，不借用 FFmpeg 成片预算；未知或未标定保持可执行的就绪失败，测试预算仅证明接线，不成为本机生产默认。配音模型必须在已登记的隔离子进程内加载、推理并随整个进程组退出释放，禁止在 API 常驻；预算至少约束文字/参考音频输入、阶段总时限、进程组内存及主机余量、输出大小，取消/超限/许可失效须终止自有进程组并证明释放。所有配音后处理也携带同一 Grant 和剩余时限，阶段内不得新开无许可 subprocess；未知释放不归还许可或提交成功。故事板只允许已确认文案及授权素材元数据编排，隐藏口型/解码/模型工作仍须专属许可，不能用纯素材通过覆盖全部组合。补充配音/故事板在同一调度/资源授权下的实际执行、持续核验、子进程/许可释放及结果检查；严禁直接删除非render保护或把不支持的动作放到旧线程。受影响 narration/montage/render 消费者统一；旧无许可执行只允许已有诊断专项继续保留，不成为产品默认回退。人物/音轨/图层/独立编辑组合发现资源执行缺口时提交证据和最小下一差额，不放宽预算或冒称支持完整渲染。
+
+退役验收：列出 start/resume/recover、单步重做及现存 `CreationExecution.execute/_work` 消费者；产品入口只能写唯一设备队列，旧无许可默认入口须停用并给出不存在证明。已有诊断专项可显式保留至本候选真实连续制作验收；不作为产品回退，不删除用户作业或媒体。真实模型或云权限未验时只能交接已证明的源码阶段，不能称整体迁移完成。回滚只能回到已具名验证的候选，不能静默重启无许可线程。
 
 最小验证：隔离 HOME/XDG/config/SQLite/model/temp/output；隔离 PostgreSQL 实际 RPC 权限正负（错 proof/设备、paused/left、撤空间、retired、anon直读拒绝），测试进程不碰真实 Keychain。验证 confirmed-script-only 真正触发配音/故事板回调并到 render，重复开始幂等、失败恢复保留上游、取消释放；账号提交/授予/实际执行/非取消提交结果/重开均复核原元组，unknown 不派发，local/跨空间与预算门禁不回退。仅必要回调替身证据不能算真实模型、真实账号 GUI 或成片验收；后续由主控在冻结候选具名验证。源码完成后一次最小直接专项，不全量/构建/收费/云部署，交准确候选/diff/测试/退役边界与释放证明。
 
 ## B：Pi 就绪与设置验收准备（当前任务 12）
 
-`MAIN-PIREADY-20261007-12`：准确产品基线同上；pipefish clean 后新独立 `codex/wil165-pi-readiness-20261007`。目标：用户填 MiniMax Key 后能明确知道对话依赖是否可用，缺依赖给准确可执行动作；保留 MiniMax 默认与 DeepSeek 主动切换，无静默供应商回退。owned：`apps/api/app/assistant_pi.py`、`runtime_health.py`、`preflight.py`，既有 `tests/test_assistant_pi_failures.py`、`test_runtime_health.py`（若存在）、`test_runtime_settings.py`；`apps/desktop/README.md` 仅依赖使用说明，不重复产品权威。其他消费者测试确需增改时先回报准确文件，主控核互斥后修订。
+`MAIN-PIREADY-20261007-12`：准确产品基线同上；pipefish clean 后新独立 `codex/wil165-pi-readiness-20261007`。目标：用户填 MiniMax Key 后能明确知道对话依赖是否可用，缺依赖给准确可执行动作；保留 MiniMax 默认与 DeepSeek 主动切换，无静默供应商回退。owned：`apps/api/app/assistant_pi.py`、`runtime_health.py`、`preflight.py`，既有 `tests/test_assistant_pi_failures.py`、`test_runtime_health.py`（若存在）、`test_runtime_settings.py`；有界修订 B12.1 追加互不重叠的既有 `apps/api/tests/test_assistant_pi.py`、`test_setup_preflight.py`，仅补真实 Node 预检前提与功能级依赖不阻断核心首启的直接消费者断言；`apps/desktop/README.md` 仅依赖使用说明，不重复产品权威。其他消费者测试确需增改时先回报准确文件，主控核互斥后修订。
 
 先修旧 `npm i -g @pi/cli` 指令及对应保护旧结果的断言；实际官方/本机 Pi 为 `@earendil-works/pi-coding-agent` 1.0.4、Node >=22.19。只读已安装包的参数/环境引用/JSON协议，核当前 launcher 的最低实际要求，补功能级 Pi/Node/业务工具可用检查与清晰修复动作；可选外部模型不能成为全局首启硬门槛。无依据不新增版本兼容分支，不安装/升级全局 Pi/Node，不改桌面包依赖/workflow或 B 主体之外的 API。普通模型生成不能因为 Pi 缺失被误报为 Key 失败；Key已保存不能当真实请求验证。
 
