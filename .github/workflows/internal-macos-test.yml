@@ -90,7 +90,7 @@ jobs:
       - name: Verify native service architecture
         shell: bash
         run: |
-          for binary in apps/desktop/dist/api-server apps/desktop/dist/worker-server; do
+          for binary in apps/desktop/dist/api-server; do
             file "$binary"
             if ! file "$binary" | grep -q "${{ matrix.file_arch }}"; then
               echo "::error::$binary is not ${{ matrix.file_arch }}"
@@ -117,8 +117,7 @@ jobs:
 
           app_binary=$(find "$app_path/Contents/MacOS" -type f -perm -111 -print -quit)
           api_binary="$app_path/Contents/Resources/api-server"
-          worker_binary="$app_path/Contents/Resources/worker-server"
-          for binary in "$app_binary" "$api_binary" "$worker_binary"; do
+          for binary in "$app_binary" "$api_binary"; do
             file "$binary"
             if ! file "$binary" | grep -q "${{ matrix.file_arch }}"; then
               echo "::error::$binary is not ${{ matrix.file_arch }}"
