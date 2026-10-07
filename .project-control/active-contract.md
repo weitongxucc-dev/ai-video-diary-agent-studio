@@ -244,6 +244,8 @@ B26.3真实首因修正：a371唯一真实轮read_current_task→一次preview_e
 
 本单直接受影响parser/工具响应专项须最小验证实际提案驱动的回复与真实模型尾句不会作为产品事实返回，保持必要事件/预览/错误断言，复用其余已过用例；交新SHA/严格三路径差额后停写，主控审核机械组合/准确冻结。仅再一次具名新 `/tmp/main-acceptance-20261007/pi-edit-factual/` GUI复验（4551/3151、独立task26-factual.keychain-db、完整新confirmed夹具/本单合成媒体副本与新隔离env/0600owner），旧三个GUI根不能写/重试。原全前提/30分钟租约/主控原生Key准备/本Dispatch START_PI_EDIT_FACTUAL_GUI门禁保持；唯一新候选真实Pi一轮180秒，验同句一次有效preview、用户可见回复符合实际提案而不承诺自动出片、确认前不写和GUI确认/刷新/一次撤销持久对应。模型原文本与实际API显示回复分别给证据和出处，首因失败仍停止不新轮。实际短静音对比与完整渲染区分。新根结束实际PID/组/4551/3151释放、RAM秘密扫描与唯一新store锁定后再最终worker_done；未通过不得结束单元或关闭卡。
 
+B26.4准确冻结与准备放行：主控审核643c2278977e835b22f06a2cc6b793bc69fe0359（parent253ada37）、两路径最小差额及5条相关parser通过/组53459与53741释放；机械组合到 **3d58c1edabee1c590028b1cd6949515575ba225f**（parent a3714dd），三owned blob与B精确一致，其余产品blob未变化。主控另查旧4543/3143无listener及5组退出，最终47文件/6日志RAM秘密扫描通过，task26旧store已锁定。重读并REBASE_ACK后ALLOW_PI_EDIT_FACTUAL_PREPARE允许新具名根完整准备；只读archive这一准确候选，待主控核完整前提/新原生store和START_PI_EDIT_FACTUAL_GUI前不发真实Pi。用户再次关闭应用后当前独立样本可用4.81GiB；A保持待命，模型实测仍等本GUI结束实际释放后另具名派工，不将此样本视为未来准入结果。
+
 结束实际源码/PID/组/4543/3143释放、完整工具轨迹/准确正文截图与只读持久事实、主控具名RAM秘密扫描/临时store锁定后最终worker_done。创建已过证据复用；不称完整制作、真实Key GUI保存/云账号/人物口型/安装/三平台发布通过，不关闭WIL-165或WIL-26。主控仅组合PR95候选，未经对应用户批准不合main。
 
 ## 主控真实 MiniMax 验证例外
