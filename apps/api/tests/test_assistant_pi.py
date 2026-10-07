@@ -99,16 +99,47 @@ console.log(JSON.stringify({calls, result, error, duplicateError}));
     assert "本轮已生成" in observed["duplicateError"]
 
 
-def test_pi_events_return_final_answer_and_preview():
-    preview = {"proposal": {"id": "proposal-1"}}
+@pytest.mark.parametrize("operation_type,before,after", [
+    ("ChangeCrop", "填满画面 · 水平 60% · 垂直 30%", "填满画面 · 水平 25% · 垂直 30%"),
+    ("TrimClip", "源片段 0.0–2.0秒", "源片段 0.25–2.0秒"),
+])
+def test_pi_events_return_final_answer_and_preview(operation_type, before, after):
+    preview = {"proposal": {
+        "id": "proposal-1", "summary": "本次实际修改", "target_refs": ["clip:chosen"],
+        "operation": {"operation_type": operation_type},
+        "preview": {"before": {"detail": before}, "after": {"detail": after}},
+        "invalidated_refs": ["artifact:current-output"],
+        "external_effects": ["任务版本尚未改变。"],
+    }}
+    model_text = "确认后才会真正出片。"
     output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
         {"type": "tool_execution_end", "toolName": "preview_edit", "isError": False,
          "result": {"details": {"kind": "edit_preview", "preview": preview}}},
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
-         "content": [{"type": "text", "text": "请检查预览后确认。"}]}},
+         "content": [{"type": "text", "text": model_text}]}},
         {"type": "agent_settled"},
     ])
-    assert _last_answer_and_preview(output) == ("请检查预览后确认。", preview)
+    reply, returned_preview = _last_answer_and_preview(output)
+    assert returned_preview == preview
+    assert f"修改前：{before}" in reply and f"修改后：{after}" in reply
+    assert "本次实际修改" in reply and "clip:chosen" in reply and operation_type in reply
+    assert "任务版本尚未改变。" in reply and "需要重做" in reply
+    assert "待确认，尚未应用修改。" in reply
+    assert "确认修改不等于完整成片已生成" in reply
+    assert ("裁剪窗口位置" in reply) == (operation_type == "ChangeCrop")
+    assert model_text not in reply
+    assert model_text in output  # Raw model evidence is not rewritten.
+
+
+def test_pi_events_leave_failed_edit_reply_without_a_proposal():
+    output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
+        {"type": "tool_execution_end", "toolName": "preview_edit", "isError": True,
+         "result": {"content": [{"type": "text", "text": "没有明确裁剪位置。"}]}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "没有明确裁剪位置，请先说明百分比。"}]}},
+        {"type": "agent_settled"},
+    ])
+    assert _last_answer_and_preview(output) == ("没有明确裁剪位置，请先说明百分比。", None)
 
 
 def test_pi_events_reject_incomplete_turn():

@@ -327,6 +327,26 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
             )
         raise _fail(cause)
+    if kind == "edit_preview" and preview is not None:
+        # The proposal is the business result; the model's final text stays in
+        # the Pi session as evidence and does not define confirmation effects.
+        proposal = preview["proposal"]
+        operation_type = proposal["operation"]["operation_type"]
+        lines = [
+            proposal["summary"],
+            "待确认，尚未应用修改。",
+            f"目标：{'、'.join(proposal['target_refs'])}",
+            f"操作：{operation_type}",
+            f"修改前：{proposal['preview']['before']['detail']}",
+            f"修改后：{proposal['preview']['after']['detail']}",
+        ]
+        if operation_type == "ChangeCrop":
+            lines.append("水平/垂直百分比表示裁剪窗口位置，不是画面宽度或面积比例。")
+        lines.extend(proposal["external_effects"])
+        if proposal["invalidated_refs"]:
+            lines.append("确认后已有结果将失效，请核对预览卡中的“需要重做”列表。")
+        lines.append("请在工作台确认后应用本提案；确认修改不等于完整成片已生成，成片以实际输出结果为准。")
+        answer = "\n".join(lines)
     return answer, preview
 
 
