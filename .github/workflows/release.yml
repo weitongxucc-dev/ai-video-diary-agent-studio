@@ -20,6 +20,12 @@ jobs:
           - arch: x64
             runner: macos-15-intel
 
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_AUTH_MODE: "supabase"
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.BETA_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.BETA_SUPABASE_PUBLISHABLE_KEY || secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -93,23 +99,17 @@ jobs:
 
       # ── Build ────────────────────────────────────────────────
 
-      - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build web frontend (Next.js standalone)
-        run: pnpm --dir apps/web build
-
-      - name: Materialise standalone deps (dereference symlinks)
-        run: node apps/desktop/scripts/bundle-standalone.js
-
-      - name: Build API binary (PyInstaller — ${{ matrix.arch }})
+      - name: Install dependencies
         run: |
+          pnpm install --frozen-lockfile
           cd apps/api
           uv sync --locked --group dev --python 3.11.15
-          .venv/bin/pyinstaller pyinstaller.spec \
-            --distpath ../desktop/dist \
-            --workpath ../desktop/build-api \
-            --clean --noconfirm
+
+      - name: Build web frontend (Next.js standalone)
+        run: pnpm --dir apps/desktop build:web
+
+      - name: Build API binary (PyInstaller — ${{ matrix.arch }})
+        run: pnpm --dir apps/desktop build:api
 
       - name: Verify API binary architecture
         run: |
@@ -122,26 +122,6 @@ jobs:
             exit 1
           fi
           echo "API binary architecture verified: $EXPECTED"
-
-      - name: Build Worker binary (PyInstaller — ${{ matrix.arch }})
-        run: |
-          cd apps/api
-          .venv/bin/pyinstaller worker.spec \
-            --distpath ../desktop/dist \
-            --workpath ../desktop/build-worker \
-            --clean --noconfirm
-
-      - name: Verify Worker binary architecture
-        run: |
-          WORKER_BIN=apps/desktop/dist/worker-server
-          echo "Worker binary info:"
-          file "$WORKER_BIN"
-          EXPECTED="${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
-          if ! file "$WORKER_BIN" | grep -q "$EXPECTED"; then
-            echo "::error::Worker binary architecture mismatch: expected $EXPECTED"
-            exit 1
-          fi
-          echo "Worker binary architecture verified: $EXPECTED"
 
       # ── Package (no publish) ─────────────────────────────────
 
