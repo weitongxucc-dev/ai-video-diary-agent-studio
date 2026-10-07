@@ -164,7 +164,7 @@ B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际�
 
 产品与权威写权零，只新 `/tmp/main-acceptance-20261007/pi-tasks/`，导入前隔离HOME/XDG/DB/config/library/output/cache/model/temp/agent及Keychain。只读复用现有已安装Node/Pi与API/Web依赖，不安装或升级、不模型加载。初始准备可信合成local owner、合成已保存知识和一条可用于metadata剪辑修改的合成既有任务/镜头，实际媒体仅短自有色卡；可定向复用之前gui-wil108新建合成夹具的准备方法，不写旧根。新任务必须由这次真实页面创建，既有剪辑任务只能作为明确准备夹具；不能把两者混称一条全制作流程。
 
-先报冻结源码、完整隔离环境（无Key值）、准确API4539/Web3139空闲/自有PID规划、临时钥匙串路径、合成owner凭证0600路径、知识及剪辑准备事实、两条拟定指令和可见按钮路径。真实Key只由主控读取已经具名的 `minimax-validation-20261007` 条目到RAM并按现有原生store写入本新根独立临时Keychain的local/llm_api_key，非秘密配置仍走现有隔离设置；不改登录钥匙串其它条目或真实用户设置，不落明文env/JSON/session/log，不发送Key给B、截图或聊天。B可让候选API自动读取本单新临时钥匙串的该条目，不自行查询/打印secret。准备报告经主控核对并完成上述Key准备后，本Dispatch收到START_PI_GUI才启动真实文字调用；无START仅准备。
+先报冻结源码、完整隔离环境（无Key值）、准确API4539/Web3139空闲/自有PID规划、临时钥匙串路径、合成owner凭证0600路径、知识及剪辑准备事实、两条拟定指令和可见按钮路径。真实Key只由主控读取已经具名的 `minimax-validation-20261007` 条目到RAM并按现有原生store写入本新根独立临时Keychain的local/llm_api_key，非秘密配置仍走现有隔离设置；不改登录钥匙串其它条目或真实用户设置；原生create-keychain自动加入搜索列表时，主控将原始列表立即原样恢复并核对默认钥匙串/最终列表不变（仅此系统创建副作用与恢复），不改变已有条目。不落明文env/JSON/session/log，不发送Key给B、截图或聊天。B可让候选API自动读取本单新临时钥匙串的该条目，不自行查询/打印secret。准备报告经主控核对并完成上述Key准备后，本Dispatch收到START_PI_GUI才启动真实文字调用；无START仅准备。
 
 最多两轮真实国内MiniMax-M3 Pi，每轮既有180秒界限，不批量重试、不切换供应商：第一轮从首页GUI输入明确目标生成真实preview_creation_plan，截图待确认和真实阻断；确认前只读确认无新task，GUI点击确认后只读核创建task与owner/workspace并刷新回读。第二轮在上述明确合成剪辑任务的实际页面选中镜头，由GUI向Pi下达一个已支持的剪辑metadata修改（例如限定第一个镜头的裁剪），必须实际read_current_task→preview_edit；截图影响及待确认，确认前原timeline不变，再GUI确认并刷新，GET/SQLite只读对应新的版本与准确变化；无需成片/模型。可一次GUI撤销验证保留已有产物，但不能点击render/narration/person或start/resume等重制作入口。若真实工具/交互/能力首因阻断，停止该项并准确回报，不API代替GUI业务写、mock输出、用正常路径失败触发隐藏fallback或擅加第三轮。
 
