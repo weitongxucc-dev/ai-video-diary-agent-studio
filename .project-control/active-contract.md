@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；33已结案，当前仅任务34具名权重慢读修正及同候选真实验收权，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；33/34已结案，当前仅任务35具名触发值诊断及同候选真实配音验收权，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务34：权重受许可慢读及真实配音 | 仅下方worker/直接专项及新paced-weights根；模型等本Dispatch START |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务35：资源拒绝精确诊断与配音 | 仅granted_subprocess与既有直接专项；新resource-diagnostics根；模型等本Dispatch START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -225,7 +225,7 @@ A32.1主控明确本轮实验参数：配音I/O持续窗口3秒，cap仍128MiB/s
 
 START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前身份输入/实际现有配音消费者；真实参考与目标仅原短句。自然压力最多generation2、实际释放后30秒fresh再准入，未知/模型错/时间限准确止，不自动增cap/新job。仅narration，后续montage/render不执行。成功须原narration请求done、job queued、permit free与真实有效audio cache同时成立，再停止driver；不可看到文件就取消成功request。最后真实WAV ffprobe/hash或首因/阶段/同次逐盘decision、遥测与所有父子/组、锁/ledger/SQLpermit释放、source/model/runtime与双clean证明，worker_done一次。未发生自然等待不称真机恢复已验；不称音质/Intel/生产标定/完整制作已过，不关闭WIL26/合main。新真实依赖缺口回证据，主控继续最小授权目标。
 
-## A：受许可权重慢读与真实配音（任务34）
+## A：受许可权重慢读与真实配音（任务34已结束，无写/操作权）
 
 `MAIN-QWENPACED-20261007-34`：延续用户已批准的最小配音修复、实际试验及“生成音频可以慢慢来”的选择；33两次真实首因使继续盲目改cap无效。本单C0局部实现修正，不改变产品/领域/架构、默认业务入口/许可/失败规则，不增加用户费用/权限。B仍零权，无新线程。主控共享合同/审核/机械集成，A唯一产品writer。
 
@@ -240,6 +240,18 @@ START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前�
 全部Host/Narration实验cap与33逐字段相同，IO128MiB/s/3秒/有限384MiB初始量、准入3.5GiB/组RSS2GiB/threads128、freshswap+64MiB、输入/输出/120秒阶段/180秒父均不改；32MiB/s慢读成本计入其内，不擅增时限。准备唯一无模型合法profile加载（如仅根字符串差复用已通过边界，单DEVNULL≤30s）及fresh完整≥3秒真实准入，交PREPARED等本Dispatch START_RUNTIME_MEASURE。START一个新具名job短参考/目标，仅narration，自然资源等待最多generation2，不盲目第三次/增cap或新job；未知/真正模型错如实停，audio+原narration done/job queued/permit free同时满足才通过，不取消成功request，不执行后续montage/render。
 
 最终真实WAV ffprobe/hash或首因及可证phase/慢读字节时长/逐盘同次decision/遥测，全父子组、held lock EX|NB/ledger/SQLpermit释放、source/13stat/runtime双clean后worker_done一次。若没自然等待不重复宣称新候选该真机场景已发生；单句不代表长文/音质/Intel/生产标定/完整制作。不关闭Linear、不合main；仍有新真实问题先交证据，主控判断最小必要范围。
+
+## A：资源拒绝精确诊断与实际配音（任务35）
+
+34 failed worker_done `msg_f951bdc472f4` 已接受：两代均读完1986754306B/约59.22s，I/O通过；第一代CPU88.8/75拒绝，自然等待后第二代RSS或线程拒绝，但同次触发值未记录，不能用异步遥测代替。没有音频；原job/request failed，task narration仍running/cache null为保留缺口。全组退出、锁重获/ledger SQL free及source/model/runtime不变已核。34旧根和Dispatch停工保留。
+
+`MAIN-QWENDIAGNOSTICS-20261008-35`：延续用户已批准的最小修复和真实配音试验，C0局部必要差额。A复用原终端，B零权，不新增线程。由clean integration **add80aeed562bb9742633ddc937cb82c9dce9b7d** 本地对象在manta保留a1493a2后新独立 `codex/qwen-resource-diagnostics-20261008`。owned仅 `apps/api/app/granted_subprocess.py` 与既有 `apps/api/tests/test_host_resource_probes.py` 的直接相关专项；目标是在原检查真实拒绝的同一次读取中保存RSS/threads和各自limit，明确是哪项越限，附于原异常和可执行错误文字。保持检查条件/exception类别/组释放/HostBudget/Grant/队列状态原样，不新增采样器、保护开关、回退层或依赖，不改其他产品路径/运行时/模型。修补已观测诊断缺口，不用独立遥测填值。
+
+最小验证沿用现有真实子进程预算专项，准确断言异常保留同次measured/limit/越限字段并且组退出及许可释放；未变源码、慢读、恢复测试不重跑。ACK后直接实施，CODE_FROZEN交clean候选/差额/直接证据，停止产品写；主控审核机械组合后绑定同候选真实验收。
+
+仅新 `/tmp/main-acceptance-20261008/qwen-resource-diagnostics/`；34根定向只读参考、合法隔离方法与证据，禁止写旧根。完整env-i隔离/合法LocalMember及已确认短句/原六AST消费者/DeviceRuntime/106源码blob（实际数核对）/13模型stat/runtime只读/精确DEVNULL profile沿用34。scheduled OFF；无Key/真实用户库/云/联网/安装下载/其他模型/GUI服务；3163继续暂停。预算先全部逐字段沿用34（CPU75/IO128MiB/s与3s完整窗口/准入3.5GiB/组RSS2GiB/threads128/fresh swap+64MiB/120秒阶段/180秒父/慢读32MiB/s），不自动增cap/改状态。prepare最小profile加载及fresh完整≥3s真实准入后停PREPARED，等本Dispatch START_RUNTIME_MEASURE。
+
+首轮仅一次新job短句narration，可自然等待至generation2；记录精确同次资源拒绝/阶段/真实音频及释放。若新诊断揭示有限预算不足，先完整释放并将实测值交主控，停等待；本Dispatch未结案时主控可以具名修订**隔离实验预算**并发明确新START（至多另一次新job，不自动第三轮），不得自行增cap/把实验标定写生产配置。每次实际音频及原narration done/job queued/permit free同时成立才通过，不取消成功请求，不做montage/render。未知/模型异常如实停止。最终真实音频ffprobe/hash或精确首因、全部父子组/实际held锁/ledger SQL释放和source/model/runtime双clean后worker_done一次；无音频不算完成，生产/Intel/音质/整制作仍不外推，不关闭Linear、不push/PR/合main。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
