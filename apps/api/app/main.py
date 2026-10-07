@@ -403,6 +403,8 @@ from app.schemas import (
 )
 from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.knowledge_grant_routes import knowledge_grant_router
+from app.knowledge_grants import VerifiedMemberGrantTargetResolver
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -946,6 +948,23 @@ def _content_visible(
         visibility=visibility,
         owner_user_id=owner_user_id,
     )
+
+
+# 知识授权路由复用本文件既有的身份与工作区解析，不新造第二套：
+# - `workspace_for` / `content_reader` 就是上面两个函数，判据与列表、详情、搜索、
+#   助手共用同一套 `_content_reader`；
+# - 目标解析用 `VerifiedMemberGrantTargetResolver`：这台机器上没有「已验证的同设备
+#   成员 → 空间」事实源，所以生产解析返回 unresolved、本地模式返回 same_workspace，
+#   响应里如实标注「仅同空间」与 `cross_workspace_status=UNVERIFIED`。
+#   真实跨空间端到端仍未验证。
+# `local_mode` 取「未启用 Supabase 认证」这一既有事实：此时 `current_workspace_id`
+# 只能落到保留的 local 工作区，全部成员共享同一空间，跨空间授权本就不成立。
+app.include_router(knowledge_grant_router(
+    source_repository,
+    workspace_for=current_workspace_id,
+    content_reader=_content_reader,
+    target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth_context.enabled),
+))
 
 
 @app.get("/api/members")
@@ -2523,6 +2542,7 @@ def _source_item_identity(item: SourceItem) -> str:
 
 
 def _creation_plan_preflight(
+    request: Request,
     workspace_id: str,
     payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
 ) -> CreationPlan:
@@ -2541,6 +2561,9 @@ def _creation_plan_preflight(
         payload = payload.model_copy(update=inherited)
     elif payload.template_version is not None:
         raise HTTPException(status_code=422, detail="模板版本缺少对应模板。")
+    # 新建引用必须按「此刻的有效授权」过滤，和列表/详情/搜索/助手共用同一判据：
+    # 撤销后的原件不得再被新方案引用（已存在的任务仍保留其版本出处）。
+    _plan_user_id, _plan_local_diagnostic = _content_reader(request, workspace_id)
     knowledge_references = [
         CreationPlanKnowledgeReference(
             id=item.id,
@@ -2549,7 +2572,9 @@ def _creation_plan_preflight(
             authorization=item.authorization,
             ownership=item.ownership,
         )
-        for item in source_repository.list_knowledge_items(workspace_id)
+        for item in source_repository.list_knowledge_items_readable_by(
+            workspace_id, user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic,
+        )
     ]
     source_references = [
         CreationPlanSourceReference(
@@ -3002,8 +3027,12 @@ def _creation_task_topic_inputs(
     evidence_by_reference_id: dict[str, dict[str, object]] = {}
     for reference in plan.knowledge_references:
         try:
-            item = source_repository.get_knowledge_item(workspace_id, reference.id)
-        except KeyError as exc:
+            item = source_repository.get_knowledge_reference_readable_by(
+                workspace_id, reference.id, reference.version,
+                user_id=task.owner_user_id,
+                local_diagnostic=task.owner_user_id is None and workspace_id == LEGACY_WORKSPACE_ID,
+            )
+        except (KeyError, ValueError) as exc:
             raise _CreationTaskTopicPreflightError(
                 reason="knowledge_reference_missing",
                 impact="方案中的知识库资料已不可用，未调用文字模型。",
@@ -4265,7 +4294,7 @@ def preview_creation_plan(
     payload: CreationPlanPreviewRequest,
 ) -> CreationPlanPreviewResponse:
     return _creation_plan_preview_response(
-        _creation_plan_preflight(current_workspace_id(request), payload)
+        _creation_plan_preflight(request, current_workspace_id(request), payload)
     )
 
 
@@ -4279,7 +4308,7 @@ def confirm_creation_plan(
     payload: CreationPlanConfirmRequest,
 ) -> CreationPlanResponse:
     workspace_id = current_workspace_id(request)
-    plan = _creation_plan_preflight(workspace_id, payload)
+    plan = _creation_plan_preflight(request, workspace_id, payload)
     if payload.preflight_fingerprint != plan.preflight_fingerprint:
         raise HTTPException(
             status_code=409,
@@ -4447,7 +4476,7 @@ def _script_library_sources(
                     # 有权读到这一版（无论是当前版还是历史版）才回填快照事实；
                     # 读不到就不给来源链接、抓取时刻和指纹。
                     _attach_cited_version_facts(
-                        state, source_repository, workspace_id, item_id, version
+                        state, source_repository, item.workspace_id, item_id, version
                     )
                     if (item.version != version or item.version != original.version
                             or item.authorization != original.authorization or item.ownership != original.ownership):
@@ -13752,16 +13781,17 @@ def get_knowledge_item_detail(
     request: Request,
 ) -> KnowledgeItemDetailResponse:
     workspace_id = current_workspace_id(request)
+    user_id, local_diagnostic = _content_reader(request, workspace_id)
     try:
-        item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
+        item = source_repository.get_knowledge_item_readable_by(
+            workspace_id, knowledge_item_id, user_id=user_id, local_diagnostic=local_diagnostic,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="knowledge item not found") from exc
-    visibility = source_repository.get_knowledge_item_visibility(workspace_id, item.id)
-    if not _content_visible(request, workspace_id, visibility, item.owner_user_id):
-        # 与列表、文案库引用同一规则：读不到别人的私有内容按不存在处理，
-        # 不用 403 暴露「它存在只是你不能看」。
-        raise HTTPException(status_code=404, detail="knowledge item not found")
-    versions = source_repository.list_knowledge_item_versions(workspace_id, item.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    visibility = source_repository.get_knowledge_item_visibility(item.workspace_id, item.id)
+    versions = source_repository.list_knowledge_item_versions(item.workspace_id, item.id)
     detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
     detail.visibility = visibility
     detail.versions = [
@@ -13811,7 +13841,7 @@ def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
     return KnowledgeItemsResponse(
         items=[
             _knowledge_item_response(
-                item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
+                item, source_repository.get_knowledge_item_visibility(item.workspace_id, item.id)
             )
             for item in items
         ],

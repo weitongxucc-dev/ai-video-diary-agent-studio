@@ -20,6 +20,7 @@ from app.database_migrations import (
     apply_production_migrations,
 )
 from app.model_runtime import ModelCatalog
+from app.local_members import LocalMemberService
 from app.production import (
     ArtifactRecord,
     Authorization,
@@ -300,11 +301,21 @@ def _save_versioned_voice(
     return production.save_versioned_voice_profile(voice)
 
 
+@pytest.fixture
+def plan_owner(tmp_path: Path, monkeypatch):
+    """Use the existing trusted LocalMember-token test boundary, not anonymous access."""
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    owner, token = members.whoami(None)
+    return owner, {"X-Local-Member-Token": token}
+
+
 def _seed_creation_plan_facts(
     production: ProductionRepository,
     sources: SourceRepository,
     *,
     workspace_id: str,
+    verified_owner_user_id: str | None = None,
 ) -> None:
     connector = SourceConnector(
         id=f"connector-{workspace_id}",
@@ -332,7 +343,7 @@ def _seed_creation_plan_facts(
         title="信息源条目",
     )
     sources.save_source_items(workspace_id, [source_item])
-    sources.create_knowledge_item(
+    sources.create_knowledge_item_owned(
         KnowledgeItem(
             id=f"knowledge-{workspace_id}",
             workspace_id=workspace_id,
@@ -344,7 +355,8 @@ def _seed_creation_plan_facts(
             ownership="user_owned",
             source_item_id=source_item.id,
             version="v1",
-        )
+        ),
+        verified_user_id=verified_owner_user_id,
     )
     video = production.video_library_path / f"{workspace_id}.mp4"
     video.write_bytes(b"video")
@@ -2383,10 +2395,14 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypa
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
@@ -2395,7 +2411,9 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace_a"),
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers=plan_owner[1])
+    assert sources.get_knowledge_item("workspace_a", "knowledge-workspace_a").owner_user_id == plan_owner[0].member_id
+    assert sources.get_knowledge_item_visibility("workspace_a", "knowledge-workspace_a") == "private"
     payload = {
         "goal": "为产品能力写一条竖屏观察视频。",
         "name": "能力观察",
@@ -2488,6 +2506,19 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
     saved_task = production.get_creation_task(
         "workspace_a", confirmed_body["creation_task"]["id"]
     )
+    assert saved_plan.owner_user_id == saved_task.owner_user_id == plan_owner[0].member_id
+    # A valid different member in this same test workspace still cannot use
+    # the uploader's private knowledge, including through content preflight.
+    _, other_token = main_module.local_members_service.join(
+        main_module.local_members_service.create_invite_code(), "另一成员",
+    )
+    other_headers = {"X-Local-Member-Token": other_token}
+    other_preview = client.post("/api/creation-plans/preview", json=payload, headers=other_headers)
+    assert other_preview.status_code == 200
+    assert other_preview.json()["knowledge_references"] == []
+    assert client.get(
+        "/api/knowledge-items/knowledge-workspace_a", headers=other_headers,
+    ).status_code == 404
     rejected_plan = replace(
         saved_plan,
         id="plan_transaction_rollback",
@@ -2537,6 +2568,7 @@ def test_creation_plan_preflight_reports_missing_authorized_voice_wav(
 def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
@@ -2548,14 +2580,17 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace_a"),
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers=plan_owner[1])
     before_empty_list = hashlib.sha256(production.database_path.read_bytes()).hexdigest()
     empty_list = client.get("/api/creation-tasks")
     assert empty_list.status_code == 200
     assert empty_list.json() == {"items": [], "total_count": 0}
     assert hashlib.sha256(production.database_path.read_bytes()).hexdigest() == before_empty_list
 
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     connector_b = SourceConnector(
         id="connector-workspace_b",
         workspace_id="workspace_b",
@@ -2649,10 +2684,14 @@ def _configure_workspace_text_service(
 def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
@@ -2698,7 +2737,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
         "_creation_task_topic_generator_for",
         lambda _settings: FakeGenerator(),
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers=plan_owner[1])
     payload = {"goal": "用已授权内容生成一条竖屏选题", "name": "选题任务"}
     preview = client.post("/api/creation-plans/preview", json=payload)
     assert preview.status_code == 200
@@ -2822,10 +2861,14 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
 def test_creation_task_script_generation_confirmation_and_restart_persistence(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
@@ -2884,7 +2927,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         "_creation_task_script_generator_for",
         lambda _settings: FakeScriptGenerator(),
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers=plan_owner[1])
     payload = {"goal": "基于授权内容生成中文视频", "name": "本地真成片"}
     preview = client.post("/api/creation-plans/preview", json=payload).json()
     created = client.post(
@@ -3226,10 +3269,14 @@ def test_creation_task_can_regenerate_script_after_duration_preflight_failure(
 def test_creation_task_topic_failure_records_capability_license_and_provider_errors(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
@@ -3238,7 +3285,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace_a"),
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers=plan_owner[1])
 
     def create_task(name: str) -> str:
         payload = {"goal": name, "name": name}

@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
 
 const api = vi.hoisted(() => ({
+  getKnowledgeGrants: vi.fn(),
+  grantKnowledgeToWorkspace: vi.fn(),
+  revokeKnowledgeGrant: vi.fn(),
   listKnowledgeItems: vi.fn(),
   getKnowledgeItem: vi.fn(),
   setKnowledgeItemVisibility: vi.fn(),
@@ -20,7 +23,13 @@ vi.mock("@/lib/source-api", () => ({
   parseKnowledgeReferenceId: api.parseKnowledgeReferenceId,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("@/lib/api", () => ({ listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
+  listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }),
+  getKnowledgeGrants: api.getKnowledgeGrants,
+  grantKnowledgeToWorkspace: api.grantKnowledgeToWorkspace,
+  revokeKnowledgeGrant: api.revokeKnowledgeGrant,
+}));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: ReactNode; inspector?: ReactNode }) => <><div>{children}</div>{inspector ? <aside aria-label="来源详情">{inspector}</aside> : null}</> }));
 
@@ -39,6 +48,11 @@ const item: KnowledgeItem = {
 };
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
+  api.getKnowledgeGrants.mockResolvedValue({
+    can_manage: true, source_workspace_id: "workspace-one", access_via_grant: false,
+    target_resolution: "resolved", target_resolution_message: "隔离UI响应示例", cross_workspace_status: "AVAILABLE",
+    targets: [{ workspace_id: "workspace-two", name: "乙的空间" }], grants: [],
+  });
   api.listKnowledgeItems.mockResolvedValue({ items: [item], total_count: 1 });
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
@@ -152,7 +166,7 @@ describe("KnowledgePage", () => {
     // 保存返回的条目就是服务端写入后的真实状态。
     api.setKnowledgeItemVisibility.mockResolvedValue({ ...item, visibility: "shared" });
     const readsBefore = api.getKnowledgeItem.mock.calls.length;
-    fireEvent.click(within(detail).getByRole("button", { name: "共享给团队" }));
+    fireEvent.click(await within(detail).findByRole("button", { name: "共享给团队" }));
     await waitFor(() => expect(api.setKnowledgeItemVisibility).toHaveBeenCalledWith("knowledge-one", "shared"));
     // 用 PUT 返回值回读，不再补一轮 GET。
     await waitFor(() => expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("当前与团队成员共享"));
@@ -168,7 +182,7 @@ describe("KnowledgePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     await waitFor(() => expect(detail).toHaveTextContent("当前仅自己可见"));
-    fireEvent.click(within(detail).getByRole("button", { name: "共享给团队" }));
+    fireEvent.click(await within(detail).findByRole("button", { name: "共享给团队" }));
     expect(await within(detail).findByRole("alert")).toHaveTextContent("仅所有者可执行此操作");
   });
 
@@ -190,10 +204,64 @@ describe("KnowledgePage", () => {
     api.setKnowledgeItemVisibility.mockReturnValue(new Promise<KnowledgeItem>((resolve) => { resolvePut = resolve; }));
     render(<KnowledgeWorkspace error={null} items={[item, other]} loading={false} onRefresh={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
-    fireEvent.click(within(screen.getByRole("complementary", { name: "来源详情" })).getByRole("button", { name: "共享给团队" }));
+    fireEvent.click(await within(screen.getByRole("complementary", { name: "来源详情" })).findByRole("button", { name: "共享给团队" }));
     fireEvent.click(screen.getByRole("button", { name: /另一份资料/ }));
     resolvePut({ ...item, visibility: "shared" });
     await waitFor(() => expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("另一份资料"));
     expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("当前仅自己可见");
+  });
+});
+
+describe("knowledge workspace grants", () => {
+  it("keeps the chosen workspace after failure and displays only saved grant/revoke results", async () => {
+    const grant = {
+      id: "grant-one", knowledge_item_id: item.id,
+      source_workspace_id: "workspace-one", target_workspace_id: "workspace-two",
+      granted_by: "original-uploader", granted_at: "2026-10-04T10:00:00Z",
+      revoked_by: null, revoked_at: null,
+    };
+    api.grantKnowledgeToWorkspace.mockRejectedValueOnce(new Error("failed")).mockResolvedValueOnce(grant);
+    api.revokeKnowledgeGrant.mockResolvedValue({ ...grant, revoked_by: "original-uploader", revoked_at: "2026-10-04T11:00:00Z" });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    const target = await screen.findByRole("combobox", { name: "目标工作空间" });
+    fireEvent.change(target, { target: { value: "workspace-two" } });
+    fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "授予读取与引用" })).toBeEnabled());
+    expect(target).toHaveValue("workspace-two");
+    expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    const revoke = await screen.findByRole("button", { name: "撤销授权" });
+    expect(api.grantKnowledgeToWorkspace).toHaveBeenLastCalledWith(item.id, "workspace-two");
+    expect(target).toHaveValue("");
+    fireEvent.click(revoke);
+    await screen.findByText("乙的空间 · 已撤销");
+    expect(api.revokeKnowledgeGrant).toHaveBeenCalledWith(item.id, "grant-one");
+    expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
+  });
+
+  it("shows original workspace to a reader without offering regrant or visibility writes", async () => {
+    api.getKnowledgeGrants.mockResolvedValue({ can_manage: false, source_workspace_id: "workspace-one", access_via_grant: true, target_resolution: "resolved", target_resolution_message: "隔离UI响应示例", cross_workspace_status: "AVAILABLE", targets: [], grants: [] });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    await screen.findByText(/原工作空间：workspace-one/);
+    expect(screen.getByText(/你通过显式授权读取和引用/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "共享给团队" })).not.toBeInTheDocument();
+  });
+
+  it("labels local members as same-workspace only without offering a cross-workspace grant", async () => {
+    api.getKnowledgeGrants.mockResolvedValue({
+      can_manage: true, source_workspace_id: "local", access_via_grant: false,
+      target_resolution: "same_workspace", cross_workspace_status: "UNVERIFIED",
+      target_resolution_message: "本地成员仅同空间；跨空间授权不成立，真实跨空间验收未验证。",
+      targets: [], grants: [],
+    });
+    render(<KnowledgeWorkspace items={[{ ...item, workspace_id: "local" }]} loading={false} error={null} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    expect(await screen.findByText(/本地成员仅同空间/)).toHaveTextContent("UNVERIFIED");
+    expect(screen.queryByRole("combobox", { name: "目标工作空间" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
+    expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
   });
 });
