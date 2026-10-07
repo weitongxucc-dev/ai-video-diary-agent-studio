@@ -785,6 +785,32 @@ def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit
                       ("retried", "result_invalid", "member-a", "done")]
 
 
+@pytest.mark.parametrize("granted", [False, True])
+def test_revoked_owner_can_cancel_with_only_actual_status_and_no_read_right(tmp_path, monkeypatch, granted):
+    scheduler = _scheduler(tmp_path)
+    original = scheduler.submit(_intent("job"), "member-a")
+    grant = scheduler.pick_and_grant() if granted else None
+    scheduler.owners.revoked = True
+    monkeypatch.setattr(scheduler.owners, "can_view_detail", lambda *_: False)
+    monkeypatch.setattr(scheduler.owners, "can_view_device_summary", lambda *_: False)
+    try:
+        with pytest.raises(PermissionError):
+            scheduler.cancel(original.id, "member-b")
+        result = scheduler.cancel(original.id, "member-a")
+        assert result == {"id": original.id, "state": "yield_requested" if granted else "cancelled",
+                          "wait_reason": "user_cancelled"}
+        with pytest.raises(PermissionError):
+            scheduler.view_for(original.id, "member-a")
+        if grant is not None:
+            scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
+                                    checkpoint_write=lambda *_: None, cancelled=True)
+            scheduler.assert_released(grant)
+        with pytest.raises(PermissionError):
+            scheduler.submit(_intent("other"), "member-a")
+    finally:
+        scheduler.close()
+
+
 def test_cancelled_request_retries_only_by_explicit_authorized_call(tmp_path):
     scheduler = _scheduler(tmp_path)
     original = scheduler.submit(_intent("job"), "member-a")

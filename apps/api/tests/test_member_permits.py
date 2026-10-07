@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.creation_execution import CpuRenderLimits
+from app.creation_execution import CpuRenderLimits, CreationExecutionActor
 from app.device_runtime import build_device_runtime
 from app.device_scheduler import SessionHeartbeat
 from app.host_resource_probes import HostProcessProbe, HostResourceProbe
@@ -24,6 +24,7 @@ from app.member_permits import (
     host_budget_from_env,
     permit_actor,
     resolve_member_token,
+    PermitIdentityUnavailable,
 )
 from app.production import ProductionRepository
 
@@ -60,6 +61,38 @@ def _repository(tmp_path):
     return ProductionRepository(
         database_path=tmp_path / "isolated.sqlite3", video_library_path=library,
     )
+
+
+def test_account_access_uses_original_tuple_not_local_roster_and_rechecks(tmp_path):
+    from uuid import uuid4
+    from types import SimpleNamespace
+
+    workspace, device, user = (str(uuid4()) for _ in range(3))
+    actor = CreationExecutionActor.account(workspace, device, user)
+    current = "ready"
+    calls = []
+
+    def lookup(*original):
+        calls.append(original)
+        return current
+
+    members = LocalMemberService(_repository(tmp_path).database_path)
+    access = MemberDeviceAccess(members, SimpleNamespace(creation_permit=lookup))
+    heartbeat = SessionHeartbeat("account-session", workspace)
+    assert access.verify_session(heartbeat, actor).member_id == actor.member_id
+    assert access.can_view_device_summary(actor)
+    assert all(item == (device, user, workspace) for item in calls)
+    current = "unauthorized"
+    with pytest.raises(PermissionError):
+        access.verify_session(heartbeat, actor)
+    assert not access.can_view_device_summary(actor)
+    current = "unknown"
+    with pytest.raises(PermitIdentityUnavailable):
+        access.verify_session(heartbeat, actor)
+    assert not access.can_view_device_summary(actor)
+    local = members.whoami(None)[0]
+    assert access.verify_identity(CreationExecutionActor("local", local.member_id)) == "unauthorized"
+    assert not members.list_members()[0].member_id.startswith("account:")
 
 
 def test_host_budget_requires_every_calibrated_value():

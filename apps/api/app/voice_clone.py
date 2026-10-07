@@ -147,6 +147,7 @@ class Qwen3TTSSubprocessProvider:
         language: str,
         pronunciation_dictionary: tuple[dict[str, str], ...],
         output_path: str | Path,
+        grant_context=None,
     ) -> VoiceCloneResult:
         narration = text.strip()
         transcript = reference_text.strip()
@@ -204,8 +205,15 @@ class Qwen3TTSSubprocessProvider:
                 str(response_path),
             ]
             try:
-                self._runner(command)
+                if grant_context is None:
+                    self._runner(command)
+                else:
+                    self._run_command(command, grant_context=grant_context,
+                        output_paths=(output, output.with_suffix(".tmp.wav"), response_path,
+                                      response_path.with_suffix(response_path.suffix + ".tmp")))
             except (OSError, subprocess.SubprocessError) as exc:
+                if grant_context is not None and isinstance(exc, PermissionError):
+                    raise
                 raise VoiceCloneError(f"声音克隆工作进程失败：{exc}") from exc
             if not response_path.is_file() or not output.is_file():
                 raise VoiceCloneError("声音克隆工作进程没有生成音频")
@@ -216,11 +224,18 @@ class Qwen3TTSSubprocessProvider:
                 raise VoiceCloneError(f"声音克隆结果无效：{exc}") from exc
         return result
 
-    def _run_command(self, command: list[str]) -> None:
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
         cache_root = self.model_path.parent / ".cache"
         temporary_root = cache_root / "tmp"
         temporary_root.mkdir(parents=True, exist_ok=True)
-        environment = dict(os.environ)
+        environment = (dict(os.environ) if grant_context is None else {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+            "OMP_NUM_THREADS": str(grant_context.threads),
+            "OPENBLAS_NUM_THREADS": str(grant_context.threads),
+            "VECLIB_MAXIMUM_THREADS": str(grant_context.threads),
+        })
         environment.update(
             {
                 "HF_HOME": str(cache_root / "huggingface"),
@@ -228,16 +243,15 @@ class Qwen3TTSSubprocessProvider:
                 "TMPDIR": str(temporary_root),
             }
         )
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30 * 60,
-            env=environment,
-        )
+        if grant_context is None:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True,
+                                       timeout=30 * 60, env=environment)
+        else:
+            completed = grant_context.run(command, env=environment, output_paths=output_paths)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
             if len(detail) > 4000:
                 detail = detail[-4000:]
             raise VoiceCloneError(

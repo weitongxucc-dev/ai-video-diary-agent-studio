@@ -107,6 +107,51 @@ class SceneRuntimeLimits:
 
 
 @dataclass(frozen=True)
+class NarrationBudget:
+    max_text_chars: int
+    max_section_count: int
+    max_reference_bytes: int
+    max_duration_seconds: float
+    max_output_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            if name in {"max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"}:
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Narration timing limits must be explicit positive values")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Narration limits must be explicit positive integers")
+        if (self.additional_memory_bytes < self.max_process_rss_bytes
+                or self.runtime_sample_seconds > 0.25):
+            raise ValueError("Narration monitor needs reserved process memory and a bounded sample interval")
+
+
+@dataclass(frozen=True)
+class MontageBudget:
+    max_section_count: int
+    max_asset_count: int
+    max_input_bytes: int
+    max_output_bytes: int
+    max_timeout_seconds: float
+    additional_memory_bytes: int
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            if name == "max_timeout_seconds":
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Montage timing limit must be explicitly positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Montage limits must be explicit positive integers")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -117,6 +162,8 @@ class HostBudget:
     sample_seconds: float = 0.1
     cpu_render: CpuRenderBudget | None = None
     scene_window: SceneWindowBudget | None = None
+    narration: NarrationBudget | None = None
+    montage: MontageBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -337,6 +384,32 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
+        elif kind in {"creation_narration", "creation_montage_plan"}:
+            stage = self.budget.narration if kind == "creation_narration" else self.budget.montage
+            if stage is None:
+                return None
+            bounds = ({"text_chars": stage.max_text_chars, "section_count": stage.max_section_count,
+                       "reference_bytes": stage.max_reference_bytes, "duration_seconds": stage.max_duration_seconds,
+                       "max_output_bytes": stage.max_output_bytes, "threads": stage.max_threads,
+                       "timeout_seconds": stage.max_timeout_seconds}
+                      if kind == "creation_narration" else
+                      {"section_count": stage.max_section_count, "asset_count": stage.max_asset_count,
+                       "input_bytes": stage.max_input_bytes, "max_output_bytes": stage.max_output_bytes,
+                       "timeout_seconds": stage.max_timeout_seconds})
+            expected_mode = "isolated_qwen3_tts" if kind == "creation_narration" else "metadata_only"
+            if resources.get("execution_mode") != expected_mode:
+                return None
+            for name, limit in bounds.items():
+                value = resources.get(name)
+                expected_types = {int, float} if name in {"duration_seconds", "timeout_seconds"} else {int}
+                if type(value) not in expected_types or not math.isfinite(value) or value < 0:
+                    return None
+                if value > limit:
+                    return False
+            required_memory = self.budget.min_available_memory_bytes + stage.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
+            if kind == "creation_narration":
+                required_disk += stage.additional_disk_bytes
         elif kind in self._SUPPORTED_KINDS:
             if type(size) is not int or size < 0:
                 return None
@@ -431,6 +504,15 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "creation_narration":
+            narration = self.budget.narration
+            if narration is None:
+                raise RecoveryBlocked("配音进程预算尚未标定")
+            return SceneRuntimeLimits(
+                narration.max_process_rss_bytes, narration.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
+                narration.runtime_sample_seconds,
+            )
         if resources.get("kind") != "material_scene_window":
             return None
         scene = self.budget.scene_window
@@ -449,6 +531,12 @@ class HostResourceProbe:
         if resources is None:
             return None
         if resources.get("kind") in self._SUPPORTED_KINDS:
+            return True
+        if resources.get("kind") == "creation_narration" and resources.get("execution_mode") == "isolated_qwen3_tts":
+            # The scheduler first proves every registered child group exited.
+            # MLX exists only inside that group, never the API process.
+            return True
+        if resources.get("kind") == "creation_montage_plan" and resources.get("execution_mode") == "metadata_only":
             return True
         if (resources.get("kind") == "creation_render"
                 and resources.get("execution_mode") == "cpu_ffmpeg"):

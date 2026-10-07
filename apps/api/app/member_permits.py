@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import fields
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -39,8 +40,12 @@ from app.host_resource_probes import (
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
+    NarrationBudget,
+    MontageBudget,
 )
 from app.local_members import LocalMember, LocalMemberService
+from app.device_accounts import DeviceAccountService
+from app.repository import LEGACY_WORKSPACE_ID
 
 
 class PermitIdentityUnavailable(RuntimeError):
@@ -99,20 +104,32 @@ class MemberDeviceAccess:
     继续拿到 ``VerifiedSession``，也不能再读整机摘要。
     """
 
-    def __init__(self, members: LocalMemberService) -> None:
+    def __init__(self, members: LocalMemberService,
+                 accounts: DeviceAccountService | None = None,
+                 identity_verifier: Callable[[CreationExecutionActor], str] | None = None) -> None:
         self._members = members
+        self._accounts = accounts
+        self._identity_verifier = identity_verifier
 
-    def _current_member(self, actor: object) -> LocalMember:
+    def verify_identity(self, actor: CreationExecutionActor) -> str:
         if not isinstance(actor, CreationExecutionActor) or not actor.member_id:
-            raise PermissionError("整机许可身份未知")
-        member = find_member(self._members, actor.member_id)
-        if member is None:
-            # 成员已被移除：旧会话不得继续凭旧身份操作整机。
-            raise PermissionError("本机成员已不存在，许可身份失效")
-        return member
+            return "unauthorized"
+        if self._identity_verifier is not None:
+            return self._identity_verifier(actor)
+        if actor.device_id is not None:
+            if self._accounts is None:
+                return "unknown"
+            return self._accounts.creation_permit(actor.device_id, actor.user_id, actor.workspace_id)
+        if actor.workspace_id != LEGACY_WORKSPACE_ID or self._accounts is not None:
+            return "unauthorized"
+        return "ready" if find_member(self._members, actor.member_id) is not None else "unauthorized"
 
     def verify_session(self, heartbeat: SessionHeartbeat, actor: object) -> VerifiedSession:
-        member = self._current_member(actor)
+        verdict = self.verify_identity(actor)
+        if verdict == "unknown":
+            raise PermitIdentityUnavailable("设备成员许可事实源不可用")
+        if verdict != "ready":
+            raise PermissionError("成员已不存在或工作区许可身份失效")
         if heartbeat.workspace_id != actor.workspace_id:
             raise PermissionError("会话工作区与许可身份不匹配")
         if not heartbeat.session_id:
@@ -120,15 +137,11 @@ class MemberDeviceAccess:
         return VerifiedSession(
             session_id=heartbeat.session_id,
             workspace_id=heartbeat.workspace_id,
-            member_id=member.member_id,
+            member_id=actor.member_id,
         )
 
     def can_view_device_summary(self, actor: object) -> bool:
-        try:
-            self._current_member(actor)
-        except PermissionError:
-            return False
-        return True
+        return self.verify_identity(actor) == "ready"
 
 
 def cpu_render_limits_from_budget(
@@ -150,6 +163,10 @@ def creation_job_registration(
     render_action: Callable[[str, str, object], object],
     render_is_valid: Callable[[str, str, object], bool],
     cpu_render_budget: CpuRenderBudget | None = None,
+    verify_identity: Callable[[CreationExecutionActor], str] | None = None,
+    narration_budget: NarrationBudget | None = None,
+    montage_budget: MontageBudget | None = None,
+    stage_actions: Mapping[str, Callable] | None = None,
 ) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
@@ -159,14 +176,39 @@ def creation_job_registration(
     return OwnerRegistration(
         CreationJobOwnerVerifier(
             repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget),
+            verify_identity=verify_identity,
+            narration_budget=narration_budget, montage_budget=montage_budget,
         ),
         CreationJobUnitExecutor(
             repository, render_action=render_action, render_is_valid=render_is_valid,
+            stage_actions=stage_actions,
         ),
     )
 
 
 #: 整机预算的标定项。这些值必须由这台设备的标定结果显式给出，没有内置默认值。
+def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
+    environment = os.environ if env is None else env
+    budgets = []
+    for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
+        values = {}
+        for item in fields(budget_type):
+            name = prefix + item.name.upper()
+            raw = environment.get(name)
+            if not raw:
+                raise HostBudgetUncalibrated(f"阶段资源预算尚未标定：请配置 {name}")
+            try:
+                values[item.name] = float(raw) if item.name in {
+                    "max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"} else int(raw)
+            except ValueError:
+                raise HostBudgetUncalibrated(f"阶段标定值无效：{name}") from None
+        try:
+            budgets.append(budget_type(**values))
+        except ValueError as exc:
+            raise HostBudgetUncalibrated(str(exc)) from None
+    return tuple(budgets)
+
+
 _HOST_BUDGET_ENV = {
     "max_cpu_percent": "DEVICE_HOST_MAX_CPU_PERCENT",
     "min_available_memory_bytes": "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES",

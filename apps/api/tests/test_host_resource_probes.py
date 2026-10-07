@@ -36,7 +36,7 @@ from app.host_resource_probes import (
     sample_host_capacity,
 )
 from app.database_migrations import apply_production_migrations
-from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork
+from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
 
 class RecordingScheduler:
@@ -66,6 +66,37 @@ def run(scheduler, argv, **options):
         max_stderr_bytes=options.pop("max_stderr_bytes", 4096),
         **options,
     )
+
+
+def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
+    from app.host_resource_probes import SceneRuntimeLimits
+    import app.granted_subprocess as commands
+
+    grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
+                  "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
+    permission_samples, rss_samples = [], []
+    class TimedScheduler(RecordingScheduler):
+        def assert_grant(self, current):
+            assert current == grant
+            permission_samples.append(time.monotonic())
+
+    scheduler = TimedScheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "isolated.sqlite", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda _grant:
+        SceneRuntimeLimits(1024 ** 3, 16, 1, 2**63, 0.05))
+    sample = commands._check_scene_runtime
+    def sampled(*args):
+        rss_samples.append(time.monotonic())
+        sample(*args)
+    monkeypatch.setattr(commands, "_check_scene_runtime", sampled)
+    result = run_granted_command(scheduler, grant, [sys.executable, "-c", "import time; time.sleep(1.3)"],
+        timeout_seconds=3, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert result.returncode == 0
+    assert len(rss_samples) >= 5
+    assert len(permission_samples) == 5  # prelaunch/register/exec, then immediate + one 1s poll
+    assert permission_samples[-1] - permission_samples[-2] >= 1
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
 def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):

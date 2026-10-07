@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Sequence
+from pathlib import Path
 
 import psutil
 
@@ -68,13 +69,19 @@ class GrantedCommandResourceUnavailable(GrantedCommandError):
 
 def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentity,
                          limits: SceneRuntimeLimits) -> None:
-    if process.poll() is not None:
-        return
     try:
-        root = psutil.Process(process.pid)
-        if f"{root.create_time():.6f}" != child.start_token:
-            raise GrantedCommandResourceUnavailable("Scene child identity changed during sampling")
-        processes = (root, *root.children(recursive=True))
+        if process.poll() is None and f"{psutil.Process(process.pid).create_time():.6f}" != child.start_token:
+            raise GrantedCommandResourceUnavailable("Child identity changed during sampling")
+        processes = []
+        for current in psutil.process_iter():
+            try:
+                if os.getpgid(current.pid) == child.pid:
+                    processes.append(current)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                # An unrelated process cannot be in our own accessible group.
+                continue
         rss = 0
         threads = 0
         for current in processes:
@@ -111,6 +118,11 @@ def _terminate_and_verify(process: subprocess.Popen[bytes], child: ProcessIdenti
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 pass
+            # Reaping the parent and the orphaned group is asynchronous on
+            # macOS. Give the group a bounded chance to disappear before KILL.
+            group_deadline = time.monotonic() + 0.25
+            while child and probe.children_released((child,)) is not True and time.monotonic() < group_deadline:
+                time.sleep(0.01)
             if child and probe.children_released((child,)) is not True:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -135,6 +147,9 @@ def run_granted_command(
     max_stdout_bytes: int,
     max_stderr_bytes: int,
     cancel_event: threading.Event | None = None,
+    env: dict[str, str] | None = None,
+    output_paths: Sequence[str | Path] = (),
+    max_output_file_bytes: int | None = None,
 ) -> GrantedCommandResult:
     """Run one command with group cleanup; nonzero exit is returned to caller.
 
@@ -145,7 +160,8 @@ def run_granted_command(
     if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
         raise RuntimeError("Grant-gated subprocess supports macOS and Linux only")
     if (not argv or any(not isinstance(arg, str) or "\x00" in arg for arg in argv)
-            or timeout_seconds <= 0 or max_stdout_bytes < 0 or max_stderr_bytes < 0):
+            or timeout_seconds <= 0 or max_stdout_bytes < 0 or max_stderr_bytes < 0
+            or (max_output_file_bytes is not None and max_output_file_bytes < 0)):
         raise ValueError("Invalid bounded subprocess command or limits")
     probe = scheduler.processes
     if not isinstance(probe, HostProcessProbe):
@@ -158,10 +174,12 @@ def run_granted_command(
     resources = getattr(scheduler, "resources", None)
     scene_unit = (isinstance(grant, Grant) and grant.owner_type == "material_asset"
                   and grant.unit_key.startswith("scene-window:v1:"))
-    if scene_unit and not isinstance(resources, HostResourceProbe):
+    model_unit = (isinstance(grant, Grant) and grant.owner_type == "creation_job"
+                  and grant.unit_key.startswith("narration:"))
+    if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None
-    if scene_unit and scene_limits is None:
+    if (scene_unit or model_unit) and scene_limits is None:
         raise RecoveryBlocked("场景子进程缺少运行中资源预算")
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
@@ -171,6 +189,7 @@ def run_granted_command(
             [sys.executable, "-c", _TRAMPOLINE, str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
+            env=env,
         )
         os.close(read_fd)
         read_fd = -1
@@ -191,11 +210,29 @@ def run_granted_command(
         outputs = {"stdout": bytearray(), "stderr": bytearray()}
         limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
         next_scene_sample = time.monotonic()
+        next_permission_sample = time.monotonic()
+
+        def check_running_unit():
+            nonlocal next_permission_sample
+            if isinstance(grant, Grant) and grant.owner_type == "creation_job" and time.monotonic() >= next_permission_sample:
+                scheduler.assert_grant(grant)
+                next_permission_sample = time.monotonic() + 1.0
+            if max_output_file_bytes is not None:
+                output_size = 0
+                for target in output_paths:
+                    try:
+                        output_size += Path(target).stat().st_size
+                    except FileNotFoundError:
+                        continue  # atomic temporary/final rename during worker output
+                if output_size > max_output_file_bytes:
+                    raise GrantedCommandOutputLimit("Generated files exceeded the stage output budget")
+
         with selectors.DefaultSelector() as selector:
             assert process.stdout is not None and process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
             while selector.get_map():
+                check_running_unit()
                 if cancel_event is not None and cancel_event.is_set():
                     raise GrantedCommandCancelled("Command cancelled")
                 if scene_limits is not None and time.monotonic() >= next_scene_sample:
@@ -213,6 +250,7 @@ def run_granted_command(
                         if len(outputs[name]) > limits[name]:
                             raise GrantedCommandOutputLimit(f"{name} exceeded its byte limit")
         while True:
+            check_running_unit()
             if cancel_event is not None and cancel_event.is_set():
                 raise GrantedCommandCancelled("Command cancelled")
             if scene_limits is not None and time.monotonic() >= next_scene_sample:
@@ -231,6 +269,7 @@ def run_granted_command(
         if probe.children_released((child,)) is not True:
             _terminate_and_verify(process, child, probe)
             raise GrantedCommandError("Command left a live process-group descendant")
+        check_running_unit()
         return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
     except BaseException:
         if process is not None:

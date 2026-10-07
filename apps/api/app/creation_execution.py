@@ -10,15 +10,15 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
-from app.host_resource_probes import admit_resource, sample_host_capacity
+from app.host_resource_probes import MontageBudget, NarrationBudget, admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
@@ -34,16 +34,76 @@ DEVICE_OWNER_TYPE = "creation_job"
 class CreationExecutionActor:
     workspace_id: str
     member_id: str
+    device_id: str | None = None
+    user_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.device_id is not None or self.user_id is not None:
+            if (not self.device_id or not self.user_id
+                    or str(UUID(self.device_id)) != self.device_id
+                    or str(UUID(self.user_id)) != self.user_id
+                    or str(UUID(self.workspace_id)) != self.workspace_id
+                    or self.member_id != f"account:{self.device_id}:{self.user_id}"):
+                raise ValueError("账号许可身份元组不完整或不一致")
+
+    @classmethod
+    def account(cls, workspace_id: str, device_id: str, user_id: str):
+        return cls(workspace_id, f"account:{device_id}:{user_id}", device_id, user_id)
+
+    def identity_payload(self) -> dict[str, str]:
+        payload = {"member_id": self.member_id}
+        if self.device_id is not None:
+            payload.update(identity_kind="account", device_id=self.device_id, user_id=self.user_id)
+        return payload
+
+    @classmethod
+    def from_event(cls, workspace_id: str, payload: dict):
+        member_id = payload.get("member_id")
+        if not isinstance(member_id, str) or not member_id:
+            raise ValueError("制作作业缺少持久成员身份")
+        if payload.get("identity_kind") == "account":
+            original = cls.account(workspace_id, payload["device_id"], payload["user_id"])
+            if original.member_id != member_id:
+                raise ValueError("制作作业账号归属不一致")
+            return original
+        if (payload.get("identity_kind") is not None or member_id.startswith("account:")
+                or payload.get("device_id") is not None or payload.get("user_id") is not None):
+            raise ValueError("制作作业身份类型无法复核")
+        return cls(workspace_id, member_id)
 
 
 @dataclass(frozen=True)
-class CpuRenderGrantContext:
+class CreationStageGrantContext:
     scheduler: DeviceScheduler
     grant: Grant
     deadline_monotonic: float
     max_output_bytes: int
     threads: int
     cancel_event: threading.Event | None = None
+
+    def check(self) -> None:
+        from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise GrantedCommandCancelled("制作阶段已取消")
+        if time.monotonic() >= self.deadline_monotonic:
+            raise GrantedCommandTimeout("制作阶段总时限已到")
+        self.scheduler.assert_grant(self.grant)
+
+    def run(self, command, *, env=None, output_paths=(), output_bytes=None):
+        from app.granted_subprocess import run_granted_command
+        self.check()
+        return run_granted_command(
+            self.scheduler, self.grant, command,
+            timeout_seconds=self.deadline_monotonic - time.monotonic(),
+            max_stdout_bytes=65536, max_stderr_bytes=65536, cancel_event=self.cancel_event,
+            env=env, output_paths=output_paths,
+            max_output_file_bytes=self.max_output_bytes if output_bytes is None else output_bytes,
+        )
+
+
+@dataclass(frozen=True)
+class CpuRenderGrantContext(CreationStageGrantContext):
+    pass
 
 
 @dataclass(frozen=True)
@@ -99,8 +159,11 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     if task.current_timeline_version_id:
         version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
         transform_id = version.snapshot.get("transform_run_id")
+        initial_storyboard = (version.parent_version_id is None and version.sequence == 1
+                              and transform_id is None and not version.snapshot.get("output_refs"))
         if (version.task_id != task.id or version.created_by_operation_id is not None
-                or not isinstance(transform_id, str) or not transform_id.startswith("transform_job_")):
+                or (not initial_storyboard and
+                    (not isinstance(transform_id, str) or not transform_id.startswith("transform_job_")))):
             raise ValueError("当前时间线已有独立编辑，CPU 成片组合尚未接入该版本")
         previous_montage = version.snapshot.get("montage")
         if not isinstance(previous_montage, dict):
@@ -153,12 +216,61 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     return f"render:{digest}", resources
 
 
+def creation_stage_facts(repository, task, script, plan, stage, narration_budget, montage_budget):
+    """Derive measured inputs; stage caps never borrow the FFmpeg render budget."""
+    if stage == "narration":
+        if narration_budget is None:
+            raise ValueError("配音预算尚未标定，请配置 DEVICE_NARRATION_* 标定值")
+        inputs = repository.resolve_creation_task_narration_inputs(
+            workspace_id=task.workspace_id, task_id=task.id,
+            voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+        reference = repository.resolve_workspace_media_reference(
+            task.workspace_id, inputs.voice.reference_audio_path, require_registered=True)
+        stat = reference.stat()
+        resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
+                     "text_chars": (sum(len(section.content) for section in script.sections)
+                                    + len(inputs.voice.reference_text) * len(script.sections)),
+                     "section_count": len(script.sections), "reference_bytes": stat.st_size,
+                     "duration_seconds": plan.duration_target_seconds,
+                     "max_output_bytes": narration_budget.max_output_bytes,
+                     "threads": narration_budget.max_threads,
+                     "timeout_seconds": narration_budget.max_timeout_seconds}
+        manifest = {"reference": [str(reference), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
+                    "voice": asdict(inputs.voice), "resources": resources}
+    else:
+        if montage_budget is None:
+            raise ValueError("故事板预算尚未标定，请配置 DEVICE_MONTAGE_* 标定值")
+        if plan.presenter_share_target:
+            raise ValueError("人物口型组合尚无已标定许可，本次仅支持纯素材故事板")
+        if not task.narration_cache_key:
+            raise ValueError("故事板缺少当前配音")
+        narration = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
+        if narration is None or narration.script_id != script.id:
+            raise ValueError("故事板配音版本失效")
+        assets = repository.list_assets(task.workspace_id)
+        manifest = {"assets": [asdict(asset) for asset in assets],
+                    "narration": asdict(narration), "script": asdict(script)}
+        encoded = json.dumps(manifest, sort_keys=True, default=str).encode()
+        resources = {"kind": "creation_montage_plan", "execution_mode": "metadata_only",
+                     "section_count": len(script.sections), "asset_count": len(assets),
+                     "input_bytes": len(encoded), "max_output_bytes": montage_budget.max_output_bytes,
+                     "timeout_seconds": montage_budget.max_timeout_seconds}
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    return f"{stage}:{digest}", resources
+
+
 class CreationJobOwnerVerifier:
     """Validate a persisted JobRun before it can become a device work unit."""
 
-    def __init__(self, repository, *, cpu_render_limits: CpuRenderLimits | None = None) -> None:
+    def __init__(self, repository, *, cpu_render_limits: CpuRenderLimits | None = None,
+                 verify_identity: Callable[[CreationExecutionActor], str] | None = None,
+                 narration_budget: NarrationBudget | None = None,
+                 montage_budget: MontageBudget | None = None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
+        self.verify_identity = verify_identity
+        self.narration_budget = narration_budget
+        self.montage_budget = montage_budget
 
     def _facts(self, conn: sqlite3.Connection, workspace_id: str, job_id: str):
         row = conn.execute(
@@ -201,12 +313,28 @@ class CreationJobOwnerVerifier:
             job, task, event, script, plan = self._facts(conn, intent.workspace_id, intent.owner_id)
             stage = intent.unit_key.split(":", 1)[0]
             verdict = self._check_facts(job, task, event, script, plan, stage, actor.member_id)
+            try:
+                original = CreationExecutionActor.from_event(job.workspace_id, event)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise PermissionError("制作作业持久身份无法复核") from None
+            if actor != original:
+                raise PermissionError("制作作业原身份不匹配")
+            if self.verify_identity is not None and self.verify_identity(original) != "ready":
+                raise PermissionError("制作许可身份失效或事实源不可用")
             if verdict == "ready" and stage == "render":
                 if self.cpu_render_limits is None:
                     raise PermissionError("CPU 成片资源预算尚未配置")
                 key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits)
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
+            elif verdict == "ready" and (
+                (stage == "narration" and self.narration_budget is not None)
+                or (stage == "montage_plan" and self.montage_budget is not None)
+            ):
+                key, resources = creation_stage_facts(
+                    self.repository, task, script, plan, stage, self.narration_budget, self.montage_budget)
+                if key != intent.unit_key:
+                    raise PermissionError("制作阶段输入已变化，请重新安排")
             else:
                 resources = {"kind": f"creation_{stage}"}
         if verdict != "ready":
@@ -249,10 +377,22 @@ class CreationJobOwnerVerifier:
         verdict = self._check_facts(job, task, event, script, plan, stage, request.member_id)
         if verdict != "ready":
             return verdict
-        if stage != "render" or self.cpu_render_limits is None:
-            return "dependency"
         try:
-            key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits)
+            original = CreationExecutionActor.from_event(job.workspace_id, event)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return "unauthorized"
+        if self.verify_identity is not None:
+            identity = self.verify_identity(original)
+            if identity != "ready":
+                return identity
+        try:
+            if stage == "render":
+                if self.cpu_render_limits is None:
+                    return "dependency"
+                key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits)
+            else:
+                key, resources = creation_stage_facts(
+                    self.repository, task, script, plan, stage, self.narration_budget, self.montage_budget)
         except (KeyError, OSError, ValueError):
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
@@ -264,7 +404,8 @@ class CreationJobOwnerVerifier:
         return False
 
     def can_view_detail(self, request: WorkRequest, actor: object) -> bool:
-        return self.can_manage(request, actor)
+        return self.can_manage(request, actor) and (
+            self.verify_identity is None or self.verify_identity(actor) == "ready")
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection) -> str:
         raise PermissionError("请通过已确认任务的继续制作入口重试")
@@ -275,34 +416,62 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
     """Queue exactly the next persisted stage; repeated submissions reuse one request."""
     if job.status not in {"queued", "interrupted"}:
         return None
-    task = execution.repository.get_creation_task(job.workspace_id, job.task_id)
-    if execution._valid_stage(job.workspace_id, task, "narration") and execution._valid_stage(job.workspace_id, task, "montage_plan"):
-        owner = scheduler.owners
-        if hasattr(owner, "registrations"):
-            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+    return scheduler.submit(next_creation_intent(execution.repository, scheduler, job), actor).id
+
+
+def upstream_stage_valid(repository, task, stage):
+    if stage == "narration":
+        if not task.narration_cache_key:
+            return False
+        artifact = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
+        return (artifact is not None and artifact.task_id == task.id
+                and artifact.script_id == task.confirmed_script_id
+                and Path(artifact.audio_path).is_file() and Path(artifact.audio_path).stat().st_size > 0)
+    if not task.montage_plan_id:
+        return False
+    try:
+        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
+    except KeyError:
+        return False
+    return plan.get("script_id") == task.confirmed_script_id and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
+
+
+def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
+    task = repository.get_creation_task(job.workspace_id, job.task_id)
+    owner = scheduler.owners
+    if hasattr(owner, "registrations"):
+        owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+    if upstream_stage_valid(repository, task, "narration") and upstream_stage_valid(repository, task, "montage_plan"):
         limits = getattr(owner, "cpu_render_limits", None)
         if limits is None:
             raise ValueError("CPU 成片资源预算尚未配置")
-        creation_plan = execution.repository.get_creation_plan(job.workspace_id, task.plan_id)
-        with execution.repository._connect() as conn:
-            stage, _resources = cpu_render_facts(execution.repository, conn, task, creation_plan, limits)
+        creation_plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
+        with repository._connect() as conn:
+            stage, _resources = cpu_render_facts(repository, conn, task, creation_plan, limits)
     else:
-        stage = next((item for item in STAGES[:2] if not execution._valid_stage(job.workspace_id, task, item)), None)
+        stage = next((item for item in STAGES[:2] if not upstream_stage_valid(repository, task, item)), None)
         if stage is None:
-            return None
-    intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
-                              job.input_digest, stage, SchedulePolicy())
-    return scheduler.submit(intent, actor).id
+            raise ValueError("制作作业没有可执行阶段")
+        budget = owner.narration_budget if stage == "narration" else owner.montage_budget
+        if budget is not None:
+            script = repository.get_creation_task_script(job.workspace_id, task.confirmed_script_id)
+            plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
+            stage, _resources = creation_stage_facts(
+                repository, task, script, plan, stage, owner.narration_budget, owner.montage_budget)
+    return SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
+                            job.input_digest, stage, SchedulePolicy())
 
 
 class CreationJobUnitExecutor:
-    """Execute one already granted CPU render, then commit the outer JobRun with its permit."""
+    """Execute one granted creation stage and checkpoint it with the same permit."""
 
     def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object],
-                 render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool]) -> None:
+                 render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool],
+                 stage_actions: dict | None = None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
+        self.stage_actions = stage_actions or {}
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
 
@@ -312,15 +481,30 @@ class CreationJobUnitExecutor:
         if event is not None:
             event.set()
 
+    def _defer_permission_loss(self, grant: Grant, scheduler: DeviceScheduler) -> bool:
+        owner = scheduler.owners
+        if hasattr(owner, "registrations"):
+            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+        if owner.verify_identity is None:
+            return False  # Existing diagnostic owners retain their explicit recovery contract.
+        with self.repository._connect() as conn:
+            conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
+                         (grant.workspace_id, grant.owner_id))
+        # Defer proves group/resource release even when the owner is revoked or
+        # temporarily unknown. Eligibility rechecks its precise current verdict.
+        scheduler.defer_unit(grant, reason="transient_failure",
+                             retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=1))
+        return True
+
     def _checkpoint(self, conn: sqlite3.Connection, grant: Grant, *, status: str,
-                    output: str | None = None, reason: str | None = None) -> str:
+                    output: str | None = None, reason: str | None = None, stage: str = "render") -> str:
         row = conn.execute("SELECT task_id,status FROM job_runs WHERE workspace_id=? AND id=? AND kind=?",
                            (grant.workspace_id, grant.owner_id, KIND)).fetchone()
         if row is None or row["status"] not in {"running", "cancelled"}:
             raise ValueError("外层制作作业不在可提交状态")
         if row["status"] == "cancelled" and status != "cancelled":
             raise ValueError("已停止的制作作业不能写入成功或失败")
-        if status == "succeeded":
+        if status == "succeeded" and stage == "render":
             task_row = conn.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
                                     (grant.workspace_id, row["task_id"])).fetchone()
             plan_row = conn.execute("SELECT payload FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=?",
@@ -341,37 +525,104 @@ class CreationJobUnitExecutor:
         now = datetime.now(timezone.utc).isoformat()
         if row["status"] == "running":
             changed = conn.execute(
-                "UPDATE job_runs SET status=?, progress=CASE WHEN ?='succeeded' THEN 100 ELSE progress END, "
+                "UPDATE job_runs SET status=?, progress=CASE WHEN ?='succeeded' THEN 100 WHEN ?='queued' THEN ? ELSE progress END, "
                 "failure_reason=?, impact=?, repair_action=?, finished_at=?, updated_at=? "
                 "WHERE workspace_id=? AND id=? AND status='running'",
-                (status, status, reason, None if status == "succeeded" else "当前成片未完成，上游产物保留。",
-                 None if status == "succeeded" else "检查首个失败原因后继续制作。",
-                 now, now, grant.workspace_id, grant.owner_id),
+                (status, status, status, 33 if stage == "narration" else 66, reason,
+                 None if status in {"queued", "succeeded"} else "当前制作未完成，上游产物保留。",
+                 None if status in {"queued", "succeeded"} else "检查首个失败原因后继续制作。",
+                 None if status == "queued" else now, now, grant.workspace_id, grant.owner_id),
             ).rowcount
             if changed != 1:
                 raise ValueError("外层制作作业状态已变化")
-        event_id = f"event_{grant.owner_id}_render_{status}"
+        event_id = f"event_{grant.owner_id}_{stage}_{status}"
         conn.execute(
             "INSERT OR IGNORE INTO task_events "
             "(id,workspace_id,task_id,job_id,event_type,payload_json,created_at) "
             "VALUES (?,?,?,?,?,?,?)",
             (event_id, grant.workspace_id, row["task_id"], grant.owner_id,
              "creation_execution_stage",
-             json.dumps({"stage": "render", "status": "completed" if status == "succeeded" else status,
+             json.dumps({"stage": stage, "status": "completed" if status in {"queued", "succeeded"} else status,
                          **({"output": output} if output else {}),
                          **({"reason": reason} if reason else {})}, ensure_ascii=False), now),
         )
         return event_id
 
+    def _execute_upstream(self, grant, scheduler, stage):
+        from app.granted_subprocess import GrantedCommandCancelled
+        if stage not in self.stage_actions:
+            raise PermissionError("该制作阶段没有受许可执行者")
+        with self.repository._connect() as conn:
+            row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            permit = conn.execute("SELECT granted_at_utc FROM device_permit WHERE id=1").fetchone()
+        if row is None or permit is None or not permit["granted_at_utc"]:
+            raise PermissionError("制作阶段缺少当前设备许可")
+        resources = json.loads(row["resources_json"])
+        if resources.get("kind") != f"creation_{stage}" or "timeout_seconds" not in resources:
+            raise PermissionError("制作阶段资源预算未标定")
+        elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
+        cancellation = threading.Event()
+        context = CreationStageGrantContext(scheduler, grant,
+            time.monotonic() + resources["timeout_seconds"] - elapsed,
+            resources["max_output_bytes"], resources.get("threads", 1), cancellation)
+        with self._cancellation_lock:
+            self._cancellations[grant.request_id] = cancellation
+        job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+        try:
+            context.check()
+            if job.status == "running":
+                with self.repository._connect() as conn:
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
+                                 (job.workspace_id, job.id))
+            job = self.repository.claim_job_run(job.workspace_id, job.id)
+            self.stage_actions[stage](job.workspace_id, job.task_id, context)
+            context.check()
+            task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+            if not upstream_stage_valid(self.repository, task, stage):
+                raise ValueError("制作阶段未产生匹配当前文案的可用结果")
+            original = CreationExecutionActor.from_event(job.workspace_id,
+                self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start").payload)
+            next_intent = next_creation_intent(self.repository, scheduler, job)
+            output = task.narration_cache_key if stage == "narration" else task.montage_plan_id
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
+                    status="queued", output=output, stage=stage), next_intent=next_intent, actor=original)
+        except RecoveryBlocked:
+            raise
+        except GrantedCommandCancelled:
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
+                    status="cancelled", reason="user_cancelled", stage=stage), cancelled=True)
+        except Exception as exc:
+            if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                    checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
+                        status="cancelled", stage=stage), cancelled=True)
+            elif isinstance(exc, PermissionError):
+                if not self._defer_permission_loss(grant, scheduler):
+                    raise
+            else:
+                reason = str(exc)
+                scheduler.fail_unit(grant, reason=f"creation_{stage}_failed",
+                    failure_write=lambda conn, current: self._checkpoint(conn, current,
+                        status="failed", reason=reason, stage=stage))
+        finally:
+            with self._cancellation_lock:
+                self._cancellations.pop(grant.request_id, None)
+
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
 
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.split(":", 1)[0] in STAGES[:2]:
+            return self._execute_upstream(grant, scheduler, grant.unit_key.split(":", 1)[0])
         if grant.owner_type != DEVICE_OWNER_TYPE or not grant.unit_key.startswith("render:"):
             raise PermissionError("制作执行器只接受已确认的 CPU 成片单元")
         try:
             scheduler.assert_grant(grant)
         except PermissionError:
             if self.repository.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
+                if self._defer_permission_loss(grant, scheduler):
+                    return
                 raise
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                                     checkpoint_write=lambda conn, current: self._checkpoint(
@@ -440,6 +691,8 @@ class CreationJobUnitExecutor:
                 if cancellation.is_set() or self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
                     cancellation.set()
                 else:
+                    if isinstance(exc, PermissionError) and self._defer_permission_loss(grant, scheduler):
+                        return
                     reason = str(exc).strip() or type(exc).__name__
                     try:
                         scheduler.fail_unit(grant, reason="creation_render_failed",
@@ -470,6 +723,8 @@ class CreationJobUnitExecutor:
                                             conn, current, status="succeeded", output=output))
             except PermissionError:
                 if self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                    if self._defer_permission_loss(grant, scheduler):
+                        return
                     raise
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                                         checkpoint_write=lambda conn, current: self._checkpoint(
@@ -534,7 +789,11 @@ class CreationExecution:
         return script, plan
 
     def start(self, workspace_id: str, task_id: str, script_id: str, digest: str,
-              *, member_id: str | None = None) -> JobRun:
+              *, member_id: str | None = None, actor: CreationExecutionActor | None = None) -> JobRun:
+        if actor is not None:
+            if actor.workspace_id != workspace_id or (member_id is not None and actor.member_id != member_id):
+                raise PermissionError("制作身份与工作区不匹配")
+            member_id = actor.member_id
         task = self.repository.get_creation_task(workspace_id, task_id)
         _, plan = self.validate_input(workspace_id, task, script_id, digest)
         if plan.selected_voice is None:
@@ -559,7 +818,8 @@ class CreationExecution:
                     job_id=run.id,
                     event_type="creation_execution_started",
                     payload={"script_id": script_id, "plan_id": task.plan_id, "input_digest": digest,
-                             **({"member_id": member_id} if member_id is not None else {})},
+                             **(actor.identity_payload() if actor is not None else
+                                {"member_id": member_id} if member_id is not None else {})},
                     created_at=run.created_at,
                 )
             )
@@ -567,6 +827,8 @@ class CreationExecution:
             start_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
             if start_event.payload.get("member_id") != member_id:
                 raise PermissionError("已有制作任务的创建者身份与当前成员不同")
+            if actor is not None and CreationExecutionActor.from_event(workspace_id, start_event.payload) != actor:
+                raise PermissionError("已有制作任务的原设备账号身份不同")
         return run
 
     def _has_start_event(self, workspace_id: str, job_id: str) -> bool:
