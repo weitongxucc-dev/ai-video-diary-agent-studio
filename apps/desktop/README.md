@@ -2,7 +2,9 @@
 
 Electron 负责启动本地 Next.js 和 FastAPI API，并管理窗口、端口、日志和子进程生命周期。
 
-0.11 的对话助手调用本机已安装的 Pi（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具随桌面包提供，Pi 可执行程序尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
+0.11 的对话助手调用本机已安装的 Pi（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具随桌面包提供，Pi 和 Node.js 尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
+
+安装 Node.js 22.19 或更高版本后执行 `npm install -g @earendil-works/pi-coding-agent`，用 `node --version` 和 `pi --version` 核对可执行程序，再重新打开应用。当前本机协议验证使用 Pi 1.0.4 / Node 24；体检分别显示 Pi、Node 和业务工具文件状态，仅阻断对话助手。文件就绪和 Key 已保存都不等于模型请求或业务 HTTP 工具成功，仍需在对应功能入口验证。
 
 ## 开发环境
 

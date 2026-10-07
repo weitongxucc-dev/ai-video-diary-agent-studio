@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
@@ -56,9 +57,16 @@ _LOCAL_MODEL_FEATURES: tuple[tuple[str, ModelSpec, str, str, str], ...] = (
 def _feature_gates(
     settings: Settings,
     catalog: ModelCatalog,
+    pi_checks: list[dict],
 ) -> list[dict[str, Any]]:
     ffmpeg_available = shutil.which("ffmpeg") is not None
+    blockers = [check for check in pi_checks if check["status"] != "ready"]
+    conversation_reason = " ".join(f"{c['reason']} {c['repair_action']}" for c in blockers)
+    if not settings.llm_configured:
+        conversation_reason += " 在设置页连接 MiniMax，或主动选择 DeepSeek。"
     gates = [
+        {"feature": "assistant-conversation", "available": not blockers and settings.llm_configured,
+         "reason": conversation_reason.strip()},
         {
             "feature": "generate-topics",
             "available": True,
@@ -102,7 +110,14 @@ def _feature_gates(
 def runtime_health(settings: Settings) -> dict[str, Any]:
     checked_at = utc_now()
     catalog = model_catalog_from_settings(settings)
+    pi_checks = pi_runtime_checks()
     items = [
+        *(_health_item(
+            item_id=c["id"], label=c["label"], status=c["status"],
+            reason=c["reason"], repair_action=c["repair_action"],
+            fix_command=c["fix_command"], checked_at=checked_at,
+            impact="仅影响对话助手；不阻断首启、精确编辑或直接文字模型调用。",
+        ) for c in pi_checks),
         _deepseek_item(settings, checked_at),
         _obsidian_item(settings, checked_at),
         _ffmpeg_item(checked_at),
@@ -144,7 +159,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
     counts = {"ready": 0, "missing": 0, "degraded": 0, "invalid": 0}
     for item in items:
         counts[str(item["status"])] += 1
-    gates = _feature_gates(settings, catalog)
+    gates = _feature_gates(settings, catalog, pi_checks)
     return {
         "summary": {
             "total": len(items),

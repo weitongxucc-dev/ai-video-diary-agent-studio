@@ -649,7 +649,7 @@ export default async function SettingsPage({
                 baseUrl={
                   valueOfSetting(settingItems, "LLM_BASE_URL") ||
                   (status?.llm.configured ? status.llm.base_url : null) ||
-                  "https://api.minimax.io/v1"
+                  "https://api.minimax.cn/v1"
                 }
                 model={
                   valueOfSetting(settingItems, "LLM_MODEL") ||
