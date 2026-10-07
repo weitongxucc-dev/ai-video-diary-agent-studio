@@ -27,7 +27,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 27：用户释放内存后新短配音实验准备 | 仅新具名实验根；START须等B26全部资源释放 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 28：修正实验空设备I/O后短配音验收 | 仅新具名实验根及准确边界probe；模型须START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -120,7 +120,9 @@ CI唯一失败文件test_montage_pipeline.py，共22失败/1550 passed/20 skippe
 
 最终新根report.md/measurement/release-evidence真实父/子组退出、device.lock非阻塞可重获、ledger与SQLpermit free、原请求/作业准确失败或单阶段结果、源码blobs/13模型stat未变；本地manta45e80 clean/integration b6ec保持。只有实际释放正证后才由主控让B26测试/GUI恢复。失败或成功均交worker_done一次，不自行修首因/改预算或新实验；主控根据当次证据推进真实缺口。不能称人物/长稿/Intel/多人/云身份/完整制作/分发完成，不关闭WIL26。
 
-## A：用户再次释放应用后的短配音实验（任务27）
+## A：用户再次释放应用后的短配音实验（任务27已结束，证据保留，无写/操作权）
+
+主控接受failed worker_done msg_777e3eace038：实际可信Grant generation1与四次当下资源决策均true，临时验收沙盒错误拒绝CPython以O_RDWR打开/dev/null，发生于Popen前；无实际模型子PID/exec ACK/音频。另查78119/78117与组退出，锁EX|NB可重获、ledger/SQLpermit free、原请求及作业failed，106源码blob/13模型stat/runtime未变。首因不归给内存或模型算法，旧根保持只读，不重试27。
 
 `MAIN-QWENHEADROOM-20261007-27`：任务25真实拒绝首因/无Grant与模型/锁及许可释放已接受且结束，用户再次明确关闭应用，主控单独观测可用5165252608B（4.81GiB）；这不是未来准入保证。仅复用同一manta可见终端的新Dispatch，产品/专项/权威写权零，45e80分支保留clean。准确冻结主控integration **3d58c1edabee1c590028b1cd6949515575ba225f**，本次Pi差额不影响A25已核模型/调度/资源消费者，archive这一个准确对象并逐blob核对。
 
@@ -129,6 +131,16 @@ CI唯一失败文件test_montage_pipeline.py，共22失败/1550 passed/20 skippe
 REBASE_ACK后先只做静态archive、合法新夹具/脚本与预算准备，不运行真实资源探针、say/FFmpeg、测试/服务或模型，不与B26 GUI争主机。报准确blobs/env/13stat/拟命令与PREPARED；主控接受B26新GUI全部PID/组/端口退出及秘密处理后再ALLOW_HEADROOM_PROBE，届时一次真实无模型probe回报，收到本Dispatch START_MEASURE才唯一attempt。准入或运行拒绝必须记录触发当次完整decision，不能事后采样倒推/放宽保护/自动重试。
 
 最终report.md/measurement.json/release-evidence.json准确音频或首因、exec ACK、组RSS/threads/available/swap/间隔、MLX不可测边界、父/子组实际退出、device.lock可重获、ledger/SQLpermit free与源码/模型stat不变；失败或成功均一次worker_done且不擅修首因。不把短单段结果当生产标定/Intel/音质/完整制作，不关闭卡；B26与旧所有实验的权威不扩展到本单。
+
+## A：修正实验空设备I/O后的短配音验收（任务28）
+
+`MAIN-QWENDEVICEIO-20261007-28`：27失败结案及全释放已由主控接受，B26也已结案且GUI/秘密资源全部释放；复用同一manta可见终端的新Dispatch。冻结仍为integration **3d58c1edabee1c590028b1cd6949515575ba225f**；无产品/测试/权威写权、不改45e80 clean分支或生产预算。只新 `/tmp/main-acceptance-20261007/qwen-measure-deviceio/`，真实合法独立owner/task/job/DB及完整隔离；旧headroom只定向读已合法参考WAV和无Key方法，绝不写旧根。106源码blob/13模型stat/外盘运行时核对，models仅本Qwen只读链接。
+
+必要差额只在新实验OS profile：确认/dev/null为系统字符设备，仅允许其精确literal设备读写，使CPython DEVNULL可以O_RDWR打开；所有其它根外持久文件写入与网络deny保持，禁止放宽到/dev目录或外部路径、关闭沙盒或改产品subprocess。先在新沙盒执行一次≤30秒非模型边界probe，自有组：真实DEVNULL+`/usr/bin/true`子进程成功；一次尝试写具名非秘密主控哨兵 `/tmp/main-controller-20261007/creation-wave/deviceio28-denied-sentinel.tmp` 必须被EPERM拒绝且文件不存在；一次127.0.0.1:9连接必须因OS策略EPERM/EACCES拒绝，不能把connection refused当通过。若边界失败停本单、不启动模型，不扩大豁免或自动试错。此哨兵只为主控可撤销测试，禁止碰任何用户文件或其它Key；实际成功创建即失败保留，由主控处理，不自行删除。
+
+REBASE_ACK后可准备并运行该唯一非模型边界probe；B26与27已实际释放，不需新增GUI并行门禁。边界通过且组退出后允许一次原HostResourceProbe真实准入样本，交精确profile/正负证据/106blob/13stat/新合法环境与当次资源decision，再停PREPARED等本Dispatch START_MEASURE。不得以准备probe替代fresh调度准入。模型仍仅任务27同参考/目标单段、A25全部预算与3758096384B准入门槛、阶段120秒/父180秒/持续许可资源检查原样生效，swap本次实际baseline+67108864B。一次START仅一次真实attempt，无自动下一阶段/重试/新cap；其它模型、媒体工具、服务、云、安装/下载与生产设置皆无权。
+
+捕获实际首次失败与同次decision、真实登记/exec ACK/加载或音频证明及RSS/threads/available/swap/间隔，MLX不可测不伪造。最后report/measurement/release-evidence核父/子组退出、device.lock EX|NB可重获、ledger/SQLpermit free、原请求及单阶段作业准确状态、源码/模型stat/runtime与分支clean不变；单段成功不外推生产标定、Intel、音质或完整制作。失败或成功均worker_done一次，禁止擅修产品首因或复试；本单不关闭WIL26、不分发或合main。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
