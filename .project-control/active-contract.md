@@ -230,7 +230,7 @@ owned只有 `apps/api/app/assistant_pi.py`、`apps/api/agent_tools/diary_tools.t
 
 真实缺口：Pi把纯动作command扩写对象/限制/猜想导致同轮preview_edit七次拒绝，最后成功仍把crop_x位置误称画面宽度。用最小既有工具描述/command参数说明与SYSTEM_PROMPT明确：对象引用/阶段单独传，command只包含用户已明确且编译器支持的动作，不扩写解释或副作用、不猜步长；水平/垂直百分比是裁剪窗口位置，非宽度/面积比例，缺量先澄清；工具失败说明准确阻断，不自行反复改写试错。真实预览的最终说明使用该提案实际before/after位置/operation与影响，不猜“中心对齐/收窄”。工具文本仅投影必要业务事实，不能发送媒体URL/原始文件/Key/整库；已有preview结构详情给UI保持。不得用regex事后改助手正文、硬编码fixture回答、静默fallback或新增LLM抽象/配置开关。若仅提示不足以解决实际重复，先提出准确必要接线证据，不自行扩写main或费用策略。
 
-最小相关专项在新 `/tmp/pipefish-pi-edit-semantics-20261007/`：直接验证工具将引用/动作分开传给现有HTTP端点，并从真实形状返回必要语义/影响，保留提案确认约束；不以字符串镜像测试替代真实LLM验收。只跑本单新增/受影响专项，不重复既有70/13/2或全量，不运行媒体/模型/服务/浏览器。A25短Qwen占主机期间只可编辑/静态核，测试/GUI等收到主控明确释放再运行。
+资源顺序B26.1：A25仍在PREPARED前且未收到START，主控可先ALLOW_PI_FIX_CHECK只运行下述两参数直接专项一次（Node子进程15秒/父30秒自有组），报PID/组释放。A25的START须等该释放正证，任何模型实际窗口不并行测试；GUI仍HOLD到A25实际结束。最小相关专项在新 `/tmp/pipefish-pi-edit-semantics-20261007/`：直接验证工具将引用/动作分开传给现有HTTP端点，并从真实形状返回必要语义/影响，保留提案确认约束；不以字符串镜像测试替代真实LLM验收。只跑本单新增/受影响专项，不重复既有70/13/2或全量，不运行媒体/模型/服务/浏览器。A25短Qwen占主机期间只可编辑/静态核，测试/GUI等收到主控明确释放再运行。
 
 交独立SHA与父cb26、严格三路径差额、最小专项与释放后进入CODE_READY，停新增代码等待主控审核/机械组合与冻结精确候选。真实复验也是本单目标，不能代码完成就终结：A25实际模型资源退出并主控ALLOW_PI_FIX_PREPARE之后，仅新 `/tmp/main-acceptance-20261007/pi-edit-fixed/` 按任务23已验证方法准备完整confirmed_script/两clip/合法timeline/原合成媒体副本与独立HOME/XDG/DB/library/output/cache/models空目录/agent，不能写旧两GUI根。新API4543/Web3143与30分钟租约；新临时Keychain准确task26.keychain-db由主控原生RAM Key保存，B不读密钥。先报准确候选blobs/env/owner0600/DB只读前提/PID/Keychain路径，等本Dispatch START_PI_EDIT_FIX_GUI。
 
