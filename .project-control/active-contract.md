@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；当前仅任务33具名真实配音准备/验收权，无产品源码写权，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案；33已结案，当前仅任务34具名权重慢读修正及同候选真实验收权，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务33：资源释放后继续首次真实配音 | 仅下方33隔离验收；无产品源码写权，模型等新Dispatch START |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务34：权重受许可慢读及真实配音 | 仅下方worker/直接专项及新paced-weights根；模型等本Dispatch START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -213,7 +213,9 @@ A32.1主控明确本轮实验参数：配音I/O持续窗口3秒，cap仍128MiB/s
 
 最终音频ffprobe/hash或准确首因、原job/request真实等待/成功单阶段/失败状态、每次真实Grant/exec/phase/逐盘窗口/RSS/threads/available/swap/间隔、MLX不可测边界、全部父子PID/组退出/held lock EX|NB可重获/ledgerSQLpermit free、源码/13stat/runtime未变与双clean后worker_done一次。不把短句成功当生产配置标定/音质/Intel/全流程，不关闭WIL26或合main。若本单有新真实依赖缺口，主控继续决定最小必要差额，不停在CODE_FROZEN或派工结果。
 
-## A：资源释放后首次真实配音（任务33）
+## A：资源释放后首次真实配音（任务33已结案，无写/操作权）
+
+主控接受failed worker_done msg_a080386a576d：同原job真实generation1压力释放、30秒等待后fresh准入并gen2，原身份/文案/等待年龄保持；自然等待恢复已验，但两代均仅worker_started/importing_runtime/loading_weights，无weights_loaded/音频。首真实IO419176448B/3.0336625s超128MiB/s；第二代861974528B超有限384MiB初始量，CPU/内存/swap/空间均过。disk6读395698176及861503488B为主要量，不能仅据吞吐称拥堵/磁盘故障。最大两代是实验停因，与首资源拒绝分列。55239/55259/55331/56012及组退出、held lock EX|NB重获、ledger/SQL free generation2；原job interrupted/failure null/request blocked resource_pressure、106blob/13stat/runtime双clean未变，主控另核PID。33根只保留证据不再重试；f71远端PR95三项CI均绿/Draft。
 
 `MAIN-QWENPRESSURE-20261007-33`：用户明确“可以啊，你试试吧”，批准暂停3163另一UI工作树的预览服务并继续实际配音。主控复核cwd/当前PID后仅SIGTERM其75454/75470，两者已退出，实际available8.84GiB；不停止其它应用/线程，不删除文件，不恢复预览至模型释放前。32 failed只表示准入准备受资源阻断，模型零次；原修复c7cea50与主控组合 **f71fde442b9654681a617065553f59ace171f157** 已审，双clean且tree相等，不重复30项专项或其它GUI/服务/模型。
 
@@ -222,6 +224,22 @@ A32.1主控明确本轮实验参数：配音I/O持续窗口3秒，cap仍128MiB/s
 先做一次新的无模型连续准入观察（必须真实完整≥3秒窗口、短单次采样0.1秒、当次freshswap+64MiB），提交PREPARED actual decision及预算、源/模型未变、原job/许可与拟命令，等**本新Dispatch START_RUNTIME_MEASURE**。所有32实验cap逐字段不变，IO128MiB/s/3秒有限384MiB初始字节量，准入memory3.5GiB、组RSS2GiB/线程128、阶段120秒/父180秒、快速取消/持续身份。无重复DEVNULL负向/专项或GUI，既有准备子组释放证据复用。
 
 START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前身份输入/实际现有配音消费者；真实参考与目标仅原短句。自然压力最多generation2、实际释放后30秒fresh再准入，未知/模型错/时间限准确止，不自动增cap/新job。仅narration，后续montage/render不执行。成功须原narration请求done、job queued、permit free与真实有效audio cache同时成立，再停止driver；不可看到文件就取消成功request。最后真实WAV ffprobe/hash或首因/阶段/同次逐盘decision、遥测与所有父子/组、锁/ledger/SQLpermit释放、source/model/runtime与双clean证明，worker_done一次。未发生自然等待不称真机恢复已验；不称音质/Intel/生产标定/完整制作已过，不关闭WIL26/合main。新真实依赖缺口回证据，主控继续最小授权目标。
+
+## A：受许可权重慢读与真实配音（任务34）
+
+`MAIN-QWENPACED-20261007-34`：延续用户已批准的最小配音修复、实际试验及“生成音频可以慢慢来”的选择；33两次真实首因使继续盲目改cap无效。本单C0局部实现修正，不改变产品/领域/架构、默认业务入口/许可/失败规则，不增加用户费用/权限。B仍零权，无新线程。主控共享合同/审核/机械集成，A唯一产品writer。
+
+源从clean主控integration **f71fde442b9654681a617065553f59ace171f157** 读取本地对象，在manta保留c7cea50后新独立 `codex/qwen-paced-weight-loading-20261007`。owned仅 `apps/api/model_workers/qwen3_tts_worker.py` 与既有 `apps/api/tests/test_voice_clone.py` 的直接专项；不改runtime安装包/任何其它产品路径、HostBudget/Grant/保护/持久状态/共享权威。先读本节、33真实commands/首因逐盘证据、现有worker与本机mlx_audio0.5.0 utils.load_weights 的 .safetensors→mx.load 原链、Darwin SDK fcntl.h F_RDAHEAD=45精确FD语义，语义ACK后实施。
+
+目标是在**已登记、同Grant被监测的Qwen子进程内部**，使用有界单块顺序慢读已安装本模型实际权重文件，所有读成本显式phase/总字节/经过时长并保留原CPU/内存/交换/IO/120秒阶段限制；不把预读藏到准入或无许可prepare，不产生完整权重副本/新模型/cache层，不修改模型/用户文件或系统级设置。初始进程内读速率 **32MiB/s、单块≤1MiB**，按真实累计读取字节与monotonic elapsed节拍，有界可取消；Darwin可仅对自己打开的读FD关闭read-ahead（F_RDAHEAD），不设全盘/其它进程策略。已有loader默认非lazy、strict语义保持；不能以lazy=True推迟/隐藏加载成本或绕过I/O检查。慢读只降低已知加载突发，不宣称严格控制全机或后续loader所有IO，原host probe若仍真实超限照常让出。固定本Qwen模型已有.safetensors；不扩其它格式/模型/网络依赖/兼容层。
+
+仅必要最小直接验证：实际小文件读字节与经过时间/节拍符合有限速率与≤1MiB内存块，取消/子组退出仍可有界；复用未变许可/RSS/身份/driver/短峰等30专项及33真实恢复证据，不全量测试/build/GUI。CODE_FROZEN后停止产品写，交clean提交、准确2路径差额和直接证据；主控审diff机械组合并冻结真实同候选SHA，不能把父f71 CI当新CI。
+
+验收只新 `/tmp/main-acceptance-20261007/qwen-paced-weights/`：从新SHA archive，沿用33完整env-i隔离/106blob真实计数/13模型stat/runtime只读/精确DEVNULL profile与六AST现有消费者、真实LocalMember/授权合成参考及已确认短句/完整DeviceRuntime。33根只定向读参考、已验证无Key方法/恢复证据，不写旧DB/report/attempt；新合法fixture/job、scheduled OFF，不重复GUI/负向probe或不相关资料搜索。无网络/安装/下载/真实用户库/Key/其它模型/服务；3163已暂停，模型窗口不并行重活。
+
+全部Host/Narration实验cap与33逐字段相同，IO128MiB/s/3秒/有限384MiB初始量、准入3.5GiB/组RSS2GiB/threads128、freshswap+64MiB、输入/输出/120秒阶段/180秒父均不改；32MiB/s慢读成本计入其内，不擅增时限。准备唯一无模型合法profile加载（如仅根字符串差复用已通过边界，单DEVNULL≤30s）及fresh完整≥3秒真实准入，交PREPARED等本Dispatch START_RUNTIME_MEASURE。START一个新具名job短参考/目标，仅narration，自然资源等待最多generation2，不盲目第三次/增cap或新job；未知/真正模型错如实停，audio+原narration done/job queued/permit free同时满足才通过，不取消成功request，不执行后续montage/render。
+
+最终真实WAV ffprobe/hash或首因及可证phase/慢读字节时长/逐盘同次decision/遥测，全父子组、held lock EX|NB/ledger/SQLpermit释放、source/13stat/runtime双clean后worker_done一次。若没自然等待不重复宣称新候选该真机场景已发生；单句不代表长文/音质/Intel/生产标定/完整制作。不关闭Linear、不合main；仍有新真实问题先交证据，主控判断最小必要范围。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
