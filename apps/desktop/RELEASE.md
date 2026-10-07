@@ -9,7 +9,7 @@
 - `auth_mode` 必须显式选择 `local` 或 `supabase`；默认值 `local` 只用于本机开发或受控诊断。
 - 交付给独立测试者的包必须选择 `supabase`，并由 GitHub Actions variables 或 secrets 提供 Supabase URL 与 publishable key。
 - 分发配置只包含可公开的 URL 和 publishable key；service-role、secret key、账号密码和管理凭据不得进入安装包。
-- 使用 uv 管理的 Python 3.11.15 构建 API 与 Worker。
+- 使用 uv 管理的 Python 3.11.15 构建 API；模型与工具资源按桌面打包配置随包提供。
 - 校验二进制架构。
 - 对 `.app` 做 ad-hoc 签名并启动打包后的 API 健康 smoke。
 - 生成 DMG、ZIP 和按架构命名的 `SHA256SUMS-<arch>.txt`。
