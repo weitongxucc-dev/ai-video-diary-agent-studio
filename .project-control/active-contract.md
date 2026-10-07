@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；唯一新写入与模型准备范围为任务32；实际模型仍须主控冻结同候选及本Dispatch START_RUNTIME_MEASURE。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；任务32已结案，当前执行线程写入与模型操作权零；其修复及隔离夹具保留，实际配音受内存外部条件阻断，后续由主控在资源具备后复用同可见终端的新具名Dispatch与START，不复活旧Dispatch。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务32：实现持续压力与资源等待恢复，随后真实短配音 | 下方owned源码及新pressure-recovery根；CODE_FROZEN后停产品写，模型等本Dispatch START |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：任务32源码已接受，真实配音待内存条件 | 写入/操作权零；c7cea50与组合f71fde44、新pressure-recovery夹具保留 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -187,7 +187,9 @@ START只一次实际短参考“这是一段测试声音。”与目标“今天
 最后report.md/measurement.json/release-evidence.json交实际音频ffprobe/hash或准确首因、所有父子PID/PGID退出、实际持有的lock EX|NB可重获、ledger/SQLpermit free及原请求/job真实状态；准备未Grant保留queued而不伪造failed，未持锁记N/A。106blob/13stat/runtime及双clean证明后worker_done一次。无论成败均完成释放，不擅改首因或试下一轮；若仍I/O拒绝，交该次精确触发点及可证局部I/O来源/不可测项建议，不再自动递增cap；单段成功不等于生产标定、音质、长文/Intel或完整制作，不关闭卡/合main/分发。
 
 
-## A：配音持续压力与等待恢复（任务32）
+## A：配音持续压力与等待恢复（任务32已结案，无写/操作权）
+
+主控接受worker_done `msg_3378e2aea31e` 的资源阻断结案：8路径实现及相关专项已审，clean c7cea50机械组合为clean f71fde442b9654681a617065553f59ace171f157，tree相同。真实准备采样available3245096960B低于3758096384B，未发START、无模型attempt/Grant；原job queued/progress0、SQLpermit free/generation0、requests空，准备17726/18051/18052及组退出，lock/ledger未创建记N/A。106blob/13模型stat/runtime不变，主控另核PID及只读SQL；隔离report/release-evidence保留。用户对另一UI工作树3163预览服务的暂停决定仍待回复。GitHub推送持续服务端500，读回远端PR95分支仍3d58c1e/Draft，新源码CI未开始；不将本地修复称已合入或真实音频通过。原用户授权目标仍待完成，资源具备后主控建立新具名Dispatch恢复，不重新询问已有修复范围；下述原任务参数与夹具只作恢复依据，不授予旧Dispatch新动作。
 
 `MAIN-QWENPRESSURE-20261007-32`：用户已审阅主控诊断并明确“可以呀，你要试一下”，批准最小修复和同候选真实短配音。沿用产品§12.1/架构§3.12/领域等待资源语义，这是修正实现，不新增产品规则；31已失败结案/全释放，不复活旧根或逐次增cap。B待命，不新增线程。主控唯一共享文档/审核/集成/PR写者，A唯一产品写者。
 
