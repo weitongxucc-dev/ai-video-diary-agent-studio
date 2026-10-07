@@ -9,15 +9,18 @@ import app.main as main
 from app.production import ProductionRepository, VideoTemplate
 from app.source_repository import SourceRepository
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator, CreationTaskScriptGenerationError
-from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, _save_versioned_voice
+from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, _save_versioned_voice, plan_owner as plan_owner
 from test_creation_task_topic_provider import _script_input, _script_document, _response
 
 
 @pytest.fixture
-def state(tmp_path, monkeypatch):
+def state(tmp_path, monkeypatch, plan_owner):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="workspace_a")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="workspace_a",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     asset = production.list_assets("workspace_a")[0]
     asset.segments[0].description = "完全不同的新主题"
     production._save_asset(asset)
@@ -34,9 +37,8 @@ def state(tmp_path, monkeypatch):
     )
     # 模板归属只认可信身份：这批用例测版本追加与持久化，因此用真实成员 id 创建，
     # 仓储内部读取时显式给出同一读取身份，而不是靠匿名或改可见范围绕过。
-    owner_user_id = "member-template-owner"
-    production.save_video_template(template, verified_owner_user_id=owner_user_id)
-    return production, template, TestClient(main.app)
+    template = production.save_video_template(template, verified_owner_user_id=plan_owner[0].member_id)
+    return production, template, TestClient(main.app, headers=plan_owner[1])
 
 
 def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
@@ -48,13 +50,13 @@ def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
     assert reopened.get_video_template("workspace_a", template.id, 1).name == template.name
     # 仓库级读取按创建时的可信身份给出；跨工作区隔离仍要单独成立。
     listed = reopened.list_video_templates(
-        "workspace_a", viewer_user_id="member-template-owner"
+        "workspace_a", viewer_user_id=template.owner_user_id
     )
     assert len(listed) == 2
     # 同一个创建者身份在另一个工作区读不到：空结果来自跨空间隔离，
     # 不是来自「没给身份所以按 owner 过滤掉了」。
     assert reopened.list_video_templates(
-        "workspace_b", viewer_user_id="member-template-owner"
+        "workspace_b", viewer_user_id=template.owner_user_id
     ) == []
     response = client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json={"goal": "新主题", "template_id": template.id, "template_version": 1})
     assert response.status_code == 404

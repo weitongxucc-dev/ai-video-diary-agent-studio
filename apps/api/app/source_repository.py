@@ -11,6 +11,7 @@ from uuid import uuid4
 from app.sources import (
     KnowledgeItem,
     KnowledgeItemVersion,
+    KnowledgeGrant,
     SourceConnector,
     SourceItem,
     SourceRunEvidence,
@@ -21,6 +22,7 @@ from app.database_migrations import (
     ensure_content_visibility_columns,
 )
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection
+from app.knowledge_grants import KNOWLEDGE_GRANTS_DDL
 
 
 class SourceRepository:
@@ -28,7 +30,8 @@ class SourceRepository:
 
     This intentionally uses the application's existing SQLite database path.
     HTTP composition owns the repository instance; this module owns only the
-    source/knowledge tables and never falls back across workspace boundaries.
+    source/knowledge tables. Cross-workspace reads require an explicit active
+    knowledge grant; original ownership is never rewritten.
     """
 
     def __init__(self, database_path: str | Path) -> None:
@@ -612,6 +615,23 @@ class SourceRepository:
                 ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
 
+    @staticmethod
+    def _knowledge_access_clause() -> str:
+        # Both reads and references consume this one predicate. A shared flag
+        # applies only inside the source workspace; cross-space needs a grant.
+        return """(
+            (knowledge_items.workspace_id = :workspace_id AND
+                (visibility = :shared OR (visibility = :private AND owner_user_id = :user_id)))
+            OR EXISTS (
+                SELECT 1 FROM knowledge_grants AS grant
+                WHERE grant.knowledge_item_id = knowledge_items.id
+                  AND grant.source_workspace_id = knowledge_items.workspace_id
+                  AND grant.target_workspace_id = :workspace_id
+                  AND grant.revoked_at IS NULL
+                  AND grant.granted_by = knowledge_items.owner_user_id
+            )
+        )"""
+
     def list_knowledge_items_readable_by(
         self,
         workspace_id: str,
@@ -619,12 +639,6 @@ class SourceRepository:
         user_id: str | None,
         local_diagnostic: bool = False,
     ) -> list[KnowledgeItem]:
-        """按已验证身份列出可读的知识条目。
-
-        ``user_id`` 取自已验证的 AuthPrincipal；``local_diagnostic`` 只在保留的
-        local workspace 受控诊断下为真（见 knowledge_item_readable 的诚实边界）。
-        认证态传不到 user_id 时不会退化成只看共享：那是调用方的错误，应当失败。
-        """
         self._require_workspace(workspace_id)
         if user_id is None and not local_diagnostic:
             raise ValueError("读取知识必须带已验证身份，或显式的本地受控诊断范围")
@@ -636,18 +650,9 @@ class SourceRepository:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
-                    SELECT * FROM knowledge_items
-                    WHERE workspace_id = ?
-                      AND (visibility = ? OR (visibility = ? AND owner_user_id = ?))
-                    ORDER BY created_at DESC
-                    """,
-                    (
-                        workspace_id,
-                        CONTENT_VISIBILITY_LEGACY,
-                        CONTENT_VISIBILITY_DEFAULT,
-                        user_id,
-                    ),
+                    f"SELECT * FROM knowledge_items WHERE {self._knowledge_access_clause()} ORDER BY created_at DESC",
+                    {"workspace_id": workspace_id, "shared": CONTENT_VISIBILITY_LEGACY,
+                     "private": CONTENT_VISIBILITY_DEFAULT, "user_id": user_id},
                 ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
 
@@ -659,11 +664,6 @@ class SourceRepository:
         user_id: str | None,
         local_diagnostic: bool = False,
     ) -> KnowledgeItem:
-        """按已验证身份读单条知识；读不到时抛 KeyError（对外是 404）。
-
-        属于其他 workspace、或属于本 workspace 但既不共享也不是本人上传的，
-        一律当读不到，不用 403 暴露「存在但你不能看」。
-        """
         self._require_workspace(workspace_id)
         if user_id is None and not local_diagnostic:
             raise ValueError("读取知识必须带已验证身份，或显式的本地受控诊断范围")
@@ -675,25 +675,135 @@ class SourceRepository:
                 ).fetchone()
             else:
                 row = conn.execute(
-                    """
-                    SELECT * FROM knowledge_items
-                    WHERE workspace_id = ? AND id = ?
-                      AND (
-                        visibility = ?
-                        OR (visibility = ? AND owner_user_id IS NOT NULL AND owner_user_id = ?)
-                      )
-                    """,
-                    (
-                        workspace_id,
-                        item_id,
-                        CONTENT_VISIBILITY_LEGACY,
-                        CONTENT_VISIBILITY_DEFAULT,
-                        user_id,
-                    ),
+                    f"SELECT * FROM knowledge_items WHERE id = :item_id AND {self._knowledge_access_clause()}",
+                    {"workspace_id": workspace_id, "item_id": item_id,
+                     "shared": CONTENT_VISIBILITY_LEGACY, "private": CONTENT_VISIBILITY_DEFAULT,
+                     "user_id": user_id},
                 ).fetchone()
         if row is None:
             raise KeyError(item_id)
         return self._knowledge_item_from_row(row)
+
+    def get_knowledge_version_readable_by(
+        self, workspace_id: str, item_id: str, version: str, *,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> KnowledgeItemVersion:
+        item = self.get_knowledge_item_readable_by(
+            workspace_id, item_id, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+        # Manual entries have no snapshot chain: their exact current head is
+        # the stored version. Never substitute it for a different version.
+        if item.content_hash is None and item.version == version:
+            return KnowledgeItemVersion(
+                knowledge_item_id=item.id, version=item.version, content_hash=None,
+                title=item.title, body=item.body, file_reference=item.file_reference,
+                source_item_id=item.source_item_id, sections=item.sections,
+                parameters=item.parameters, saved_at=item.created_at,
+                fetched_at=item.fetched_at, source_url=item.source_url,
+            )
+        snapshots = self.list_knowledge_item_versions(item.workspace_id, item.id)
+        for snapshot in snapshots:
+            if snapshot.version == version:
+                return snapshot
+        raise KeyError((item_id, version))
+
+    def get_knowledge_reference_readable_by(
+        self, workspace_id: str, item_id: str, version: str, *,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> KnowledgeItem:
+        """Resolve an exact version only after checking today's read/reference grant."""
+        item = self.get_knowledge_item_readable_by(
+            workspace_id, item_id, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+        # Manual entries have a current version but no historical snapshot chain.
+        if item.version == version:
+            return item
+        snapshot = self.get_knowledge_version_readable_by(
+            workspace_id, item_id, version, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+        return replace(
+            item, version=snapshot.version, title=snapshot.title, body=snapshot.body,
+            file_reference=snapshot.file_reference, content_hash=snapshot.content_hash,
+            source_item_id=snapshot.source_item_id, sections=snapshot.sections,
+            parameters=snapshot.parameters, fetched_at=snapshot.fetched_at,
+            source_url=snapshot.source_url,
+        )
+
+    @staticmethod
+    def _grant_from_row(row: sqlite3.Row) -> KnowledgeGrant:
+        return KnowledgeGrant(
+            id=row["id"], knowledge_item_id=row["knowledge_item_id"],
+            source_workspace_id=row["source_workspace_id"],
+            target_workspace_id=row["target_workspace_id"],
+            granted_by=row["granted_by"], granted_at=_parse_datetime(row["granted_at"]),
+            revoked_by=row["revoked_by"],
+            revoked_at=_parse_datetime(row["revoked_at"]) if row["revoked_at"] else None,
+        )
+
+    @staticmethod
+    def _require_knowledge_grant_owner(
+        conn: sqlite3.Connection, workspace_id: str, item_id: str, user_id: str,
+    ) -> None:
+        # Owning the device is not owning another member's private original.
+        row = conn.execute(
+            "SELECT owner_user_id FROM knowledge_items WHERE workspace_id=? AND id=?",
+            (workspace_id, item_id),
+        ).fetchone()
+        if not user_id or row is None or row["owner_user_id"] != user_id:
+            raise KeyError(item_id)
+
+    def list_knowledge_grants(
+        self, workspace_id: str, item_id: str, *, user_id: str,
+    ) -> list[KnowledgeGrant]:
+        with self._connect() as conn:
+            self._require_knowledge_grant_owner(conn, workspace_id, item_id, user_id)
+            rows = conn.execute(
+                "SELECT * FROM knowledge_grants WHERE source_workspace_id=? AND knowledge_item_id=? ORDER BY granted_at",
+                (workspace_id, item_id),
+            ).fetchall()
+        return [self._grant_from_row(row) for row in rows]
+
+    def grant_knowledge_item(
+        self, workspace_id: str, item_id: str, target_workspace_id: str, *, user_id: str,
+    ) -> KnowledgeGrant:
+        self._require_workspace(target_workspace_id)
+        if target_workspace_id == workspace_id:
+            raise ValueError("请选择其他工作空间")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_knowledge_grant_owner(conn, workspace_id, item_id, user_id)
+            conn.execute(
+                """INSERT INTO knowledge_grants
+                    (id, knowledge_item_id, source_workspace_id, target_workspace_id, granted_by, granted_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(knowledge_item_id, target_workspace_id) WHERE revoked_at IS NULL DO NOTHING""",
+                (str(uuid4()), item_id, workspace_id, target_workspace_id, user_id, _utc_now().isoformat()),
+            )
+            row = conn.execute(
+                "SELECT * FROM knowledge_grants WHERE knowledge_item_id=? AND target_workspace_id=? AND revoked_at IS NULL",
+                (item_id, target_workspace_id),
+            ).fetchone()
+        return self._grant_from_row(row)
+
+    def revoke_knowledge_grant(
+        self, workspace_id: str, item_id: str, grant_id: str, *, user_id: str,
+    ) -> KnowledgeGrant:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_knowledge_grant_owner(conn, workspace_id, item_id, user_id)
+            row = conn.execute(
+                "SELECT * FROM knowledge_grants WHERE id=? AND source_workspace_id=? AND knowledge_item_id=?",
+                (grant_id, workspace_id, item_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(grant_id)
+            if row["revoked_at"] is None:
+                conn.execute(
+                    "UPDATE knowledge_grants SET revoked_by=?, revoked_at=? WHERE id=?",
+                    (user_id, _utc_now().isoformat(), grant_id),
+                )
+                row = conn.execute("SELECT * FROM knowledge_grants WHERE id=?", (grant_id,)).fetchone()
+        return self._grant_from_row(row)
 
     def set_knowledge_item_owner(
         self, workspace_id: str, item_id: str, owner_user_id: str | None
@@ -1012,6 +1122,8 @@ class SourceRepository:
                     conn.execute(
                         f"ALTER TABLE knowledge_item_versions ADD COLUMN {column} TEXT"
                     )
+
+            conn.executescript(KNOWLEDGE_GRANTS_DDL)
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(

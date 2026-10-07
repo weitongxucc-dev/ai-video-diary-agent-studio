@@ -1,6 +1,7 @@
-import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource } from "./types";
+import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import { localMemberTokenHeader } from "./local-member-auth";
+import type { KnowledgeItemVersion } from "./source-api";
 import type {
   ContentTemplates,
   CreationPlan,
@@ -82,6 +83,26 @@ export function apiUrl(path: string): string {
   return path;
 }
 
+export function getKnowledgeGrants(itemId: string): Promise<KnowledgeGrantState> {
+  return request<KnowledgeGrantState>(`/api/knowledge-items/${encodeURIComponent(itemId)}/grants`);
+}
+
+export function getKnowledgeReferenceVersion(itemId: string, version: string): Promise<KnowledgeItemVersion> {
+  return request<KnowledgeItemVersion>(`/api/knowledge-items/${encodeURIComponent(itemId)}/versions/${encodeURIComponent(version)}`);
+}
+
+export function grantKnowledgeToWorkspace(itemId: string, targetWorkspaceId: string): Promise<KnowledgeGrant> {
+  return request<KnowledgeGrant>(`/api/knowledge-items/${encodeURIComponent(itemId)}/grants`, {
+    method: "POST", body: JSON.stringify({ target_workspace_id: targetWorkspaceId }),
+  });
+}
+
+export function revokeKnowledgeGrant(itemId: string, grantId: string): Promise<KnowledgeGrant> {
+  return request<KnowledgeGrant>(`/api/knowledge-items/${encodeURIComponent(itemId)}/grants/${encodeURIComponent(grantId)}`, {
+    method: "DELETE",
+  });
+}
+
 type ServerAuthorizationProvider = () => Promise<string | null>;
 let serverAuthorizationProvider: ServerAuthorizationProvider | null = null;
 
@@ -89,6 +110,10 @@ export function setServerAuthorizationProvider(
   provider: ServerAuthorizationProvider,
 ): void {
   serverAuthorizationProvider = provider;
+}
+
+export class ApiRequestError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -107,7 +132,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new ApiRequestError(response.status, message || `Request failed: ${response.status}`);
   }
 
   return response.json() as Promise<T>;
