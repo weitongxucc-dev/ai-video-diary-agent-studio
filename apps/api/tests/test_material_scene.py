@@ -252,6 +252,12 @@ def test_scene_timeout_or_resource_stop_never_commits_a_checkpoint(
         assert scene_grant is not None and scene_grant.unit_key.startswith("scene-window:v1:")
 
         def stopped(*args, **kwargs):
+            if error_name == "GrantedCommandResourceLimit":
+                limits = scheduler.resources.scene_runtime_limits(scene_grant)
+                raise gated.GrantedCommandResourceLimit(
+                    rss=limits.max_process_rss_bytes + 1,
+                    threads=limits.max_process_threads, limits=limits,
+                )
             raise getattr(gated, error_name)("test stopped child")
 
         monkeypatch.setattr(gated, "run_granted_command", stopped)
