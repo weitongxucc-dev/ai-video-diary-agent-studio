@@ -44,6 +44,8 @@ A可写新`/tmp/main-acceptance-20261008/creation36/`准备文件，旧35只定�
 
 B初段允许只读源码追踪、具名文件实现及最小无外部模型测试、新`/tmp/main-acceptance-20261008/pi-entry37/`验收准备；不读Key文档/Keychain/真实用户数据、不起GUI/产品服务、不调用收费API/加载本地模型。真实Key仅主控按既有具名授权处理隔离验证；后续冻结候选、A资源释放后由主控在本Dispatch给出GUI/国内MiniMax窗口和秘密输入方式。输出准确业务工具清单、实现候选/专项证据、真实保存重启验收步骤及首次实际缺口。准备或派工不是最终交付节点；主控审核后继续必要集成和完整成片/修改重出验收，PR合入仍逐次批准。
 
+任务36/37有界补充（C1，目标不变）：A已定位`production.py:ProductionRepository.fail_creation_task_stage`自行连接，与`fail_unit`事务嵌套会导致同库写锁；追加A owned `apps/api/app/production.py`仅该方法和复用现有事务所需的最小直接接线，保留旧直接消费者行为，不重构整库。B追加owned `apps/api/tests/test_assistant_pi.py`仅`test_edit_tool_separates_action_and_projects_actual_preview`及直接工具边界专项，禁止改运行器/API专项。B可落实`preview_edit`已声明的先读取任务、每轮失败不自行重试边界：须以执行真实TS工具的未读取拒绝及失败后第二次POST零发送证明，不添加其他猜测防护。
+
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
