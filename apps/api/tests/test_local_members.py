@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
+from app.database_migrations import LOCAL_MEMBERS_TABLE_DDL
 
 
 def _service(tmp_path) -> LocalMemberService:
@@ -382,3 +383,30 @@ def test_concurrent_join_reserves_only_one_seat(tmp_path):
     assert outcomes.count("accepted") == 1
     assert outcomes.count("conflict") == len(codes) - 1
     assert len(service.list_members()) == 5
+
+
+@pytest.mark.parametrize("existing_token_column", [False, True])
+def test_constructor_migrates_legacy_tokens_and_reads_under_another_writer(tmp_path, existing_token_column):
+    database = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database) as conn:
+        conn.executescript(LOCAL_MEMBERS_TABLE_DDL)
+        conn.execute("INSERT INTO local_members VALUES ('legacy', '旧成员', 'member', '2020-01-01')")
+        if existing_token_column:
+            conn.execute("ALTER TABLE local_members ADD COLUMN token TEXT")
+            conn.execute("INSERT INTO local_members VALUES ('stable', '已有令牌', 'member', '2020-01-01', 'stable-token')")
+    service = LocalMemberService(database)
+    # Migration commits at construction, before any normal read or scheduler lock.
+    with sqlite3.connect(database) as conn:
+        token = conn.execute("SELECT token FROM local_members WHERE member_id='legacy'").fetchone()[0]
+        assert token and conn.execute("SELECT count(*) FROM local_members WHERE token IS NULL").fetchone()[0] == 0
+    owner, owner_token = service.whoami(None)
+    with sqlite3.connect(database) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        assert service.resolve_member(token).member_id == "legacy"
+        assert service.whoami(token)[1] == token
+        assert service.whoami(None) == (owner, owner_token)
+        assert "legacy" in {member.member_id for member in service.list_members()}
+    reopened = LocalMemberService(database)
+    assert reopened.whoami(token)[1] == token
+    if existing_token_column:
+        assert reopened.whoami("stable-token")[0].member_id == "stable"
