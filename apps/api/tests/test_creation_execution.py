@@ -156,6 +156,8 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
 from pathlib import Path
 r=json.loads(Path(sys.argv[sys.argv.index('--request')+1]).read_text())
 assert 'DEVICE_PROOF' not in os.environ and 'AI_VIDEO_DIARY_LLM_KEY' not in os.environ
+assert Path(os.environ['HOME']).parent.name == '.cache'
+assert Path(os.environ['XDG_CONFIG_HOME']).parent == Path(os.environ['HOME']).parent
 p=Path(r['output_path'])
 with wave.open(str(p),'wb') as w:
  w.setparams((1,2,24000,0,'NONE','not compressed')); w.writeframes(b'\\0\\0'*24000)

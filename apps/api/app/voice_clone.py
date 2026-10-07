@@ -230,6 +230,8 @@ class Qwen3TTSSubprocessProvider:
         temporary_root.mkdir(parents=True, exist_ok=True)
         environment = (dict(os.environ) if grant_context is None else {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(cache_root / "home"),
+            "XDG_CONFIG_HOME": str(cache_root / "config"),
             "PYTHONDONTWRITEBYTECODE": "1",
             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
             "OMP_NUM_THREADS": str(grant_context.threads),
