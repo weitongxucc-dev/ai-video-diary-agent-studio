@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key、任务26一轮国内Pi编辑复验及随后具名A25短Qwen实验例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控 MiniMax Key、任务26一轮国内Pi编辑复验具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 25：准确资源诊断后的短Qwen实测 | 产品写权零；冻结组合、新根、真实准入与单次START |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：短配音准入内存不足，等待新具名实验 | 写入/执行权零；25已结束，旧根不得重试 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 26：Pi 编辑指令与结果语义修复 | 仅assistant_pi/diary_tools与既有直接专项；GUI候选冻结后具名放行 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -106,7 +106,7 @@ CI唯一失败文件test_montage_pipeline.py，共22失败/1550 passed/20 skippe
 
 交独立SHA/父cb26/严格净差额、每个CI失败对应最终有效判据、精确资源拒绝证据和最小用例、测试释放及clean。主控机械集成原PR95并只重新核新CI；B23未变化GUI/实际Pi证据按blob与消费者影响复用。下一次真实Qwen需新冻结候选/具名根与START，不能从本单拿到模型权。不关闭WIL26/整体RETIRED，不提出源码以外发布批准。
 
-## A：准确资源诊断后的短 Qwen 实测（任务 25）
+## A：准确资源诊断后的短 Qwen 实测（任务25已结束、证据保留，无写/操作权）
 
 `MAIN-QWENDIAGNOSED-20261007-25`：任务24 succeeded worker_done、严格四路径差额/37个不同专项、十份permit与锁释放已接受；主控已机械cherry-pick45e80fc到准确组合 **b6ecba2f13d99ca7f5d2d29c2846dd2fa7756523**，其parent cb26，产品tree含A24唯一诊断修正。B23 actual GUI所有PID/组/端口与主控秘密扫描/store锁定完成，B26仅静态代码施工，模型窗口测试/GUI保持HOLD。复用同一manta visible终端，新Dispatch；保留45e80原分支/代码clean，本单无产品/测试/权威写权。
 
@@ -233,6 +233,8 @@ owned只有 `apps/api/app/assistant_pi.py`、`apps/api/agent_tools/diary_tools.t
 资源顺序B26.1：A25仍在PREPARED前且未收到START，主控可先ALLOW_PI_FIX_CHECK只运行下述两参数直接专项一次（Node子进程15秒/父30秒自有组），报PID/组释放。A25的START须等该释放正证，任何模型实际窗口不并行测试；GUI仍HOLD到A25实际结束。最小相关专项在新 `/tmp/pipefish-pi-edit-semantics-20261007/`：直接验证工具将引用/动作分开传给现有HTTP端点，并从真实形状返回必要语义/影响，保留提案确认约束；不以字符串镜像测试替代真实LLM验收。只跑本单新增/受影响专项，不重复既有70/13/2或全量，不运行媒体/模型/服务/浏览器。A25短Qwen占主机期间只可编辑/静态核，测试/GUI等收到主控明确释放再运行。
 
 交独立SHA与父cb26、严格三路径差额、最小专项与释放后进入CODE_READY，停新增代码等待主控审核/机械组合与冻结精确候选。真实复验也是本单目标，不能代码完成就终结：A25实际模型资源退出并主控ALLOW_PI_FIX_PREPARE之后，仅新 `/tmp/main-acceptance-20261007/pi-edit-fixed/` 按任务23已验证方法准备完整confirmed_script/两clip/合法timeline/原合成媒体副本与独立HOME/XDG/DB/library/output/cache/models空目录/agent，不能写旧两GUI根。新API4543/Web3143与30分钟租约；新临时Keychain准确task26.keychain-db由主控原生RAM Key保存，B不读密钥。先报准确候选blobs/env/owner0600/DB只读前提/PID/Keychain路径，等本Dispatch START_PI_EDIT_FIX_GUI。
+
+B26.2冻结与准备放行：主控接受253ada37严格三路径与实际Node24.16.0两参数专项2passed/组28807释放，已机械组合到准确 **a3714ddfe3590f27d78c290d573480abf1fabfc7**（parent b6ecba2）；该三路径blob逐个与被测B候选一致，A24四路径与45e80一致。后续GUI仅此准确源码archive。任务25实际准入时3649896448B低于3758096384B、其它检查通过、无Grant/provider/子进程/音频；父30999与launcher30995/组退出、锁/ledger/SQL free已由主控另查，旧根不得重试。B重读并REBASE_ACK后ALLOW_PI_FIX_PREPARE可开始无Key新根/服务/Chrome准备；待主控核完整前提、新原生store与本Dispatch START_PI_EDIT_FIX_GUI前不调用Pi。人物/独立重输出和配音实验均继续HOLD。
 
 唯一180秒真实国内MiniMax-M3 Pi轮，从原生GUI向选中clip-1下达任务23同一句“只修改我选中的第一个镜头 clip-1：水平裁剪到40%，保持两个镜头时长和第二个镜头不变。先读取当前任务，再调用preview_edit给我看影响并等待确认；不要生成声音、人物或重新渲染。” 验实际read_current_task与一次有效preview_edit、正文解释位置准确不误称比例、无无谓内部试错、GUI预览/未确认timeline不变；确认后准确crop_x .5→.4且clip2/时长不变，刷新与一次撤销持久对应。现有端点本地最多5秒静音对比属于本轮实证，记录真实产物/进程，不称无媒体或完整出片；不能新模型调用/重试、API代GUI写或点击重制作。失败首因停止如实回报，不另加轮次。原产物物理保留但output_ready仍false现象记录给后续纵向任务，本单不改时间线/重输出契约。
 
