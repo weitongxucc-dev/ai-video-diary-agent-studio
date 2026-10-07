@@ -28,7 +28,7 @@
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 27：用户释放内存后新短配音实验准备 | 仅新具名实验根；START须等B26全部资源释放 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 26：Pi 编辑指令与结果语义修复 | 仅assistant_pi/diary_tools与既有直接专项；GUI候选冻结后具名放行 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
@@ -232,7 +232,9 @@ B23.3 有界续验：唯一用户GUI发送内实际read_current_task成功、pre
 
 一轮既有180秒限，原生表面受限明确未验，不改政策/用户浏览器/剪贴板，eval只读。结束真实PID/组/端口释放、完整tool轨迹与无思考标记正文、确认前后GUI截图及只读持久对应。主控RAM最终秘密扫描，仅本新tempKeychain后续锁定，不删数据。报告report.md；创建既有证据复用/本轮编辑/组合负向页面/仍未验制作、真实账号、Key GUI保存与分发各自准确；不关闭卡/remote、不宣称整体RETIRED。
 
-## B：Pi 编辑指令与结果语义修复（任务 26）
+## B：Pi 编辑指令与结果语义修复（任务26已结束，证据保留，无写/操作权）
+
+主控已接受同一Task26 succeeded worker_done msg_9693795f064a：643c227源码与最小专项、组合3d58实际国内Pi一次预览、GUI确认/刷新/一次撤销精确持久对应；19PID/5组及4551/3151实际退出，最终75文件/6日志RAM秘密扫描通过且task26-factual新store已锁定。原始LLM与实际API提案事实回复分开留证，PNG只证明真实可见区域；撤销output_ready仍false、历史回复生成时措辞及完整制作/真实Key GUI保存/账号/分发等边界不算通过。WIL-165维持In Review，本段以下仅解释保留成果，不恢复操作或源码写权。
 
 `MAIN-PIEDITSEMANTICS-20261007-26` 绑定既有WIL-165。任务23 failed worker_done、分项持久化/刷新/撤销正证、全部自有PID/端口释放、主控12文件RAM秘密扫描与新具名临时Keychain锁定已接受；仅整体指令正确性FAIL。复用同一pipefish可见线程，不新增执行者。保留d4ebf2d原分支，从主控integration Git准确 `cb26f49e339d303e56f1f881fb60f071ea7e6e59` 建新clean `codex/wil165-pi-edit-semantics-20261007`；A24仅host probe/测试不重叠，后续由主控机械组合，不merge旧历史。
 
