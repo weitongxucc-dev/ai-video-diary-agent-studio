@@ -257,6 +257,8 @@ START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前�
 
 仅当前35同Dispatch内新子根 `/tmp/main-acceptance-20261008/qwen-resource-diagnostics/calibrated-4g/`，同fe6d96d archive/新合法fixture/job，首轮顶层DB/log/report原样保留、禁止重写。按已有完整隔离/DEVNULL profile/106blob/13stat/runtime/六AST消费者及fresh完整准入准备，交PREPARED等第二明确START_RUNTIME_MEASURE；源冻结，新增产品写权零。只一新job、仅narration，自然最多generation2，无第三轮/进一步cap增加。真实成功联合条件、全部释放和未证边界沿用35；失败亦准确首因及资源，不把4GiB当默认产品值。第二轮结束总汇证据在新子根后worker_done一次。
 
+任务35.2 CI直接消费者修正：fe6d96d CI的唯一Backend失败是既有 `apps/api/tests/test_material_scene.py::test_scene_timeout_or_resource_stop_never_commits_a_checkpoint` 通过getattr动态构造旧字符串异常，未提供新的同次测值参数；其余1606通过/20skip，Frontend/Desktop通过。仅临时增加该既有测试文件的具名参数夹具写权，使用当前SceneRuntimeLimits与明确超限测值构造GrantedCommandResourceLimit；其他异常路径原样、不添加兼容构造器/改产品保护。只跑该相关参数专项，单独提交后再次CODE_FROZEN；主控机械组合后把35.1真实试验绑定新准确候选（产品源码行为未变、未改分项证据复用），4GiB trial准备可保留但不得旧SHA启动。原两个产品/测试路径继续冻结无写权，模型仍等待新明确START。
+
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
 B12 候选固定 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，产品写权已收回；以下范围只解释保留成果。任务 13 不改该候选。
