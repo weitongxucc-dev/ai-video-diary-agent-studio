@@ -196,11 +196,11 @@ B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际�
 
 A22当前占主机实测，本单先只阅读并准备最小命令/夹具结构；收到主控ALLOW_EDIT_PREPARE及A实际释放正证前不启动服务/Chrome/say/FFmpeg/测试或运行准备seed，不影响Qwen观测。随后一次新隔离HOME/XDG/config/DB/library/output/cache/model/temp/agent；模型目录空、scheduled生产OFF、无生产预算放宽。只用已安装Node/Pi/API/Web依赖和旧root合成2秒色卡媒体的明确副本，不执行制作或下载。
 
-**修复初始准备前提**：可信真实LocalMember owner与同工作区/owner的已确认文案、实际confirmed_script_id、已登记素材、两镜头montage、对应当前timeline版本及合成已有产物完整合法建立在新DB。登记通过既有repository，SQLite初始seed可用但仅这一新根；准备报告必须只读核confirmed_script_id和script.selection_status=confirmed、clip-1/clip-2/timeline确实对应，先静态核API assistant/edit确认要求，不能漏前提再用业务写补救。无人物/声音模型/真实账号；素材/产物仅合成夹具不冒称真实渲染。
+**修复初始准备前提**：可信真实LocalMember owner与同工作区/owner的已确认文案、实际confirmed_script_id、已登记素材、两镜头montage、对应当前timeline版本及合成已有产物完整合法建立在新DB。本轮具体已支持修改为ChangeCrop构图向左，区别于时间裁剪；初版时间裁剪指令经静态核没有自然语言映射且与固定slot时长语义冲突，已在发送Pi前退役，不称该语义支持。登记通过既有repository，SQLite初始seed可用但仅这一新根；准备报告必须只读核confirmed_script_id和script.selection_status=confirmed、clip-1/clip-2/timeline确实对应，先静态核API assistant/edit确认要求，不能漏前提再用业务写补救。无人物/声音模型/真实账号；素材/产物仅合成夹具不冒称真实渲染。
 
 准备报告精确SHA/源码blob、完整无Key隔离env、自有API4541/Web3141端口/PID/30分钟租约规划、独立临时Keychain路径、0600 owner token、文案/任务/版本确认前只读基线、拟指令及native GUI路径。主控按已验证原生store路径从已授权validation Key条目到RAM，仅新临时Keychain保存local MiniMax及关联cn/M3设置，最终search list/default保持、不落明文/不交B；B仅候选API自动读这新路径，不自行查询secret。主控核全部前提与Key准备后本Dispatch START_PI_EDIT_GUI才允许唯一一轮真实Pi。
 
-真实新external Chrome独立profile/PID/window，经computer-use native AX/截图依据点击/键盘进入已准备剪辑task、选clip-1并输入明确命令“只修改我选中的第一个镜头 clip-1：开头裁掉0.25秒，保留原结束时间和第二个镜头。先读取当前任务，再调用preview_edit给我看影响并等待确认；不要生成声音、人物或重新渲染。” 必须真实read_current_task→preview_edit，展示影响待确认，GUI确认前timeline/clip不变；GUI确认后GET与mode=ro SQLite对应新版本/精确变化且clip-2不变、刷新可读。可一次GUI撤销验证恢复且已有媒体保持；无API代GUI业务写、无模型替身/响应mock/第三轮/重试。如果真实首因阻断，保留准确失败，不伪造编辑成功。
+真实新external Chrome独立profile/PID/window，经computer-use native AX/截图依据点击/键盘进入已准备剪辑task、选clip-1并输入明确命令“只修改我选中的第一个镜头 clip-1：画面向左一点，保持两个镜头时长和第二个镜头不变。先读取当前任务，再调用preview_edit给我看影响并等待确认；不要生成声音、人物或重新渲染。” 必须真实read_current_task→preview_edit，展示影响待确认，GUI确认前timeline/clip不变；GUI确认后GET与mode=ro SQLite对应新版本/精确变化且clip-2不变、刷新可读。可一次GUI撤销验证恢复且已有媒体保持；无API代GUI业务写、无模型替身/响应mock/第三轮/重试。如果真实首因阻断，保留准确失败，不伪造编辑成功。
 
 同一组合页面同时截图核：工作台仍保留编辑、播放/旧产物、连续制作真实预检首因/可执行动作；B19退役的三个旧单步按钮不存在，不把queued/running当已出片。只观察/必要导航，不点start/resume/person/narration/render、不制造假作业状态；这类负向可见与模型完整制作分开给结论。
 
