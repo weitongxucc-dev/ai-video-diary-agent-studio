@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key 和任务17单次本地配音实验的具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控 MiniMax Key 的具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 17：已安装 Qwen 本地配音有界实验 | 产品写权为零；仅新隔离夹具及具名只读模型/运行时 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 20：本机名册读路径 SQLite 锁修复 | 仅 local_members.py 及三项既有直接专项；不运行模型 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 19：连续制作活跃页面消费者同步 | 仅 CreationTaskWorkspace 及既有专项；不改API、Pi或权威 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -46,7 +46,9 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 最小验证：隔离 HOME/XDG/config/SQLite/model/temp/output；隔离 PostgreSQL 实际 RPC 权限正负（错 proof/设备、paused/left、撤空间、retired、anon直读拒绝），测试进程不碰真实 Keychain。验证 confirmed-script-only 真正触发配音/故事板回调并到 render，重复开始幂等、失败恢复保留上游、取消释放；账号提交/授予/实际执行/非取消提交结果/重开均复核原元组，unknown 不派发，local/跨空间与预算门禁不回退。仅必要回调替身证据不能算真实模型、真实账号 GUI 或成片验收；后续由主控在冻结候选具名验证。源码完成后一次最小直接专项，不全量/构建/收费/云部署，交准确候选/diff/测试/退役边界与释放证明。
 
-## A：已安装 Qwen 本地配音有界实验（任务 17）
+## A：已安装 Qwen 本地配音有界实验（证据保留，操作权收回）
+
+任务17已准确失败结案：Grant前名册读路径写初始化触发SQLite锁，模型启动零次；父进程、设备锁和许可已释放，保留失败夹具及报告。本节不再授予实验、模型或重试权；下一实验须新具名候选及START。
 
 `MAIN-TTSMEASURE-20261007-17`：仅在 A11 最终含显式子进程 HOME 隔离的 worker_done 与 clean 候选被主控接受后，用同一 manta 新 Dispatch 执行。准确冻结候选 `702392d11910138f2ef028b64f2bd42c019212d6`，不改产品或文档。本单依据用户明确指示查找并使用外接盘已有模型；旧任务禁止模型的范围被本节唯一具名实验取代，其他限制不变。
 
@@ -59,6 +61,18 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 先交新根准备、真实机器准入测量、预计命令与准确字段供主控只读核对，再等主控本 Dispatch 的 START_MEASURE（避免 GUI 同时占用主机）；START只允许这一次实验。父侧每0.1秒记录实际组RSS/线程、主机可用/交换增量及阶段时间，记录MLX可测内存与不可测项，不仅依据模型文件大小。若真实探针不能准入、缺依赖、worker错误或触及界限，停止并交准确首因/释放，不盲重试、不临时扩大上限。只在该实验成功后形成观测数据和下一生产标定建议，不将一段成功外推到长稿、多用户、Intel或音质。
 
 报告 `/tmp/main-acceptance-20261007/qwen-measure/report.md`：准确SHA、真实Qwen产物及ffprobe信息、时间/峰值/MLX与RSS边界、子进程/组/许可释放、既有权重只读证明、首个阻断及下一最小差额。软件 GUI、云身份、五人设备、人物口型、完整制作仍未验，不关闭卡或远端操作。
+
+## A：本机名册读路径 SQLite 锁修复（任务 20）
+
+`MAIN-ROSTERREAD-20261007-20`：任务17 failed worker_done 已由主控接受，报告及真实释放证据保留；同一 manta 新 Dispatch继续已授权流程修复。准确基线 `702392d11910138f2ef028b64f2bd42c019212d6`，在当前clean的连续制作分支追加局部差额，保留旧候选。先读本段、任务17报告最终首因和认证§5/领域§11直接相关章节，语义 REBASE_ACK 后实施，不另等START。
+
+仅 owned `apps/api/app/local_members.py`、既有 `apps/api/tests/test_local_members.py`、`test_local_members_auth.py` 和 `test_member_permits.py` 的直接本单消费者；不改scheduler/creation_execution/member_permits生产逻辑、API契约、Web、模型、共享权威或其他专项。若真正必需跨文件，先提交证据由主控修订。
+
+实际首因是 DeviceScheduler.pick_and_grant 的 BEGIN IMMEDIATE 内持续身份核验，经 MemberDeviceAccess.find_member→list_members 在第二连接 executescript建表/seed及token回填写入同一DB，触发 database is locked。将已有初始化/回填写边界与普通名册/令牌读路径分离，使已有事务中的核验只读取最新持久名册。不能缓存/伪造身份、复用旧成员状态、改变事实源、绕过持续撤权检查、降低锁/准入条件或加等待重试。保留新库自初始化、旧库token一次迁移和稳定性、真正并发五人名额预留、owner保护/成员删除/role更新与现有接口。
+
+用一个真实 LocalMemberService + MemberDeviceAccess 的 DeviceScheduler.pick_and_grant 同库事务直接专项证明不死锁且实际Grant，并对同一可信名册的撤权后阻断作最小验证；资源探针可明确测试夹具，身份不可替身。现有freshDB/token回填/seat并发专项按影响挑选最小复用，不全量、不镜像实现测试。普通读不得发DDL/seed/backfill写；检查真实生产构造与调用时序，不引入通用兼容层。
+
+仅新证据 `/tmp/manta-roster-read-20261007/` 和具名源码写权，无服务、模型、网络/安装、Keychain/真实用户库/账号、push/PR/Linear或重跑17实验。交精确SHA/父/净差额、真实最小检查、初始化与读边界、不扩大身份/权限的证据及释放，报告report.md。模型预算/真实性/GUI/云/完整制作仍未验，本修复不关闭WIL26或宣称整体迁移RETIRED。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
@@ -122,7 +136,7 @@ B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际�
 
 不新增无许可重做/人物/复杂音轨执行。已有默认20%露脸、局部配音重做、独立编辑版本仍是A明确未支持/未验差额，不把禁用或纯素材路径当完整目标。若本最小接线需要后端或新增能力才能实现，交准确证据由主控修订，不添加假回退。既有预检失败要保留首因与可执行动作，不靠隐藏整个工作台掩盖失败。
 
-一文件一写者，A当前任务17产品写权零。本单只写新 `/tmp/pipefish-creation-queue-ui-20261007/` 证据和owned源码；无模型/服务/浏览器/Key/账号/依赖安装、push/PR/Linear权。A有界真实模型实验占主机时，先读/编辑并把最小测试命令备好，主控通知测量结束后再做CPU/内存较重的组件检查，避免影响实测；没有通知前不build/test。只跑必要直接用户按钮/确认/真实状态消费者，不本地全量或重复原未受影响验收。
+一文件一写者，A当前任务20与本单owned不重叠。本单只写新 `/tmp/pipefish-creation-queue-ui-20261007/` 证据和owned源码；无模型/服务/浏览器/Key/账号/依赖安装、push/PR/Linear权。A有界真实模型实验占主机时，先读/编辑并把最小测试命令备好，主控通知测量结束后再做CPU/内存较重的组件检查，避免影响实测；没有通知前不build/test。只跑必要直接用户按钮/确认/真实状态消费者，不本地全量或重复原未受影响验收。
 
 交准确SHA/父/净差额、组件最小证据、三个旧调用从活跃组件消失的不存在证明、受限组合保留边界。GUI在A+B同一组合候选由主控另行具名验证，组件不代替GUI。本单不宣称整体迁移已RETIRED/可合入，不关闭WIL26。报告 `/tmp/pipefish-creation-queue-ui-20261007/report.md`。
 
