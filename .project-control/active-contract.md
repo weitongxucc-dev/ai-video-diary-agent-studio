@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key、任务23一轮国内Pi编辑页面验收与任务22单次本地配音实验具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控 MiniMax Key、任务23一轮国内Pi编辑页面验收具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 22：修复后同一组合候选有界 Qwen 配音验收 | 产品写权零；仅新隔离夹具与具名只读模型/运行时 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 24：资源拒绝准确诊断及退役CI消费者同步 | 仅HostResourceProbe/调度assert诊断与三项既有直接专项 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 23：Pi 剪辑修改补验与组合页面核验 | 产品写权零；完整新夹具及一轮国内Pi，模型实验期间HOLD |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -76,7 +76,9 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 仅新证据 `/tmp/manta-roster-read-20261007/` 和具名源码写权，无服务、模型、网络/安装、Keychain/真实用户库/账号、push/PR/Linear或重跑17实验。交精确SHA/父/净差额、真实最小检查、初始化与读边界、不扩大身份/权限的证据及释放，报告report.md。模型预算/真实性/GUI/云/完整制作仍未验，本修复不关闭WIL26或宣称整体迁移RETIRED。
 
-## A：修复后同一组合候选有界 Qwen 配音验收（任务 22）
+## A：修复后同一组合候选有界 Qwen 配音验收（证据保留，操作权收回）
+
+任务22真实Grant后资源复核拒绝而准确failed结案；未证明Qwen加载/推理，无音频，父/子组/许可已释放。原22根/现场只读保留，禁止重试与模型操作。
 
 `MAIN-TTSFIXED-20261007-22`：A20 worker_done与真实Grant/撤权/释放经主控接受，同一manta新Dispatch。产品与权威写权零。冻结主控机械集成候选 `cb26f49e339d303e56f1f881fb60f071ea7e6e59`（独立review工作树 `/tmp/main-controller-20261007/creation-wave/integration`），准确包含PR94已合入f024132、A11的c965e831/702392d1、B19的d4ebf2d、唯一认证§5及A20的87834d3差额。只读此准确Git对象archive并核blob，不用自己旧branch SHA或main未冻结树，也不能修改集成工作树。保留任务17失败根，不原地重试。
 
@@ -89,6 +91,20 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 先完成新根准备、准确blob/路径/预算/资源真实预测和拟执行命令报告主控，然后保持PREPARED并等本Dispatch START_MEASURE。B21 GUI/服务未释放前不得模型加载/实测，即使资源预测通过。准入预测不足只报告当下条件不硬跑，主控协调可用内存；一次START只允许一次受准入实验，独占attempt marker避免重复。无首因修复权/无新源码写，不盲重跑旧17。
 
 报告新根report.md，准确组合SHA、实际Qwen音频/ffprobe、首次首因或成功观测、真实父/子组/Grant释放、既有模型stat只读、不外推长稿/Intel/多用户/音质。不关闭卡/远端，不称GUI/云身份/完整制作通过；主控实际人物口型与独立编辑重输出缺口仍留在整体目标中。
+
+## A：资源拒绝准确诊断及退役CI消费者同步（任务 24）
+
+`MAIN-RESOURCEREASON-20261007-24`：任务22 failed worker_done与父/子组/许可释放已由主控接受，同一manta新Dispatch恢复已授权纵向修正。保存87834d3原连续制作分支，从主控main Git准确组合对象 `cb26f49e339d303e56f1f881fb60f071ea7e6e59`（integration review branch）建新独立clean `codex/wil26-resource-reasons-ci-20261007`，只机械取得对象，不merge旧混合历史。B23冻结cb26做GUI，产品写权零且与本单无文件重叠。
+
+仅 owned `apps/api/app/host_resource_probes.py`、`apps/api/app/device_scheduler.py` 中assert_grant的拒绝诊断接线、既有 `apps/api/tests/test_host_resource_probes.py`、`test_device_scheduler.py`、`test_montage_pipeline.py` 的直接失败消费者。main/creation_execution/member/声音/avatar/Worker/Web/预算设置/共享权威无写权，真正需要越界先报精确证据。新证据 `/tmp/manta-resource-reasons-20261007/`。
+
+实际阻断：任务22在获得真实Grant generation1并启动子进程后仅0.738秒被continue_unit复核非True拒绝；HostResourceProbe._sample只返回bool/None，未记录当次CPU/可用内存/交换/磁盘空间/IO门槛与未知采样原因，故不能判定具体首因。修正为同一次真实采样绑定的明确决策/拒绝证据，运行中失败能保留准确实际指标与阈值/不可读原因供用户修复与主控标定，不引入泛日志平台或宽泛兜底。新说明须来自触发拒绝的那次probe，而非事后另采/全局旧snapshot。保留全部阈值、未知阻断、单设备许可、持续授权/撤权、取消/组释放、真实预算缺失拒绝；不增加delay/retry/cache-ready，不关闭IO/CPU/内存任何检查，不依当前猜想扩大budget或写生产默认。
+
+CI唯一失败文件test_montage_pipeline.py，共22失败/1550 passed/20 skipped，原日志与简短失败列表在主控creation-wave/pr95-backend-failed.log及pr95-backend-failure-summary.txt。它们仍从旧公开POST montage/plan、montage/render和未接许可的局部配音重做触发先前链路，与退役契约冲突。逐项只同步已真实改变的消费者：公开旧入口必须验证明确拒绝、无重制作/无部分数据成功；仅先前保留的诊断专项可直接使用现有诊断helpers检验原算法/谱系/字幕/撤销，不恢复产品fallback或新增测试开关。保留底层实际谱系/逻辑引用/模板与字幕/声音时钟/产物失效、使用状态及授权限制的有效断言，不能批量把期待200换409、skip/xfail/删除关键验证来过CI。需要新受许可路径才能成立的完成判据准确列缺口，不伪造产品已支持。人物/独立编辑/局部配音真实能力仍是整体待完成目标，不能因为旧测试退役就删除要求。
+
+最小验证：新增准确拒绝/未知分支的直接可复现实证与不放宽阈值断言，现有probe/scheduler受影响专项；只跑22项CI失败参数集合及真正必要的直接下层断言，不重复105或全量矩阵。可以一次无模型真实HostResourceProbe读取以证明诊断与实际测量值对应，0.1秒上下；不复测22、不启动模型/媒体/服务/浏览器、不访真实库/Keychain/云/账号、不安装、push/PR/Linear。本单模型实验写/操作权零。
+
+交独立SHA/父cb26/严格净差额、每个CI失败对应最终有效判据、精确资源拒绝证据和最小用例、测试释放及clean。主控机械集成原PR95并只重新核新CI；B23未变化GUI/实际Pi证据按blob与消费者影响复用。下一次真实Qwen需新冻结候选/具名根与START，不能从本单拿到模型权。不关闭WIL26/整体RETIRED，不提出源码以外发布批准。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
