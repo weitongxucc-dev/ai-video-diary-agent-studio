@@ -52,6 +52,10 @@ Migrate验收：纯素材crop编辑确认后以真实现有start/resume接线得
 
 任务37设置GUI窗口（非模型，冻结f9ed34c7a57c894711507d253cac81062058c11e）：主控已审PREPARED、521源码blob清单、真实app.main入口及exact新store wrapper。主控可在新`creation36`控制证据根创建/解锁`/tmp/main-acceptance-20261008/pi-entry37/config/task37.keychain-db`空临时钥匙串，保持用户search list/default前后相同；只读取既有具名`minimax-validation-20261007`条目到RAM，以原生密码输入stdin交软件页面保存，不预先用API/脚本写入task37工作区Key。B在本Dispatch具名START_SETTINGS_GUI后仅运行所报services.py start、隔离Chrome新profile与原生GUI非秘密操作；API4567/Web3167、30分钟lease，重启API仅同env/DB/store，允许一次保存后重启及一次空Key保存验证保留。主控输入Key、审安全状态/非秘密配置、RAM秘密扫描并最终锁定新store；B不读取Key、剪贴板、文档或登录store。模型/制作/Pi文字请求/测试连接均不在此窗口内；A只静态源码工作，不执行重模型。两方记录自己的准确PID/PGID，B最后停止服务与浏览器、证明端口释放。保存重启通过仅证明当前软件配置GUI，不证明包内或整链。
 
+任务37真实GUI首因有界修订：主控实际密码输入和保存后，原生task37条目与授权Key相等，非秘密配置已保存；页面URL却显示`保存配置失败：NEXT_REDIRECT`，本轮整体保存GUI判FAIL。源码`apps/web/src/app/actions.ts:updateRuntimeSettingsAction`把成功redirect放在catch捕获区。追加B owned该文件仅此动作及已有直接专项（若存在），按真实控制流修复，禁止顺手改其它server actions；以真实GUI成功保存、API同env重启及回读验证，不新增模拟store或实现镜像测试。旧f9候选及首次FAIL原始证据保留。修复clean新SHA提交主控后可在当前同Dispatch/未延长30分钟租约内，先停止旧自有Web组，建立新准确archive及独立源码目录（不覆盖旧code证据），同env/DB/store重启API/Web到新候选并做一次空Key实际保存保留、API再重启回读；主控另核原生值相等/秘密扫描。原模型、制作、用户数据及外部调用禁令保持；未知释放即停止，不扩大进程终止范围。
+
+任务36发布并发边界C1：A已定位渲染末尾计划与新版本分别提交，`create_timeline_version`没有比较当前父版本；这是已定义当前版本事实源的实际写入竞态。追加A owned `production.py`仅现有`create_timeline_version`及`save_creation_task_montage_plan`的借用connection/当前版本比较，以及已有版本直接专项；由main现有渲染末尾在同一事务比较当前版本并发布计划和新版本，保留独立旧调用的默认行为。不新增事实源/迁移用户数据/全库重构；并发编辑时真实失败后的旧计划写回也不得覆盖新crop。最小真实仓库/许可正负专项覆盖CAS拒绝后新计划与版本完整保留、合法自产版本提交、重复调用，媒体执行替身证据单列，后续同候选真媒体验收保持。
+
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
