@@ -756,6 +756,15 @@ export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskM
   );
 }
 
+export function getCreationTaskQualityCheck(taskId: string): Promise<import("./types").CreationTaskQualityCheck> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check`);
+}
+
+export function checkCreationTaskQuality(taskId: string): Promise<import("./types").CreationTaskQualityCheck> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check`,
+    { method: "POST", body: JSON.stringify({}) });
+}
+
 export function previewCreationTaskEdit(
   taskId: string,
   input: {

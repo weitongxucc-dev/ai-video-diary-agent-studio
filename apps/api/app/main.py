@@ -187,6 +187,11 @@ from app.production import (
     material_allows_footage,
 )
 from app.task_runtime import JobFailure, JobResult
+from app.quality_inspection import (
+    QualityCheckRepository,
+    final_quality_check_payload,
+    start_final_video_quality_check,
+)
 from app.media_link_import import (
     DEFAULT_MAX_BYTES,
     MediaLinkImportError,
@@ -256,6 +261,8 @@ from app.schemas import (
     CreationTaskMontagePlanResponse,
     CreationTaskMontageClipUpdateRequest,
     CreationTaskMontageRenderRequest,
+    CreationTaskQualityCheckRequest,
+    CreationTaskQualityCheckResponse,
     CreationTaskEditConfirmResponse,
     CreationTaskEditPreviewRequest,
     CreationTaskAssistantTurnRequest,
@@ -519,6 +526,7 @@ production_repo = ProductionRepository(
     visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
 )
 montage_repo = MontageRepository(settings.database_path)
+quality_check_repo = QualityCheckRepository(settings.database_path)
 local_members_service = LocalMemberService(settings.database_path)
 montage_planner = MontagePlanner(
     semantic_provider=visual_semantic_provider,
@@ -11195,6 +11203,7 @@ def _render_creation_task_montage_for_workspace(
                 or subtitle_record.sha256 != published_subtitle.sha256
                 or subtitle_record.size_bytes != published_subtitle.size_bytes):
             raise ValueError("成片恢复字幕产物校验失败")
+        _start_creation_task_quality_check(workspace_id, task.id)
         return _creation_task_montage_response(plan)
     base_idempotency_key = f"montage-render:{task.id}:{input_digest}"
     matching_jobs = [
@@ -11312,6 +11321,7 @@ def _render_creation_task_montage_for_workspace(
                         },
                     )
                 )
+                _start_creation_task_quality_check(workspace_id, task.id)
                 return _creation_task_montage_response(plan)
     idempotency_key = (
         latest_matching_job.idempotency_key
@@ -11614,6 +11624,7 @@ def _render_creation_task_montage_for_workspace(
         production_repo.get_creation_task_montage_plan(workspace_id, task.id)
     )
     _record_montage_usage(workspace_id, rendered)
+    _start_creation_task_quality_check(workspace_id, task.id)
     return _creation_task_montage_response(rendered)
 
 
@@ -11651,6 +11662,94 @@ def _creation_task_output_path(
     except (FileNotFoundError, ValueError):
         raise HTTPException(status_code=404, detail="creation task output not found")
     return path
+
+
+def _quality_check_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
+    user_id, _ = _content_reader(request, workspace_id)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="请使用可信成员身份检查成片")
+    if (_local_member_token(request) and workspace_id != LEGACY_WORKSPACE_ID
+            and getattr(request.state, "principal", None) is None):
+        raise HTTPException(status_code=403, detail="本机成员与工作区不匹配")
+    task = _creation_task_or_404(workspace_id, task_id)
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="creation task not found")
+    return task
+
+
+def _quality_check_source(workspace_id: str, task_id: str):
+    task = _creation_task_or_404(workspace_id, task_id)
+    plan = creation_task_montage_plan_from_payload(
+        production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+    )
+    path = _creation_task_output_path(workspace_id, task_id, subtitle=False)
+    publication = artifact_store.describe(plan.output_path)
+    registered = next(record for record in production_repo.list_artifact_records(workspace_id, task_id)
+                      if record.logical_ref == plan.output_path and record.kind == "rendered_video")
+    if publication.sha256 != registered.sha256 or publication.size_bytes != registered.size_bytes:
+        raise ValueError("成片与登记产物不匹配，请重新生成。")
+    return task, plan, path, publication.sha256
+
+
+def _creation_task_quality_check_response(workspace_id: str, task_id: str) -> CreationTaskQualityCheckResponse:
+    task = _creation_task_or_404(workspace_id, task_id)
+    try:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+    except KeyError:
+        plan = None
+    try:
+        _, _, _, render_ref = _quality_check_source(workspace_id, task_id)
+    except (KeyError, HTTPException, OSError, ValueError):
+        # A missing, invalidated or replaced output cannot retain a clean result.
+        render_ref = None
+    return CreationTaskQualityCheckResponse.model_validate(final_quality_check_payload(
+        quality_check_repo.get(workspace_id, task_id), plan,
+        timeline_version_id=task.current_timeline_version_id, current_render_ref=render_ref))
+
+
+def _start_creation_task_quality_check(workspace_id: str, task_id: str, *, force: bool = False) -> None:
+    task = _creation_task_or_404(workspace_id, task_id)
+    try:
+        task, plan, path, render_ref = _quality_check_source(workspace_id, task_id)
+    except (KeyError, HTTPException, OSError, ValueError) as exc:
+        try:
+            source_ref = production_repo.get_creation_task_montage_plan(workspace_id, task_id).get("output_path")
+        except KeyError:
+            source_ref = None
+        check_id = quality_check_repo.begin(workspace_id, task_id, task.current_timeline_version_id, source_ref, None)
+        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+        quality_check_repo.finish(workspace_id, task_id, check_id, error=error)
+        return
+    current = final_quality_check_payload(quality_check_repo.get(workspace_id, task_id), plan,
+                                         timeline_version_id=task.current_timeline_version_id,
+                                         current_render_ref=render_ref)
+    if not current["stale"] and (current["check_state"] == "checking"
+                                 or (not force and current["check_state"] == "done")):
+        return
+    start_final_video_quality_check(quality_check_repo, workspace_id, task_id,
+                                   task.current_timeline_version_id, plan.output_path, path, render_ref)
+
+
+@app.get("/api/creation-tasks/{task_id}/quality-check", response_model=CreationTaskQualityCheckResponse)
+def get_creation_task_quality_check(task_id: str, request: Request) -> CreationTaskQualityCheckResponse:
+    workspace_id = current_workspace_id(request)
+    _quality_check_task_access(request, workspace_id, task_id)
+    return _creation_task_quality_check_response(workspace_id, task_id)
+
+
+@app.on_event("startup")
+def recover_interrupted_quality_checks() -> None:
+    quality_check_repo.recover_interrupted()
+
+
+@app.post("/api/creation-tasks/{task_id}/quality-check", response_model=CreationTaskQualityCheckResponse)
+def check_creation_task_quality(task_id: str, request: Request,
+                                _payload: CreationTaskQualityCheckRequest) -> CreationTaskQualityCheckResponse:
+    workspace_id = current_workspace_id(request)
+    _quality_check_task_access(request, workspace_id, task_id)
+    _start_creation_task_quality_check(workspace_id, task_id, force=True)
+    return _creation_task_quality_check_response(workspace_id, task_id)
 
 
 @app.get("/api/creation-tasks/{task_id}/output")

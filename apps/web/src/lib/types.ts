@@ -1407,6 +1407,21 @@ export type CreationTaskRecording = {
   created_at?: string;
 };
 
+export type CreationTaskQualityCheck = {
+  check_state: "none" | "checking" | "failed" | "done";
+  result_status: "clean" | "issues_found" | "unavailable" | null;
+  stale: boolean;
+  check_id: string | null;
+  timeline_version_id: string | null;
+  render_ref: string | null;
+  checked_at: string | null;
+  error: string | null;
+  findings: { kind: "black_frame" | "truncation" | "clipping" | "timestamp_offset";
+    start_seconds: number; end_seconds: number; duration_seconds: number; detail: string; clip_ids: string[] }[];
+  unavailable: { kind: string; reason: string; status: "unavailable" }[];
+  validation_scope: "deterministic_media_errors_only";
+};
+
 export type CreationTaskMontage = {
   graphic_overlays?:GraphicOverlay[];
   aspect_ratio?: "9:16" | "16:9" | "1:1";

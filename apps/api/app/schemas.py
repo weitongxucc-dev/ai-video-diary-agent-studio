@@ -1261,6 +1261,39 @@ class AudioTimelineResponse(AudioTimeline):
     tracks: list[TimelineAudioTrackResponse] = Field(default_factory=list)
 
 
+class CreationTaskQualityFindingResponse(BaseModel):
+    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset"]
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    detail: str
+    clip_ids: list[str]
+
+
+class CreationTaskQualityUnavailableResponse(BaseModel):
+    kind: str
+    reason: str
+    status: Literal["unavailable"]
+
+
+class CreationTaskQualityCheckResponse(BaseModel):
+    check_state: Literal["none", "checking", "failed", "done"]
+    result_status: Literal["clean", "issues_found", "unavailable"] | None
+    stale: bool
+    check_id: str | None
+    timeline_version_id: str | None
+    render_ref: str | None
+    checked_at: str | None
+    error: str | None
+    findings: list[CreationTaskQualityFindingResponse]
+    unavailable: list[CreationTaskQualityUnavailableResponse]
+    validation_scope: Literal["deterministic_media_errors_only"]
+
+
+class CreationTaskQualityCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class CreationTaskMontagePlanResponse(BaseModel):
     graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
