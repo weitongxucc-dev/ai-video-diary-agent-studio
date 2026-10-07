@@ -28,7 +28,7 @@
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 11：连续制作与账号设备许可纵向闭环 | 仅下方具名 API、专项及新增 migration；main.py 唯一写者 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 15：国内 MiniMax 默认连接与回复格式修复 | 仅具名默认配置/Pi/界面及直接专项；不读取真实 Key |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 16：国内 MiniMax 地址真实页面与最终 Pi 复验准备 | 产品写权为零；仅新隔离夹具/服务/自有 Chrome，不读取真实 Key |
 
 ## A：连续制作与账号许可闭环（当前任务 11）
 
@@ -70,7 +70,7 @@ B13 已完成具名页面验收并释放自有 PID/4537/3137/Chrome/Orca page-pr
 
 新页面异常只报告步骤与最小消费者，不获得源码写权。结束释放全部自有 PID/PGID/端口及新页面/profile，证明端口空闲、保留旧证据/用户浏览器。交准确 SHA、真实截图/说明、只读辅助证据及未验项；这只验依赖页面，不是 Key 保存、真实 MiniMax 对话、连续制作、桌面包或账号隔离通过。绑定 DESIGN、认证 §3 及本合同，语义 REBASE_ACK 后直接开始。
 
-## B：国内 MiniMax 默认连接与实际回复格式（当前任务 15）
+## B：国内 MiniMax 默认连接与实际回复格式（候选保留，写权收回）
 
 `MAIN-MINIMAX-20261007-15`：用户已确认国内平台 Key，主控 `.cn/MiniMax-M3` 短请求及冻结B12真实Pi两只读工具实际成功；当前新配置却在四个实际消费者硬编码国际地址，真实Pi回复同时夹带 `<think>` 标记。本单作为当前MiniMax/Pi使用目标的必要差额，同一pipefish可见线程复用；先结束B13并证明资源释放，再新Dispatch/ACK，不从本节抢先写代码。
 
@@ -81,6 +81,16 @@ B13 已完成具名页面验收并释放自有 PID/4537/3137/Chrome/Orca page-pr
 回复格式只基于主控实际见到的M3思考标记：优先核本机Pi1.0.4模型配置/实际SDK请求序列化与当前MiniMax官方 thinking/reasoning_split 契约，让正文和思考分离或明确禁用当前M3思考输出；不按猜测加compat、不靠宽泛正则删正常正文、不修改其他供应商/自定义模型的能力。B可仅用合成Key离线检查真实SDK构造，不调用真实模型或读Key；若SDK接口确需额外consumer先报准确文件。主控证据 `/tmp/main-controller-20261007/creation-wave/pi-live/result.json` 只定向读取状态/格式缺口，Key不在其中。最小直接检查须证明真实序列化字段/正文、默认国内与明确国际保留，不仅镜像常量。此前70条及未变化health截图复用，不重复全量。
 
 候选提交/源码完整后一次最小必要专项交接准确SHA/diff/仍未验项；默认地址UI和真实M3最终正文由主控冻结后具名验证，不抢先重启旧服务或用组件代替GUI。绑定PRD2.6、DESIGN直接命名和本合同；语义REBASE_ACK后直接完成这项必要差额。
+
+## B：最终 MiniMax 地址页面及只读服务（当前任务 16）
+
+`MAIN-MINIMAXGUI-20261007-16`：B15 已冻结 `50dbab6bb1008f16f3ea53c2bb3f7e4d2fd7e8de` 并交接，产品写权收回；同一 pipefish 可见线程新 Dispatch。先读 main 活动合同本节、DESIGN §5.9、PRD §2.6，语义 REBASE_ACK 后开始。只写新的 `/tmp/main-acceptance-20261007/minimax-final/`，不混入 A、旧证据或用户数据。archive 排除 dotenv，核源码 blob；依赖只读复用、HOME/XDG/config/workspace/DB/library/output/cache/models/temp 全隔离，secret store 仅指定新根内不存在的空测试路径并保护真实钥匙串，不创建/改系统钥匙串或搜索列表。无 Key/外部请求、模型/云、制作、真实配置或产品修改权。
+
+先核 API4547/Web3147 空闲，记录准确自有 PID/PGID 和30分钟租约，起唯一 API/Web；只准备一个可信合成本机 owner、零业务资产/任务及必要空目录。新独立 Chrome profile，不 clone，采用已验证的原生 computer-use、自有 app PID/window；只自己的3147设置/欢迎页。实际页面核新 MiniMax 默认.cn、手动切 DeepSeek 后再选 MiniMax 的.cn及现有地址输入可编辑；截图密钥框为空或掩码。需要复验既有国际/自定义回填时，先停止 API，使用新的合成非密钥配置夹具重启同一隔离环境再读页面，清楚区分准备和 GUI，不 API业务写冒称GUI保存。未变化的 B13依赖健康GUI及70条专项复用，不重复。页无响应只报具体阻断，不写DOM/mock输出或改策略。
+
+为主控真实最终Pi只读复验交准确 API PID/PGID、端口4547、合成owner token的0600文件路径和只读DB路径；经主控指定十分钟窗口与B明确ACK后环境/DB/API保持，允许当前候选真实 read_workspace_context/find_materials HTTP回调，零业务写。主控只使用自己的国内Key在RAM，不交B、不改B服务env或secret store，单轮总限180秒；核最终正文无思考块、工具成功及会话不含Key/token。用新 `/tmp/main-controller-20261007/creation-wave/pi-live-final/`，旧14窗口和证据保持已结束。不得将函数/HTTP证据当软件聊天GUI、真实账号或全制作通过。
+
+B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际证明端口和所有自有组退出；保留截图及用户浏览器。报告到 `/tmp/main-acceptance-20261007/minimax-final/report.md`，交准确候选、页面证据、只读夹具/HTTP条件、资源证明及未验项，不写Linear/远端或关闭卡。
 
 ## 主控真实 MiniMax 验证例外
 
