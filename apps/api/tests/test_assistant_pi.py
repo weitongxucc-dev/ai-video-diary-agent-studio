@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,93 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.assistant_pi import AssistantUnavailable, _last_answer_and_preview, run_plan_turn, run_task_turn
 from app.config import Settings
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+def test_edit_tool_separates_action_and_projects_actual_preview(tmp_path, rejected):
+    """Run the shipped TS tool without a server/model; UI details stay local."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Pi business tools require Node.js")
+    extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+    preview = {
+        "proposal": {
+            "id": "proposal-one", "summary": "调整画面适配", "status": "proposed",
+            "target_refs": ["clip:clip-1"],
+            "operation": {"operation_type": "ChangeCrop", "payload": {
+                "clip_id": "clip-1", "crop_x": 0.4, "source_path": "/private/source.mp4",
+            }},
+            "preview": {
+                "before": {"detail": "填满画面 · 水平 50% · 垂直 50%",
+                           "video_url": "/api/private/before.mp4", "label": "source.mp4"},
+                "after": {"detail": "填满画面 · 水平 40% · 垂直 50%",
+                          "video_url": "/api/private/after.mp4", "label": "source.mp4"},
+            },
+            "invalidated_refs": ["artifact:existing-output"],
+            "external_effects": ["已在本地生成静音画面对比；任务版本尚未改变。"],
+        },
+    }
+    script = r"""
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const tools = new Map();
+const calls = [];
+globalThis.fetch = async (url, init) => {
+  if (init?.method === 'POST') {
+    calls.push({url, body: JSON.parse(init.body)});
+    return new Response(JSON.stringify(input.rejected
+      ? {detail: '缺少明确裁剪位置；没有应用修改。'} : input.preview),
+      {status: input.rejected ? 422 : 200});
+  }
+  return new Response(JSON.stringify({task: {}, montage: {clips: []}}));
+};
+const {default: register} = await import(input.extension);
+register({registerTool: tool => tools.set(tool.name, tool)});
+await tools.get('read_current_task').execute('read', {});
+let result, error, duplicateError;
+try {
+  result = await tools.get('preview_edit').execute('edit', {
+    command: '水平裁剪到40%', context_stage: 'montage', selected_refs: ['clip:clip-1'],
+  });
+} catch (e) { error = e.message; }
+if (result) {
+  try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
+  catch (e) { duplicateError = e.message; }
+}
+console.log(JSON.stringify({calls, result, error, duplicateError}));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        input=json.dumps({"extension": extension.as_uri(), "preview": preview, "rejected": rejected}),
+        capture_output=True, text=True, check=True, timeout=15, cwd=tmp_path,
+        env={"PATH": str(Path(node).parent), "HOME": str(tmp_path),
+             "AI_VIDEO_DIARY_AGENT_API_BASE": "http://127.0.0.1:1",
+             "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",
+             "AI_VIDEO_DIARY_AGENT_STAGE": "review",
+             "AI_VIDEO_DIARY_AGENT_SELECTED_REFS": '["clip:clip-2"]'},
+    )
+    observed = json.loads(result.stdout)
+    assert observed["calls"] == [{
+        "url": "http://127.0.0.1:1/api/creation-tasks/task-one/edits/preview",
+        "body": {"raw_command": "水平裁剪到40%", "context_stage": "montage",
+                 "selected_object_refs": ["clip:clip-1"], "playhead_ms": None},
+    }]
+    if rejected:
+        assert observed["error"] == "缺少明确裁剪位置；没有应用修改。"
+        assert "result" not in observed
+        return
+    facts = json.loads(observed["result"]["content"][0]["text"])
+    assert facts["operation_type"] == "ChangeCrop"
+    assert facts["target_refs"] == ["clip:clip-1"]
+    assert facts["before"] == preview["proposal"]["preview"]["before"]["detail"]
+    assert facts["after"] == preview["proposal"]["preview"]["after"]["detail"]
+    assert facts["invalidated_refs"] == ["artifact:existing-output"]
+    assert facts["external_effects"] == preview["proposal"]["external_effects"]
+    assert facts["status"] == "proposed"
+    assert "/private/" not in observed["result"]["content"][0]["text"]
+    assert "source.mp4" not in observed["result"]["content"][0]["text"]
+    assert observed["result"]["details"] == {"kind": "edit_preview", "preview": preview}
+    assert "本轮已生成" in observed["duplicateError"]
 
 
 def test_pi_events_return_final_answer_and_preview():
