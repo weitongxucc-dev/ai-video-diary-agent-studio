@@ -222,6 +222,32 @@ describe("persisted final video quality checks", () => {
     expect(screen.queryByRole("button", { name: /^定位/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新检查成片" })).toBeDisabled();
   });
+
+  it("shows clipping totals and separate evidence limits only when a current summary exists", async () => {
+    const clipping_summary = {
+      event_count: 2001, total_clipped_seconds: 20.01,
+      first_start_seconds: 0, last_end_seconds: 40, full_scale_duty: .25,
+      event_list_limit: 50, events: [{ start_seconds: 0, end_seconds: .01, duration_seconds: .01 }],
+      events_truncated: true, truncated_event_count: 1951,
+      findings_event_limit: 2000, findings_truncated: true, findings_truncated_count: 1,
+    };
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary });
+    const props = { taskId: "task-1", versionId: "timeline-version-6", outputUrl: "/video", onLocate: vi.fn() };
+    const view = render(<FinalVideoQualityCheck {...props} />);
+    const summary = await screen.findByLabelText("音频削平摘要");
+    expect(summary).toHaveTextContent("音频削平共 2001 段，累计 20.01 秒。");
+    expect(summary).toHaveTextContent("削平问题明细已限流至 2000 条，另有 1 段未逐条列出；总量包含这些事件。");
+    expect(summary).toHaveTextContent("削平区间摘要仅保留 50 条，另有 1951 段未在区间摘要中列举；总量仍完整。");
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary: null });
+    view.rerender(<FinalVideoQualityCheck {...props} outputUrl="/new-video" />);
+    await waitFor(() => expect(screen.queryByLabelText("音频削平摘要")).not.toBeInTheDocument());
+    expect(await screen.findByText("成片发现问题")).toBeInTheDocument();
+    expect(screen.queryByText(/音频削平共/)).not.toBeInTheDocument();
+    mocks.getQualityCheck.mockResolvedValue({ ...completed, clipping_summary, stale: true });
+    view.rerender(<FinalVideoQualityCheck {...props} outputUrl="/stale-video" />);
+    expect(await screen.findByText("旧检查已失效，请检查当前成片")).toBeInTheDocument();
+    expect(screen.queryByLabelText("音频削平摘要")).not.toBeInTheDocument();
+  });
 });
 
 function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null): WorkspaceState {

@@ -7,6 +7,7 @@ import pytest
 import app.quality_inspection as inspection
 from app.montage import CreationTaskMontagePlan, MontageClip
 from app.quality_checks import QualityCheckError, QualityFinding, QualityReport, QualityUnavailable
+from app.schemas import CreationTaskQualityCheckResponse
 
 
 def montage(output_path="artifacts/video.mp4"):
@@ -135,3 +136,28 @@ def test_service_restart_exposes_interrupted_check_as_failed_and_retryable(tmp_p
     check_id = restarted.begin("local", "task", "v1", montage().output_path, "hash")
     restarted.finish("local", "task", check_id, evidence=inspection.quality_report_evidence(report()))
     assert restarted.get("local", "task")["result_status"] == "clean"
+
+
+def test_clipping_summary_forwarded_without_loss_and_hidden_when_stale(tmp_path):
+    from app.quality_checks import _clipping_summary
+
+    findings = [QualityFinding("clipping", start, start + .1, "削平") for start in (0, .5, 1.2)]
+    summary = _clipping_summary(findings, .25, limit=1, findings_limit=2)
+    evidence = inspection.quality_report_evidence(replace(report(tuple(findings[:2])), clipping_summary=summary))
+    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    check_id = repo.begin("local", "task", "v1", montage().output_path, "hash")
+    repo.finish("local", "task", check_id, evidence=evidence)
+    record = repo.get("local", "task")
+    payload = inspection.final_quality_check_payload(record, montage(),
+                                                     timeline_version_id="v1", current_render_ref="hash")
+    assert payload["clipping_summary"] == summary
+    assert CreationTaskQualityCheckResponse.model_validate(payload).model_dump()["clipping_summary"] == summary
+    assert summary["event_count"] == 3
+    assert summary["truncated_event_count"] == 2
+    assert summary["findings_truncated_count"] == 1
+    stale = inspection.final_quality_check_payload(record, montage(),
+                                                   timeline_version_id="v2", current_render_ref="hash")
+    assert stale["stale"] and stale["clipping_summary"] is None
+    missing = inspection.final_quality_check_payload(record, montage(),
+                                                     timeline_version_id="v1", current_render_ref=None)
+    assert missing["stale"] and missing["clipping_summary"] is None

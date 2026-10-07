@@ -1260,6 +1260,15 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate 
     <p>检查黑帧、尾部截断、音频削波和起点时间戳错位；内容质量仍需人工确认。</p>
     {error || current?.error ? <p role="alert">{error ?? current?.error}</p> : null}
     {current?.checked_at ? <small>检查时间：{new Date(current.checked_at).toLocaleString()}</small> : null}
+    {current?.check_state === "done" && current.clipping_summary ? <div aria-label="音频削平摘要">
+      <p>音频削平共 {current.clipping_summary.event_count} 段，累计 {current.clipping_summary.total_clipped_seconds} 秒。</p>
+      {current.clipping_summary.findings_truncated ? <p>
+        削平问题明细已限流至 {current.clipping_summary.findings_event_limit} 条，另有 {current.clipping_summary.findings_truncated_count} 段未逐条列出；总量包含这些事件。
+      </p> : null}
+      {current.clipping_summary.events_truncated ? <p>
+        削平区间摘要仅保留 {current.clipping_summary.event_list_limit} 条，另有 {current.clipping_summary.truncated_event_count} 段未在区间摘要中列举；总量仍完整。
+      </p> : null}
+    </div> : null}
     {current?.findings.map((finding, index) => <article key={`${finding.kind}:${index}`}>
       <button type="button" onClick={() => onLocate(finding)}>
         定位 {finding.start_seconds.toFixed(2)}–{finding.end_seconds.toFixed(2)} 秒

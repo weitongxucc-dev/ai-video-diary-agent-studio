@@ -1276,6 +1276,27 @@ class CreationTaskQualityUnavailableResponse(BaseModel):
     status: Literal["unavailable"]
 
 
+class CreationTaskClippingEventResponse(BaseModel):
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+
+
+class CreationTaskClippingSummaryResponse(BaseModel):
+    event_count: int
+    total_clipped_seconds: float
+    first_start_seconds: float
+    last_end_seconds: float
+    full_scale_duty: float | None
+    event_list_limit: int
+    events: list[CreationTaskClippingEventResponse]
+    events_truncated: bool
+    truncated_event_count: int
+    findings_event_limit: int
+    findings_truncated: bool
+    findings_truncated_count: int
+
+
 class CreationTaskQualityCheckResponse(BaseModel):
     check_state: Literal["none", "checking", "failed", "done"]
     result_status: Literal["clean", "issues_found", "unavailable"] | None
@@ -1287,6 +1308,7 @@ class CreationTaskQualityCheckResponse(BaseModel):
     error: str | None
     findings: list[CreationTaskQualityFindingResponse]
     unavailable: list[CreationTaskQualityUnavailableResponse]
+    clipping_summary: CreationTaskClippingSummaryResponse | None = None
     validation_scope: Literal["deterministic_media_errors_only"]
 
 
