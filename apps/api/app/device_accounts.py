@@ -65,6 +65,32 @@ class DeviceAccountService:
         self._publishable_key = settings.supabase_publishable_key
         self._device = trusted_device
 
+    def creation_permit(self, device_id: str, user_id: str, workspace_id: str) -> str:
+        """Read only the original tuple's permission; no user session is retained."""
+        if device_id != self._device.device_id:
+            return "unauthorized"
+        try:
+            UUID(user_id)
+            UUID(workspace_id)
+        except (ValueError, TypeError, AttributeError):
+            return "unauthorized"
+        try:
+            response = httpx.post(
+                f"{self._base_url}/rest/v1/rpc/device_creation_permit",
+                headers={"apikey": self._publishable_key, "Content-Type": "application/json"},
+                json={"target_device_id": device_id, "device_proof": self._device.proof,
+                      "target_user_id": user_id, "target_workspace_id": workspace_id},
+                timeout=5.0,
+            )
+            if response.status_code != 200:
+                return "unknown"
+            result = response.json()
+        except (httpx.HTTPError, ValueError):
+            return "unknown"
+        if type(result) is not bool:
+            return "unknown"
+        return "ready" if result else "unauthorized"
+
     def _call(self, principal: AuthPrincipal, name: str, parameters: dict[str, object]) -> object:
         if not principal.authenticated or not principal.user_id or not principal.access_token:
             raise DeviceAccountError("forbidden", "verified account identity is required")

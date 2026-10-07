@@ -18,6 +18,7 @@ from app.voice_clone import (
     VoiceCloneError,
     VoiceCloneProvider,
     VoiceCloneResult,
+    Qwen3TTSSubprocessProvider,
     text_to_speech_preflight,
 )
 
@@ -253,8 +254,14 @@ class NarrationGenerator:
         delivery_instruction: str | None = None,
         generation_identity: str | None = None,
         language: str | None = None,
+        grant_context=None,
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
+
+        if grant_context is not None:
+            grant_context.check()
+            if not isinstance(self.provider, Qwen3TTSSubprocessProvider):
+                raise ValueError("当前声音提供者没有受许可的隔离子进程执行路径")
 
         tempo = _delivery_tempo(delivery_instruction)
         text = narration_text.strip()
@@ -325,6 +332,7 @@ class NarrationGenerator:
             output_path=output_path,
             language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
+            **({"grant_context": grant_context} if grant_context is not None else {}),
         )
         resolved_output = output_path.resolve()
         if (
@@ -335,7 +343,7 @@ class NarrationGenerator:
             raise ValueError("声音克隆没有生成当前创作任务的 WAV")
         if tempo != 1.0:
             adjusted_path = output_path.with_name(f"{output_path.stem}_adjusted.wav")
-            completed = subprocess.run(
+            completed = _run_narration_command(
                 [
                     "ffmpeg",
                     "-y",
@@ -347,8 +355,7 @@ class NarrationGenerator:
                     "pcm_s16le",
                     str(adjusted_path),
                 ],
-                capture_output=True,
-                text=True,
+                grant_context=grant_context, output_paths=(resolved_output, adjusted_path),
             )
             if completed.returncode or not adjusted_path.is_file() or adjusted_path.stat().st_size == 0:
                 adjusted_path.unlink(missing_ok=True)
@@ -359,7 +366,7 @@ class NarrationGenerator:
             adjusted_path.replace(resolved_output)
             result = VoiceCloneResult(
                 audio_path=str(resolved_output),
-                duration_seconds=_probe_audio_duration(resolved_output),
+                duration_seconds=_probe_audio_duration(resolved_output, grant_context=grant_context),
                 sample_rate=result.sample_rate,
             )
         if result.duration_seconds > max_duration_seconds:
@@ -389,6 +396,7 @@ class NarrationGenerator:
         script_id: str,
         segments: list[NarrationArtifact],
         max_duration_seconds: int,
+        grant_context=None,
     ) -> NarrationArtifact:
         if not segments:
             raise ValueError("没有可拼合的配音片段")
@@ -411,6 +419,10 @@ class NarrationGenerator:
         if any(not path.is_file() or path.stat().st_size == 0 for path in source_paths):
             raise ValueError("存在缺失或为空的配音片段")
         if len(source_paths) == 1:
+            if grant_context is not None:
+                grant_context.check()
+                if source_paths[0].stat().st_size > grant_context.max_output_bytes:
+                    raise ValueError("配音拼合超过阶段输出预算")
             shutil.copyfile(source_paths[0], output_path)
         else:
             command = ["ffmpeg", "-y"]
@@ -428,14 +440,14 @@ class NarrationGenerator:
                     str(output_path),
                 ]
             )
-            completed = subprocess.run(command, capture_output=True, text=True)
+            completed = _run_narration_command(command, grant_context=grant_context, output_paths=(output_path,))
             if completed.returncode or not output_path.is_file() or output_path.stat().st_size == 0:
                 output_path.unlink(missing_ok=True)
                 raise ValueError(
                     "配音片段拼合失败："
                     + (completed.stderr.strip() or f"ffmpeg 退出码 {completed.returncode}")
                 )
-        duration = _probe_audio_duration(output_path)
+        duration = _probe_audio_duration(output_path, grant_context=grant_context)
         if duration > max_duration_seconds:
             output_path.unlink(missing_ok=True)
             raise ValueError("拼合后的配音超过创作方案上限，请先压缩并重新确认文案")
@@ -823,8 +835,23 @@ def _delivery_tempo(instruction: str | None) -> float:
     return 1.0 if instruction is None else compile_narration_command(instruction)
 
 
-def _probe_audio_duration(path: Path) -> float:
-    completed = subprocess.run(
+def _run_narration_command(command, *, grant_context=None, output_paths=()):
+    if grant_context is None:
+        return subprocess.run(command, capture_output=True, text=True)
+    if command[0] == "ffmpeg":
+        command = [command[0], "-threads", str(grant_context.threads),
+                   "-filter_threads", str(grant_context.threads),
+                   "-filter_complex_threads", str(grant_context.threads), *command[1:-1],
+                   "-threads", str(grant_context.threads), command[-1]]
+    import os
+    result = grant_context.run(command, output_paths=output_paths,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+    return subprocess.CompletedProcess(command, result.returncode,
+        result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace"))
+
+
+def _probe_audio_duration(path: Path, *, grant_context=None) -> float:
+    completed = _run_narration_command(
         [
             "ffprobe",
             "-v",
@@ -835,8 +862,7 @@ def _probe_audio_duration(path: Path) -> float:
             "default=noprint_wrappers=1:nokey=1",
             str(path),
         ],
-        capture_output=True,
-        text=True,
+        grant_context=grant_context,
     )
     if completed.returncode:
         raise ValueError(

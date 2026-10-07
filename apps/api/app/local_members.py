@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,7 +49,7 @@ def _ensure_token_column(conn: sqlite3.Connection) -> None:
     """Give every member a stable bearer token for the local member header.
 
     The token column intentionally lives outside the static DDL and migration
-    13: the members table is self-provisioned here on every open, so a plain
+    13: the service provisions the members table at initialization, so a plain
     ALTER in the migration chain would collide with a column this ensure may
     already have added (SQLite has no ADD COLUMN IF NOT EXISTS). PRAGMA-guarded
     ALTER plus a NULL-token backfill keeps both entry points idempotent.
@@ -65,30 +66,21 @@ def _ensure_token_column(conn: sqlite3.Connection) -> None:
 
 
 def _open(database_path: str | Path) -> sqlite3.Connection:
-    db = Path(database_path).expanduser()
-    db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
+    """Connect without provisioning or changing the persisted roster."""
+    conn = sqlite3.connect(str(database_path))
     conn.row_factory = sqlite3.Row
-    # Self-provision the members table so a fresh (test) database works without
-    # running the non-idempotent full migration chain. Idempotent on an existing
-    # database that already applied migration 11.
-    conn.executescript(LOCAL_MEMBERS_TABLE_DDL + "\n" + LOCAL_MEMBERS_SEED_DDL)
-    _ensure_token_column(conn)
     return conn
 
 
 def _open_reserving(database_path: str | Path) -> sqlite3.Connection:
     """Open for a seat-taking write with SQLite's write lock already held.
 
-    ``_open`` leaves an implicit transaction behind (the token backfill), so
-    that is committed first and the lock is then taken explicitly. The lock has
-    to be held *before* the seat count is read, otherwise two concurrent joins
-    both observe "4 seats used" and both insert. Deliberately scoped to the two
+    The lock must be held *before* the seat count is read; concurrent joins would
+    otherwise both observe "4 seats used" and both insert. Deliberately scoped to the two
     seat-taking write paths: listing, token lookup, role changes and every
     unrelated reader keep the ordinary connection and never wait on this lock.
     """
     conn = _open(database_path)
-    conn.commit()
     conn.isolation_level = None
     conn.execute("BEGIN IMMEDIATE")
     return conn
@@ -130,6 +122,12 @@ def _member_from_row(row: sqlite3.Row) -> LocalMember:
 class LocalMemberService:
     def __init__(self, database_path: str | Path) -> None:
         self._database_path = Path(database_path).expanduser()
+        self._database_path.parent.mkdir(parents=True, exist_ok=True)
+        # Provision/migrate before request or scheduler transactions begin.
+        # Ordinary reads must not acquire a second writer during identity checks.
+        with closing(_open(self._database_path)) as conn, conn:
+            conn.executescript(LOCAL_MEMBERS_TABLE_DDL + "\n" + LOCAL_MEMBERS_SEED_DDL)
+            _ensure_token_column(conn)
         # One-time join codes are deliberately in-memory: they are cheap, local,
         # and reset when the process restarts.
         self._invite_codes: set[str] = set()

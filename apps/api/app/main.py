@@ -71,6 +71,7 @@ from app.member_permits import (
     DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
     build_host_probes, cpu_render_budget_from_env, creation_job_registration, find_member,
     host_budget_from_env, permit_actor, resolve_member_token,
+    creation_stage_budgets_from_env,
 )
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -87,7 +88,7 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    CpuRenderGrantContext, CreationExecution, CreationExecutionActor,
+    CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
     CreationJobUnitExecutor, ExecutionStartRequest,
     revision_digest, submit_creation_stage,
 )
@@ -5521,10 +5522,13 @@ def generate_creation_task_narration(
     task_id: str,
     request: Request,
 ) -> CreationTaskNarrationResponse:
-    return _generate_creation_task_narration_for_workspace(current_workspace_id(request), task_id)
+    raise HTTPException(status_code=409, detail="请确认文案和制作要求后使用开始/继续制作，配音必须进入设备队列")
 
 
-def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: str) -> CreationTaskNarrationResponse:
+def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: str,
+    *, grant_context: CreationStageGrantContext | None = None) -> CreationTaskNarrationResponse:
+    if grant_context is not None:
+        grant_context.check()
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     if task.confirmed_script_id is None:
@@ -5566,7 +5570,10 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: 
         )
         segment_artifacts: list[NarrationArtifact] = []
         narration_segments: list[NarrationSegment] = []
+        output_bytes = 0
         for section in script.sections:
+            if grant_context is not None:
+                grant_context.check()
             segment_id = f"narration_segment_{hashlib.sha256(f'{task.id}:{script.id}:{section.id}'.encode('utf-8')).hexdigest()[:20]}"
             segment_artifact = narration_generator.generate_for_creation_task(
                 workspace_id=workspace_id,
@@ -5579,7 +5586,15 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: 
                 pronunciation_entries=inputs.pronunciation_entries,
                 resolved_reference_audio_path=reference_path,
                 segment_id=segment_id,
+                **({"grant_context": replace(grant_context,
+                    max_output_bytes=grant_context.max_output_bytes - output_bytes)}
+                   if grant_context is not None else {}),
             )
+            output_bytes += Path(segment_artifact.audio_path).stat().st_size
+            if grant_context is not None:
+                grant_context.check()
+                if output_bytes >= grant_context.max_output_bytes:
+                    raise ValueError("配音输出超过阶段预算，尚无余量拼合")
             segment_record = production_repo.save_narration_artifact(
                 NarrationArtifactRecord(
                     id=f"narration_{segment_artifact.cache_key[:16]}",
@@ -5624,7 +5639,12 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: 
             script_id=script.id,
             segments=segment_artifacts,
             max_duration_seconds=plan.duration_target_seconds,
+            **({"grant_context": replace(grant_context,
+                max_output_bytes=grant_context.max_output_bytes - output_bytes)}
+               if grant_context is not None else {}),
         )
+        if grant_context is not None:
+            grant_context.check()
         task, record = production_repo.complete_creation_task_narration(
             NarrationArtifactRecord(
                 id=f"narration_{artifact.cache_key[:16]}",
@@ -5643,6 +5663,8 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: 
             segments=narration_segments,
         )
     except (MediaAuthorityError, VoiceCloneError, OSError, ValueError) as exc:
+        if grant_context is not None and isinstance(exc, PermissionError):
+            raise
         if isinstance(exc, MediaAuthorityError):
             reason, impact, repair_action, retryable = (
                 exc.reason,
@@ -6238,12 +6260,17 @@ def create_creation_task_montage_plan(
     task_id: str,
     request: Request,
 ) -> CreationTaskMontagePlanResponse:
-    return _create_creation_task_montage_plan_for_workspace(current_workspace_id(request), task_id)
+    raise HTTPException(status_code=409, detail="请使用开始/继续制作，故事板必须进入设备队列")
 
 
-def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id: str) -> CreationTaskMontagePlanResponse:
+def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id: str,
+    *, grant_context: CreationStageGrantContext | None = None) -> CreationTaskMontagePlanResponse:
     task = _creation_task_or_404(workspace_id, task_id)
     creation_plan = _creation_plan_for_task_or_404(workspace_id, task)
+    if grant_context is not None:
+        grant_context.check()
+        if creation_plan.presenter_share_target:
+            raise HTTPException(status_code=503, detail="人物口型组合尚无受许可执行预算；当前仅支持纯素材故事板")
     if task.confirmed_script_id is None or task.narration_cache_key is None:
         raise HTTPException(status_code=409, detail="confirmed script or narration missing")
     try:
@@ -6284,7 +6311,8 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
         )
         if selected_sections and creation_plan.selected_voice is None:
             raise ValueError("露脸段落缺少当前任务已授权的人物和声音")
-        montage = montage_planner.build_for_creation_task(
+        planner = montage_planner if grant_context is None else MontagePlanner()
+        montage = planner.build_for_creation_task(
             workspace_id=workspace_id,
             task_id=task.id,
             script=script,
@@ -6335,6 +6363,8 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
         actual = round(100 * sum(clip.timeline_end_seconds - clip.timeline_start_seconds
                                  for clip in montage.clips if clip.person_render_id) / montage.duration_seconds, 1)
         montage.message += f" 露脸目标 {montage.presenter_share_target}%，实际 {actual}%；仅为露脸段落制作口型。"
+        if grant_context is not None:
+            montage.message += " 本次受许可编排仅使用已授权素材元数据，未运行视觉语义模型。"
         montage.aspect_ratio = creation_plan.aspect_ratio
         for clip in montage.clips:
             clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
@@ -6342,6 +6372,10 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
                 clip.visual_effects.update(reusable_color_settings(creation_plan.template_settings["color_style"]))
         for cue in montage.cues:
             cue.subtitle_style = dict(creation_plan.template_settings.get("subtitle_style", {}))
+        if grant_context is not None:
+            grant_context.check()
+            if len(json.dumps(creation_task_montage_plan_to_payload(montage)).encode()) > grant_context.max_output_bytes:
+                raise ValueError("故事板输出超过阶段预算")
         task, _ = production_repo.save_creation_task_montage_plan(
             workspace_id,
             task.id,
@@ -9195,46 +9229,7 @@ def confirm_creation_task_edit(
             narration_segments=narration_segments,
         )
     if operation_type == "RegenerateNarrationSegment" and isinstance(operation_payload, dict):
-        segment_id = operation_payload.get("narration_segment_id")
-        expected_audio_reference = operation_payload.get("expected_audio_reference")
-        delivery_instruction = operation_payload.get("delivery_instruction")
-        base_version_id = operation_payload.get("base_version_id")
-        if (
-            not isinstance(segment_id, str) or not segment_id
-            or not isinstance(base_version_id, str) or not base_version_id
-            or (delivery_instruction is not None and not isinstance(delivery_instruction, str))
-        ):
-            raise HTTPException(status_code=409, detail="invalid narration segment edit operation")
-        if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
-        current_segment = production_repo.get_narration_segment(
-            workspace_id, task.id, segment_id
-        )
-        if current_segment.audio_reference != expected_audio_reference:
-            raise HTTPException(status_code=409, detail="narration segment edit target has changed")
-        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
-        try:
-            segments, narration_record, montage = _regenerate_creation_task_narration_segment(
-                workspace_id=workspace_id, task=task, segment_id=segment_id,
-                delivery_instruction=delivery_instruction,
-                generation_identity=proposal.id,
-            )
-        except (KeyError, MediaAuthorityError, VoiceCloneError, OSError, ValueError) as exc:
-            raise _topic_failure_response(
-                status_code=503,
-                error="narration_segment_generation_failed",
-                reason="所选配音片段没有生成可用的新音频。",
-                impact="当前时间线、配音和成片保持不变。",
-                repair_action=str(exc),
-                retryable=True,
-            ) from exc
-        return _persist_typed_montage_edit(
-            workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base_version, updated_plan=montage,
-            operation_type="RegenerateNarrationSegment",
-            operation_payload=dict(operation_payload),
-            narration_segments=segments, narration_artifact=narration_record,
-        )
+        raise HTTPException(status_code=503, detail="局部配音重做尚未接入设备许可；当前时间线与已有配音保留，请等待该组合的受许可路径")
     if operation_type == "ChangeLinkedSpeed" and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联变速")
@@ -11109,7 +11104,7 @@ def render_creation_task_montage(
     request: Request,
     _payload: CreationTaskMontageRenderRequest,
 ) -> CreationTaskMontagePlanResponse:
-    return _render_creation_task_montage_for_workspace(current_workspace_id(request), task_id)
+    raise HTTPException(status_code=409, detail="请使用开始/继续制作，成片必须进入设备队列")
 
 
 def _render_creation_task_montage_for_workspace(
@@ -15019,22 +15014,29 @@ def _recover_creation_executions() -> None:
     for row in cancelled_requests:
         event = production_repo.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
         # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
-        if (row["workspace_id"] != LEGACY_WORKSPACE_ID or not row["member_id"]
-                or event.payload.get("member_id") != row["member_id"]):
+        try:
+            original = CreationExecutionActor.from_event(row["workspace_id"], event.payload)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            logger.warning("已停止制作请求 %s 的持久身份无法复核", row["id"])
+            continue
+        if (not row["member_id"] or original.member_id != row["member_id"]
+                or (original.device_id is None and row["workspace_id"] != LEGACY_WORKSPACE_ID)):
             raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
-        runtime.scheduler.cancel(row["id"], CreationExecutionActor(row["workspace_id"], row["member_id"]))
+        runtime.scheduler.cancel(row["id"], original)
     for job in production_repo.list_pending_creation_executions():
         event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
-        member_id = event.payload.get("member_id")
-        if job.workspace_id != LEGACY_WORKSPACE_ID or not isinstance(member_id, str) or not member_id:
-            raise RuntimeError("制作作业缺少可复核的本机成员身份，不能自动申请设备许可")
-        if find_member(local_members_service, member_id) is None:
-            logger.warning(
-                "本机成员 %s 已不在名册内，跳过其制作作业 %s 的自动恢复", member_id, job.id,
-            )
+        try:
+            original = CreationExecutionActor.from_event(job.workspace_id, event.payload)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
             continue
-        submit_creation_stage(creation_execution, runtime.scheduler, job,
-                              CreationExecutionActor(job.workspace_id, member_id))
+        if _verify_creation_identity(original) != "ready":
+            logger.warning("制作作业 %s 的成员许可失效或未知，保留待处理", job.id)
+            continue
+        try:
+            submit_creation_stage(creation_execution, runtime.scheduler, job, original)
+        except PermissionError:
+            logger.warning("制作作业 %s 的当前许可未就绪，保留待处理", job.id)
     runtime.wake()
 
 
@@ -15080,24 +15082,45 @@ def _request_member(request: Request) -> LocalMember | None:
 
 
 def _request_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor | None:
-    """本次请求在整机许可里的可信身份（真实成员行，不是字符串）。"""
+    """Interactive identity comes from a verified JWT or the local roster."""
+    if auth_context.enabled:
+        principal = getattr(request.state, "principal", None)
+        if (principal is None or not principal.authenticated
+                or principal.workspace_id != workspace_id or workspace_id == LEGACY_WORKSPACE_ID
+                or request.headers.get("X-Local-Member-Token")):
+            raise HTTPException(status_code=403, detail="账号设备许可身份与工作区不匹配")
+        try:
+            device = trusted_device_credential()
+            return CreationExecutionActor.account(workspace_id, device.device_id, principal.user_id)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="账号设备许可身份无效") from None
+    if workspace_id != LEGACY_WORKSPACE_ID:
+        raise HTTPException(status_code=403, detail="本机制作身份与工作区不匹配")
     return permit_actor(_request_member(request), workspace_id)
 
 
-def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
-    """本次请求必须带得动的整机许可身份。
+def _verify_creation_identity(actor: CreationExecutionActor) -> str:
+    if actor.device_id is not None:
+        try:
+            service = DeviceAccountService(settings, trusted_device_credential())
+        except (DeviceAccountError, HTTPException):
+            return "unknown"
+        return service.creation_permit(actor.device_id, actor.user_id, actor.workspace_id)
+    if auth_context.enabled or actor.workspace_id != LEGACY_WORKSPACE_ID:
+        return "unauthorized"
+    return "ready" if find_member(local_members_service, actor.member_id) is not None else "unauthorized"
 
-    成员身份只能来自本机名册里的真实成员行；工作区也必须和它绑定的那一个
-    一致。混合的 Bearer 凭据/local-token 或客户端自填的工作区都拼不出一个
-    跨空间的许可，这里直接拒绝。
-    """
-    if workspace_id != LEGACY_WORKSPACE_ID:
-        raise HTTPException(status_code=403, detail="本机制作身份与工作区不匹配")
+
+def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecutionActor:
+    """Verify permission before writing any JobRun, session or queue intent."""
     actor = _request_permit_actor(request, workspace_id)
     if actor is None:
-        # 现有认证服务无法在调度器的准入事务里复核远端成员，所以不从一次
-        # 无法事后核验的请求里铸出一个持久成员身份。
         raise HTTPException(status_code=503, detail="多成员制作许可尚未接通持续身份核验")
+    identity = _verify_creation_identity(actor)
+    if identity == "unknown":
+        raise HTTPException(status_code=503, detail="设备成员许可暂不可核验，请恢复连接后重试")
+    if identity != "ready":
+        raise HTTPException(status_code=403, detail="设备成员或工作区制作许可已失效")
     return actor
 
 
@@ -15142,8 +15165,7 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
             current_stage = latest_stage_event["stage"]
     waiting_reason = None
     status_updated_at = job.updated_at.isoformat() if job else None
-    if (job and job.status in {"queued", "interrupted"}
-            and creation_execution_mode == "scheduled" and workspace_id == LEGACY_WORKSPACE_ID):
+    if job and job.status in {"queued", "interrupted"}:
         start_event = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
         queued_member_id = start_event.payload.get("member_id")
         if queued_member_id:
@@ -15170,7 +15192,7 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
         "waiting_reason": waiting_reason,
         "status_updated_at": status_updated_at,
         "video_ready": _creation_render_is_valid(
-            workspace_id, task_id, verify_media=creation_execution_mode != "scheduled"),
+            workspace_id, task_id, verify_media=device_runtime is None),
         "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
         "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
     }
@@ -15247,7 +15269,7 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
     actor = _require_permit_actor(request, workspace_id)
     try:
         job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest,
-                                       member_id=actor.member_id)
+                                       actor=actor)
         submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="创作任务或确认对象不存在") from exc
@@ -15282,7 +15304,9 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
     _creation_task_or_404(workspace_id, task_id)
     # 取消不要求整机运行时在场：没有许可通道时也必须能把已经发起的作业停下来。
     runtime = device_runtime
-    actor = _require_permit_actor(request, workspace_id)
+    actor = _request_permit_actor(request, workspace_id)
+    if actor is None:
+        raise HTTPException(status_code=403, detail="缺少可核查的原制作身份，不能取消")
     try:
         job = creation_execution.cancel(workspace_id, task_id, member_id=actor.member_id)
     except PermissionError as exc:
@@ -15363,7 +15387,9 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
     成员仍在名册内——撤权必须总是可行。
     """
     workspace_id = current_workspace_id(request)
-    actor = _require_permit_actor(request, workspace_id)
+    actor = _request_permit_actor(request, workspace_id)
+    if actor is None:
+        raise HTTPException(status_code=403, detail="缺少可核查的原制作身份，不能取消")
     runtime = _creation_runtime()
     try:
         detail = runtime.scheduler.cancel(request_id, actor)
@@ -15411,6 +15437,14 @@ def _render_creation_stage_with_grant(workspace_id: str, task_id: str, grant: Cp
         raise RenderStageRejected(str(exc.detail)) from exc
 
 
+def _narration_stage_with_grant(workspace_id: str, task_id: str, context: CreationStageGrantContext):
+    return _generate_creation_task_narration_for_workspace(workspace_id, task_id, grant_context=context)
+
+
+def _montage_stage_with_grant(workspace_id: str, task_id: str, context: CreationStageGrantContext):
+    return _create_creation_task_montage_plan_for_workspace(workspace_id, task_id, grant_context=context)
+
+
 def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
     return _creation_render_is_valid(workspace_id, task_id, render_context=grant)
 
@@ -15434,12 +15468,17 @@ def _build_device_components(*, repository: ProductionRepository):
 
     cpu_render_budget = cpu_render_budget_from_env()
     budget = host_budget_from_env(cpu_render=cpu_render_budget)
+    narration_budget, montage_budget = creation_stage_budgets_from_env()
+    budget = replace(budget, narration=narration_budget, montage=montage_budget)
     registrations = {
         "creation_job": creation_job_registration(
             repository,
             render_action=_render_creation_stage_with_grant,
             render_is_valid=_creation_stage_valid_with_grant,
             cpu_render_budget=cpu_render_budget,
+            verify_identity=_verify_creation_identity,
+            narration_budget=narration_budget, montage_budget=montage_budget,
+            stage_actions={"narration": _narration_stage_with_grant, "montage_plan": _montage_stage_with_grant},
         ),
     }
     material_service = None
@@ -15458,7 +15497,7 @@ def _build_device_components(*, repository: ProductionRepository):
     runtime = build_device_runtime(
         database_path=repository.database_path,
         device_lock_path=_device_lock_path(),
-        device_access=MemberDeviceAccess(local_members_service),
+        device_access=MemberDeviceAccess(local_members_service, identity_verifier=_verify_creation_identity),
         registrations=registrations,
         resources=resources,
         processes=processes,

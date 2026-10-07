@@ -77,6 +77,18 @@ from app.production import (
 from app.video_jobs import VideoJobRunner
 
 
+def _assert_retired_montage_endpoint(client, production, workspace_id, task_id, stage):
+    """Public retirement must reject before any job/version/artifact mutation."""
+    with production._connect() as conn:
+        before = tuple(conn.iterdump())
+    response = client.post(f"/api/creation-tasks/{task_id}/montage/{stage}", json={})
+    assert response.status_code == 409, response.text
+    expected = "故事板必须进入设备队列" if stage == "plan" else "成片必须进入设备队列"
+    assert expected in response.json()["detail"]
+    with production._connect() as conn:
+        assert tuple(conn.iterdump()) == before
+
+
 def test_subtitle_export_uses_selected_current_tracks_and_fixed_chinese_first(monkeypatch):
     task = SimpleNamespace(id="task_export", current_timeline_version_id="version_2")
     source = SubtitleTrack(
@@ -1954,6 +1966,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
 
     client = TestClient(main_module.app)
+    _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
+    # Existing helper remains diagnostic-only: no public execution fallback or real FFmpeg here.
     original_create_artifact_record = production.create_artifact_record
 
     class SimulatedProcessExit(BaseException):
@@ -1964,12 +1978,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         "create_artifact_record",
         lambda _artifact: (_ for _ in ()).throw(SimulatedProcessExit()),
     )
-    with pytest.raises(BaseExceptionGroup) as crashed:
-        client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
-    assert any(
-        isinstance(error, SimulatedProcessExit)
-        for error in crashed.value.exceptions
-    )
+    with pytest.raises(SimulatedProcessExit):
+        main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
 
     interrupted_job = production.list_job_runs(workspace_id, task.id)[0]
     assert interrupted_job.status == "running"
@@ -1988,12 +1998,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     monkeypatch.setattr(
         main_module, "_render_montage_with_resolved_clip_sources", reject_rerender
     )
-    response = client.post(
-        f"/api/creation-tasks/{task.id}/montage/render", json={}
-    )
+    response = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
 
-    assert response.status_code == 200, response.text
-    assert response.json()["status"] == "rendered"
+    assert response.status == "rendered"
     jobs = production.list_job_runs(workspace_id, task.id)
     assert len(jobs) == 1 and jobs[0].status == "succeeded"
     artifacts = production.list_artifact_records(workspace_id, task.id)
@@ -2075,10 +2082,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
             "DELETE FROM timeline_versions WHERE workspace_id = ? AND task_id = ?",
             (workspace_id, task.id),
         )
-    migrated_render = client.post(
-        f"/api/creation-tasks/{task.id}/montage/render", json={}
-    )
-    assert migrated_render.status_code == 200, migrated_render.text
+    migrated_render = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
+    assert migrated_render.status == "rendered"
     migrated_plan = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
@@ -2195,8 +2200,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     monkeypatch.setattr(
         main_module, "_render_montage_with_resolved_clip_sources", fake_render
     )
-    rerender = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
-    assert rerender.status_code == 200, rerender.text
+    rerender = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
+    assert rerender.status == "rendered"
     rerendered_plan = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
@@ -2206,8 +2211,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     workspace_after_rerender = client.get(f"/api/creation-tasks/{task.id}").json()
     assert workspace_after_rerender["task"]["timeline_sequence"] == 3
     assert workspace_after_rerender["task"]["can_undo"] is True
-    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
-    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert main_module._render_creation_task_montage_for_workspace(workspace_id, task.id).status == "rendered"
+    assert main_module._render_creation_task_montage_for_workspace(workspace_id, task.id).status == "rendered"
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
     before_trim_version = production.get_creation_task(workspace_id, task.id).current_timeline_version_id
@@ -2280,9 +2285,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     ).clips[0].source_start_seconds == before_trim_start
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
 
-    final_render = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
-    assert final_render.status_code == 200, final_render.text
-    assert final_render.json()["status"] == "rendered"
+    final_render = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
+    assert final_render.status == "rendered"
     assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
@@ -2674,10 +2678,11 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
     monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
     client = TestClient(main_module.app)
-    # New renderer, then cache hit: both must carry the same immutable cover selection.
+    _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
+    # Diagnostic helper, then cache hit: both must carry the same immutable cover selection.
     for _ in range(2):
-        result = client.post(f"/api/creation-tasks/{task.id}/montage/render", json={})
-        assert result.status_code == 200, result.text
+        result = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
+        assert result.status == "rendered"
         current = client.get(f"/api/creation-tasks/{task.id}").json()
         assert current["cover_asset"]["title"] == cover.title
         assert current["cover_asset"]["artifact_ref"] == cover.artifact_ref
@@ -2687,7 +2692,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
 
     # A rendering-contract change must not reuse an output from the previous engine.
     monkeypatch.setattr(main_module, "CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION", "next-render-contract")
-    assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 200
+    assert main_module._render_creation_task_montage_for_workspace(workspace_id, task.id).status == "rendered"
     assert len(render_calls) == 2
 
     from app.subtitle_tracks import SubtitleTranslationProviderError
@@ -2898,11 +2903,10 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         "_render_montage_with_resolved_clip_sources",
         fake_render,
     )
-    rerender = state.client.post(
-        f"/api/creation-tasks/{state.task.id}/montage/render",
-        json={},
-    )
-    assert rerender.status_code == 200, rerender.text
+    _assert_retired_montage_endpoint(state.client, production, state.workspace_id, state.task.id, "render")
+    # Diagnostic fixture rendering does not prove a permitted person/edit re-output path.
+    rerender = main_module._render_creation_task_montage_for_workspace(state.workspace_id, state.task.id)
+    assert rerender.status == "rendered"
     rerendered_plan = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(
             state.workspace_id, state.task.id
@@ -3030,8 +3034,10 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
-    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
-    assert response.status_code == 200, response.text
+    _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, task.id, "plan")
+    # Existing planning diagnostic with fixture providers, not the public/device path.
+    response = main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id)
+    assert response.task_id == task.id
     versioned_task = state.production.get_creation_task(state.workspace_id, task.id)
     assert versioned_task.current_timeline_version_id is not None
     assert len(state.production.list_timeline_versions(state.workspace_id, task.id)) == 1
@@ -3065,9 +3071,11 @@ def test_initial_montage_generates_face_only_for_selected_share(person_render_ed
         return SimpleNamespace(id="render-selected", status="ready", duration_seconds=30.0)
     monkeypatch.setattr(main_module, "_generate_creation_task_person_render_record", fake_generate)
     monkeypatch.setattr(main_module, "_person_render_media_path", lambda _: Path("/tmp/test-render.mp4"))
-    response = state.client.post(f"/api/creation-tasks/{task.id}/montage/plan")
-    assert response.status_code == 200, response.text
-    body = response.json()
+    _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, task.id, "plan")
+    # Existing planning diagnostic with fixture providers, not the public/device path.
+    response = main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id)
+    assert response.task_id == task.id
+    body = response.model_dump()
     assert len(calls) == expected_calls
     assert body["presenter_share_target"] == target
     assert body["presenter_share_actual"] == target
@@ -3471,14 +3479,29 @@ def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(pe
     before = state.client.get(base).json()["subtitle_tracks"]
     changed = main_module._retime_montage_for_narration_segments(state.workspace_id, state.montage,
         [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/new")
-    # Model execution is covered separately; exercise the real confirmation transaction and file publication.
+    # Explicit diagnostic fixture durations exercise persistence/publication; no model evidence.
     regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
         for segment in state.production.list_narration_segments(
             state.workspace_id, state.task.id, state.task.confirmed_script_id)]
-    monkeypatch.setattr(main_module, "_regenerate_creation_task_narration_segment",
-        lambda **kwargs: (regenerated, None, changed))
+    def must_not_generate(**kwargs):
+        pytest.fail("未接许可的公开局部配音确认不能执行生成")
+    monkeypatch.setattr(main_module, "_regenerate_creation_task_narration_segment", must_not_generate)
+    with state.production._connect() as conn:
+        persisted_before = tuple(conn.iterdump())
     response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
-    assert response.status_code == 200, response.text
+    assert response.status_code == 503, response.text
+    assert "局部配音重做尚未接入设备许可" in response.json()["detail"]
+    with state.production._connect() as conn:
+        assert tuple(conn.iterdump()) == persisted_before
+    assert state.client.get(base).json()["subtitle_tracks"] == before
+    # Diagnostic-only confirmed fixture facts; no model, permission or product support claim.
+    proposal = state.production.get_edit_proposal(state.workspace_id, preview.json()['proposal']['id'])
+    current_task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    base_version = state.production.get_timeline_version(state.workspace_id, proposal.operation['payload']['base_version_id'])
+    main_module._persist_typed_montage_edit(workspace_id=state.workspace_id, task=current_task,
+        proposal=proposal, base_version=base_version, updated_plan=changed,
+        operation_type="RegenerateNarrationSegment", operation_payload=proposal.operation['payload'],
+        narration_segments=regenerated)
     after = state.client.get(base).json()["subtitle_tracks"]
     assert after[0]["cues"][0]["end_seconds"] == 6
     assert after[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
@@ -4606,8 +4629,10 @@ def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
     assert after['montage']['duration_seconds']==expected
     assert len(after['montage']['clips'])==3
     assert after['subtitle_tracks']==before['subtitle_tracks']==[]
-    rendered=state.client.post(base+'/montage/render',json={})
-    assert rendered.status_code==200,rendered.text
+    _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, state.task.id, "render")
+    # Preserve this pre-existing real-media diagnostic, never restore the public fallback.
+    rendered=main_module._render_creation_task_montage_for_workspace(state.workspace_id,state.task.id)
+    assert rendered.status=="rendered"
     media=state.client.get(base+'/output')
     assert media.status_code==200 and len(media.content)>1000
     output=source.parent/'silence-result.mp4'
@@ -4815,9 +4840,12 @@ def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_rend
     state.montage.clips[0].person_render_id=None
     state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
-    blocked=state.client.post(f'/api/creation-tasks/{state.task.id}/montage/render',json={})
-    assert blocked.status_code==409,blocked.text
-    assert '使用状态' in blocked.text
+    _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, state.task.id, "render")
+    # The internal diagnostic still enforces the material's authoritative use state.
+    with pytest.raises(main_module.HTTPException) as blocked:
+        main_module._render_creation_task_montage_for_workspace(state.workspace_id, state.task.id)
+    assert blocked.value.status_code == 409
+    assert '使用状态' in str(blocked.value.detail)
     assert state.client.put(base+'/use-state',json={'use_state':'unknown'}).status_code==422
     assert state.client.put(base+'/review',json={'review_status':'approved','usage_role':'b_roll','rights_confirmed':True}).status_code==422
     assert state.client.put(base+'/use-state',json={'use_state':'available'}).status_code==200

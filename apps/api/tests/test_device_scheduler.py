@@ -785,6 +785,32 @@ def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit
                       ("retried", "result_invalid", "member-a", "done")]
 
 
+@pytest.mark.parametrize("granted", [False, True])
+def test_revoked_owner_can_cancel_with_only_actual_status_and_no_read_right(tmp_path, monkeypatch, granted):
+    scheduler = _scheduler(tmp_path)
+    original = scheduler.submit(_intent("job"), "member-a")
+    grant = scheduler.pick_and_grant() if granted else None
+    scheduler.owners.revoked = True
+    monkeypatch.setattr(scheduler.owners, "can_view_detail", lambda *_: False)
+    monkeypatch.setattr(scheduler.owners, "can_view_device_summary", lambda *_: False)
+    try:
+        with pytest.raises(PermissionError):
+            scheduler.cancel(original.id, "member-b")
+        result = scheduler.cancel(original.id, "member-a")
+        assert result == {"id": original.id, "state": "yield_requested" if granted else "cancelled",
+                          "wait_reason": "user_cancelled"}
+        with pytest.raises(PermissionError):
+            scheduler.view_for(original.id, "member-a")
+        if grant is not None:
+            scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
+                                    checkpoint_write=lambda *_: None, cancelled=True)
+            scheduler.assert_released(grant)
+        with pytest.raises(PermissionError):
+            scheduler.submit(_intent("other"), "member-a")
+    finally:
+        scheduler.close()
+
+
 def test_cancelled_request_retries_only_by_explicit_authorized_call(tmp_path):
     scheduler = _scheduler(tmp_path)
     original = scheduler.submit(_intent("job"), "member-a")
@@ -820,3 +846,45 @@ def test_defer_keeps_permit_while_registered_child_is_alive(tmp_path):
         if child.poll() is None:
             child.terminate()
             child.wait(timeout=5)
+
+
+def test_scheduler_keeps_exact_host_refusal_and_checks_revocation_first(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.host_resource_probes import HostBudget, HostResourceProbe, HostResourceRefusal
+    import app.host_resource_probes as probes
+
+    class MaterialOwners(Owners):
+        def verify_submission(self, intent, actor):
+            return replace(super().verify_submission(intent, actor),
+                           resources={"kind": "material_hash", "size_bytes": 10})
+
+    owners = MaterialOwners()
+    available = [100]
+    calls = []
+    monkeypatch.setattr(probes.psutil, "disk_io_counters", lambda: SimpleNamespace(read_bytes=0, write_bytes=0))
+    monkeypatch.setattr(probes.psutil, "cpu_percent", lambda interval: calls.append("cpu") or 12)
+    monkeypatch.setattr(probes.psutil, "virtual_memory", lambda: SimpleNamespace(available=available[0]))
+    monkeypatch.setattr(probes.psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(probes.psutil, "disk_usage", lambda path: SimpleNamespace(free=200))
+    probe = HostResourceProbe(tmp_path / "business.sqlite", disk_paths=(tmp_path,),
+                              budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    scheduler = _scheduler(tmp_path, owners=owners, resources=probe)
+    scheduler.submit(_intent("bounded"), "member-a")
+    grant = scheduler.pick_and_grant()
+    assert grant is not None
+    available[0] = 99
+    with pytest.raises(HostResourceRefusal) as stopped:
+        scheduler.assert_grant(grant)
+    assert stopped.value.decision.verdict is False
+    assert stopped.value.decision.checks["available_memory_bytes"] == {"actual": 99, "minimum": 100, "passed": False}
+    assert len(calls) == 2  # Admission plus the precise refusing call, no diagnostic resample.
+    owners.revoked = True
+    with pytest.raises(PermissionError):
+        scheduler.assert_grant(grant)
+    assert len(calls) == 2  # Resource diagnosis cannot bypass earlier continuous authorization.
+    owners.revoked = False
+    scheduler.fail_unit(grant, reason="fixture_host_refusal", failure_write=lambda conn, current: None)
+    scheduler.assert_released(grant)
+    assert scheduler._get(grant.request_id).state == "failed"
+    with sqlite3.connect(scheduler.database_path) as conn:
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
