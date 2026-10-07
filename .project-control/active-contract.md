@@ -27,7 +27,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 24：资源拒绝准确诊断及退役CI消费者同步 | 仅HostResourceProbe/调度assert诊断与三项既有直接专项 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 25：准确资源诊断后的短Qwen实测 | 产品写权零；冻结组合、新根、真实准入与单次START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 26：Pi 编辑指令与结果语义修复 | 仅assistant_pi/diary_tools与既有直接专项；GUI候选冻结后具名放行 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -92,7 +92,7 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 报告新根report.md，准确组合SHA、实际Qwen音频/ffprobe、首次首因或成功观测、真实父/子组/Grant释放、既有模型stat只读、不外推长稿/Intel/多用户/音质。不关闭卡/远端，不称GUI/云身份/完整制作通过；主控实际人物口型与独立编辑重输出缺口仍留在整体目标中。
 
-## A：资源拒绝准确诊断及退役CI消费者同步（任务 24）
+## A：资源拒绝准确诊断及退役CI消费者同步（任务24已结束、候选保留，无写/操作权）
 
 `MAIN-RESOURCEREASON-20261007-24`：任务22 failed worker_done与父/子组/许可释放已由主控接受，同一manta新Dispatch恢复已授权纵向修正。保存87834d3原连续制作分支，从主控main Git准确组合对象 `cb26f49e339d303e56f1f881fb60f071ea7e6e59`（integration review branch）建新独立clean `codex/wil26-resource-reasons-ci-20261007`，只机械取得对象，不merge旧混合历史。B23冻结cb26做GUI，产品写权零且与本单无文件重叠。
 
@@ -105,6 +105,20 @@ CI唯一失败文件test_montage_pipeline.py，共22失败/1550 passed/20 skippe
 最小验证：新增准确拒绝/未知分支的直接可复现实证与不放宽阈值断言，现有probe/scheduler受影响专项；只跑22项CI失败参数集合及真正必要的直接下层断言，不重复105或全量矩阵。可以一次无模型真实HostResourceProbe读取以证明诊断与实际测量值对应，0.1秒上下；不复测22、不启动模型/媒体/服务/浏览器、不访真实库/Keychain/云/账号、不安装、push/PR/Linear。本单模型实验写/操作权零。有界修订A24.1：允许22失败集合中既有test_silence_edit_real_preview_confirm_and_undo唯一一次真实FFmpeg/FFprobe专项，仅新证据根内8秒64x64合成视频与8秒合成音频及该既有diagnostic renderer所需输出/帧检查；不改测试输入或帧/像素/时间线/撤销断言来避实证，不运行其它媒体矩阵或模型。整体120秒父watchdog、自有进程组，超时仅终止本单组并核退出，记录实际产物和释放；必要子进程上限可仅由隔离测试启动器约束，不改生产预算/渲染路径。该诊断FFmpeg专项不证明当前产品已恢复独立编辑出片。
 
 交独立SHA/父cb26/严格净差额、每个CI失败对应最终有效判据、精确资源拒绝证据和最小用例、测试释放及clean。主控机械集成原PR95并只重新核新CI；B23未变化GUI/实际Pi证据按blob与消费者影响复用。下一次真实Qwen需新冻结候选/具名根与START，不能从本单拿到模型权。不关闭WIL26/整体RETIRED，不提出源码以外发布批准。
+
+## A：准确资源诊断后的短 Qwen 实测（任务 25）
+
+`MAIN-QWENDIAGNOSED-20261007-25`：任务24 succeeded worker_done、严格四路径差额/37个不同专项、十份permit与锁释放已接受；主控已机械cherry-pick45e80fc到准确组合 **b6ecba2f13d99ca7f5d2d29c2846dd2fa7756523**，其parent cb26，产品tree含A24唯一诊断修正。B23 actual GUI所有PID/组/端口与主控秘密扫描/store锁定完成，B26仅静态代码施工，模型窗口测试/GUI保持HOLD。复用同一manta visible终端，新Dispatch；保留45e80原分支/代码clean，本单无产品/测试/权威写权。
+
+只允许新 `/tmp/main-acceptance-20261007/qwen-measure-diagnosed/`，准确b6ec候选archive及blob清单冻结；旧qwen-measure-fixed/A17只读定向复用已明确合法的短参考WAV、无Key环境和测试准备方法，绝不写旧DB/attempt/session。只读已安装外盘Qwen3-TTS0.6B8bit完整模型13文件stat与model-runtime/bin/python；新模型根仅本Qwen软链接，不下载/安装/更改用户模型/运行其他avatar/VL模型。新HOME/XDG/config/cache/library/output/temp/DB/device/agent，production scheduled OFF，设备预算仍未标定，不能修改生产默认。
+
+真实LocalMember owner/MemberDeviceAccess/CreationJobOwnerVerifier与同源真实DeviceScheduler/HostResourceProbe；新的合成task/job原owner/workspace明确，真实授权持久化、真实generation、子PID登记先于exec、进程组检查及释放均不替身。短参考“这是一段测试声音。”与目标“今天阳光很好。”，单段/CPUthreads1；不运行整链或CPU成片/人物。保持A22全部初始实验上限：NarrationBudget文字80/段落1/参考1048576B/音频15s/输出2097152B/线程1/阶段120s/组RSS2147483648B/组threads128/sample0.1s/追加memory2147483648B与disk8388608B；HostBudget CPU75/minavailable1610612736B/maxswap真实执行baseline+67108864B/mindisk1073741824B/maxIO67108864B/s/input2097152B/sample0.1s。准入≥3758096384B，不降余量/放宽cap/关闭任何检查或假idle。父180秒、阶段120秒；取消/超限/首因失败仅终止自己组。离线与写入边界复用既有OS沙盒准确限制，无外部网络/真实库/Key/云/安装/下载/其他模型。
+
+先新根准备、b6ec源码完整blob与模型stat、真实无模型资源预测/预算、拟执行命令/合法owner准备证明报告主控；停PREPARED等本Dispatch START_MEASURE。一次START仅一次attempt marker/真实受准入短Qwen实验，无重试、自动下一阶段或整作业succeeded。若准入拒绝准确当下指标与阈值，不能硬跑。
+
+本轮必须捕获**实际触发拒绝那次**HostResourceRefusal.decision并dataclasses.asdict写本新根measurement，完整declared/checks/reason/采样间隔/门槛留证，产品str仅复用A24自然中文，不用事后liveprobe倒推。其他首因保留真实stack/阶段与子exec ACK、是否已加载/推理的可证事实；无音频不能说Qwen成功。父0.1s遥测组RSS/threads/主机available/swap增量/时间/采样gap；MLX allocator不可读准确UNAVAILABLE，不将RSS冒充GPU。若有真实audio就ffprobe核格式/时长/字节/hash，不以合成或say参考替代输出/音质验收。
+
+最终新根report.md/measurement/release-evidence真实父/子组退出、device.lock非阻塞可重获、ledger与SQLpermit free、原请求/作业准确失败或单阶段结果、源码blobs/13模型stat未变；本地manta45e80 clean/integration b6ec保持。只有实际释放正证后才由主控让B26测试/GUI恢复。失败或成功均交worker_done一次，不自行修首因/改预算或新实验；主控根据当次证据推进真实缺口。不能称人物/长稿/Intel/多人/云身份/完整制作/分发完成，不关闭WIL26。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
