@@ -28,7 +28,7 @@
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 11：连续制作与账号设备许可纵向闭环 | 仅下方具名 API、专项及新增 migration；main.py 唯一写者 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 12：Pi 依赖检查与准确修复提示；Key/对话验收准备 | 仅下方 Pi/体检、直接专项与桌面说明；不写 A 所有文件，不读取真实 Key |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 13：冻结 Pi 候选的依赖页面验收 | 产品写权零；仅新隔离验收目录/服务/页面，不读取真实 Key |
 
 ## A：连续制作与账号许可闭环（当前任务 11）
 
@@ -46,7 +46,9 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 最小验证：隔离 HOME/XDG/config/SQLite/model/temp/output；隔离 PostgreSQL 实际 RPC 权限正负（错 proof/设备、paused/left、撤空间、retired、anon直读拒绝），测试进程不碰真实 Keychain。验证 confirmed-script-only 真正触发配音/故事板回调并到 render，重复开始幂等、失败恢复保留上游、取消释放；账号提交/授予/实际执行/非取消提交结果/重开均复核原元组，unknown 不派发，local/跨空间与预算门禁不回退。仅必要回调替身证据不能算真实模型、真实账号 GUI 或成片验收；后续由主控在冻结候选具名验证。源码完成后一次最小直接专项，不全量/构建/收费/云部署，交准确候选/diff/测试/退役边界与释放证明。
 
-## B：Pi 就绪与设置验收准备（当前任务 12）
+## B：Pi 就绪与设置验收准备（候选保留，写权收回）
+
+B12 候选固定 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，产品写权已收回；以下范围只解释保留成果。任务 13 不改该候选。
 
 `MAIN-PIREADY-20261007-12`：准确产品基线同上；pipefish clean 后新独立 `codex/wil165-pi-readiness-20261007`。目标：用户填 MiniMax Key 后能明确知道对话依赖是否可用，缺依赖给准确可执行动作；保留 MiniMax 默认与 DeepSeek 主动切换，无静默供应商回退。owned：`apps/api/app/assistant_pi.py`、`runtime_health.py`、`preflight.py`，既有 `tests/test_assistant_pi_failures.py`、`test_runtime_health.py`（若存在）、`test_runtime_settings.py`；有界修订 B12.1 追加互不重叠的既有 `apps/api/tests/test_assistant_pi.py`、`test_setup_preflight.py`，仅补真实 Node 预检前提与功能级依赖不阻断核心首启的直接消费者断言；`apps/desktop/README.md` 仅依赖使用说明，不重复产品权威。其他消费者测试确需增改时先回报准确文件，主控核互斥后修订。
 
@@ -54,9 +56,19 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 用隔离环境做必要缺依赖/参数/环境引用与工具可见性验证；不读 `/Users/Zhuanz/Desktop/sk.docx`、真实 Keychain/账号/配置，不调用真实模型。可准备新的 `/tmp/pipefish-pi-readiness-20261007/` 与最小合成材料/只读候选映射，给主控实际 Key→Pi→HTTP工具验收所需最短命令和精确运行条件。暂不起 GUI/API 服务、不重用旧验收 DB/profile，不在 A 冻结前宣称全链完成。读本合同及认证 §3、PRD §2.6 后语义 ACK 即开始。交候选/精确净差额/最小测试、已安装协议检查、安装包尚不自带 Pi/Node 的真实边界和后续 GUI 条件。
 
+## B：Pi 依赖准备真实页面验收（任务 13，仅在 B12 完成并冻结后生效）
+
+`MAIN-PIGUI-20261007-13`：同一可见 pipefish 线程复用，新 Dispatch；产品代码写权为零。准确冻结 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，不混入 A 的未冻结源码，不要求等待未变化的创建模块。只写新 `/tmp/main-acceptance-20261007/pi-health/`；archive 排除 dotenv，导入前隔离 HOME/XDG/DB/config/workspace配置/library/output/cache/model/temp。不读真实 Keychain、桌面 Key 文档、账号、旧用户数据；Keychain 测试路径在新根且不初始化/读取登录钥匙串。当前无配置模型、无外部请求、无制作/分析。
+
+允许准备合成目录及本机可信 local owner，先核 API4537/Web3137 空闲、记录自有 PID/PGID/30分钟租约，起唯一隔离 API/Web。已安装 Pi/Node 仅通过准确 executable/PATH 只读复用，禁止安装/升级。新建 scope=isolated Orca 内嵌 browser profile/page，只访问自己的 http://127.0.0.1:3137/health 及必要首启/健康页面；始终准确 page ID，native click/key/snapshot/screenshot，eval 只读 DOM。不得操作用户 profile/cookie/tab，旧 cua_repl 策略路线不重试。
+
+可见验证：已安装依赖情况下显示对话程序/运行环境/业务工具的真实就绪说明，并明确未做模型请求。然后仅停止自有 API，以同一隔离数据重启并将 Pi executable 指向新根内不存在的准确路径，刷新真实页面，展开缺 Pi 项看到正确安装命令及不把缺依赖当密钥拒绝。必要只读 GET 核对 setup preflight 的三个 required 与对话项 required=false，不能将 GET 当首启 GUI 完成；不需要重验未变业务。截图真实来自两个实际环境，不伪造 HTTP 或数据响应。
+
+新页面异常只报告步骤与最小消费者，不获得源码写权。结束释放全部自有 PID/PGID/端口及新页面/profile，证明端口空闲、保留旧证据/用户浏览器。交准确 SHA、真实截图/说明、只读辅助证据及未验项；这只验依赖页面，不是 Key 保存、真实 MiniMax 对话、连续制作、桌面包或账号隔离通过。绑定 DESIGN、认证 §3 及本合同，语义 REBASE_ACK 后直接开始。
+
 ## 主控真实 MiniMax 验证例外
 
-用户提供文档并批准执行，主控可仅解析该 DOCX 中的唯一 Key，保存到新具名验收工作区 `minimax-validation-20261007` 的系统钥匙串条目；不枚举/读取/修改其他登录钥匙串内容，不改源文档、不迁移旧用户配置。仅用此 Key 对 MiniMax 官方 `https://api.minimax.io/v1` / `MiniMax-M3` 发出完成本轮验证所需的少量短文字/工具请求（先一个短鉴权探针），不上传原始媒体/整库/Key到其他域或代理，不测试 DeepSeek 的真实付费调用。Key不得写进终端/聊天/线程消息/仓库/构建/env明文或报告；只保存无秘密的状态、用量、错误类别和结果证据。Pi 真实轮次在冻结候选隔离运行环境由主控具名交接后验证；本地语音/口型模型、真实 Supabase 部署/账号、安装包和分发仍需独立具名安排。该例外不授权 A/B 读文档或真实凭据。
+用户提供文档并批准执行，主控可仅解析该 DOCX 中的唯一 Key，保存到新具名验收工作区 `minimax-validation-20261007` 的系统钥匙串条目；不枚举/读取/修改其他登录钥匙串内容，不改源文档、不迁移旧用户配置。用户已确认 Key 来自国内平台；首次国际接口401保留，后续仅用此 Key 对国内官方文档当前指定 `https://api.minimax.cn/v1` / `MiniMax-M3` 发出完成本轮验证所需的少量短文字/工具请求（先一个短鉴权探针），不再对国际接口重试，不上传原始媒体/整库/Key到其他域或代理，不测试 DeepSeek 的真实付费调用。Key不得写进终端/聊天/线程消息/仓库/构建/持久化 env 明文文件或报告；只保存无秘密的状态、用量、错误类别和结果证据。Pi 真实轮次在冻结候选隔离运行环境由主控具名交接后验证；本地语音/口型模型、真实 Supabase 部署/账号、安装包和分发仍需独立具名安排。该例外不授权 A/B 读文档或真实凭据。
 
 本轮有界修订 `MAIN-CONTINUE-20261007-02`：用户已明确“可以，你执行吧”，并愿协助浏览器事项。A 以已交 WIL-110 候选 `9645d70e0eb94b6dea639b4de5dc28b6034e25e7` 收尾 PR #90 的实际 CI 失败，新增 owned tests 为 `apps/api/tests/test_production_foundation.py` 与 `test_video_templates.py` 的本单直接消费者夹具/断言；不得弱化可信身份、扩张匿名诊断空间或把私有内容改共享以消除失败。先最小复现，区分生产回归与旧测试身份前提，再一次必要专项。B 定向读取该冻结候选或主控后来指定的修复候选，只在自有临时目录准备服务和合成测试数据，提供用户人工 GUI 操作的准确 URL、短步骤、PID/端口及停止方法；这不是代理更换浏览器工具执行被阻断动作。B 不进行导航/点击/键盘操作、不更改策略。用户未实际操作前仅为 readiness，不能宣称 GUI 通过；用户选择暂缓时停止自有服务并保留报告。A/B 阅读本段后语义 ACK 即可开始本轮任务，WIL-108 仍需独立派工。
 
