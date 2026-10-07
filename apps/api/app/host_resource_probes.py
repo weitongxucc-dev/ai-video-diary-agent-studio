@@ -12,7 +12,7 @@ import os
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import quote
@@ -337,6 +337,81 @@ def admit_resource(kind: str, request: Mapping[str, object],
     )
 
 
+@dataclass(frozen=True)
+class HostResourceDecision:
+    """One probe call's verdict and evidence; never a cached readiness fact."""
+
+    verdict: bool | None
+    declared: dict[str, object]
+    checks: dict[str, dict[str, object]]
+    reason: str | None = None
+    observed_interval_seconds: float | None = None
+
+
+class HostResourceRefusal(RecoveryBlocked):
+    """Carry the exact refusing observation through the existing failure path."""
+
+    def __init__(self, decision: HostResourceDecision) -> None:
+        self.decision = decision
+        labels = {
+            "cpu_percent": ("CPU占用", "%"),
+            "available_memory_bytes": ("可用内存", "字节"),
+            "swap_used_bytes": ("交换空间已用量", "字节"),
+            "disk_io_bytes_per_second": ("磁盘读写速率", "字节/秒"),
+            "size_bytes": ("输入大小", "字节"),
+            "text_chars": ("配音文字数量", "字"),
+            "section_count": ("段落数量", "段"),
+            "reference_bytes": ("参考音频大小", "字节"),
+            "duration_seconds": ("配音时长", "秒"),
+            "max_output_bytes": ("输出大小", "字节"),
+            "threads": ("线程数量", "个"),
+            "timeout_seconds": ("阶段时限", "秒"),
+            "asset_count": ("素材数量", "个"),
+            "input_bytes": ("素材输入大小", "字节"),
+        }
+        reasons = {
+            "disk_io_before_unavailable": "采样前的磁盘读写计数不可读取",
+            "disk_io_after_unavailable": "采样后的磁盘读写计数不可读取",
+            "sample_interval_nonpositive": "磁盘负载采样时长无效",
+            "disk_io_counters_regressed": "磁盘读写计数回退，无法确认当前负载",
+            "render_budget_or_execution_mode_unavailable": "成片预算或执行模式不可用",
+            "render_numeric_fields_invalid": "成片时长或阶段时限无效",
+            "render_integer_fields_invalid": "成片输入的数量或大小字段无效",
+            "render_required_fields_zero": "成片必需的尺寸、数量或线程为零",
+            "stage_budget_unavailable": "当前阶段的专属设备预算尚未标定",
+            "stage_execution_mode_unavailable": "当前阶段的执行模式不受支持",
+            "material_size_invalid": "素材输入大小无效",
+            "scene_budget_or_source_codec_unavailable": "场景预算或源视频编码不可用",
+            "scene_fields_invalid": "场景检测的输入声明无效",
+            "scene_output_sampling_contract_invalid": "场景采样数量与输入时长不一致",
+            "unsupported_resource_kind": "当前阶段的资源类型不受支持",
+            "granted_resources_unreadable": "当前许可的阶段资源记录不可读取",
+            "declared_resources_exceed_budget": "阶段输入超出已标定的设备预算",
+        }
+        details = []
+        for metric, check in decision.checks.items():
+            if check.get("passed") is not False:
+                continue
+            label, unit = (("目标磁盘可用空间", "字节") if metric.startswith("disk_free_bytes:")
+                           else labels[metric])
+            bound = (f"至少需要{check['minimum']}{unit}" if "minimum" in check else
+                     f"上限{check['maximum']}{unit}")
+            details.append(f"{label}为{check['actual']}{unit}，{bound}")
+        if not details and decision.reason:
+            metric = decision.reason.partition(":")[0]
+            if metric == "disk_free_bytes":
+                details.append("目标磁盘可用空间不可读取")
+            elif metric in labels:
+                details.append(f"{labels[metric][0]}不可读取")
+            elif metric == "stage_field_invalid":
+                details.append(f"{labels[decision.reason.split(':', 1)[1]][0]}声明无效")
+            else:
+                details.append(reasons[decision.reason])
+        super().__init__("运行中资源未知或不足，须在安全边界让出：" + "；".join(details)
+                         + "。请检查本机资源与该阶段预算后再试，当前任务保持。")
+
+
+
 class HostResourceProbe:
     """Admit measured material work and explicitly bounded CPU render only."""
 
@@ -350,25 +425,32 @@ class HostResourceProbe:
         self.disk_paths = tuple(Path(path).expanduser().resolve() for path in disk_paths)
         self.budget = budget
 
-    def _sample(self, resources: dict[str, object]) -> bool | None:
+    def _sample(self, resources: dict[str, object]) -> HostResourceDecision:
+        checks: dict[str, dict[str, object]] = {}
+
+        def decision(verdict: bool | None, reason: str | None = None,
+                     interval: float | None = None) -> HostResourceDecision:
+            return HostResourceDecision(verdict, dict(resources), checks, reason, interval)
+
         kind, size = resources.get("kind"), resources.get("size_bytes")
         render = self.budget.cpu_render if kind == "creation_render" else None
         if kind == "creation_render":
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
-                return None
+                return decision(None, "render_budget_or_execution_mode_unavailable")
             numeric_fields = ("duration_seconds", "timeout_seconds")
             integer_fields = ("width_px", "height_px", "input_bytes", "clip_count",
                               "overlay_count", "max_output_bytes", "threads")
             if any(type(resources.get(name)) not in {int, float}
                    or not math.isfinite(resources[name]) or resources[name] <= 0
                    for name in numeric_fields):
-                return None
+                return decision(None, "render_numeric_fields_invalid")
             if any(type(resources.get(name)) is not int or resources[name] < 0
                    for name in integer_fields):
-                return None
+                return decision(None, "render_integer_fields_invalid")
             if any(resources[name] == 0 for name in
                    ("width_px", "height_px", "clip_count", "max_output_bytes", "threads")):
-                return None
+                return decision(None, "render_required_fields_zero")
+            checks["render_budget"] = {"limits": asdict(render)}
             if (resources["duration_seconds"] > render.max_duration_seconds
                     or resources["width_px"] > render.max_width_px
                     or resources["height_px"] > render.max_height_px
@@ -380,14 +462,14 @@ class HostResourceProbe:
                     or resources["max_output_bytes"] > render.max_output_bytes
                     or resources["threads"] > render.max_threads
                     or resources["timeout_seconds"] > render.max_timeout_seconds):
-                return False
+                return decision(False, "declared_resources_exceed_budget")
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
         elif kind in {"creation_narration", "creation_montage_plan"}:
             stage = self.budget.narration if kind == "creation_narration" else self.budget.montage
             if stage is None:
-                return None
+                return decision(None, "stage_budget_unavailable")
             bounds = ({"text_chars": stage.max_text_chars, "section_count": stage.max_section_count,
                        "reference_bytes": stage.max_reference_bytes, "duration_seconds": stage.max_duration_seconds,
                        "max_output_bytes": stage.max_output_bytes, "threads": stage.max_threads,
@@ -398,29 +480,32 @@ class HostResourceProbe:
                        "timeout_seconds": stage.max_timeout_seconds})
             expected_mode = "isolated_qwen3_tts" if kind == "creation_narration" else "metadata_only"
             if resources.get("execution_mode") != expected_mode:
-                return None
+                return decision(None, "stage_execution_mode_unavailable")
             for name, limit in bounds.items():
                 value = resources.get(name)
                 expected_types = {int, float} if name in {"duration_seconds", "timeout_seconds"} else {int}
                 if type(value) not in expected_types or not math.isfinite(value) or value < 0:
-                    return None
+                    return decision(None, f"stage_field_invalid:{name}")
+                checks[name] = {"actual": value, "maximum": limit, "passed": value <= limit}
                 if value > limit:
-                    return False
+                    return decision(False, "declared_resources_exceed_budget")
             required_memory = self.budget.min_available_memory_bytes + stage.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
             if kind == "creation_narration":
                 required_disk += stage.additional_disk_bytes
         elif kind in self._SUPPORTED_KINDS:
             if type(size) is not int or size < 0:
-                return None
+                return decision(None, "material_size_invalid")
+            checks["size_bytes"] = {"actual": size, "maximum": self.budget.max_unit_input_bytes,
+                                    "passed": size <= self.budget.max_unit_input_bytes}
             if size > self.budget.max_unit_input_bytes:
-                return False
+                return decision(False, "declared_resources_exceed_budget")
             required_memory = self.budget.min_available_memory_bytes
             required_disk = self.budget.min_free_disk_bytes
         elif kind == "material_scene_window":
             scene = self.budget.scene_window
             if scene is None or resources.get("source_codec") not in scene.allowed_source_codecs:
-                return None
+                return decision(None, "scene_budget_or_source_codec_unavailable")
             real_fields = ("source_frame_rate_fps", "scan_seconds", "output_sample_fps",
                            "timeout_seconds")
             int_fields = ("size_bytes", "source_width_px", "source_height_px",
@@ -430,7 +515,8 @@ class HostResourceProbe:
                     for name in real_fields)
                     or any(type(resources.get(name)) is not int or resources[name] <= 0
                            for name in int_fields)):
-                return None
+                return decision(None, "scene_fields_invalid")
+            checks["scene_budget"] = {"limits": asdict(scene)}
             if (resources["size_bytes"] > scene.max_source_bytes
                     or resources["source_width_px"] > scene.max_source_width_px
                     or resources["source_height_px"] > scene.max_source_height_px
@@ -443,40 +529,79 @@ class HostResourceProbe:
                     or resources["output_max_frames"] > scene.max_output_frames
                     or resources["ffmpeg_threads"] > scene.max_threads
                     or resources["timeout_seconds"] > scene.max_timeout_seconds):
-                return False
+                return decision(False, "declared_resources_exceed_budget")
             if resources["output_sample_fps"] * resources["scan_seconds"] > resources["output_max_frames"]:
-                return None
+                return decision(None, "scene_output_sampling_contract_invalid")
             required_memory = self.budget.min_available_memory_bytes + scene.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + scene.additional_disk_bytes
         else:
-            return None
+            return decision(None, "unsupported_resource_kind")
+        # Known thresholds remain available even when a later metric is unreadable.
+        checks.update({
+            "cpu_percent": {"maximum": self.budget.max_cpu_percent},
+            "available_memory_bytes": {"minimum": required_memory},
+            "swap_used_bytes": {"maximum": self.budget.max_swap_used_bytes},
+            "disk_io_bytes_per_second": {"maximum": self.budget.max_disk_io_bytes_per_second},
+            **{f"disk_free_bytes:{path}": {"minimum": required_disk} for path in self.disk_paths},
+        })
+        sampling = "disk_io_before"
+        duration = None
         try:
             before = psutil.disk_io_counters()
             if before is None:
-                return None
+                return decision(None, "disk_io_before_unavailable")
             start = time.monotonic()
+            sampling = "cpu_percent"
             cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
+            checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
+                                     "passed": cpu <= self.budget.max_cpu_percent}
             duration = time.monotonic() - start
+            sampling = "disk_io_after"
             after = psutil.disk_io_counters()
-            if after is None or duration <= 0:
-                return None
+            if after is None:
+                return decision(None, "disk_io_after_unavailable", duration)
+            if duration <= 0:
+                return decision(None, "sample_interval_nonpositive", duration)
             io_bytes = (after.read_bytes - before.read_bytes +
                         after.write_bytes - before.write_bytes)
             if io_bytes < 0:
-                return None
+                checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
+                    "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
+                    "after_write_bytes": after.write_bytes}
+                return decision(None, "disk_io_counters_regressed", duration)
+            rate = io_bytes / duration
+            checks["disk_io_bytes_per_second"] = {
+                "actual": rate, "maximum": self.budget.max_disk_io_bytes_per_second,
+                "passed": rate <= self.budget.max_disk_io_bytes_per_second,
+                "delta_bytes": io_bytes,
+            }
+            sampling = "available_memory_bytes"
             memory = psutil.virtual_memory()
+            checks[sampling] = {"actual": memory.available, "minimum": required_memory,
+                                "passed": memory.available >= required_memory}
+            sampling = "swap_used_bytes"
             swap = psutil.swap_memory()
-            disks = tuple(psutil.disk_usage(str(path)) for path in self.disk_paths)
-        except (OSError, psutil.Error, ValueError):
-            return None
-        return (cpu <= self.budget.max_cpu_percent
-                and memory.available >= required_memory
-                and swap.used <= self.budget.max_swap_used_bytes
-                and all(disk.free >= required_disk for disk in disks)
-                and io_bytes / duration <= self.budget.max_disk_io_bytes_per_second)
+            checks[sampling] = {"actual": swap.used, "maximum": self.budget.max_swap_used_bytes,
+                                "passed": swap.used <= self.budget.max_swap_used_bytes}
+            disks = []
+            for path in self.disk_paths:
+                sampling = f"disk_free_bytes:{path}"
+                disk = psutil.disk_usage(str(path))
+                disks.append(disk)
+                checks[sampling] = {"actual": disk.free, "minimum": required_disk,
+                                    "passed": disk.free >= required_disk}
+        except (OSError, psutil.Error, ValueError) as exc:
+            return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
+        # Exactly the existing host gates, evaluated from this observation only.
+        return decision(cpu <= self.budget.max_cpu_percent
+                        and memory.available >= required_memory
+                        and swap.used <= self.budget.max_swap_used_bytes
+                        and all(disk.free >= required_disk for disk in disks)
+                        and io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
+                        interval=duration)
 
     def admit(self, request: WorkRequest) -> bool | None:
-        return self._sample(request.resources)
+        return self._sample(request.resources).verdict
 
     def _grant_resources(self, grant: Grant) -> dict[str, object] | None:
         if grant.database_path != self.database_path:
@@ -498,7 +623,11 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        return self._sample(resources) if resources is not None else None
+        decision = (self._sample(resources) if resources is not None else
+                    HostResourceDecision(None, {}, {}, "granted_resources_unreadable"))
+        if decision.verdict is not True:
+            raise HostResourceRefusal(decision)
+        return True
 
     def scene_runtime_limits(self, grant: Grant) -> SceneRuntimeLimits | None:
         resources = self._grant_resources(grant)

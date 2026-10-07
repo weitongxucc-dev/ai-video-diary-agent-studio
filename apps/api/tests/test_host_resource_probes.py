@@ -28,6 +28,9 @@ from app.host_resource_probes import (
     HostCapacity,
     HostProcessProbe,
     HostResourceProbe,
+    HostResourceRefusal,
+    HostResourceDecision,
+    NarrationBudget,
     ResourceAdmissionRejected,
     ResourceSamplingUnavailable,
     SceneWindowBudget,
@@ -554,3 +557,140 @@ def test_sample_host_capacity_unavailable_fails_explicitly(monkeypatch):
     monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: None)
     with pytest.raises(ResourceSamplingUnavailable):
         sample_host_capacity()
+
+
+@pytest.mark.parametrize("metric,actual,threshold", [
+    ("cpu_percent", 76, 75),
+    ("available_memory_bytes", 99, 100),
+    ("swap_used_bytes", 51, 50),
+    ("disk_free_bytes", 199, 200),
+    ("disk_io_bytes_per_second", 101, 100),
+])
+def test_runtime_refusal_contains_the_same_samples_and_unchanged_thresholds(
+    tmp_path, monkeypatch, metric, actual, threshold,
+):
+    import app.host_resource_probes as probes
+    values = {"cpu_percent": 75, "available_memory_bytes": 100, "swap_used_bytes": 50,
+              "disk_free_bytes": 200, "disk_io_bytes_per_second": 100}
+    values[metric] = actual
+    calls = []
+    counters = iter([SimpleNamespace(read_bytes=0, write_bytes=0),
+                     SimpleNamespace(read_bytes=values["disk_io_bytes_per_second"], write_bytes=0)])
+    def io():
+        calls.append("io")
+        return next(counters)
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", io)
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: values["cpu_percent"])
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=values["available_memory_bytes"]))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=values["swap_used_bytes"]))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=values["disk_free_bytes"]))
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: {"kind": "material_hash", "size_bytes": 10})
+    with pytest.raises(HostResourceRefusal) as stopped:
+        probe.continue_unit("fixture-grant")
+    decision = stopped.value.decision
+    key = f"disk_free_bytes:{tmp_path}" if metric == "disk_free_bytes" else metric
+    failed = decision.checks[key]
+    assert decision.verdict is False and failed["passed"] is False
+    assert failed["actual"] == actual
+    assert failed["minimum" if metric in {"available_memory_bytes", "disk_free_bytes"} else "maximum"] == threshold
+    assert all(check["passed"] for name, check in decision.checks.items() if name != key)
+    assert decision.observed_interval_seconds == 1
+    assert calls == ["io", "io"]  # No second observation to explain the first refusal.
+    label = {"cpu_percent": "CPU占用", "available_memory_bytes": "可用内存", "swap_used_bytes": "交换空间已用量",
+             "disk_free_bytes": "目标磁盘可用空间", "disk_io_bytes_per_second": "磁盘读写速率"}[metric]
+    assert label in str(stopped.value) and str(actual) in str(stopped.value)
+
+
+@pytest.mark.parametrize("failure", ["before_missing", "after_missing", "regressed", "memory_unreadable"])
+def test_unknown_runtime_sampling_records_exact_cause_without_ready_fallback(tmp_path, monkeypatch, failure):
+    import app.host_resource_probes as probes
+    counters = iter([None if failure == "before_missing" else SimpleNamespace(read_bytes=10, write_bytes=0),
+                     None if failure == "after_missing" else SimpleNamespace(read_bytes=0 if failure == "regressed" else 10, write_bytes=0)])
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda: next(counters))
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: 12)
+    def unreadable():
+        raise OSError("fixture host memory read refused")
+    monkeypatch.setattr(psutil, "virtual_memory", unreadable)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: {"kind": "material_hash", "size_bytes": 10})
+    with pytest.raises(HostResourceRefusal) as stopped:
+        probe.continue_unit("fixture-grant")
+    decision = stopped.value.decision
+    assert decision.verdict is None
+    expected = {"before_missing": "disk_io_before_unavailable", "after_missing": "disk_io_after_unavailable",
+                "regressed": "disk_io_counters_regressed", "memory_unreadable": "available_memory_bytes: OSError: fixture host memory read refused"}
+    assert decision.reason == expected[failure]
+    expected_text = {"before_missing": "采样前的磁盘读写计数不可读取", "after_missing": "采样后的磁盘读写计数不可读取",
+                     "regressed": "磁盘读写计数回退", "memory_unreadable": "可用内存不可读取"}
+    assert expected_text[failure] in str(stopped.value)
+    if failure != "before_missing":
+        assert decision.checks["cpu_percent"]["actual"] == 12
+    if failure == "memory_unreadable":
+        assert decision.checks["disk_io_bytes_per_second"]["actual"] == 0
+        assert decision.checks["available_memory_bytes"] == {"minimum": 100}  # Never invent a value.
+
+
+def test_runtime_declared_budget_missing_and_grant_fact_unreadable_are_explicit(tmp_path, monkeypatch):
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts"}
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: resources)
+    with pytest.raises(HostResourceRefusal) as missing:
+        probe.continue_unit("fixture-grant")
+    assert missing.value.decision.verdict is None
+    assert missing.value.decision.reason == "stage_budget_unavailable"
+    assert missing.value.decision.checks == {}
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: None)
+    with pytest.raises(HostResourceRefusal) as unreadable:
+        probe.continue_unit("fixture-grant")
+    assert unreadable.value.decision.reason == "granted_resources_unreadable"
+
+
+def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, monkeypatch):
+    import app.host_resource_probes as probes
+    narration = NarrationBudget(80, 1, 1048576, 15, 2097152, 1, 120,
+                                2147483648, 128, 0.1, 2147483648, 8388608)
+    minimum_memory = 1610612736 + narration.additional_memory_bytes
+    minimum_disk = 1073741824 + narration.additional_disk_bytes + narration.max_output_bytes
+    reads = []
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: reads.append("cpu") or 75)
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda: SimpleNamespace(read_bytes=0, write_bytes=0))
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=minimum_memory))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=50))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=minimum_disk))
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                              budget=HostBudget(75, 1610612736, 50, 1073741824, 0, 2097152, narration=narration))
+    resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
+                 "text_chars": 80, "section_count": 1, "reference_bytes": 1048576,
+                 "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
+    assert probe.admit(SimpleNamespace(resources=resources)) is True
+    assert probe.admit(SimpleNamespace(resources={**resources, "text_chars": 81})) is False
+    assert probe.admit(SimpleNamespace(resources={**resources, "reference_bytes": 1048577})) is False
+    assert probe.admit(SimpleNamespace(resources={**resources, "execution_mode": "in_process"})) is None
+    assert probe.admit(SimpleNamespace(resources={**resources, "timeout_seconds": None})) is None
+    assert reads == ["cpu"]  # Declared rejection never becomes a ready host resample.
+
+
+def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(tmp_path):
+    decision = HostResourceDecision(False, {"kind": "material_hash", "size_bytes": 10}, {
+        "cpu_percent": {"actual": 76, "maximum": 75, "passed": False},
+        "swap_used_bytes": {"actual": 51, "maximum": 50, "passed": False},
+        "available_memory_bytes": {"actual": 1000, "minimum": 100, "passed": True},
+        f"disk_free_bytes:{tmp_path}": {"actual": 999, "minimum": 200, "passed": True},
+    }, observed_interval_seconds=0.1)
+    error = HostResourceRefusal(decision)
+    assert "CPU占用为76%，上限75%" in str(error)
+    assert "交换空间已用量为51字节，上限50字节" in str(error)
+    assert "1000" not in str(error) and str(tmp_path) not in str(error)
+    assert "material_hash" not in str(error) and "{" not in str(error)
+    assert error.decision is decision  # Full evidence survives without another observation.
+    unknown = HostResourceRefusal(HostResourceDecision(None, {}, {}, "stage_budget_unavailable"))
+    assert "专属设备预算尚未标定" in str(unknown)
+    disk = HostResourceRefusal(HostResourceDecision(None, {}, {}, f"disk_free_bytes:{tmp_path}: OSError: denied"))
+    assert "目标磁盘可用空间不可读取" in str(disk) and str(tmp_path) not in str(disk)
