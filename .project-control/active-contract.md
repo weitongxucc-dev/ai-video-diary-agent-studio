@@ -48,7 +48,7 @@ Owned files：`apps/api/app/source_repository.py`、`sources.py`、`knowledge_fi
 
 复用旧模块 `20df87f` 和 stash `wil108-wiring-wip-paused-20261007`，不改旧树/stash。完成真实触发、持久状态/结果、API 响应、页面展示与片段定位、重生成后旧结论失效；失败/不可用绝不显示无问题。只消费已在 main 的 WIL-119 冻结检测契约，不重写算法。待 WIL-110 候选审核后，由主控绑定独立分支/准确基线及 owned files；不将两单混成一个 PR。
 
-下一单具名绑定 `MAIN-WIL108-20261007-03`：用户已批准上述继续顺序，主控仅在 PR #90 修复候选检查收口后发起新 Dispatch。A 先确认现有 WIL-110 `397a56f311fdc1962abe345ae23aef6f00a20568` 已保存且工作树干净，再在 manta 新建 `codex/wil108-main-20261007`，准确基线为当前 `origin/main` 产品提交 `584ccc362c0e03a7647d655f22014f30e75022b1`。保留旧分支与独立 PR #90；WIL-108 PR 只含本单差额，未来主控按 110→108 审核集成，不整体恢复旧混合分支。
+下一单具名绑定 `MAIN-WIL108-20261007-03`：用户已批准上述继续顺序，主控仅在 PR #90 修复候选检查收口后发起新 Dispatch。A 先确认现有 WIL-110 `afd1620c3aaec02727443442146d003539750144` 已保存且工作树干净，再在 manta 新建 `codex/wil108-main-20261007`，准确基线为当前 `origin/main` 产品提交 `584ccc362c0e03a7647d655f22014f30e75022b1`。保留旧分支与独立 PR #90；WIL-108 PR 只含本单差额，未来主控按 110→108 审核集成，不整体恢复旧混合分支。
 
 Owned files：`apps/api/app/quality_inspection.py`（旧模块的必要适配）、`main.py`（本单触发/查询和直接失效消费者）、`schemas.py`（本单请求/结果）；`apps/api/tests/test_quality_inspection.py`、`test_quality_inspection_api.py`；`apps/web/src/lib/api.ts`、`types.ts`（本单字段）、`apps/web/src/components/CreationTaskWorkspace.tsx`、同名 CSS、`apps/web/src/components/__tests__/CreationTaskWorkspace.test.tsx` 和本单直接专项。其他路径先报主控；`quality_checks.py` 的 WIL-119 算法、production/身份/调度与共享文档只读。不改 WIL-110 分支、旧树或 stash。
 
@@ -57,6 +57,8 @@ Owned files：`apps/api/app/quality_inspection.py`（旧模块的必要适配）
 最小验证：隔离导入与数据库下的流程/路由/状态/版本失效和直接 UI 专项；短合成媒体经真实 WIL-119 检测至少证明实际问题能进入本单流程及定位，mock 清单不能代替此项。不运行模型、真实用户库、真实制作或扩展全量检测算法测试。B 在候选冻结后另行准备人工普通页面核验，组件检查不替代 GUI；缺环境仅标对应项未验。报告独立 SHA/net diff、实际检测与持久结果证据、权限/旧版本失效、GUI 未验项和自有资源释放，禁止自行 push/PR/Linear/扩权或启动下一单。
 
 ### B：环境与 WIL-100 验收
+
+本次人工 WIL-110 交接中，用户已亲自在 Orca 内嵌浏览器打开隔离页，并要求主控看页面指导。主控可仅对用户已打开的 `http://127.0.0.1:3107/knowledge` 标签只读获取 snapshot/screenshot；页面点击、选择与保存仍由用户执行。证据明确记录为用户人工操作的 Orca 内嵌浏览器及主控只读截图，不能冒称普通 Chrome 或旧工具策略已恢复。B 的导航/输入/截图限制与原拒绝路径禁令保持；后续页面或自动操作不从此段取得授权。
 
 先核实当前桌面 Chrome 的合法访问能力与历史“请求头策略加载失败”的真实错误/原因。不得重试未改变的已拒绝路径，不换表面绕过安全或 URL 策略；无新证据的同根因两次失败后停止该路线。可按版本匹配 computer-use/orca-cli 的只读发现确认工具、窗口、权限与错误，不擅自改浏览器策略/权限/安全配置。
 
