@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新指定先做小范围可信试用，交付渠道以 [产品需求 §1.3](../docs/product-requirements.md#13-交付设备平台与待定选项) 为准；2026-10-07 用户进一步批准按审查缺口开始执行，并提供 `/Users/Zhuanz/Desktop/sk.docx` 中的 MiniMax Key。原只读审查结束；当前写权及主控真实文字请求的有限例外只来自下方 `MAIN-CREATION-20261007-11` / `MAIN-PIREADY-20261007-12`，旧任务不恢复。
+用户最新指定先做小范围可信试用，交付渠道以 [产品需求 §1.3](../docs/product-requirements.md#13-交付设备平台与待定选项) 为准；2026-10-07 用户进一步批准按审查缺口开始执行，并提供 `/Users/Zhuanz/Desktop/sk.docx` 中的 MiniMax Key。原只读审查结束；当前写权、操作权及主控真实文字请求的有限例外只来自下表当前任务及其具名条款，历史候选说明与旧任务不恢复。
 
 用户于 2026-10-07 在本会话指定 main 线程为产品主控，提供两条可见 Codex 执行线程，并明确要求“现在你来安排工作吧”。本次仅恢复下表具名范围；原主控和其他旧派工仍停工，历史授权不自动扩展到本批。
 
@@ -105,6 +105,14 @@ B13 已完成具名页面验收并释放自有 PID/4537/3137/Chrome/Orca page-pr
 为主控真实最终Pi只读复验交准确 API PID/PGID、端口4547、合成owner token的0600文件路径和只读DB路径；经主控指定十分钟窗口与B明确ACK后环境/DB/API保持，允许当前候选真实 read_workspace_context/find_materials HTTP回调，零业务写。主控只使用自己的国内Key在RAM，不交B、不改B服务env或secret store，单轮总限180秒；核最终正文无思考块、工具成功及会话不含Key/token。用新 `/tmp/main-controller-20261007/creation-wave/pi-live-final/`，旧14窗口和证据保持已结束。不得将函数/HTTP证据当软件聊天GUI、真实账号或全制作通过。
 
 B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际证明端口和所有自有组退出；保留截图及用户浏览器。报告到 `/tmp/main-acceptance-20261007/minimax-final/report.md`，交准确候选、页面证据、只读夹具/HTTP条件、资源证明及未验项，不写Linear/远端或关闭卡。
+
+## B：MiniMax 国内默认的两个 CI 消费者（任务 18）
+
+`MAIN-MINIMAXCI-20261007-18`：仅在 B16 页面与最终Pi窗口结束、准确自有资源释放并 worker_done 被主控接受后，同一 pipefish 新 Dispatch。起点精确 `50dbab6bb1008f16f3ea53c2bb3f7e4d2fd7e8de`，当前独立分支保持，先核 clean 并读 main 活动合同本节 REBASE_ACK。只 owned `apps/api/tests/test_deepseek_llm.py` 中 `test_new_text_provider_defaults_to_minimax_without_routing_video_analysis`，以及 `apps/api/tests/test_llm_service_state.py` 中 `test_state_is_process_local_and_survives_nothing_but_the_process`；当前没有其他写者。最新 PR94 Backend CI 为1551 passed/19 skipped，实际唯一两失败是这两个既有消费者硬编码旧.io缺省。
+
+仅修该两处前提：新配置期待已批准的国内.cn；同一连接重读的状态消费者仍使用与被验证连接一致的国内地址，保留 available→清缓存后unverified、不同Key/模型/地址不共享状态与所有非本单断言。不要全文件机械替换.io：明确国际地址是继续支持的真实配置。生产代码、Web、配置/Key、共享文档及A路径写权为零；无服务/浏览器/模型/外部请求/依赖安装权。
+
+只写新 `/tmp/pipefish-minimax-ci-20261007/` 证据，导入前 HOME/XDG/DB/config/library/output/cache/model/temp及Keychain测试根隔离。一次仅运行上述两条现有专项，差额check后只提交两个具名文件，准确父50dbab6；不重复旧13/70条、GUI/Pi请求或本地全量。报告SHA/diff/测试/全部 product source blob与50dbab6相等证明，自有检查进程退出。main负责叠加已经批准的唯一PRD §2.6国内缺省说明、更新同一PR94及远端CI，B不push/PR/Linear、不改权威或关闭卡。报告 `/tmp/pipefish-minimax-ci-20261007/report.md`。
 
 ## 主控真实 MiniMax 验证例外
 
