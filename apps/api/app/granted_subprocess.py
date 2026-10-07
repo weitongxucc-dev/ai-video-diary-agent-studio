@@ -184,6 +184,9 @@ def run_granted_command(
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     child: ProcessIdentity | None = None
+    outputs = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
+    exec_ack = False
     try:
         process = subprocess.Popen(
             [sys.executable, "-c", _TRAMPOLINE, str(read_fd), *argv],
@@ -204,11 +207,10 @@ def run_granted_command(
         if cancel_event is not None and cancel_event.is_set():
             raise GrantedCommandCancelled("Command cancelled before exec ACK")
         os.write(write_fd, b"G")
+        exec_ack = True
         os.close(write_fd)
         write_fd = -1
 
-        outputs = {"stdout": bytearray(), "stderr": bytearray()}
-        limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
         next_scene_sample = time.monotonic()
         next_permission_sample = time.monotonic()
 
@@ -271,9 +273,33 @@ def run_granted_command(
             raise GrantedCommandError("Command left a live process-group descendant")
         check_running_unit()
         return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
-    except BaseException:
+    except BaseException as exc:
+        before_termination_returncode = process.poll() if process is not None else None
         if process is not None:
             _terminate_and_verify(process, child, probe)
+            # Drain only this released group's pipes, within the original caps.
+            # A resource refusal must retain the diagnostics collected before it.
+            for name in outputs:
+                pipe = getattr(process, name)
+                if pipe is not None:
+                    os.set_blocking(pipe.fileno(), False)
+                    while len(outputs[name]) <= limits[name]:
+                        try:
+                            chunk = os.read(pipe.fileno(), min(65536, limits[name] + 1 - len(outputs[name])))
+                        except BlockingIOError:
+                            break
+                        if not chunk:
+                            break
+                        outputs[name].extend(chunk)
+        exc.command_diagnostics = {
+            "stdout": bytes(outputs["stdout"][:max_stdout_bytes]),
+            "stderr": bytes(outputs["stderr"][:max_stderr_bytes]),
+            "stdout_truncated": len(outputs["stdout"]) > max_stdout_bytes,
+            "stderr_truncated": len(outputs["stderr"]) > max_stderr_bytes,
+            "exec_ack": exec_ack, "group_released": True,
+            "before_termination_returncode": before_termination_returncode,
+            "returncode": process.returncode if process is not None else None,
+        }
         raise
     finally:
         if read_fd >= 0:

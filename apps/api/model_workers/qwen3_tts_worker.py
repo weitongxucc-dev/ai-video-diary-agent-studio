@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 MODEL_ID = "qwen3-tts-12hz-0.6b-base-8bit"
@@ -11,6 +12,7 @@ LANGUAGE_CODES = {"zh": "chinese", "en": "english", "zh-en": "auto"}
 
 
 def main() -> None:
+    print("QWEN_PHASE worker_started", file=sys.stderr, flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True)
     parser.add_argument("--response", required=True)
@@ -18,6 +20,7 @@ def main() -> None:
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
     _validate_request(request)
 
+    print("QWEN_PHASE importing_runtime", file=sys.stderr, flush=True)
     import numpy as np
     from mlx_audio.audio_io import write as audio_write
     from mlx_audio.tts.utils import load_model
@@ -30,7 +33,10 @@ def main() -> None:
     if not reference_path.is_file() or reference_path.suffix.lower() != ".wav":
         raise FileNotFoundError("reference WAV does not exist")
 
+    print("QWEN_PHASE loading_weights", file=sys.stderr, flush=True)
     model = load_model(str(model_path))
+    print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
+    print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
     results = list(
         model.generate(
             text=request["text"],
@@ -41,6 +47,7 @@ def main() -> None:
     )
     if not results:
         raise RuntimeError("model generated no audio")
+    print("QWEN_PHASE inference_returned", file=sys.stderr, flush=True)
     sample_rates = {int(result.sample_rate) for result in results}
     if len(sample_rates) != 1:
         raise RuntimeError("model returned inconsistent sample rates")
@@ -65,6 +72,7 @@ def main() -> None:
     temporary_response = response_path.with_suffix(response_path.suffix + ".tmp")
     temporary_response.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary_response, response_path)
+    print("QWEN_PHASE audio_written", file=sys.stderr, flush=True)
 
 
 def _validate_request(payload: object) -> None:

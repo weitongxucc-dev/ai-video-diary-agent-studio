@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import subprocess
 import wave
 from collections.abc import Callable
@@ -249,6 +250,9 @@ class Qwen3TTSSubprocessProvider:
             completed = subprocess.run(command, check=False, capture_output=True, text=True,
                                        timeout=30 * 60, env=environment)
         else:
+            if sys.platform == "darwin":
+                # Process-scoped lower I/O priority, not a throughput limit.
+                command = ["/usr/sbin/taskpolicy", "-d", "throttle", *command]
             completed = grant_context.run(command, env=environment, output_paths=output_paths)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()

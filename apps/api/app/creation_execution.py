@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
-from app.host_resource_probes import MontageBudget, NarrationBudget, admit_resource, sample_host_capacity
+from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
@@ -474,6 +474,7 @@ class CreationJobUnitExecutor:
         self.stage_actions = stage_actions or {}
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
+        self.last_resource_refusal: HostResourceRefusal | None = None
 
     def request_cancel(self, request_id: str) -> None:
         with self._cancellation_lock:
@@ -575,7 +576,9 @@ class CreationJobUnitExecutor:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
                                  (job.workspace_id, job.id))
             job = self.repository.claim_job_run(job.workspace_id, job.id)
-            self.stage_actions[stage](job.workspace_id, job.task_id, context)
+            current_task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+            if not upstream_stage_valid(self.repository, current_task, stage):
+                self.stage_actions[stage](job.workspace_id, job.task_id, context)
             context.check()
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             if not upstream_stage_valid(self.repository, task, stage):
@@ -587,6 +590,45 @@ class CreationJobUnitExecutor:
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
                     status="queued", output=output, stage=stage), next_intent=next_intent, actor=original)
+        except HostResourceRefusal as exc:
+            self.last_resource_refusal = exc
+            if not exc.recoverable_pressure:
+                raise  # Unknown measurements and declaration faults still stop the driver.
+            diagnostics = getattr(exc, "command_diagnostics", None)
+            natural_exit = diagnostics.get("before_termination_returncode") if diagnostics else None
+            if natural_exit is not None and natural_exit != 0:
+                # A worker's natural error exit must not be renamed resource waiting.
+                reason = diagnostics["stderr"].decode("utf-8", errors="replace")[-4000:]
+                scheduler.fail_unit(grant, reason=f"creation_{stage}_failed",
+                    failure_write=lambda conn, current: self._checkpoint(conn, current,
+                        status="failed", reason=reason or f"worker exit {natural_exit}", stage=stage))
+            elif self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled" or cancellation.is_set():
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                    checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
+                        status="cancelled", stage=stage), cancelled=True)
+            else:
+                # defer_unit itself proves all registered groups and the host lock
+                # released; do not mutate the job before that proof succeeds.
+                scheduler.defer_unit(grant, reason="resource_pressure",
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
+                with self.repository._connect() as conn:
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
+                                 (job.workspace_id, job.id))
+                    task_row = conn.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
+                                            (job.workspace_id, job.task_id)).fetchone()
+                    payload = json.loads(task_row["payload"])
+                    if payload["stage"] == stage and payload["stage_status"] == "running":
+                        # The aborted segment has no completed checkpoint. Reuse
+                        # the existing start state; sealed upstream stays intact.
+                        payload.update(stage_status="not_started", stage_reason="resource_pressure",
+                                       recovery_point=stage)
+                        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                                     (json.dumps(payload, ensure_ascii=False), job.workspace_id, job.task_id))
+                    conn.execute("INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) VALUES (?,?,?,?,?,?,?)",
+                        (f"event_{job.id}_pressure_{grant.generation}", job.workspace_id, job.task_id, job.id,
+                         "creation_execution_stage", json.dumps({"stage": stage, "status": "interrupted",
+                         "reason": "resource_pressure", "decision": asdict(exc.decision)}, ensure_ascii=False),
+                         datetime.now(timezone.utc).isoformat()))
         except RecoveryBlocked:
             raise
         except GrantedCommandCancelled:

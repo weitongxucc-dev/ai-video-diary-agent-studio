@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -285,6 +286,10 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         assert calls == []
         state["identity"] = "ready"
         grant = scheduler.pick_and_grant()
+        deadline = time.monotonic() + 4
+        while grant is None and stop != "input" and time.monotonic() < deadline:
+            time.sleep(0.1)
+            grant = scheduler.pick_and_grant()
         if stop == "input":
             assert grant is None
             assert calls == []
@@ -1115,3 +1120,119 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     })
     assert rejected.status_code == 404
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
+
+
+@pytest.mark.parametrize("after_wait", ["recover", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure"])
+def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
+    """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
+    from datetime import timedelta
+    from app.avatar_lipsync import PersonProfile
+    from app.device_runtime import OwnerRegistration, build_device_runtime
+    from app.device_scheduler import RecoveryBlocked
+    from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
+    from app.member_permits import MemberDeviceAccess
+
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    members = LocalMemberService(repo.database_path)
+    member = members.add_member("bounded fixture member")
+    actor = CreationExecutionActor("local", member.member_id)
+    access = MemberDeviceAccess(members)
+    auth = Authorization("voice_auth_1", "v1", "synthetic fixture", ("voice",), ("narration",),
+        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "synthetic WAV", "active", "local")
+    person_auth = replace(auth, id="person_auth_1", content_types=("person",))
+    repo.save_person_profile(PersonProfile("person_1", "local", "fixture", "v1", "fixture://unused", (), (), person_auth))
+    voice = VersionedVoiceProfile("voice_1", "local", "person_1", "v1", "v1", "zh", "workspace://ref.wav", "fixture", "test", auth)
+    repo.save_versioned_voice_profile(voice)
+    reference = tmp_path / "library/ref.wav"
+    with wave.open(str(reference), "wb") as wav:
+        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\0\0" * 240)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id="local", reference="workspace://ref.wav")
+    narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
+    owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
+    # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
+    resources = SimpleNamespace(admit=lambda request: request.resources.get("kind") == "creation_narration",
+        continue_unit=lambda grant: True, released=lambda grant: True)
+    failure = HostResourceRefusal(HostResourceDecision(None if after_wait == "unknown" else False,
+        {}, {} if after_wait == "unknown" else {"disk_io_bytes_per_second": {"actual": 200, "maximum": 100, "passed": False}},
+        "disk_io_before_unavailable" if after_wait == "unknown" else None))
+    if after_wait == "model_error":
+        failure.command_diagnostics = {"before_termination_returncode": -6, "stderr": b"synthetic model abort"}
+    attempts = []
+    grants = []
+    def action(workspace, current_task, context):
+        attempts.append(context.grant.generation)
+        grants.append(context.grant)
+        repo.start_creation_task_narration(workspace, current_task)
+        if len(attempts) == 1 and after_wait != "checkpoint_pressure":
+            if after_wait == "unreleased":
+                monkeypatch.setattr(context.scheduler.processes, "children_released", lambda children: False)
+            raise failure
+        audio = tmp_path / "library/narration.wav"
+        audio.write_bytes(reference.read_bytes())
+        record = NarrationArtifactRecord(id="pressure_audio", workspace_id=workspace, task_id=current_task,
+            script_id=script_id, voice_profile_id="voice_1", cache_key="pressure_cache",
+            audio_path=str(audio), duration_seconds=0.01, sample_rate=24000, model_id="synthetic")
+        if after_wait == "checkpoint_pressure":
+            repo.complete_creation_task_narration(record)
+            raise failure
+        repo.save_narration_artifact(record)
+        task = repo.get_creation_task(workspace, current_task)
+        task.narration_cache_key = record.cache_key
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?", (json.dumps(asdict(task), default=str), workspace, current_task))
+    executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail("not render"),
+        render_is_valid=lambda *args: False, stage_actions={"narration": action})
+    runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
+        device_access=access, registrations={"creation_job": OwnerRegistration(owner, executor)},
+        resources=resources, processes=HostProcessProbe(), poll_interval_seconds=0.01)
+    execution = _execution(repo)
+    job = execution.start("local", task_id, script_id, digest, actor=actor)
+    request_id = submit_creation_stage(execution, runtime.scheduler, job, actor)
+    with repo._connect() as conn:
+        first_ready = conn.execute("SELECT first_ready_at_utc FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0]
+    try:
+        if after_wait in {"unknown", "unreleased"}:
+            with pytest.raises(RecoveryBlocked):
+                runtime.run_once()
+            assert repo.get_job_run("local", job.id).status == "running"
+            with repo._connect() as conn:
+                assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
+            monkeypatch.setattr(runtime.scheduler.processes, "children_released", lambda children: True)
+            grant = grants[-1]
+            runtime.scheduler.fail_unit(grant, reason="fixture_cleanup",
+                failure_write=lambda conn, current: executor._checkpoint(conn, current, status="failed", stage="narration"))
+            return
+        assert runtime.run_once() is True and runtime.last_error is None
+        if after_wait == "model_error":
+            assert repo.get_job_run("local", job.id).status == "failed"
+            assert repo.get_job_run("local", job.id).failure_reason == "synthetic model abort"
+            assert runtime.run_once() is False
+            return
+        assert attempts == [1] and repo.get_job_run("local", job.id).status == "interrupted"
+        assert repo.get_creation_task("local", task_id).stage_status == "not_started"
+        if after_wait == "checkpoint_pressure":
+            assert repo.get_creation_task("local", task_id).stage == "montage"
+        with repo._connect() as conn:
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+            assert row["state"] == "blocked" and row["wait_reason"] == "resource_pressure"
+            assert row["first_ready_at_utc"] == first_ready
+            retry_at = datetime.fromisoformat(row["retry_not_before_utc"])
+        assert runtime.run_once() is False  # Cannot cold-start every polling tick.
+        if after_wait == "revoked":
+            members.remove_member(member.member_id)
+        elif after_wait == "cancelled":
+            execution.cancel("local", task_id, member_id=member.member_id)
+            runtime.scheduler.cancel(request_id, actor)
+        monkeypatch.setattr(runtime.scheduler, "_now", lambda: retry_at + timedelta(seconds=1))
+        assert runtime.run_once() is (after_wait in {"recover", "checkpoint_pressure"})
+        assert attempts == ([1, 2] if after_wait == "recover" else [1])
+        if after_wait in {"recover", "checkpoint_pressure"}:
+            assert repo.get_job_run("local", job.id).status == "queued"
+            assert repo.get_creation_task("local", task_id).narration_cache_key == "pressure_cache"
+            assert all(event.payload.get("stage") != "render" for event in repo.list_task_events("local", task_id))
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
+    finally:
+        assert runtime.stop(2) is True

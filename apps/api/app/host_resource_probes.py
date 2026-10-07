@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 import sys
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -370,6 +372,9 @@ class HostResourceRefusal(RecoveryBlocked):
             "input_bytes": ("素材输入大小", "字节"),
         }
         reasons = {
+            "io_window_incomplete": "磁盘持续观察窗口尚未完成",
+            "io_observation_gap": "运行中磁盘持续观察间隔超出窗口",
+            "disk_devices_changed": "磁盘采样设备集合变化",
             "disk_io_before_unavailable": "采样前的磁盘读写计数不可读取",
             "disk_io_after_unavailable": "采样后的磁盘读写计数不可读取",
             "sample_interval_nonpositive": "磁盘负载采样时长无效",
@@ -410,6 +415,15 @@ class HostResourceRefusal(RecoveryBlocked):
         super().__init__("运行中资源未知或不足，须在安全边界让出：" + "；".join(details)
                          + "。请检查本机资源与该阶段预算后再试，当前任务保持。")
 
+    @property
+    def recoverable_pressure(self) -> bool:
+        if self.decision.verdict is not False or self.decision.reason is not None:
+            return False
+        failed = [name for name, check in self.decision.checks.items() if check.get("passed") is False]
+        return bool(failed) and all(name in {
+            "cpu_percent", "available_memory_bytes", "swap_used_bytes", "disk_io_bytes_per_second",
+        } or name.startswith("disk_free_bytes:") for name in failed)
+
 
 
 class HostResourceProbe:
@@ -418,14 +432,92 @@ class HostResourceProbe:
     _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta"})
 
     def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...],
-                 budget: HostBudget) -> None:
+                 budget: HostBudget, io_paths: Mapping[str, str | Path] | None = None) -> None:
         if not disk_paths:
             raise ValueError("At least one material/output disk path is required")
         self.database_path = Path(database_path).expanduser().resolve()
         self.disk_paths = tuple(Path(path).expanduser().resolve() for path in disk_paths)
         self.budget = budget
+        # Measurement history only; permissions and readiness are always fresh.
+        # A32.1: bounded initial narration observation, not hardware calibration.
+        self.io_window_seconds = 3.0
+        self._admission_io = deque()
+        self._running_io = deque()
+        self._running_io_key = None
+        self.io_paths = {name: Path(path).resolve() for name, path in (io_paths or {}).items()}
+        self.io_paths.update({f"output_{i}": path for i, path in enumerate(self.disk_paths)})
 
-    def _sample(self, resources: dict[str, object]) -> HostResourceDecision:
+    def _io_evidence(self, before, after, start, end, history):
+        if set(before) != set(after):
+            return None, "disk_devices_changed"
+        if history and start - history[-1][0] > self.io_window_seconds:
+            history.clear()  # Backoff is not a long averaging window or readiness cache.
+            if history is self._running_io:
+                return None, "io_observation_gap"
+        if history and set(history[-1][1]) != set(before):
+            history.clear()
+            return None, "disk_devices_changed"
+        if history and any(before[key].read_bytes < history[-1][1][key].read_bytes
+                           or before[key].write_bytes < history[-1][1][key].write_bytes for key in before):
+            history.clear()
+            return None, "disk_io_counters_regressed"
+        if not history:
+            history.append((start, before))
+        history.append((end, after))
+        while len(history) > 2 and history[1][0] <= end - self.io_window_seconds:
+            history.popleft()
+        anchor, initial = history[0]
+        fields = ("read_bytes", "write_bytes", "read_count", "write_count", "read_time", "write_time", "busy_time")
+        metrics = {}
+        for device in before:
+            metrics[device] = {}
+            for field in fields:
+                left, right = getattr(initial[device], field, None), getattr(after[device], field, None)
+                if left is None or right is None:
+                    metrics[device][field] = "UNAVAILABLE"
+                    if field in {"read_bytes", "write_bytes"}:
+                        return None, "disk_io_after_unavailable"
+                elif right < left:
+                    return None, "disk_io_counters_regressed"
+                else:
+                    metrics[device][field] = {"before": left, "after": right, "delta": right - left}
+            for direction in ("read", "write"):
+                count, duration = metrics[device][direction + "_count"], metrics[device][direction + "_time"]
+                metrics[device][direction + "_request_mean_ms"] = (
+                    duration["delta"] / count["delta"]
+                    if isinstance(count, dict) and isinstance(duration, dict) and count["delta"] > 0
+                    else "UNAVAILABLE")
+        elapsed = end - anchor
+        delta = sum(after[key].read_bytes + after[key].write_bytes - initial[key].read_bytes - initial[key].write_bytes for key in after)
+        if delta < 0:
+            history.clear()
+            return None, "disk_io_counters_regressed"
+        byte_budget = self.budget.max_disk_io_bytes_per_second * max(self.io_window_seconds, elapsed)
+        mappings = {}
+        try:
+            partitions = psutil.disk_partitions(all=True)
+            for name, path in self.io_paths.items():
+                matches = [p for p in partitions if path.is_relative_to(Path(p.mountpoint))]
+                partition = max(matches, key=lambda p: len(p.mountpoint)) if matches else None
+                device = Path(partition.device).name if partition else "UNAVAILABLE"
+                physical = re.match(r"^(disk\d+)(?:s\d+)*$", device)
+                counter = physical.group(1) if physical else device
+                mappings[name] = {"st_dev": path.stat().st_dev, "device": device,
+                                  "counter": counter if counter in after else "UNAVAILABLE"}
+        except (OSError, psutil.Error) as exc:
+            mappings = {"status": "UNAVAILABLE", "reason": type(exc).__name__}
+        return {"actual": delta / elapsed, "maximum": self.budget.max_disk_io_bytes_per_second,
+                "passed": delta <= byte_budget, "delta_bytes": delta,
+                "window_seconds": elapsed, "required_window_seconds": self.io_window_seconds,
+                "window_complete": elapsed >= self.io_window_seconds,
+                "finite_byte_budget": byte_budget, "sample_started_monotonic": start,
+                "sample_finished_monotonic": end, "sample_interval_seconds": end - start,
+                "window_started_monotonic": anchor, "window_finished_monotonic": end,
+                "devices": metrics, "path_devices": mappings,
+                "busy_percent": "UNAVAILABLE: request times are not utilization",
+                "process_io": "UNAVAILABLE: host counters cannot attribute a process"}, None
+
+    def _sample(self, resources: dict[str, object], *, running_io: bool = False) -> HostResourceDecision:
         checks: dict[str, dict[str, object]] = {}
 
         def decision(verdict: bool | None, reason: str | None = None,
@@ -547,34 +639,41 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            before = psutil.disk_io_counters()
-            if before is None:
+            sustained = kind == "creation_narration"
+            before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+            if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
             start = time.monotonic()
             sampling = "cpu_percent"
             cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
             checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
                                      "passed": cpu <= self.budget.max_cpu_percent}
-            duration = time.monotonic() - start
             sampling = "disk_io_after"
-            after = psutil.disk_io_counters()
-            if after is None:
+            after = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+            end = time.monotonic()
+            duration = end - start
+            if after is None or (sustained and not after):
                 return decision(None, "disk_io_after_unavailable", duration)
             if duration <= 0:
                 return decision(None, "sample_interval_nonpositive", duration)
-            io_bytes = (after.read_bytes - before.read_bytes +
-                        after.write_bytes - before.write_bytes)
-            if io_bytes < 0:
-                checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
-                    "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
-                    "after_write_bytes": after.write_bytes}
-                return decision(None, "disk_io_counters_regressed", duration)
-            rate = io_bytes / duration
-            checks["disk_io_bytes_per_second"] = {
-                "actual": rate, "maximum": self.budget.max_disk_io_bytes_per_second,
-                "passed": rate <= self.budget.max_disk_io_bytes_per_second,
-                "delta_bytes": io_bytes,
-            }
+            if sustained:
+                evidence, unavailable = self._io_evidence(before, after, start, end,
+                    self._running_io if running_io else self._admission_io)
+                if unavailable:
+                    return decision(None, unavailable, duration)
+                checks["disk_io_bytes_per_second"] = evidence
+            else:
+                io_bytes = (after.read_bytes - before.read_bytes + after.write_bytes - before.write_bytes)
+                if io_bytes < 0:
+                    checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
+                        "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
+                        "after_write_bytes": after.write_bytes}
+                    return decision(None, "disk_io_counters_regressed", duration)
+                checks["disk_io_bytes_per_second"] = {
+                    "actual": io_bytes / duration, "maximum": self.budget.max_disk_io_bytes_per_second,
+                    "passed": io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
+                    "delta_bytes": io_bytes,
+                }
             sampling = "available_memory_bytes"
             memory = psutil.virtual_memory()
             checks[sampling] = {"actual": memory.available, "minimum": required_memory,
@@ -593,12 +692,14 @@ class HostResourceProbe:
         except (OSError, psutil.Error, ValueError) as exc:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
         # Exactly the existing host gates, evaluated from this observation only.
-        return decision(cpu <= self.budget.max_cpu_percent
+        passed = (cpu <= self.budget.max_cpu_percent
                         and memory.available >= required_memory
                         and swap.used <= self.budget.max_swap_used_bytes
                         and all(disk.free >= required_disk for disk in disks)
-                        and io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
-                        interval=duration)
+                        and checks["disk_io_bytes_per_second"]["passed"])
+        if sustained and passed and not running_io and not evidence["window_complete"]:
+            return decision(None, "io_window_incomplete", duration)
+        return decision(passed, interval=duration)
 
     def admit(self, request: WorkRequest) -> bool | None:
         return self._sample(request.resources).verdict
@@ -623,7 +724,14 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        decision = (self._sample(resources) if resources is not None else
+        if resources is not None and resources.get("kind") == "creation_narration" and self.budget.narration is not None:
+            key = (grant.request_id, grant.generation)
+            if key != self._running_io_key:
+                self._running_io.clear()
+                self._running_io_key = key
+            decision = self._sample(resources, running_io=True)
+        else:
+            decision = (self._sample(resources) if resources is not None else
                     HostResourceDecision(None, {}, {}, "granted_resources_unreadable"))
         if decision.verdict is not True:
             raise HostResourceRefusal(decision)

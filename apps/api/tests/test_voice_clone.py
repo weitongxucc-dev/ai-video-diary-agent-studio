@@ -574,3 +574,20 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
     assert response["language"] == language
     assert response["segments"][0]["language"] == language
     assert response["segments"][0]["audio_url"].endswith("/segment-language/audio")
+
+
+def test_granted_qwen_lower_io_priority_is_process_scoped_and_offline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.voice_clone as voices
+    calls = []
+    provider = _provider(tmp_path, lambda *_args: None)
+    monkeypatch.setattr(voices.sys, "platform", "darwin")
+    context = SimpleNamespace(threads=1, run=lambda command, **options:
+        calls.append((command, options)) or SimpleNamespace(returncode=0, stdout=b"", stderr=b""))
+    provider._run_command([str(provider.runtime_python_path), str(provider.worker_path)], grant_context=context)
+    command, options = calls[0]
+    assert command[:3] == ["/usr/sbin/taskpolicy", "-d", "throttle"]
+    assert command[3:] == [str(provider.runtime_python_path), str(provider.worker_path)]
+    assert options["env"]["HF_HUB_OFFLINE"] == "1"
+    assert options["env"]["OMP_NUM_THREADS"] == "1"
+    assert not any(key.endswith("KEY") for key in options["env"])
