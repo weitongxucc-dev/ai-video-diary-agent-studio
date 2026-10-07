@@ -849,6 +849,25 @@ it("does not report an import when the source is refused before submission", asy
 });
 
 
+it.each([
+  ["unreachable service", "API server unreachable", "暂时无法连接本地服务，请确认应用正常运行后重试"],
+  ["other English failure", "Unexpected upstream response", "说明保存失败"],
+  ["existing Chinese detail", "目录暂不可写", "目录暂不可写"],
+])("shows the %s note-save cause while retaining the draft without success", async (_kind, detail, expected) => {
+  const { ApiRequestError } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  vi.mocked(updateMaterialNotes).mockRejectedValueOnce(new ApiRequestError(502, JSON.stringify({ detail })));
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value: "保留这份未保存的草稿" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存本素材说明" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(`${expected}。草稿已保留，请重试保存。`);
+  expect(alert.textContent).not.toMatch(/API server unreachable|Unexpected upstream response/);
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("保留这份未保存的草稿");
+  expect(screen.queryByText("本素材说明已保存。")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存本素材说明" })).toBeEnabled();
+  expect(updateMaterialNotes).toHaveBeenCalledExactlyOnceWith([{ asset_id: asset.id, user_description: "保留这份未保存的草稿", upload_context: asset.upload_context }]);
+});
+
 it("keeps material note drafts and save failures on their own asset when switching", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
   let rejectSave!: (cause: Error) => void;
