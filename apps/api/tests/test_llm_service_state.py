@@ -122,7 +122,7 @@ def test_state_is_process_local_and_survives_nothing_but_the_process():
     verified = _filled()
     record_llm_service_verification(verified, ok=True, cause="verified")
     reloaded = Settings(llm_api_key=FILLED_KEY, llm_api_key_provider="minimax",
-                        llm_base_url="https://api.minimax.io/v1")
+                        llm_base_url="https://api.minimax.cn/v1")
     assert reloaded.llm_service_state == LLM_SERVICE_AVAILABLE
     with config_module._llm_service_lock:
         config_module._llm_service_verifications.clear()
