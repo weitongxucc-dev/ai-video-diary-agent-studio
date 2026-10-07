@@ -2158,6 +2158,39 @@ class KnowledgeItemVisibilityRequest(ContentVisibilityRequest):
     """知识条目的可见范围请求；任务、方案、模板与素材共用同一形状。"""
 
 
+class KnowledgeGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_workspace_id: str = Field(min_length=1)
+
+
+class KnowledgeGrantTargetResponse(BaseModel):
+    workspace_id: str
+    name: str
+
+
+class KnowledgeGrantResponse(BaseModel):
+    id: str
+    knowledge_item_id: str
+    source_workspace_id: str
+    target_workspace_id: str
+    granted_by: str
+    granted_at: datetime
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+
+
+class KnowledgeGrantStateResponse(BaseModel):
+    can_manage: bool
+    source_workspace_id: str
+    access_via_grant: bool = False
+    target_resolution: Literal["resolved", "same_workspace", "unresolved"]
+    target_resolution_message: str
+    cross_workspace_status: Literal["AVAILABLE", "UNVERIFIED"]
+    targets: list[KnowledgeGrantTargetResponse] = Field(default_factory=list)
+    grants: list[KnowledgeGrantResponse] = Field(default_factory=list)
+
+
 class KnowledgeItemVersionResponse(BaseModel):
     version: str
     content_hash: str | None = None

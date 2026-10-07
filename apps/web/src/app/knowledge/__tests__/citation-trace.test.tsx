@@ -9,8 +9,11 @@ const api = vi.hoisted(() => ({
   getScriptLibrarySources: vi.fn(),
   reuseScriptLibraryEntry: vi.fn(),
   getKnowledgeItem: vi.fn(),
+  getKnowledgeReferenceVersion: vi.fn(),
 }));
-vi.mock("@/lib/api", () => api);
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(), ...api,
+}));
 vi.mock("@/lib/source-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/source-api")>();
   return { ...actual, getKnowledgeItem: api.getKnowledgeItem };
@@ -18,6 +21,8 @@ vi.mock("@/lib/source-api", async (importOriginal) => {
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: ReactNode }) => <a {...props}>{children}</a> }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
+
+import { ApiRequestError } from "@/lib/api";
 
 import { ScriptLibraryPanel } from "@/app/knowledge/KnowledgeWorkspace";
 
@@ -72,9 +77,10 @@ beforeEach(() => {
 
 describe("文案引用回查", () => {
   it("reads the exact cited version with its page and parameter locators", async () => {
-    api.getKnowledgeItem.mockResolvedValue(detail());
+    api.getKnowledgeReferenceVersion.mockResolvedValue(detail().versions[0]);
     await openEntry([source({})]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
+    expect(api.getKnowledgeReferenceVersion).toHaveBeenCalledWith("ki-one", "2");
     const trace = await screen.findByText(/引用版本 2 · 指纹 hash-v2/);
     expect(within(trace.parentElement!).getByText(/第2页 基本参数/)).toBeInTheDocument();
     // 页码出处与参数都来自被引用的那一版，不是当前版。
@@ -85,7 +91,7 @@ describe("文案引用回查", () => {
   });
 
   it("does not substitute the current version when the cited one is gone", async () => {
-    api.getKnowledgeItem.mockResolvedValue(detail({ versions: [] }));
+    api.getKnowledgeReferenceVersion.mockRejectedValue(new ApiRequestError(404, "knowledge version not found"));
     await openEntry([source({})]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
     await screen.findByText(/该引用绑定的版本已不在可回查范围/);
@@ -95,7 +101,7 @@ describe("文案引用回查", () => {
   it("still traces the cited old version after the current one advanced", async () => {
     // version_changed 只是当前版本不同或授权变化，不等于引用不可读：
     // 旧版快照还在时就应该能回查当时原文，不能拿授权失效当理由阻断。
-    api.getKnowledgeItem.mockResolvedValue(detail());
+    api.getKnowledgeReferenceVersion.mockResolvedValue(detail().versions[0]);
     // 该场景只看回查本身，摘要行不重复断言。
     await openEntry([source({ status: "version_changed", version_or_identity: "3", cited_version: null, cited_content_hash: null })]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
@@ -117,7 +123,7 @@ describe("文案引用回查", () => {
   });
 
   it("locates the cited paragraph and parameter by the locator the source provides", async () => {
-    api.getKnowledgeItem.mockResolvedValue(detail());
+    api.getKnowledgeReferenceVersion.mockResolvedValue(detail().versions[0]);
     await openEntry([{ ...source({}), locator: "第2页" }]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
     const hit = (await screen.findByText("命中定位 第2页")).parentElement!;
@@ -127,17 +133,19 @@ describe("文案引用回查", () => {
   });
 
   it("reports a locator that is not in the cited version instead of guessing a page", async () => {
-    api.getKnowledgeItem.mockResolvedValue(detail());
+    api.getKnowledgeReferenceVersion.mockResolvedValue(detail().versions[0]);
     await openEntry([{ ...source({}), locator: "第9页" }]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
     await screen.findByText(/引用绑定的定位 第9页 不在这一版里/);
   });
 
   it("shows the failure state and allows retrying", async () => {
-    api.getKnowledgeItem.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(detail());
+    api.getKnowledgeReferenceVersion.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(detail().versions[0]);
     await openEntry([source({})]);
     fireEvent.click(screen.getByRole("button", { name: "回查固定版本原文" }));
     await screen.findByText("回查失败，请稍后重试。");
+    fireEvent.click(screen.getByRole("button", { name: "重试回查" }));
+    await screen.findByText(/引用版本 2 · 指纹 hash-v2/);
   });
 
   it("leaves non-knowledge citations to their own source link", async () => {

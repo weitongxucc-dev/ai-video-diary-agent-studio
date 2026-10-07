@@ -99,6 +99,18 @@ class KnowledgeItem:
 
 
 @dataclass(frozen=True)
+class KnowledgeGrant:
+    id: str
+    knowledge_item_id: str
+    source_workspace_id: str
+    target_workspace_id: str
+    granted_by: str
+    granted_at: datetime
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class SourceRunEvidence:
     id: str
     workspace_id: str

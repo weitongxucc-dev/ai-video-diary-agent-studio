@@ -3,12 +3,12 @@
 import { AlertCircle, ArrowRight, BookOpen, FileText, Link2, LoaderCircle, RefreshCw, Search, Video } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry } from "@/lib/api";
-import type { ScriptLibraryEntry, ScriptLibrarySource } from "@/lib/types";
+import { ApiRequestError, getKnowledgeReferenceVersion, getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry, getKnowledgeGrants, grantKnowledgeToWorkspace, revokeKnowledgeGrant } from "@/lib/api";
+import type { ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
-import { findCitedVersion, getKnowledgeItem, parseKnowledgeReferenceId, setKnowledgeItemVisibility, sourceErrorMessage } from "@/lib/source-api";
+import { getKnowledgeItem, parseKnowledgeReferenceId, setKnowledgeItemVisibility, sourceErrorMessage } from "@/lib/source-api";
 import styles from "./KnowledgeWorkspace.module.css";
 
 type KnowledgeDisplayItem = KnowledgeItem & {
@@ -79,7 +79,7 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     if (updated.id !== selectedId) return;
     setDetail((current) => current && current.id === updated.id ? { ...current, visibility: updated.visibility } : current);
   }
-  const inspector = selected ? <KnowledgeInspector detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} /> : undefined;
+  const inspector = selected ? <KnowledgeInspector key={selected.id} detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} /> : undefined;
 
   return <AppShell inspector={inspector} inspectorTitle="来源详情">
     <div className={styles.page}>
@@ -117,7 +117,46 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   </AppShell>;
 }
 
+function grantErrorMessage(cause: unknown): string {
+  if (cause instanceof ApiRequestError) {
+    if (cause.status === 503) return "同设备成员与空间关系尚未解析；跨空间授权未验证。";
+    if (cause.status === 409) return "仅同空间，无需跨空间授权。";
+    if (cause.status === 401) return "知识授权需要已验证成员身份。";
+    if (cause.status === 404) return "知识资料或授权目标不可访问。";
+  }
+  return cause instanceof Error ? cause.message : "授权请求失败。";
+}
+
 function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersion, onViewVersion, onVisibilityChanged }: { item: KnowledgeDisplayItem; detail: KnowledgeItemDetail | null; detailError: string | null; exampleMode: boolean; viewVersion: string | null; onViewVersion: (version: string | null) => void; onVisibilityChanged: (updated: KnowledgeItem) => void }) {
+  const [grantState, setGrantState] = useState<KnowledgeGrantState | null>(null);
+  const [targetWorkspace, setTargetWorkspace] = useState("");
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [grantError, setGrantError] = useState<string | null>(null);
+  useEffect(() => {
+    if (exampleMode) return;
+    let active = true;
+    getKnowledgeGrants(item.id)
+      .then(value => { if (active) setGrantState(value); })
+      .catch(cause => { if (active) setGrantError(grantErrorMessage(cause)); });
+    return () => { active = false; };
+  }, [item.id, exampleMode]);
+  async function grantToWorkspace() {
+    setGrantBusy(true); setGrantError(null);
+    try {
+      const grant = await grantKnowledgeToWorkspace(item.id, targetWorkspace);
+      setGrantState(current => current ? { ...current, grants: [...current.grants.filter(value => value.id !== grant.id), grant] } : current);
+      setTargetWorkspace("");
+    } catch (cause) { setGrantError(grantErrorMessage(cause)); }
+    finally { setGrantBusy(false); }
+  }
+  async function revokeGrant(grantId: string) {
+    setGrantBusy(true); setGrantError(null);
+    try {
+      const revoked = await revokeKnowledgeGrant(item.id, grantId);
+      setGrantState(current => current ? { ...current, grants: current.grants.map(value => value.id === revoked.id ? revoked : value) } : current);
+    } catch (cause) { setGrantError(grantErrorMessage(cause)); }
+    finally { setGrantBusy(false); }
+  }
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
   const visibility = detail?.visibility ?? item.visibility ?? "private";
@@ -143,7 +182,25 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
     <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
     {versions.length ? <div className={styles.detailSection}><h3>版本</h3><label><span>查看版本</span><select aria-label="查看版本" onChange={(event) => onViewVersion(event.target.value || null)} value={viewVersion ?? ""}><option value="">当前版本 {detail?.version}</option>{versions.map((version) => <option key={version.version} value={version.version}>版本 {version.version} · {formatTime(version.saved_at)}</option>)}</select></label>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
-    <div className={styles.detailSection}><h3>可见范围</h3>{exampleMode ? <p>示例：可见范围设置不会保存。</p> : <><p>{visibility === "shared" ? "当前与团队成员共享，成员可读取这条资料。" : "当前仅自己可见，成员读不到这条资料。"}</p><div className={styles.detailActions}>{visibility === "private" ? <button disabled={visibilityBusy} onClick={() => void changeVisibility("shared")} type="button">共享给团队</button> : <button disabled={visibilityBusy} onClick={() => void changeVisibility("private")} type="button">收回为仅自己可见</button>}</div>{visibilityError ? <p role="alert">{visibilityError}</p> : null}</>}</div>
+    {!exampleMode ? <section className={styles.detailSection}><h3>授权给其他工作空间</h3>
+      <p>保留原工作空间、所有者和版本。授权允许目标空间读取和引用；撤销后停止新访问与后续引用。</p>
+      {grantState && grantState.target_resolution !== "resolved" ? <p role="status">{grantState.target_resolution_message} · {grantState.cross_workspace_status}</p> : null}
+      {grantState?.can_manage ? <>
+        {grantState.target_resolution === "resolved" ? <><label className={styles.grantTarget}><span>目标工作空间</span><select aria-label="目标工作空间" disabled={grantBusy} value={targetWorkspace} onChange={event => setTargetWorkspace(event.target.value)}>
+          <option value="">请选择同设备工作空间</option>
+          {grantState.targets.map(target => <option key={target.workspace_id} value={target.workspace_id}>{target.name}</option>)}
+        </select></label>
+        {!grantState.targets.length ? <p>当前没有其他可授权的同设备工作空间。</p> : null}
+        <button disabled={grantBusy || !targetWorkspace} onClick={() => void grantToWorkspace()} type="button">授予读取与引用</button>
+        </> : null}
+        <ul className={styles.grantList}>{grantState.grants.map(grant => <li key={grant.id}>
+          <span>{grantState.targets.find(target => target.workspace_id === grant.target_workspace_id)?.name ?? grant.target_workspace_id} · {grant.revoked_at ? "已撤销" : "可读与引用"}</span>
+          {!grant.revoked_at ? <button disabled={grantBusy} onClick={() => void revokeGrant(grant.id)} type="button">撤销授权</button> : null}
+        </li>)}</ul>
+      </> : grantState ? <p>原工作空间：{grantState.source_workspace_id}。当前可读取资料，无权向其他空间授予或转移归属。</p> : !grantError ? <p>正在读取授权状态…</p> : null}
+      {grantError ? <p role="alert">{grantError}</p> : null}
+    </section> : null}
+    <div className={styles.detailSection}><h3>可见范围</h3>{exampleMode ? <p>示例：可见范围设置不会保存。</p> : <><p>{grantState?.access_via_grant ? "原空间的可见范围保持不变；你通过显式授权读取和引用这条资料。" : visibility === "shared" ? "当前与团队成员共享，成员可读取这条资料。" : "当前仅自己可见，成员读不到这条资料。"}</p><div className={styles.detailActions}>{grantState?.can_manage ? visibility === "private" ? <button disabled={visibilityBusy} onClick={() => void changeVisibility("shared")} type="button">共享给团队</button> : <button disabled={visibilityBusy} onClick={() => void changeVisibility("private")} type="button">收回为仅自己可见</button> : null}</div>{visibilityError ? <p role="alert">{visibilityError}</p> : null}</>}</div>
     <div className={styles.compare}>
       <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3><p>{shown.body || "这个条目没有可显示的正文。"}</p>{sections.length ? <ol>{sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre></li>)}</ol> : null}</section>
       <section><h3>{exampleMode ? "AI 摘要 · 示例" : "摘要"}</h3><p>{exampleMode ? item.exampleSummary ?? "示例暂无摘要" : "尚无可核对的摘要来源；不能把正文当作 AI 摘要。"}</p></section>
@@ -206,11 +263,10 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
     if (!reference) return;
     setTrace({ state: "loading" });
     try {
-      const detail = await getKnowledgeItem(reference.knowledgeItemId);
-      const version = findCitedVersion(detail, reference.version);
-      setTrace(version ? { state: "ready", version } : { state: "unavailable" });
-    } catch {
-      setTrace({ state: "failed" });
+      const version = await getKnowledgeReferenceVersion(reference.knowledgeItemId, reference.version);
+      setTrace({ state: "ready", version });
+    } catch (cause) {
+      setTrace({ state: cause instanceof ApiRequestError && cause.status === 404 ? "unavailable" : "failed" });
     }
   }
 
@@ -231,6 +287,7 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
       ? <button onClick={() => void traceCitation()} type="button">回查固定版本原文</button> : null}
     {trace.state === "loading" ? <p role="status">正在回查…</p> : null}
     {trace.state === "failed" ? <p role="alert">回查失败，请稍后重试。</p> : null}
+    {trace.state === "failed" && source.status !== "missing" ? <button onClick={() => void traceCitation()} type="button">重试回查</button> : null}
     {trace.state === "unavailable" ? <p role="alert">该引用绑定的版本已不在可回查范围；不会用当前版替代。</p> : null}
     {trace.state === "ready" && trace.version ? <div className={styles.citationTrace}>
       {source.status === "version_changed" ? <p>当前条目已与引用绑定的版本不同；以下仍是引用当时那一版的原文。</p> : null}
@@ -311,7 +368,7 @@ export function ScriptLibraryPanel() {
       <p>原稿 {selected.source_script_id} · {selected.source_run_id ? `原记录 ${selected.source_run_id}` : "复用或人工文案，无模型生成记录"}</p>
       {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p><small>{section.reference_ids.join("、")}</small></article>)}
       <h4>事实出处（实时核对）</h4>
-      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={source.reference_id} source={source} />)}</ul>}
+      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
       <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmed(false); }} /></label>
       <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmed(false); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
       <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmed(false); }} /></label>
