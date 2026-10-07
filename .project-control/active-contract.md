@@ -20,7 +20,7 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key、任务23一轮国内Pi编辑页面验收具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控 MiniMax Key、任务26一轮国内Pi编辑复验及随后具名A25短Qwen实验例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
@@ -28,7 +28,7 @@
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 24：资源拒绝准确诊断及退役CI消费者同步 | 仅HostResourceProbe/调度assert诊断与三项既有直接专项 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 23：Pi 剪辑修改补验与组合页面核验 | 产品写权零；完整新夹具及一轮国内Pi，模型实验期间HOLD |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 26：Pi 编辑指令与结果语义修复 | 仅assistant_pi/diary_tools与既有直接专项；GUI候选冻结后具名放行 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
@@ -190,7 +190,7 @@ B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际�
 
 30分钟自有API/Web/Chrome租约，先核端口，scheduled生产OFF、预算拒绝不放宽。禁止真实云身份/账号/注册、其他Key/真实数据、Qwen/口型/渲染/下载/安装/发布或生产配置写；A22仅准备独立进行，其模型实测须主控先释放本GUI资源。结束实际证明PID/组/端口释放，保留新证据/临时钥匙串不自动删除，主控后处理具名测试secret。报告report.md，创建与编辑分开给通过/未验；这不证明整条制作、真实账号、Key GUI保存、安装包或三平台发布，不关闭整卡。
 
-## B：Pi 剪辑修改补验与组合页面核验（任务 23）
+## B：Pi 剪辑修改补验与组合页面核验（任务23已结束、候选证据保留，无写/操作权）
 
 `MAIN-PIEDITGUI-20261007-23`：任务21分项结果与资源/秘密释放由主控接受，复用创建PASS不再测创建；同一pipefish新Dispatch，仅这次尚未验的编辑。冻结准确组合 `cb26f49e339d303e56f1f881fb60f071ea7e6e59`，从主控integration Git对象只读archive核blobs（包含f024与B19）；不修改分支/候选/代码/权威。仅新 `/tmp/main-acceptance-20261007/pi-edit/`，旧pi-tasks只定向读合成媒体/准备方法及已过创建证据，绝不写旧DB或session。
 
@@ -207,6 +207,22 @@ B23.3 有界续验：唯一用户GUI发送内实际read_current_task成功、pre
 同一组合页面同时截图核：工作台仍保留编辑、播放/旧产物、连续制作真实预检首因/可执行动作；B19退役的三个旧单步按钮不存在，不把queued/running当已出片。只观察/必要导航，不点start/resume/person/narration/render、不制造假作业状态；这类负向可见与模型完整制作分开给结论。
 
 一轮既有180秒限，原生表面受限明确未验，不改政策/用户浏览器/剪贴板，eval只读。结束真实PID/组/端口释放、完整tool轨迹与无思考标记正文、确认前后GUI截图及只读持久对应。主控RAM最终秘密扫描，仅本新tempKeychain后续锁定，不删数据。报告report.md；创建既有证据复用/本轮编辑/组合负向页面/仍未验制作、真实账号、Key GUI保存与分发各自准确；不关闭卡/remote、不宣称整体RETIRED。
+
+## B：Pi 编辑指令与结果语义修复（任务 26）
+
+`MAIN-PIEDITSEMANTICS-20261007-26` 绑定既有WIL-165。任务23 failed worker_done、分项持久化/刷新/撤销正证、全部自有PID/端口释放、主控12文件RAM秘密扫描与新具名临时Keychain锁定已接受；仅整体指令正确性FAIL。复用同一pipefish可见线程，不新增执行者。保留d4ebf2d原分支，从主控integration Git准确 `cb26f49e339d303e56f1f881fb60f071ea7e6e59` 建新clean `codex/wil165-pi-edit-semantics-20261007`；A24仅host probe/测试不重叠，后续由主控机械组合，不merge旧历史。
+
+owned只有 `apps/api/app/assistant_pi.py`、`apps/api/agent_tools/diary_tools.ts`、既有 `apps/api/tests/test_assistant_pi.py` 本单直接消费者。无main/编译器/时间线/渲染/资源阈值/Web/桌面/共享文档写权。先读取已通过创建/设置的当前消费者和任务23真实trace，保留国内M3/思考历史/私密保存/创建流程行为。
+
+真实缺口：Pi把纯动作command扩写对象/限制/猜想导致同轮preview_edit七次拒绝，最后成功仍把crop_x位置误称画面宽度。用最小既有工具描述/command参数说明与SYSTEM_PROMPT明确：对象引用/阶段单独传，command只包含用户已明确且编译器支持的动作，不扩写解释或副作用、不猜步长；水平/垂直百分比是裁剪窗口位置，非宽度/面积比例，缺量先澄清；工具失败说明准确阻断，不自行反复改写试错。真实预览的最终说明使用该提案实际before/after位置/operation与影响，不猜“中心对齐/收窄”。工具文本仅投影必要业务事实，不能发送媒体URL/原始文件/Key/整库；已有preview结构详情给UI保持。不得用regex事后改助手正文、硬编码fixture回答、静默fallback或新增LLM抽象/配置开关。若仅提示不足以解决实际重复，先提出准确必要接线证据，不自行扩写main或费用策略。
+
+最小相关专项在新 `/tmp/pipefish-pi-edit-semantics-20261007/`：直接验证工具将引用/动作分开传给现有HTTP端点，并从真实形状返回必要语义/影响，保留提案确认约束；不以字符串镜像测试替代真实LLM验收。只跑本单新增/受影响专项，不重复既有70/13/2或全量，不运行媒体/模型/服务/浏览器。A25短Qwen占主机期间只可编辑/静态核，测试/GUI等收到主控明确释放再运行。
+
+交独立SHA与父cb26、严格三路径差额、最小专项与释放后进入CODE_READY，停新增代码等待主控审核/机械组合与冻结精确候选。真实复验也是本单目标，不能代码完成就终结：A25实际模型资源退出并主控ALLOW_PI_FIX_PREPARE之后，仅新 `/tmp/main-acceptance-20261007/pi-edit-fixed/` 按任务23已验证方法准备完整confirmed_script/两clip/合法timeline/原合成媒体副本与独立HOME/XDG/DB/library/output/cache/models空目录/agent，不能写旧两GUI根。新API4543/Web3143与30分钟租约；新临时Keychain准确task26.keychain-db由主控原生RAM Key保存，B不读密钥。先报准确候选blobs/env/owner0600/DB只读前提/PID/Keychain路径，等本Dispatch START_PI_EDIT_FIX_GUI。
+
+唯一180秒真实国内MiniMax-M3 Pi轮，从原生GUI向选中clip-1下达任务23同一句“只修改我选中的第一个镜头 clip-1：水平裁剪到40%，保持两个镜头时长和第二个镜头不变。先读取当前任务，再调用preview_edit给我看影响并等待确认；不要生成声音、人物或重新渲染。” 验实际read_current_task与一次有效preview_edit、正文解释位置准确不误称比例、无无谓内部试错、GUI预览/未确认timeline不变；确认后准确crop_x .5→.4且clip2/时长不变，刷新与一次撤销持久对应。现有端点本地最多5秒静音对比属于本轮实证，记录真实产物/进程，不称无媒体或完整出片；不能新模型调用/重试、API代GUI写或点击重制作。失败首因停止如实回报，不另加轮次。原产物物理保留但output_ready仍false现象记录给后续纵向任务，本单不改时间线/重输出契约。
+
+结束实际源码/PID/组/4543/3143释放、完整工具轨迹/准确正文截图与只读持久事实、主控具名RAM秘密扫描/临时store锁定后最终worker_done。创建已过证据复用；不称完整制作、真实Key GUI保存/云账号/人物口型/安装/三平台发布通过，不关闭WIL-165或WIL-26。主控仅组合PR95候选，未经对应用户批准不合main。
 
 ## 主控真实 MiniMax 验证例外
 
