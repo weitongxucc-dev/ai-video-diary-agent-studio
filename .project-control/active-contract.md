@@ -28,7 +28,7 @@
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 11：连续制作与账号设备许可纵向闭环 | 仅下方具名 API、专项及新增 migration；main.py 唯一写者 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 13：冻结 Pi 候选的依赖页面验收 | 产品写权零；仅新隔离验收目录/服务/页面，不读取真实 Key |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 15：国内 MiniMax 默认连接与回复格式修复 | 仅具名默认配置/Pi/界面及直接专项；不读取真实 Key |
 
 ## A：连续制作与账号许可闭环（当前任务 11）
 
@@ -56,7 +56,9 @@ B12 候选固定 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，产品写权已收
 
 用隔离环境做必要缺依赖/参数/环境引用与工具可见性验证；不读 `/Users/Zhuanz/Desktop/sk.docx`、真实 Keychain/账号/配置，不调用真实模型。可准备新的 `/tmp/pipefish-pi-readiness-20261007/` 与最小合成材料/只读候选映射，给主控实际 Key→Pi→HTTP工具验收所需最短命令和精确运行条件。暂不起 GUI/API 服务、不重用旧验收 DB/profile，不在 A 冻结前宣称全链完成。读本合同及认证 §3、PRD §2.6 后语义 ACK 即开始。交候选/精确净差额/最小测试、已安装协议检查、安装包尚不自带 Pi/Node 的真实边界和后续 GUI 条件。
 
-## B：Pi 依赖准备真实页面验收（任务 13，仅在 B12 完成并冻结后生效）
+## B：Pi 依赖准备真实页面验收（证据保留，任务已结束）
+
+B13 已完成具名页面验收并释放自有 PID/4537/3137/Chrome/Orca page-profile；本节只解释证据，不取得新服务或页面操作权。
 
 `MAIN-PIGUI-20261007-13`：同一可见 pipefish 线程复用，新 Dispatch；产品代码写权为零。准确冻结 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，不混入 A 的未冻结源码，不要求等待未变化的创建模块。只写新 `/tmp/main-acceptance-20261007/pi-health/`；archive 排除 dotenv，导入前隔离 HOME/XDG/DB/config/workspace配置/library/output/cache/model/temp。不读真实 Keychain、桌面 Key 文档、账号、旧用户数据；Keychain 测试路径在新根且不初始化/读取登录钥匙串。当前无配置模型、无外部请求、无制作/分析。
 
@@ -68,11 +70,23 @@ B12 候选固定 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，产品写权已收
 
 新页面异常只报告步骤与最小消费者，不获得源码写权。结束释放全部自有 PID/PGID/端口及新页面/profile，证明端口空闲、保留旧证据/用户浏览器。交准确 SHA、真实截图/说明、只读辅助证据及未验项；这只验依赖页面，不是 Key 保存、真实 MiniMax 对话、连续制作、桌面包或账号隔离通过。绑定 DESIGN、认证 §3 及本合同，语义 REBASE_ACK 后直接开始。
 
+## B：国内 MiniMax 默认连接与实际回复格式（当前任务 15）
+
+`MAIN-MINIMAX-20261007-15`：用户已确认国内平台 Key，主控 `.cn/MiniMax-M3` 短请求及冻结B12真实Pi两只读工具实际成功；当前新配置却在四个实际消费者硬编码国际地址，真实Pi回复同时夹带 `<think>` 标记。本单作为当前MiniMax/Pi使用目标的必要差额，同一pipefish可见线程复用；先结束B13并证明资源释放，再新Dispatch/ACK，不从本节抢先写代码。
+
+从准确 B12 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018` 的干净树新独立 `codex/wil165-minimax-domestic-20261007`，保留旧B12候选；主控负责最终更新PR94，B不push/PR/Linear。owned仅 `apps/api/app/config.py` 的MiniMax新配置缺省地址、`assistant_pi.py` 的真实M3请求/回复边界；`apps/web/src/app/welcome/page.tsx`、`settings/page.tsx`、`components/LlmProviderFields.tsx` 的新配置默认入口及必要连接说明。直接既有专项 `apps/api/tests/test_runtime_settings.py`、`test_assistant_pi.py`、`test_assistant_pi_failures.py` 与 `apps/web/src/components/__tests__/LlmProviderFields.test.tsx`、`apps/web/src/app/settings/__tests__/page.test.tsx`，只增改本单消费者；不新建层/依赖/开关，不改A的main/队列/许可/模型执行或用户现有配置/Keychain。
+
+新MiniMax配置、主动选择MiniMax和首启采用当前官方国内 `https://api.minimax.cn/v1`，M3不变；明确已有/用户输入的国际或自定义URL原样保留，不迁移旧地址或Key、不探Key地区、不在失败后换域/供应商。现有连接地址编辑继续支持国际用户，不新增区域设置层；DeepSeek主动切换及旧用户选择保持。准备页“已保存”仍不等于真实鉴权。
+
+回复格式只基于主控实际见到的M3思考标记：优先核本机Pi1.0.4模型配置/实际SDK请求序列化与当前MiniMax官方 thinking/reasoning_split 契约，让正文和思考分离或明确禁用当前M3思考输出；不按猜测加compat、不靠宽泛正则删正常正文、不修改其他供应商/自定义模型的能力。B可仅用合成Key离线检查真实SDK构造，不调用真实模型或读Key；若SDK接口确需额外consumer先报准确文件。主控证据 `/tmp/main-controller-20261007/creation-wave/pi-live/result.json` 只定向读取状态/格式缺口，Key不在其中。最小直接检查须证明真实序列化字段/正文、默认国内与明确国际保留，不仅镜像常量。此前70条及未变化health截图复用，不重复全量。
+
+候选提交/源码完整后一次最小必要专项交接准确SHA/diff/仍未验项；默认地址UI和真实M3最终正文由主控冻结后具名验证，不抢先重启旧服务或用组件代替GUI。绑定PRD2.6、DESIGN直接命名和本合同；语义REBASE_ACK后直接完成这项必要差额。
+
 ## 主控真实 MiniMax 验证例外
 
 用户提供文档并批准执行，主控可仅解析该 DOCX 中的唯一 Key，保存到新具名验收工作区 `minimax-validation-20261007` 的系统钥匙串条目；不枚举/读取/修改其他登录钥匙串内容，不改源文档、不迁移旧用户配置。用户已确认 Key 来自国内平台；首次国际接口401保留，后续仅用此 Key 对国内官方文档当前指定 `https://api.minimax.cn/v1` / `MiniMax-M3` 发出完成本轮验证所需的少量短文字/工具请求（先一个短鉴权探针），不再对国际接口重试，不上传原始媒体/整库/Key到其他域或代理，不测试 DeepSeek 的真实付费调用。Key不得写进终端/聊天/线程消息/仓库/构建/持久化 env 明文文件或报告；只保存无秘密的状态、用量、错误类别和结果证据。Pi 真实轮次在冻结候选隔离运行环境由主控具名交接后验证；本地语音/口型模型、真实 Supabase 部署/账号、安装包和分发仍需独立具名安排。该例外不授权 A/B 读文档或真实凭据。
 
-主控 Pi 只读工具轮次 `MAIN-PILIVE-20261007-14`：国内短探针已实际通过。可用冻结 B12 的原始 `assistant_pi.py`，从主控新 `/tmp/main-controller-20261007/creation-wave/pi-live/` 隔离 HOME/XDG/agent/config/model/temp 根启动一次只读真实 `run_plan_turn`，最多180秒；Key仅由本轮新具名钥匙串条目读取到RAM并传给Pi子进程环境，不写持久化env/models/session明文。必须先由 B13 报告其准确自有 API PID/4537、冻结源码及合成数据/合成成员令牌文件，并完成缺Pi环境验收；主控与 B 确认最多十分钟只读工具窗口后才发起，B 在窗口内不重启API或改数据。HTTP只调用 read_workspace_context/find_materials 等只读工具，不创建提案/文案/任务、不开始制作、不写 B 的配置或 DB。模型记录由主控独有agent根持有；只保存HTTP/工具成功和最短无秘密回复，不能把这次直接服务调用说成普通GUI、设置页保存、真实账号或连续成片通过。窗口结束立即通知B按B13释放，不默认延长租约。
+主控 Pi 只读工具轮次 `MAIN-PILIVE-20261007-14`：国内短探针已实际通过。可用冻结 B12 的原始 `assistant_pi.py`，从主控新 `/tmp/main-controller-20261007/creation-wave/pi-live/` 隔离 HOME/XDG/agent/config/model/temp 根启动一次只读真实 `run_plan_turn`，最多180秒；Key仅由本轮新具名钥匙串条目读取到RAM并传给Pi子进程环境，不写持久化env/models/session明文。必须先由 B13 报告其准确自有 API PID/4537、冻结源码及合成数据/合成成员令牌文件，并交付缺Pi真实状态截图；主控与 B 确认最多十分钟只读工具窗口后才发起，B 在窗口内不重启API或改数据。HTTP只调用 read_workspace_context/find_materials 等只读工具，不创建提案/文案/任务、不开始制作、不写 B 的配置或 DB。模型记录由主控独有agent根持有；只保存HTTP/工具成功和最短无秘密回复，不能把这次直接服务调用说成普通GUI、设置页保存、真实账号或连续成片通过。窗口结束立即通知B按B13释放，不默认延长租约。
 
 本轮有界修订 `MAIN-CONTINUE-20261007-02`：用户已明确“可以，你执行吧”，并愿协助浏览器事项。A 以已交 WIL-110 候选 `9645d70e0eb94b6dea639b4de5dc28b6034e25e7` 收尾 PR #90 的实际 CI 失败，新增 owned tests 为 `apps/api/tests/test_production_foundation.py` 与 `test_video_templates.py` 的本单直接消费者夹具/断言；不得弱化可信身份、扩张匿名诊断空间或把私有内容改共享以消除失败。先最小复现，区分生产回归与旧测试身份前提，再一次必要专项。B 定向读取该冻结候选或主控后来指定的修复候选，只在自有临时目录准备服务和合成测试数据，提供用户人工 GUI 操作的准确 URL、短步骤、PID/端口及停止方法；这不是代理更换浏览器工具执行被阻断动作。B 不进行导航/点击/键盘操作、不更改策略。用户未实际操作前仅为 readiness，不能宣称 GUI 通过；用户选择暂缓时停止自有服务并保留报告。A/B 阅读本段后语义 ACK 即可开始本轮任务，WIL-108 仍需独立派工。
 
