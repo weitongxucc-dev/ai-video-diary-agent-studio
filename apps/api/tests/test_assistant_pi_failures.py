@@ -47,7 +47,8 @@ def _settings(tmp_path, key: str = KEY) -> Settings:
 
 def _install_fake_pi(monkeypatch, tmp_path):
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     return fake_pi
 
@@ -57,6 +58,8 @@ def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY)
     settings = _settings(tmp_path, key)
 
     def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
         return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
@@ -113,6 +116,8 @@ def test_unreachable_address_is_not_blamed_on_the_key(monkeypatch, tmp_path):
 
 def test_timeout_offers_retry_then_address_check(monkeypatch, tmp_path):
     def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
         raise subprocess.TimeoutExpired(cmd, 180)
 
     _install_fake_pi(monkeypatch, tmp_path)
@@ -130,7 +135,7 @@ def test_timeout_offers_retry_then_address_check(monkeypatch, tmp_path):
 def test_missing_pi_runtime_is_its_own_class(monkeypatch, tmp_path):
     # 让三条发现途径都落空：环境变量、PATH、nvm 目录。
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(tmp_path / "nope"))
-    monkeypatch.setattr("app.assistant_pi.shutil.which", lambda _name: None)
+    monkeypatch.setattr("app.assistant_pi.shutil.which", lambda _name, **_kwargs: None)
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
     with pytest.raises(AssistantUnavailable) as caught:
         run_task_turn(_settings(tmp_path), workspace_id="w", task_id="t", message="你好",
@@ -138,7 +143,9 @@ def test_missing_pi_runtime_is_its_own_class(monkeypatch, tmp_path):
     text = str(caught.value)
     assert caught.value.cause == FAILURE_RUNTIME_MISSING
     assert "没碰到密钥和网络" in text
-    assert "npm i -g @pi/cli" in text
+    assert "npm install -g @earendil-works/pi-coding-agent" in text
+    assert "22.19" in text
+    assert "@pi/cli" not in text
     assert KEY not in text
 
 
@@ -255,3 +262,65 @@ def test_a_successful_turn_marks_the_service_available(monkeypatch, tmp_path):
     ]))
     assert answer == "收到。"
     assert settings.llm_service_status("w")["state"] == LLM_SERVICE_AVAILABLE
+
+
+@pytest.mark.parametrize("version,ready", [("v22.18.0", False), ("v22.19.0", True), ("v24.16.0", True)])
+def test_node_requirement_uses_the_same_path_as_the_launcher(monkeypatch, tmp_path, version, ready):
+    from app.assistant_pi import pi_runtime_checks
+    pi = _install_fake_pi(monkeypatch, tmp_path)
+    seen = {}
+    def which(name, path=None):
+        assert name == "node"
+        seen["path"] = path
+        return str(tmp_path / "node")
+    monkeypatch.setattr("app.assistant_pi.shutil.which", which)
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", lambda cmd, **kwargs:
+                        subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else version), stderr=""))
+    checks = {c["id"]: c for c in pi_runtime_checks()}
+    assert seen["path"].split(__import__("os").pathsep)[0] == str(pi.parent)
+    assert (checks["pi_node"]["status"] == "ready") == ready
+
+
+def test_node_missing_blocks_before_provider_and_does_not_change_saved_key(monkeypatch, tmp_path):
+    _install_fake_pi(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.assistant_pi.shutil.which", lambda *args, **kwargs: None)
+    settings = _settings(tmp_path)
+    with pytest.raises(AssistantUnavailable) as caught:
+        run_task_turn(settings, workspace_id="w", task_id="t", message="你好",
+                      stage="montage", selected_refs=[], playhead_ms=None)
+    assert caught.value.cause == FAILURE_RUNTIME_MISSING
+    assert not caught.value.service_contacted
+    assert "Node.js" in str(caught.value)
+    assert settings.effective_llm_api_key == KEY
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
+
+
+def test_missing_business_tool_import_has_reinstall_action_not_pi_install(monkeypatch, tmp_path):
+    from app.assistant_pi import pi_runtime_checks
+    _install_fake_pi(monkeypatch, tmp_path)
+    extension = tmp_path / "diary_tools.ts"
+    extension.write_text("// initial test fixture, missing required sibling")
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(extension))
+    checks = {c["id"]: c for c in pi_runtime_checks()}
+    assert checks["pi_tools"]["status"] == "missing"
+    assert "retrieval.ts" in checks["pi_tools"]["repair_action"]
+    assert checks["pi_tools"]["fix_command"] is None
+
+
+
+def test_pi_launch_check_failure_is_not_a_provider_key_rejection(monkeypatch, tmp_path):
+    _install_fake_pi(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+    def failed_pi_version(cmd, **kwargs):
+        assert cmd[-1] == "--version"  # No conversation request reached the provider.
+        if Path(cmd[0]).name == "pi":
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="401 private-test-key")
+        return subprocess.CompletedProcess(cmd, 0, stdout="v24.16.0", stderr="")
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", failed_pi_version)
+    with pytest.raises(AssistantUnavailable) as caught:
+        run_task_turn(settings, workspace_id="w", task_id="t", message="你好",
+                      stage="montage", selected_refs=[], playhead_ms=None)
+    assert caught.value.cause == FAILURE_RUNTIME_MISSING
+    assert not caught.value.service_contacted
+    assert KEY not in str(caught.value)
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED

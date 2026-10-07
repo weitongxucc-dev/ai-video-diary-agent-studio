@@ -42,7 +42,7 @@ def test_preflight_endpoint_returns_stable_structure(tmp_path, monkeypatch):
     data = response.json()
     assert data["overall"] in ("ready", "blocked")
     assert isinstance(data["checks"], list)
-    assert len(data["checks"]) == 8
+    assert len(data["checks"]) == 11
     assert "generated_at" in data
 
     # Every check has the required fields
@@ -63,7 +63,7 @@ def test_preflight_endpoint_returns_stable_structure(tmp_path, monkeypatch):
     ids = {c["id"] for c in data["checks"]}
     assert ids == {
         "deepseek", "obsidian", "video_inbox", "video_output",
-        "jianying", "ffmpeg", "python", "asr",
+        "jianying", "ffmpeg", "python", "asr", "pi", "pi_node", "pi_tools",
     }
 
 
@@ -141,7 +141,7 @@ def test_preflight_missing_deepseek_key_uses_local_degraded_mode(tmp_path):
 
 def test_preflight_deepseek_ready_is_honest_about_local_only(tmp_path):
     """DeepSeek ready must say config is provided, not verified, and defer
-    remote availability to /api/runtime/health (no network call)."""
+    actual connection to the feature entry (no network call)."""
     settings = Settings(
         deepseek_api_key="sk-test",
         database_path=str(tmp_path / "db.sqlite"),
@@ -153,7 +153,8 @@ def test_preflight_deepseek_ready_is_honest_about_local_only(tmp_path):
     deepseek = next(c for c in result["checks"] if c["id"] == "deepseek")
     assert deepseek["status"] == "ready"
     assert "配置已提供" in deepseek["summary"]
-    assert "runtime/health" in deepseek["summary"]
+    assert "不代表实际请求成功" in deepseek["summary"]
+    assert "功能入口验证" in deepseek["summary"]
     # Honest wording must not claim verification
     assert "已验证" not in deepseek["summary"]
     assert "verified" not in deepseek["summary"]
@@ -572,3 +573,51 @@ def test_default_local_preflight_does_not_report_ready_from_cloud_credentials():
     check = _asr_check(settings)
     assert check["status"] == "missing"
     assert check["settings_target"] == "local_whisper_backend"
+
+
+
+def test_missing_conversation_dependencies_never_block_core_onboarding(tmp_path, monkeypatch):
+    # Real absence, rather than making all readiness checks return a ready fixture.
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(tmp_path / "missing-pi"))
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(tmp_path / "missing-tools.ts"))
+    monkeypatch.setattr("app.preflight.shutil.which", lambda name, **kwargs:
+                        "/synthetic/ffmpeg" if name == "ffmpeg" else None)
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
+    result = setup_preflight(Settings(video_inbox_path=str(inbox), video_output_path=str(output),
+                                      model_root_path=str(tmp_path / "models")))
+    checks = {x["id"]: x for x in result["checks"]}
+    assert result["overall"] == "ready"
+    for item in ("pi", "pi_node", "pi_tools"):
+        assert checks[item]["status"] == "missing"
+        assert not checks[item]["required"]
+        assert "不阻断首启" in checks[item]["impact"]
+    assert {x["id"] for x in result["checks"] if x["required"]} == {"video_inbox", "video_output", "ffmpeg"}
+
+
+
+def test_pi_probe_temp_failure_stays_optional_for_core_onboarding(tmp_path, monkeypatch):
+    pi = tmp_path / "pi"
+    pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    pi.chmod(0o700)
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(pi))
+    def deny_probe_directory(**kwargs):
+        raise PermissionError("synthetic isolated probe directory denied")
+    monkeypatch.setattr("app.assistant_pi.TemporaryDirectory", deny_probe_directory)
+    monkeypatch.setattr("app.preflight.shutil.which", lambda name, **kwargs:
+                        "/synthetic/ffmpeg" if name == "ffmpeg" else "/synthetic/node")
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", lambda cmd, **kwargs:
+                        __import__("subprocess").CompletedProcess(cmd, 0, stdout="v24.16.0", stderr=""))
+    inbox = tmp_path / "inbox"
+    output = tmp_path / "output"
+    inbox.mkdir()
+    output.mkdir()
+    result = setup_preflight(Settings(video_inbox_path=str(inbox), video_output_path=str(output)))
+    assert result["overall"] == "ready"
+    item = next(x for x in result["checks"] if x["id"] == "pi")
+    assert item["status"] == "missing" and not item["required"]
+    assert "临时目录" in item["summary"]
+    assert "临时目录可写" in item["repair_action"]
+    assert "npm install" not in item["repair_action"]

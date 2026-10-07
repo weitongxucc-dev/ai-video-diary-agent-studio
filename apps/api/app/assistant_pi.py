@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
@@ -45,7 +46,7 @@ _FAILURES: dict[str, dict[str, object]] = {
     FAILURE_RUNTIME_MISSING: {
         "service_contacted": False,
         "explanation": "对话没能在本机跑起来，所以这一轮根本没碰到密钥和网络。",
-        "next_step": "在终端执行 npm i -g @pi/cli 后重新打开应用；桌面版安装包目前不自带 Pi。",
+        "next_step": "安装 Node.js 22.19 或更高版本，再执行 npm install -g @earendil-works/pi-coding-agent；确认 node --version 和 pi --version 可运行后重新打开应用。桌面安装包尚不自带 Node/Pi。",
     },
     FAILURE_TOOL_FAILED: {
         "service_contacted": False,
@@ -94,7 +95,9 @@ class AssistantUnavailable(RuntimeError):
         self.service_contacted = service_contacted
 
 
-def _fail(cause: str, *, explanation: str | None = None) -> AssistantUnavailable:
+def _fail(
+    cause: str, *, explanation: str | None = None, repair_action: str | None = None,
+) -> AssistantUnavailable:
     """Build the user-facing failure text: what happened, then what to do.
 
     The text is assembled from fixed copy only — never from the process log,
@@ -103,7 +106,7 @@ def _fail(cause: str, *, explanation: str | None = None) -> AssistantUnavailable
     copy = _FAILURES[cause]
     headline = explanation or str(copy["explanation"])
     return AssistantUnavailable(
-        f"{headline} 下一步：{copy['next_step']}",
+        f"{headline} 下一步：{repair_action or copy['next_step']}",
         cause=cause,
         service_contacted=bool(copy["service_contacted"]),
     )
@@ -182,19 +185,23 @@ SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每
 def _agent_root(settings: Settings, workspace_id: str) -> Path:
     parent = Path(settings.model_root_path).expanduser().parent
     if len(parent.parts) >= 3 and parent.parts[1] == "Volumes" and not Path(*parent.parts[:3]).is_mount():
-        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。",
+                    repair_action="连接设置中选择的素材与模型盘后重试。")
     if not parent.is_dir():
-        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="素材与模型盘未连接，对话上下文没有地方保存。",
+                    repair_action="连接设置中选择的素材与模型盘后重试。")
     return workspace_pi_config_dir(workspace_id, parent / "agent")
 
 
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
     endpoint = urlsplit(settings.effective_llm_base_url)
     if endpoint.scheme != "https" or not endpoint.hostname or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
-        raise _fail(FAILURE_RUNTIME_MISSING, explanation="对话须选择外部文字模型，请先在设置里选 MiniMax 或 DeepSeek。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="对话须选择外部文字模型，请先在设置里选 MiniMax 或 DeepSeek。",
+                    repair_action="在设置页连接 MiniMax，或主动选择 DeepSeek；不会自动切换服务。")
     key = settings.effective_llm_api_key
     if not key:
-        raise _fail(FAILURE_RUNTIME_MISSING, explanation="外部文字模型的 API Key 还没填，所以这一轮对话没有开始。")
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="外部文字模型的 API Key 还没填，所以这一轮对话没有开始。",
+                    repair_action="在设置页填写当前所选服务的 API Key 并保存后重试。")
     return settings.effective_llm_base_url, settings.effective_llm_model, key
 
 
@@ -208,6 +215,76 @@ def _pi_executable() -> str | None:
     # Desktop apps launched from Finder do not inherit the interactive nvm PATH.
     candidates = sorted((Path.home() / ".nvm" / "versions" / "node").glob("v*/bin/pi"), reverse=True)
     return str(candidates[0]) if candidates else None
+
+
+def pi_runtime_checks() -> list[dict]:
+    """Local conversation dependencies only; no provider request or secret lookup."""
+    pi = _pi_executable()
+    pi_ready = bool(pi and os.access(pi, os.X_OK))
+    node_path = (str(Path(pi).parent) + os.pathsep if pi else "") + os.environ.get("PATH", "")
+    node = shutil.which("node", path=node_path)
+    node_ready = False
+    node_reason = "未找到 Node.js；对话程序还未启动，不代表密钥被拒。"
+    if node:
+        try:
+            result = subprocess.run(
+                [node, "--version"], capture_output=True, text=True, timeout=5,
+                check=False, env={"PATH": node_path},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            node_reason = "无法运行 Node.js 版本检查；对话程序还未启动。"
+        else:
+            version = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", result.stdout.strip())
+            if result.returncode == 0 and version:
+                node_ready = tuple(map(int, version.groups())) >= (22, 19, 0)
+                node_reason = (f"Node.js {result.stdout.strip()} 可用。" if node_ready
+                               else "Node.js 版本低于 22.19，无法启动当前 Pi。")
+            else:
+                node_reason = "Node.js 未返回有效版本，无法确认对话程序可启动。"
+    extension = Path(os.getenv("AI_VIDEO_DIARY_PI_EXTENSION") or
+                     Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts")
+    tools_ready = extension.is_file() and os.access(extension, os.R_OK)
+    # The shipped extension imports this sibling; file presence is not HTTP/tool execution.
+    if extension.name == "diary_tools.ts":
+        tools_ready = tools_ready and (extension.parent / "retrieval.ts").is_file()
+    pi_reason = "未找到可执行 Pi；这不是密钥保存或鉴权失败。"
+    pi_repair_action = str(_FAILURES[FAILURE_RUNTIME_MISSING]["next_step"])
+    pi_fix_command = "npm install -g @earendil-works/pi-coding-agent"
+    if pi_ready and node_ready:
+        # --version exits before Pi loads settings/auth or starts a model session.
+        try:
+            with TemporaryDirectory(prefix="diary-pi-check-") as isolated_home:
+                result = subprocess.run(
+                    [str(pi), "--version"], capture_output=True, text=True, timeout=5,
+                    check=False, env={"PATH": node_path, "HOME": isolated_home,
+                                      "PI_CODING_AGENT_DIR": isolated_home, "PI_OFFLINE": "1"},
+                    cwd=isolated_home,
+                )
+        except (OSError, subprocess.TimeoutExpired):
+            pi_ready = False
+            pi_reason = "无法运行隔离的 Pi 版本检查，请核对临时目录与程序启动权限；这不是密钥失败。"
+            pi_repair_action = "确认系统临时目录可写、Pi 可执行，并在相同运行环境中执行 pi --version 后重试。"
+            pi_fix_command = None
+        else:
+            pi_ready = result.returncode == 0 and bool(re.fullmatch(r"\d+\.\d+\.\d+", result.stdout.strip()))
+            pi_reason = (f"Pi {result.stdout.strip()} 可启动；实际对话尚未验证。" if pi_ready
+                         else "Pi 未返回有效版本；对话尚未开始，不能据此判定密钥失败。")
+    elif pi_ready:
+        pi_reason = "已找到 Pi；需先修复 Node.js 才能验证启动。"
+    return [
+        {"id": "pi", "label": "对话程序 Pi", "status": "ready" if pi_ready else "missing",
+         "reason": pi_reason,
+         "repair_action": "无需安装；实际对话由功能入口验证。" if pi_ready else pi_repair_action,
+         "fix_command": None if pi_ready else pi_fix_command},
+        {"id": "pi_node", "label": "对话运行环境 Node.js", "status": "ready" if node_ready else "missing",
+         "reason": node_reason,
+         "repair_action": "无需处理。" if node_ready else "安装 Node.js 22.19 或更高版本，使 Pi 同目录或 PATH 中的 node --version 可运行，再重新打开应用。",
+         "fix_command": None if node_ready else "node --version"},
+        {"id": "pi_tools", "label": "对话业务工具", "status": "ready" if tools_ready else "missing",
+         "reason": "业务工具文件可读；注册与 HTTP 回调尚未验证。" if tools_ready else "对话业务工具文件缺失或不可读，助手无法读取任务数据。",
+         "repair_action": "无需处理；工具调用由实际对话验证。" if tools_ready else "重新安装包含业务工具的桌面包；开发环境核对 AI_VIDEO_DIARY_PI_EXTENSION 及 diary_tools.ts 同目录的 retrieval.ts。",
+         "fix_command": None},
+    ]
 
 
 def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[str, dict | None]:
@@ -316,15 +393,16 @@ def _run_turn(
     preview_kind: str,
     session_key: str | None = None,
 ) -> tuple[str, dict | None]:
+    checks = pi_runtime_checks()
+    for check in checks:
+        if check["status"] != "ready":
+            raise _fail(
+                FAILURE_RUNTIME_MISSING,
+                explanation=f"{check['reason']} 对话没能在本机跑起来，没碰到密钥和网络。",
+                repair_action=check["repair_action"],
+            )
     pi_executable = _pi_executable()
-    if not pi_executable:
-        raise _fail(FAILURE_RUNTIME_MISSING)
     extension = Path(os.getenv("AI_VIDEO_DIARY_PI_EXTENSION") or Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts")
-    if not extension.is_file():
-        raise _fail(
-            FAILURE_RUNTIME_MISSING,
-            explanation="对话的业务工具文件不在安装包里，助手没法读取任务数据。",
-        )
     base_url, model, key = _configured_model(settings)
     root = _agent_root(settings, workspace_id)
     # 已解析的可信调用方身份参与会话键：不同成员不共用同一段对话历史。

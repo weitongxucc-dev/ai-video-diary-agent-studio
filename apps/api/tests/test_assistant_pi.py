@@ -43,13 +43,16 @@ def test_pi_events_keep_plan_preview_separate_from_edit_preview():
 def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
     commands = []
 
     def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         commands.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
             json.dumps({"type": "tool_execution_end", "toolName": "preview_script_draft",
@@ -79,13 +82,16 @@ def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_
     """已验证的本地成员令牌必须进到工具运行环境，否则工具回调会变成匿名 local 读取。"""
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
     envs = []
 
     def fake_run(cmd, **kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         envs.append(kwargs["env"])
         return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
@@ -110,13 +116,16 @@ def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_
 def test_trusted_callers_do_not_share_the_pi_session(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
     sessions = []
 
     def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         sessions.append(cmd[cmd.index("--session-id") + 1])
         return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
@@ -143,11 +152,14 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     settings = Settings(model_root_path=str(model_root), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     captured = {}
 
     def fake_run(cmd, **kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         captured.update(cmd=cmd, kwargs=kwargs)
         return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
@@ -173,7 +185,8 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
 def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_provider="minimax")
     with pytest.raises(AssistantUnavailable, match="API Key"):
@@ -248,13 +261,16 @@ def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch):
 def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
-    fake_pi.touch()
+    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
+    fake_pi.chmod(0o700)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
     sessions = []
 
     def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         sessions.append(cmd[cmd.index("--session-id") + 1])
         return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
