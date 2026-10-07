@@ -253,6 +253,10 @@ START只一个原job、真实完整DeviceRuntime/CreationJobUnitExecutor/当前�
 
 首轮仅一次新job短句narration，可自然等待至generation2；记录精确同次资源拒绝/阶段/真实音频及释放。若新诊断揭示有限预算不足，先完整释放并将实测值交主控，停等待；本Dispatch未结案时主控可以具名修订**隔离实验预算**并发明确新START（至多另一次新job，不自动第三轮），不得自行增cap/把实验标定写生产配置。每次实际音频及原narration done/job queued/permit free同时成立才通过，不取消成功请求，不做montage/render。未知/模型异常如实停止。最终真实音频ffprobe/hash或精确首因、全部父子组/实际held锁/ledger SQL释放和source/model/runtime双clean后worker_done一次；无音频不算完成，生产/Intel/音质/整制作仍不外推，不关闭Linear、不push/PR/合main。
 
+任务35.1 有界校准：首轮实测同次RSS2350383104B >2147483648B、threads13≤128，模型loading_weights阶段被2GiB保护终止；慢读/Host检查通过，没有音频。完整释放msg_bce191d7ee37及positive release已核、主控独立ps退出。基于实际加载需求超过原预算与实际可用余量，第二且最后一轮实验仅将NarrationBudget **max_process_rss_bytes与additional_memory_bytes同改4294967296B（4GiB）**，因此真实准入minimum available随原不变量升为 **5905580032B（5.5GiB）**，不得只抬RSS而不保留内存预留；此值是有限探索上限，不冒称已测得峰值或生产标定。原Host可用1.5GiB/CPU75/IO128MiB/s/3s/384MiB/swap fresh+64MiB/threads128/输入输出/慢读32MiB/s/120秒阶段180秒父均不改。
+
+仅当前35同Dispatch内新子根 `/tmp/main-acceptance-20261008/qwen-resource-diagnostics/calibrated-4g/`，同fe6d96d archive/新合法fixture/job，首轮顶层DB/log/report原样保留、禁止重写。按已有完整隔离/DEVNULL profile/106blob/13stat/runtime/六AST消费者及fresh完整准入准备，交PREPARED等第二明确START_RUNTIME_MEASURE；源冻结，新增产品写权零。只一新job、仅narration，自然最多generation2，无第三轮/进一步cap增加。真实成功联合条件、全部释放和未证边界沿用35；失败亦准确首因及资源，不把4GiB当默认产品值。第二轮结束总汇证据在新子根后worker_done一次。
+
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
 B12 候选固定 `bfbfaf8ce1c45ee2fead93b624fdc27bc25c2018`，产品写权已收回；以下范围只解释保留成果。任务 13 不改该候选。
