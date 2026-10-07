@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key、任务26一轮国内Pi编辑复验具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key与任务29已安装Qwen单次有界实验，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行其它本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26已结案，不恢复旧Pi调用权。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 28：修正实验空设备I/O后短配音验收 | 仅新具名实验根及准确边界probe；模型须START |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 29：据实测校订实验I/O预算后的短配音 | 仅新具名实验根；生产cap不变、模型须START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -132,7 +132,9 @@ REBASE_ACK后先只做静态archive、合法新夹具/脚本与预算准备，�
 
 最终report.md/measurement.json/release-evidence.json准确音频或首因、exec ACK、组RSS/threads/available/swap/间隔、MLX不可测边界、父/子组实际退出、device.lock可重获、ledger/SQLpermit free与源码/模型stat不变；失败或成功均一次worker_done且不擅修首因。不把短单段结果当生产标定/Intel/音质/完整制作，不关闭卡；B26与旧所有实验的权威不扩展到本单。
 
-## A：修正实验空设备I/O后的短配音验收（任务28）
+## A：修正实验空设备I/O后的短配音验收（任务28已结束，证据保留，无写/操作权）
+
+主控接受failed worker_done msg_6664ca4ebd88：真实Grant generation1及子93866登记后、exec ACK之前，当次总磁盘I/O72167582.97193675B/s超过67108864B/s（7319552B/0.101424375s），其它指标全部通过；没有Qwen执行或音频，不能把总I/O归给某个进程/模型。93865/93863/93866及组已另查退出，锁可重获且ledger/SQLpermit free，原请求及作业failed，106源码blob/13stat/runtime未变。精确/dev/null正负边界证据保留，旧deviceio根不得重试。
 
 `MAIN-QWENDEVICEIO-20261007-28`：27失败结案及全释放已由主控接受，B26也已结案且GUI/秘密资源全部释放；复用同一manta可见终端的新Dispatch。冻结仍为integration **3d58c1edabee1c590028b1cd6949515575ba225f**；无产品/测试/权威写权、不改45e80 clean分支或生产预算。只新 `/tmp/main-acceptance-20261007/qwen-measure-deviceio/`，真实合法独立owner/task/job/DB及完整隔离；旧headroom只定向读已合法参考WAV和无Key方法，绝不写旧根。106源码blob/13模型stat/外盘运行时核对，models仅本Qwen只读链接。
 
@@ -141,6 +143,14 @@ REBASE_ACK后先只做静态archive、合法新夹具/脚本与预算准备，�
 REBASE_ACK后可准备并运行该唯一非模型边界probe；B26与27已实际释放，不需新增GUI并行门禁。边界通过且组退出后允许一次原HostResourceProbe真实准入样本，交精确profile/正负证据/106blob/13stat/新合法环境与当次资源decision，再停PREPARED等本Dispatch START_MEASURE。不得以准备probe替代fresh调度准入。模型仍仅任务27同参考/目标单段、A25全部预算与3758096384B准入门槛、阶段120秒/父180秒/持续许可资源检查原样生效，swap本次实际baseline+67108864B。一次START仅一次真实attempt，无自动下一阶段/重试/新cap；其它模型、媒体工具、服务、云、安装/下载与生产设置皆无权。
 
 捕获实际首次失败与同次decision、真实登记/exec ACK/加载或音频证明及RSS/threads/available/swap/间隔，MLX不可测不伪造。最后report/measurement/release-evidence核父/子组退出、device.lock EX|NB可重获、ledger/SQLpermit free、原请求及单阶段作业准确状态、源码/模型stat/runtime与分支clean不变；单段成功不外推生产标定、Intel、音质或完整制作。失败或成功均worker_done一次，禁止擅修产品首因或复试；本单不关闭WIL26、不分发或合main。
+
+## A：据实测校订实验I/O预算后的短配音（任务29）
+
+`MAIN-QWENIOBUDGET-20261007-29`：28准确首因及全释放已接受。主控只将**新实验HostBudget.max_disk_io_bytes_per_second改为100663296B/s（96MiB/s）**，覆盖已观测约68.8MiB/s并留有限余量；这是基于当次实证的实验参数调整，不证明I/O来源、硬件可用吞吐或生产标定，不写生产配置/代码、不关闭探针，也不从其它阶段借预算。其余A25全部cap、1610612736B主机余量/3758096384B准入、2GiB组RSS、原持久许可/组threads/输入输出、CPU75、fresh swap+67108864、120秒阶段/180秒父均不变。若新I/O或其它限额仍拒绝，停止且不自行再扩大或重试。
+
+仅同一manta可见线程新Dispatch，新 `/tmp/main-acceptance-20261007/qwen-measure-iobudget/` 与准确 **3d58c1edabee1c590028b1cd6949515575ba225f**，106blob/13模型stat/runtime、45e80与integration clean保持；只读复用deviceio合法参考与无Key方法，新合法独立owner/task/job/DB与完整HOME/XDG/config/cache/library/output/tmp/agent隔离，models仅本Qwen只读链接，scheduled OFF。产品/专项/权威写权零，旧根不写。精确/dev/null profile逻辑与28已实际通过的正负边界复用，仅root字符串换成新根并核归一化文本完全一致；不得其它豁免或重跑完整边界专项。可用一次真实DEVNULL `/usr/bin/true` 无模型准备探针确认新profile加载，自有组≤30秒且证明退出，不联网/写外部哨兵。
+
+REBASE_ACK后准备及上述最小probe、一次真实HostResourceProbe（新96MiB上限其余逐字段相同），交源码/模型/新隔离环境与真实decision供主控核对，停PREPARED等本Dispatch START_MEASURE。一次START仅一次相同短参考/目标单段Qwen，fresh调度准入、子登记/exec ACK/持续核验与拒绝同次asdict必须真实；不自动下一阶段、不mock、下载、安装、云、其它模型、服务或生产修改。最后准确首因或真实音频/ffprobe/hash、实际遥测与MLX不可测边界、父子组/锁/ledgerSQLpermit释放、源码/模型stat未变的report/measurement/release-evidence后worker_done一次，不关闭WIL26、不称完整制作或分发通过。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
