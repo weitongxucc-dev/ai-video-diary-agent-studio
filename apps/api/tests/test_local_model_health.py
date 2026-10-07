@@ -148,7 +148,9 @@ def test_fully_installed_local_model_reports_ready_without_impact(tmp_path):
 def test_feature_gates_expose_both_local_model_dependencies(tmp_path):
     catalog = ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py")
 
-    gates = {gate["feature"]: gate for gate in _feature_gates(Settings(), catalog)}
+    pi_checks = [{"id": dependency, "status": "ready"}
+                 for dependency in ("pi", "pi_node", "pi_tools")]
+    gates = {gate["feature"]: gate for gate in _feature_gates(Settings(), catalog, pi_checks)}
 
     assert gates["material-visual-understanding"]["available"] is False
     assert gates["material-visual-semantics"]["available"] is False

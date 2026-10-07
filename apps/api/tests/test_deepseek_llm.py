@@ -109,7 +109,7 @@ def test_new_text_provider_defaults_to_minimax_without_routing_video_analysis():
     settings = Settings(llm_api_key="secret", llm_api_key_provider="minimax")
 
     assert settings.effective_llm_provider == "minimax"
-    assert settings.effective_llm_base_url == "https://api.minimax.io/v1"
+    assert settings.effective_llm_base_url == "https://api.minimax.cn/v1"
     assert settings.effective_llm_model == "MiniMax-M3"
     assert settings.public_status()["llm"]["provider"] == "minimax"
     assert "secret" not in json.dumps(settings.public_status(), ensure_ascii=False)

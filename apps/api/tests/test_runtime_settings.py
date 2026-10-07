@@ -50,6 +50,19 @@ def test_runtime_settings_supports_openai_compatible_provider_fields():
     }
 
 
+def test_minimax_domestic_default_preserves_explicit_addresses_and_deepseek():
+    from app.config import Settings
+
+    assert Settings().effective_llm_base_url == "https://api.minimax.cn/v1"
+    assert Settings().effective_llm_model == "MiniMax-M3"
+    for address in ("https://api.minimax.io/v1", "https://example.com/custom/v1"):
+        assert Settings(llm_provider="minimax", llm_base_url=address).effective_llm_base_url == address
+        updates = runtime_settings_updates({"llm_provider": "minimax", "llm_base_url": address})
+        assert updates["LLM_BASE_URL"] == address
+    assert Settings(llm_provider="deepseek").effective_llm_base_url == "https://api.deepseek.com"
+    assert Settings(deepseek_api_key="synthetic-deepseek").effective_llm_provider == "deepseek"
+
+
 def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
     from app.config import Settings
 
@@ -275,3 +288,25 @@ def test_runtime_settings_bgm_path_rejected_for_non_local_client(tmp_path, monke
     )
     assert response.status_code == 403
     assert not env_path.exists()
+
+
+
+def test_conversation_dependencies_do_not_disable_direct_model_features(tmp_path, monkeypatch):
+    from app.assistant_pi import pi_runtime_checks
+    from app.config import Settings
+    from app.runtime_health import runtime_health
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(tmp_path / "missing-pi"))
+    monkeypatch.setattr("app.assistant_pi.shutil.which", lambda *args, **kwargs: None)
+    settings = Settings(llm_api_key="isolated-synthetic-key", llm_api_key_provider="minimax",
+                        model_root_path=str(tmp_path / "models"))
+    health = runtime_health(settings)
+    items = {x["id"]: x for x in health["items"]}
+    gates = {x["feature"]: x for x in health["feature_gates"]}
+    assert items["pi"]["status"] == "missing"
+    assert items["pi_node"]["status"] == "missing"
+    assert not gates["assistant-conversation"]["available"]
+    assert "密钥" in items["pi"]["reason"] and "不是" in items["pi"]["reason"]
+    assert gates["generate-topics"]["available"]
+    assert gates["generate-script"]["available"]
+    assert "isolated-synthetic-key" not in str(health)
+    assert pi_runtime_checks()[0]["fix_command"] == "npm install -g @earendil-works/pi-coding-agent"

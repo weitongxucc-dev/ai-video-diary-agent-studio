@@ -97,6 +97,18 @@ beforeEach(() => {
 });
 
 describe("SettingsPage · LLM 服务状态徽章四档", () => {
+  it("新配置回填国内默认，同时已有国际地址原样保留", async () => {
+    const existing = runtimeWithServiceState("已填写，未验证");
+    api.getRuntimeSettings.mockResolvedValue(existing);
+    const view = await renderSettings();
+    expect(screen.getByLabelText("模型服务地址")).toHaveValue("https://api.minimax.io/v1");
+    view.unmount();
+    const fresh = runtimeWithServiceState("未填写", false);
+    fresh.settings = [];
+    api.getRuntimeSettings.mockResolvedValue(fresh);
+    await renderSettings();
+    expect(screen.getByLabelText("模型服务地址")).toHaveValue("https://api.minimax.cn/v1");
+  });
   it("服务真的失败时不许显示绿色「已配置」", async () => {
     // B03 回归线：后端已经记下一次真实失败，但字段仍然「填了」。
     // 用户今天看到的必须不是绿色「已配置」。

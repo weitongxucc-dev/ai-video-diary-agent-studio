@@ -4,6 +4,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
 from app.models import utc_now
 from app.production import directory_accepts_writes
@@ -19,6 +20,11 @@ def setup_preflight(settings: Settings) -> dict:
     generated_at = utc_now()
     checks: list[dict] = [
         _deepseek_check(settings),
+        *(_preflight_item(
+            item_id=c["id"], label=c["label"], status=c["status"],
+            summary=c["reason"], repair_action=c["repair_action"],
+            impact="仅影响对话助手；不阻断首启、精确编辑或直接文字模型调用。",
+        ) for c in pi_runtime_checks()),
         _obsidian_check(settings),
         _video_inbox_check(settings),
         _video_output_check(settings),
@@ -80,7 +86,7 @@ def _deepseek_check(settings: Settings) -> dict:
             status="ready",
             summary=(
                 f"配置已提供：{settings.effective_llm_provider} / "
-                f"{settings.effective_llm_model}；远端可用性由 /api/runtime/health 验证"
+                f"{settings.effective_llm_model}；配置不代表实际请求成功；连接需在对应功能入口验证"
             ),
             impact="AI 选题、脚本生成、语音指令草案均依赖此服务。",
             repair_action="无需处理。",

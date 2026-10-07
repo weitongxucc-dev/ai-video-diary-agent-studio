@@ -14,7 +14,7 @@ const PROVIDERS: ProviderPreset[] = [
   {
     id: "minimax",
     label: "MiniMax",
-    baseUrl: "https://api.minimax.io/v1",
+    baseUrl: "https://api.minimax.cn/v1",
     models: ["MiniMax-M3"],
   },
   {
