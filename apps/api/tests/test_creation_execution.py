@@ -1122,7 +1122,7 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
 
 
-@pytest.mark.parametrize("after_wait", ["recover", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure"])
+@pytest.mark.parametrize("after_wait", ["recover", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
     from datetime import timedelta
@@ -1166,6 +1166,12 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         grants.append(context.grant)
         repo.start_creation_task_narration(workspace, current_task)
         if len(attempts) == 1 and after_wait != "checkpoint_pressure":
+            if after_wait == "ordinary_error":
+                raise RuntimeError("synthetic narration failed")
+            if after_wait == "user_cancel":
+                from app.granted_subprocess import GrantedCommandCancelled
+                execution.cancel(workspace, current_task, member_id=member.member_id)
+                raise GrantedCommandCancelled("user cancelled")
             if after_wait == "unreleased":
                 monkeypatch.setattr(context.scheduler.processes, "children_released", lambda children: False)
             raise failure
@@ -1177,6 +1183,9 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         if after_wait == "checkpoint_pressure":
             repo.complete_creation_task_narration(record)
             raise failure
+        if after_wait in {"ordinary_error", "user_cancel"}:
+            repo.complete_creation_task_narration(record)
+            return
         repo.save_narration_artifact(record)
         task = repo.get_creation_task(workspace, current_task)
         task.narration_cache_key = record.cache_key
@@ -1202,12 +1211,35 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             monkeypatch.setattr(runtime.scheduler.processes, "children_released", lambda children: True)
             grant = grants[-1]
             runtime.scheduler.fail_unit(grant, reason="fixture_cleanup",
-                failure_write=lambda conn, current: executor._checkpoint(conn, current, status="failed", stage="narration"))
+                failure_write=lambda conn, current: executor._checkpoint(
+                    conn, current, status="failed", reason="fixture_cleanup", stage="narration"))
             return
         assert runtime.run_once() is True and runtime.last_error is None
+        if after_wait in {"ordinary_error", "user_cancel"}:
+            failed_task = repo.get_creation_task("local", task_id)
+            assert failed_task.stage_status == ("failed" if after_wait == "ordinary_error" else "not_started")
+            assert failed_task.stage_reason == ("synthetic narration failed" if after_wait == "ordinary_error" else "user_cancelled")
+            assert failed_task.recovery_point == "narration"
+            assert failed_task.confirmed_script_id == script_id
+            assert failed_task.narration_cache_key is None
+            with repo._connect() as conn:
+                assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
+            runtime.scheduler.assert_released(grants[-1])
+            resumed = execution.retry("local", task_id, member_id=member.member_id)
+            assert resumed.id != job.id and resumed.input_digest == job.input_digest
+            submit_creation_stage(execution, runtime.scheduler, resumed, actor)
+            assert runtime.run_once() is True
+            assert repo.get_job_run("local", resumed.id).status == "queued"
+            recovered = repo.get_creation_task("local", task_id)
+            assert recovered.narration_cache_key == "pressure_cache" and recovered.stage == "montage"
+            assert attempts == [1, 2]
+            runtime.scheduler.assert_released(grants[-1])
+            return
         if after_wait == "model_error":
             assert repo.get_job_run("local", job.id).status == "failed"
             assert repo.get_job_run("local", job.id).failure_reason == "synthetic model abort"
+            assert repo.get_creation_task("local", task_id).stage_status == "failed"
+            assert repo.get_creation_task("local", task_id).stage_reason == "synthetic model abort"
             assert runtime.run_once() is False
             return
         assert attempts == [1] and repo.get_job_run("local", job.id).status == "interrupted"

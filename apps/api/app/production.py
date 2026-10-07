@@ -8749,32 +8749,39 @@ class ProductionRepository:
         impact: str,
         repair_action: str,
         retryable: bool,
+        connection: sqlite3.Connection | None = None,
     ) -> CreationTask:
         if not all(value.strip() for value in (reason, impact, repair_action)):
             raise ValueError("阶段失败必须包含原因、影响和修复动作")
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
-            if task.stage != stage:
-                raise ValueError("任务当前阶段与失败阶段不一致")
-            task.stage_status = "failed"
-            task.status = "failed"
-            task.recovery_point = stage
-            task.stage_reason = reason
-            task.stage_impact = impact
-            task.stage_repair_action = repair_action
-            task.stage_retryable = retryable
-            task.updated_at = utc_now()
-            conn.execute(
-                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
-            )
-        return self.get_creation_task(workspace_id, task_id)
+        if connection is None:
+            with self._connect() as conn:
+                self.fail_creation_task_stage(
+                    workspace_id, task_id, stage=stage, reason=reason, impact=impact,
+                    repair_action=repair_action, retryable=retryable, connection=conn,
+                )
+            return self.get_creation_task(workspace_id, task_id)
+        row = connection.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+        if task.stage != stage:
+            raise ValueError("任务当前阶段与失败阶段不一致")
+        task.stage_status = "failed"
+        task.status = "failed"
+        task.recovery_point = stage
+        task.stage_reason = reason
+        task.stage_impact = impact
+        task.stage_repair_action = repair_action
+        task.stage_retryable = retryable
+        task.updated_at = utc_now()
+        connection.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+        )
+        return task
 
     def _start_creation_task_stage(
         self,

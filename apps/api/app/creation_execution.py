@@ -524,6 +524,27 @@ class CreationJobUnitExecutor:
                     or output != f"{version_id}:{ref}"):
                 raise ValueError("成片检查点与当前版本产物不一致")
         now = datetime.now(timezone.utc).isoformat()
+        if stage in {"narration", "montage_plan"} and status in {"failed", "cancelled"}:
+            task_row = conn.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
+                                    (grant.workspace_id, row["task_id"])).fetchone()
+            payload = json.loads(task_row["payload"])
+            task_stage = "narration" if stage == "narration" else "montage"
+            if payload["stage"] == task_stage:
+                if status == "failed" and payload["stage_status"] != "failed":
+                    self.repository.fail_creation_task_stage(
+                        grant.workspace_id, row["task_id"], stage=task_stage,
+                        reason=reason, impact="当前制作未完成，上游有效产物保留。",
+                        repair_action="修复当前阶段后点击继续制作。", retryable=True, connection=conn,
+                    )
+                elif status == "cancelled" and payload["stage_status"] == "running":
+                    payload.update(stage_status="not_started", status="created",
+                                   recovery_point=task_stage, stage_reason="user_cancelled",
+                                   stage_impact="当前阶段已停止，上游有效产物保留。",
+                                   stage_repair_action="需要时点击继续制作。", stage_retryable=True,
+                                   updated_at=now)
+                    conn.execute("UPDATE creation_tasks SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+                                 (json.dumps(payload, ensure_ascii=False), now,
+                                  grant.workspace_id, row["task_id"]))
         if row["status"] == "running":
             changed = conn.execute(
                 "UPDATE job_runs SET status=?, progress=CASE WHEN ?='succeeded' THEN 100 WHEN ?='queued' THEN ? ELSE progress END, "
