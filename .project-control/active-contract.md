@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26与29已结案，不恢复旧Pi调用或Qwen实验权；唯一新模型操作范围为下方任务31，须本Dispatch START。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；当前无模型操作权，新实验须具名派工及本Dispatch START。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务31：实测I/O后仅校订128MiB/s实验值 | 仅新io128实验根；准备后等本Dispatch START；无产品写权 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：31真实I/O拒绝且完整释放 | 写入/操作权零；无音频；不再自动增cap或重试 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -170,7 +170,9 @@ START只一次实际短参考“这是一段测试声音。”与目标“今天
 
 最后report.md/measurement.json/release-evidence.json交实际音频ffprobe/hash或准确首因、所有父子PID/PGID退出、实际持有的lock EX|NB可重获、ledger/SQLpermit free及原请求/job真实状态；准备未Grant保留queued而不伪造failed，未持锁记N/A。106blob/13stat/runtime及双clean证明后worker_done一次。无论成败均完成释放，不擅改首因或试下一轮；单段成功不等于生产标定、音质、长文/Intel或完整制作，不关闭卡/合main/分发。
 
-## A：按真实I/O峰值校订实验预算的短配音（任务31）
+## A：按真实I/O峰值校订实验预算的短配音（任务31已结束，无写/操作权）
+
+主控接受failed worker_done msg_f19687ddc60e：exec ACK后1.87868秒，实际0.100521750秒窗口主机合计I/O644134905.995523B/s（614.295MiB/s）超过128MiB/s，CPU17.3/available5696438272/swap4739432448及其它均通过；无音频、模型加载/推理仍未证。51135/51137/51148及组退出、held lock EX|NB可重获/ledgerSQL free/原request及job failed/106blob13stat runtime双clean，主控另ps退出。只保留证据，不再自动递增cap或重试；先核查同窗口逐设备/执行阶段来源和目标机资源预算，不能由全盘短窗口速率推断磁盘容量不足或归给模型。
 
 `MAIN-QWENIO128-20261007-31`：30已实际失败并完整释放：exec ACK后0.11秒窗口IO103529210.82B/s超过96MiB/s；同次CPU43.5/75、available5860278272/3758096384、swap4764598272/4831707136及其它检查全部通过，I/O来源不可归因，没有音频/加载推理证明。主控已独立核39035/39037/39058退出、lock重获/ledgerSQL free、106blob/13stat/runtime双clean，须30 failed worker_done接受后新Dispatch才开始；旧根不重试。B26结案待命，全部GUI资源已释放。仅复用原manta可见终端的新Dispatch；冻结准确integration **3d58c1edabee1c590028b1cd6949515575ba225f**，manta45e80与integration clean不变，无产品/测试/共享权威写权。
 
