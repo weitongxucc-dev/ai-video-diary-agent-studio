@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控 MiniMax Key 与任务21的两轮国内Pi页面验收具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控 MiniMax Key、任务21两轮国内Pi页面验收与任务22单次本地配音实验具名例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 20：本机名册读路径 SQLite 锁修复 | 仅 local_members.py 及三项既有直接专项；不运行模型 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 22：修复后同一组合候选有界 Qwen 配音验收 | 产品写权零；仅新隔离夹具与具名只读模型/运行时 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 21：Pi 真实页面创建及修改验收 | 产品写权零；仅新隔离页面/夹具及具名两轮国内Pi请求 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -62,7 +62,9 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 
 报告 `/tmp/main-acceptance-20261007/qwen-measure/report.md`：准确SHA、真实Qwen产物及ffprobe信息、时间/峰值/MLX与RSS边界、子进程/组/许可释放、既有权重只读证明、首个阻断及下一最小差额。软件 GUI、云身份、五人设备、人物口型、完整制作仍未验，不关闭卡或远端操作。
 
-## A：本机名册读路径 SQLite 锁修复（任务 20）
+## A：本机名册读路径 SQLite 锁修复（候选保留，写权收回）
+
+任务20的87834d3c8fd953e8cb7ea92cb8d0a20d3b8e5700与53项不同相关用例证据已由主控接受，许可/锁释放且clean；本节不再授产品写权。
 
 `MAIN-ROSTERREAD-20261007-20`：任务17 failed worker_done 已由主控接受，报告及真实释放证据保留；同一 manta 新 Dispatch继续已授权流程修复。准确基线 `702392d11910138f2ef028b64f2bd42c019212d6`，在当前clean的连续制作分支追加局部差额，保留旧候选。先读本段、任务17报告最终首因和认证§5/领域§11直接相关章节，语义 REBASE_ACK 后实施，不另等START。
 
@@ -73,6 +75,20 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`device_acc
 用一个真实 LocalMemberService + MemberDeviceAccess 的 DeviceScheduler.pick_and_grant 同库事务直接专项证明不死锁且实际Grant，并对同一可信名册的撤权后阻断作最小验证；资源探针可明确测试夹具，身份不可替身。现有freshDB/token回填/seat并发专项按影响挑选最小复用，不全量、不镜像实现测试。普通读不得发DDL/seed/backfill写；检查真实生产构造与调用时序，不引入通用兼容层。
 
 仅新证据 `/tmp/manta-roster-read-20261007/` 和具名源码写权，无服务、模型、网络/安装、Keychain/真实用户库/账号、push/PR/Linear或重跑17实验。交精确SHA/父/净差额、真实最小检查、初始化与读边界、不扩大身份/权限的证据及释放，报告report.md。模型预算/真实性/GUI/云/完整制作仍未验，本修复不关闭WIL26或宣称整体迁移RETIRED。
+
+## A：修复后同一组合候选有界 Qwen 配音验收（任务 22）
+
+`MAIN-TTSFIXED-20261007-22`：A20 worker_done与真实Grant/撤权/释放经主控接受，同一manta新Dispatch。产品与权威写权零。冻结主控机械集成候选 `cb26f49e339d303e56f1f881fb60f071ea7e6e59`（独立review工作树 `/tmp/main-controller-20261007/creation-wave/integration`），准确包含PR94已合入f024132、A11的c965e831/702392d1、B19的d4ebf2d、唯一认证§5及A20的87834d3差额。只读此准确Git对象archive并核blob，不用自己旧branch SHA或main未冻结树，也不能修改集成工作树。保留任务17失败根，不原地重试。
+
+仅新 `/tmp/main-acceptance-20261007/qwen-measure-fixed/`，导入前HOME/XDG/DB/config/library/cache/output/models/temp隔离，scheduled生产OFF，不导入main/起服务。只读复用已安装API Python `/tmp/manta-wil108-20261007/venv/bin/python`、模型运行时 `/Volumes/Dujiangyan-VM/AI视频日记/model-runtime/bin/python` 和已装 `models/qwen3-tts-12hz-0.6b-base-8bit`（完整外接盘路径同前17），自有models软链接且缓存/HOME均新根。权重/manifest/runtime只读，不加载其它模型、联网、下载或升级，不触碰真实用户媒体/库/Keychain/账号。
+
+新可信本机owner、授权合成声音和实际已确认一段文案登记于新DB；参考由内置say生成≤10秒/1MiB，目标≤12汉字，say/FFmpeg仅准备且自有进程组各30秒限。不能把系统say当Qwen输出。实际候选DeviceScheduler与MemberDeviceAccess/CreationJobOwnerVerifier持续核验→真实HostResourceProbe→Grant→NarrationGenerator/Qwen3TTSSubprocessProvider→未改qwen3_tts_worker短配音，不能伪造ready/identity/resource或绕过Grant；只这一段，不自动下一阶段/全作业成功。
+
+沿用同一初始实验保护上限且仍非生产预算：NarrationBudget max_text_chars=80,max_section_count=1,max_reference_bytes=1048576,max_duration_seconds=15,max_output_bytes=2097152,max_threads=1,max_timeout_seconds=120,max_process_rss_bytes=2147483648,max_process_threads=128,runtime_sample_seconds=0.1,additional_memory_bytes=2147483648,additional_disk_bytes=8388608；HostBudget max_cpu_percent=75,min_available_memory_bytes=1610612736,max_swap_used_bytes=执行前实际baseline+67108864,min_free_disk_bytes=1073741824,max_disk_io_bytes_per_second=67108864,max_unit_input_bytes=2097152,sample_seconds=0.1。准入可用内存至少3758096384，不能因本机当前紧张降低余量/增大cap/假idle。实际阶段120秒、父总180秒，0.1秒记录组RSS/线程及主机内存/交换增量/阶段时间/采样间隔；MLX allocator不可测明确UNAVAILABLE，不把RSS冒充GPU占用。超限、撤权、失败立即终止本单自有组并以真实锁/许可/组事实证明释放；不重试。
+
+先完成新根准备、准确blob/路径/预算/资源真实预测和拟执行命令报告主控，然后保持PREPARED并等本Dispatch START_MEASURE。B21 GUI/服务未释放前不得模型加载/实测，即使资源预测通过。准入预测不足只报告当下条件不硬跑，主控协调可用内存；一次START只允许一次受准入实验，独占attempt marker避免重复。无首因修复权/无新源码写，不盲重跑旧17。
+
+报告新根report.md，准确组合SHA、实际Qwen音频/ffprobe、首次首因或成功观测、真实父/子组/Grant释放、既有模型stat只读、不外推长稿/Intel/多用户/音质。不关闭卡/远端，不称GUI/云身份/完整制作通过；主控实际人物口型与独立编辑重输出缺口仍留在整体目标中。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
@@ -154,7 +170,7 @@ B做完页面与窗口后只释放自有服务/Chrome/页面及租约，实际�
 
 真实表面用现有computer-use驱动本任务新external Chrome profile/PID/window，--use-mock-keychain仅Chrome隔离，不改变API秘密store，不安全弱化参数，不碰用户浏览器/剪贴板/旧标签。native AX与有实际截图依据的点击/键盘可用，eval仅只读，不修改浏览器政策；不能操作时按具体项未验。两轮分别记录真实Pi工具轨迹、最终正文无思考标记、session无Key/成员凭证、实际HTTP结果及截图；截图与日志不暴露秘密。
 
-30分钟自有API/Web/Chrome租约，先核端口，scheduled生产OFF、预算拒绝不放宽。禁止真实云身份/账号/注册、其他Key/真实数据、Qwen/口型/渲染/下载/安装/发布或生产配置写；A20只源码检查独立进行，后续A模型实测须主控先暂停/释放本GUI资源。结束实际证明PID/组/端口释放，保留新证据/临时钥匙串不自动删除，主控后处理具名测试secret。报告report.md，创建与编辑分开给通过/未验；这不证明整条制作、真实账号、Key GUI保存、安装包或三平台发布，不关闭整卡。
+30分钟自有API/Web/Chrome租约，先核端口，scheduled生产OFF、预算拒绝不放宽。禁止真实云身份/账号/注册、其他Key/真实数据、Qwen/口型/渲染/下载/安装/发布或生产配置写；A22仅准备独立进行，其模型实测须主控先释放本GUI资源。结束实际证明PID/组/端口释放，保留新证据/临时钥匙串不自动删除，主控后处理具名测试secret。报告report.md，创建与编辑分开给通过/未验；这不证明整条制作、真实账号、Key GUI保存、安装包或三平台发布，不关闭整卡。
 
 ## 主控真实 MiniMax 验证例外
 
