@@ -574,3 +574,125 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
     assert response["language"] == language
     assert response["segments"][0]["language"] == language
     assert response["segments"][0]["audio_url"].endswith("/segment-language/audio")
+
+
+def test_granted_qwen_lower_io_priority_is_process_scoped_and_offline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.voice_clone as voices
+    calls = []
+    provider = _provider(tmp_path, lambda *_args: None)
+    monkeypatch.setattr(voices.sys, "platform", "darwin")
+    context = SimpleNamespace(threads=1, run=lambda command, **options:
+        calls.append((command, options)) or SimpleNamespace(returncode=0, stdout=b"", stderr=b""))
+    provider._run_command([str(provider.runtime_python_path), str(provider.worker_path)], grant_context=context)
+    command, options = calls[0]
+    assert command[:3] == ["/usr/sbin/taskpolicy", "-d", "throttle"]
+    assert command[3:] == [str(provider.runtime_python_path), str(provider.worker_path)]
+    assert options["env"]["HF_HUB_OFFLINE"] == "1"
+    assert options["env"]["OMP_NUM_THREADS"] == "1"
+    assert not any(key.endswith("KEY") for key in options["env"])
+
+
+def test_qwen_weight_reads_use_real_bytes_elapsed_and_bounded_blocks(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    import time
+
+    worker_path = Path(__file__).parents[1] / "model_workers/qwen3_tts_worker.py"
+    spec = importlib.util.spec_from_file_location("qwen_paced_worker", worker_path)
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    model = tmp_path / "weights"
+    model.mkdir()
+    sizes = [2 * 1024 * 1024 + 123, 1024 * 1024 + 77]
+    names = ["model.safetensors", "speech_tokenizer/model.safetensors"]
+    for name, size in zip(names, sizes):
+        (model / name).parent.mkdir(exist_ok=True)
+        with (model / name).open("wb") as stream:
+            stream.truncate(size)
+    # Unrelated files are not read; actual installed model format is safetensors.
+    (model / "config.json").write_text("{}")
+    original_open = Path.open
+    reads = []
+    opened = []
+
+    class TrackedRead:
+        def __init__(self, path, stream):
+            self.path, self.stream = path, stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, size):
+            chunk = self.stream.read(size)
+            reads.append((str(self.path.relative_to(model)), size, len(chunk)))
+            return chunk
+
+    def tracked_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if mode == "rb" and path.suffix == ".safetensors":
+            opened.append(str(path.relative_to(model)))
+            assert kwargs["buffering"] == 0
+            return TrackedRead(path, stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    started = time.monotonic()
+    total, elapsed = worker._pace_weight_reads(model)
+    assert total == sum(sizes) == sum(row[2] for row in reads)
+    assert elapsed >= total / (32 * 1024 * 1024)
+    assert time.monotonic() - started >= elapsed
+    assert opened == names
+    assert all(0 <= got <= requested <= 1024 * 1024 for _, requested, got in reads)
+    stderr = capsys.readouterr().err
+    assert f"paced_weights_complete bytes={total}" in stderr
+    assert "rate_bytes_per_second=33554432 block_bytes=1048576" in stderr
+    assert str(model) not in stderr
+
+
+def test_qwen_paced_read_child_can_be_cancelled_and_group_released(tmp_path):
+    import json
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    model = tmp_path / "weights"
+    model.mkdir()
+    with (model / "weights.safetensors").open("wb") as stream:
+        stream.truncate(64 * 1024 * 1024)
+    worker = Path(__file__).parents[1] / "model_workers/qwen3_tts_worker.py"
+    code = ("import importlib.util,sys; from pathlib import Path; "
+            "s=importlib.util.spec_from_file_location('paced',sys.argv[1]); "
+            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+            "m._pace_weight_reads(Path(sys.argv[2]))")
+    with (tmp_path / "child.stderr").open("wb") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, str(worker), str(model)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
+            start_new_session=True)
+        try:
+            deadline = time.monotonic() + 3
+            while b"paced_weights_progress" not in (tmp_path / "child.stderr").read_bytes():
+                assert child.poll() is None
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            os.killpg(child.pid, signal.SIGTERM)
+            code = child.wait(timeout=1)
+            assert code == -signal.SIGTERM
+            with pytest.raises(ProcessLookupError):
+                os.killpg(child.pid, 0)
+            (tmp_path / "release-evidence.json").write_text(json.dumps({
+                "pid": child.pid, "pgid": child.pid, "exit_code": code,
+                "group_absent": True, "kind": "non-model direct helper cancellation",
+                "actual_read_progress": (tmp_path / "child.stderr").read_text(),
+            }))
+        finally:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=1)

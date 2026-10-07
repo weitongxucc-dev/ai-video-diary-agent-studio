@@ -416,13 +416,16 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
   pi.registerTool({
     name: "preview_edit",
     label: "预览剪辑修改",
-    description: "对当前任务生成真实修改预览。没有界面选中对象时，可从 read_current_task 选择用户明确指出的镜头、字幕轨或配音段；不明确时先询问。只预览，不确认执行。",
+    description: "读取当前任务后，对用户明确的动作生成真实待确认预览。对象引用和阶段单独传，不写进 command；缺少明确参数先询问。每轮只调用一次，失败后说明原始阻断，不自行改写重试。只预览，不确认执行。",
     parameters: {
       type: "object",
       properties: {
-        command: { type: "string", minLength: 2, maxLength: 500 },
-        context_stage: { type: "string", enum: ["topic", "script", "narration", "montage", "review", "subtitle_cover"] },
-        selected_refs: { type: "array", items: { type: "string" }, maxItems: 8 },
+        command: { type: "string", minLength: 2, maxLength: 500,
+          description: "只传用户明确的可执行动作，如水平裁剪到40%。不扩写对象、限制、解释或副作用。裁剪百分比是窗口位置，不是宽度或保留比例；缺少百分比先询问，不猜步长。" },
+        context_stage: { type: "string", enum: ["topic", "script", "narration", "montage", "review", "subtitle_cover"],
+          description: "目标所处阶段，单独传递，不写入 command。" },
+        selected_refs: { type: "array", items: { type: "string" }, maxItems: 8,
+          description: "用户明确或界面选中的对象引用，例如clip:clip-1；单独传递，不写入 command。" },
       },
       required: ["command"],
       additionalProperties: false,
@@ -446,9 +449,14 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         content: [{ type: "text", text: JSON.stringify({
           proposal_id: preview.proposal.id,
           summary: preview.proposal.summary,
+          target_refs: preview.proposal.target_refs,
+          operation_type: preview.proposal.operation.operation_type,
+          before: preview.proposal.preview.before.detail,
+          after: preview.proposal.preview.after.detail,
           invalidated_refs: preview.proposal.invalidated_refs,
+          external_effects: preview.proposal.external_effects,
           status: preview.proposal.status,
-          instruction: "告诉用户预览已生成，必须由用户确认后才能执行。",
+          instruction: "仅依据上述实际前后变化和影响说明预览；水平/垂直百分比是裁剪窗口位置，不是宽度或面积比例，不猜中心对齐或收窄。必须由用户确认后才能执行，尚未出片。",
         }) }],
         details: { kind: "edit_preview", preview },
       };

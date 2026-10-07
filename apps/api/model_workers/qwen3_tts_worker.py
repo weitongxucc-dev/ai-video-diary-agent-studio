@@ -4,13 +4,51 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+import time
 from pathlib import Path
 
 MODEL_ID = "qwen3-tts-12hz-0.6b-base-8bit"
 LANGUAGE_CODES = {"zh": "chinese", "en": "english", "zh-en": "auto"}
+WEIGHT_READ_BYTES_PER_SECOND = 32 * 1024 * 1024
+WEIGHT_READ_BLOCK_BYTES = 1024 * 1024
+
+
+def _pace_weight_reads(model_path: Path) -> tuple[int, float]:
+    """Read within the monitored worker; loader/cache behavior remains separate."""
+    weights = sorted(model_path.rglob("*.safetensors"))
+    if not weights:
+        raise FileNotFoundError("model safetensors weights missing")
+    started = time.monotonic()
+    next_report = started + 1
+    total_bytes = 0
+    print("QWEN_PHASE paced_weights_started rate_bytes_per_second=33554432 block_bytes=1048576",
+          file=sys.stderr, flush=True)
+    for weight in weights:
+        with weight.open("rb", buffering=0) as stream:
+            if sys.platform == "darwin":
+                import fcntl
+
+                fcntl.fcntl(stream.fileno(), 45, 0)  # Darwin F_RDAHEAD: this read FD only.
+            while chunk := stream.read(WEIGHT_READ_BLOCK_BYTES):
+                total_bytes += len(chunk)
+                del chunk
+                remaining = total_bytes / WEIGHT_READ_BYTES_PER_SECOND - (time.monotonic() - started)
+                if remaining > 0:
+                    time.sleep(remaining)
+                now = time.monotonic()
+                if now >= next_report:
+                    print(f"QWEN_PHASE paced_weights_progress bytes={total_bytes} elapsed_seconds={now - started:.6f}",
+                          file=sys.stderr, flush=True)
+                    next_report = now + 1
+    elapsed = time.monotonic() - started
+    print(f"QWEN_PHASE paced_weights_complete bytes={total_bytes} elapsed_seconds={elapsed:.6f}",
+          file=sys.stderr, flush=True)
+    return total_bytes, elapsed
 
 
 def main() -> None:
+    print("QWEN_PHASE worker_started", file=sys.stderr, flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True)
     parser.add_argument("--response", required=True)
@@ -18,6 +56,7 @@ def main() -> None:
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
     _validate_request(request)
 
+    print("QWEN_PHASE importing_runtime", file=sys.stderr, flush=True)
     import numpy as np
     from mlx_audio.audio_io import write as audio_write
     from mlx_audio.tts.utils import load_model
@@ -30,7 +69,11 @@ def main() -> None:
     if not reference_path.is_file() or reference_path.suffix.lower() != ".wav":
         raise FileNotFoundError("reference WAV does not exist")
 
+    _pace_weight_reads(model_path)
+    print("QWEN_PHASE loading_weights", file=sys.stderr, flush=True)
     model = load_model(str(model_path))
+    print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
+    print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
     results = list(
         model.generate(
             text=request["text"],
@@ -41,6 +84,7 @@ def main() -> None:
     )
     if not results:
         raise RuntimeError("model generated no audio")
+    print("QWEN_PHASE inference_returned", file=sys.stderr, flush=True)
     sample_rates = {int(result.sample_rate) for result in results}
     if len(sample_rates) != 1:
         raise RuntimeError("model returned inconsistent sample rates")
@@ -65,6 +109,7 @@ def main() -> None:
     temporary_response = response_path.with_suffix(response_path.suffix + ".tmp")
     temporary_response.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary_response, response_path)
+    print("QWEN_PHASE audio_written", file=sys.stderr, flush=True)
 
 
 def _validate_request(payload: object) -> None:

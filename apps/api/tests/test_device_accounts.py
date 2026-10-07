@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 import socket
 import subprocess
 import tempfile
@@ -37,23 +38,25 @@ def pg():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    with tempfile.TemporaryDirectory(prefix="device-accounts-pg-", dir="/tmp") as pg_dir:
+    with tempfile.TemporaryDirectory(prefix="device-accounts-pg-", dir=os.environ.get("TMPDIR", "/tmp")) as pg_dir:
         subprocess.run(
             ["initdb", "-D", pg_dir, "-A", "trust", "-U", "postgres"],
             check=True,
             capture_output=True,
             text=True,
         )
-        subprocess.run(
+        started = subprocess.run(
             [
                 "pg_ctl", "-D", pg_dir,
-                "-o", f"-k {pg_dir} -p {port}",
+                "-o", f"-k '' -h 127.0.0.1 -p {port}",
                 "-l", f"{pg_dir}/server.log", "start",
             ],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if started.returncode:
+            raise AssertionError(started.stderr + Path(pg_dir, "server.log").read_text())
 
         def run(
             sql: str,
@@ -71,7 +74,7 @@ def pg():
             args = [
                 "psql", "-X", "-A", "-t", "-F", "|",
                 "-v", "ON_ERROR_STOP=1",
-                "-h", pg_dir, "-p", str(port), "-U", "postgres", "-d", "postgres",
+                "-h", "127.0.0.1", "-p", str(port), "-U", "postgres", "-d", "postgres",
             ]
             if verbosity is not None:
                 # Per-call only: psql renders the error text in the server
@@ -89,7 +92,7 @@ def pg():
                 raise AssertionError(result.stderr)
             return result
 
-        run.socket_dir = pg_dir
+        run.socket_dir = "127.0.0.1"
         run.port = port
 
         try:
@@ -123,6 +126,78 @@ def pg():
 
 def _last(result: subprocess.CompletedProcess[str]) -> str:
     return result.stdout.strip().splitlines()[-1]
+
+
+def test_creation_permit_is_only_a_proof_scoped_boolean_and_revokes(pg):
+    owner, (member,), device = _users_and_device(pg, 1)
+    target = _target(pg, owner, device)
+    reserved = _last(pg(f"SET ROLE anon; SELECT public.device_creation_permit('{device}','{PROOF}','{owner}','{target}');"))
+    assert reserved == "f"
+    _, token = _invite(pg, owner, device, target)
+    _accept(pg, member, device, token)
+
+    def read(*, proof=PROOF, target_device=device, user=member, workspace=target, role="anon"):
+        return _last(pg(
+            f"SET ROLE {role}; SELECT public.device_creation_permit("
+            f"'{target_device}','{proof}','{user}','{workspace}');"
+        ))
+
+    assert read() == "t"
+    assert read(role="authenticated") == "t"
+    assert read(proof=OTHER_PROOF) == "f"
+    assert read(proof="invalid") == "f"
+    assert read(target_device=str(uuid4())) == "f"
+    _, _, wrong_device = _users_and_device(pg, 0)
+    assert read(target_device=wrong_device) == "f"
+    assert read(user=owner) == "f"  # owning the device does not grant private workspace access
+    assert read(workspace=str(uuid4())) == "f"
+    for status in ("paused", "left"):
+        pg(f"UPDATE public.device_members SET status='{status}' WHERE device_id='{device}' AND user_id='{member}';")
+        assert read() == "f"
+    pg(f"UPDATE public.device_members SET status='active' WHERE device_id='{device}' AND user_id='{member}';")
+    assert read() == "t"
+    pg(f"DELETE FROM public.workspace_members WHERE workspace_id='{target}' AND user_id='{member}';")
+    assert read() == "f"
+    pg(f"INSERT INTO public.workspace_members(workspace_id,user_id,role) VALUES ('{target}','{member}','owner');")
+    pg(f"UPDATE public.devices SET retired_at=now() WHERE id='{device}';")
+    assert read() == "f"
+    for role in ("anon", "authenticated"):
+        for table in ("devices", "device_members"):
+            denied = pg(f"SET ROLE {role}; SELECT * FROM public.{table};", check=False)
+            assert denied.returncode != 0
+    assert _last(pg("SELECT prorettype::regtype FROM pg_proc WHERE proname='device_creation_permit';")) == "boolean"
+    assert _last(pg("SELECT count(*) FROM public.device_members WHERE device_id='" + device + "';")) == "2"
+
+
+def test_creation_permit_adapter_never_uses_login_token_or_guesses_unknown(monkeypatch):
+    device, user, workspace = (str(uuid4()) for _ in range(3))
+    service = DeviceAccountService(
+        Settings(supabase_url="https://permit.example", supabase_publishable_key="sb_publishable_test"),
+        DeviceCredential(device, PROOF),
+    )
+    calls = []
+    result = True
+
+    def post(url, **kwargs):
+        calls.append(kwargs)
+        assert url.endswith("/rpc/device_creation_permit")
+        assert "Authorization" not in kwargs["headers"]
+        assert kwargs["json"] == {"target_device_id": device, "device_proof": PROOF,
+                                  "target_user_id": user, "target_workspace_id": workspace}
+        return httpx.Response(200, json=result)
+
+    monkeypatch.setattr(httpx, "post", post)
+    assert service.creation_permit(device, user, workspace) == "ready"
+    result = False
+    assert service.creation_permit(device, user, workspace) == "unauthorized"
+    result = {"ready": True}
+    assert service.creation_permit(device, user, workspace) == "unknown"
+    assert service.creation_permit(str(uuid4()), user, workspace) == "unauthorized"
+    assert len(calls) == 3
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: httpx.Response(503))
+    assert service.creation_permit(device, user, workspace) == "unknown"
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: (_ for _ in ()).throw(httpx.ConnectError("offline")))
+    assert service.creation_permit(device, user, workspace) == "unknown"
 
 
 def _users_and_device(pg, member_count: int, *, proof: str = PROOF):

@@ -28,6 +28,9 @@ from app.host_resource_probes import (
     HostCapacity,
     HostProcessProbe,
     HostResourceProbe,
+    HostResourceRefusal,
+    HostResourceDecision,
+    NarrationBudget,
     ResourceAdmissionRejected,
     ResourceSamplingUnavailable,
     SceneWindowBudget,
@@ -36,7 +39,7 @@ from app.host_resource_probes import (
     sample_host_capacity,
 )
 from app.database_migrations import apply_production_migrations
-from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent, VerifiedWork
+from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
 
 class RecordingScheduler:
@@ -66,6 +69,37 @@ def run(scheduler, argv, **options):
         max_stderr_bytes=options.pop("max_stderr_bytes", 4096),
         **options,
     )
+
+
+def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
+    from app.host_resource_probes import SceneRuntimeLimits
+    import app.granted_subprocess as commands
+
+    grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
+                  "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
+    permission_samples, rss_samples = [], []
+    class TimedScheduler(RecordingScheduler):
+        def assert_grant(self, current):
+            assert current == grant
+            permission_samples.append(time.monotonic())
+
+    scheduler = TimedScheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "isolated.sqlite", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda _grant:
+        SceneRuntimeLimits(1024 ** 3, 16, 1, 2**63, 0.05))
+    sample = commands._check_scene_runtime
+    def sampled(*args):
+        rss_samples.append(time.monotonic())
+        sample(*args)
+    monkeypatch.setattr(commands, "_check_scene_runtime", sampled)
+    result = run_granted_command(scheduler, grant, [sys.executable, "-c", "import time; time.sleep(1.3)"],
+        timeout_seconds=3, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert result.returncode == 0
+    assert len(rss_samples) >= 5
+    assert len(permission_samples) == 5  # prelaunch/register/exec, then immediate + one 1s poll
+    assert permission_samples[-1] - permission_samples[-2] >= 1
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
 def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):
@@ -362,8 +396,8 @@ def test_isolated_cpu_ffmpeg_render_uses_measured_admission_and_real_grant(tmp_p
         scheduler.close()
 
 
-@pytest.mark.parametrize("unavailable", [False, True])
-def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monkeypatch, unavailable):
+@pytest.mark.parametrize("refusal", ["rss_bytes", "threads", "unavailable"])
+def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monkeypatch, refusal):
     resources = _scene_resources()
 
     class Owner:
@@ -384,8 +418,11 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
             observed_at REAL NOT NULL, completed_digest TEXT, attempted_digest TEXT,
             state TEXT NOT NULL, PRIMARY KEY (workspace_id, file_path))""")
         apply_production_migrations(conn)
-    scene_budget = replace(_scene_budget(), max_process_rss_bytes=24 * 1024 * 1024,
-                           additional_memory_bytes=24 * 1024 * 1024)
+    unavailable = refusal == "unavailable"
+    scene_budget = replace(_scene_budget(),
+                           max_process_rss_bytes=(256 if refusal == "threads" else 24) * 1024 * 1024,
+                           max_process_threads=1 if refusal == "threads" else 128,
+                           additional_memory_bytes=(256 if refusal == "threads" else 24) * 1024 * 1024)
     probe = HostResourceProbe(
         database, disk_paths=(tmp_path,),
         budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024, 0.02,
@@ -405,14 +442,26 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
             monkeypatch.setattr(psutil.Process, "memory_info", missing_memory)
         start = time.monotonic()
         expected = GrantedCommandResourceUnavailable if unavailable else GrantedCommandResourceLimit
-        with pytest.raises(expected):
+        with pytest.raises(expected) as caught:
             run_granted_command(
                 scheduler, grant,
-                [sys.executable, "-c", "import os,time; os.close(1); os.close(2); "
-                 "held=bytearray(80_000_000); time.sleep(5)"],
+                [sys.executable, "-c", "import os,time,threading; os.close(1); os.close(2); "
+                 "held=bytearray(80_000_000); "
+                 "threading.Thread(target=lambda:time.sleep(5),daemon=True).start(); time.sleep(5)"],
                 timeout_seconds=3, max_stdout_bytes=100, max_stderr_bytes=100,
             )
         assert time.monotonic() - start < 2
+        assert caught.value.command_diagnostics["group_released"] is True
+        if not unavailable:
+            sample = caught.value.resource_sample
+            assert sample["limits"] == {"rss_bytes": scene_budget.max_process_rss_bytes,
+                                        "threads": scene_budget.max_process_threads}
+            assert sample["exceeded"] == [refusal]
+            assert sample["measured"][refusal] > sample["limits"][refusal]
+            assert sample["measured"]["rss_bytes"] > 0
+            assert sample["measured"]["threads"] >= 1
+            assert str(sample["measured"][refusal]) in str(caught.value)
+            assert str(sample["limits"][refusal]) in str(caught.value)
         if unavailable:
             scheduler.defer_unit(grant, reason="resource_pressure",
                                  retry_not_before_utc=datetime.now(timezone.utc) + timedelta(minutes=1))
@@ -523,3 +572,258 @@ def test_sample_host_capacity_unavailable_fails_explicitly(monkeypatch):
     monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: None)
     with pytest.raises(ResourceSamplingUnavailable):
         sample_host_capacity()
+
+
+@pytest.mark.parametrize("metric,actual,threshold", [
+    ("cpu_percent", 76, 75),
+    ("available_memory_bytes", 99, 100),
+    ("swap_used_bytes", 51, 50),
+    ("disk_free_bytes", 199, 200),
+    ("disk_io_bytes_per_second", 101, 100),
+])
+def test_runtime_refusal_contains_the_same_samples_and_unchanged_thresholds(
+    tmp_path, monkeypatch, metric, actual, threshold,
+):
+    import app.host_resource_probes as probes
+    values = {"cpu_percent": 75, "available_memory_bytes": 100, "swap_used_bytes": 50,
+              "disk_free_bytes": 200, "disk_io_bytes_per_second": 100}
+    values[metric] = actual
+    calls = []
+    counters = iter([SimpleNamespace(read_bytes=0, write_bytes=0),
+                     SimpleNamespace(read_bytes=values["disk_io_bytes_per_second"], write_bytes=0)])
+    def io():
+        calls.append("io")
+        return next(counters)
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", io)
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: values["cpu_percent"])
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=values["available_memory_bytes"]))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=values["swap_used_bytes"]))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=values["disk_free_bytes"]))
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: {"kind": "material_hash", "size_bytes": 10})
+    with pytest.raises(HostResourceRefusal) as stopped:
+        probe.continue_unit("fixture-grant")
+    decision = stopped.value.decision
+    key = f"disk_free_bytes:{tmp_path}" if metric == "disk_free_bytes" else metric
+    failed = decision.checks[key]
+    assert decision.verdict is False and failed["passed"] is False
+    assert failed["actual"] == actual
+    assert failed["minimum" if metric in {"available_memory_bytes", "disk_free_bytes"} else "maximum"] == threshold
+    assert all(check["passed"] for name, check in decision.checks.items() if name != key)
+    assert decision.observed_interval_seconds == 1
+    assert calls == ["io", "io"]  # No second observation to explain the first refusal.
+    label = {"cpu_percent": "CPU占用", "available_memory_bytes": "可用内存", "swap_used_bytes": "交换空间已用量",
+             "disk_free_bytes": "目标磁盘可用空间", "disk_io_bytes_per_second": "磁盘读写速率"}[metric]
+    assert label in str(stopped.value) and str(actual) in str(stopped.value)
+
+
+@pytest.mark.parametrize("failure", ["before_missing", "after_missing", "regressed", "memory_unreadable"])
+def test_unknown_runtime_sampling_records_exact_cause_without_ready_fallback(tmp_path, monkeypatch, failure):
+    import app.host_resource_probes as probes
+    counters = iter([None if failure == "before_missing" else SimpleNamespace(read_bytes=10, write_bytes=0),
+                     None if failure == "after_missing" else SimpleNamespace(read_bytes=0 if failure == "regressed" else 10, write_bytes=0)])
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda: next(counters))
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: 12)
+    def unreadable():
+        raise OSError("fixture host memory read refused")
+    monkeypatch.setattr(psutil, "virtual_memory", unreadable)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: {"kind": "material_hash", "size_bytes": 10})
+    with pytest.raises(HostResourceRefusal) as stopped:
+        probe.continue_unit("fixture-grant")
+    decision = stopped.value.decision
+    assert decision.verdict is None
+    expected = {"before_missing": "disk_io_before_unavailable", "after_missing": "disk_io_after_unavailable",
+                "regressed": "disk_io_counters_regressed", "memory_unreadable": "available_memory_bytes: OSError: fixture host memory read refused"}
+    assert decision.reason == expected[failure]
+    expected_text = {"before_missing": "采样前的磁盘读写计数不可读取", "after_missing": "采样后的磁盘读写计数不可读取",
+                     "regressed": "磁盘读写计数回退", "memory_unreadable": "可用内存不可读取"}
+    assert expected_text[failure] in str(stopped.value)
+    if failure != "before_missing":
+        assert decision.checks["cpu_percent"]["actual"] == 12
+    if failure == "memory_unreadable":
+        assert decision.checks["disk_io_bytes_per_second"]["actual"] == 0
+        assert decision.checks["available_memory_bytes"] == {"minimum": 100}  # Never invent a value.
+
+
+def test_runtime_declared_budget_missing_and_grant_fact_unreadable_are_explicit(tmp_path, monkeypatch):
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts"}
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: resources)
+    with pytest.raises(HostResourceRefusal) as missing:
+        probe.continue_unit("fixture-grant")
+    assert missing.value.decision.verdict is None
+    assert missing.value.decision.reason == "stage_budget_unavailable"
+    assert missing.value.decision.checks == {}
+    monkeypatch.setattr(probe, "_grant_resources", lambda grant: None)
+    with pytest.raises(HostResourceRefusal) as unreadable:
+        probe.continue_unit("fixture-grant")
+    assert unreadable.value.decision.reason == "granted_resources_unreadable"
+
+
+def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, monkeypatch):
+    import app.host_resource_probes as probes
+    narration = NarrationBudget(80, 1, 1048576, 15, 2097152, 1, 120,
+                                2147483648, 128, 0.1, 2147483648, 8388608)
+    minimum_memory = 1610612736 + narration.additional_memory_bytes
+    minimum_disk = 1073741824 + narration.additional_disk_bytes + narration.max_output_bytes
+    reads = []
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: reads.append("cpu") or 75)
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_kwargs: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=minimum_memory))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=50))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=minimum_disk))
+    ticks = iter([10.0, 13.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                              budget=HostBudget(75, 1610612736, 50, 1073741824, 0, 2097152, narration=narration))
+    resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
+                 "text_chars": 80, "section_count": 1, "reference_bytes": 1048576,
+                 "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
+    assert probe.admit(SimpleNamespace(resources=resources)) is True
+    assert probe.admit(SimpleNamespace(resources={**resources, "text_chars": 81})) is False
+    assert probe.admit(SimpleNamespace(resources={**resources, "reference_bytes": 1048577})) is False
+    assert probe.admit(SimpleNamespace(resources={**resources, "execution_mode": "in_process"})) is None
+    assert probe.admit(SimpleNamespace(resources={**resources, "timeout_seconds": None})) is None
+    assert reads == ["cpu"]  # Declared rejection never becomes a ready host resample.
+
+
+def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(tmp_path):
+    decision = HostResourceDecision(False, {"kind": "material_hash", "size_bytes": 10}, {
+        "cpu_percent": {"actual": 76, "maximum": 75, "passed": False},
+        "swap_used_bytes": {"actual": 51, "maximum": 50, "passed": False},
+        "available_memory_bytes": {"actual": 1000, "minimum": 100, "passed": True},
+        f"disk_free_bytes:{tmp_path}": {"actual": 999, "minimum": 200, "passed": True},
+    }, observed_interval_seconds=0.1)
+    error = HostResourceRefusal(decision)
+    assert "CPU占用为76%，上限75%" in str(error)
+    assert "交换空间已用量为51字节，上限50字节" in str(error)
+    assert "1000" not in str(error) and str(tmp_path) not in str(error)
+    assert "material_hash" not in str(error) and "{" not in str(error)
+    assert error.decision is decision  # Full evidence survives without another observation.
+    unknown = HostResourceRefusal(HostResourceDecision(None, {}, {}, "stage_budget_unavailable"))
+    assert "专属设备预算尚未标定" in str(unknown)
+    disk = HostResourceRefusal(HostResourceDecision(None, {}, {}, f"disk_free_bytes:{tmp_path}: OSError: denied"))
+    assert "目标磁盘可用空间不可读取" in str(disk) and str(tmp_path) not in str(disk)
+
+
+def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, monkeypatch):
+    from app.host_resource_probes import SceneRuntimeLimits
+    grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
+                  "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
+    decision = HostResourceDecision(False, {}, {
+        "disk_io_bytes_per_second": {"actual": 200, "maximum": 100, "passed": False},
+    })
+    class RefusingScheduler(RecordingScheduler):
+        def assert_grant(self, grant):
+            if self.children and time.monotonic() - self.began > 0.2:
+                raise HostResourceRefusal(decision)
+
+    scheduler = RefusingScheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current:
+        SceneRuntimeLimits(1024**3, 16, 1, 2**63, 0.1))
+    scheduler.began = time.monotonic()
+    with pytest.raises(HostResourceRefusal) as stopped:
+        run_granted_command(scheduler, grant, [sys.executable, "-c",
+            "import sys,time; print('QWEN_PHASE importing_runtime',file=sys.stderr,flush=True); time.sleep(5)"],
+            timeout_seconds=2, max_stdout_bytes=64, max_stderr_bytes=64)
+    assert stopped.value.decision is decision
+    diagnostic = stopped.value.command_diagnostics
+    assert diagnostic["exec_ack"] and diagnostic["group_released"]
+    assert b"QWEN_PHASE importing_runtime" in diagnostic["stderr"]
+    assert len(diagnostic["stderr"]) <= 64
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+@pytest.mark.parametrize("scenario", ["short_peak", "sustained", "unknown", "counter_regressed", "observation_gap"])
+def test_narration_io_uses_real_endpoint_window_and_finite_burst(tmp_path, monkeypatch, scenario):
+    import app.host_resource_probes as probes
+    narration = NarrationBudget(80, 1, 1048576, 15, 2097152, 1, 120,
+                                100, 128, 0.1, 100, 1)
+    budget = HostBudget(75, 100, 50, 200, 100, 2097152, narration=narration)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=budget)
+    resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
+                 "text_chars": 16, "section_count": 1, "reference_bytes": 100,
+                 "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
+    ticks = iter([0, 0.1, 10, 10.1] if scenario == "observation_gap" else
+                 [0, 0.1, 1, 1.1, 2, 2.1, 3, 3.1, 4, 4.1])
+    totals = [0, 150, 150, 150, 150, 150, 150, 150, 150, 150] if scenario == "short_peak" else [0, 10, 140, 150, 280, 290, 420, 430, 560, 570]
+    if scenario == "counter_regressed":
+        totals[2] = 1  # Regression across the polling gap must not disappear.
+    counters = iter(totals)
+    def disks(**options):
+        assert options == {"perdisk": True}
+        total = next(counters)
+        if scenario == "unknown":
+            return None
+        return {"disk6": SimpleNamespace(read_bytes=total, write_bytes=0,
+                 read_count=total, write_count=0, read_time=total * 2, write_time=0)}
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", disks)
+    monkeypatch.setattr(psutil, "cpu_percent", lambda **kw: 10)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1000))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=10**9))
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **kw: [])
+    first = probe._sample(resources, running_io=True)
+    if scenario == "unknown":
+        assert first.verdict is None and first.reason == "disk_io_before_unavailable"
+        assert not HostResourceRefusal(first).recoverable_pressure
+        return
+    assert first.verdict is True  # Known measured bytes below the finite 300B burst budget.
+    second = probe._sample(resources, running_io=True)
+    if scenario == "observation_gap":
+        assert second.verdict is None and second.reason == "io_observation_gap"
+        return
+    if scenario == "counter_regressed":
+        assert second.verdict is None and second.reason == "disk_io_counters_regressed"
+        return
+    third = probe._sample(resources, running_io=True)
+    final = probe._sample(resources, running_io=True)
+    io = final.checks["disk_io_bytes_per_second"]
+    assert io["window_complete"] and io["window_seconds"] >= 3
+    assert io["delta_bytes"] == (0 if scenario == "short_peak" else 420)
+    # This full 0.1-to-3.1 window includes polling-gap I/O, not isolated sample deltas.
+    assert sum(device[direction]["delta"] for device in io["devices"].values()
+               for direction in ("read_bytes", "write_bytes")) == io["delta_bytes"]
+    assert io["devices"]["disk6"]["busy_time"] == "UNAVAILABLE"
+    if scenario == "short_peak":
+        assert all(d.verdict is True for d in [first, second, third, final])
+        assert first.checks["disk_io_bytes_per_second"]["actual"] > 100
+    else:
+        assert final.verdict is False and HostResourceRefusal(final).recoverable_pressure
+        assert io["actual"] > 100 and io["maximum"] == 100
+    next_window = probe._sample(resources, running_io=True)
+    assert next_window.checks["disk_io_bytes_per_second"]["window_complete"]
+
+
+def test_narration_admission_requires_complete_window_without_blocking(tmp_path, monkeypatch):
+    import app.host_resource_probes as probes
+    narration = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, 0.1, 100, 1)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(75, 0, 50, 0, 100, 100, narration=narration))
+    resources = dict(kind="creation_narration", execution_mode="isolated_qwen3_tts", text_chars=1,
+        section_count=1, reference_bytes=100, duration_seconds=15, max_output_bytes=100, threads=1, timeout_seconds=120)
+    ticks = iter([0, 0.1, 1, 1.1, 3, 3.1, 34, 34.1, 35, 35.1, 37, 37.1])
+    intervals = []
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **kw: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: intervals.append(interval) or 0)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1000))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=1000))
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **kw: [])
+    for _ in range(2):
+        decision = probe._sample(resources)
+        assert decision.verdict is None and decision.reason == "io_window_incomplete"
+    assert probe._sample(resources).verdict is True
+    for _ in range(2):
+        assert probe._sample(resources).reason == "io_window_incomplete"
+    assert probe._sample(resources).verdict is True
+    assert intervals == [0.1] * 6  # A 30s backoff must require a new complete 3s observation.

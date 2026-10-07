@@ -1137,8 +1137,11 @@ class DeviceScheduler:
                 conn.execute("UPDATE device_work_requests SET state='cancelled', wait_reason='user_cancelled', updated_at=? WHERE id=?", (_stamp(self._now()), request_id))
             elif row["state"] == "granted":
                 conn.execute("UPDATE device_work_requests SET state='yield_requested', wait_reason='user_cancelled', updated_at=? WHERE id=?", (_stamp(self._now()), request_id))
+            cancelled = conn.execute("SELECT id,state,wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             conn.commit()
-        return self.view_for(request_id, actor)
+        # Cancellation is authorized by exact ownership even after revocation.
+        # Return its actual stored result without granting any queue read right.
+        return dict(cancelled)
 
     def close(self) -> None:
         """Stop this coordinator; a held ledger remains for recovery audit."""

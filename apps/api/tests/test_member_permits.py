@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.creation_execution import CpuRenderLimits
+from app.creation_execution import CpuRenderLimits, CreationExecutionActor
 from app.device_runtime import build_device_runtime
 from app.device_scheduler import SessionHeartbeat
 from app.host_resource_probes import HostProcessProbe, HostResourceProbe
-from app.local_members import LocalMemberService
+from app.local_members import LocalMembersError, LocalMemberService
 from app.member_permits import (
     HostBudgetUncalibrated,
     MemberDeviceAccess,
@@ -24,6 +24,7 @@ from app.member_permits import (
     host_budget_from_env,
     permit_actor,
     resolve_member_token,
+    PermitIdentityUnavailable,
 )
 from app.production import ProductionRepository
 
@@ -60,6 +61,38 @@ def _repository(tmp_path):
     return ProductionRepository(
         database_path=tmp_path / "isolated.sqlite3", video_library_path=library,
     )
+
+
+def test_account_access_uses_original_tuple_not_local_roster_and_rechecks(tmp_path):
+    from uuid import uuid4
+    from types import SimpleNamespace
+
+    workspace, device, user = (str(uuid4()) for _ in range(3))
+    actor = CreationExecutionActor.account(workspace, device, user)
+    current = "ready"
+    calls = []
+
+    def lookup(*original):
+        calls.append(original)
+        return current
+
+    members = LocalMemberService(_repository(tmp_path).database_path)
+    access = MemberDeviceAccess(members, SimpleNamespace(creation_permit=lookup))
+    heartbeat = SessionHeartbeat("account-session", workspace)
+    assert access.verify_session(heartbeat, actor).member_id == actor.member_id
+    assert access.can_view_device_summary(actor)
+    assert all(item == (device, user, workspace) for item in calls)
+    current = "unauthorized"
+    with pytest.raises(PermissionError):
+        access.verify_session(heartbeat, actor)
+    assert not access.can_view_device_summary(actor)
+    current = "unknown"
+    with pytest.raises(PermitIdentityUnavailable):
+        access.verify_session(heartbeat, actor)
+    assert not access.can_view_device_summary(actor)
+    local = members.whoami(None)[0]
+    assert access.verify_identity(CreationExecutionActor("local", local.member_id)) == "unauthorized"
+    assert not members.list_members()[0].member_id.startswith("account:")
 
 
 def test_host_budget_requires_every_calibrated_value():
@@ -175,3 +208,92 @@ def test_one_real_runtime_carries_creation_job_and_revokes_a_removed_member(tmp_
             )
     finally:
         assert runtime.stop(timeout_seconds=5.0)
+
+
+@pytest.mark.parametrize("remove_at", ["before_grant", "after_grant"])
+def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_path, remove_at):
+    """Actual identity/owner/scheduler SQL; only resource availability is a fixture."""
+    import json
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.avatar_lipsync import Authorization, PersonProfile, VoiceProfile
+    from app.creation_execution import (
+        CreationExecution, CreationJobOwnerVerifier, revision_digest, submit_creation_stage,
+    )
+    from app.device_scheduler import DeviceScheduler
+    from app.host_resource_probes import NarrationBudget
+    from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask
+
+    repository = _repository(tmp_path)
+    members = LocalMemberService(repository.database_path)
+    joined, token = members.join(members.create_invite_code(), "制作成员")
+    actor = permit_actor(members.resolve_member(token), WORKSPACE)
+    access = MemberDeviceAccess(members)
+    reference = tmp_path / "library/reference.wav"
+    reference.write_bytes(b"synthetic reference; no inference in this test")
+    auth = Authorization("auth", "v1", "fixture", ("voice",), ("narration",),
+        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "synthetic fixture", "active", WORKSPACE)
+    repository.save_person_profile(PersonProfile("person", WORKSPACE, "夹具", "v1",
+        "fixture://unused-avatar", (), (), auth))
+    repository.save_versioned_voice_profile(VoiceProfile("voice", WORKSPACE, "person", "v1",
+        "v1", "zh", "workspace://reference.wav", "参考", "fixture-model", auth))
+    plan = CreationPlan(id="plan", workspace_id=WORKSPACE, goal="测试", name="测试", target_count=1,
+        language="zh-CN", aspect_ratio="9:16", duration_target_seconds=15,
+        knowledge_references=[], source_references=[],
+        selected_voice=CreationPlanVoiceReference("voice", "v1", "person", "v1", "auth", "v1",
+            "auth", "v1", "zh-CN", "fixture-model"), pronunciation_references=[],
+        approved_asset_count=0, approved_clip_count=0, material_rule_summary="测试", model_snapshot=[],
+        confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
+    task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation")
+    repository.confirm_creation_plan(plan, task)
+    now = datetime.now(timezone.utc).isoformat()
+    payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
+        title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="测试",
+            visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
+        created_at=now, updated_at=now, confirmed_at=now)
+    with repository._connect() as conn:
+        conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
+            ("script", WORKSPACE, task.id, "run", json.dumps(payload), now))
+        task.confirmed_script_id = "script"
+        task.stage = "narration"
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
+            (json.dumps(asdict(task), default=str), task.id))
+    script = repository.get_creation_task_script(WORKSPACE, "script")
+    plan = repository.get_creation_plan(WORKSPACE, plan.id)
+    budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024)
+    owner = CreationJobOwnerVerifier(repository, narration_budget=budget, verify_identity=access.verify_identity)
+    # No model is executed; this fixture only permits the real scheduler's admission.
+    resources = SimpleNamespace(admit=lambda request: True, continue_unit=lambda grant: True,
+        released=lambda grant: True)
+    scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock", owners=owner,
+        resources=resources, processes=HostProcessProbe())
+    def forbidden(*args):
+        pytest.fail("grant-only roster test must never execute a model or media stage")
+    execution = CreationExecution(repository, run_narration=forbidden, run_montage_plan=forbidden,
+        run_render=forbidden, render_is_valid=forbidden)
+    job = execution.start(WORKSPACE, task.id, script.id, revision_digest(script, plan), actor=actor)
+    request_id = submit_creation_stage(execution, scheduler, job, actor)
+    grant = None
+    try:
+        if remove_at == "before_grant":
+            members.remove_member(joined.member_id)
+            assert scheduler.pick_and_grant() is None
+            assert scheduler._get(request_id).wait_reason == "authorization_lost"
+        else:
+            grant = scheduler.pick_and_grant()
+            assert grant is not None and grant.request_id == request_id
+            scheduler.assert_grant(grant)
+            members.remove_member(joined.member_id)
+            with pytest.raises(PermissionError, match="授权已失效"):
+                scheduler.assert_grant(grant)
+        assert access.verify_identity(actor) == "unauthorized"
+        assert find_member(members, joined.member_id) is None
+        with pytest.raises(LocalMembersError, match="凭据无效"):
+            members.resolve_member(token)
+    finally:
+        if grant is not None:
+            scheduler.fail_unit(grant, reason="fixture_finished", failure_write=lambda conn, current: "fixture_finished")
+            scheduler.assert_released(grant)
+        scheduler.close()
