@@ -20,14 +20,14 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；当前无模型操作权，新实验须具名派工及本Dispatch START。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26/29/30/31已结案，不恢复旧Pi调用或Qwen实验权；唯一新写入与模型准备范围为任务32；实际模型仍须主控冻结同候选及本Dispatch START_RUNTIME_MEASURE。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 待命：31真实I/O拒绝且完整释放 | 写入/操作权零；无音频；不再自动增cap或重试 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务32：实现持续压力与资源等待恢复，随后真实短配音 | 下方owned源码及新pressure-recovery根；CODE_FROZEN后停产品写，模型等本Dispatch START |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 待命：26源码及真实Pi编辑分项已验收 | 写入/操作权零；643c227与3d58真实证据保留 |
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
@@ -186,6 +186,28 @@ START只一次实际短参考“这是一段测试声音。”与目标“今天
 
 最后report.md/measurement.json/release-evidence.json交实际音频ffprobe/hash或准确首因、所有父子PID/PGID退出、实际持有的lock EX|NB可重获、ledger/SQLpermit free及原请求/job真实状态；准备未Grant保留queued而不伪造failed，未持锁记N/A。106blob/13stat/runtime及双clean证明后worker_done一次。无论成败均完成释放，不擅改首因或试下一轮；若仍I/O拒绝，交该次精确触发点及可证局部I/O来源/不可测项建议，不再自动递增cap；单段成功不等于生产标定、音质、长文/Intel或完整制作，不关闭卡/合main/分发。
 
+
+## A：配音持续压力与等待恢复（任务32）
+
+`MAIN-QWENPRESSURE-20261007-32`：用户已审阅主控诊断并明确“可以呀，你要试一下”，批准最小修复和同候选真实短配音。沿用产品§12.1/架构§3.12/领域等待资源语义，这是修正实现，不新增产品规则；31已失败结案/全释放，不复活旧根或逐次增cap。B待命，不新增线程。主控唯一共享文档/审核/集成/PR写者，A唯一产品写者。
+
+源码：manta当前45e80 clean保留，从主控local integration读取准确 **3d58c1edabee1c590028b1cd6949515575ba225f** Git对象，clean确认后新独立 `codex/wil26-io-pressure-recovery-20261007`，不得merge/rebase旧混合历史。owned仅 `apps/api/app/host_resource_probes.py`、`creation_execution.py`、`granted_subprocess.py`、`voice_clone.py`、`apps/api/model_workers/qwen3_tts_worker.py` 及既有直接专项 `apps/api/tests/test_host_resource_probes.py`、`test_creation_execution.py`、`test_granted_subprocess.py`、`test_voice_clone.py`、`test_narration_commands.py`、`test_device_runtime.py`、`test_device_runtime_wiring.py`（存在者）；只改本单必要消费者。不写device_runtime/main/Web/桌面/配置和共享权威；确需跨owned先报证据，不新建调度器/兼容层/开关。
+
+先读本节及 `/tmp/main-controller-20261007/creation-wave/voice-io-solution-review.md`、产品§12.1/架构§3.12/领域“等待资源区别于失败”，语义REBASE_ACK后直接实施，不再问是否继续。目标：短时全盘吞吐峰值不会被冒称磁盘故障；明确持续压力后，受许可子进程有界终止且核组释放，复用已有defer_unit(resource_pressure,未来retry_not_before)，原job保持可恢复/有效上游/等待年龄，驱动继续可处理其它单元，恢复时重新核原身份/当前输入/资源后获新Grant。不得宽泛吞RecoveryBlocked或修改driver generic exception-stop；权限/失效输入/未证明释放/真正模型错误保留原阻断。没有输出不能完成，不能每秒冷启动重试形成忙循环。
+
+I/O：同窗口逐物理盘read/write及计数/请求时间，模型/runtime/输出盘来源能确定才关联；无法测字段明示UNAVAILABLE，Mac无busy_time不能伪造利用率，吞吐高不直接等于拥堵。使用可解释的持续观察而非单0.1秒峰值，保持实时内存/交换/空间/取消/身份保护；不能因未凑窗口而假unknown=true、不关闭I/O或忽略持续超限。先回报具体窗口/准入与运行区分、实测标定方法和低优先级方案，数字不得随失败自动递增；本轮初始IO cap仍134217728B/s，其它31保护保持，必要新标定参数由主控据证据明确。可用macOS单自有子进程taskpolicy/I/O QoS降低优先级；不更改全机设置/用户进程，不把优先级称硬限速，不用SIGSTOP冒充释放，不隐藏预读/加载成本或lazy=True回避保护。
+
+诊断：中止保留已收集的有界stdout/stderr/首个真实decision及实际可证执行阶段。模型worker可输出短phase诊断，不写私密文案/路径或用户内容，不新增用户界面/业务状态。actualACK仅证明放行，不冒称exec/权重加载/推理；真实Qwen音频+ffprobe/hash才该分项成功。
+
+源码完成一次最小直接验证：短峰/持续压力/测量unknown、资源等待与恢复、持续撤权/用户取消及未释放不能重新获准，真实未知故障仍停driver。复用未影响的已有证据，不全量测试/构建/GUI/云/真实Key。交clean提交及准确diff、相关用例与组/锁释放，发CODE_FROZEN后停止产品写，主控审diff并机械组合、明确真实验收SHA。
+
+真实验收根仅新 `/tmp/main-acceptance-20261007/qwen-pressure-recovery/`；候选必须主控冻结的同组合SHA，完整HOME/XDG/config/data/cache/library/output/tmp/agent/models/DB/dotenv隔离及env-i，不导入app.main、scheduled OFF。已有API venv/model-runtime只读，模型仅外盘既有Qwen0.6B8bit13stat（若worker新增计数/诊断导致源码blob数量变化据真实计数，不硬报旧106）；无网络/下载/安装/真实账号Key/用户库/其它模型/服务/GUI。旧io128只定向读合法参考WAV与无Key方法，不写旧根。新真实LocalMember owner、授权声音、已确认文案、CreationExecution.start/CreationJobOwnerVerifier及完整DeviceRuntime/CreationJobUnitExecutor流程，不能直接provider+harness手动failed冒称生产恢复。
+
+先准备实际probe/profile/逐字段预算/真实合法fixture及拟命令供主控核，等本Dispatch START_RUNTIME_MEASURE再模型。精确/dev/null旧边界证据复用、新root归一化一致；仅一次DEVNULL加载probe与必要实际资源样本，不重复完整负向专项。初始NarrationBudget仍文字80/段1/参考1MiB/音频15s/输出2MiB/线程1/阶段120s/组RSS2GiB/组threads128/runtime_sample0.1/追加memory2GiB/disk8MiB；HostCPU75/minavailable1.5GiB/freshswap+64MiB/mindisk1GiB/IO128MiB/s/input2MiB，准入memory3.5GiB。父总180秒；按实际持续窗口选择probe采样可据方案调整，不能使取消/撤权保护失去界限。参考“这是一段测试声音。”/目标“今天阳光很好。”仅一段。
+
+一次START是一个原job的有界真实验收，允许正常资源等待后最多一次重新Grant（总generation最多2、180秒总限，不改cap/重新造job）；每次均fresh准入/真实登记先于exec ACK/持续身份资源组检查，不mock，不强制造资源压力或并行重活。源码专项模拟压力与真实自然运行分开报告，真实未发生等待不可称该场景真机验证。只验narration，不自动执行montage/render/人物，后续阶段保持原queued/blocked，不称整job succeeded。出现真正模型错误/unknown/总限停止交首因，不擅装依赖或修旧根重试。
+
+最终音频ffprobe/hash或准确首因、原job/request真实等待/成功单阶段/失败状态、每次真实Grant/exec/phase/逐盘窗口/RSS/threads/available/swap/间隔、MLX不可测边界、全部父子PID/组退出/held lock EX|NB可重获/ledgerSQLpermit free、源码/13stat/runtime未变与双clean后worker_done一次。不把短句成功当生产配置标定/音质/Intel/全流程，不关闭WIL26或合main。若本单有新真实依赖缺口，主控继续决定最小必要差额，不停在CODE_FROZEN或派工结果。
 
 ## B：Pi 就绪与设置验收准备（候选保留，写权收回）
 
