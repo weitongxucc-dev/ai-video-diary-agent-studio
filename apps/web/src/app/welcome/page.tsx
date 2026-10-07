@@ -162,9 +162,15 @@ export default function WelcomePage() {
     setVerifyingKey(true);
     setKeyFeedback(null);
     try {
+      const current = await getRuntimeSettings();
+      const provider = current.settings.find((item) => item.name === "LLM_PROVIDER")?.value ||
+        (current.status.llm.configured ? current.status.llm.provider : "minimax");
+      const savedAddress = provider === "minimax"
+        ? current.settings.find((item) => item.name === "LLM_BASE_URL")?.value
+        : null;
       await updateRuntimeSettings({
         llm_provider: "minimax",
-        llm_base_url: "https://api.minimax.io/v1",
+        llm_base_url: savedAddress || "https://api.minimax.cn/v1",
         llm_model: "MiniMax-M3",
         llm_api_key: trimmed,
       });

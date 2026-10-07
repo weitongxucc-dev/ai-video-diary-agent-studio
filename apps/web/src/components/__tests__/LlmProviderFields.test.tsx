@@ -16,6 +16,18 @@ function renderFields(apiKeyConfigured: boolean) {
 }
 
 describe("LlmProviderFields 删除密钥", () => {
+  it("保留已有国际地址，主动选择 MiniMax 才填国内默认", () => {
+    renderFields(true);
+    const address = screen.getByLabelText("模型服务地址");
+    expect(address).toHaveValue("https://api.minimax.io/v1");
+    fireEvent.change(address, { target: { value: "https://example.com/custom/v1" } });
+    expect(address).toHaveValue("https://example.com/custom/v1");
+    fireEvent.change(screen.getByLabelText("模型服务"), { target: { value: "deepseek" } });
+    expect(address).toHaveValue("https://api.deepseek.com");
+    fireEvent.change(screen.getByLabelText("模型服务"), { target: { value: "minimax" } });
+    expect(address).toHaveValue("https://api.minimax.cn/v1");
+    expect(screen.getByLabelText("模型")).toHaveValue("MiniMax-M3");
+  });
   it("已配置时才给删除入口，且要点两次才真的带删除动作", () => {
     const form = renderFields(true).container.querySelector("form")!;
 

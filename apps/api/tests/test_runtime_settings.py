@@ -50,6 +50,19 @@ def test_runtime_settings_supports_openai_compatible_provider_fields():
     }
 
 
+def test_minimax_domestic_default_preserves_explicit_addresses_and_deepseek():
+    from app.config import Settings
+
+    assert Settings().effective_llm_base_url == "https://api.minimax.cn/v1"
+    assert Settings().effective_llm_model == "MiniMax-M3"
+    for address in ("https://api.minimax.io/v1", "https://example.com/custom/v1"):
+        assert Settings(llm_provider="minimax", llm_base_url=address).effective_llm_base_url == address
+        updates = runtime_settings_updates({"llm_provider": "minimax", "llm_base_url": address})
+        assert updates["LLM_BASE_URL"] == address
+    assert Settings(llm_provider="deepseek").effective_llm_base_url == "https://api.deepseek.com"
+    assert Settings(deepseek_api_key="synthetic-deepseek").effective_llm_provider == "deepseek"
+
+
 def test_model_runtime_defaults_follow_configured_model_root(monkeypatch):
     from app.config import Settings
 

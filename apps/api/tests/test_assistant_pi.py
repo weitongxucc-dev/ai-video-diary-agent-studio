@@ -180,6 +180,41 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     runtime_root = Path(captured["kwargs"]["cwd"])
     assert runtime_root.parent.parent == tmp_path / "agent" / "workspaces" / "workspace-1"
     assert "private-test-key" not in (runtime_root / "models.json").read_text()
+    definition = json.loads((runtime_root / "models.json").read_text())["providers"]["ai-video-diary"]["models"][0]
+    assert definition == {"id": "MiniMax-M3", "samplingParams": {"reasoning_split": True}}
+
+
+def test_pi_events_keep_thinking_outside_answer_without_rewriting_text():
+    text = "说明中保留 <think> 示例，不改写正常正文。"
+    output = "\n".join(json.dumps(event) for event in [
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "thinking", "thinking": "离线思考样本"},
+                     {"type": "text", "text": text}]}},
+        {"type": "agent_settled"},
+    ])
+    assert _last_answer_and_preview(output) == (text, None)
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("deepseek", "deepseek-chat"), ("custom", "MiniMax-M3"), ("minimax", "custom-model"),
+])
+def test_pi_reasoning_split_does_not_change_other_models(monkeypatch, tmp_path, provider, model):
+    (tmp_path / "models").mkdir()
+    monkeypatch.setattr("app.assistant_pi.pi_runtime_checks", lambda: [])
+    monkeypatch.setattr("app.assistant_pi._pi_executable", lambda: "/synthetic/pi")
+    captured = {}
+
+    def capture_run(_cmd, **kwargs):
+        captured.update(json.loads((Path(kwargs["cwd"]) / "models.json").read_text()))
+        raise RuntimeError("offline request boundary")
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", capture_run)
+    settings = Settings(model_root_path=str(tmp_path / "models"), llm_provider=provider,
+                        llm_api_key="synthetic-key", llm_api_key_provider=provider,
+                        llm_base_url="https://example.com/v1", llm_model=model)
+    with pytest.raises(RuntimeError, match="offline request boundary"):
+        run_plan_turn(settings, workspace_id="offline", conversation_id="offline", message="测试")
+    assert captured["providers"]["ai-video-diary"]["models"] == [{"id": model}]
 
 
 def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):

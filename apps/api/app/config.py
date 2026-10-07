@@ -462,7 +462,7 @@ class Settings:
     @property
     def effective_llm_base_url(self) -> str:
         default_url = (
-            "https://api.minimax.io/v1"
+            "https://api.minimax.cn/v1"
             if self.effective_llm_provider == "minimax"
             else self.deepseek_base_url
         )

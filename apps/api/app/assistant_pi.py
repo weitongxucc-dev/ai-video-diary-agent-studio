@@ -411,12 +411,17 @@ def _run_turn(
     session_id = uuid5(NAMESPACE_URL, f"ai-video-diary:{workspace_id}:{session_key or task_id}{caller_scope}")
     runtime_root = root / "runtimes" / str(session_id)
     runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    model_definition: dict[str, object] = {"id": model}
+    if settings.effective_llm_provider == "minimax" and model == "MiniMax-M3":
+        # M3 otherwise puts <think> in content. Pi keeps reasoning_content in
+        # thinking blocks/history; only text blocks reach the user's answer.
+        model_definition["samplingParams"] = {"reasoning_split": True}
     (runtime_root / "models.json").write_text(json.dumps({
         "providers": {"ai-video-diary": {
             "baseUrl": base_url,
             "api": "openai-completions",
             "apiKey": "$AI_VIDEO_DIARY_LLM_KEY",
-            "models": [{"id": model}],
+            "models": [model_definition],
         }}
     }), encoding="utf-8")
     (runtime_root / "models.json").chmod(0o600)
