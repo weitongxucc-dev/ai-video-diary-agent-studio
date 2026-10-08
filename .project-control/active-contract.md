@@ -57,6 +57,8 @@
 
 76.2 主控核实 HomeCommandComposer.tsx 的 confirmTaskPreview 也是当前确认接口消费者（原无条件回复修改已完成并开启撤销）。B76 所有权扩展到 apps/web/src/components/HomeCommandComposer.tsx 及其既有 __tests__/HomeCommandComposer.test.tsx，仅补 queued 响应显示已排队/等待真实完成、不给本次尚未提交版本开启撤销；同步 applied 行为保持。复用已有 onTaskUpdated 与现有作业视图，不在创作助手新增轮询系统、不修改视觉/共享底座。该必要接口迁移与 B76 同单交付，不另派UI占用同文件；UI77打包不受影响。
 
+76.3 主控定向审核发现 granted_subprocess.py 的 model_unit 仍只识别 narration:/person_render:；新 person_edit: 必须继承同一真实资源探针与运行预算拒绝边界，不能因新unit名称跳过。B76所有权仅再补 apps/api/app/granted_subprocess.py 的该前缀识别和既有 apps/api/tests/test_host_resource_probes.py 中 test_person_model_child_rejects_non_host_probe_before_exec 的直接参数覆盖。资源预算事实本身已有按creation_person_render正确识别，无须修改HostResourceProbe或新增保护体系；检查在拒绝分支中不得启动真实子进程/探针。原模型暂停和其他所有权不变。
+
 ### UI77：WIL-169本机arm64包准备与有界构建
 
 目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
