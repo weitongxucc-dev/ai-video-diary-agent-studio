@@ -35,9 +35,33 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 78已交且retain | 保留源码；无新增写入/运行权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 80：抖音发布纵向接线 | 仅下方80具名路径 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76已交且retain | 保留源码；无新增写入/运行权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 79：后端8项失败修复 | 仅下方79具名路径；main.py唯一写者 |
+
+## 当前交付波次：B79 / UI80（2026-10-09）
+
+用户在最新状态评估后批准“抓紧开始”。本节取代76/77/78的当前施工入口；它们已结案、源码和证据保留，不复活旧Dispatch。基线为准确clean PR99 head `0ed7f38fae0b9451e2adc1ae1302c24f78c4bfe1`（集成树 `/tmp/main-controller-20261008/ui-v3-integration`）；新权威读取本main合同。两条原可见终端复用，不新增窗口/内部Agent；核各自clean，保留旧分支，从本地fetch该候选建立新具名分支，语义REBASE_ACK后直接实施。主控只管文档/审核/机械集成/PR/Linear，不写产品代码。
+
+新head CI37796648239已结束：Frontend/Desktop syntax成功，Backend8 failed/1647 passed/20 skipped。79负责修复这些真实失败；80独立接发布业务。资源/模型/FFmpeg暂停保持，无主机探针、真实模型、媒体生成、用户库/Key/账号会话读取、登录/上传/发送、云身份/真实迁移、签名/Release权。允许本轮隔离假provider/资源/浏览器协议及临时DB测试；自动PR CI另行回读，不以夹具称真实媒体或平台通过。无产品收费，新电脑/Intel后置，main不自动合入。
+
+### B79：渲染、版本与音频编辑失败修复
+
+目标：解释并修复上述8项失败（bounded render两项、video_ready一项、字幕精确编辑撤销两项、提取原声两项、静音剪辑一项）。沿已有制作/版本/音频链，区分真实实现缺陷与确已违反当前契约的夹具；不得批量松断言、跳过、恢复伪rendered或绕开许可。绑定领域§6.2/§7/§8及产品§9/§14，参考 `/tmp/main-acceptance-20261008/ci78/report.md`；读取最新CI日志，不能只按旧摘要猜原因。
+
+Owned仅 apps/api/app/main.py 中相关渲染有效性/音频预览确认/撤销直接消费者、creation_execution.py、task_audio.py、production.py及必要同路径直接辅助文件（超出这些先报精确路径）；tests/test_creation_execution.py、test_montage_pipeline.py 的8项相关夹具/断言及已有直接用例。不改Web、platform_*、桌面、依赖锁或共享文档。main.py全文件唯一写者是B；80必要router挂载须由主控审核后发准确补丁给B机械应用，不让UI并行写main.py。
+
+最小验证：合法隔离HOME/XDG/DB/output/tmp，复用既有pytest；无媒体的相关用例直接跑，依赖FFmpeg的原8项本地不运行，静态首因和最小替身证据分开，最终真实CI由主控push后回读。不得为这项暂停擅自改媒体测试成永远假的成功；若不能确认首因，报告精确未验及所需条件，不停其他可修项。只做必要改动，不重复全仓库/视觉。交clean候选、净diff、逐失败原因/修正依据、实测命令/未验与自有进程释放到 `/tmp/main-acceptance-20261009/backend79/`；worker不push/写PR或Linear。
+
+### UI80：抖音账号连接到确认发送的真实纵向实现
+
+80为发布迁移纵向负责人。目标是沿当前PublishingWorkspace与platform_browser接本机已安装Chrome的真实独立会话驱动，抖音账号真实状态、当前有效CreationTask成片、用户确认账号/内容、持久发布作业、真实平台响应与重启回读；不只提交协议或演示UI。账号/视频没有证据时如实未连接/未发布，未知远端结果不自动重复发送。用户界面继续当前DESIGN v5.3，不开新视觉重构。
+
+Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_publish模块/router及其直接测试；Web PublishingWorkspace.tsx/既有测试、lib/api.ts/types.ts中发布专用增量。使用既有工作区/成员解析、CreationTask/产物读取、JobRun/设备持久任务机制，不造第二套生产事实源或调度框架。必要公开浏览器依赖仅先报告已有依赖可复用情况，获主控精确兼容判断后局部添加；不下载模型/新浏览器。main.py、production.py、settings.py、根锁文件、桌面打包与共享权威不在UI写权；需要的注册入口按现有knowledge_grant_router注入模式给主控精确补丁，审核后由B唯一写者应用。必要新SQLite表可只在自有隔离DB验证，不能打开/迁移用户库；凭据不得沿旧SQLite明文token设计保存，复用系统安全存储/浏览器自身安全会话，不读真实钥匙串。
+
+退役目标：活动UI模拟绑定、localStorage模拟草稿、生产默认MockOAuth/MockDraft、mock远端ID和publish桩。抖音替换必须落实到实际消费者；小红书/视频号暂显示真实尚未接通状态，保留后续目标，不把其mock留作生产回退。只允许测试夹具显式fake。真实账号发送未获授权，代码实现到可执行入口，平台选择器与实际响应不能猜造为已验。方案已核在 `/tmp/main-controller-20261008/platform-publishing-route-review.md`，绑定产品§11、领域§9.3/§10、架构§5.6/§7、认证§4–6。新增需求/权限边界交主控裁决，不转授。
+
+最低验证：假浏览器只验证调用顺序、无确认零上传/发送、陈旧产物/跨空间拒绝、真实结果解析/持久回读与未知结果禁止自动重发；相关Web组件/类型检查及退役消费者不存在检查。若需要查看实际登录前页面/GUI或依赖安装，先给精确动作与路径，由主控在用户授权范围补具名权限；不得因未登录停掉已授权代码实现。无服务/真实浏览器/平台网络/账号操作权，不以组件检查冒称GUI/发布通过。交clean源码、净diff、B所需准确挂载补丁、实际测试与全部未验到 `/tmp/main-acceptance-20261009/publishing80/`，主控审核/集成后另安排具名真实登录和发送。整体发布迁移只在真实目标与旧消费者退役证明完成后接受，源码阶段不关闭WIL45/113/114/115。
 
 ## 当前交付波次：B76 / UI77
 
