@@ -215,7 +215,13 @@ Script 保存结构化文案和段落。每个 ScriptSegment 有稳定 id，并�
 
 ### 5.4 Narration
 
-Narration 关联一个 Script 版本和 VoiceProfile 版本。NarrationSegment 与 ScriptSegment 一一或多对一对应，记录音频引用、时长、语言、模型运行和生成状态。
+Narration 关联一个已确认的 Script 版本。NarrationSegment 与 ScriptSegment 一一或多对一对应，记录音频引用、真实时长、语言和处理状态；来源在现有 Narration 事实中明确区分 `generated`（生成配音）与 `recorded`（已明确采用的任务录音），不建立第二套任务或时间线事实源。
+
+`generated` 关联 VoiceProfile 版本与实际模型运行，既有生成记录保持该语义。`recorded` 关联同一工作区、同一任务的 `task_recording` Artifact/Transform、源引用与内容摘要，以及用户明确选定的当前 ScriptSegment；VoiceProfile 和模型可为空，不冒称声音克隆或模型生成。未知来源不得按录音或生成成功处理。
+
+保存录音与采用录音是两个动作。保存只产生录音资产；明确采用才提交当前文案版本绑定的 Narration/段落事实，并沿现有连续制作进入故事板。首次采用不依赖一个尚不存在的故事板。录音真实时长决定对应段落时长；没有明确分段映射时不能按文字或总时长猜测切分。文案、源文件或采用范围变化时，相关下游按现有版本依赖失效，未受影响结果保留。
+
+纯素材渲染读取并核验真实录音输入，不强制录音伪装成某个克隆声音。人物口型仍按既有人物、声音授权与身份匹配契约核验；录音采用不扩大口型模型支持或授予人物/声音使用权，缺少该链所需依赖时明确阻断。
 
 ## 6. 时间线与产物
 
