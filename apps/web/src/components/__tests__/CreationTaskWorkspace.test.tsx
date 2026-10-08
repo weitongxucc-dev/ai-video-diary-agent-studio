@@ -2405,8 +2405,8 @@ describe("CreationTaskWorkspace", () => {
 
   // WIL-160：连续制作已成功，但剪辑改动让成片不再对应当前时间线（video_ready=false），
   // 面板此前只剩一行状态文字、零按钮，且 onStart 会命中同一幂等键返回旧作业。
-  // 独立编辑版本尚未接入许可执行；保留查看/编辑，不从旧单步渲染绕过。
-  it("preserves an invalidated timeline without bypassing the queue through legacy render", async () => {
+  // 当前纯素材编辑版本经原 resume 通道申请 render Grant，不从旧单步渲染绕过。
+  it.each(["queued", "blocked"])("confirms current timeline re-output through resume and preserves %s status", async (outcome) => {
     const task = {
       ...baseTask, stage: "narration" as const, stage_status: "waiting_for_user" as const,
       status: "waiting_for_user" as const, stage_reason: null, stage_impact: null,
@@ -2424,6 +2424,9 @@ describe("CreationTaskWorkspace", () => {
       message: "镜头审核已完成，可以重新渲染。", created_at: task.created_at, updated_at: task.updated_at,
     };
     const initial = workspace(task, montage);
+    const preview = queuePreview();
+    preview.requirements.presenter_share_target = 0;
+    mocks.previewExecution.mockResolvedValue(preview);
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.getExecution.mockResolvedValue({
       task_id: "task-1",
@@ -2431,18 +2434,76 @@ describe("CreationTaskWorkspace", () => {
       stages: [], current_stage: null, waiting_reason: null, status_updated_at: "2026-10-01T00:00:00+00:00",
       video_ready: false, cover_status: "pending", cover_message: null,
     });
+    if (outcome === "queued") {
+      mocks.resumeExecution.mockImplementation(async () => {
+        const queued = queueStatus("queued");
+        mocks.getExecution.mockResolvedValue(queued);
+        return queued;
+      });
+    } else {
+      mocks.resumeExecution.mockRejectedValue(new mocks.MockCreationPlanApiError(409, null,
+        "当前有效音轨组合尚未接入 CPU 成片预算"));
+    }
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
     // 文案/配音侧的连续制作面板：状态仍是「成片产物需要检查」，但现在有出口
     await waitFor(() => expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查"));
 
-    expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("当前暂不支持已编辑时间线重新输出");
+    const panel = screen.getByRole("region", { name: "连续制作" });
+    expect(panel).toHaveTextContent("仅重新输出当前时间线");
+    expect(panel).toHaveTextContent("这段就是实际要读的内容");
+    expect(panel).not.toHaveTextContent("当前暂不支持已编辑时间线重新输出");
+    expect(mocks.resumeExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "查看剪辑与已有产物" }));
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查");
     expect(screen.queryByRole("button", { name: "生成成片" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "确认以上文案和要求，开始制作" })).not.toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "确认以上文案和要求，仅重新输出当前剪辑" }));
+    await waitFor(() => expect(mocks.resumeExecution).toHaveBeenCalledExactlyOnceWith("task-1"));
+    if (outcome === "queued") {
+      expect(await within(panel).findByRole("heading", { name: "已排队" })).toBeInTheDocument();
+      expect(panel).not.toHaveTextContent("成片已生成");
+    } else {
+      expect(await screen.findByRole("alert")).toHaveTextContent("当前有效音轨组合尚未接入 CPU 成片预算");
+      expect(panel).not.toHaveTextContent("成片已生成");
+    }
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+    expect(mocks.generateNarration).not.toHaveBeenCalled();
+    expect(mocks.createMontage).not.toHaveBeenCalled();
+    expect(mocks.renderMontage).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the changed timeline before confirming re-output and preserves the new preflight blocker", async () => {
+    const initial = subtitleCoverWorkspace();
+    const changed = structuredClone(initial);
+    changed.task.current_timeline_version_id = "timeline-version-7";
+    changed.task.output_ready = false;
+    changed.montage!.output_url = null;
+    const done = queueStatus("succeeded");
+    done.video_ready = true;
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue(done);
+    let rejectPreview!: (cause: Error) => void;
+    mocks.previewExecution.mockResolvedValueOnce(queuePreview())
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectPreview = reject; }));
+    mocks.undoTimeline.mockImplementation(async () => {
+      mocks.getWorkspace.mockResolvedValue(changed);
+      mocks.getExecution.mockResolvedValue({ ...done, video_ready: false });
+      return {};
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await waitFor(() => expect(mocks.previewExecution).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(mocks.previewExecution).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "确认以上文案和要求，仅重新输出当前剪辑" })).toBeDisabled();
+    expect(screen.queryByText("这段就是实际要读的内容")).not.toBeInTheDocument();
+    await act(async () => rejectPreview(new mocks.MockCreationPlanApiError(503,
+      "device_budget_unavailable", "配音预算未标定", null, "先标定本机配音资源预算，再重试。")));
+    expect(await screen.findByRole("alert")).toHaveTextContent("配音预算未标定 先标定本机配音资源预算，再重试。");
+    expect(screen.getByRole("button", { name: "确认以上文案和要求，仅重新输出当前剪辑" })).toBeDisabled();
+    expect(mocks.resumeExecution).not.toHaveBeenCalled();
     expect(mocks.startExecution).not.toHaveBeenCalled();
     expect(mocks.renderMontage).not.toHaveBeenCalled();
   });

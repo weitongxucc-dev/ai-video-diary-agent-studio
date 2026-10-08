@@ -590,13 +590,14 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
   onOpenMontage: () => void;
 }) {
   const job = execution?.job;
+  const needsOutput = job?.status === "succeeded" && !execution?.video_ready;
   const active = job?.status === "queued" || job?.status === "running" || job?.status === "interrupted";
-  const resumable = job?.status === "failed" || job?.status === "cancelled" || job?.status === "interrupted";
+  const resumable = needsOutput || job?.status === "failed" || job?.status === "cancelled" || job?.status === "interrupted";
   const statusText = job?.status === "queued" ? "已排队" : job?.status === "running" ? "后台制作中"
     : job?.status === "failed" ? "制作停在失败步骤" : job?.status === "cancelled" ? "已在安全边界停止"
       : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
   return <section aria-label="连续制作" className={styles.workSection}>
-    <div className={styles.sectionHeading}><div><span>连续制作</span><h2>{statusText}</h2><p>开始后会依次处理配音、镜头和成片；每一步的结果以后台任务为准。</p></div></div>
+    <div className={styles.sectionHeading}><div><span>连续制作</span><h2>{statusText}</h2><p>{needsOutput ? "这次沿用有效配音和故事板，仅重新输出当前时间线；已有产物保留。" : "制作会按后台任务处理配音、镜头和成片；继续制作会沿用有效结果。"}每一步的结果以后台任务为准。</p></div></div>
     {(!job || resumable) && preview ? <>
       <div className={styles.scriptSections}><article><header><strong>这次使用的文案：{preview.script_title}</strong></header>{preview.script_sections.map((section, index) => <p key={index}>第 {index + 1} 段 · {section.title}：{section.content}</p>)}</article></div>
       <div className={styles.scriptSections}><article><header><strong>这次制作要求</strong></header>
@@ -610,9 +611,9 @@ function CreationExecutionPanel({ preview, execution, busy, onStart, onResume, o
     {job ? <div role="status"><ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null} /><p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p>
       <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
       {execution?.video_ready ? <p>成片可检查；{execution.cover_status === "ready" ? "封面已准备好。" : execution.cover_message}</p> : null}
-      {job.status === "succeeded" && !execution?.video_ready ? <><p>剪辑改动后原成片不再对应当前时间线。当前暂不支持已编辑时间线重新输出；可以继续查看和编辑，已有产物保留。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
+      {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
       {active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">停止制作</button> : null}
-      {resumable ? <button className="modern-primary-button" disabled={busy || !preview?.requirements.selected_voice} onClick={onResume} type="button">确认以上文案和要求，继续制作</button> : null}
+      {resumable ? <button className="modern-primary-button" disabled={busy || !preview?.requirements.selected_voice} onClick={onResume} type="button">{needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</button> : null}
     </div> : null}
   </section>;
 }
@@ -1424,7 +1425,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     pollExecutionRef.current = () => void poll();
     void poll();
     return () => { active = false; pollExecutionRef.current = () => undefined; window.clearTimeout(timer); };
-  }, [task.id, task.confirmed_script_id, workspace.plan.selected_voice?.profile_id, workspace.plan.selected_voice?.version]);
+  }, [task.id, task.confirmed_script_id, task.current_timeline_version_id, workspace.plan.selected_voice?.profile_id, workspace.plan.selected_voice?.version]);
   const latestScript = workspace.scripts[0] ?? null;
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
   const selectedTopicCandidate = topics?.candidates.find((candidate) => candidate.id === selectedTopicId) ?? null;
