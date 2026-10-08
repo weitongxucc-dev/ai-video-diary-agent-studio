@@ -1329,6 +1329,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     worker = SimpleNamespace(
         submit=lambda *args: submitted.append(args), shutdown=lambda **_kwargs: None,
     )
+    runtime_starts = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "local_members_service", members)
@@ -1336,11 +1337,13 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
-        last_error=None, wake=lambda: None, stop=lambda **_kwargs: True,
+        last_error=None, wake=lambda: None, start=lambda: runtime_starts.append("start"),
+        stop=lambda **_kwargs: True,
     ))
     with TestClient(main_module.app) as client:
         # 开机恢复重新申请的是整机许可，不是绕开身份和主机门禁的旧线程。
         assert not submitted
+        assert runtime_starts == ["start"]
         with repo._connect() as conn:
             recovered = conn.execute(
                 "SELECT member_id, owner_id FROM device_work_requests WHERE owner_type='creation_job'",
