@@ -41,7 +41,7 @@
 
 ## 当前交付波次：B79 / UI80（2026-10-09）
 
-当前续单为UI83（task_fdd1618a267f / ctx_0287fed00361），准确82源码c0cffecf已交；83只复用CreationExecutionActor.identity_payload修持久账号身份、恢复SchedulePolicy缺失import及实际Ruff失败，复用既有queued/unknown测试。已语义ACK，无新业务范围、共享接口或真实账号权限。B81以failed结案，具体验收阻断及实际包启动证据见/tmp/main-acceptance-20261009/desktop81/report.md，不宣称GUI整体通过；原终端retain，所有自有进程已释放。79/80/81/82的正文保留其具名授权来历，已结案Dispatch不取得新START。
+UI83/85与B84均已审核结案并retain；当前没有运行中的施工或验收Dispatch，旧启动权结束。发布与桌面差额已组合至草稿PR100准确30d3760；最终CI与最新范围以该PR和Linear回执为准。84包准确91a6279，30d3760仅两测试文件差额，包内产品输入相同；实际包/驱动/HTTP与释放证据见/tmp/main-acceptance-20261009/desktop84/report.md。B81的具体验收阻断及首页/重开证据保留于desktop81/report.md，不宣称GUI整体通过。资源/模型暂停及具名账号外发边界未解除，下一真实流程须依用户答复具名绑定，不从任何已结案正文复活START。
 
 用户在最新状态评估后批准“抓紧开始”。本节取代76/77/78的当前施工入口；它们已结案、源码和证据保留，不复活旧Dispatch。基线为准确clean PR99 head `0ed7f38fae0b9451e2adc1ae1302c24f78c4bfe1`（集成树 `/tmp/main-controller-20261008/ui-v3-integration`）；新权威读取本main合同。两条原可见终端复用，不新增窗口/内部Agent；核各自clean，保留旧分支，从本地fetch该候选建立新具名分支，语义REBASE_ACK后直接实施。主控只管文档/审核/机械集成/PR/Linear，不写产品代码。
 
