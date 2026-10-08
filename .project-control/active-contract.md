@@ -14,7 +14,7 @@
 
 用户于2026-10-08提供并批准独立v3增量，以[DESIGN v5.2](../DESIGN.md)及产品/领域编辑规则为准。已完成的三栏、浮卡、搜索和业务接线保留；不重启整轮重构。63已审交付retain；当前新施工仅下方UI64视觉/时间组织与A65直接草稿编辑，主控独占共享权威、审核、机械集成、PR/Linear。重模型资源暂停继续有效，不做探针、模型、配音/口型、FFmpeg或收费调用。
 
-UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`（`main-ui-linear`）已只读REBASE_ACK v5.1。任务38从准确main代码对象新建独立分支，保留63d1984旧分支，不整体merge/rebase。先前ACK中被新版替代的参数不再作为执行契约；共享语义再变化须按指定章节重新ACK。
+UI与A当前64/65均已语义REBASE_ACK v3权威与共同867c6bf，原分支保留。旧v5.1普通编辑确认语义不再有效；共享语义再变化只重绑受影响条款，不重启整轮。
 
 用户最新指定先做小范围可信试用，交付渠道以 [产品需求 §1.3](../docs/product-requirements.md#13-交付设备平台与待定选项) 为准；2026-10-07 用户进一步批准按审查缺口开始执行，并提供 `/Users/Zhuanz/Desktop/sk.docx` 中的 MiniMax Key。原只读审查结束；当前写权、操作权及主控真实文字请求的有限例外只来自本节设计任务、下表当前任务及其具名条款，历史候选说明与旧任务不恢复。
 
@@ -39,9 +39,11 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 用户最新v3交接为本次授权依据。共同产品代码971f77a（PR98最终三类CI成功），叠加本次唯一权威提交后由主控提供准确新基线。旧普通参数“预览影响→确认→应用”规则失效；两线程先读原包增量交接、组件规范，再读DESIGN §3–5、产品§2.3/§9及领域§6–7，语义REBASE_ACK后直接完成所辖定向调整。不改已确认三栏、品牌或领域枚举，不复制示例数据，不整合旧混合分支。分支/脏树保留；新候选从主控准确对象建分支。
 
-UI64负责可独立交付的可读文字/清楚交互态、七类真实状态形状、首页分组、列表显示入口、任务实际比例与共用真实时间尺。owned：globals.css、modern-overrides.css、AppShell.tsx、HomeWorkspace.tsx及CSS、VideoEditor.tsx及CSS、MaterialLibraryWorkspace.tsx、KnowledgeWorkspace.tsx及它们直接CSS/既有测试；其他文件先报告真实必要差额。保留360/320/240四角浮卡底座、父状态与全部已有操作；VideoEditor内普通比例控件直接提交既有onPreview回调（A65将其解释为应用草稿），不新增确认链。不写CreationTaskWorkspace.tsx、精细编辑组件、lib、API或共享权威。真实已有能力缺失明确说明，不新增虚假分类/波形/状态或列表设置。
+UI64负责可独立交付的可读文字/清楚交互态、七类真实状态形状、首页分组、列表显示入口、任务实际比例与共用真实时间尺。owned：globals.css、modern-overrides.css、AppShell.tsx、HomeWorkspace.tsx及CSS、VideoEditor.tsx及CSS、MaterialLibraryWorkspace.tsx、KnowledgeWorkspace.tsx及它们直接CSS/既有测试；其他文件先报告真实必要差额。保留360/320/240四角浮卡底座、父状态与全部已有操作；VideoEditor内VideoClipQuickEditor及普通比例控件直接提交既有onPreview回调（A65将其解释为应用草稿），不新增确认链。不写CreationTaskWorkspace.tsx、精细编辑组件、lib、API或共享权威。真实已有能力缺失明确说明，不新增虚假分类/波形/状态或列表设置。
 
-A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤销/重做→产物依赖有效性”的纵向负责人。owned：CreationTaskWorkspace.tsx、VideoClipQuickEditor.tsx、ScriptSectionEditor.tsx、AudioTimelineEditor.tsx、GraphicOverlayEditor.tsx、既有精确编辑/字幕表单直接消费者、lib/api.ts/types.ts中确有必要的直接编辑调用、main.py及production.py中当前编辑/撤销/重做/有效性直接路径、对应既有测试。精确字段在选择/完成输入/结束拖动时直接持久化，不提交未完成值；复用原命令校验、版本和依赖，不新建draft事实源或扫描/兜底/兼容层。自然语言提案一键“应用到草稿”，普通编辑不自动生成；扣费/删除才保留确认，未知费用不扣费，系统授权及阶段动作不套额外产品确认。其他生成/权限/队列/模型/发布不扩权；API确认命名可保留为内部提交，不以改名重建接口。涉及实际媒体预览/生成须与草稿提交分开，模型资源暂停不解除。不得把聊天状态或未持久化React快照称为草稿完成。
+A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤销/重做→产物依赖有效性”的纵向负责人。owned：CreationTaskWorkspace.tsx、ScriptSectionEditor.tsx、AudioTimelineEditor.tsx、GraphicOverlayEditor.tsx、既有精确编辑/字幕表单直接消费者、lib/api.ts/types.ts中确有必要的直接编辑调用、main.py及production.py中当前编辑/撤销/重做/有效性直接路径、对应既有测试。精确字段在选择/完成输入/结束拖动时直接持久化，不提交未完成值；复用原命令校验、版本和依赖，不新建draft事实源或扫描/兜底/兼容层。自然语言提案一键“应用到草稿”，普通编辑不自动生成；扣费/删除才保留确认，未知费用不扣费，系统授权及阶段动作不套额外产品确认。其他生成/权限/队列/模型/发布不扩权；API确认命名可保留为内部提交，不以改名重建接口。涉及实际媒体预览/生成须与草稿提交分开，模型资源暂停不解除。不得把聊天状态或未持久化React快照称为草稿完成。
+
+65.1直接接口绑定：VideoClipQuickEditor实在UI-owned VideoEditor.tsx，UI64同时改其字段/结构动作提交时机，A65不跨文件写入。真实三轨共尺需A-owned AudioTimelineTracks配合：允许既有组件新增sharedTimeScale可选属性，CreationTaskWorkspace内嵌传true；嵌入时音频跟随父0–真实duration的同一lane和标签宽，不使用独立zoom/滚动尺度，其他音频工作区既有独立缩放保留。UI64负责共同CSS及VideoEditor视频/字幕坐标；A65负责音轨直接消费者，双方仅重绑此差额。不得隐藏整条音轨/旧操作或只靠CSS假称同步。
 
 本单退役目标：普通参数确认链、贴边详情、颜色独自表意及等宽时间段；已有合法底座和未影响成果复用。主控为整体v3验收/退役负责人，64/65各报所辖不存在证据，不凭层级分项关闭整体任务。实施期只做最小已有消费者与真实问题复现，禁止为CSS像素写镜像测试，不重复旧全量/GUI。证据64/65分别写/tmp/main-acceptance-20261008/ui64/及draft65/，短报告列commit、净差额、必要结果和真实剩余。无服务/GUI/个人浏览器、真实库/Key、模型、主机探针、网络安装或收费权；完成后交付准确源码并收回操作权。组合后B只做受影响页面、实际比例、编辑持久化/撤销/失效与费用/删除边界的必要真实可见验收，另绑定准确候选，不重跑全部UI。
 
