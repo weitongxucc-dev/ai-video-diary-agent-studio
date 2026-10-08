@@ -56,6 +56,10 @@ Migrate验收：纯素材crop编辑确认后以真实现有start/resume接线得
 
 任务36发布并发边界C1：A已定位渲染末尾计划与新版本分别提交，`create_timeline_version`没有比较当前父版本；这是已定义当前版本事实源的实际写入竞态。追加A owned `production.py`仅现有`create_timeline_version`及`save_creation_task_montage_plan`的借用connection/当前版本比较，以及已有版本直接专项；由main现有渲染末尾在同一事务比较当前版本并发布计划和新版本，保留独立旧调用的默认行为。不新增事实源/迁移用户数据/全库重构；并发编辑时真实失败后的旧计划写回也不得覆盖新crop。最小真实仓库/许可正负专项覆盖CAS拒绝后新计划与版本完整保留、合法自产版本提交、重复调用，媒体执行替身证据单列，后续同候选真媒体验收保持。
 
+任务36首份软件整链准备窗口：37保存/重启分项和全部自有服务/浏览器释放已由主控接受，task37新store已锁，无模型/收费调用。冻结主控集成候选`61fca1387dd6283b36505acd6db5b1eb010b9a0d`（含A失败恢复、B工具门禁与实际redirect修复）；A未提交的编辑重出差额不混入首次成片。允许A在新`/tmp/main-acceptance-20261008/creation36/software-first/`核准确archive/源码、完整隔离env、13模型stat/runtime，只读复用旧合法合成参考；一次≤30秒/≤1MiB/16秒双色FFmpeg素材准备及既有真实本机owner/授权声音/任务文案草稿夹具。文案为“清晨的阳光洒进房间。泡一杯茶，整理今天的计划，从一件小事开始，认真记录每一次进步。”，Plan15秒/显式纯素材0，CPU Render仅max_duration_seconds15及max_pixel_seconds31104000按输入修改，其它proposed-budgets字段含Narration120/parent180不变；fresh swap+64MiB须取本窗口当次样本。允许一次无模型真实HostResourceProbe和精确OS边界预检，允许实际app.main API4569（无Web/GUI）自有组有限20分钟lease、loopback仅本服务所需连接，不给外域网络/下载/安装/Keychain/其它模型权限。采用现有慢权重读取/DEVNULL边界，不放宽根外写入，写清精确profile；若系统沙盒导致实际软件入口不可行，先报首因不静默去掉。
+
+A在准备窗口可以合法夹具初始化并由真实HTTP确认文案和读取execution/preview，不能先POST start/resume或加载模型。交PREPARED具体源码/env/inputs/probe当次decision及PID/PGID/端口、OS profile和精确一轮整链命令；主控对本Dispatch的START_CREATION36才允许一次原API start→真实Grant→Qwen→确定性montage→受许可FFmpeg/字幕成片，父180秒/各阶段原120/10/60秒，首因停止不自动重试。已编辑输出另90秒窗口须后续冻结重出候选；本节不给人物/真实账号云/GUI/Pi/生产标定。软件媒体窗口期间B仅静态工作，A亦不并行测试/别的重进程。
+
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
