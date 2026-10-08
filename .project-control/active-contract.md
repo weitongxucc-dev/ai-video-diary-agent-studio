@@ -99,6 +99,8 @@ UI从clean299066b继续可创建具名`codex/ui-v51-toolbar-20261008`，按本�
 
 只做必要直接消费者检查/类型与CSS语法，CSS像素修复不写镜像断言；不重跑56未改制作专项/全量或启动服务GUI/模型探针/网络安装。新证据仅`/tmp/main-acceptance-20261008/ui58/`，本地准确净差额commit/report交主控。B57继续原d782矩阵不热换，UI读本段语义ACK直接施工；主控审后组合并另单补工具栏实际画面与可达性，不宣称旧候选覆盖新差额。
 
+58.1搜索初始焦点补充：B57已受控一次重开导航搜索，`search-controlled-initial.json`显示580圆角模态可见但activeElement仍顶部“搜索”按钮；真实点击输入后14次Tab/ShiftTab全部卡内并首尾回绕，证明键盘方法可用，真实缺陷仅新开初始聚焦。主控已读该JSON和实际search-tab-cycle PNG，HomeCard navigation源码已有Tab trap，不能为此另造trap或削弱层级。允许唯一UI写者追加`CommandPalette.tsx`及其现有直接专项；先用既有可挂载真实Portal消费者复现“入口点击→无需人工再次点击即可输入”，使初始化发生在实际输入挂载并React提交完成后，旧搜索/导航/ESC/关闭焦点契约保持。若必须改变共享HomeCard底座，只提交精确首因/最小差额待主控绑定后才写。旧统一卡片无新增写权；不新增dependency/通用hook/延时重试。只为真实失败作最小生命周期验证、复用已过边界循环证据，不跑全量/服务GUI。合入同58准确commit/report，B57不热换，后续同候选新开初始焦点需真实页面补验。
+
 ## 任务38/39/40：设计v5.1实施与独立准备
 
 任务51结算：主控已核ui51完整report、实际closed/reopened PNG/AX与card-comparison，接受准确1e0c972必要GUI5 PASS、可选嵌套关闭1 UNVERIFIED，succeeded并retain。首屏/普通刷新正常，历史V1开关重开、关闭入口焦点及镜头2/草稿/暂停8秒保持；可选嵌套卡已可见但后续window_not_found，结果与焦点未证，不猜产品FAIL或绕过恢复。已装普通React19.2.6包与实际Next15.5.18浏览器19.2.0-canary分别记录，不冒称GUI同CI renderer。61表/旧库hash不变；16:53:32 API23815/Web23816/lease23817/Chrome24159及组、根进程、4575/3175全部退出，主控独立ps/lsof与release.json相符，无续租。任务51以下START只作历史依据，无恢复权。准确1e0c972 CI37752015898 Frontend/Backend/Desktop syntax全部SUCCESS并回读head一致。PR97/WIL-205保留草稿/In Progress及指定尺寸/主题、三栏拖动、完整键盘/播放器/新blob嵌套关闭等未验，不宣布整体RETIRED或自动合入；用户Tab可用反馈已记录。
