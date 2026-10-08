@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 83：发布持久身份及恢复的直接审查修正 | 仅routes.py、queue.py及既有两项发布测试；82已交源码，无新增真实运行权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 83已审核结案并retain | clean1b73be1保留，已机械集成；无新增写/运行权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 81已结案并retain；启动/重开有证，必要GUI受工具阻断 | 源码5291d613及包/报告保留；旧运行权收回，无新增写权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 84：最新发布组合增量入包 | 仅新owned冻结构建/启动；不改产品源码，见84 |
 
 ## 当前交付波次：B79 / UI80（2026-10-09）
 
@@ -83,7 +83,13 @@ Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_p
 
 普通业务/授权/输出版本不变。继续遵守80的退役目标、假provider边界、无产品收费和无真实平台/模型/资源运行权限。新报告/tmp/main-acceptance-20261009/publishing82/report.md：准确源码/diff、main实际入口与同一候选最低验证、旧mock消费者不存在、会话/自有进程释放及未验真实平台。旧80源与报告不覆盖。主控负责独立审核和PR，不直接写产品代码。先读本条语义ACK再直接施工；相关有限补充已获授权，不再按80旧正文等主控写main.py。
 
-### B81：本机组合包启动与关闭重开
+### B84：最新发布组合增量入包
+
+83已交clean1b73be1并审阅，80/82/83与81两项桌面差额机械组合clean91a6279be78dd4557b0260c0962b2e25c0a9a1db（30改动文件逐blob相同）。81包缺这次发布与Playwright驱动，本单只补这一必要差额，不重复81的首页/重开和已阻断GUI矩阵。复用原B终端，保留81分支，fetch准确组合建立具名分支；在/tmp/main-acceptance-20261009/desktop84/冻结构建本机arm64 local.app。复用已有公开缓存，只有Playwright与其锁中必要依赖及PyInstaller缺失时可下载到新owned缓存/venv；不修改旧环境/全局，不下载浏览器或模型，不发布Release/签名。
+
+无产品源码写权；若真实构建失败报具体首因/所需路径，不绕过collect_all或偷偷移除驱动。复核包内真实Playwright资源/驱动可用及候选身份，启动包内API/Web一次，仅HTTP健康与/api/publishing/platforms实际路由回读；不重复native点击/窗口/截图/主题测试。无Chrome会话、平台网络/账号、资源容量采样、模型/FFmpeg/Pi、Key/用户库或Supabase权限。隔离与 owned进程释放沿81具名方法，保留原证据。生成.app即可，不再生成DMG/ZIP或重开本单。交报告/包身份/实际API回读/所有自有进程释放与准确未验。83线程保留，不在构建期间改候选。
+
+### B81：本机组合包启动与关闭重开（已结案，运行权结束）
 
 79源码8fc8427已经主控审核并机械集成至clean PR99候选aa1af943ee218a1252a600cf2789d2e9044c1ba0，79写权结束。81复用原B终端，保留旧分支，从该准确候选建立具名desktop81分支，读取桌面README/RELEASE相关本机通道和本条后语义ACK直接执行。80发布代码仍施工；81只证明当前组合包启动，不能冒称已包含80或三平台通过。
 
