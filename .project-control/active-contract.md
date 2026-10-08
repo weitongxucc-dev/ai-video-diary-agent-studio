@@ -12,9 +12,9 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，UI73已交84a3b76并retain，主控审后机械组合clean候选db5ff93937d74a590618387237d8fc787638b1ab；B71已接收该准确候选START，执行既有集中GUI，尚无通过结论。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。资源暂停继续有效：无主机探针、模型、配音/口型和FFmpeg执行。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75仅补受影响保存旅程，具体条件START见下节。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。资源暂停继续有效：无主机探针、模型、配音/口型和FFmpeg执行。
 
-用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI只读接收纠正，无新增源码任务；B71重新绑定新权威后继续已有prepare，仍须准确候选START才可运行GUI。
+用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI保留已交源码，无新增写权；B仅按下方75准确候选与条件START运行定向GUI。
 
 本次变更 `MAIN-SOFT-CARDS-20261008-70` 属共享设计增量，用户已直接授权；只有受影响浮层条款重绑。69已完成的草稿差额和64/67/68未影响成果保留，公共浮层的旧几何证据不用于新规则通过结论。
 
@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 74：字幕不可用时普通编辑保存与失败画幅显示修复 | 73成果保留；仅下方已实证消费者及直接测试 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 74已交并retain，等待实际缺陷 | 保留源码；无新增写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 71：新设计同候选验收准备 | 66准备资料保留；最终候选绑定前无服务/GUI权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 75：74修复后定向保存旅程补验 | 仅新隔离证据与具名GUI；无产品写权 |
 
 ## 当前增量：UI70 / B71
 
@@ -80,6 +80,18 @@ B71冻结db5ff93937d74a590618387237d8fc787638b1ab实际GUI把画幅16:9改1:1，
 旧B66仅prepare且已fence，无服务/GUI运行，保留/tmp/main-acceptance-20261008/ui66/准备资料。原B可见终端复用，新证据/tmp/main-acceptance-20261008/ui71/；不重造未影响合法色卡或旧库，不写产品代码。读DESIGN v5.3相关几何/编辑/验收与实际领域版本，确认新验收取代66旧几何；语义ACK后先核准备输入，不启动服务。以ui66合法合成隔离准备为来源，所有新写仅ui71，原库只读；保持HOME/XDG/DB/config/library/output/tmp/cache/models/agent隔离、0600合成凭据、无真实Key/Pi离线/scheduled OFF。不扫描个人数据/模型，不造真实生成结果/费用/质量成功。
 
 待主控绑定70+69准确组合SHA、具名服务/租约/数据及page命令后再开启一次集中GUI。本阶段只准备/查静态真实入口，不用旧candidate启动，不安装或运行媒体。相关旅程覆盖1440×900/1280×720/1024×720右侧共同尺寸与根/子/确认搜索、父状态保留、顶层关闭/取消回焦、浅暗/减少动态、普通字段持久化→刷新→撤销/重做→成片/检查版本，真实任务比例和共尺。复用不受影响证据，缺失真实音频/模型/原生项明确未验；不准备或验收费卡。普通GUI由Agent自操，不向用户逐步索要缩放/按键。
+
+### B75：普通画幅保存修复的定向补验
+
+B71已以failed结算：报告实际10 PASS/1 FAIL/6 UNVERIFIED，画幅409为真实FAIL。自有三进程组、4579/3179、page/profile已释放并回读；冻结候选及旧库不变。UI74来源30dbac7213fee38bc9eb9c00bb509bbbd92dc716已审，API4/Web2及类型检查通过；机械集成clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，五个改动文件blob与来源一致。仅源码修复已接受，真实保存补验未通过；复用71未受影响的几何、主题、搜索证据，不重跑整轮。
+
+原B可见终端新Dispatch复用，只写/tmp/main-acceptance-20261008/ui75/。从/tmp/main-controller-20261008/ui-v3-integration准确候选archive排除dotenv并核源码blob；只读ui71/reuse-input.json及直接启动资料，用SQLite mode=ro/uri=True备份其合法V5合成库、复制现有色卡和0600合成owner token，旧库和证据保留。不新增成功产物、字幕valid状态或输出封存；新HOME/XDG/config/DB/library/output/cache/tmp/models/agent隔离，Key空、Pi离线、scheduled OFF、资源门禁不变。无安装、主机探针、模型、媒体生成、费用、真实库/Key/账号、发布、Electron打包或远端权。
+
+准确候选/源码与旧输入核验、语义REBASE_ACK、4579/3179空闲及自有隔离page方法确认后条件START。一次自有API4579/Web3179，仅loopback；首服务起15分钟绝对lease，不续租。登记PID/PGID/starttoken和deadline；仅下述已计划失败场景可停止自己的API并恢复一次，恢复仍受原deadline约束，不能重开Web/租约或对其他服务操作。自己的隔离profile/page，每条GUI明确page；真实控件、键盘、截图，eval只读，不注入DOM/CSS/事件/响应，不操作个人浏览器或请求用户拖窗按键。
+
+只在1280×720补验ui41-task：画幅16:9→1:1直接保存，无多余确认/自动生成；GET及只读库证明新持久版本和unavailable字幕原原因/影响/修复保留，刷新仍1:1，撤销16:9、重做1:1，output_ready仍false。随后停止自有API一次，经GUI改9:16取得真实请求失败，控件恢复已保存1:1、错误可见且持久版本不变；恢复自有API一次后GUI重试成功并刷新回读。若页面离线阻止发送则如实记录该场景未验证，不伪造响应。不启动生成/配音/口型/检查，不把合成草稿证明写成真实成片通过。准备后业务修改仅GUI；HTTP GET、SQLite只读仅辅助证据。
+
+结束/到期释放全部登记自有组/端口及page/profile并回读，证明旧库hash保持和工作树clean。短report.md列同一候选实际PASS/FAIL/UNVERIFIED、PNG、版本与失败反馈、release；真实新缺陷只提交首因证据，无产品修复权。不追加71未验长滚动/三层模态/全尺寸矩阵，不关闭WIL205或整个制作/安装/发布。74及71旧操作权结束。
 
 ## 当前v3增量：64/65
 
