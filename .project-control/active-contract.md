@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 80：抖音发布纵向接线 | 仅下方80具名路径 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 79已交，主控审核 | 无新增写权；main.py交80.2 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 81：本机组合包启动验收 | 仅下方81桌面路径；main.py仍由80独占 |
 
 ## 当前交付波次：B79 / UI80（2026-10-09）
 
@@ -68,6 +68,18 @@ Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_p
 80.2 B79已具名交付clean8fc8427，仅两测试文件；main.py产品blob与0ed7f38相同，其写权在本条收回。UI80成为main.py局部唯一写者，仅发布模块import、router依赖注入、_build_device_components中的platform_publish OwnerRegistration及相关真实状态/产物/成员回调；不修改79渲染/音频消费者。UI80读本条ACK后可以直接落实自身入口，不再等待B应用补丁，主控仍独立审核最终diff。B79源码保留，不整体rebase正在修改的UI分支；主控组合两项源码时再机械保留79测试差额。
 
 80.3 主控核实现有HostResourceProbe._SUPPORTED_KINDS只含material_hash/material_probe_meta，发布浏览器kind会被拒绝。UI80增补唯一写权 apps/api/app/host_resource_probes.py 和既有tests/test_host_resource_probes.py：将platform_publish作为明确的浏览器/网络I/O控制单元接入现有主机CPU/内存/磁盘/IO预算、可信Grant及子进程归属/退出路径，声明真实输入大小和有限操作期限；不冒充material或creation、不跳过资源核验、不增加另一套采样/调度框架。优先复用既有通用准入与进程跟踪；若证据表明通用预算无法涵盖实际浏览器开销，提交准确不变量与最小额外字段，不伪造标定或直接猜生产预算。本轮只能假资源/假driver验证，无真实Host采样、Chrome/FFmpeg/模型执行；未知预算/资源继续明确不可用，源码接通不等于实机准入通过。此新增已是已授权发布纵向的必要接线，不扩展真实账号/外发权；UI只重读80.2/80.3 ACK后继续，B79不受资源实现补充影响。
+
+### B81：本机组合包启动与关闭重开
+
+79源码8fc8427已经主控审核并机械集成至clean PR99候选aa1af943ee218a1252a600cf2789d2e9044c1ba0，79写权结束。81复用原B终端，保留旧分支，从该准确候选建立具名desktop81分支，读取桌面README/RELEASE相关本机通道和本条后语义ACK直接执行。80发布代码仍施工；81只证明当前组合包启动，不能冒称已包含80或三平台通过。
+
+目标：在新的owned `/tmp/main-acceptance-20261009/desktop81/` 冻结候选，沿UI77已验证构建路径生成本机arm64 `.app`，真正启动包内API/Web/Electron，查看首页/设置/任务入口一次，关闭后证明其子进程退出，再用同一隔离配置重开。复用77的公开依赖缓存/构建方法，不能复用其私密配置或以旧包替代当前候选；只构建arm64本机local诊断包，不签名/公证/上传/Release，不覆盖Applications或用户原包。可先生成.app，成功后再生成分发档案，不为本轮重复新电脑/尺寸/主题矩阵。
+
+启动前必须证明Electron userData、HOME/XDG、dotenv、DB/library/output/models/agent/log/temp全部位于owned根，明确空Key/无云身份，不能假定HOME或Chrome参数已隔离Electron路径。先查现有可用隔离入口；确有隔离或实际启动缺陷时，81唯一写权限于apps/desktop/main.js、preload.js、scripts/内必要直接消费者及其现有直接检查；新增文件或跨到API/Web/pyinstaller/依赖锁须报准确首因由主控补边界。不得为隔离新增大型启动框架或通用兼容层。80独占API main.py和打包spec/锁，81不碰；所有构建发生在owned冻结副本。
+
+本条新增权限仅具名包构建、拥有的Electron/API/Web启动、当前隔离页的必要GUI操作与截图、正常退出和关闭重开；允许读自有进程/端口归属，不允许主机容量探针、模型/TTS/口型/FFmpeg/Pi真实调用、真实Key/账号/用户DB/媒体读取、平台浏览器/登录/上传/发送。没有任务时启动若自动采样或运行媒体，应停止该owned启动并报告实际首因，不能偷偷取消暂停或改业务保护。GUI优先自己使用当前Orca computer工具；工具阻断限具体可见项，不重复让用户拖窗口/按键，不用HTTP或测试替代截图结论。
+
+交准确候选和必要源码diff、实际.app/档案路径/hash/包内身份、启动日志/健康与截图、关闭重开及自有PID/PGID释放证据、失败首因和未验到desktop81/report.md。真实制作与最新发布仍另验；worker不push/写PR/Linear/共享权威。主控审核后再决定最终发布组合的必要增量重建。
 
 ## 已结案波次：B76 / UI77
 
