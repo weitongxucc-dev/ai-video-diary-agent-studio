@@ -60,6 +60,8 @@ Migrate验收：纯素材crop编辑确认后以真实现有start/resume接线得
 
 A在准备窗口可以合法夹具初始化并由真实HTTP确认文案和读取execution/preview，不能先POST start/resume或加载模型。交PREPARED具体源码/env/inputs/probe当次decision及PID/PGID/端口、OS profile和精确一轮整链命令；主控对本Dispatch的START_CREATION36才允许一次原API start→真实Grant→Qwen→确定性montage→受许可FFmpeg/字幕成片，父180秒/各阶段原120/10/60秒，首因停止不自动重试。已编辑输出另90秒窗口须后续冻结重出候选；本节不给人物/真实账号云/GUI/Pi/生产标定。软件媒体窗口期间B仅静态工作，A亦不并行测试/别的重进程。
 
+用户于2026-10-08回复本机人物视频与声音均为本人，要求主控直接查找：允许主控定向只读现有素材目录、`legacy-movies/agent.sqlite3`的素材/声音登记元数据，以`mode=ro,uri=True`读取，不访问账号/秘密或修改原库。已定位素材`video-inbox/历史成片_待审核/VID_20260529_122252_preview.mp4`（登记a_roll/approved/rights_confirmed）和默认`acceptance/real-voice-20260824/reference/reference.wav`；允许主控在新`/tmp/main-controller-20261008/creation36/user-media/`仅一次≤30秒、线程1的FFmpeg取前段单帧视觉核验，记录自有PID/退出及原文件stat，不启动模型。人物与真实声音的模型处理/截段须随后具名有限窗口，不扩大A/B当前模型权；纯素材链继续独立推进，用户原件保留。
+
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
 
 `MAIN-CREATION-20261007-11`：用户已批准实施审查缺口。准确产品基线 `7289f4fa3aa4d2fb61f9a3a362991a08885d14ca`；manta clean 后新独立 `codex/wil26-creation-permits-20261007`，不带旧候选混合历史。先读本合同、[认证 §5/§9](../docs/auth-workspace-boundary.md#5-后台任务)、[架构 §5.2/§5.3/§3.12](../docs/system-architecture.md#52-新任务) 与 `/tmp/main-controller-20261007/pi-review/review.md`；原账号方案仅作实施建议，以新契约为准。语义 `REBASE_ACK` 后直接实施，不等第二次 START。
