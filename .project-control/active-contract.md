@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户于2026-10-08批准完整UI交接包作为整个桌面的设计基线，随后批准最新包的中间栏与侧边浮卡v2；设计权威已更新为[DESIGN v5.1](../DESIGN.md)。最新“可以，开始执行吧”批准UI剩余验收、默认人物许可接线及试用前收口。53/57/58已交付并收回操作权；当前新操作仅限下列B59。main主控独占共享文档、候选审核、机械集成、PR与Linear维护，不编写产品代码。重模型仍受用户资源暂停约束；未恢复资源窗口前不作资源探针、模型、配音/口型或整链实测。
+用户于2026-10-08批准完整UI交接包作为整个桌面的设计基线，随后批准最新包的中间栏与侧边浮卡v2；设计权威已更新为[DESIGN v5.1](../DESIGN.md)。最新“可以，开始执行吧”批准UI剩余验收、默认人物许可接线及试用前收口。53/57/58已交付并收回操作权；当前新操作仅限下列B59、A60和UI61。main主控独占共享文档、候选审核、机械集成、PR与Linear维护，不编写产品代码。重模型仍受用户资源暂停约束；未恢复资源窗口前不作资源探针、模型、配音/口型或整链实测。
 
 UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`（`main-ui-linear`）已只读REBASE_ACK v5.1。任务38从准确main代码对象新建独立分支，保留63d1984旧分支，不整体merge/rebase。先前ACK中被新版替代的参数不再作为执行契约；共享语义再变化须按指定章节重新ACK。
 
@@ -24,15 +24,15 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；新操作仅限任务59具名权利。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；新操作仅限任务59/60/61具名权利。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 58源码已核并retain | 待命，无新增写入或服务权 |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 53源码已核并retain | 待命，无新增写入或服务权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 61最小内容宽工具栏重叠修复 | 仅61工具栏与直接父选择器；无服务/GUI权 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 60人物许可CI消费者收口 | 仅60直接测试；生产只读/无模型权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 59：组合候选工具栏与搜索差额补验 | 仅59隔离根/有限服务及自有嵌入页面；不写产品或制作 |
 
 ## 任务52/53/54：UI收口与人物制作接线
@@ -121,7 +121,7 @@ B59只验冻结完整组合14fd23da24f685b7d3d4ce22c893f95b409a01af，来源`/tm
 
 A60仅从clean99b3660继续，在新`codex/presenter-ci-20261008`按14fd23d目标API blob核等。先读本节、53相关权威和主控`presenter53-ci-failed.log`六条真实失败，分清公共人物编辑消费者尚未接队列与内部诊断正向测试缺少有效Grant。owned只`apps/api/tests/test_montage_pipeline.py`上述五个函数/六个参数化case及其必要局部fixture；生产API只读。保留人物替换映射/语言/同源缓存的正向实质覆盖，将必要内部用例迁到真实隔离队列/Grant许可上下文；公共无许可入口应证明409且provider/job/版本/输出零写。不得把所有200改409、删/跳过原正向覆盖、monkeypatch绕过guard或放开生产无许可路径。若确认当前公开编辑范围需要新产品接线，先回报准确缺口与最小实施建议，不在此测试修复单扩写。仅最小相关pytest在完整隔离HOME/XDG/config/DB/tmp/output中使用已装依赖、合法引用/无模型fake provider；该有界直接测试可按其原隔离fixture导入app.main，禁止真实配置/密钥/资源探针/服务/媒体/模型/外部网络。新证据`/tmp/main-acceptance-20261008/presenter60/`，准确clean净提交/report交主控，不重跑全1636；53旧权不复活，重模型暂停不变。
 
-UI61仅从cleanb9a86b9继续，在新`codex/ui-v51-toolbar-min-20261008`按5cf78c4目标Web blob核等；先读DESIGN工具栏/三栏自定义宽度、59准确1024 PNG/geometry与58真实消费者。owned `CreationTaskWorkspace.tsx`任务toolbar、同名CSS、`VideoEditor.module.css`toolbar；若首因在既有父层，有限追加`EditorShell.tsx`/同名CSS和`modern-overrides.css`仅当前editor toolbar父布局及其直接响应式选择器，不改AppShell网格/三栏默认/共享卡片底座。以真实剩余内容宽而非只window断点修标题/共享入口/固定动作无重叠；标准入口保留真实能力/共享handler/错误、播放器与父状态，不把动作全部隐藏或加第二浮层。不要新增CSS像素镜像测试，已有直接消费者最小必要检查/类型/CSS语法即可；不重跑已过搜索/全量、起服务/GUI/模型/安装或写后端/共享文档/远端。证据`/tmp/main-acceptance-20261008/ui61/`，新clean提交/report；主控机械组合后新具名剩余窄宽/加宽真实补验，59不热换。
+UI61仅从cleanb9a86b9继续，在新`codex/ui-v51-toolbar-min-20261008`按5cf78c4目标Web blob核等；先读DESIGN工具栏/三栏自定义宽度、59准确1024 PNG/geometry与58真实消费者。owned `CreationTaskWorkspace.tsx`任务toolbar、同名CSS、`VideoEditor.module.css`toolbar；若首因在既有父层，有限追加`AppShell.tsx`/同名CSS和`modern-overrides.css`仅当前editor toolbar父布局及其直接响应式选择器，不改AppShell网格/三栏默认/共享卡片底座。以真实剩余内容宽而非只window断点修标题/共享入口/固定动作无重叠；标准入口保留真实能力/共享handler/错误、播放器与父状态，不把动作全部隐藏或加第二浮层。不要新增CSS像素镜像测试，已有直接消费者最小必要检查/类型/CSS语法即可；不重跑已过搜索/全量、起服务/GUI/模型/安装或写后端/共享文档/远端。证据`/tmp/main-acceptance-20261008/ui61/`，新clean提交/report；主控机械组合后新具名剩余窄宽/加宽真实补验，59不热换。
 
 60/61由原A/UI可见终端实施，文件所有权与B59零产品写权不交叠；读本节语义ACK后可直接执行，不复活53/58。主控保留共享文档、候选审核/集成、PR/Linear权，不编写产品代码。
 
