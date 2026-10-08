@@ -53,6 +53,8 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`host_resou
 
 53.1有限追加：A已提供avatar缓存/输出校验经`media_timing.py`两个probe直接subprocess.run的证据，主控核源码相符。允许仅该文件`probe_avatar_media`/`probe_media_duration`接可选既有runner，使本次人物Grant覆盖ffprobe及剩余时限；不复制算法、不全局monkeypatch、不改变媒体成功条件。既有直接消费者测试归A，不增真实ffprobe/模型执行权；legacy诊断默认路径边界如实列出，新连续制作不得落回默认无Grant。
 
+53/56接口绑定补充：已批准人物工作单元沿现有execution状态返回`current_stage="person_render"`及同名stages事件；digest/分段仅为内部unit_key，不当成对用户阶段名。原narration/montage_plan/render/cover值与null保持，不改CreationTask领域阶段或引入第二状态机。A只owned现有main状态投影；UI唯一owned56下述直接类型/中文显示消费者。这是既有目标的必要接线，任务目标与未实测边界不变，双方阅读本条语义ACK后实施。
+
 ### B54：准确候选的UI剩余验收
 
 本单产品写权为零。新根仅`/tmp/main-acceptance-20261008/ui54/`；archive准确1e0c972并逐blob核验。只读ui51合法合成DB/参考媒体/现有依赖，不写旧根；合成owner权限0600、新HOME/XDG/config/DB/cache/output/tmp/models/agent、Key空/Pi离线/scheduled OFF、无云身份。沿用既有Next15.5.18与已安装依赖，准确记录浏览器canary/普通React区别，不安装修改依赖。
@@ -72,6 +74,8 @@ UI52准确61e260579bcdd24245b5f95f20dd5ce814b5ae4c已交付并由主控读diff/r
 从UI树clean后本地fetch主控d9605a0，新分支`codex/ui-v51-player-20261008`，旧UI分支保留；不整体merge/rebase。owned仅`apps/web/src/components/CreationTaskWorkspace.tsx`编辑阶段制作/作业/质量呈现、同名CSS、`VideoEditor.module.css`和既有`CreationTaskWorkspace.test.tsx`直接布局/连续制作专项。将编辑首屏的完整制作文案要求改为紧凑真实状态/入口，详细核对按需用现有圆角卡片或展开；给播放器及控制/横向故事板实际空间，低高度滚动属于所属正文。保留真实预检错误/阻塞/取消/恢复与render-only入口，明确开始必须仍核对实际文案和要求，开详情不是启动或确认，不改变请求/body/权限/领域/默认/配音字段；不移除开始功能或隐藏真实错误来腾空间。开关详情保留播放位置、镜头、草稿和版本，沿已有HomeCard底座不改其层级/焦点实现。
 
 只做必要组件/类型/样式检查，复用旧未改状态证据，不启动服务/GUI/模型/探针/媒体生成、不安装配置或写api.ts/后端/共享权威。证据`/tmp/main-acceptance-20261008/ui56/`，最小前后证据、准确commit/diff和新GUI需求交主控；B54仍只验1e0c972，不能覆盖新布局与质量API差额。主控审并机械组合后再具名安排准确新候选可见补验，不自动合main。
+
+56.1直接消费者追加：A53正在实现的`person_render`真实执行事件原Web未列其类型/中文名，会显示未知/原始内部名。允许UI在`apps/web/src/lib/types.ts`的CreationExecutionStatus.current_stage、`components/ExecutionQueueStatus.tsx`类型/阶段名、CreationTaskWorkspace既有executionStageLabels和各自既有直接测试添加这一个值，中文为“人物口型”；不改业务对象/阶段导航或其他状态。无模型事件测试只证明正确呈现，不能冒称真实人物运行。本批预览修复与这一个必要类型消费者可一次最小联合验证，其余53/56权限不变。
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
