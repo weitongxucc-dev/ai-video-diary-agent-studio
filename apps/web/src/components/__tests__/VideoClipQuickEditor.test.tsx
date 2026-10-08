@@ -28,7 +28,8 @@ it("keeps a clip draft across categories and previews only typed changes", () =>
   fireEvent.click(screen.getByRole("button", { name:"画面" }));
   fireEvent.change(screen.getByRole("slider", { name:"镜头 1 快速裁切水平位置" }), { target:{ value:"0.7" } });
   expect(screen.getByRole("slider", { name:"镜头 1 快速裁切水平位置" })).toHaveValue("0.7");
-  fireEvent.change(screen.getByRole("combobox", { name:"镜头 1 快速画面方式" }), { target:{ value:"fit" } });
+  fireEvent.click(screen.getByRole("button", { name:"镜头 1 快速画面方式" }));
+  fireEvent.click(screen.getByRole("option", { name:"完整显示" }));
   fireEvent.click(screen.getByRole("button", { name:"预览修改" }));
   expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.7, crop_y:.5 });
   fireEvent.click(screen.getByRole("button", { name:"裁剪" }));

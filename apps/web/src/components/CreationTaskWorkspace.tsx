@@ -27,7 +27,7 @@ import {
   Volume2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { HomeCardDialog } from "@/components/HomeCardDialog";
+import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
 import { AppShell } from "@/components/AppShell";
 import {
   apiUrl,
@@ -685,7 +685,46 @@ export function PreviewVideo({ url, label, muted, pauseOthers }: {
   />;
 }
 
+function EditPreviewCard({ preview, busy, compact = false, command, onCancel, onConfirm, kind, chosen = null, onChosen, onSelectionPreview }: {
+  preview: CreationTaskEditPreviewResponse; busy: BusyAction | null; compact?: boolean;
+  command: string; onCancel: () => void; onConfirm: () => void; kind: "modal" | "confirmation";
+  chosen?: number[] | null; onChosen?: (indices: number[]) => void; onSelectionPreview?: (indices: number[]) => void;
+}) {
+  const ui = editorUi;
+  const previewRef = useRef<HTMLDivElement>(null);
+  const steps = preview.proposal.operation.operation_type === "EditCompoundTimeline" && preview.proposal.operation.payload.selection_enabled
+    ? preview.proposal.operation.payload.steps as { index: number; command: string; enabled: boolean }[] : [];
+  const originalSelection = steps.filter(step => step.enabled).map(step => step.index);
+  const selectedSteps = chosen ?? originalSelection;
+  const commandChanged = steps.length > 0 && command.trim() !== preview.intent.raw_command.trim();
+  const selectionChanged = selectedSteps.length !== originalSelection.length || selectedSteps.some(index => !originalSelection.includes(index));
+  return (
+        <HomeCardDialog kind={kind} title="预览修改" onClose={onCancel} footer={
+          <div className={ui.previewActions}>
+            <button data-card-cancel className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null} onClick={onCancel} type="button">{kind === "modal" ? "取消" : "返回详情"}</button>
+            {selectionChanged ? <button className={compact ? editorUi.primary : "modern-primary-button"} type="button" disabled={busy !== null || commandChanged || !selectedSteps.length} onClick={() => onSelectionPreview?.(selectedSteps)}>重看所选</button> : null}
+            <button className={(selectionChanged || commandChanged) ? (compact ? editorUi.button : styles.secondaryButton) : (compact ? editorUi.primary : "modern-primary-button")} disabled={busy !== null || selectionChanged || commandChanged || preview.proposal.status !== "proposed"} onClick={onConfirm} type="button">
+              {busy === "edit-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认修改
+            </button>
+          </div>
+        }><div ref={previewRef} aria-label="变更预览" aria-live="polite" className={editorUi.dialogPreview}>
+          <header><strong>{preview.proposal.summary}</strong><span>{(selectionChanged||commandChanged)?"重看效果":"待确认"}</span></header>
+          {steps.length?<fieldset className={editorUi.propertySection}><legend>选择修改</legend>{steps.map(step=><label className={editorUi.actionRow} key={step.index}><input type="checkbox" aria-label={`保留修改${step.index+1}：${step.command}`} disabled={busy!==null||commandChanged} checked={selectedSteps.includes(step.index)} onChange={event=>onChosen?.(event.target.checked?[...selectedSteps,step.index]:selectedSteps.filter(index=>index!==step.index))}/><span>{step.index+1}. {step.command}</span></label>)}</fieldset>:null}
+          {(selectionChanged||commandChanged)?<p role="status">内容已变，请重看效果。</p>:<div className={ui.previewDiff}>
+            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <PreviewVideo url={preview.proposal.preview.before.video_url} label="修改前画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { previewRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
+            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <PreviewVideo url={preview.proposal.preview.after.video_url} label="修改后画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { previewRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
+          </div>}
+          {preview.proposal.preview.text_changes?.length ? <details className={editorUi.textChanges} open><summary>字幕变化 · {preview.proposal.preview.text_changes.length}</summary><ol>{preview.proposal.preview.text_changes.map(change => <li key={change.cue_id}><span>修改前：{change.before}</span><span>修改后：{change.after}</span></li>)}</ol></details> : null}
+          <div className={ui.previewEffects}>
+            <span><strong>需要重做</strong>{preview.proposal.invalidated_refs.map(ref => compact ? ref.endsWith(".mp4") ? "当前成片" : ref.endsWith(".srt") ? "字幕输出" : ref : ref).join("、") || "无"}</span>
+            <span><strong>其他影响</strong>{preview.proposal.external_effects.join("；") || "无"}</span>
+          </div>
+        </div></HomeCardDialog>
+  );
+}
+
 function ContextCommandBar({
+  localConfirmation = false,
   compact = false,
   scriptMode = false,
   busy,
@@ -704,6 +743,7 @@ function ContextCommandBar({
   selectedContextLabel,
   selectedContextPlaceholder,
 }: {
+  localConfirmation?: boolean;
   compact?: boolean;
   scriptMode?: boolean;
   busy: BusyAction | null;
@@ -731,8 +771,6 @@ function ContextCommandBar({
   const selectedSteps=chosen??originalSelection;
   const commandChanged=steps.length>0 && command.trim()!==preview?.intent.raw_command.trim();
   const selectionChanged=selectedSteps.length!==originalSelection.length||selectedSteps.some(index=>!originalSelection.includes(index));
-
-
   useEffect(() => {
     if (preview && !compact) barRef.current?.scrollIntoView?.({ block: "end" });
   }, [preview, compact]);
@@ -745,60 +783,43 @@ function ContextCommandBar({
     >
       {!assistantReply ? <div className={editorUi.chatSuggestions}><h2>{scriptMode ? "这段文案怎么写？" : "这条怎么改？"}</h2><p>{scriptMode ? "说说想突出什么，草稿会放在右侧等你确认。" : selectedContextLabel ? `已选中${selectedContextLabel}` : "点选右边的镜头，再告诉我想怎么改。"}</p>{(scriptMode ? [["写个开头", "为当前选题写一个简短开头"], ["说得简单些", "把当前文案改得更容易理解"], ["再短一点", "缩短当前文案，保留关键事实和出处"]] : [["换个镜头", "换一个更合适的镜头，保留声音"], ["亮一点", "把当前镜头调亮一点"], ["字幕大些", "把字幕字号调大一点"]]).map(([label, value]) => <button key={label} type="button" disabled={busy !== null} onClick={() => onCommandChange(value)}>{label}</button>)}</div> : null}
       <div className={editorUi.chatEntry}>
-        <span className={selectedContextLabel ? ui.contextSelection : ui.contextEmpty}>
-          {scriptMode ? "当前文案" : selectedContextLabel ?? "先选对象"}
-        </span>
         <label className={ui.commandInput}>
           {!compact ? <span>{scriptMode ? "说说文案想怎么写" : "说说怎么改"}</span> : null}
-          <input
+          <textarea
             aria-label={scriptMode ? "文案要求" : "局部修改要求"}
+            rows={3}
             disabled={busy !== null || selectionChanged}
             onChange={(event) => onCommandChange(event.target.value)}
             placeholder={steps.length ? "想保留哪项？" : selectedContextPlaceholder}
             value={command}
           />
         </label>
+        <div className={editorUi.composerTools}>
+          <span className={selectedContextLabel ? ui.contextSelection : ui.contextEmpty}>{scriptMode ? "当前文案" : selectedContextLabel ?? "先选对象"}</span>
+          <div className={editorUi.composerActions}>
+        {selectedContextLabel && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">预览修改</button> : null}
         <button
-          className={compact ? editorUi.primary : "modern-primary-button"}
+          aria-label="发送"
+          title="发送"
+          className={compact ? editorUi.sendButton : "modern-primary-button"}
             disabled={busy !== null || !assistantConfigured || (Boolean(preview)&&!commandChanged) || !command.trim()}
           onClick={onPreview}
           type="button"
         >
           {busy === "assistant" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}
-          发送
+          {!compact ? "发送" : null}
         </button>
-        {selectedContextLabel && !scriptMode ? <button className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">预览修改</button> : null}
+          </div>
+        </div>
       </div>
       <div className="assistant-meta">
         <span>{assistantConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
-        {assistantConfigured ? <details><summary>服务详情</summary><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></details> : <a href="/settings">去设置</a>}
+        {assistantConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
         {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
       </div>
       {scriptMode && assistantTurns.length ? <p className="assistant-reply">我：{assistantTurns.at(-1)?.command}</p> : null}
       {assistantReply ? <p className="assistant-reply" aria-live="polite">{assistantReply}</p> : null}
-      {preview ? (
-        <HomeCardDialog title="预览修改" onClose={onCancel}><div aria-label="变更预览" aria-live="polite" className={editorUi.dialogPreview}>
-          <header><strong>{preview.proposal.summary}</strong><span>{(selectionChanged||commandChanged)?"重看效果":"待确认"}</span></header>
-          {steps.length?<fieldset className={editorUi.propertySection}><legend>选择修改</legend>{steps.map(step=><label className={editorUi.actionRow} key={step.index}><input type="checkbox" aria-label={`保留修改${step.index+1}：${step.command}`} disabled={busy!==null||commandChanged} checked={selectedSteps.includes(step.index)} onChange={event=>setChosen(event.target.checked?[...selectedSteps,step.index]:selectedSteps.filter(index=>index!==step.index))}/><span>{step.index+1}. {step.command}</span></label>)}</fieldset>:null}
-          {(selectionChanged||commandChanged)?<p role="status">内容已变，请重看效果。</p>:<div className={ui.previewDiff}>
-            <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <PreviewVideo url={preview.proposal.preview.before.video_url} label="修改前画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)} /> : null}</section>
-            <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)} />查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <PreviewVideo url={preview.proposal.preview.after.video_url} label="修改后画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { barRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current) media.pause(); }); }} /> : null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { barRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget) audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)} /> : null}</section>
-          </div>}
-          {preview.proposal.preview.text_changes?.length ? <details className={editorUi.textChanges} open><summary>字幕变化 · {preview.proposal.preview.text_changes.length}</summary><ol>{preview.proposal.preview.text_changes.map(change => <li key={change.cue_id}><span>修改前：{change.before}</span><span>修改后：{change.after}</span></li>)}</ol></details> : null}
-          <div className={ui.previewEffects}>
-            <span><strong>需要重做</strong>{preview.proposal.invalidated_refs.map(ref => compact ? ref.endsWith(".mp4") ? "当前成片" : ref.endsWith(".srt") ? "字幕输出" : ref : ref).join("、") || "无"}</span>
-            <span><strong>其他影响</strong>{preview.proposal.external_effects.join("；") || "无"}</span>
-          </div>
-          <div className={ui.previewActions}>
-            <button className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null} onClick={onCancel} type="button">取消</button>
-            {selectionChanged?<button className={compact?editorUi.primary:"modern-primary-button"} type="button" disabled={busy!==null||commandChanged||!selectedSteps.length} onClick={()=>onSelectionPreview(selectedSteps)}>重看所选</button>:null}
-            <button className={(selectionChanged||commandChanged) ? (compact?editorUi.button:styles.secondaryButton) : (compact ? editorUi.primary : "modern-primary-button")} disabled={busy !== null || selectionChanged || commandChanged || preview.proposal.status !== "proposed"} onClick={onConfirm} type="button">
-              {busy === "edit-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}
-              确认修改
-            </button>
-          </div>
-        </div></HomeCardDialog>
-      ) : null}
+      {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={command} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview} /> : null}
     </section>
   );
 }
@@ -2079,8 +2100,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       : undefined
     : <Inspector activeView={activeView} busy={busy !== null} error={error} onPreparePersonEdit={preparePersonEdit} selectedContext={selectedEditContext} workspace={workspace} />;
 
+  // target_refs is the actual proposal scope; external_effects is explanatory
+  // copy (even a local crop includes it), not a boolean permission/fee flag.
+  const operation = editPreview?.proposal.operation;
+  const ordinaryObjectEdit = operation && (["ReplaceClip", "ChangeCrop", "TrimClip", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "SetClipTransition", "AdjustVisualEffects", "UpdateSubtitleCue"].includes(operation.operation_type)
+    || (operation.operation_type === "EditGraphicOverlay" && operation.payload.overlay_action === "update"));
+  const localConfirmation = Boolean(ordinaryObjectEdit && selectedEditContext && editPreview
+    && editPreview.proposal.task_id === task.id && editPreview.proposal.workspace_id === task.workspace_id
+    && editPreview.proposal.target_refs.length > 0
+    && editPreview.proposal.target_refs.every(ref => ref === selectedEditContext.ref));
+  const inspectorConfirmation = localConfirmation && editPreview ? <EditPreviewCard key={editPreview.proposal.id} preview={editPreview} busy={busy} compact command={editCommand} kind="confirmation" onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} /> : null;
+
   return (
-    <AppShell conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} inspectorDismissKey={isEditor ? editPreview?.proposal.id : undefined} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span><span className={styles.taskVisibility}>
+    <AppShell inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span><span className={styles.taskVisibility}>
       <span>{task.visibility === "shared" ? "团队共享" : "仅自己可见"}</span>
       {task.visibility === "shared"
         ? <button disabled={visibilityBusy || busy !== null} onClick={() => void changeTaskVisibility("private")} type="button">收回</button>
@@ -2142,7 +2174,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
         {activeView === "publish" ? <PublishStageView workspace={workspace} onOpenReview={() => openView("review")} /> : null}
-        {recordingOpen ? <div className="home-card-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRecordingOpen(false); }}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></div> : null}
+        {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}
 
 
       </div>

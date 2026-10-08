@@ -1,4 +1,5 @@
 "use client";
+import { HomeCardDialog } from "./HomeCardDialog";
 
 import { CircleHelp, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -114,10 +115,7 @@ export function HelpPanel() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && open) {
-        event.preventDefault();
-        closeHelpPanel();
-      } else if (event.key === "?" && !isEditable(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key === "?" && !isEditable(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         toggleHelpPanel();
       }
@@ -129,9 +127,8 @@ export function HelpPanel() {
   if (!open) return null;
 
   return (
-    <div className="help-panel" role="presentation">
-      <button aria-label="关闭帮助" className="help-panel-backdrop" onClick={closeHelpPanel} type="button" />
-      <aside aria-label="应用帮助" className="help-panel-card" role="complementary">
+    <HomeCardDialog kind="detail" title="应用帮助" onClose={closeHelpPanel}>
+      <aside aria-label="应用帮助" className="help-panel-content" role="complementary">
         <header className="help-panel-head">
           <span className="help-panel-icon-frame" aria-hidden="true"><CircleHelp size={19} /></span>
           <div><h2>{help.title}</h2><p>{help.intro}</p></div>
@@ -142,7 +139,7 @@ export function HelpPanel() {
         </ol>
         <footer><kbd>?</kbd> 打开帮助 <span>·</span> <kbd>Esc</kbd> 关闭</footer>
       </aside>
-    </div>
+    </HomeCardDialog>
   );
 }
 

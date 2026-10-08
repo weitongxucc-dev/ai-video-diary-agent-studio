@@ -65,16 +65,14 @@ describe("KnowledgePage", () => {
     expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
     expect(screen.getByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).toBeInTheDocument();
-    expect(screen.getAllByText(/未分类/)).not.toHaveLength(0);
+    expect(screen.getByText(/用途分类尚未接入/)).toBeInTheDocument();
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
     expect(detail).toHaveTextContent("没有显式参数格式就不生成参数");
     expect(detail).toHaveTextContent("v2");
     expect(detail).toHaveTextContent("内部使用");
-    fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
-    expect(screen.getByText(/不能按文件格式推断/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
+    expect(screen.queryByRole("button", { name: /产品知识/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
   });
 
@@ -124,7 +122,7 @@ describe("KnowledgePage", () => {
     api.listKnowledgeItems.mockRejectedValue(new Error("offline"));
     render(<KnowledgePage />);
     expect(await screen.findByRole("alert")).toHaveTextContent("请求失败：502");
-    expect(screen.getByText(/读取失败 · 选来源查看内容/)).toBeInTheDocument();
+    expect(screen.getByText(/读取失败 · 选择资料查看正文/)).toBeInTheDocument();
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
   });
 
@@ -227,14 +225,25 @@ describe("knowledge workspace grants", () => {
     const target = await screen.findByRole("combobox", { name: "目标工作空间" });
     fireEvent.change(target, { target: { value: "workspace-two" } });
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("dialog", { name: "跨空间授权确认" });
+    expect(confirmation).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(target).toHaveValue("workspace-two");
+    fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "授予读取与引用" })).toBeEnabled());
     expect(target).toHaveValue("workspace-two");
     expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     const revoke = await screen.findByRole("button", { name: "撤销授权" });
     expect(api.grantKnowledgeToWorkspace).toHaveBeenLastCalledWith(item.id, "workspace-two");
     expect(target).toHaveValue("");
     fireEvent.click(revoke);
+    expect(api.revokeKnowledgeGrant).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认撤销授权" }));
     await screen.findByText("乙的空间 · 已撤销");
     expect(api.revokeKnowledgeGrant).toHaveBeenCalledWith(item.id, "grant-one");
     expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();

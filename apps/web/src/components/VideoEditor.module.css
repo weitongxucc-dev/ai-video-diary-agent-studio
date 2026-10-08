@@ -1,7 +1,7 @@
-.workspace { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); color: var(--text-1); font: 400 14px/1.5 "PingFang SC", -apple-system, sans-serif; }
+.workspace { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); color: var(--text-1); font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
 .workspace *, .inspector * { box-sizing: border-box; }
-.toolbarTitle { display: flex; flex: 1; min-width: 0; align-items: baseline; gap: 12px; }
-.toolbarTitle h1 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 500; }
+.toolbarTitle { display: flex; flex: 1; min-width: 0; align-items:center;gap:8px; }
+.toolbarTitle h1 {flex:1;min-width:0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-title);line-height:var(--line-title); font-weight: 500; }
 .toolbarTitle span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .toolbarActions { display: flex; gap: 4px; }
 .button, .primary, .iconButton { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; min-height: 32px; width: auto; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.3; cursor: pointer; white-space: nowrap; }
@@ -11,28 +11,29 @@
 .primary:hover:not(:disabled) { filter: brightness(.96); }
 .button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.stageRail { flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; }
+.stageRail { flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; container-type: inline-size; }
 .stageRail li { flex: 0 0 auto; }
 .stageRail ol { overflow-x: auto; display: flex; justify-content: space-between; gap: 8px; list-style: none; margin: 0; padding: 0; }
 .stageRail button { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
 .stageRail button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
 .stageRail button:disabled { color: var(--text-3); cursor: default; }
+.stageRail button > span:first-child:empty { display: none; }
+@container (max-width: 680px) {
+  .stageRail ol { gap: 2px; }
+  .stageRail button { gap: 4px; padding-inline: 6px; }
+}
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 20px; overflow: auto; }
 .previewToolbar { display: flex; flex: 0 0 auto; min-height: 52px; align-items: center; gap: 12px; }
-.previewToolbar strong { font-size: 14px; font-weight: 500; }
+.previewToolbar strong { font-size: var(--font-size-body); font-weight: 500; }
 .previewToolbar > span { color: var(--text-3); font-size: 12px; }
-.previewActions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.canvasControls { position: relative; }
-.canvasControls summary { display: inline-flex; min-height: 32px; align-items: center; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 8px; color: var(--text-2); font-size: 12px; cursor: pointer; list-style: none; }
-.canvasControls summary::-webkit-details-marker { display: none; }
-.canvasControls[open] summary { border-color: var(--accent); color: var(--accent); }
-.canvasControlsPanel { position: absolute; z-index: 9; right: 0; top: 40px; display: grid; width: 244px; gap: 10px; padding: 14px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); box-shadow: 0 8px 24px rgb(0 0 0 / 14%); }
-.canvasControlsPanel small { color: var(--text-2); font-size: 12px; }
-.canvasControlsPanel > button { justify-self: start; }
+.previewActions { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; margin-left: auto; }
+.canvasFields { display:grid;gap:12px; }
+.canvasFields small { color:var(--text-2);font-size:12px; }
+.canvasFields >button { justify-self:start; }
 .previewToolbar .warning { color: var(--warning); }
 .player { position: relative; display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-height: 250px; overflow: hidden; border: 1px solid var(--border-1); border-bottom: 0; border-radius: 8px 8px 0 0; background: #181b1e; }
 .player > video { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; position: absolute; inset: 0; }
-.player > p { color: #e1e3e6; font-size: 14px; padding: 24px; }
+.player > p { color: #e1e3e6; font-size: var(--font-size-body); padding: 24px; }
 .playerBadge { position: absolute; top: 12px; left: 12px; padding: 4px 8px; border-radius: 6px; background: rgb(0 0 0 / 65%); color: white; font-size: 12px; }
 .playerError { position: absolute; bottom: 0; background: rgb(0 0 0 / 75%); }
 .transport { display: flex; flex: 0 0 auto; min-height: 40px; align-items: center; gap: 8px; padding: 0 8px; border: 1px solid var(--border-1); border-radius: 0 0 8px 8px; background: var(--surface-2); }
@@ -52,7 +53,7 @@
 .shotLabel small { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tracks { flex: 0 0 auto; display: grid; gap: 5px; padding: 6px 0 0; }
 .ruler, .track { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
-.ruler > div { display: flex; justify-content: space-between; color: var(--text-3); font-size: 11px; border-bottom: 1px solid var(--border-1); padding-bottom: 3px; }
+.ruler > div { display: flex; justify-content: space-between; color: var(--text-3); font-size:12px; border-bottom: 1px solid var(--border-1); padding-bottom: 3px; }
 .track > div { display: flex; min-width: 0; gap: 2px; }
 .track button { min-width: 0; height: 26px; padding: 0 5px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 4px; background: var(--surface-2); color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .track button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); }
@@ -61,10 +62,10 @@
 .track .waveformClip { padding: 0; color: var(--accent); }
 .waveformClip svg { display: block; width: 100%; height: 24px; }
 .waveformClip path { stroke: currentColor; stroke-width: 1; fill: none; }
-.inspector { font: 400 14px/1.5 "PingFang SC", -apple-system, sans-serif; }
+.inspector { font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
 .inspectorImage { width: 100%; height: 150px; display: block; object-fit: cover; border-radius: 7px; background: var(--surface-2); }
 .inspectorTabs { display: flex; border-bottom: 1px solid var(--border-1); margin: 12px 0 16px; }
-.inspectorTabs button { flex: 1; height: 36px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 14px; cursor: pointer; }
+.inspectorTabs button { flex: 1; height: 36px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--font-size-body); cursor: pointer; }
 .inspectorTabs button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
 .properties { display: grid; gap: 12px; margin: 0; }
 .properties > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -76,7 +77,7 @@
 .propertySection > button { justify-self: start; }
 .twoFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .twoFields label, .field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; }
-.twoFields input, .twoFields output, .field select { width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: 14px; font-weight: 400; line-height: 1.4; }
+.twoFields input, .twoFields output, .field select { width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: var(--font-size-body); font-weight: 400; line-height: 1.4; }
 .twoFields output { background: var(--surface-2); }
 .cropFields { display: grid; gap: 8px; }
 .cropFields label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px; font-size: 12px; color: var(--text-2); }
@@ -98,11 +99,11 @@
 .source p, .source ul { color: var(--text-2); font-size: 13px; }
 .source ul { padding-left: 18px; }
 .source a { color: var(--accent); font-size: 13px; }
-.contextSelection, .contextEmpty { flex-shrink: 0; padding: 4px 7px; border-radius: 5px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); font-size: 12px; }
+.contextSelection, .contextEmpty { flex-shrink: 0; padding: 4px 8px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); font-size: 12px; }
 .contextEmpty { color: var(--text-3); background: var(--surface-2); }
 .commandInput { flex: 1; min-width: 0; }
-.commandInput input { width: 100%; min-width: 0; height: 32px; padding: 4px; border: 0; outline: 0; background: transparent; color: var(--text-1); font: 400 14px/1.4 "PingFang SC", sans-serif; }
-.commandInput input:focus-visible { box-shadow: inset 0 -1px var(--accent); }
+.commandInput textarea { width: 100%; min-width: 0; min-height:64px;resize:none;padding:0; border: 0; outline: 0; background: transparent; color: var(--text-1); font: 400 var(--font-size-body)/var(--line-body) var(--font-ui); }
+.commandInput textarea:focus-visible { box-shadow: inset 0 -1px var(--accent); }
 .previewDiff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .previewDiff section { display: grid; align-content: start; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); }
 .previewDiff small { color: var(--text-3); font-size: 12px; }
@@ -110,7 +111,7 @@
 .previewDiff span { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
 .previewEffects { display: grid; gap: 6px; padding: 10px 0; font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
 .previewEffects strong { margin-right: 8px; font-weight: 500; }
-.previewActions { display: flex; justify-content: flex-end; gap: 8px; }
+.previewActions { display: flex; flex-wrap:wrap; justify-content: flex-end; gap: 8px; }
 .feedback { display: flex; align-items: center; gap: 8px; padding: 6px 20px; color: var(--text-2); background: var(--surface-2); font-size: 13px; }
 @media (max-width: 1279px) { .stage { padding-inline: 16px; } .stageRail { padding-inline: 12px; } .stageRail button { padding-inline: 8px; } .player { min-height: 220px; } }
 
@@ -144,19 +145,30 @@
 
 .subtitleStylePreview { display: block; width: 100%; height: 300px; object-fit: contain; background: var(--text-2); border-radius: var(--radius-sm); }
 
-.chatCommand { display: flex; flex-direction: column; flex: 1; gap: 14px; min-height: 0; padding: 16px; }
-.chatEntry { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding: 12px; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-2); order: 3; }
-.chatEntry .contextSelection, .chatEntry .contextEmpty { max-width: 100%; white-space: normal; }
-.chatEntry .commandInput { flex: 0 0 100%; min-width: 0; }
-.chatEntry input { width: 100%; min-height: 65px; background: transparent; border: 0; font-size: 14px; }
-.chatCommand :global(.assistant-meta) { order: 4; font-size: 12px; }
-.chatCommand :global(.assistant-reply) { order: 1; margin: 0; padding: 14px; border-radius: 8px; background: var(--surface-2); font-size: 14px; line-height: 1.7; }
+.chatCommand {display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;padding:16px 12px 10px;overflow:auto;}
+.chatEntry {display:grid;gap:8px;margin-top:auto;padding:12px 10px 8px;border:1px solid var(--border-1);border-radius:12px;background:var(--surface-1);box-shadow:0 2px 5px rgb(25 25 40 / 3%);order:3;flex-shrink:0;}
+.chatEntry:focus-within {border-color:var(--focus);}
+.chatEntry .commandInput {min-width:0;}
+.chatEntry textarea {display:block;width:100%;min-height:64px;padding:0 2px;border:0;background:transparent;box-shadow:none;outline:0;color:var(--text-1);font-size:var(--font-size-body);line-height:var(--line-body);}
+.chatEntry textarea:focus-visible {box-shadow:none!important;}
+.chatEntry .contextSelection,.chatEntry .contextEmpty {max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;height:26px;padding:3px 8px;border-radius:999px;}
+.composerTools {display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;}
+.composerActions {display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.sendButton {display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-contrast);cursor:pointer;}
+.sendButton:disabled {opacity:.38;cursor:default;}
+.composerPreview {min-height:32px;padding:0 5px;border:0;background:transparent;color:var(--text-2);font:inherit;font-size:12px;cursor:pointer;}
+.composerPreview:disabled {opacity:.4;cursor:default;}
+.chatCommand :global(.assistant-meta) {order:4;font-size:12px;color:var(--text-3);}
+.chatCommand :global(.assistant-reply) {order:1;margin:0;padding:0;background:transparent;font-size:var(--font-size-body);line-height:var(--line-body);}
 .dialogPreview { display: grid; gap: 14px; }
 .dialogPreview header { display: flex; justify-content: space-between; gap: 12px; }
-.dialogPreview header strong { font-size: 14px; font-weight: 500; }
+.dialogPreview header strong { font-size: var(--font-size-body); font-weight: 500; }
 .dialogPreview header span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 
-.chatSuggestions { padding: 14px; border-radius: 8px; background: var(--surface-2); }
-.chatSuggestions h2 { margin: 0; font-size: 15px; font-weight: 500; }
-.chatSuggestions p { font-size: 13px; color: var(--text-2); line-height: 1.6; }
-.chatSuggestions button { display: block; width: 100%; margin-top: 8px; padding: 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); text-align: left; color: var(--text-1); font-size: 13px; cursor: pointer; }
+.chatSuggestions {display:flex;align-content:flex-start;flex-wrap:wrap;gap:8px;padding:4px 2px;background:transparent;}
+.chatSuggestions h2 { margin: 0; font-size: var(--font-size-title);line-height:var(--line-title); font-weight: 500; }
+.chatSuggestions p {width:100%;margin:0 0 4px;font-size:13px;color:var(--text-2);line-height:var(--line-body);}
+.chatSuggestions button {min-height:32px;padding:0 10px;border:1px solid var(--border-1);border-radius:999px;background:var(--surface-1);color:var(--text-2);font-size:12px;cursor:pointer;}
+@media (max-width:1279px) {
+  .toolbarTitle > span {display:none;}
+}

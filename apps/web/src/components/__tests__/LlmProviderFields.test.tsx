@@ -22,9 +22,11 @@ describe("LlmProviderFields 删除密钥", () => {
     expect(address).toHaveValue("https://api.minimax.io/v1");
     fireEvent.change(address, { target: { value: "https://example.com/custom/v1" } });
     expect(address).toHaveValue("https://example.com/custom/v1");
-    fireEvent.change(screen.getByLabelText("模型服务"), { target: { value: "deepseek" } });
+    fireEvent.click(screen.getByRole("button", { name: "模型服务" }));
+    fireEvent.click(screen.getByRole("option", { name: "DeepSeek" }));
     expect(address).toHaveValue("https://api.deepseek.com");
-    fireEvent.change(screen.getByLabelText("模型服务"), { target: { value: "minimax" } });
+    fireEvent.click(screen.getByRole("button", { name: "模型服务" }));
+    fireEvent.click(screen.getByRole("option", { name: "MiniMax" }));
     expect(address).toHaveValue("https://api.minimax.cn/v1");
     expect(screen.getByLabelText("模型")).toHaveValue("MiniMax-M3");
   });

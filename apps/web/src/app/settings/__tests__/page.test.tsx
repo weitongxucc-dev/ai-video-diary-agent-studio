@@ -124,7 +124,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("已填写，未验证"));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("已填写，未验证");
+    expect(node).toHaveTextContent("已配置·待验证");
     expect(node.className).not.toContain("is-ready");
     expect(node.textContent).not.toContain("可用");
   });
@@ -133,7 +133,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("可用"));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("可用");
+    expect(node).toHaveTextContent("最近调用成功");
     expect(node.className).toContain("is-ready");
   });
 
@@ -141,7 +141,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("未填写", false));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("未填写");
+    expect(node).toHaveTextContent("未配置");
     const detail = screen.getByTestId("llm-service-detail");
     expect(detail).toHaveTextContent("API Key");
   });
@@ -151,7 +151,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState(undefined));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("拿不到");
+    expect(node).toHaveTextContent("暂时无法读取连接状态");
     expect(node.className).not.toContain("is-ready");
     expect(node.textContent).not.toContain("可用");
     expect(node.textContent).not.toContain("已填写，未验证");

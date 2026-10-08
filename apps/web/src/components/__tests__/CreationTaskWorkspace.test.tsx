@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
   return {
     MockCreationPlanApiError,
     showQuickInspector: false,
+    realShell: false,
     openQuickDetails: vi.fn(),
     confirmEdit: vi.fn(),
     confirmScript: vi.fn(),
@@ -58,11 +59,18 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, conversation, inspector, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" }: { children: React.ReactNode; conversation?: React.ReactNode; toolbar?: React.ReactNode; toolbarActions?: React.ReactNode; inspector?: React.ReactNode; quickInspector?: (openDetails: () => void) => React.ReactNode; quickInspectorLabel?: string; inspectorTitle?: string }) => (
-    <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>
-  ),
-}));
+vi.mock("@/components/AppShell", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/AppShell")>();
+  return { AppShell: (props: import("@/components/AppShell").AppShellProps) => {
+    if (mocks.realShell) return <actual.AppShell {...props} />;
+    const { children, conversation, inspector, inspectorConfirmation, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" } = props;
+    return <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}{inspectorConfirmation}</>;
+  } };
+});
+vi.mock("next/navigation", () => ({ usePathname: () => "/tasks/task-1", useRouter: () => ({ push: vi.fn(), back: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ role: "owner" }) }));
+vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
+vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 
 vi.mock("../DesktopVoiceRecorder", () => ({
   DesktopVoiceRecorder: ({ onRecorded, onCancel }: { onRecorded: (blob: Blob) => void | Promise<void>; onCancel: () => void }) => (
@@ -74,6 +82,7 @@ vi.mock("../DesktopVoiceRecorder", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  listCreationTasks: vi.fn().mockResolvedValue({ items: [], total_count: 0 }),
   apiUrl: (path: string) => path,
   getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
   applyCreationTaskExactEdit: mocks.exactEdit,
@@ -410,6 +419,7 @@ function workspaceWithCover() {
 }
 
 afterEach(() => {
+  mocks.realShell = false;
   mocks.showQuickInspector = false;
   vi.clearAllMocks();
   mocks.getQualityCheck.mockReset().mockResolvedValue({ check_state: "none", result_status: null,
@@ -633,7 +643,9 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.startExecution).not.toHaveBeenCalled();
   });
 
-  it("keeps the assistant proposal under explicit confirmation and the selected clip", async () => {
+  it.each(["local", "delete", "cross-object"])("keeps the real shell single-clip scope %s on its actual confirmation surface", async (scope) => {
+    mocks.realShell = true;
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
     const initial = subtitleCoverWorkspace();
     initial.montage!.clips = [{
       id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
@@ -642,12 +654,17 @@ describe("CreationTaskWorkspace", () => {
       match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
     }];
     const preview = exactPreview(initial.task, "ReplaceClip");
+    preview.proposal.target_refs = ["clip:clip-1"];
+    preview.proposal.external_effects = ["确认后只更新任务版本，不会立即调用模型或渲染。"];
+    if (scope === "delete") Object.assign(preview.proposal.operation, { operation_type: "DeleteClip", payload: { clip_id: "clip-1" } });
+    if (scope === "cross-object") preview.proposal.target_refs.push("clip:clip-2");
     preview.intent.raw_command = "换成产品特写";
     mocks.askAssistant.mockResolvedValue({ reply: "已生成镜头替换预览，请确认。", provider: "minimax", model: "MiniMax-M3", edit_preview: preview });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    expect(screen.queryByRole("dialog", { name: "镜头 01" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "换成产品特写" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
@@ -655,8 +672,32 @@ describe("CreationTaskWorkspace", () => {
       message: "换成产品特写", selected_object_refs: ["clip:clip-1"],
     })));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    const confirmation = screen.getByRole("dialog", { name: "预览修改" });
+    const detail = screen.queryByRole("dialog", { name: "镜头 01" });
+    if (scope === "local") {
+      expect(detail).toHaveAttribute("data-card-kind", "detail");
+      expect(detail?.inert).toBe(true);
+      expect(confirmation).toHaveAttribute("data-card-kind", "confirmation");
+      expect(confirmation).not.toHaveAttribute("aria-modal");
+      expect(screen.getByRole("button", { name: "返回详情" })).toHaveFocus();
+    } else {
+      expect(detail).toBeNull();
+      expect(confirmation).toHaveAttribute("data-card-kind", "modal");
+      expect(confirmation).toHaveStyle({ width: "480px" });
+      expect(confirmation).toHaveAttribute("aria-modal", "true");
+      expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    }
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "预览修改" })).not.toBeInTheDocument();
+    if (scope === "local") {
+      expect(screen.getByRole("dialog", { name: "镜头 01" })).toBe(detail);
+      expect(detail?.inert).toBe(false);
+    }
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
-    expect(screen.getByText("已生成镜头替换预览，请确认。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "预览修改" });
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    expect(screen.getAllByText("已生成镜头替换预览，请确认。").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
     await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-ReplaceClip"));
   });
@@ -1361,12 +1402,15 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", {name:/^视频剪辑：/}));
     fireEvent.click(screen.getByText("画幅设置"));
-    fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"16:9"}});
-    fireEvent.change(screen.getByLabelText("整片画面适配"),{target:{value:"fit"}});
+    fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
+    fireEvent.click(screen.getByRole("option", {name:"16:9 横屏"}));
+    fireEvent.click(screen.getByRole("button", {name:"整片画面适配"}));
+    fireEvent.click(screen.getByRole("option", {name:"完整画面"}));
     fireEvent.click(screen.getByRole("button",{name:"预览画幅"}));
     await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9",fit_mode:"fit"}));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("成片画幅"),{target:{value:"1:1"}});
+    fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
+    fireEvent.click(screen.getByRole("option", {name:"1:1 方形"}));
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });

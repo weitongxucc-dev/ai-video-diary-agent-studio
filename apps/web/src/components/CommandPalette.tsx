@@ -1,4 +1,5 @@
 "use client";
+import { HomeCardDialog } from "./HomeCardDialog";
 
 import { Search } from "lucide-react";
 import {
@@ -56,12 +57,9 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
   }
 
   return (
-    <div className="command-palette-layer">
-      <button aria-label="关闭搜索" className="command-palette-backdrop" onClick={onClose} type="button" />
+    <HomeCardDialog kind="navigation" title="搜索页面和创作任务" onClose={onClose}>
       <section
-        aria-label="搜索页面和创作任务"
-        aria-modal="true"
-        className="command-palette"
+        className="command-palette-content"
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
@@ -77,7 +75,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
             choose(results[activeIndex]);
           }
         }}
-        role="dialog"
       >
         <label className="command-palette-search">
           <Search aria-hidden size={18} strokeWidth={1.8} />
@@ -118,6 +115,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
         </div>
         <footer>↑↓ 选择 · Enter 打开 · ⌘K 随时搜索</footer>
       </section>
-    </div>
+    </HomeCardDialog>
   );
 }

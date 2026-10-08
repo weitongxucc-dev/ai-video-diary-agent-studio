@@ -134,30 +134,30 @@ const LLM_SERVICE_VIEWS: Record<
   { label: string; detail: string; nextStep: string; tone: string }
 > = {
   missing: {
-    label: "未填写",
+    label: "未配置",
     detail:
       "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。",
     nextStep: "下一步：在下面填齐服务商、连接地址、模型和 API Key 后保存。",
     tone: "missing",
   },
   unverified: {
-    label: "已填写，未验证",
+    label: "已配置·待验证",
     detail:
       "地址、模型和密钥都填了，但还没有真的连过一次服务；这把密钥能不能被认，要等下一次真实对话或写稿才知道。",
     nextStep:
-      "下一步：保存后发起一次对话或写稿，再回到这一页看它有没有变成「可用」。",
+      "下一步：保存后发起一次对话或写稿，再回到这一页查看最近实际调用结果。",
     tone: "unverified",
   },
   available: {
-    label: "可用",
+    label: "最近调用成功",
     detail:
       "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。",
     nextStep:
-      "下一步：保持现状即可。改动地址、模型或密钥之后，这一档会退回「已填写，未验证」，需要重新验证一次。",
+      "下一步：改动地址、模型或密钥之后会退回「已配置·待验证」，需要重新验证一次；上次成功不保证本次可用。",
     tone: "available",
   },
   failed: {
-    label: "失败",
+    label: "最近调用失败",
     detail:
       "上一次真实调用没有成功。当前状态接口没有返回失败原因，所以这里拿不到更具体的原因，不替它猜一个。",
     nextStep:
@@ -167,7 +167,7 @@ const LLM_SERVICE_VIEWS: Record<
 };
 
 const LLM_SERVICE_UNKNOWN_VIEW = {
-  label: "拿不到服务状态",
+  label: "暂时无法读取连接状态",
   detail:
     "这一页没有取到后端的服务状态行，所以不知道现在是可用还是失败。字段填了也不等于服务认得它。",
   nextStep:
@@ -598,8 +598,8 @@ export default async function SettingsPage({
       inspectorTitle="设置状态"
     >
       <div className="workspace-page settings-page">
-        <aside className="settings-category-panel" aria-label="设置分类">
-          <nav className="settings-category-nav">
+        <header className="settings-category-panel">
+          <nav className="settings-category-nav" aria-label="设置分类">
             {SETTINGS_CATEGORIES.map((item) => (
               <Link
                 aria-current={activeCategory === item.id ? "page" : undefined}
@@ -616,7 +616,7 @@ export default async function SettingsPage({
             <Link href="/privacy">隐私政策</Link>
             <Link href="/terms">使用条款</Link>
           </nav></details>
-        </aside>
+        </header>
         <section className="workspace-main ui-panel">
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
 

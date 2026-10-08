@@ -1,6 +1,6 @@
 .workspace {
   min-width: 0;
-  padding: 24px 28px 40px;
+  padding:0 16px 24px;
   color: var(--text-1);
 }
 
@@ -14,17 +14,19 @@
   gap: 16px;
 }
 
+.workSection h3,
 .taskHeader h1,
 .sectionHeading h2,
 .emptyAction h2 {
   margin: 4px 0 8px;
   font-weight: 500;
-  line-height: 1.25;
+  line-height: var(--line-title);
 }
 
-.taskHeader h1 { font-size: clamp(22px, 2.2vw, 28px); }
+.taskHeader h1 { font-size: var(--font-size-title); }
+.workSection h3,
 .sectionHeading h2,
-.emptyAction h2 { font-size: 20px; }
+.emptyAction h2 { font-size:var(--font-size-title); }
 
 .taskHeader p,
 .sectionHeading p,
@@ -229,13 +231,13 @@
   border: 1px solid var(--border-1);
   border-radius: 10px;
   background: var(--surface-1);
-  padding: 24px;
+  padding:16px;
 }
 
-.sectionHeading { margin-bottom: 20px; }
+.sectionHeading {margin-bottom:12px;}
 .sectionHeading > button { min-width: max-content; }
 .reviewActions { display: flex; align-items: center; gap: 8px; }
-.secondaryButton { min-height: 36px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding: 7px 12px; cursor: pointer; }
+.secondaryButton { min-height:32px;border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding:0 10px; cursor: pointer; }
 .secondaryButton:hover:not(:disabled) { background: var(--surface-2); }
 
 .topicList,
@@ -634,7 +636,7 @@
 
 .inspector { display: grid; gap: 16px; }
 .inspector section { padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
-.inspector h3 { margin: 4px 0 6px; font-size: 18px; font-weight: 500; }
+.inspector h3 { margin:4px 0 6px;font-size:14px; font-weight: 500; }
 .inspector dl { display: grid; gap: 8px; margin: 10px 0 0; }
 .inspector dl > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
 .inspector dt { color: var(--text-3); }
@@ -684,11 +686,11 @@
 }
 
 .taskVisibility {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-3);
+  gap:8px;
+  font-size:12px;
+  color:var(--text-2);
 }
 
 .taskVisibility button {
@@ -739,3 +741,31 @@
   color: inherit;
   background: var(--surface-1);
 }
+
+.sharingMenu {position:relative;flex:0 0 auto;font-size:12px;}
+.sharingMenu > summary {display:flex;align-items:center;gap:5px;height:32px;padding:0 8px;border-radius:999px;list-style:none;color:var(--text-2);cursor:pointer;}
+.sharingMenu > summary::-webkit-details-marker {display:none;}
+.sharingMenu > summary:hover {background:var(--surface-2);}
+.sharingMenu > div {position:absolute;z-index:40;top:38px;right:0;display:grid;gap:12px;width:300px;padding:16px;border:1px solid var(--border-1);border-radius:12px;background:var(--surface-1);box-shadow:var(--shadow-float);}
+.sharingMenu .taskVisibility {justify-content:space-between;flex-wrap:wrap;}
+.sharingMenu .taskVisibility + .taskVisibility {border-top:1px solid var(--border-1);padding-top:12px;}
+.executionPanel {margin:12px 0;}
+.executionScript {border-top:1px solid var(--border-1);padding:12px 0;}
+.executionScript summary {display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;cursor:pointer;}
+.executionScript summary span {color:var(--text-3);font-size:12px;white-space:nowrap;}
+.executionScript p {display:grid;gap:4px;margin:12px 0 0;font-size:13px;line-height:var(--line-body);}
+.executionScript p span {font-size:12px;color:var(--text-3);}
+.executionRequirements {display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:12px 0;border-top:1px solid var(--border-1);}
+.executionRequirements > span {display:inline-flex;align-items:center;height:24px;padding:0 8px;border:1px solid var(--border-1);border-radius:999px;font-size:12px;color:var(--text-2);}
+.executionRequirements > details {width:100%;margin-top:6px;}
+.executionPanel > p {font-size:12px;color:var(--text-2);}
+.executionPanel .primaryAction {margin-top:12px;padding-top:12px;}
+.jobProgress {padding:10px 0;border-bottom:1px solid var(--border-1);font-size:12px;color:var(--text-2);}
+.jobProgress summary {display:flex;align-items:center;gap:8px;min-height:24px;cursor:pointer;list-style:none;}
+.jobProgress summary::-webkit-details-marker {display:none;}
+.jobProgress summary > svg:last-child {margin-left:auto;}
+.jobProgress dl {display:grid;gap:6px;padding:12px;margin:8px 0 0;border:1px solid var(--border-1);border-radius:8px;background:var(--surface-1);}
+.jobProgress dl > div {display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;}
+.jobProgress dt {color:var(--text-3);}.jobProgress dd {margin:0;}
+.jobProgress .jobFailure {color:var(--danger);}
+.evidenceList article {min-height:var(--list-row-height);}

@@ -9,6 +9,7 @@ import { apiUrl, listenCreationTaskAudio } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskWorkspace, MontageClipCandidate } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 import quickUi from "./VideoClipQuickEditor.module.css";
+import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
 import { NarrationWaveformTrack } from "./NarrationWaveformTrack";
 
 export const editorTime = (value: number) => `${Math.floor(value / 60).toString().padStart(2, "0")}:${(value % 60).toFixed(1).padStart(4, "0")}`;
@@ -27,12 +28,13 @@ export function ClipThumbnail({ clip, taskId, className }: { clip: CreationTaskM
 function CanvasControls({ ratio, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
   const [draft,setDraft]=useState(ratio);
   const [fit,setFit]=useState<""|"fill"|"fit">("");
-  return <details className={ui.canvasControls}><summary>画幅设置</summary><div className={ui.canvasControlsPanel}>
-    <label className={ui.field}>画幅<select aria-label="成片画幅" disabled={busy} value={draft} onChange={event=>{onDraftChange();setDraft(event.target.value as typeof draft);}}><option value="9:16">9:16 竖屏</option><option value="16:9">16:9 横屏</option><option value="1:1">1:1 方形</option></select></label>
-    <label className={ui.field}>画面<select aria-label="整片画面适配" disabled={busy} value={fit} onChange={event=>{onDraftChange();setFit(event.target.value as typeof fit);}}><option value="">各镜头原样</option><option value="fit">完整画面</option><option value="fill">填满画面</option></select></label>
+  const [open,setOpen]=useState(false);
+  return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
+    <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{onDraftChange();setDraft(value as typeof draft);}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
+    <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{onDraftChange();setFit(value as typeof fit);}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
     <small>填满：可能裁切 · 完整：可能留边</small>
     <button className={ui.button} disabled={busy || (draft===ratio && !fit)} onClick={()=>onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(fit?{fit_mode:fit}:{})})} type="button">预览画幅</button></div>
-  </details>;
+  </HomeCardDialog> : null}</>;
 }
 
 export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay }:  {
@@ -129,7 +131,7 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
       </section> : tab === "frame" ? <section className={quickUi.controlGroup}>
         <h3>画面适配</h3>
         <p>填满画面时可以调整裁切位置；完整显示会保留源画面的全部内容。</p>
-        <label>显示方式<select aria-label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={event => update({ ...draft, mode: event.target.value as "fill" | "fit" })}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>
+        <label>显示方式<CardSelect label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={value => update({ ...draft, mode: value as "fill" | "fit" })} options={[{value:"fill",label:"填满画面"},{value:"fit",label:"完整显示"}]} /></label>
         {draft.mode === "fill" ? <div className={quickUi.cropControls}>
           <label>水平位置 <output>{Math.round(draft.x * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切水平位置`} type="range" min={0} max={1} step={.05} value={draft.x} disabled={busy || clip.locked} onChange={event => update({ ...draft, x: Number(event.target.value) })} /></label>
           <label>垂直位置 <output>{Math.round(draft.y * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切垂直位置`} type="range" min={0} max={1} step={.05} value={draft.y} disabled={busy || clip.locked} onChange={event => update({ ...draft, y: Number(event.target.value) })} /></label>

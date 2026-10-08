@@ -9,6 +9,7 @@ import {
   BookOpen,
   ChevronDown,
   CircleHelp,
+  CircleAlert, CircleCheck, Clock, LoaderCircle,
   Clapperboard,
   Columns2,
   FileStack,
@@ -28,14 +29,11 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   Suspense,
   type ComponentType,
   type ReactNode,
-  type PointerEvent as ReactPointerEvent,
   type CSSProperties,
 } from "react";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
@@ -85,11 +83,14 @@ const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
   { href: "/production", label: "创作任务" },
   { href: "/tasks", label: "创作任务" },
-  { href: "/sources", label: "知识库" },
+  { href: "/sources", label: "资料来源" },
   { href: "/history", label: "发布与数据" },
   { href: "/health", label: "运行情况" },
   { href: "/settings", label: "设置" },
   { href: "/onboarding", label: "启动检查" },
+  { href: "/learning", label: "偏好学习" },
+  { href: "/privacy", label: "隐私政策" },
+  { href: "/terms", label: "使用条款" },
   { href: "/profile", label: "创作者画像" },
   { href: "/profiles", label: "人物与声音" },
 ];
@@ -103,6 +104,8 @@ export type AppShellProps = {
   children: ReactNode;
   creationTasks?: AppShellCreationTask[];
   inspector?: ReactNode;
+  inspectorConfirmation?: ReactNode;
+  inspectorConfirmationKey?: string;
   quickInspector?: (openDetails: () => void) => ReactNode;
   quickInspectorKey?: string;
   quickInspectorLabel?: string;
@@ -201,6 +204,8 @@ export function AppShell({
   children,
   creationTasks,
   inspector: providedInspector,
+  inspectorConfirmation,
+  inspectorConfirmationKey,
   quickInspector,
   quickInspectorKey,
   quickInspectorLabel,
@@ -214,6 +219,13 @@ export function AppShell({
   toolbarActions,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
+  const [nativeMac, setNativeMac] = useState(false);
+  useEffect(() => {
+    // These two read-only fields are provided by the existing desktop preload;
+    // the older per-control Window declaration only describes its callable API.
+    const desktop = window.electronAPI as (NonNullable<Window["electronAPI"]> & { isElectron: boolean; platform: string }) | undefined;
+    setNativeMac(desktop?.isElectron === true && desktop.platform === "darwin");
+  }, []);
   // 身份引导：挂载时拉一次 whoami 并把令牌写进 localStorage（hook 内完成）。
   // 角色未知（加载中）时先显示“成员与空间”，避免 owner 首屏看不到自己的页面。
   const { role: localMemberRole } = useLocalMemberIdentity();
@@ -222,91 +234,25 @@ export function AppShell({
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [quickOpen, setQuickOpen] = useState(true);
-  const [quickSize, setQuickSize] = useState({ width: 400, height: 0, minLeft: 8, maxLeft: 8, minTop: 8, maxTop: 8 });
-  const [quickPosition, setQuickPosition] = useState<{ left: number; top: number } | null>(null);
-  const editorMainRef = useRef<HTMLElement>(null);
-  const quickExpandRef = useRef<HTMLButtonElement>(null);
-  const quickPanelRef = useRef<HTMLElement>(null);
-  const quickDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
-  const quickManualRef = useRef(false);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  useEffect(() => {
+    const readWidth = () => setViewportWidth(window.innerWidth);
+    readWidth();
+    window.addEventListener("resize", readWidth);
+    return () => window.removeEventListener("resize", readWidth);
+  }, []);
+  const detailsDocked = !editorLayout && viewportWidth >= 1380 && !panels.workspaceCollapsed;
+  const [quickOpen, setQuickOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
+  useEffect(() => {
+    if (inspectorConfirmationKey) { setQuickOpen(false); setDetailsOpen(true); }
+  }, [inspectorConfirmationKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
-  const quickFits = quickSize.height >= 240 && quickSize.width >= 400;
-  const quickShown = quickAvailable && quickOpen && quickFits;
-
-  useLayoutEffect(() => {
-    const main = editorMainRef.current;
-    if (!quickAvailable || !main) return;
-    quickManualRef.current = false;
-    setQuickPosition(null);
-    let frame = 0;
-    const measure = () => {
-      const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
-      const player = main.querySelector<HTMLElement>("[data-editor-player]");
-      const mainRect = main.getBoundingClientRect();
-      const stage = main.querySelector<HTMLElement>('nav[aria-label="制作阶段"]');
-      const minTop = Math.ceil((stage?.getBoundingClientRect().bottom ?? mainRect.top) - mainRect.top + 8);
-      const bottom = Math.floor((transport?.getBoundingClientRect().top ?? mainRect.bottom) - mainRect.top - 8);
-      const height = Math.max(0, Math.min(400, bottom - minTop));
-      let safeLeft = 8;
-      let safeRight = mainRect.width - 8;
-      if (player) {
-        const video = player.querySelector("video");
-        const box = (video ?? player).getBoundingClientRect();
-        let pictureLeft = box.left - mainRect.left;
-        let pictureRight = box.right - mainRect.left;
-        // VideoEditor's contained picture stays centered; only the float uses its empty side.
-        if (video?.videoWidth && video.videoHeight) {
-          const pictureWidth = Math.min(box.width, box.height * video.videoWidth / video.videoHeight);
-          pictureLeft += (box.width - pictureWidth) / 2;
-          pictureRight = pictureLeft + pictureWidth;
-        }
-        if (mainRect.width - pictureRight >= pictureLeft) safeLeft = Math.max(8, pictureRight + 8);
-        else safeRight = Math.min(safeRight, pictureLeft - 8);
-      }
-      const width = Math.max(0, Math.min(480, Math.floor(safeRight - safeLeft)));
-      const minLeft = Math.ceil(safeLeft);
-      const maxLeft = Math.max(minLeft, Math.floor(safeRight - width));
-      const maxTop = Math.max(minTop, bottom - height);
-      setQuickSize((current) => current.height === height && current.width === width && current.minLeft === minLeft && current.maxLeft === maxLeft && current.minTop === minTop && current.maxTop === maxTop ? current : { width, height, minLeft, maxLeft, minTop, maxTop });
-      setQuickPosition((current) => {
-        if (!current) return null;
-        const left = Math.min(Math.max(minLeft, current.left), maxLeft);
-        const top = Math.min(Math.max(minTop, current.top), maxTop);
-        return left === current.left && top === current.top ? current : { left, top };
-      });
-      if (!quickManualRef.current) setQuickOpen(width >= 400 && height >= 240);
-    };
-    const scheduleMeasure = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(measure);
-    };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
-    observer?.observe(main);
-    const player = main.querySelector<HTMLElement>("[data-editor-player]");
-    const transport = main.querySelector<HTMLElement>("[data-editor-transport]");
-    const video = player?.querySelector("video");
-    if (player) observer?.observe(player);
-    if (transport) observer?.observe(transport);
-    const stage = main.querySelector<HTMLElement>('nav[aria-label="制作阶段"]');
-    if (stage) observer?.observe(stage);
-    video?.addEventListener("loadedmetadata", scheduleMeasure);
-    main.addEventListener("scroll", scheduleMeasure, true);
-    window.addEventListener("resize", scheduleMeasure);
-    measure();
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer?.disconnect();
-      video?.removeEventListener("loadedmetadata", scheduleMeasure);
-      main.removeEventListener("scroll", scheduleMeasure, true);
-      window.removeEventListener("resize", scheduleMeasure);
-    };
-  }, [quickAvailable, quickInspectorKey]);
+  useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("ai-video-diary-theme") as ThemeMode | null;
@@ -367,52 +313,9 @@ export function AppShell({
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
   ], [recentTasks, showMembersNav]);
 
-  function collapseQuick() {
-    quickManualRef.current = true;
-    setQuickOpen(false);
-    window.requestAnimationFrame(() => quickExpandRef.current?.focus());
-  }
-
-  function expandQuick() {
-    quickManualRef.current = true;
-    setQuickOpen(true);
-    window.requestAnimationFrame(() => {
-      quickPanelRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
-    });
-  }
-
-  function startQuickDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (event.target instanceof Element && event.target.closest("button")) return;
-    const panel = quickPanelRef.current;
-    const main = editorMainRef.current;
-    if (!panel || !main) return;
-    const panelRect = panel.getBoundingClientRect();
-    const mainRect = main.getBoundingClientRect();
-    quickDragRef.current = {
-      pointerId: event.pointerId, x: event.clientX, y: event.clientY,
-      left: panelRect.left - mainRect.left, top: panelRect.top - mainRect.top,
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  function moveQuickDrag(event: ReactPointerEvent<HTMLElement>) {
-    const drag = quickDragRef.current;
-    const main = editorMainRef.current;
-    if (!drag || !main || drag.pointerId !== event.pointerId) return;
-    setQuickPosition({
-      left: Math.min(quickSize.maxLeft, Math.max(quickSize.minLeft, drag.left + event.clientX - drag.x)),
-      top: Math.min(quickSize.maxTop, Math.max(quickSize.minTop, drag.top + event.clientY - drag.y)),
-    });
-  }
-
-  function stopQuickDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (quickDragRef.current?.pointerId !== event.pointerId) return;
-    quickDragRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }
-
   return (
-    <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
+    <div className={`desktop-shell ${editorShell.shell}${nativeMac ? ` ${editorShell.nativeMac}` : ""}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
+      {nativeMac ? <div className={editorShell.nativeTitlebar} aria-hidden /> : null}
       {sidebarOpen ? (
         <button
           aria-label="关闭侧栏"
@@ -423,7 +326,6 @@ export function AppShell({
       ) : null}
 
       <aside className={`desktop-sidebar${sidebarOpen ? " is-open" : ""}`}>
-        <div className="desktop-sidebar__traffic-spacer" aria-hidden="true" />
         <div className="desktop-sidebar__brand-row">
           <Link aria-label="返回首页" className="desktop-brand" href="/">
             <span className="desktop-brand__mark">
@@ -431,9 +333,7 @@ export function AppShell({
             </span>
             <span>智能视频日记</span>
           </Link>
-          <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button" onClick={() => setSearchOpen(true)} type="button">
-            <Search size={16} />
-          </button>
+          <button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={16} /></button>
         </div>
 
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
@@ -454,8 +354,8 @@ export function AppShell({
             {recentTasks.length ? recentTasks.map((task) => {
               const taskState = creationTaskState(task);
               return (
-                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className="desktop-creation-task" href={creationTaskHref(task)} key={task.id}>
-                  <span className={`creation-task-dot status-${taskState.tone}`} aria-hidden="true" />
+                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className="desktop-creation-task" title={`${displayTaskName(task.name)} · ${taskState.label}`} href={creationTaskHref(task)} key={task.id}>
+                  <span className={`desktop-task-status status-${taskState.tone}`} aria-hidden="true">{taskState.tone === "running" ? <LoaderCircle size={15} /> : taskState.tone === "success" ? <CircleCheck size={15} /> : taskState.tone === "idle" ? <Clock size={15} /> : <CircleAlert size={15} />}</span>
                   <span className="desktop-creation-task__copy">
                     <strong>{displayTaskName(task.name)}</strong>
                     <small>{taskState.label}</small>
@@ -490,14 +390,12 @@ export function AppShell({
       </aside>
 
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
+        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}${detailsOpen && detailsDocked ? ` ${editorShell.inspectorOpen}` : ""}`}>
         <header className="desktop-toolbar">
           <div className="desktop-toolbar__leading">
             <button aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">
               <Menu size={17} />
             </button>
-            {<button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={17} /></button>}
-            {<button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={17} /></button>}
-            {<button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={17} /></button>}
             {!editorLayout ? <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
             </button> : null}
@@ -506,13 +404,14 @@ export function AppShell({
             </Suspense>}
           </div>
           <div className="desktop-toolbar__actions">
+            <button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></button>
             {toolbarActions}
-            {quickAvailable && !quickShown ? <button aria-label={quickFits ? "展开镜头编辑" : "查看镜头详情"} className={editorShell.quickCollapsed} onClick={quickFits ? expandQuick : () => setDetailsOpen(true)} ref={quickExpandRef} title={quickFits ? quickInspectorLabel ?? "镜头编辑" : "空间不足，使用镜头详情"} type="button"><span>{quickInspectorLabel ?? "镜头编辑"}</span><strong>{quickFits ? "展开" : "详情"}</strong></button> : null}
+            {quickAvailable ? <button aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(true); setQuickOpen(true); }} type="button">镜头参数</button> : null}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
               <Search size={16} />
 
             </button>
-            {providedInspector && !quickAvailable ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
+            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
             <button aria-label="帮助" className="shell-icon-button" onClick={() => toggleHelpPanel()} type="button">
               <CircleHelp size={17} />
             </button>
@@ -524,34 +423,21 @@ export function AppShell({
           </div>
         </header>
 
-        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`}>
           <section aria-label="创作助手" className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small><button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></button></div></header>
             <div className={editorShell.conversationBody}>
               {conversation || <HomeCommandComposer autoFocus={autoFocus} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className="desktop-main-scroll" data-scroll-region="main-y" ref={editorMainRef} onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
             {children}
-            {quickShown && quickInspector ? (
-                <section aria-label={quickInspectorLabel ?? "镜头快速编辑"} className={editorShell.quickPanel} ref={quickPanelRef} style={{ width: quickSize.width, height: quickSize.height, top: quickPosition?.top ?? quickSize.minTop, left: quickPosition?.left ?? quickSize.maxLeft }}>
-                  <header className={editorShell.quickHeader} onPointerDown={startQuickDrag} onPointerMove={moveQuickDrag} onPointerUp={stopQuickDrag} onPointerCancel={stopQuickDrag} title="拖动以调整浮卡位置">
-                    <strong>{quickInspectorLabel ?? "镜头快速编辑"}</strong>
-                    <div>
-                      <button onClick={() => setDetailsOpen(true)} type="button">更多剪辑</button>
-                      <button aria-label="收起镜头编辑" onClick={collapseQuick} type="button">收起</button>
-                    </div>
-                  </header>
-                  {quickInspector(() => setDetailsOpen(true))}
-                </section>
-            ) : null}
           </main>
         </div>
 
       </section>
       <KeyboardShortcuts onOpenSearch={() => setSearchOpen(true)} />
-      {detailsOpen && providedInspector ? <HomeCardDialog title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}</HomeCardDialog> : null}
+      {providedInspector ? <HomeCardDialog open={detailsOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{quickOpen && quickInspector ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>{quickInspector(() => setQuickOpen(false))}</HomeCardDialog> : null}{inspectorConfirmation}</HomeCardDialog> : null}
       <HelpPanel />
       <CommandPalette
         items={commandItems}

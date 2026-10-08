@@ -1,6 +1,6 @@
-.page { width: min(100%, 960px); margin: 0 auto; padding: 0 0 24px; }
+.page { width: min(100%, 960px); margin: 0 auto; padding: 16px 20px 24px; }
 .viewBar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border-1); }
-.viewBar h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.viewBar h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
@@ -18,7 +18,7 @@
 
 .panel { margin-top: 14px; padding: 16px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .sectionHeader span { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.sectionHeader h2 { margin: 4px 0 0; font-size: 16px; font-weight: 500; }
+.sectionHeader h2 { margin: 4px 0 0; font-size: 14px; font-weight: 500; }
 .sectionHeader p { margin: 6px 0 0; color: var(--text-2); font-size: 12px; }
 
 .memberList { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
@@ -26,8 +26,8 @@
 .memberIcon { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .memberMeta { display: grid; min-width: 0; flex: 1; }
 .memberMeta strong { font-size: 13px; font-weight: 500; }
-.memberMeta small { color: var(--text-3); font-size: 11px; }
-.badge { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.memberMeta small { color: var(--text-3); font-size: 12px; }
+.badge { padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; }
 .ownerBadge { background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
 .memberBadge { background: var(--surface-2); color: var(--text-2); }
 .memberActions { display: flex; flex: 0 0 auto; gap: 6px; }
@@ -41,9 +41,9 @@
 
 .inviteRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-1); }
 .inviteCode { display: grid; gap: 3px; }
-.inviteCode span { color: var(--text-3); font-size: 11px; }
+.inviteCode span { color: var(--text-3); font-size: 12px; }
 .inviteCode code { font-size: 15px; letter-spacing: 1px; }
-.inviteCode small { color: var(--text-3); font-size: 11px; }
+.inviteCode small { color: var(--text-3); font-size: 12px; }
 .hint { margin: 0; color: var(--text-2); font-size: 12px; }
 
 .empty { display: flex; gap: 10px; margin-top: 14px; padding: 16px; border: 1px dashed var(--border-1); border-radius: 8px; color: var(--text-2); }

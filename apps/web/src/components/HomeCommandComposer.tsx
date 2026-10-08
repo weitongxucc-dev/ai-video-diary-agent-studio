@@ -6,7 +6,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline } from "@/lib/api";
 import type { CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
-import { HomeCardDialog } from "@/components/HomeCardDialog";
+import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 
@@ -273,7 +273,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         <div className="home-composer__toolbar">
           <div className="home-composer__meta">
             <span>{modelConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
-            {modelConfigured ? <details><summary>服务详情</summary><p>当前服务：{model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。</p></details> : <a href="/settings">去设置</a>}
+            {modelConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
           </div>
           <button aria-label="发送" className="composer-submit" disabled={!modelConfigured || !message.trim() || pending !== null} type="submit">
             <ArrowUp size={17} /><span>{pending === "chat" ? "发送中" : "发送"}</span>
