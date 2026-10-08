@@ -59,6 +59,8 @@ START_GUI冻结候选为`ef4b74c7405842b0f38e6fbf45dd6ae04aa8a0a5`，独立revie
 
 ## 任务36/37实施与验收记录（已结案，操作权收回）
 
+任务42 / UI（MAIN-UI-CI-CONTRACT-20261008-42）：主控在组合ef4b74c实际运行CI必需`apps/web/scripts/modern-desktop-contract-check.mjs`，仅3项失败：旧`--sidebar-width: 220px`、旧`--inspector-width: 320px`以及`Modern Desktop System`旧文档标题。允许同一可见UI线程仅该脚本对已批准v5.1权威与实际运行消费者作最小修正，保留不相关真实业务/桌面/旧路径退役检查；不得删除检查以掩盖新缺陷或添加镜像实现测试。基于自身clean3925e9b，准确单文件提交与一次该检查，报告实际结果，无产品运行/GUI/模型/共享文档/依赖/远端写权。任务38已结案不复活。B41已收到HOLD_GUI，下一精确完整SHA取代ef4启动权后具名START_GUI，未变API与fixture准备沿用；整体RETIRED仍待实际GUI。
+
 主控已接受两条准确worker_done/outcome failed：本轮失败原因是实际资源与依赖阻断，不能改称实现专项失败或整体成功；全部自有验收资源已释放，线程已worker-retain，Run无待回收Dispatch。已审组合候选`a3e9c7b9dd51927f605272fda8bd6410bd707896`在[草稿PR96](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/pull/96)，main未合入；CI结果以实时workflow为准。两次软件准备内存准入拒绝，0start/job/Grant/model，当前完整成片/Pi修改重出/默认人物仍未完成。以下只保留本轮具体范围及真实证据依据，不授予继续启动或修改权；用户释放资源后需新Dispatch绑定精确候选与有限窗口。
 
 用户于2026-10-08批准“可以，你开始吧”：执行已说明的完整成片及一次修改重出计划。PR95已由用户合入；两线程从产品基线 **fec1d13d8583d5c7e37de2467c4705713a0d3d2c** 新建独立分支，原A297c2de、B643c227及所有证据保留，不整体merge旧分支、不覆盖脏树。主控本地e4457a3已含该main；其共享说明仍由主控持有，不要求执行线程复制旧合同全文。语义REBASE_ACK说明目标、所有权和门禁后，直接开始下述已授权实现/最小验证；重模型和GUI需具名资源窗口。
