@@ -49,6 +49,8 @@ const mocks = vi.hoisted(() => {
     undoTimeline: vi.fn(),
     redoTimeline: vi.fn(),
     saveRecording: vi.fn(),
+    listRecordings: vi.fn().mockResolvedValue({ items: [] }),
+    adoptRecording: vi.fn(),
     previewAudioEdit: vi.fn(),
     getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
     listTimelineVersions: vi.fn().mockResolvedValue({ task_id: "task-1", current_version_id: null, items: [] }),
@@ -121,6 +123,8 @@ vi.mock("@/lib/api", () => ({
   undoCreationTaskTimeline: mocks.undoTimeline,
   redoCreationTaskTimeline: mocks.redoTimeline,
   saveCreationTaskRecording: mocks.saveRecording,
+  listCreationTaskRecordings: mocks.listRecordings,
+  adoptCreationTaskRecording: mocks.adoptRecording,
   previewCreationTaskAudio: mocks.previewAudioEdit,
   getProductionMaterials: mocks.getProductionMaterials,
   listCreationTaskTimelineVersions: mocks.listTimelineVersions,
@@ -1108,6 +1112,7 @@ describe("CreationTaskWorkspace", () => {
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
       sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh" as const, pronunciation_version: "v1",
       segments: [{
         id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
@@ -1116,6 +1121,7 @@ describe("CreationTaskWorkspace", () => {
         duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
         voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
         pronunciation_version: "p1", status: "ready" as const,
+        source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       }],
     };
 
@@ -1143,6 +1149,7 @@ describe("CreationTaskWorkspace", () => {
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
       sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh" as const, pronunciation_version: "v1",
       segments: [{
         id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
@@ -1151,6 +1158,7 @@ describe("CreationTaskWorkspace", () => {
         duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
         voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
         pronunciation_version: "p1", status: "ready" as const,
+        source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       }],
     };
     mocks.generatePersonRender.mockResolvedValue({ id: "person-render-1" });
@@ -1180,6 +1188,7 @@ describe("CreationTaskWorkspace", () => {
       duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
       voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
       pronunciation_version: "p1", status: "ready" as const,
+      source_kind: "generated" as const, source_artifact_ref: null, source_sha256: null, source_script_digest: null,
     });
     const initial = workspace(task);
     initial.plan.presenter_share_target = 40;
@@ -1191,6 +1200,7 @@ describe("CreationTaskWorkspace", () => {
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 6,
       sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh" as const, pronunciation_version: "p1",
       segments: [segment("narration-segment-1"), segment("narration-segment-2")],
     };
@@ -1239,11 +1249,13 @@ describe("CreationTaskWorkspace", () => {
       duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
       voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
       pronunciation_version: "p1", status: "ready" as const,
+      source_kind: "generated" as const, source_artifact_ref: null, source_sha256: null, source_script_digest: null,
     };
     const initial = workspace(task);
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
       sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh" as const, pronunciation_version: "v1", segments: [segment],
     };
 
@@ -1835,6 +1847,38 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", { name: "应用到草稿" })).not.toBeInTheDocument();
   });
 
+  it("keeps a first task recording unapplied until the user explicitly adopts it", async () => {
+    const task = { ...baseTask, stage_status: "not_started" as const, status: "running" as const };
+    const initial = workspace(task);
+    initial.scripts = [{
+      id: "script-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1", title: "已确认文案",
+      language: "zh-CN", selection_status: "confirmed", created_at: task.created_at,
+      updated_at: task.updated_at, confirmed_at: task.updated_at,
+      sections: [{ id: "section-1", title: "开场", content: "当前文案",
+        visual_prompt: "现场", evidence_reference_ids: [] }],
+    }];
+    const recording = {
+      source_ref: "recording:first", artifact_id: "artifact-first",
+      audio_url: "/api/recordings/first.wav", duration_ms: 2400, applied: false,
+    };
+    mocks.listRecordings.mockResolvedValue({ items: [] });
+    mocks.saveRecording.mockResolvedValue(recording);
+    mocks.adoptRecording.mockResolvedValue({ source_kind: "recorded" });
+    mocks.getWorkspace.mockResolvedValue(initial);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "录一段旁白" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
+
+    expect(await screen.findByText("已保存 · 尚未采用")).toBeInTheDocument();
+    expect(mocks.adoptRecording).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "采用这段录音" }));
+    await waitFor(() => expect(mocks.adoptRecording).toHaveBeenCalledExactlyOnceWith("task-1", {
+      script_id: "script-1", source_section_id: "section-1", source_ref: "recording:first",
+    }));
+    expect(await screen.findByText(/本机录音已采用为当前文案的配音来源/)).toBeInTheDocument();
+  });
+
   it("surfaces an honest recording error and never previews when the upload fails", async () => {
     const task = {
       ...baseTask,
@@ -2075,6 +2119,7 @@ describe("CreationTaskWorkspace", () => {
       sample_rate: 24000,
       model_id: "qwen3-tts-12hz-0.6b-base-8bit",
       voice_profile_id: "voice-1",
+      source_kind: "generated" as const, source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh" as const,
       pronunciation_version: "v1",
       segments: [
@@ -2083,12 +2128,14 @@ describe("CreationTaskWorkspace", () => {
           audio_reference: "narration://artifact/segment-1", audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio",
           duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
           voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const, pronunciation_version: "p1", status: "ready" as const,
+          source_kind: "generated" as const, source_artifact_ref: null, source_sha256: null, source_script_digest: null,
         },
         {
           id: "narration-segment-2", source_section_id: "section-2", text: "第二段真实配音",
           audio_reference: "narration://artifact/segment-2", audio_url: "/api/creation-tasks/task-1/narration/segments/narration-segment-2/audio",
           duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit",
           voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const, pronunciation_version: "p1", status: "ready" as const,
+          source_kind: "generated" as const, source_artifact_ref: null, source_sha256: null, source_script_digest: null,
         },
       ],
     };
@@ -2274,6 +2321,7 @@ describe("CreationTaskWorkspace", () => {
       sample_rate: 24000,
       model_id: "qwen3-tts",
       voice_profile_id: "voice-cc",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       language: "zh",
       pronunciation_version: "v1",
       segments: [{
@@ -2282,6 +2330,7 @@ describe("CreationTaskWorkspace", () => {
         duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
         voice_profile_id: "voice-cc", voice_version: "voice-v3", language: "zh",
         pronunciation_version: "v1", status: "ready",
+        source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
       }],
     };
     initial.person_renders = [{

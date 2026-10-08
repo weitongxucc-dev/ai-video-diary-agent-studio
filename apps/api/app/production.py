@@ -452,12 +452,16 @@ class NarrationArtifactRecord:
     cache_key: str
     audio_path: str
     duration_seconds: float
-    sample_rate: int
-    model_id: str
+    sample_rate: int | None
+    model_id: str | None
     episode_id: str | None = None
     task_id: str | None = None
     language: str = "zh"
     pronunciation_version: str = ""
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -475,12 +479,16 @@ class NarrationSegment:
     audio_reference: str | None
     duration_seconds: float | None
     sample_rate: int | None
-    model_id: str
-    voice_profile_id: str
-    voice_version: str
+    model_id: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
     language: str
     pronunciation_version: str
     status: NarrationSegmentStatus
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -2567,7 +2575,51 @@ class ProductionRepository:
         record = self._narration_artifact_from_payload(json.loads(str(row["payload"])))
         if not Path(record.audio_path).is_file():
             return None
+        if record.source_kind == "recorded" and not self._recorded_narration_source_is_current(record):
+            return None
         return record
+
+    def _recorded_narration_source_is_current(self, artifact: NarrationArtifactRecord) -> bool:
+        if (artifact.source_kind != "recorded" or not artifact.task_id
+                or not artifact.source_artifact_ref or not artifact.source_sha256
+                or not artifact.source_script_digest
+                or artifact.voice_profile_id is not None or artifact.model_id is not None):
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
+                (artifact.workspace_id, artifact.task_id, artifact.source_artifact_ref),
+            ).fetchone()
+            if row is None:
+                return False
+            source = self._artifact_record_from_row(row)
+            if source.kind != "task_recording" or source.sha256 != artifact.source_sha256:
+                return False
+            try:
+                job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
+                transform = self.get_transform_run(
+                    artifact.workspace_id,
+                    source.producer_job_id.replace("job_", "transform_", 1),
+                )
+            except KeyError:
+                return False
+        if (job.task_id != artifact.task_id or job.status != "succeeded"
+                or transform.task_id != artifact.task_id or transform.status != "succeeded"
+                or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
+                or transform.parameters.get("script_id") != artifact.script_id
+                or transform.parameters.get("script_digest") != artifact.source_script_digest
+                or self.confirmed_creation_task_script_digest(
+                    artifact.workspace_id, artifact.task_id, artifact.script_id
+                ) != artifact.source_script_digest):
+            return False
+        path = Path(artifact.audio_path)
+        if not path.is_file() or path.stat().st_size != source.size_bytes:
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as audio:
+            for chunk in iter(lambda: audio.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest() == source.sha256
 
     def save_narration_artifact(
         self,
@@ -7419,6 +7471,9 @@ class ProductionRepository:
         )
         if script.selection_status != "confirmed":
             raise ValueError("配音分段只能关联已确认文案")
+        script_digest = self.confirmed_creation_task_script_digest(
+            workspace_id, task_id, script_id,
+        )
         sections = {section.id: section for section in script.sections}
         supplied_section_ids = [segment.source_section_id for segment in segments]
         if (
@@ -7452,6 +7507,8 @@ class ProductionRepository:
                 raise ValueError("配音分段与当前工作区、任务或文案谱系不一致")
             if segment.text != sections[segment.source_section_id].content:
                 raise ValueError("配音分段文字必须与已确认文案段落一致")
+            if segment.source_kind == "recorded" and segment.source_script_digest != script_digest:
+                raise ValueError("电脑录音必须绑定当前确认文案内容")
             identity_row = conn.execute(
                 "SELECT * FROM narration_segments WHERE id = ?",
                 (segment.id,),
@@ -7468,8 +7525,10 @@ class ProductionRepository:
                         (id, workspace_id, task_id, script_id, source_section_id,
                          text, audio_reference, duration_seconds, sample_rate,
                          model_id, voice_profile_id, voice_version, language,
-                         pronunciation_version, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         pronunciation_version, status, created_at, updated_at,
+                         source_kind, source_artifact_ref, source_sha256,
+                         source_script_digest)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _narration_segment_values(segment),
                 )
@@ -7486,7 +7545,8 @@ class ProductionRepository:
                 SET text = ?, audio_reference = ?, duration_seconds = ?,
                     sample_rate = ?, model_id = ?, voice_profile_id = ?,
                     voice_version = ?, language = ?, pronunciation_version = ?,
-                    status = ?, updated_at = ?
+                    status = ?, updated_at = ?, source_kind = ?,
+                    source_artifact_ref = ?, source_sha256 = ?, source_script_digest = ?
                 WHERE workspace_id = ? AND task_id = ? AND script_id = ?
                   AND source_section_id = ? AND id = ?
                 """,
@@ -7502,6 +7562,10 @@ class ProductionRepository:
                     segment.pronunciation_version,
                     segment.status,
                     segment.updated_at.isoformat(),
+                    segment.source_kind,
+                    segment.source_artifact_ref,
+                    segment.source_sha256,
+                    segment.source_script_digest,
                     workspace_id,
                     task_id,
                     script_id,
@@ -8199,6 +8263,28 @@ class ProductionRepository:
             raise KeyError(script_id)
         return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
 
+    def confirmed_creation_task_script_digest(
+        self, workspace_id: str, task_id: str, script_id: str | None = None,
+    ) -> str | None:
+        task = self.get_creation_task(workspace_id, task_id)
+        current_script_id = script_id or task.confirmed_script_id
+        if not current_script_id or task.confirmed_script_id != current_script_id:
+            return None
+        try:
+            script = self.get_creation_task_script(workspace_id, current_script_id)
+        except KeyError:
+            return None
+        if script.task_id != task_id or script.selection_status != "confirmed" or not script.sections:
+            return None
+        manifest = {
+            "script_id": script.id,
+            "sections": [{"id": section.id, "content": section.content}
+                         for section in script.sections],
+        }
+        return hashlib.sha256(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
     def update_assistant_script_draft(
         self,
         workspace_id: str,
@@ -8608,6 +8694,7 @@ class ProductionRepository:
         if not Path(artifact.audio_path).is_file() or Path(artifact.audio_path).stat().st_size == 0:
             raise ValueError("声音克隆没有生成有效 WAV")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (artifact.workspace_id, artifact.task_id),
@@ -8615,12 +8702,22 @@ class ProductionRepository:
             if task_row is None:
                 raise KeyError(artifact.task_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            expected_statuses = {"not_started", "failed"} if artifact.source_kind == "recorded" else {"running"}
             if (
                 task.stage != "narration"
-                or task.stage_status != "running"
+                or task.stage_status not in expected_statuses
                 or task.confirmed_script_id != artifact.script_id
             ):
                 raise ValueError("配音产物与当前创作任务不一致")
+            if artifact.source_kind == "recorded" and not self._recorded_narration_source_is_current(artifact):
+                raise ValueError("采用的电脑录音不再是当前任务的有效来源")
+            if artifact.source_kind == "recorded" and (
+                segments is None or len(segments) != 1
+                or segments[0].source_artifact_ref != artifact.source_artifact_ref
+                or segments[0].source_sha256 != artifact.source_sha256
+                or segments[0].source_script_digest != artifact.source_script_digest
+            ):
+                raise ValueError("录音产物与唯一采用的文案分段来源不一致")
             if segments is not None:
                 self._upsert_narration_segments(
                     conn,
@@ -9820,12 +9917,20 @@ class ProductionRepository:
             sample_rate=(
                 int(row["sample_rate"]) if row["sample_rate"] is not None else None
             ),
-            model_id=str(row["model_id"]),
-            voice_profile_id=str(row["voice_profile_id"]),
-            voice_version=str(row["voice_version"]),
+            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
+            voice_profile_id=(str(row["voice_profile_id"])
+                              if row["voice_profile_id"] is not None else None),
+            voice_version=str(row["voice_version"]) if row["voice_version"] is not None else None,
             language=str(row["language"]),
             pronunciation_version=str(row["pronunciation_version"]),
             status=str(row["status"]),  # type: ignore[arg-type]
+            source_kind=str(row["source_kind"]),  # type: ignore[arg-type]
+            source_artifact_ref=(str(row["source_artifact_ref"])
+                                 if row["source_artifact_ref"] is not None else None),
+            source_sha256=(str(row["source_sha256"])
+                           if row["source_sha256"] is not None else None),
+            source_script_digest=(str(row["source_script_digest"])
+                                  if row["source_script_digest"] is not None else None),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
@@ -10198,6 +10303,10 @@ def _narration_segment_values(segment: NarrationSegment) -> tuple[object, ...]:
         segment.status,
         segment.created_at.isoformat(),
         segment.updated_at.isoformat(),
+        segment.source_kind,
+        segment.source_artifact_ref,
+        segment.source_sha256,
+        segment.source_script_digest,
     )
 
 
@@ -10368,22 +10477,28 @@ def _validate_artifact_record(artifact: ArtifactRecord) -> None:
 
 
 def _validate_narration_segment(segment: NarrationSegment) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            segment.id,
-            segment.workspace_id,
-            segment.task_id,
-            segment.script_id,
-            segment.source_section_id,
-            segment.text,
-            segment.model_id,
-            segment.voice_profile_id,
-            segment.voice_version,
-            segment.language,
-        )
-    ):
-        raise ValueError("配音分段缺少必要谱系、文字、模型或声音版本")
+    identity = (segment.id, segment.workspace_id, segment.task_id, segment.script_id,
+                segment.source_section_id, segment.text, segment.language)
+    if not all(value.strip() for value in identity):
+        raise ValueError("配音分段缺少必要谱系或文字")
+    if segment.source_kind == "generated":
+        if not all(value and value.strip() for value in
+                   (segment.model_id, segment.voice_profile_id, segment.voice_version)):
+            raise ValueError("生成配音分段必须有关联模型与声音版本")
+        if (segment.source_artifact_ref is not None or segment.source_sha256 is not None
+                or segment.source_script_digest is not None):
+            raise ValueError("生成配音不能携带电脑录音来源")
+    elif segment.source_kind == "recorded":
+        if (segment.model_id is not None or segment.voice_profile_id is not None
+                or segment.voice_version is not None
+                or not segment.source_artifact_ref
+                or not segment.source_sha256
+                or not segment.source_script_digest
+                or not re.fullmatch(r"[0-9a-f]{64}", segment.source_sha256)):
+            raise ValueError("电脑录音分段必须仅关联真实录音产物与SHA-256")
+        _validate_logical_reference(segment.source_artifact_ref, "电脑录音来源")
+    else:
+        raise ValueError("配音来源类型无效")
     if segment.audio_reference is not None:
         _validate_logical_reference(segment.audio_reference, "配音分段音频引用")
     if segment.duration_seconds is not None and (
@@ -10396,7 +10511,7 @@ def _validate_narration_segment(segment: NarrationSegment) -> None:
         segment.audio_reference is None
         or segment.duration_seconds is None
         or segment.duration_seconds <= 0
-        or segment.sample_rate is None
+        or (segment.sample_rate is None and segment.source_kind != "recorded")
     ):
         raise ValueError("ready 配音分段必须有可定位音频、时长和采样率")
     if segment.status not in {"pending", "generating", "ready", "failed"}:

@@ -1200,12 +1200,16 @@ export type CreationTaskNarrationSegment = {
   audio_url: string | null;
   duration_seconds: number | null;
   sample_rate: number | null;
-  model_id: string;
-  voice_profile_id: string;
-  voice_version: string;
+  model_id: string | null;
+  voice_profile_id: string | null;
+  voice_version: string | null;
   language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   status: "pending" | "ready" | "generating" | "failed";
+  source_kind: "generated" | "recorded";
+  source_artifact_ref: string | null;
+  source_sha256: string | null;
+  source_script_digest: string | null;
 };
 
 export type CreationTaskNarration = {
@@ -1213,9 +1217,13 @@ export type CreationTaskNarration = {
   script_id: string;
   audio_reference: string;
   duration_seconds: number;
-  sample_rate: number;
-  model_id: string;
-  voice_profile_id: string;
+  sample_rate: number | null;
+  model_id: string | null;
+  voice_profile_id: string | null;
+  source_kind: "generated" | "recorded";
+  source_artifact_ref: string | null;
+  source_sha256: string | null;
+  source_script_digest: string | null;
   language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   segments: CreationTaskNarrationSegment[];

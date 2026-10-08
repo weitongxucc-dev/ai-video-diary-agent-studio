@@ -1133,11 +1133,15 @@ class CreationTaskNarrationSegmentResponse(BaseModel):
     audio_url: str | None
     duration_seconds: float | None = Field(default=None, gt=0)
     sample_rate: int | None = Field(default=None, gt=0)
-    model_id: str
-    voice_profile_id: str
-    voice_version: str
+    model_id: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
     language: Literal["zh", "en", "zh-en"]
     status: Literal["pending", "ready", "generating", "failed"]
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
 
 
 class CreationTaskNarrationResponse(BaseModel):
@@ -1145,9 +1149,13 @@ class CreationTaskNarrationResponse(BaseModel):
     script_id: str
     audio_reference: str
     duration_seconds: float = Field(gt=0)
-    sample_rate: int = Field(gt=0)
-    model_id: str
-    voice_profile_id: str
+    sample_rate: int | None = Field(default=None, gt=0)
+    model_id: str | None
+    voice_profile_id: str | None
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     language: Literal["zh", "en", "zh-en"]
     pronunciation_version: str
     segments: list[CreationTaskNarrationSegmentResponse]
@@ -1158,6 +1166,14 @@ class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
 
     voice_profile_id: str = Field(min_length=1, max_length=120)
     voice_version: str = Field(min_length=1, max_length=120)
+
+
+class CreationTaskRecordingAdoptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: str = Field(min_length=1, max_length=120)
+    source_section_id: str = Field(min_length=1, max_length=120)
+    source_ref: str = Field(min_length=1, max_length=240)
 
 
 class CreationTaskPersonRenderRequest(BaseModel):

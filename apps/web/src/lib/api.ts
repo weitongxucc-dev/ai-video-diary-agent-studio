@@ -1048,6 +1048,13 @@ export function previewCreationTaskAudio(taskId: string, input: AudioEditInput):
 export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`);
 }
+export function adoptCreationTaskRecording(taskId: string, input: {
+  script_id: string; source_section_id: string; source_ref: string;
+}): Promise<CreationTaskNarration> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings/adopt`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
 export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording> {
   const mediaType = recording.type.split(";")[0].trim().toLowerCase();
   const suffix = ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 14
+PRODUCTION_SCHEMA_VERSION = 15
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -612,6 +612,68 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
         14,
         "",
+    ),
+    (
+        15,
+        """
+        DROP TRIGGER IF EXISTS narration_segments_stable_identity;
+        ALTER TABLE narration_segments RENAME TO narration_segments_v14;
+        CREATE TABLE narration_segments (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            source_section_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            audio_reference TEXT,
+            duration_seconds REAL,
+            sample_rate INTEGER,
+            model_id TEXT,
+            voice_profile_id TEXT,
+            voice_version TEXT,
+            language TEXT NOT NULL,
+            pronunciation_version TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'generating', 'ready', 'failed')
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source_kind TEXT NOT NULL DEFAULT 'generated' CHECK (
+                source_kind IN ('generated', 'recorded')
+            ),
+            source_artifact_ref TEXT,
+            source_sha256 TEXT,
+            source_script_digest TEXT,
+            UNIQUE(workspace_id, task_id, script_id, source_section_id)
+        );
+        INSERT INTO narration_segments (
+            id, workspace_id, task_id, script_id, source_section_id, text,
+            audio_reference, duration_seconds, sample_rate, model_id,
+            voice_profile_id, voice_version, language, pronunciation_version,
+            status, created_at, updated_at, source_kind, source_script_digest
+        )
+        SELECT id, workspace_id, task_id, script_id, source_section_id, text,
+               audio_reference, duration_seconds, sample_rate, model_id,
+               voice_profile_id, voice_version, language, pronunciation_version,
+               status, created_at, updated_at, 'generated', NULL
+        FROM narration_segments_v14;
+        DROP TABLE narration_segments_v14;
+        CREATE INDEX idx_narration_segments_task
+            ON narration_segments(workspace_id, task_id, script_id, created_at ASC, id ASC);
+        CREATE TRIGGER narration_segments_stable_identity
+        BEFORE UPDATE ON narration_segments
+        WHEN NOT (
+            OLD.id = NEW.id
+            AND OLD.workspace_id = NEW.workspace_id
+            AND OLD.task_id = NEW.task_id
+            AND OLD.script_id = NEW.script_id
+            AND OLD.source_section_id = NEW.source_section_id
+            AND OLD.created_at = NEW.created_at
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'narration_segment identity is immutable');
+        END;
+        """,
     ),
 )
 

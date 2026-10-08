@@ -256,6 +256,7 @@ from app.schemas import (
     CreationTaskScriptGenerateRequest,
     CreationTaskScriptsResponse,
     CreationTaskNarrationResponse,
+    CreationTaskRecordingAdoptRequest,
     CreationTaskNarrationVoiceSelectionRequest,
     CreationTaskPersonRenderRequest,
     CreationTaskPersonRenderResponse,
@@ -3336,7 +3337,7 @@ def _creation_task_narration_response(
     task: CreationTask,
     artifact: NarrationArtifactRecord,
 ) -> CreationTaskNarrationResponse:
-    if artifact.task_id != task.id or artifact.voice_profile_id is None:
+    if artifact.task_id != task.id:
         raise ValueError("配音产物与当前创作任务不一致")
     segments = production_repo.list_narration_segments(
         task.workspace_id, task.id, artifact.script_id
@@ -3350,6 +3351,10 @@ def _creation_task_narration_response(
             "sample_rate": artifact.sample_rate,
             "model_id": artifact.model_id,
             "voice_profile_id": artifact.voice_profile_id,
+            "source_kind": artifact.source_kind,
+            "source_artifact_ref": artifact.source_artifact_ref,
+            "source_sha256": artifact.source_sha256,
+            "source_script_digest": artifact.source_script_digest,
             "language": artifact.language,
             "pronunciation_version": artifact.pronunciation_version,
             "segments": [
@@ -3409,19 +3414,34 @@ def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile
 def list_creation_task_recordings(task_id: str, request: Request):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if not task.confirmed_script_id or not task.montage_plan_id:
+    if not task.confirmed_script_id:
         return {"items": []}
     service = _task_audio()
-    plan = creation_task_montage_plan_from_payload(
-        production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    current_narration_refs = {clip.source_ref for track in _effective_audio_timeline(plan).tracks
-                              if track.role == "narration" for clip in track.clips}
+    current_narration_refs = set()
+    if task.montage_plan_id:
+        plan = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+        if plan.script_id == task.confirmed_script_id:
+            current_narration_refs = {clip.source_ref for track in _effective_audio_timeline(plan).tracks
+                                      if track.role == "narration" for clip in track.clips}
+    if task.narration_cache_key:
+        current_narration = production_repo.get_narration_artifact(
+            workspace_id, task.narration_cache_key,
+        )
+        if (current_narration is not None and current_narration.task_id == task.id
+                and current_narration.script_id == task.confirmed_script_id
+                and current_narration.source_kind == "recorded"
+                and current_narration.source_artifact_ref):
+            current_narration_refs.add(current_narration.source_artifact_ref)
     items = []
     for record in reversed(production_repo.list_artifact_records(workspace_id, task_id)):
         if record.kind != "task_recording":
             continue
         try:
-            _, duration_ms = service.recording(workspace_id, task_id, record.logical_ref)
+            _, duration_ms = service.recording(
+                workspace_id, task_id, record.logical_ref,
+                verify_digest=record.logical_ref in current_narration_refs,
+            )
         except (KeyError, ValueError, FileNotFoundError):
             continue  # Failed or obsolete uploads are never offered as current narration.
         items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
@@ -3437,8 +3457,13 @@ def save_creation_task_recording(task_id: str, request: Request, audio: UploadFi
     task = _creation_task_or_404(workspace_id, task_id)
     if creation_execution_mode == "scheduled":
         raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
-    if task.stage not in {"montage", "review"} or not task.confirmed_script_id or not task.montage_plan_id:
-        raise HTTPException(status_code=409, detail="当前任务尚无可替换旁白的故事板")
+    if task.stage not in {"narration", "montage", "review"} or not task.confirmed_script_id:
+        raise HTTPException(status_code=409, detail="请先确认当前任务文案，再保存电脑录音")
+    script_digest = production_repo.confirmed_creation_task_script_digest(
+        workspace_id, task.id, task.confirmed_script_id,
+    )
+    if script_digest is None:
+        raise HTTPException(status_code=409, detail="当前文案未确认或已经变化，不能保存为本任务录音")
     suffix = Path(audio.filename or "").suffix.lower()
     if suffix not in {".webm", ".mp4", ".m4a", ".ogg", ".wav"}:
         raise HTTPException(status_code=422, detail="当前录音格式不可用，请使用 WebM、MP4、Ogg 或 WAV")
@@ -3458,7 +3483,9 @@ def save_creation_task_recording(task_id: str, request: Request, audio: UploadFi
         service = _task_audio()
         record = service.publish(
             workspace_id, task_id, kind="task_recording",
-            parameters={"script_id": task.confirmed_script_id, "montage_plan_id": task.montage_plan_id},
+            parameters={"script_id": task.confirmed_script_id,
+                        "script_digest": script_digest,
+                        "montage_plan_id": task.montage_plan_id},
             input_refs=[], produce=produce, suffix=suffix,
         )
         _, duration_ms = service.recording(workspace_id, task_id, record.logical_ref)
@@ -3469,6 +3496,89 @@ def save_creation_task_recording(task_id: str, request: Request, audio: UploadFi
     return {"source_ref": record.logical_ref, "artifact_id": record.id,
             "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
             "duration_ms": duration_ms, "applied": False}
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/audio/recordings/adopt",
+    response_model=CreationTaskNarrationResponse,
+)
+def adopt_creation_task_recording(
+    task_id: str,
+    request: Request,
+    payload: CreationTaskRecordingAdoptRequest,
+) -> CreationTaskNarrationResponse:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.stage != "narration" or task.stage_status not in {"not_started", "failed"}:
+        raise HTTPException(status_code=409, detail="当前任务不能首次采用录音")
+    if task.confirmed_script_id != payload.script_id:
+        raise HTTPException(status_code=409, detail="文案版本已变化，请重新选择当前录音")
+    try:
+        script = production_repo.get_creation_task_script(workspace_id, payload.script_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="当前文案不存在") from exc
+    if script.selection_status != "confirmed" or len(script.sections) != 1:
+        raise HTTPException(status_code=409, detail="当前版本有多个文案段，暂不能确定单段录音的对应关系")
+    section = script.sections[0]
+    if payload.source_section_id != section.id:
+        raise HTTPException(status_code=409, detail="录音对应的文案段已变化，请重新选择")
+    script_digest = production_repo.confirmed_creation_task_script_digest(
+        workspace_id, task.id, script.id,
+    )
+    if script_digest is None:
+        raise HTTPException(status_code=409, detail="当前文案未确认或已经变化，不能采用录音")
+    try:
+        source, duration_ms = _task_audio().recording(
+            workspace_id, task.id, payload.source_ref, verify_digest=True,
+        )
+        audio_path = _task_audio().source(workspace_id, task.id, source.logical_ref)
+        cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
+        cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
+        narration_ref = production_repo.narration_artifact_reference(cache_key)
+        narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
+        language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
+        record = NarrationArtifactRecord(
+            id=cache_key,
+            workspace_id=workspace_id,
+            task_id=task.id,
+            script_id=script.id,
+            voice_profile_id=None,
+            cache_key=cache_key,
+            audio_path=str(audio_path),
+            duration_seconds=duration_ms / 1000,
+            sample_rate=None,
+            model_id=None,
+            language=language,
+            source_kind="recorded",
+            source_artifact_ref=source.logical_ref,
+            source_sha256=source.sha256,
+            source_script_digest=script_digest,
+        )
+        segment = NarrationSegment(
+            id=narration_id,
+            workspace_id=workspace_id,
+            task_id=task.id,
+            script_id=script.id,
+            source_section_id=section.id,
+            text=section.content,
+            audio_reference=narration_ref,
+            duration_seconds=duration_ms / 1000,
+            sample_rate=None,
+            model_id=None,
+            voice_profile_id=None,
+            voice_version=None,
+            language=language,
+            pronunciation_version="",
+            status="ready",
+            source_kind="recorded",
+            source_artifact_ref=source.logical_ref,
+            source_sha256=source.sha256,
+            source_script_digest=script_digest,
+        )
+        task, record = production_repo.complete_creation_task_narration(record, segments=[segment])
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=409, detail=f"当前录音未采用：{exc}") from exc
+    return _creation_task_narration_response(task, record)
 
 
 @app.get("/api/creation-tasks/{task_id}/audio/artifacts/{artifact_id}")
@@ -5749,7 +5859,11 @@ def get_creation_task_narration_audio(task_id: str, request: Request) -> FileRes
     )
     if artifact is None or artifact.task_id != task.id:
         raise HTTPException(status_code=404, detail="creation task narration not found")
-    return FileResponse(artifact.audio_path, media_type="audio/wav", filename="narration.wav")
+    media_type = {
+        ".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
+        ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+    }.get(Path(artifact.audio_path).suffix.lower(), "application/octet-stream")
+    return FileResponse(artifact.audio_path, media_type=media_type, filename=f"narration{Path(artifact.audio_path).suffix}")
 
 
 @app.get("/api/creation-tasks/{task_id}/narration/waveform")
@@ -5788,7 +5902,11 @@ def get_creation_task_narration_segment_audio(
     path = production_repo.resolve_authorized_narration_audio_reference(
         workspace_id, segment.audio_reference
     )
-    return FileResponse(path, media_type="audio/wav", filename=f"{segment.id}.wav")
+    media_type = {
+        ".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
+        ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=f"{segment.id}{path.suffix}")
 
 
 def _person_source_range(workspace_id, task, montage, clip, segment):

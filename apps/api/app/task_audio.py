@@ -43,13 +43,23 @@ class TaskAudio:
         transform = self.repository.get_transform_run(workspace_id, transform_id)
         duration_ms = transform.parameters.get("duration_ms")
         task = self.repository.get_creation_task(workspace_id, task_id)
-        if (job.task_id != task_id or job.status != "succeeded" or transform.task_id != task_id
+        saved_script_id = transform.parameters.get("script_id")
+        saved_script_digest = transform.parameters.get("script_digest")
+        current_script_digest = self.repository.confirmed_creation_task_script_digest(
+            workspace_id, task_id, task.confirmed_script_id,
+        )
+        saved_montage_id = transform.parameters.get("montage_plan_id")
+        if (job.task_id != task_id or job.kind != "task_recording" or job.status != "succeeded"
+                or transform.transform_type != "task_recording" or transform.task_id != task_id
                 or transform.job_id != job.id or transform.status != "succeeded"
                 or transform.output_refs != [reference]
-                or transform.parameters.get("script_id") != task.confirmed_script_id
-                or transform.parameters.get("montage_plan_id") != task.montage_plan_id
+                or (saved_montage_id is not None
+                    and saved_montage_id != task.montage_plan_id)
                 or type(duration_ms) is not int or duration_ms <= 0):
             raise ValueError("电脑录音尚未完整保存")
+        if (not task.confirmed_script_id or saved_script_id != task.confirmed_script_id
+                or not current_script_digest or saved_script_digest != current_script_digest):
+            raise ValueError("当前确认文案已变化，不能采用旧录音；请为当前文案重新录制")
         path = self.source(workspace_id, task_id, reference)
         if path.stat().st_size != record.size_bytes:
             raise ValueError("电脑录音文件已变化")

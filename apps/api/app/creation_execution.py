@@ -304,10 +304,15 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     if montage.narration_audio_path != narration_reference:
         raise ValueError("故事板配音与当前任务产物不一致")
     narration = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
-    if (narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id
-            or creation_plan.selected_voice is None
-            or narration.voice_profile_id != creation_plan.selected_voice.profile_id):
+    if (narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id):
         raise ValueError("当前配音产物不可用")
+    if narration.source_kind == "recorded":
+        if (presenter or creation_plan.presenter_share_target != 0
+                or narration.voice_profile_id is not None or narration.model_id is not None):
+            raise ValueError("本人录音只能用于纯素材成片，人物身份仍需已授权的声音版本")
+    elif (narration.source_kind != "generated" or creation_plan.selected_voice is None
+          or narration.voice_profile_id != creation_plan.selected_voice.profile_id):
+        raise ValueError("当前生成配音与已选择的声音版本不一致")
     version = None
     if task.current_timeline_version_id:
         version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
@@ -609,7 +614,14 @@ class CreationJobOwnerVerifier:
                 or event.get("script_id") != script.id or event.get("plan_id") != task.plan_id
                 or task.confirmed_script_id != script.id or script.selection_status != "confirmed"
                 or plan.creation_task_id != task.id or plan.status != "confirmed"
-                or plan.selected_voice is None or revision_digest(script, plan) != job.input_digest):
+                or (plan.selected_voice is None and (
+                    plan.presenter_share_target != 0
+                    or task.narration_cache_key is None
+                    or (recording := self.repository.get_narration_artifact(
+                        task.workspace_id, task.narration_cache_key
+                    )) is None or recording.source_kind != "recorded"
+                ))
+                or revision_digest(script, plan) != job.input_digest):
             return "stale"
         return "ready"
 
@@ -1200,7 +1212,11 @@ class CreationExecution:
             member_id = actor.member_id
         task = self.repository.get_creation_task(workspace_id, task_id)
         _, plan = self.validate_input(workspace_id, task, script_id, digest)
-        if plan.selected_voice is None:
+        narration = (self.repository.get_narration_artifact(workspace_id, task.narration_cache_key)
+                     if task.narration_cache_key else None)
+        if (plan.selected_voice is None
+                and (plan.presenter_share_target != 0 or narration is None
+                     or narration.source_kind != "recorded")):
             raise ValueError("请先为本次制作选择已授权声音")
         key = f"creation-execution:{task_id}:{digest}"
         run = self.repository.create_job_run(

@@ -63,6 +63,8 @@ import {
   previewCreationTaskExactEdit,
   applyCreationTaskExactEdit,
   selectCreationTaskNarrationVoice,
+  listCreationTaskRecordings,
+  adoptCreationTaskRecording,
   undoCreationTaskTimeline,
   redoCreationTaskTimeline,
 } from "@/lib/api";
@@ -72,6 +74,7 @@ import type {
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
   CreationTaskNarrationSegment,
+  CreationTaskRecording,
   CreationTaskPersonRender,
   CreationTaskScript,
   CreationTaskSubtitleCue,
@@ -100,7 +103,7 @@ type Props = {
   initialTasks: CreationTask[];
 };
 
-type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "person-render" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
+type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "recording-adopt" | "person-render" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 
 type WorkspaceView = CreationTask["stage"] | "subtitle_cover" | "prepare" | "person" | "publish";
 
@@ -434,7 +437,7 @@ function NarrationResultView({ busy, onGeneratePersonRender, onSelect, selectedS
   ) ?? null;
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>已生成配音</span><h2>试听当前声音版本</h2><p>{narration.model_id} · {narration.duration_seconds.toFixed(1)} 秒 · {narration.sample_rate} Hz</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已生成</span></div>
+      <div className={styles.sectionHeading}><div><span>{narration.source_kind === "recorded" ? "本人录音" : "已生成配音"}</span><h2>试听当前声音来源</h2><p>{narration.model_id ?? "本机录音"} · {narration.duration_seconds.toFixed(1)} 秒{narration.sample_rate ? ` · ${narration.sample_rate} Hz` : ""}</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已采用</span></div>
       <audio className={styles.audioPreview} controls preload="metadata" src={apiUrl(`/api/creation-tasks/${workspace.task.id}/narration/audio`)} />
       <div className={styles.narrationSegments}>
         {narration.segments.map((segment, index) => (
@@ -832,7 +835,7 @@ function ContextCommandBar({
         </div>
       </div>
       <div className="assistant-meta">
-        <span>{assistantConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
+        <span>{assistantConfigured ? "仅传文字" : "尚未连接"}</span>
         {assistantConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
         {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
       </div>
@@ -1376,6 +1379,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [editCommand, setEditCommand] = useState("");
   const [editPreview, setEditPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
   const [recordingOpen, setRecordingOpen] = useState(false);
+  const [recordings, setRecordings] = useState<CreationTaskRecording[]>([]);
+  const [recordingsError, setRecordingsError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [assistantReply, setAssistantReply] = useState<string | null>(null);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurnRecord[]>([]);
@@ -1394,6 +1399,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
     }).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    let active = true;
+    if (!workspace.task.confirmed_script_id) {
+      setRecordings([]);
+      setRecordingsError(null);
+      return () => { active = false; };
+    }
+    void listCreationTaskRecordings(workspace.task.id).then(({ items }) => {
+      if (active) {
+        setRecordings(items);
+        setRecordingsError(null);
+      }
+    }).catch((cause) => {
+      if (active) setRecordingsError(cause instanceof Error ? cause.message : "无法读取本任务已保存的录音。");
+    });
+    return () => { active = false; };
+  }, [workspace.task.id, workspace.task.confirmed_script_id, workspace.task.stage]);
   const task = workspace.task;
   const [sharingOpen, setSharingOpen] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
@@ -2003,16 +2025,21 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   async function submitRecordedVoice(blob: Blob): Promise<void> {
-    const narrationTrackId = workspace.montage?.audio_timeline?.tracks.find((track) => track.role === "narration")?.id ?? "audio-narration";
-    let sourceRef: string;
+    let recording: CreationTaskRecording;
     try {
-      const recording = await saveCreationTaskRecording(task.id, blob);
-      sourceRef = recording.source_ref;
+      recording = await saveCreationTaskRecording(task.id, blob);
     } catch (cause) {
       const details = errorDetails(cause);
       setError(details);
       throw new Error(details.message);
     }
+    setRecordings((current) => [recording, ...current.filter((item) => item.source_ref !== recording.source_ref)]);
+    if (task.stage === "narration" && !workspace.narration) {
+      setRecordingOpen(false);
+      setNotice("录音已保存；尚未采用，选择“采用这段录音”后才会进入本任务配音。");
+      return;
+    }
+    const narrationTrackId = workspace.montage?.audio_timeline?.tracks.find((track) => track.role === "narration")?.id ?? "audio-narration";
     setError(null);
     setNotice(null);
     invalidateEditPreview();
@@ -2022,7 +2049,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         base_version_id: task.current_timeline_version_id,
         action: "replace_narration",
         target_id: narrationTrackId,
-        values: { source_ref: sourceRef },
+        values: { source_ref: recording.source_ref },
         raw_command: "用本机录音替换整条旁白",
       });
       if (revision === editContextRevision.current) {
@@ -2036,6 +2063,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       setError(details);
       throw new Error(details.message);
     }
+  }
+
+  async function adoptRecordedVoice(recording: CreationTaskRecording): Promise<void> {
+    const script = workspace.scripts.find((item) => item.id === task.confirmed_script_id);
+    if (!script || script.selection_status !== "confirmed" || script.sections.length !== 1) {
+      setError(errorDetails(new Error("当前文案不是单段已确认版本，不能确定录音对应关系。")));
+      return;
+    }
+    await run("recording-adopt", () => adoptCreationTaskRecording(task.id, {
+      script_id: script.id,
+      source_section_id: script.sections[0].id,
+      source_ref: recording.source_ref,
+    }), "本机录音已采用为当前文案的配音来源；可以按原任务继续制作。 ");
   }
 
   async function reviseCompoundSelection(selection:number[]|string){
@@ -2234,7 +2274,35 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}
 
-        {activeView === "narration" && task.stage === "narration" && !workspace.narration ? <section className={styles.workSection}><div className={styles.emptyAction}><Volume2 size={30} /><h2>选择连续制作的授权声音</h2><p>声音用于已确认文案；开始制作前还需核对文案和制作要求。</p>{task.can_revise_script ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : workspace.plan.selected_voice ? <p>声音已绑定，请在连续制作中确认文案和要求；开始后会依次处理配音、故事板和成片。</p> : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于本任务的声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，请确认文案和要求后开始连续制作。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用此声音</button></div> : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于中文配音的授权声音</strong><p>登记人物身份、导入已授权录音 并逐字填写参考文字后，可回到本任务继续，不需要重做选题或文案。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>}</div></section> : null}
+        {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
+          <section className={styles.workSection}>
+            <div className={styles.emptyAction}>
+              <Volume2 size={30} />
+              <h2>为已确认文案准备配音</h2>
+              <p>可以保存本机录音，再明确采用为本任务配音；保存录音本身不会开始制作。</p>
+              {latestScript?.selection_status === "confirmed" ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />录一段旁白</button> : null}
+              {task.can_revise_script ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : null}
+              {recordingsError ? <p role="alert">已保存录音读取失败：{recordingsError}</p> : null}
+              {recordings.map((recording) => (
+                <article key={recording.source_ref}>
+                  <strong>本机录音 · {(recording.duration_ms / 1000).toFixed(1)} 秒</strong>
+                  <audio controls preload="metadata" src={apiUrl(recording.audio_url)} />
+                  <span>{recording.applied ? "已采用为当前配音" : "已保存 · 尚未采用"}</span>
+                  {!recording.applied ? (
+                    latestScript?.selection_status === "confirmed" && latestScript.sections.length === 1 ?
+                      <button className="modern-primary-button" disabled={busy !== null} onClick={() => void adoptRecordedVoice(recording)} type="button">{busy === "recording-adopt" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}采用这段录音</button>
+                      : <p>当前文案不是单段确认稿，无法确定录音对应关系；请先整理为一个明确段落。</p>
+                  ) : null}
+                </article>
+              ))}
+              {!task.can_revise_script ? (
+                workspace.plan.selected_voice ? <p>已选择授权声音。如需生成配音，可在连续制作中确认要求后继续；本机录音也可独立采用。</p>
+                  : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于生成配音的授权声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，请确认文案和要求后开始连续制作。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用授权声音生成</button></div>
+                    : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于生成配音的授权声音</strong><p>你仍可采用这次本人录音；使用声音模型时再登记获得授权的声音。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>故事板与连续制作</h2><p>请在连续制作中确认文案和要求，再由同一任务推进故事板和成片；排队不表示产物已生成。</p></div></section> : null}

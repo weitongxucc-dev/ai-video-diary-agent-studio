@@ -2392,6 +2392,48 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypa
     assert versions == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
+def test_recorded_narration_schema_migrates_v14_generated_rows_without_rewrite(tmp_path, monkeypatch):
+    database_path = tmp_path / "narration-v14.sqlite3"
+    created_at = datetime.now(timezone.utc).isoformat()
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    monkeypatch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+    ProductionRepository(database_path, library_path)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        for version, sql in _MIGRATIONS:
+            if version == PRODUCTION_SCHEMA_VERSION:
+                break
+            if sql:
+                conn.executescript(
+                    "BEGIN IMMEDIATE;\n" + sql + "\nCOMMIT;"
+                )
+            conn.execute("INSERT INTO production_schema_migrations (version) VALUES (?)", (version,))
+        conn.execute(
+            """INSERT INTO narration_segments
+               (id, workspace_id, task_id, script_id, source_section_id, text,
+                audio_reference, duration_seconds, sample_rate, model_id,
+                voice_profile_id, voice_version, language, pronunciation_version,
+                status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("narration-old", "local", "task-old", "script-old", "section-old",
+             "既有文案", "narration://artifact/generated-old", 2.5, 24000,
+             "qwen-existing", "voice-existing", "v3", "zh", "dict-v1",
+             "ready", created_at, created_at),
+        )
+        apply_production_migrations(conn)
+        row = conn.execute(
+            "SELECT model_id, voice_profile_id, voice_version, source_kind, source_artifact_ref, source_sha256, source_script_digest FROM narration_segments WHERE id='narration-old'"
+        ).fetchone()
+        columns = {item[1]: item for item in conn.execute("PRAGMA table_info(narration_segments)")}
+        trigger = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='narration_segments_stable_identity'"
+        ).fetchone()
+    assert row == ("qwen-existing", "voice-existing", "v3", "generated", None, None, None)
+    assert all(columns[name][3] == 0 for name in ("model_id", "voice_profile_id", "voice_version"))
+    assert trigger == (1,)
+
+
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
     tmp_path,
     monkeypatch,

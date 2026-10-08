@@ -275,7 +275,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         </div>
         <div className="home-composer__toolbar">
           <div className="home-composer__meta">
-            <span>{modelConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
+            <span>{modelConfigured ? "仅传文字" : "尚未连接"}</span>
             {modelConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
           </div>
           <button aria-label="发送" className="composer-submit" disabled={!modelConfigured || !message.trim() || pending !== null} type="submit">
