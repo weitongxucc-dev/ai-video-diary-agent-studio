@@ -20,17 +20,19 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26至35均已结案，旧Dispatch不复活；当前权利仅见任务36/37，模型和GUI仍按其资源门禁错峰。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。任务26至37均已结案，旧Dispatch不复活；两条线程保留但产品写权、测试/服务/GUI/模型/探针操作权收回。主控继续PR96的CI/审核与Linear回读；用户资源条件恢复后以新具名合同/Dispatch接续已批准完整目标，不从本记录自动启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务36：软件连续制作与失败恢复 | 下节具名后端及直接测试；不写B文件，旧候选/证据保留 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务37：软件配置与Pi业务工具入口 | 下节具名Pi/设置/页面及直接测试；不写A文件，旧候选/证据保留 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务36已按RESOURCE_BLOCKED结案；保留原可见线程 | 候选fdac3c2与报告保留，当前无新增写/执行权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务37已按DEPENDENCY_RESOURCE_BLOCKED结案；保留原可见线程 | 候选5f06e77与已过配置GUI分项保留，当前无新增写/执行权 |
 
-## 当前任务36/37：main 已合并后的完整用户结果
+## 任务36/37实施与验收记录（已结案，操作权收回）
+
+主控已接受两条准确worker_done/outcome failed：本轮失败原因是实际资源与依赖阻断，不能改称实现专项失败或整体成功；全部自有验收资源已释放，线程已worker-retain，Run无待回收Dispatch。已审组合候选`a3e9c7b9dd51927f605272fda8bd6410bd707896`在[草稿PR96](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/pull/96)，main未合入；CI结果以实时workflow为准。两次软件准备内存准入拒绝，0start/job/Grant/model，当前完整成片/Pi修改重出/默认人物仍未完成。以下只保留本轮具体范围及真实证据依据，不授予继续启动或修改权；用户释放资源后需新Dispatch绑定精确候选与有限窗口。
 
 用户于2026-10-08批准“可以，你开始吧”：执行已说明的完整成片及一次修改重出计划。PR95已由用户合入；两线程从产品基线 **fec1d13d8583d5c7e37de2467c4705713a0d3d2c** 新建独立分支，原A297c2de、B643c227及所有证据保留，不整体merge旧分支、不覆盖脏树。主控本地e4457a3已含该main；其共享说明仍由主控持有，不要求执行线程复制旧合同全文。语义REBASE_ACK说明目标、所有权和门禁后，直接开始下述已授权实现/最小验证；重模型和GUI需具名资源窗口。
 
