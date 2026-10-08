@@ -20,7 +20,7 @@ function Cards() {
   </HomeCardDialog></>;
 }
 
-describe("v5.1 object card stack", () => {
+describe("v5.3 object card stack", () => {
   it("focuses the real navigation input when its portal mounts on first open", async () => {
     function SearchConsumer() {
       const [open, setOpen] = useState(false);
@@ -109,8 +109,11 @@ describe("v5.1 object card stack", () => {
     fireEvent.click(screen.getByRole("button", {name:"版本与出处"}));
     const field = screen.getByRole("button", {name:"查看版本"}); field.focus(); fireEvent.click(field);
     expect(screen.getByRole("dialog", {name:"资料详情"})).toBe(parent);
-    expect(parent).toHaveStyle({width:"360px"});
-    expect(screen.getByRole("dialog", {name:"版本配置"})).toHaveStyle({width:"320px"});
+    expect(parent).toHaveStyle({width:"360px",height:"560px"});
+    const child = screen.getByRole("dialog", {name:"版本配置"});
+    expect(child).toHaveStyle({width:"360px",height:"560px"});
+    expect(Number.parseFloat(child.style.left)).toBe(Number.parseFloat(parent.style.left) - 12);
+    expect(Number.parseFloat(child.style.top)).toBe(Number.parseFloat(parent.style.top) + 32);
     expect(screen.getByRole("dialog", {name:"查看版本"})).toHaveStyle({width:"240px",zIndex:"100"});
     fireEvent.keyDown(document.activeElement!, {key:"Escape"});
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); expect(field).toHaveFocus();
@@ -142,16 +145,16 @@ describe("v5.1 object card stack", () => {
   it("scopes ordinary confirmation inert/focus to its parent, not the application", () => {
     render(<Cards />); const parent = screen.getByRole("dialog", {name:"资料详情"}); fireEvent.click(screen.getByRole("button", {name:"应用参数"}));
     const confirmation = screen.getByRole("dialog", {name:"确认对象参数"});
-    expect(confirmation).not.toHaveAttribute("aria-modal"); expect(parent.inert).toBe(true);
+    expect(confirmation).toHaveAttribute("aria-modal", "true"); expect(parent.inert).toBe(true);
     expect(screen.getByRole("button", {name:"返回详情"})).toHaveFocus();
     const last = within(confirmation).getByRole("button", {name:"确认应用"}); last.focus(); fireEvent.keyDown(last, {key:"Tab"});
     expect(within(confirmation).getByRole("button", {name:"关闭卡片"})).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, {key:"Escape"}); expect(parent.inert).toBe(false);
   });
-  it("keeps a real modal's selection above its 480px global parent", () => {
+  it("keeps the real modal and its short selection in the shared right-side geometry", () => {
     const close = vi.fn(); render(<HomeCardDialog title="重要确认" onClose={close}><CardSelect label="范围" value="one" onChange={vi.fn()} options={[{value:"one",label:"仅此对象"}]} /></HomeCardDialog>);
     fireEvent.click(screen.getByRole("button", {name:"范围"}));
-    expect(screen.getByRole("dialog", {name:"重要确认"})).toHaveStyle({width:"480px",zIndex:"111"});
+    expect(screen.getByRole("dialog", {name:"重要确认"})).toHaveStyle({width:"360px",height:"560px",zIndex:"111"});
     expect(screen.getByRole("dialog", {name:"范围"})).toHaveStyle({zIndex:"121"});
     fireEvent.keyDown(document.activeElement!, {key:"Escape"}); expect(close).not.toHaveBeenCalled();
   });

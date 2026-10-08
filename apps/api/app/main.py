@@ -11050,6 +11050,38 @@ def render_creation_task_montage(
     raise HTTPException(status_code=409, detail="请使用开始/继续制作，成片必须进入设备队列")
 
 
+def _creation_task_montage_render_input_payload(
+    plan, *, subtitles_visible: bool, subtitle_tracks: list[dict[str, object]],
+    timeline_version_id: str | None = None, bind_timeline_version: bool = False,
+    portrait_runtime_fingerprint: str | None = None,
+) -> dict[str, object]:
+    payload = creation_task_montage_plan_to_payload(plan)
+    for transient_key in ("status", "message", "output_path", "subtitle_path", "updated_at"):
+        payload.pop(transient_key, None)
+    payload["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    if bind_timeline_version:
+        payload["timeline_version_id"] = timeline_version_id
+    payload["subtitles_visible"] = subtitles_visible
+    payload["subtitle_tracks"] = subtitle_tracks
+    if portrait_runtime_fingerprint is not None:
+        payload["portrait_runtime_fingerprint"] = portrait_runtime_fingerprint
+    return payload
+
+
+def _creation_task_montage_render_input_refs(task: CreationTask, plan) -> list[str]:
+    return list(dict.fromkeys([
+        f"montage-plan://{task.id}/{plan.id}",
+        plan.narration_audio_path,
+        *(clip.source_path for clip in plan.clips),
+        *((clip.source_ref for track in plan.audio_timeline.tracks for clip in track.clips) if plan.audio_timeline else ()),
+        *(f"person-render://{clip.person_render_id}" for clip in plan.clips if clip.person_render_id),
+    ]))
+
+
+def _creation_task_montage_render_input_digest(payload: dict[str, object]) -> str:
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def _render_creation_task_montage_for_workspace(
     workspace_id: str, task_id: str, *, render_context: CpuRenderGrantContext | None = None,
 ) -> CreationTaskMontagePlanResponse:
@@ -11087,25 +11119,13 @@ def _render_creation_task_montage_for_workspace(
         if active_version is not None
         else None
     )
-    plan_input = creation_task_montage_plan_to_payload(plan)
-    for transient_key in (
-        "status",
-        "message",
-        "output_path",
-        "subtitle_path",
-        "updated_at",
-    ):
-        plan_input.pop(transient_key, None)
-    plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
-    if render_context is not None:
-        plan_input["timeline_version_id"] = task.current_timeline_version_id
-    plan_input["subtitles_visible"] = subtitles_visible
+    portrait_runtime_fingerprint = None
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure") for clip in plan.clips):
         try:
-            plan_input["portrait_runtime_fingerprint"]=_portrait_processor(workspace_id).fingerprint()
+            portrait_runtime_fingerprint = _portrait_processor(workspace_id).fingerprint()
         except ValueError as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from exc
-    plan_input["subtitle_tracks"] = [
+    subtitle_tracks = [
         {
             "language": track.language,
             "style": track.style,
@@ -11114,24 +11134,16 @@ def _render_creation_task_montage_for_workspace(
         for track in active_subtitle_tracks
         if track.status == "valid"
     ]
-    input_refs = list(
-        dict.fromkeys(
-            [
-                f"montage-plan://{task.id}/{plan.id}",
-                plan.narration_audio_path,
-                *(clip.source_path for clip in plan.clips),
-                *((clip.source_ref for track in plan.audio_timeline.tracks for clip in track.clips) if plan.audio_timeline else ()),
-                *(
-                    f"person-render://{clip.person_render_id}"
-                    for clip in plan.clips
-                    if clip.person_render_id
-                ),
-            ]
-        )
+    plan_input = _creation_task_montage_render_input_payload(
+        plan,
+        subtitles_visible=subtitles_visible,
+        subtitle_tracks=subtitle_tracks,
+        timeline_version_id=task.current_timeline_version_id,
+        bind_timeline_version=render_context is not None,
+        portrait_runtime_fingerprint=portrait_runtime_fingerprint,
     )
-    input_digest = hashlib.sha256(
-        json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    input_refs = _creation_task_montage_render_input_refs(task, plan)
+    input_digest = _creation_task_montage_render_input_digest(plan_input)
     if (render_context is not None and active_version is not None
             and active_version.snapshot.get("creation_render_request_id") == render_context.grant.request_id):
         # The published version owns output subtitle tracks. They were not an
@@ -11148,9 +11160,7 @@ def _render_creation_task_montage_for_workspace(
         plan_input["timeline_version_id"] = snapshot["render_input_timeline_version_id"]
         plan_input["subtitle_tracks"] = original_tracks
         plan_input["subtitles_visible"] = original_visible
-        input_digest = hashlib.sha256(
-            json.dumps(plan_input, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        input_digest = _creation_task_montage_render_input_digest(plan_input)
         transform_id = snapshot.get("transform_run_id")
         if not isinstance(transform_id, str) or not transform_id.startswith("transform_job_"):
             raise ValueError("成片恢复缺少内层渲染记录")
@@ -14931,6 +14941,7 @@ def _creation_render_is_valid(
                     or not isinstance(input_version_id, str)
                     or version.parent_version_id != input_version_id
                     or not isinstance(version.snapshot.get("creation_render_request_id"), str)
+                    or not version.snapshot.get("creation_render_request_id")
                     or not transform_id.startswith("transform_job_")
                     or version.id != f"timeline_{transform_id.removeprefix('transform_')}"
                     or not isinstance(version.snapshot.get("render_input_subtitles_visible"), bool)
@@ -14939,6 +14950,37 @@ def _creation_render_is_valid(
                 return False
             input_version = production_repo.get_timeline_version(workspace_id, input_version_id)
             if input_version.task_id != task_id:
+                return False
+        input_plan = creation_task_montage_plan_from_payload(plan)
+        input_refs = None
+        if timeline_version is not None:
+            if not isinstance(render_input_digest, str) or not render_input_digest:
+                return False
+            input_version_id = version.snapshot.get("render_input_timeline_version_id")
+            if not isinstance(input_version_id, str) or version.parent_version_id != input_version_id:
+                return False
+            input_version = production_repo.get_timeline_version(workspace_id, input_version_id)
+            input_plan_payload = input_version.snapshot.get("montage")
+            subtitle_tracks = version.snapshot.get("render_input_subtitle_tracks")
+            subtitles_visible = version.snapshot.get("render_input_subtitles_visible")
+            if (input_version.task_id != task_id or not isinstance(input_plan_payload, dict)
+                    or not isinstance(subtitle_tracks, list) or not isinstance(subtitles_visible, bool)):
+                return False
+            input_plan = creation_task_montage_plan_from_payload(input_plan_payload)
+            if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
+                   for clip in input_plan.clips):
+                # The fingerprint is produced by the licensed renderer and is not sealed separately.
+                return False
+            input_payload = _creation_task_montage_render_input_payload(
+                input_plan,
+                subtitles_visible=subtitles_visible,
+                subtitle_tracks=subtitle_tracks,
+                timeline_version_id=input_version_id,
+                bind_timeline_version=True,
+            )
+            expected_digest = _creation_task_montage_render_input_digest(input_payload)
+            input_refs = _creation_task_montage_render_input_refs(task, input_plan)
+            if expected_digest != render_input_digest:
                 return False
         registered = next(
             (artifact for artifact in production_repo.list_artifact_records(workspace_id, task_id)
@@ -14955,8 +14997,14 @@ def _creation_render_is_valid(
             return False
         if render_input_digest is not None and job.input_digest != render_input_digest:
             return False
+        if input_refs is not None and (
+            transform.transform_type != "montage_render"
+            or transform.input_refs != input_refs
+            or registered.input_refs != input_refs
+        ):
+            return False
         path = artifact_store.resolve_file(ref)
-        _validate_montage_material_use(workspace_id, creation_task_montage_plan_from_payload(plan))
+        _validate_montage_material_use(workspace_id, input_plan)
         if render_context is not None:
             render_context.scheduler.assert_grant(render_context.grant)
         published = artifact_store.describe(ref)

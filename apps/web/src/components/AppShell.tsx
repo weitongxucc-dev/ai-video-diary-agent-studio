@@ -234,14 +234,6 @@ export function AppShell({
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [viewportWidth, setViewportWidth] = useState(0);
-  useEffect(() => {
-    const readWidth = () => setViewportWidth(window.innerWidth);
-    readWidth();
-    window.addEventListener("resize", readWidth);
-    return () => window.removeEventListener("resize", readWidth);
-  }, []);
-  const detailsDocked = !editorLayout && viewportWidth >= 1380 && !panels.workspaceCollapsed;
   const [quickOpen, setQuickOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
@@ -390,7 +382,7 @@ export function AppShell({
       </aside>
 
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}${detailsOpen && detailsDocked ? ` ${editorShell.inspectorOpen}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
         <header className="desktop-toolbar">
           <div className="desktop-toolbar__leading">
             <button aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">

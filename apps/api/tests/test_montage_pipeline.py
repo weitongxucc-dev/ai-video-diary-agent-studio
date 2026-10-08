@@ -5154,37 +5154,87 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     from app.production import ArtifactRecord, JobRun, TimelineVersion, TransformRun
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
+    # Establish a real versioned input before registering the synthetic output.
+    input_edit = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"16:9"})
+    assert input_edit.status_code == 200, input_edit.text
+    input_task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    input_version = state.production.get_timeline_version(state.workspace_id, input_task.current_timeline_version_id)
+    input_plan = creation_task_montage_plan_from_payload(input_version.snapshot["montage"])
+    input_refs = main_module._creation_task_montage_render_input_refs(input_task, input_plan)
+    input_subtitle_tracks = main_module._current_subtitle_tracks(
+        state.workspace_id, input_task, current_version=input_version, montage=input_plan,
+    )
+    explicit_subtitles = "subtitle_track_ids" in input_version.snapshot
+    subtitles_visible = (
+        any(track.status == "valid" and track.style.get("enabled", True) for track in input_subtitle_tracks)
+        if input_subtitle_tracks or explicit_subtitles else bool(input_plan.cues)
+    )
+    sealed_subtitle_tracks = [
+        {"language": track.language, "style": track.style, "cues": [asdict(cue) for cue in track.cues]}
+        for track in input_subtitle_tracks if track.status == "valid"
+    ]
+    render_input_payload = main_module._creation_task_montage_render_input_payload(
+        input_plan, subtitles_visible=subtitles_visible, subtitle_tracks=sealed_subtitle_tracks,
+        timeline_version_id=input_version.id,
+        bind_timeline_version=True,
+    )
+    render_input_digest = main_module._creation_task_montage_render_input_digest(render_input_payload)
     # Synthetic registered bytes prove version/hash behavior, not rendered media.
     source = tmp_path / "synthetic-output.bin"
     source.write_bytes(b"synthetic-registered-output")
     published = main_module.artifact_store.publish_file(state.montage.output_path, source)
     job = state.production.create_job_run(JobRun(id="job_v3_fixture", workspace_id=state.workspace_id,
-        task_id=state.task.id, kind="creation_task_montage_render", idempotency_key="v3-fixture", input_digest="fixture"))
+        task_id=state.task.id, kind="creation_task_montage_render", idempotency_key="v3-fixture",
+        input_digest=render_input_digest))
     state.production.claim_job_run(state.workspace_id, job.id)
     state.production.create_artifact_record(ArtifactRecord(id="artifact_v3_fixture", workspace_id=state.workspace_id,
         task_id=state.task.id, kind="rendered_video", logical_ref=published.logical_ref,
-        sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=[]))
+        sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs))
     state.production.finish_job_run(state.workspace_id, job.id, status="succeeded", output_refs=[published.logical_ref])
     transform_id = "transform_job_v3_fixture"
     now = main_module.utc_now()
     state.production.create_transform_run(TransformRun(id=transform_id, workspace_id=state.workspace_id,
-        task_id=state.task.id, job_id=job.id, transform_type="montage_render", input_digest="fixture",
-        input_refs=[], output_refs=[published.logical_ref], engine="fixture", parameters={}, status="succeeded",
+        task_id=state.task.id, job_id=job.id, transform_type="montage_render", input_digest=render_input_digest,
+        input_refs=input_refs, output_refs=[published.logical_ref], engine="fixture", parameters={}, status="succeeded",
         started_at=now, finished_at=now))
-    original = state.production.create_timeline_version(TimelineVersion(id="timeline_v3_rendered_fixture",
-        workspace_id=state.workspace_id, task_id=state.task.id, parent_version_id=None, sequence=1,
-        snapshot={"montage":creation_task_montage_plan_to_payload(state.montage),
+    rendered_plan = replace(input_plan, status="rendered", output_path=published.logical_ref)
+    original = state.production.create_timeline_version(TimelineVersion(id="timeline_job_v3_fixture",
+        workspace_id=state.workspace_id, task_id=state.task.id, parent_version_id=input_version.id,
+        sequence=input_version.sequence + 1,
+        snapshot={"montage":creation_task_montage_plan_to_payload(rendered_plan),
                   "output_refs":[published.logical_ref], "transform_run_id":transform_id,
+                  "render_input_digest":render_input_digest,
+                  "render_input_timeline_version_id":input_version.id,
+                  "render_input_subtitle_tracks":sealed_subtitle_tracks,
+                  "render_input_subtitles_visible":subtitles_visible,
+                  "creation_render_request_id":"request_v3_fixture",
                   **main_module._current_narration_snapshot(state.workspace_id, state.task)},
         created_by_operation_id=None))
+    assert main_module._creation_render_is_valid(
+        state.workspace_id, state.task.id, verify_media=False, timeline_version=original,
+    )
+    # Missing sealed input facts must never restore a ready output.
+    unsealed_snapshot = {key: value for key, value in original.snapshot.items() if not key.startswith("render_input_")
+                         and key != "creation_render_request_id"}
+    unsealed = replace(original, snapshot=unsealed_snapshot)
+    assert not main_module._creation_render_is_valid(
+        state.workspace_id, state.task.id, verify_media=False, timeline_version=unsealed,
+    )
     monkeypatch.setattr(main_module, "publish_color_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
     jobs_before = state.production.list_job_runs(state.workspace_id, state.task.id)
-    changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"16:9"})
+    changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"1:1"})
     assert changed.status_code == 200, changed.text
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id != original.id and not task.output_ready
-    assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)["aspect_ratio"] == "16:9"
+    assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)["aspect_ratio"] == "1:1"
     assert state.production.list_job_runs(state.workspace_id, state.task.id) == jobs_before
+    changed_input_version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    changed_seal_snapshot = dict(original.snapshot)
+    changed_seal_snapshot["render_input_timeline_version_id"] = changed_input_version.id
+    changed_dependency = replace(original, parent_version_id=changed_input_version.id, snapshot=changed_seal_snapshot)
+    assert not main_module._creation_render_is_valid(
+        state.workspace_id, state.task.id, verify_media=False, timeline_version=changed_dependency,
+    )
     undo = state.client.post(base + "/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
     assert state.production.get_creation_task(state.workspace_id, state.task.id).output_ready

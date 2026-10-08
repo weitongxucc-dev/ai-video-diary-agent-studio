@@ -55,7 +55,7 @@
 }
 
 /* ========================================================================== */
-/* Shared desktop tokens — DESIGN.md v5.1                                      */
+/* Shared desktop tokens — DESIGN.md v5.3                                      */
 /* ========================================================================== */
 
 :root {
@@ -85,8 +85,23 @@
   --warning: #815400;
   --danger: #a33a3a;
   --focus: #6571b5;
+  --focus-text: #4f5ca6;
+  --selection-line: #7d8193;
+  --card-edge-start: rgb(185 191 215 / 60%);
+  --card-edge-mid: rgb(212 203 222 / 60%);
+  --card-edge-end: rgb(183 205 210 / 60%);
+  --card-focus-start: #7c85be;
+  --card-focus-mid: #9b88be;
+  --card-focus-end: #6c9da8;
+  --composer-edge-start: #c8ccda;
+  --composer-edge-mid: #dedee7;
+  --composer-edge-end: #c4cbd7;
+  --composer-focus-start: #6571b5;
+  --composer-focus-mid: #8270b5;
+  --composer-focus-end: #3f8292;
+  --composer-tint: #6571b5;
   --running: var(--focus);
-  --shadow-float: 0 2px 5px rgb(25 25 40 / 5%), 0 8px 24px rgb(25 25 40 / 8%);
+  --shadow-float: 0 2px 5px #1e24450a, 0 14px 42px #171c3016, 0 0 18px #6f77af06;
   --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 12px;
@@ -128,6 +143,21 @@
   --warning: #dfae62;
   --danger: #ed9898;
   --focus: #abb5fa;
+  --focus-text: #abb5fa;
+  --selection-line: #9999aa;
+  --card-edge-start: #6c7196;
+  --card-edge-mid: #7e6c94;
+  --card-edge-end: #5d7f86;
+  --card-focus-start: #abb5fa;
+  --card-focus-mid: #c0a6e6;
+  --card-focus-end: #80bdcc;
+  --composer-edge-start: #45454f;
+  --composer-edge-mid: #565661;
+  --composer-edge-end: #454f55;
+  --composer-focus-start: #abb5fa;
+  --composer-focus-mid: #c0a6e6;
+  --composer-focus-end: #80bdcc;
+  --composer-tint: #abb5fa;
   --running: var(--focus);
   --shadow-float: 0 18px 48px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 24%);
 }

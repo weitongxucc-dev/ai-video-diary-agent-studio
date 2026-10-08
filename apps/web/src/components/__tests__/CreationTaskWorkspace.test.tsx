@@ -728,33 +728,33 @@ describe("CreationTaskWorkspace", () => {
       message: "换成产品特写", selected_object_refs: ["clip:clip-1"],
     })));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
-    const confirmation = screen.getByRole("dialog", { name: "预览修改" });
+    const confirmation = screen.getByRole("dialog", { name: "修改提案" });
     const detail = screen.queryByRole("dialog", { name: "镜头 01" });
     if (scope === "local") {
       expect(detail).toHaveAttribute("data-card-kind", "detail");
       expect(detail?.inert).toBe(true);
       expect(confirmation).toHaveAttribute("data-card-kind", "confirmation");
-      expect(confirmation).not.toHaveAttribute("aria-modal");
+      expect(confirmation).toHaveAttribute("aria-modal", "true");
       expect(screen.getByRole("button", { name: "返回详情" })).toHaveFocus();
     } else {
       expect(detail).toBeNull();
       expect(confirmation).toHaveAttribute("data-card-kind", "modal");
-      expect(confirmation).toHaveStyle({ width: "480px" });
+      expect(confirmation).toHaveStyle({ width: "360px", height: "560px" });
       expect(confirmation).toHaveAttribute("aria-modal", "true");
       expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
     }
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "预览修改" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "修改提案" })).not.toBeInTheDocument();
     if (scope === "local") {
       expect(screen.getByRole("dialog", { name: "镜头 01" })).toBe(detail);
       expect(detail?.inert).toBe(false);
     }
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await screen.findByRole("dialog", { name: "预览修改" });
+    await screen.findByRole("dialog", { name: "修改提案" });
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     expect(screen.getAllByText("已生成镜头替换预览，请确认。").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "应用到草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: scope === "delete" ? "确认删除" : "应用到草稿" }));
     await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-ReplaceClip"));
   });
   it("selects the playhead clip, keeps its position and discards a late preview for another clip", async () => {

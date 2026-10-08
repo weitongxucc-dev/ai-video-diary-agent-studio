@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, CircleDot, Film, LoaderCircle, QrCode, RefreshCw, Send, Signal, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { listCreationTasks } from "@/lib/api";
 import type { CreationTask } from "@/lib/types";
 import styles from "./ProductWorkspace.module.css";
@@ -239,19 +240,10 @@ export function PublishingWorkspace() {
             ) : null}
           </section>
         ) : null}
-        {authPlatform ? (
-          <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "grid", placeItems: "center", background: "rgba(0,0,0,.3)" }} role="dialog" aria-label="扫码授权">
-            <div style={{ width: 320, padding: 20, borderRadius: 10, background: "var(--surface-1)", border: "1px solid var(--border-1)", boxShadow: "var(--shadow-float)" }}>
-              <strong style={{ fontSize: 14 }}>{PLATFORM_AUTH_CAPS.find((c) => c.platform === authPlatform)?.label} · 扫码授权（演示二维码）</strong>
-              <div style={{ display: "grid", placeItems: "center", height: 160, margin: "12px 0", background: "var(--surface-2)", borderRadius: 8 }} aria-hidden="true"><QrCode size={96} /></div>
-              <p style={{ fontSize: 12, color: "var(--text-2)" }}>这是 mock 二维码，不连接真实平台。点击下方完成模拟授权。</p>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button className={styles.secondaryButton} type="button" onClick={() => setAuthPlatform(null)}>取消</button>
-                <button className={styles.primaryButton} type="button" onClick={() => bindAccount(authPlatform)}>模拟扫码完成</button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {authPlatform ? <HomeCardDialog kind="modal" title={`${PLATFORM_AUTH_CAPS.find((c) => c.platform === authPlatform)?.label} · 扫码授权（演示二维码）`} onClose={() => setAuthPlatform(null)} footer={<><button className={styles.secondaryButton} data-card-cancel type="button" onClick={() => setAuthPlatform(null)}>取消</button><button className={styles.primaryButton} type="button" onClick={() => bindAccount(authPlatform)}>模拟扫码完成</button></>}>
+          <div style={{ display: "grid", placeItems: "center", minHeight: 160, marginBottom: 12, background: "var(--surface-2)", borderRadius: 8 }} aria-hidden="true"><QrCode size={96} /></div>
+          <p>这是 mock 二维码，不连接真实平台。点击下方完成模拟授权。</p>
+        </HomeCardDialog> : null}
         <section className={styles.capabilityBanner}><span><Signal size={18} /></span><div><strong>暂不支持发布</strong><p>可以先保存成片，再到平台上传。</p></div><Link href="/health">运行情况 <ArrowRight size={14} /></Link></section>
         {error && tasks.length ? (
           <section aria-label="读取失败提示" className={styles.inspectorNotice} role="status">

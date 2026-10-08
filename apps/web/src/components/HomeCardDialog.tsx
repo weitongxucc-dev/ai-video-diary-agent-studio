@@ -6,10 +6,50 @@ import { createPortal } from "react-dom";
 import styles from "./SideCards.module.css";
 
 type Kind = "detail" | "config" | "confirmation" | "selection" | "modal" | "navigation";
-type Layer = { id: string; kind: Kind; active: boolean; zIndex: number; parentId?: string; node: HTMLElement; close: () => void };
+type Layer = { id: string; kind: Kind; active: boolean; zIndex: number; parentId?: string; node: HTMLElement; close: () => void; position: CSSProperties; setPosition: (value: CSSProperties) => void; anchor?: RefObject<HTMLElement | null> };
 const layers: Layer[] = [];
 const ParentCard = createContext<Layer | null>(null);
 const topLayer = () => layers.at(-1);
+
+/** Measure the actual workspace once, then position every open card from that shared box. */
+function positionLayers() {
+  const measuredWorkspace = document.querySelector<HTMLElement>(".desktop-workspace")?.getBoundingClientRect();
+  const contentElement = document.querySelector<HTMLElement>(".desktop-main-scroll");
+  const measuredContent = contentElement?.getBoundingClientRect();
+  const hasWorkArea = Boolean(measuredWorkspace && measuredWorkspace.width > 0 && measuredWorkspace.height > 0);
+  const workspace = hasWorkArea ? measuredWorkspace : undefined;
+  const content = measuredContent?.height ? measuredContent : undefined;
+  const left = workspace?.left ?? 0;
+  const right = workspace?.right ?? window.innerWidth;
+  const toolbarBottom = document.querySelector<HTMLElement>(".desktop-toolbar")?.getBoundingClientRect().bottom ?? 56;
+  const phaseNav = contentElement?.querySelector<HTMLElement>('[aria-label="制作阶段"]')?.getBoundingClientRect();
+  const top = Math.max(content?.top ?? 56, toolbarBottom, phaseNav && phaseNav.bottom > (content?.top ?? 56) && phaseNav.top < (content?.bottom ?? window.innerHeight) ? phaseNav.bottom : 0);
+  const bottom = workspace?.bottom ?? window.innerHeight;
+  const width = Math.max(0, Math.min(360, right - left - 48));
+  const rootTop = top + 16;
+  const height = Math.max(0, Math.min(560, bottom - rootTop - 80));
+  const positioned = new Map<string, CSSProperties>();
+
+  for (const layer of layers) {
+    const parentPosition = layer.parentId ? positioned.get(layer.parentId) : undefined;
+    let position: CSSProperties;
+    if (layer.kind === "selection") {
+      const trigger = layer.anchor?.current?.getBoundingClientRect();
+      const menuWidth = Math.max(0, Math.min(240, right - left - 24));
+      const menuHeight = Math.max(32, Math.min(layer.node.scrollHeight || 240, bottom - top - 24));
+      const menuLeft = trigger ? Math.max(left + 12, Math.min(trigger.right - menuWidth, right - menuWidth - 12)) : right - menuWidth - 16;
+      const menuTop = trigger && trigger.bottom + 6 + menuHeight <= bottom - 12 ? trigger.bottom + 6 : Math.max(top + 12, (trigger?.top ?? top + 12) - menuHeight - 6);
+      position = { width: menuWidth, left: menuLeft, top: menuTop, maxHeight: Math.max(0, bottom - top - 24) };
+    } else if (parentPosition) {
+      position = { width, height, left: Number(parentPosition.left) - 12, top: Number(parentPosition.top) + 32 };
+    } else {
+      position = { width, height, left: right - 16 - width, top: rootTop };
+    }
+    layer.position = position;
+    positioned.set(layer.id, position);
+    layer.setPosition(position);
+  }
+}
 
 /** Object-card children portal out of the parent's scroll clip. */
 export function HomeCardDialog({ title, children, onClose, kind = "modal", anchor, footer, open = true }: {
@@ -28,37 +68,27 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
   const close = useRef(onClose); close.current = onClose;
   const [layer, setLayer] = useState<Layer | null>(null);
   const [position, setPosition] = useState<CSSProperties>({ visibility: "hidden" });
+  const anchorRef = useRef(anchor); anchorRef.current = anchor;
   useLayoutEffect(() => {
     if (!active) return;
     const card = node.current!;
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const entry: Layer = { id, kind, active: true, zIndex, parentId: parent?.id, node: card, close: () => close.current() };
+    const entry: Layer = { id, kind, active: true, zIndex, parentId: parent?.id, node: card, close: () => close.current(), position: {}, setPosition, anchor: anchorRef.current };
     // Replace a sibling, never its parent or the parent's scroll/draft state.
     layers.filter(value => value.parentId === entry.parentId && value.id !== id && (entry.parentId || value.kind === kind)).forEach(value => value.close());
     layers.push(entry); setLayer(entry);
-    const measure = () => {
-      const margin = kind === "detail" ? 16 : 12;
-      const width = Math.min(kind === "navigation" ? 580 : kind === "modal" ? 480 : kind === "detail" ? 360 : kind === "selection" ? 240 : 320, window.innerWidth - margin * 2);
-      if (kind === "modal" || kind === "navigation") { setPosition({ width }); return; }
-      const bounds = parent?.node.getBoundingClientRect();
-      if (kind === "detail") {
-        const workspace = document.querySelector(".desktop-main-scroll")?.getBoundingClientRect();
-        const transport = document.querySelector(".video-editor-shell [data-editor-transport]")?.getBoundingClientRect();
-        setPosition({ width, top: (workspace?.top ?? 56) + 16, right: 16, bottom: transport ? Math.max(16, window.innerHeight - transport.top + 16) : 16 });
-      } else if (kind === "selection" && anchor?.current) {
-        const trigger = anchor.current.getBoundingClientRect();
-        const height = Math.min(card.scrollHeight || 240, window.innerHeight - 24);
-        setPosition({ width, left: Math.max(12, Math.min(trigger.right - width, window.innerWidth - width - 12)), top: trigger.bottom + 6 + height <= window.innerHeight - 12 ? trigger.bottom + 6 : Math.max(12, trigger.top - height - 6), maxHeight: window.innerHeight - 24 });
-      } else {
-        setPosition({ width, right: bounds ? window.innerWidth - bounds.right + 12 : 16, ...(kind === "confirmation" ? { bottom: bounds ? window.innerHeight - bounds.bottom + 12 : 16 } : { top: (bounds?.top ?? 56) + 44 }), maxHeight: window.innerHeight - (bounds?.top ?? 56) - 60 });
-      }
-    };
+    const measure = () => positionLayers();
     measure(); const frame = window.requestAnimationFrame(measure); window.addEventListener("resize", measure);
+    const observer = new ResizeObserver(measure);
+    const workArea = document.querySelector<HTMLElement>(".desktop-workspace");
+    const contentArea = document.querySelector<HTMLElement>(".desktop-main-scroll");
+    if (workArea) observer.observe(workArea);
+    if (contentArea) observer.observe(contentArea);
     card.querySelector<HTMLElement>(kind === "confirmation" || kind === "modal" ? "[data-card-cancel], button" : "button, input, select, textarea")?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (topLayer() !== entry) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); entry.close(); return; }
-      if (event.key !== "Tab" || (kind !== "modal" && kind !== "confirmation" && kind !== "navigation")) return;
+      if (event.key !== "Tab" || !modal) return;
       const focusable = Array.from(card.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]'));
       const first = focusable[0], last = focusable.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
@@ -80,18 +110,26 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     const fieldScroll = (event: Event) => {
       if (kind === "selection" && topLayer() === entry && event.target instanceof Node && !card.contains(event.target)) entry.close();
     };
-    if (kind === "confirmation" && parent) parent.node.inert = true;
+    const shell = document.querySelector<HTMLElement>(".desktop-shell");
+    const wasShellInert = shell?.inert ?? false;
+    const wasParentInert = parent?.node.inert ?? false;
+    const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
+    if (modal && shell) shell.inert = true;
+    if (modal && parent) parent.node.inert = true;
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("scroll", fieldScroll, true);
     return () => {
       window.removeEventListener("resize", measure);
       window.cancelAnimationFrame(frame);
+      observer.disconnect();
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", outside, true);
       document.removeEventListener("scroll", fieldScroll, true);
       const index = layers.indexOf(entry); if (index !== -1) layers.splice(index, 1);
-      if (kind === "confirmation" && parent) parent.node.inert = false;
+      if (parent && modal) parent.node.inert = wasParentInert;
+      if (shell && modal) shell.inert = wasShellInert || layers.some(value => value.kind === "modal" || value.kind === "navigation" || value.kind === "confirmation");
+      positionLayers();
     };
   }, [id, kind, parent, anchor, active, zIndex]);
   useEffect(() => {
@@ -108,16 +146,17 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     const target = kind === "selection" ? node.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]') ?? node.current?.querySelector<HTMLElement>('[role="option"]') : node.current?.querySelector<HTMLElement>('[data-card-cancel]');
     target?.focus();
   }, [layer, kind, active]);
+  const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
   const childContext = useMemo(() => layer ? { ...layer, active } : null, [layer, active]);
   const card = <ParentCard.Provider value={childContext}>
     {active && kind === "confirmation" && parent ? <div className={styles.localShade} style={{ ...(() => { const r = parent.node.getBoundingClientRect(); return { top: r.top, left: r.left, width: r.width, height: r.height }; })() }} /> : null}
-    <section hidden={!active} aria-label={title} aria-modal={kind === "modal" || kind === "navigation" ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex }} data-card-kind={kind}>
+    <section hidden={!active} aria-label={title} aria-modal={modal ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex }} data-card-kind={kind}>
       <header><h2>{title}</h2><button aria-label="关闭卡片" onClick={onClose} type="button"><X size={16} /></button></header>
       <div className={styles.body}>{layer ? children : null}</div>
       {layer && (footer || kind === "detail") ? <footer>{footer ?? <button type="button" onClick={onClose}>收起详情</button>}</footer> : null}
     </section>
   </ParentCard.Provider>;
-  return clientReady ? createPortal(kind === "modal" || kind === "navigation" ? <div hidden={!active} className={styles.modalShade}>{card}</div> : card, document.body) : null;
+  return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade}>{card}</div> : card, document.body) : null;
 }
 
 export function CardSelect({ label, value, options, onChange, disabled = false, name }: {

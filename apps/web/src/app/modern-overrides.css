@@ -396,22 +396,7 @@ h4 {
 .assistant-history li small { color: var(--text-3); }
 
 .assistant-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 2px; color: var(--text-3); font-size: 12px; }
-.assistant-meta > details { position: relative; }
 .assistant-meta summary { cursor: pointer; }
-.assistant-meta > details > p {
-  position: absolute;
-  z-index: 8;
-  left: 0;
-  bottom: 24px;
-  width: min(320px, 70vw);
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border-1);
-  border-radius: 8px;
-  background: var(--surface-1);
-  color: var(--text-2);
-  box-shadow: var(--shadow-float);
-}
 .assistant-meta a { color: var(--accent); }
 .assistant-reply { max-height: 88px; overflow-y: auto; margin: 2px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--text-1); font-size: 13px; white-space: pre-wrap; }
 
