@@ -115,6 +115,16 @@ B59只验冻结完整组合14fd23da24f685b7d3d4ce22c893f95b409a01af，来源`/tm
 
 复用57未改播放器/主题/嵌套层级/三栏记忆等通过证据，不重跑28项或保存/质量检查/模型。业务POST/PATCH/PUT/DELETE为零；不能用fixture/DOM替代截图。结束或到期只退出登记自有组/page，独立证明4578/3178和PID/组释放、旧库未变、产品树clean；报告准确PASS/FAIL/UNVERIFIED和剩余Electron/滚轮/重模型边界。真实FAIL交唯一UI写者，不自行改产品；用户资源暂停不因本单GUI结束而解除。
 
+## 任务60/61：新候选CI与最小宽度缺陷收口
+
+59继续只验冻结14fd23d，18:15:40首启/18:35:40绝对到期不变，不热换。已真实证搜索首次直接聚焦/输入/Tab/Esc及父状态通过；主控读PNG/焦点记录。新1024×700共享入口x584–658与收起x606–638、撤销x642–674重叠，1280/1440/1379默认宽不重叠。主控已查看toolbar-light-1024.png；该FAIL另交61，不扩大59写权。PR97精确5cf78c4三类CI成功；PR98精确14fd23d前端/桌面成功、后端6 FAIL/1630 PASS/20 skipped，六项均为原人物未许可调用被53新增真实409拒绝，不能简单删安全保护或统一改断言消除失败。
+
+A60仅从clean99b3660继续，在新`codex/presenter-ci-20261008`按14fd23d目标API blob核等。先读本节、53相关权威和主控`presenter53-ci-failed.log`六条真实失败，分清公共人物编辑消费者尚未接队列与内部诊断正向测试缺少有效Grant。owned只`apps/api/tests/test_montage_pipeline.py`上述五个函数/六个参数化case及其必要局部fixture；生产API只读。保留人物替换映射/语言/同源缓存的正向实质覆盖，将必要内部用例迁到真实隔离队列/Grant许可上下文；公共无许可入口应证明409且provider/job/版本/输出零写。不得把所有200改409、删/跳过原正向覆盖、monkeypatch绕过guard或放开生产无许可路径。若确认当前公开编辑范围需要新产品接线，先回报准确缺口与最小实施建议，不在此测试修复单扩写。仅最小相关pytest在完整隔离HOME/XDG/config/DB/tmp/output中使用已装依赖、合法引用/无模型fake provider；该有界直接测试可按其原隔离fixture导入app.main，禁止真实配置/密钥/资源探针/服务/媒体/模型/外部网络。新证据`/tmp/main-acceptance-20261008/presenter60/`，准确clean净提交/report交主控，不重跑全1636；53旧权不复活，重模型暂停不变。
+
+UI61仅从cleanb9a86b9继续，在新`codex/ui-v51-toolbar-min-20261008`按5cf78c4目标Web blob核等；先读DESIGN工具栏/三栏自定义宽度、59准确1024 PNG/geometry与58真实消费者。owned `CreationTaskWorkspace.tsx`任务toolbar、同名CSS、`VideoEditor.module.css`toolbar；若首因在既有父层，有限追加`EditorShell.tsx`/同名CSS和`modern-overrides.css`仅当前editor toolbar父布局及其直接响应式选择器，不改AppShell网格/三栏默认/共享卡片底座。以真实剩余内容宽而非只window断点修标题/共享入口/固定动作无重叠；标准入口保留真实能力/共享handler/错误、播放器与父状态，不把动作全部隐藏或加第二浮层。不要新增CSS像素镜像测试，已有直接消费者最小必要检查/类型/CSS语法即可；不重跑已过搜索/全量、起服务/GUI/模型/安装或写后端/共享文档/远端。证据`/tmp/main-acceptance-20261008/ui61/`，新clean提交/report；主控机械组合后新具名剩余窄宽/加宽真实补验，59不热换。
+
+60/61由原A/UI可见终端实施，文件所有权与B59零产品写权不交叠；读本节语义ACK后可直接执行，不复活53/58。主控保留共享文档、候选审核/集成、PR/Linear权，不编写产品代码。
+
 ## 任务38/39/40：设计v5.1实施与独立准备
 
 任务51结算：主控已核ui51完整report、实际closed/reopened PNG/AX与card-comparison，接受准确1e0c972必要GUI5 PASS、可选嵌套关闭1 UNVERIFIED，succeeded并retain。首屏/普通刷新正常，历史V1开关重开、关闭入口焦点及镜头2/草稿/暂停8秒保持；可选嵌套卡已可见但后续window_not_found，结果与焦点未证，不猜产品FAIL或绕过恢复。已装普通React19.2.6包与实际Next15.5.18浏览器19.2.0-canary分别记录，不冒称GUI同CI renderer。61表/旧库hash不变；16:53:32 API23815/Web23816/lease23817/Chrome24159及组、根进程、4575/3175全部退出，主控独立ps/lsof与release.json相符，无续租。任务51以下START只作历史依据，无恢复权。准确1e0c972 CI37752015898 Frontend/Backend/Desktop syntax全部SUCCESS并回读head一致。PR97/WIL-205保留草稿/In Progress及指定尺寸/主题、三栏拖动、完整键盘/播放器/新blob嵌套关闭等未验，不宣布整体RETIRED或自动合入；用户Tab可用反馈已记录。
