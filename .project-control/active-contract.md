@@ -33,9 +33,15 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44已结案；任务47修实际侧卡hydration错误 | 仅HomeCardDialog及SideCards直接测试；无服务/GUI/其它产品边界权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45已结案；任务46补未验交互 | 仅新ui46隔离测试/自有GUI和证据；条件START及15分钟绝对窗口，不写产品 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46已结案；任务48准备侧卡hydration补验 | 仅新ui48隔离准备/证据；候选冻结并收到本Dispatch START后才有一次15分钟服务/GUI窗口，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务48 / B（MAIN-UI-HYDRATION-ACCEPTANCE-20261008-48）**：任务46已准确failed结案并retain，主控接受8 PASS / 1 FAIL / 3 UNVERIFIED与16:08:04全部自有资源释放。用户人工滚动、Esc、重开和“Tab可以用”保留，不扩大为完整键盘循环/实际拖动/完整播放器通过；原任务46全部启动权终止。UI47正修唯一已证hydration缺陷，复用B可见终端新Dispatch，唯一新写根`/tmp/main-acceptance-20261008/ui48/`。
+
+先仅准备：mode=ro备份具名`ui46/db/fixture.sqlite3`，逐表相等及旧库hash不变；只复制ui46具名合成owner凭证为新0600文件，不打印。素材仍只读复用已合法的`ui45/library/source.mp4`及其父VIDEO_INBOX_PATH，禁止扫描或改写。HOME/XDG/config/cache/tmp/output/models/agent/不存在测试store全新隔离，排除dotenv、Key空、Pi/model offline、生产定时OFF；现有已装依赖只读复用。此阶段不启动服务/GUI、不写产品/Git/共享文档/远端、不安装/build/test/媒体工具/模型/探针/收费调用。准备好给短PREPARED，等待主控接受47源码并冻结机械组合准确SHA的本Dispatch START；不得用94bf旧候选冒称新验收。
+
+START后一次自有API4574/Web3174/新Chrome profile，自首次服务启动15分钟固定绝对到期不续，先核任务与身份可读再普通打开。目标仅真实首屏/普通刷新不再出现hydration错误、卡片正常打开/关闭/重开及原有父状态保持；共享卡片消费者可定向轻触知识/设置的显示，不重复已过保存/锁定/制作链路。原生AX/截图，无CDP/页面JS/合成键盘或绕过focus拒绝，不再请求用户额外人工。B46未改逻辑正证可复用并准确标候选边界。新真实缺陷报主控，不热换代码；不把HTTP/库比较或错误badge消失单独当整体验收。固定到期或提前完成只停登记自有PID/PGID/新profile，证明本根与4574/3174无残余；短报告准确SHA、PASS/FAIL/UNVERIFIED、实际PNG/AX及释放后worker_done，不关闭WIL-205/父项或宣布整体RETIRED。
 
 **任务47 / UI（MAIN-UI-CARD-HYDRATION-20261008-47）**：B46在准确94bf367真实Chrome读取开发1 Issue正文，`ui46/issue-text.txt`/`issue-readable.json`明确Hydration failed：HomeCardDialog103初始`open=false`隐藏section与服务器VideoEditor_stage div不一致，调用CreationTaskWorkspace2146/TaskPage24。主控已核真实AX错误及准确源码109的document条件Portal，不把浏览器可恢复渲染或用户“可以用”当错误不存在。唯一UI写者基于自身clean400c3ee512a037d06b1621d1d24238143459552d，定向确认根因后修复SSR与首次客户端输出一致、客户端可用后正常Portal。owned仅`apps/web/src/components/HomeCardDialog.tsx`及既有`__tests__/SideCards.test.tsx`；不改业务/API/状态/几何CSS，不另建浮层/依赖或隐藏错误。
 
