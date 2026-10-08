@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户于2026-10-08批准完整UI交接包作为整个桌面的设计基线，随后批准最新包的中间栏与侧边浮卡v2；设计权威已更新为[DESIGN v5.1](../DESIGN.md)。最新“可以，开始执行吧”批准UI剩余验收、默认人物许可接线及试用前收口。当前新增写权和操作权只来自下列任务53/57/58；52/55/56源码已交付，54已结案并退出，不恢复已结案任务。main主控独占共享文档、候选审核、机械集成、PR与Linear维护，不编写产品代码。重模型仍受用户资源暂停约束；未恢复资源窗口前不作资源探针、模型、配音/口型或整链实测。
+用户于2026-10-08批准完整UI交接包作为整个桌面的设计基线，随后批准最新包的中间栏与侧边浮卡v2；设计权威已更新为[DESIGN v5.1](../DESIGN.md)。最新“可以，开始执行吧”批准UI剩余验收、默认人物许可接线及试用前收口。53/57/58已交付并收回操作权；当前新操作仅限下列B59。main主控独占共享文档、候选审核、机械集成、PR与Linear维护，不编写产品代码。重模型仍受用户资源暂停约束；未恢复资源窗口前不作资源探针、模型、配音/口型或整链实测。
 
 UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`（`main-ui-linear`）已只读REBASE_ACK v5.1。任务38从准确main代码对象新建独立分支，保留63d1984旧分支，不整体merge/rebase。先前ACK中被新版替代的参数不再作为执行契约；共享语义再变化须按指定章节重新ACK。
 
@@ -31,9 +31,9 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 52/55/56已核；58修1280顶部可见重叠 | 仅58任务工具栏呈现及直接消费者；无服务/GUI/模型权 |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务53：人物制作许可与预算接线 | 仅53指定API路径；无服务/模型/资源探针权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务57：新候选页面自动化补验 | 仅57隔离根/有限本地服务及具名自有嵌入页面；不写产品或制作 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 58源码已核并retain | 待命，无新增写入或服务权 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 53源码已核并retain | 待命，无新增写入或服务权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 59：组合候选工具栏与搜索差额补验 | 仅59隔离根/有限服务及自有嵌入页面；不写产品或制作 |
 
 ## 任务52/53/54：UI收口与人物制作接线
 
@@ -100,6 +100,20 @@ UI从clean299066b继续可创建具名`codex/ui-v51-toolbar-20261008`，按本�
 只做必要直接消费者检查/类型与CSS语法，CSS像素修复不写镜像断言；不重跑56未改制作专项/全量或启动服务GUI/模型探针/网络安装。新证据仅`/tmp/main-acceptance-20261008/ui58/`，本地准确净差额commit/report交主控。B57继续原d782矩阵不热换，UI读本段语义ACK直接施工；主控审后组合并另单补工具栏实际画面与可达性，不宣称旧候选覆盖新差额。
 
 58.1搜索初始焦点补充：B57已受控一次重开导航搜索，`search-controlled-initial.json`显示580圆角模态可见但activeElement仍顶部“搜索”按钮；真实点击输入后14次Tab/ShiftTab全部卡内并首尾回绕，证明键盘方法可用，真实缺陷仅新开初始聚焦。主控已读该JSON和实际search-tab-cycle PNG，HomeCard navigation源码已有Tab trap，不能为此另造trap或削弱层级。允许唯一UI写者追加`CommandPalette.tsx`及其现有直接专项；先用既有可挂载真实Portal消费者复现“入口点击→无需人工再次点击即可输入”，使初始化发生在实际输入挂载并React提交完成后，旧搜索/导航/ESC/关闭焦点契约保持。若必须改变共享HomeCard底座，只提交精确首因/最小差额待主控绑定后才写。旧统一卡片无新增写权；不新增dependency/通用hook/延时重试。只为真实失败作最小生命周期验证、复用已过边界循环证据，不跑全量/服务GUI。合入同58准确commit/report，B57不热换，后续同候选新开初始焦点需真实页面补验。
+
+## 任务59：工具栏与首次搜索聚焦差额验收
+
+57冻结d78267e实际24 PASS/2 FAIL/2 UNVERIFIED已接受failed/retain：窄窗口工具栏重叠、搜索初始焦点为真实FAIL；普通滚轮位移和原生OS/Electron未验。18:03:56已退出三自有组、4577/3177空闲及自有page关闭，主控独立ps/lsof与release核验相符。原57租约与操作权结束，不热换旧候选。
+
+58/58.1来源b9a86b9b510b5cdbe80c891c771801bd6b92e9b3已审，机械组合Web候选5cf78c46512fac63a10d75ca6104312091784271；任务/方案共享使用既有config圆角卡和独立handler，打开不写。搜索input callback ref只具组件证据，真实初始聚焦仍待本单，不把受控animation-frame测试冒称浏览器首因证明。53来源99b36607e879eb065438a58c860790308e8f5000已审，机械组合在同Web之上为14fd23da24f685b7d3d4ce22c893f95b409a01af，人物预算、Grant、缓存同源校验、释放专项通过，不具真实模型/生产预算标定证据。53/58准确worker_done succeeded已retain，原写权结束。
+
+B59只验冻结完整组合14fd23da24f685b7d3d4ce22c893f95b409a01af，来源`/tmp/main-controller-20261008/presenter53-integration`。只写新`/tmp/main-acceptance-20261008/ui59/`证据/脚本/隔离库，完整archive排除dotenv并核源码blob；mode=ro备份57合法合成DB，复制0600合成token及ui45/library/source.mp4，旧库与证据保持。完整HOME/XDG/config/DB/library/cache/output/tmp/models/agent隔离，Key空、Pi离线、scheduled OFF，不读真实配置/数据/密钥，不安装依赖。版本化orca browser指南与DESIGN相关章节须重读；共享权威无变化，ACK绑定本单精确候选/暂停/方法。
+
+语义REBASE_ACK、源码/库核验、4578/3178空闲且新自有about:blank嵌入页viewport/keypress探针通过后，本条即条件START：仅一次API4578/Web3178、自首个服务20分钟绝对租约，记录PID/PGID/starttoken，不续租、不自动重启；自己的新隔离profile/page，每条命令显式--page。沿57成功真实控件/鼠标/键盘/viewport/PNG方法，eval只读几何/焦点/播放器，不写业务、注入事件/CSS/响应，不接个人Chrome/CDP或操作系统窗口，不请求用户做普通浏览器动作。
+
+只补58影响项目：1280×720、1024×700、1440×900及一个57重叠断点的真实工具栏截图与无重叠几何，浅暗代表；真实三栏宽度调大后入口/播放器仍可达。共享设置真实打开，任务/方案状态与API事实相符、独立动作/错误槽可见但不点击共享写入，关闭焦点与镜头/暂停位置/未发草稿/当前版本保留。搜索入口点击后无需第二次点击输入，先只读activeElement再实际输入查询、Tab/ShiftTab循环及Esc关闭归还入口；未聚焦必须报真实FAIL，不用先点input制造通过。正常首屏及一次普通刷新quality GET仍200，保留尚未检查；新API只跑普通读取，不生成/执行/授权制作。
+
+复用57未改播放器/主题/嵌套层级/三栏记忆等通过证据，不重跑28项或保存/质量检查/模型。业务POST/PATCH/PUT/DELETE为零；不能用fixture/DOM替代截图。结束或到期只退出登记自有组/page，独立证明4578/3178和PID/组释放、旧库未变、产品树clean；报告准确PASS/FAIL/UNVERIFIED和剩余Electron/滚轮/重模型边界。真实FAIL交唯一UI写者，不自行改产品；用户资源暂停不因本单GUI结束而解除。
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
