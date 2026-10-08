@@ -31,7 +31,7 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务52：首屏质量读取失败定位与必要修复 | 仅52指定Web质量消费者与直接测试；无服务/GUI/模型权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 52源码证据已核；55补本地/账号模式边界 | 仅api.ts质量GET和其既有测试；无服务/GUI/模型权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务53：人物制作许可与预算接线 | 仅53指定API路径；无服务/模型/资源探针权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务54：冻结候选UI剩余矩阵 | 仅54新隔离根/有限本地服务及自有浏览器；不写产品或制作 |
 
@@ -51,6 +51,8 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`host_resou
 
 最小源码验收：非零目标不再被无条件拒绝，而是必须具备正确人物输入/已标定专属预算/有效同设备Grant；人物输出必须对应当前配音分段/人物版本，成功提交前持续复核原账号/workspace/设备和输入版本。取消/超限/撤权/unknown终止自有子组并释放后才提交或重排，cache复用仍核版本/授权；无预算/跨空间/陈旧输入明确拒绝。沿用现有阶段持久状态与render-only恢复，人物媒体计入真实组合输入和预算。旧无许可person消费者不得成为新连续制作回退；列清实际保留诊断/单步入口及其边界，不扩大修改权限。专项用隔离SQLite/合法合成引用与无模型provider或轻量假子进程证明接线、取消/释放和拒绝，不能称真实模型/成片/设备校准通过。禁止app.main真实配置导入、主机探针、模型/FFmpeg/媒体解码、联网收费/安装/云迁移/GUI或用户媒体读写。证据只`/tmp/main-acceptance-20261008/presenter53/`，本地提交具名净差额，回报真实剩余模型校准与E2E条件。
 
+53.1有限追加：A已提供avatar缓存/输出校验经`media_timing.py`两个probe直接subprocess.run的证据，主控核源码相符。允许仅该文件`probe_avatar_media`/`probe_media_duration`接可选既有runner，使本次人物Grant覆盖ffprobe及剩余时限；不复制算法、不全局monkeypatch、不改变媒体成功条件。既有直接消费者测试归A，不增真实ffprobe/模型执行权；legacy诊断默认路径边界如实列出，新连续制作不得落回默认无Grant。
+
 ### B54：准确候选的UI剩余验收
 
 本单产品写权为零。新根仅`/tmp/main-acceptance-20261008/ui54/`；archive准确1e0c972并逐blob核验。只读ui51合法合成DB/参考媒体/现有依赖，不写旧根；合成owner权限0600、新HOME/XDG/config/DB/cache/output/tmp/models/agent、Key空/Pi离线/scheduled OFF、无云身份。沿用既有Next15.5.18与已安装依赖，准确记录浏览器canary/普通React区别，不安装修改依赖。
@@ -58,6 +60,10 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`host_resou
 优先在启动前读当前computer-use能力；启动一次新的自有API4576/Web3176/Chrome profile，lease自首个服务起最多20分钟，登记PID/PGID/argv/starttoken，只本地loopback。不续租或自动重开。读写只限本合成DB和隔离根；只允许布局/主题/卡片/播放器交互，不业务确认/创建/检查/制作/发布/Key/模型；可播放具名合成色卡不转码生成。重用已过首屏/配置/锁定证据，不重复整轮。
 
 必须收集剩余：1440×900、1280×720、1024×768和1024×700真实画面/实测窗口；浅/暗代表画面；三栏真实拖动及普通刷新宽度记忆；新HomeCard blob嵌套Esc/外部点击仅顶层且父状态保持；Tab实际循环/关闭焦点；播放器播放/暂停/定位及详情收起时必要控制可见。Electron壳仅列后续，当前不启动桌面。几何只辅助，不能用启动尺寸冒充实测viewport。工具拒绝focus/key/resize/window_not_found时保留首个原因、立即回报主控所需一个人工动作；不盲重试、不用CDP/JS/合成键/AppleScript/改权限绕过，不猜产品FAIL。能独立完成的继续，等待用户期间lease不延长；到期或结束仅退出本单已核自有进程组/Chrome，不影响用户浏览器。报告矩阵PASS/FAIL/UNVERIFIED、真实PNG/AX/持久读回、失败首因与release正证；未验证不关闭WIL205/父项、不称RETIRED。
+
+### UI55：首屏修复的认证模式审查补充
+
+UI52准确61e260579bcdd24245b5f95f20dd5ce814b5ae4c已交付并由主控读diff/report/前后日志：本地初次质量401的真实身份顺序首因明确，13直接专项及类型通过，未GUI验。旧52已结案，不恢复。55继续同一目标，owned仅`apps/web/src/lib/api.ts`的quality GET与`src/lib/__tests__/creation-plan-api.test.ts`；基线61e2605。复用现有`lib/auth/routing.ts:isLocalAuthMode`将新本地身份初始化限定在本地模式；Supabase/SSR/已存无效令牌仍沿既有鉴权路径，不能新增本地owner前置条件或匿名重试。核现有模式消费者、证明无localStorage令牌的supabase质量GET不调用whoami，local首屏仍正确等身份、失败仍显式。仅必要前后专项及类型，reuse52未改组件证据，不跑全量或启动服务/GUI/网络/模型，证据`/tmp/main-acceptance-20261008/ui55/`。主控审后机械组合52+55，B54旧冻结证据不覆盖api blob新差额，需新空profile补验。
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
