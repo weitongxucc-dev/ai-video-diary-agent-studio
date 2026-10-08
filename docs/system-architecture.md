@@ -39,7 +39,7 @@ Web 负责用户界面和短生命周期交互状态：
 - 素材、内容、人物声音、模板和自动任务管理；
 - CreationTask 阶段工作区；
 - 播放器、时间线、字幕和属性检查器；
-- 自然语言命令输入、影响预览、确认和撤销；
+- 自然语言提案选择、普通精确草稿编辑、撤销和重做；
 - 运行状态、阻断原因和修复动作。
 
 Web 不把 localStorage、React state 或聊天消息当作业务事实源。
@@ -52,7 +52,7 @@ API 是同步领域入口，负责：
 - Knowledge、Source、Media、Profile、Plan、CreationTask、Template 和 Automation 的仓储访问；
 - 命令校验和状态转换；
 - 自然语言意图的上下文组装与类型化提案；
-- 提案确认后写入 EditOperation 和 TimelineVersion；
+- 普通精确命令或用户应用提案后写入 EditOperation 和 TimelineVersion；
 - 能力状态、失败证据和修复动作；
 - 向 Worker 提交可恢复作业。
 
@@ -150,8 +150,8 @@ PlanCompiler 的输出是领域对象，不是聊天回答。
 3. 文字模型只负责理解意图、补全约束和生成候选提案。
 4. EditCompiler 校验范围、对象类型、ContentUseState、能力和副作用。
 5. Web 展示操作、影响范围、失效依赖和预览差异。
-6. 用户确认后，API 写入 EditOperation 并调度 Worker。
-7. 完成后生成 TimelineVersion，CreationTask 指向新版本。
+6. 用户选择应用提案后，API 写入 EditOperation 和新 TimelineVersion，CreationTask 指向新版本。
+7. 更新依赖有效性；只有明确生成动作才向 Worker 调度媒体作业。普通编辑的交互规则引用[产品规则](product-requirements.md#23-自然语言与精确编辑共享同一事实源)。
 
 文字模型不能直接访问任意文件路径、执行 Shell 或构造任意 FFmpeg 命令。媒体操作由受控、类型化的执行器生成。
 
@@ -255,18 +255,19 @@ Worker 只处理 invalidated 节点。输入摘要未变的 valid 产物可以�
 首页已选任务或任务工作台中的命令 + 当前任务摘要 + 明确的对象范围
 → EditCompiler
 → EditProposal
-→ 用户确认
-→ EditOperation
+→ 用户应用到草稿
+→ EditOperation 与 TimelineVersion
 → DependencyGraph invalidation
-→ Worker 增量生成或渲染
-→ TimelineVersion
-→ 新预览
+→ 用户明确生成时调度 Worker
+→ 新产物与预览
 
 ### 5.4 精确编辑
 
 时间线控件
 → 类型化 EditOperation
-→ 与自然语言相同的校验、依赖失效、版本和渲染路径
+→ 与自然语言相同的校验、依赖失效及持久版本
+→ 撤销/重做
+→ 明确生成动作时使用既有Worker路径
 
 ### 5.5 本地输出
 

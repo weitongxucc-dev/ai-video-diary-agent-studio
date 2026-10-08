@@ -225,7 +225,7 @@ Timeline 是成片编辑的逻辑时间线，包含视频、人物、配音、�
 
 ### 6.2 TimelineVersion
 
-每次已确认的自然语言或精确编辑创建一个不可变 TimelineVersion。
+每次已应用到草稿的自然语言提案或有效精确编辑创建一个不可变 TimelineVersion；普通控件直接提交确定性命令，不必先创建面向用户的提案确认。草稿仍由CreationTask及其当前版本持久化，不新增聊天或内存事实源。
 
 关键字段：
 
@@ -298,15 +298,17 @@ EditIntent 编译出的待确认提案，必须说明：
 
 ### 7.3 EditOperation
 
-确认后的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
+由普通精确控件直接提交或用户应用提案后的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
 
-跨对象复合修改先在同一基础版本上完整编译与预览，确认时原子写入一个新版本；任一子操作失败不得保留部分修改，撤销恢复整组变更。
+跨对象复合修改在同一基础版本上完整编译，自然语言先展示提案，应用时原子写入一个新版本；任一子操作失败不得保留部分修改，撤销恢复整组变更。
 
 文字模型只能产生或修正 EditIntent 和 EditProposal，不得直接写文件路径、执行任意 FFmpeg 命令或绕过领域校验修改时间线。
 
 ### 7.4 编辑状态机
 
-interpreted → proposed → confirmed → running → applied
+自然语言：interpreted → proposed → confirmed → running → applied
+
+这里confirmed表示用户已选择应用提案，不要求额外确认弹窗。精确控件直接提交EditOperation并应用为版本化草稿，复用相同校验、依赖和撤销/重做。草稿应用不自动生成；媒体生成是独立执行动作。费用与删除确认的用户流程见[产品编辑规则](product-requirements.md#23-自然语言与精确编辑共享同一事实源)。
 
 异常分支为：
 
@@ -385,7 +387,7 @@ PublishJob 记录目标平台、账号引用、PlatformVariant、用户确认、
 4. 来源和版本必须保留，但逐条权利人或证据不是默认创作前置字段。
 5. 原始资产不可覆盖；派生产物必须有 TransformRun。
 6. 自然语言和精确编辑必须编译为同一组 EditOperation，并写入 TimelineVersion。
-7. 未确认的 EditProposal 不得改变任务或产物。
+7. 尚未选择“应用到草稿”的 EditProposal 不得改变任务或产物；普通精确命令不以提案弹窗作为写入前提。
 8. 局部编辑只使真实下游依赖失效，不得无理由重做整条任务。
 9. 不可用能力必须返回 unavailable 或 blocked，不能使用虚假成功 fallback。
 10. 平台发布、云端外发、付费调用和删除等外部副作用按风险显式确认。
