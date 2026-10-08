@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { confirmCreationPlan, CreationPlanApiError, getCreationTaskQualityCheck, previewCreationPlan } from "../api";
 import { LOCAL_MEMBER_TOKEN_HEADER, LOCAL_MEMBER_TOKEN_STORAGE_KEY } from "../local-member-auth";
 
@@ -48,7 +48,29 @@ describe("creation-plan API", () => {
 });
 
 describe("quality result API identity", () => {
-  afterEach(() => window.localStorage.clear());
+  beforeEach(() => vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "local"));
+  afterEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([200, 401])("reads through the Supabase session path without local identity initialization (%s)", async status => {
+    vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "supabase");
+    window.localStorage.clear();
+    const result = { check_state: "none", result_status: null, findings: [], unavailable: [] };
+    const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url === "/api/members/whoami"
+      ? new Response(JSON.stringify({ detail: "本地身份不可用" }), { status: 503 })
+      : new Response(JSON.stringify(status === 200 ? result : { detail: "会话凭据无效" }), { status })));
+    vi.stubGlobal("fetch", fetch);
+
+    const reading = getCreationTaskQualityCheck("task-1");
+    if (status === 200) expect(await reading).toEqual(result);
+    else await expect(reading).rejects.toMatchObject({ status: 401, message: "会话凭据无效" });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/creation-tasks/task-1/quality-check", expect.objectContaining({
+      headers: { "Content-Type": "application/json" }, cache: "no-store",
+    }));
+    expect(window.localStorage.getItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY)).toBeNull();
+  });
 
   it("waits for first-browser member identity before reading quality without starting a check", async () => {
     window.localStorage.clear();

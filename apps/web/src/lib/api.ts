@@ -1,6 +1,7 @@
 import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import { ensureLocalMemberIdentity, localMemberTokenHeader, readLocalMemberToken } from "./local-member-auth";
+import { isLocalAuthMode } from "./auth/routing";
 import type { KnowledgeItemVersion } from "./source-api";
 import type {
   ContentTemplates,
@@ -783,8 +784,8 @@ export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskM
 
 export async function getCreationTaskQualityCheck(taskId: string): Promise<import("./types").CreationTaskQualityCheck> {
   // Quality reads require a trusted identity, unlike anonymous task reads.
-  // On first browser load, AppShell's identity initialization may still be pending.
-  if (typeof window !== "undefined" && !readLocalMemberToken()) await ensureLocalMemberIdentity();
+  // In local mode, AppShell's first-browser identity initialization may still be pending.
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) await ensureLocalMemberIdentity();
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check`);
 }
 
