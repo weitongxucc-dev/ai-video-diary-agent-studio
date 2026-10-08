@@ -33,7 +33,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 72：70交付的实际遗留缺口收口 | 70源码保留；沿70范围只补审核确认的几何/父层/依赖及必要检查 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 73：确认职责与旧草稿消费者断言收口 | 72源码保留；只修下方实证缺口及受影响直接测试 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 71：新设计同候选验收准备 | 66准备资料保留；最终候选绑定前无服务/GUI权 |
 
@@ -56,6 +56,14 @@ owned：HomeCardDialog.tsx、SideCards.module.css、AppShell.tsx及CSS、Command
 ### UI72：70交付未达到完整目标的接续
 
 70源码899b23ab已交clean并保留，主控不认可整体迁移完成：标准config无footer时仍没有64底栏；共同left取包含中栏的desktop-workspace；modal/navigation zIndex和遮罩仍固定；AppShell确认仍关闭quick父卡且同级挂载，全球搜索无真实父关联；70.1人物当前授权依赖复用点尚未落实。旧报告11个最小Web通过，仍有一次扩展运行18失败未分类，不能宣称CI就绪。原UI可见终端从clean899b23ab接续新分支，owned沿70/70.1，不扩大业务/媒体权，不重做保留成果。主控会提供已核可用的原pytest运行时 `/tmp/manta-wil108-20261007/venv/bin/python`；不再按“无pytest”阻断或安装。目标是一次交完整差额和相关检查，不每项单独交付。只对已观察真实缺口编码，现有直接测试中保护退役旧规则的断言按新行为更新，真实失败必须修，不把全部18项猜为既有失败。复用未改正证；无全仓库测试、服务GUI/模型/探针/网络/收费/共享权威写权。证据续/tmp/main-acceptance-20261008/ui70/，加接续说明保留旧report原文。准确净源码交后由主控审核，再B71同候选GUI。
+
+### UI73：72主控审核未接受的差额
+
+72源码d85a5d321a5bfd35c9133ea9130b4e1f9e37c06e已交clean并保留，其几何、搜索真实target父关联和人物undo复核不重做。但HomeCardDialog把所有有父confirmation统一降为非模态，修改测试撤掉aria-modal；DESIGN §4.2要求删除/费用保留模态，不能按有没有parent降级。普通自然语言“选择应用到草稿”属于方案操作，不应继续用confirmation伪装危险确认。原UI可见终端新Dispatch沿clean d85接续：owned HomeCardDialog、CreationTaskWorkspace的EditPreviewCard/localConfirmation职责映射及其既有直接测试、AppShell/SideCards直接测试；KeyboardShortcuts仅真实搜索target回调已有差额保留，API已过且本单不再改。危险确认仍用真实modal/confirmation、aria-modal/顶层Tab约束/取消/遮罩，父层保持；普通提案用config方案卡单次应用，不能加第二次确认。只改实际职责，不造fee字段、收费或权限逻辑，不改已正确普通直接草稿。
+
+72的CreationTaskWorkspace全文件18失败只证明和899父候选相同，父候选本身不是通过基线，不能用于放行。主控已读失败JSON：大部分仍找旧“预览字幕修改/预览裁剪/预览转场/确认修改”或期待preview API；另有比例DTO、录音和重出检查断言。按v5.3既有语义更新这些现有用例/必要mock，保留无自动生成、持久化刷新、撤销/重做、版本失效、删除取消/确认和真实重出预检的实质覆盖；不得删/skip测试或加生产fallback。如果录音确为必要表单一次应用，更新旧“只提案”断言并保留替换范围/失败/版本检查；若真实动作错误先精确指出，不按所有旧断言自动回退新设计。新增zIndex90/111、几何数值镜像断言退役，采用焦点/关闭顺序/父草稿/作用范围功能证据。
+
+复用72 API2项、类型等未变证据；只跑上述实际受影响卡片/任务文件，文件通过后不再重复全仓库或GUI矩阵。新续报/tmp/main-acceptance-20261008/ui70/continuation73.md记录准确clean源码及仍未验事实，整项交付后检查待收消息。无服务/GUI/模型/媒体/主机探针/收费/网络安装/真实库/共享权威或远端写权。B71继续等准确候选，不启动已知确认职责错误的72页面；不要求用户协助普通GUI。
 
 ### B71：最新候选集中相关验收
 
