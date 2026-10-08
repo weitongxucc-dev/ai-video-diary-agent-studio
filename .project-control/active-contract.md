@@ -59,6 +59,8 @@
 
 76.3 主控定向审核发现 granted_subprocess.py 的 model_unit 仍只识别 narration:/person_render:；新 person_edit: 必须继承同一真实资源探针与运行预算拒绝边界，不能因新unit名称跳过。B76所有权仅再补 apps/api/app/granted_subprocess.py 的该前缀识别和既有 apps/api/tests/test_host_resource_probes.py 中 test_person_model_child_rejects_non_host_probe_before_exec 的直接参数覆盖。资源预算事实本身已有按creation_person_render正确识别，无须修改HostResourceProbe或新增保护体系；检查在拒绝分支中不得启动真实子进程/探针。原模型暂停和其他所有权不变。
 
+76.4 主控接受同一动作失败/取消后显式重新预览的重试需求：现有repair_action明确让用户修复后重预览，不能被终态幂等键永久挡住。B76沿已有JobRun/事件/设备请求实现新proposal的一次新attempt；旧终态proposal不得复活，活跃的同task/member/base/operation重复confirm或exact仍复用同一作业、不重复生成。只补_submit_person_edit及必要既有仓储事务/直接测试，不新增接口、表、迁移或后台自动重试。明确区分旧提案重复与用户新提案重试；活跃去重/创建使用既有事务边界，避免并发检查后同时创建两作业。至少用原合法假provider证明失败→新预览→排队成功与活跃重复复用；原模型/FFmpeg/探针暂停保持。
+
 ### UI77：WIL-169本机arm64包准备与有界构建
 
 目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
