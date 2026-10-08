@@ -1387,7 +1387,7 @@ export type CreationTaskMontageClip = {
 };
 
 export type TimelineAudioClip = {
-  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number;
+  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number; playback_rate?: number;
   gain_db: number; fade_in_ms: number; fade_out_ms: number; muted: boolean; locked: boolean; denoise_db: number; loudness_target_lufs?: number | null;
   gain_points: { offset_ms: number; gain_db: number }[]; editor_gain_points?: { offset_ms: number; gain_db: number }[]; envelope_offset_ms: number; envelope_duration_ms: number | null;
 };

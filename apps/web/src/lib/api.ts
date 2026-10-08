@@ -761,7 +761,7 @@ export function previewCreationTaskExactEdit(
   input: CreationTaskExactEditInput,
 ): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest<CreationTaskEditPreviewResponse>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview`,
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
@@ -804,7 +804,7 @@ export function previewCreationTaskEdit(
   },
 ): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest<CreationTaskEditPreviewResponse>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview`,
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
@@ -831,7 +831,7 @@ export function getCreationTaskAssistantHistory(taskId: string): Promise<Creatio
 }
 
 export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse>{
-  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview`,
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview?draft=true`,
     {method:"POST",body:JSON.stringify(typeof selection==="string"?{raw_command:selection}:{included_step_indices:selection})});
 }
 
@@ -1006,7 +1006,7 @@ export function saveVideoTemplate(taskId: string, input: {
 }
 
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
-  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`);
@@ -1036,7 +1036,7 @@ export async function importCreationTaskAudio(taskId: string, file: File): Promi
 }
 
 export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
-  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview`, { method: "POST", body: JSON.stringify(input) });
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 
 

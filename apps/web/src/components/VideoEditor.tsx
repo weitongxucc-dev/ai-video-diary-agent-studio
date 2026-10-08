@@ -67,10 +67,6 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
       const next = { width: fittedWidth, height: fittedWidth / previewRatio };
       setPlayerSize(previous => previous && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 ? previous : next);
     };
-    if (typeof ResizeObserver === "undefined") {
-      resize();
-      return;
-    }
     const observer = new ResizeObserver(resize);
     observer.observe(viewport);
     resize();

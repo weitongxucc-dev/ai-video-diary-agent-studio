@@ -61,6 +61,7 @@ import {
   sendCreationTaskAssistantTurn,
   previewCompoundSelection,
   previewCreationTaskExactEdit,
+  applyCreationTaskExactEdit,
   selectCreationTaskNarrationVoice,
   undoCreationTaskTimeline,
   redoCreationTaskTimeline,
@@ -717,12 +718,12 @@ function EditPreviewCard({ preview, busy, compact = false, command, onCancel, on
   const commandChanged = steps.length > 0 && command.trim() !== preview.intent.raw_command.trim();
   const selectionChanged = selectedSteps.length !== originalSelection.length || selectedSteps.some(index => !originalSelection.includes(index));
   return (
-        <HomeCardDialog kind={kind} title="预览修改" onClose={onCancel} footer={
+        <HomeCardDialog kind={kind} title="修改提案" onClose={onCancel} footer={
           <div className={ui.previewActions}>
             <button data-card-cancel className={compact ? editorUi.button : styles.secondaryButton} disabled={busy !== null} onClick={onCancel} type="button">{kind === "modal" ? "取消" : "返回详情"}</button>
             {selectionChanged ? <button className={compact ? editorUi.primary : "modern-primary-button"} type="button" disabled={busy !== null || commandChanged || !selectedSteps.length} onClick={() => onSelectionPreview?.(selectedSteps)}>重看所选</button> : null}
             <button className={(selectionChanged || commandChanged) ? (compact ? editorUi.button : styles.secondaryButton) : (compact ? editorUi.primary : "modern-primary-button")} disabled={busy !== null || selectionChanged || commandChanged || preview.proposal.status !== "proposed"} onClick={onConfirm} type="button">
-              {busy === "edit-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认修改
+              {busy === "edit-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}{preview.proposal.operation.operation_type.startsWith("Delete") || preview.proposal.operation.payload.overlay_action === "delete" || (preview.proposal.operation.operation_type === "EditAudioTimeline" && (preview.proposal.operation.payload.edit as AudioEditInput)?.action === "delete") ? "确认删除" : "应用到草稿"}
             </button>
           </div>
         }><div ref={previewRef} aria-label="变更预览" aria-live="polite" className={editorUi.dialogPreview}>
@@ -902,6 +903,12 @@ function SubtitleCueEditor({
   const [terms, setTerms] = useState(cueEmphasisTerms(cue));
   const [start, setStart] = useState(String(cue.start_seconds));
   const [end, setEnd] = useState(String(cue.end_seconds));
+  useEffect(() => {
+    setText(storedText); setTerms(cueEmphasisTerms(cue));
+    setStart(String(cue.start_seconds)); setEnd(String(cue.end_seconds));
+    setSplitOffset(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
+    setSplitTime(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
+  }, [cue.id, cue.text, cue.start_seconds, cue.end_seconds, cue.emphasis, cue.line_breaks, track.style]);
   const [splitOffset, setSplitOffset] = useState(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
   const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
   const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
@@ -912,19 +919,24 @@ function SubtitleCueEditor({
   const textLength = Array.from(text).length;
   const overTextLimit = textLength > textMaxLength;
 
+  const save=()=>{if(busy||!changed||!text.trim()||!validTime||overTextLimit)return;
+    onPreview({operation_type:"UpdateSubtitleCue",track_id:track.id,cue_id:cue.id,
+      start_seconds:Number(start),end_seconds:Number(end),text,
+      line_breaks:lineBreakPositions(text),emphasis:emphasisTerms(text,terms),style});
+  };
   return (
     <article className={[styles.subtitleCue, selected ? styles.selectedSubtitleCue : ""].filter(Boolean).join(" ")}>
       <button aria-label={`选择${track.language === "zh-CN" ? "中文" : "英文"}字幕 ${index + 1}`} aria-pressed={selected} className={styles.cueTime} onClick={onSelect} type="button">
         <strong>{cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)}</strong>
       </button>
-      <div className={styles.cueFields} onFocus={onSelect}>
+      <div className={styles.cueFields} onFocus={onSelect} onBlur={save}>
         <label><span>出现时间（秒）</span><input aria-label={`字幕 ${index + 1} 出现时间`} type="number" min="0" step="0.01" disabled={busy} value={start} onChange={(event) => { onDraftChange(); setStart(event.target.value); }} /></label>
         <label><span>结束时间（秒）</span><input aria-label={`字幕 ${index + 1} 结束时间`} type="number" min="0" step="0.01" disabled={busy} value={end} onChange={(event) => { onDraftChange(); setEnd(event.target.value); }} /></label>
         <label>
           <span>字幕文本与断行</span>
           <textarea aria-label={`字幕 ${index + 1} 文本`} disabled={busy} onChange={(event) => { onDraftChange(); setText(event.target.value); }} rows={2} value={text} />
           <small aria-label={`字幕 ${index + 1} 字数`}>{textLength} / {textMaxLength} 字</small>
-          {overTextLimit ? <small role="alert">字幕文本超出 {textMaxLength} 字上限（当前 {textLength} 字），无法预览保存。请缩短到 {textMaxLength} 字以内，或还原草稿后用下方「预览拆分」把它拆成两条。</small> : null}
+          {overTextLimit ? <small role="alert">字幕文本超出 {textMaxLength} 字上限（当前 {textLength} 字），无法保存。请缩短到 {textMaxLength} 字以内，或还原草稿后用下方「拆分字幕」把它拆成两条。</small> : null}
         </label>
         <label>
           <span>强调词（用顿号分隔）</span>
@@ -936,25 +948,15 @@ function SubtitleCueEditor({
         <label className={editorUi.field}>第几个字后拆分<input aria-label="字幕拆分文字位置" type="number" min="1" max={Array.from(cue.text).length - 1} disabled={busy || changed} value={splitOffset} onChange={event => { onDraftChange(); setSplitOffset(Number(event.target.value)); }} /></label>
         <label className={editorUi.field}>拆分时间（秒）<input aria-label="字幕拆分时间" type="number" step="0.001" min={cue.start_seconds + .04} max={cue.end_seconds - .04} disabled={busy || changed} value={splitTime} onChange={event => { onDraftChange(); setSplitTime(Number(event.target.value)); }} /></label>
         <div className={styles.cueAction}>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed || splitOffset < 1 || splitOffset >= Array.from(cue.text).length || splitTime < cue.start_seconds + .04 || splitTime > cue.end_seconds - .04} onClick={() => onPreview({operation_type:"SplitSubtitleCue", track_id:track.id, cue_id:cue.id, split_offset:splitOffset, split_time_seconds:splitTime})}>预览拆分</button>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed || index >= track.cues.length - 1} onClick={() => onPreview({operation_type:"MergeSubtitleCue", track_id:track.id, cue_id:cue.id})}>预览与下一条合并</button>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed} onClick={() => onPreview({operation_type:"DeleteSubtitleCue", track_id:track.id, cue_id:cue.id})}>预览删除字幕</button>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed || splitOffset < 1 || splitOffset >= Array.from(cue.text).length || splitTime < cue.start_seconds + .04 || splitTime > cue.end_seconds - .04} onClick={() => onPreview({operation_type:"SplitSubtitleCue", track_id:track.id, cue_id:cue.id, split_offset:splitOffset, split_time_seconds:splitTime})}>拆分字幕</button>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed || index >= track.cues.length - 1} onClick={() => onPreview({operation_type:"MergeSubtitleCue", track_id:track.id, cue_id:cue.id})}>与下一条合并</button>
+          <button type="button" className={styles.secondaryButton} disabled={busy || changed} onClick={() => onPreview({operation_type:"DeleteSubtitleCue", track_id:track.id, cue_id:cue.id})}>删除字幕</button>
         </div>
         {changed ? <small>先保存或还原上方文字与时间修改，再调整结构。</small> : null}
       </details>
       <div className={styles.cueAction}>
-        {changed ? <small>待预览</small> : <small>已保存</small>}
-        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime || overTextLimit} onClick={() => onPreview({
-          operation_type: "UpdateSubtitleCue",
-          track_id: track.id,
-          cue_id: cue.id,
-          start_seconds: Number(start),
-          end_seconds: Number(end),
-          text,
-          line_breaks: lineBreakPositions(text),
-          emphasis: emphasisTerms(text, terms),
-          style,
-        })} type="button">预览字幕修改</button>
+        {changed ? <small>待保存</small> : <small>已保存</small>}
+        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime || overTextLimit} onClick={save} type="button">保存字幕草稿</button>
       </div>
     </article>
   );
@@ -967,23 +969,26 @@ function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
   const initial = { ...style, stroke_width: style.stroke_width ?? 3, stroke_color: style.stroke_color ?? "#000000",
     background_color: style.background_color ?? "#000000", background_opacity: style.background_opacity ?? 158 / 255 };
   const [draft, setDraft] = useState(initial);
+  useEffect(() => { setDraft(initial); }, [style]);
   const changed = JSON.stringify(draft) !== JSON.stringify(initial);
-  const change = (patch: Partial<typeof draft>) => { onDraftChange(); setDraft({ ...draft, ...patch }); };
+  const save=(value=draft)=>{
+    if(busy||!value.font_family.trim())return;
+    const patch=Object.fromEntries(Object.entries(value).filter(([key,v])=>key!=="enabled"&&initial[key as keyof typeof initial]!==v));
+    if(Object.keys(patch).length)onPreview({operation_type:"ConfigureSubtitleTrack",style:patch});
+  };
+  const change=(patch:Partial<typeof draft>,apply=false)=>{onDraftChange();const next={...draft,...patch};setDraft(next);if(apply)save(next);};
   return <details className={editorUi.propertySection}>
     <summary>全部字幕样式</summary>
-    <div className={styles.cueFields}>
+    <div className={styles.cueFields} onBlur={event=>{if(event.target instanceof HTMLInputElement&&event.target.validity.valid)save();}}>
       <label><span>本机字体</span><input aria-label="字幕字体" disabled={busy} value={draft.font_family} onChange={event => change({font_family:event.target.value})} /></label>
-      <label><span>字号</span><input aria-label="字幕字号" type="number" min="1" max="1920" disabled={busy} value={draft.font_size} onChange={event => change({font_size:Number(event.target.value)})} /></label>
-      <label><span>位置</span><select aria-label="字幕位置" disabled={busy} value={draft.position} onChange={event => change({position:event.target.value as typeof draft.position})}><option value="top">顶部</option><option value="middle">居中</option><option value="bottom">底部</option></select></label>
-      <label><span>双语顺序</span><select aria-label="字幕双语顺序" disabled={busy} value={draft.bilingual_order} onChange={event => change({bilingual_order:event.target.value as typeof draft.bilingual_order})}><option value="source_then_translation">原文在上</option><option value="translation_then_source">译文在上</option></select></label>
-      {([["primary_color","文字颜色"],["emphasis_color","强调颜色"],["stroke_color","描边颜色"],["background_color","背景颜色"]] as const).map(([key,label]) => <label key={key}><span>{label}</span><input aria-label={`字幕${label}`} type="color" disabled={busy} value={draft[key]} onChange={event => change({[key]:event.target.value})} /></label>)}
-      <label><span>描边宽度</span><input aria-label="字幕描边宽度" type="number" min="0" max="12" disabled={busy} value={draft.stroke_width} onChange={event => change({stroke_width:Number(event.target.value)})} /></label>
-      <label><span>背景不透明度 {Math.round(draft.background_opacity*100)}%</span><input aria-label="字幕背景不透明度" type="range" min="0" max="100" disabled={busy} value={Math.round(draft.background_opacity*100)} onChange={event => change({background_opacity:Number(event.target.value)/100})} /></label>
+      <label><span>字号</span><input aria-label="字幕字号" required type="number" min="1" max="1920" disabled={busy} value={draft.font_size} onChange={event => change({font_size:Number(event.target.value)})} /></label>
+      <label><span>位置</span><select aria-label="字幕位置" disabled={busy} value={draft.position} onChange={event => change({position:event.target.value as typeof draft.position},true)}><option value="top">顶部</option><option value="middle">居中</option><option value="bottom">底部</option></select></label>
+      <label><span>双语顺序</span><select aria-label="字幕双语顺序" disabled={busy} value={draft.bilingual_order} onChange={event => change({bilingual_order:event.target.value as typeof draft.bilingual_order},true)}><option value="source_then_translation">原文在上</option><option value="translation_then_source">译文在上</option></select></label>
+      {([["primary_color","文字颜色"],["emphasis_color","强调颜色"],["stroke_color","描边颜色"],["background_color","背景颜色"]] as const).map(([key,label]) => <label key={key}><span>{label}</span><input aria-label={`字幕${label}`} type="color" disabled={busy} value={draft[key]} onChange={event => change({[key]:event.target.value},true)} /></label>)}
+      <label><span>描边宽度</span><input aria-label="字幕描边宽度" required type="number" min="0" max="12" disabled={busy} value={draft.stroke_width} onChange={event => change({stroke_width:Number(event.target.value)})} /></label>
+      <label><span>背景不透明度 {Math.round(draft.background_opacity*100)}%</span><input aria-label="字幕背景不透明度" type="range" min="0" max="100" disabled={busy} value={Math.round(draft.background_opacity*100)} onChange={event => change({background_opacity:Number(event.target.value)/100})} onPointerUp={()=>save()} onKeyUp={()=>save()} /></label>
     </div>
-    <button className={styles.secondaryButton} type="button" disabled={busy || !changed || !draft.font_family.trim()} onClick={() => {
-      const patch = Object.fromEntries(Object.entries(draft).filter(([key,value]) => key !== "enabled" && initial[key as keyof typeof initial] !== value));
-      onPreview({operation_type:"ConfigureSubtitleTrack", style:patch});
-    }}>预览字幕样式</button>
+    <button className={styles.secondaryButton} type="button" disabled={busy || !changed || !draft.font_family.trim()} onClick={()=>save()}>保存字幕样式</button>
   </details>;
 }
 
@@ -1084,18 +1089,18 @@ function SubtitleCoverView({
 
       {!selectedSavable ? <p className={styles.capabilityLine}>所选语言暂无有效字幕轨，请先检查或生成字幕。</p> : null}
       {!translationCapability.available && !translationTrack ? <p className={styles.capabilityLine} role="status"><AlertCircle size={15} />中英双语暂不可用：{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p> : null}
-      <SubtitleStyleEditor key={sourceTrack.timeline_version_id} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact} />
+      <SubtitleStyleEditor style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact} />
 
       <div className={styles.previewGrid}>
         <section className={styles.mediaPanel}>
-          <header><span><Play size={15} />当前成片</span><small>{duration.toFixed(1)} 秒</small></header>
-          <video aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} src={apiUrl(montage?.output_url ?? "")} />
+          <header><span><Play size={15} />{montage?.output_url ? "当前成片" : "草稿字幕"}</span><small>{duration.toFixed(1)} 秒</small></header>
+          {montage?.output_url ? <video aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} src={apiUrl(montage.output_url)} /> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
         </section>
         <div className={styles.subtitleTracks}>
           <div className={styles.trackTabs} role="tablist" aria-label="字幕轨道">
             {tracks.map((track) => <button aria-selected={track.id === activeTrack.id} disabled={busy} key={track.id} onClick={() => onSelectTrack(track.id)} role="tab" type="button"><Captions size={15} />{track.language === "zh-CN" ? "中文轨" : "英文轨"}<small>{track.cues.length} 条</small></button>)}
           </div>
-          <details className={editorUi.propertySection}><summary>全文查找替换</summary><label className={editorUi.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event => { setFindText(event.target.value); onDraftChange(); }} /></label><label className={editorUi.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event => { setReplaceText(event.target.value); onDraftChange(); }} /></label><button className={editorUi.button} type="button" disabled={busy || !findText || findText === replaceText} onClick={() => onPreviewExact({ operation_type: "ReplaceSubtitleText", track_id: activeTrack.id, find_text: findText, replacement_text: replaceText })}>预览全文替换</button><p>仅当前语言轨，确认前逐条查看；配音不变。</p></details>
+          <details className={editorUi.propertySection}><summary>全文查找替换</summary><label className={editorUi.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event => { setFindText(event.target.value); onDraftChange(); }} /></label><label className={editorUi.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event => { setReplaceText(event.target.value); onDraftChange(); }} /></label><button className={editorUi.button} type="button" disabled={busy || !findText || findText === replaceText} onClick={() => onPreviewExact({ operation_type: "ReplaceSubtitleText", track_id: activeTrack.id, find_text: findText, replacement_text: replaceText })}>应用全文替换</button><p>只修改当前语言轨的草稿，可撤销；配音不变。</p></details>
           <label className={styles.cueSelection}><span>选择字幕</span><select aria-label="选择字幕" disabled={busy} onChange={(event) => {
             const cue = activeTrack.cues.find((item) => item.id === event.target.value);
             if (cue) {
@@ -1104,7 +1109,7 @@ function SubtitleCoverView({
             }
           }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue, index) => <option key={cue.id} value={cue.id}>{index + 1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</option>)}</select></label>
           <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList} role="tabpanel">
-            {currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} key={JSON.stringify([activeTrack.id, activeTrack.timeline_version_id, activeTrack.style, currentCue])} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} style={activeTrack.style} track={activeTrack} /> : null}
+            {currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} style={activeTrack.style} track={activeTrack} /> : null}
           </div>
         </div>
       </div>
@@ -1959,7 +1964,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     const revision=editContextRevision.current;
     try {
       const preview=await previewCreationTaskVisual(task.id,input);
-      if(revision===editContextRevision.current) setEditPreview(preview);
+      if(revision===editContextRevision.current) {
+        await confirmCreationTaskEdit(task.id, preview.proposal.id);
+        setEditorDraft(false);
+        await refresh(true);
+      }
     } catch(cause) {setError(errorDetails(cause));}
     finally {setBusy(null);}
   }
@@ -1969,7 +1978,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     const revision = editContextRevision.current;
     try {
       const preview = await previewCreationTaskAudio(task.id,input);
-      if (revision === editContextRevision.current) setEditPreview(preview);
+      if (revision === editContextRevision.current) {
+        if (input.action === "delete") setEditPreview(preview);
+        else {
+          await confirmCreationTaskEdit(task.id, preview.proposal.id);
+          setEditorDraft(false);
+          await refresh(true);
+        }
+      }
     } catch (cause) { setError(errorDetails(cause)); }
     finally { setBusy(null); }
   }
@@ -1998,9 +2014,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         raw_command: "用本机录音替换整条旁白",
       });
       if (revision === editContextRevision.current) {
-        setEditPreview(preview);
-        setEditCommand(preview.intent.raw_command);
+        await confirmCreationTaskEdit(task.id, preview.proposal.id);
+        setEditorDraft(false);
         setRecordingOpen(false);
+        await refresh(true);
       }
     } catch (cause) {
       const details = errorDetails(cause);
@@ -2020,20 +2037,24 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   async function previewExactEdit(input: CreationTaskExactEditInput) {
-    setBusy("edit-preview");
-    setError(null);
-    setNotice(null);
-    invalidateEditPreview();
+    if (busy !== null) return;
+    setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     try {
-      const revision = editContextRevision.current;
-      const preview = await previewCreationTaskExactEdit(task.id, input);
-      if (revision === editContextRevision.current) setEditPreview(preview);
+      if (input.operation_type.startsWith("Delete") || (input.operation_type === "EditGraphicOverlay" && input.overlay_action === "delete")) {
+        setEditPreview(await previewCreationTaskExactEdit(task.id, input));
+      } else {
+        await applyCreationTaskExactEdit(task.id, input);
+        setClipDrafts(current => {
+          const next = { ...current };
+          if (selectedClipId) delete next[`${task.id}:${selectedClipId}`];
+          return next;
+        });
+        setEditorDraft(false);
+        await refresh(true);
+      }
     } catch (cause) {
       setError(errorDetails(cause));
-      await refresh(true).catch(() => undefined);
-    } finally {
-      setBusy(null);
-    }
+    } finally { setBusy(null); }
   }
 
   async function undoTimeline(redo = false) {
@@ -2043,7 +2064,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     invalidateEditPreview();
     try {
       await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id);
-      if (activeView !== "montage") setSelectedClipId(null);
+      setClipDrafts({});
       setSelectedCueId(null);
       setSelectedNarrationSegmentId(null);
       setSelectedCover(false);
@@ -2077,13 +2098,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (view === "narration") return Boolean(state.narration);
     if (view === "person") return Boolean(state.narration || state.person_renders.length);
     if (view === "montage") return Boolean(state.montage);
-    if (view === "subtitle_cover") return Boolean(state.montage?.output_url && state.subtitle_tracks.length);
+    if (view === "subtitle_cover") return Boolean(state.montage && state.subtitle_tracks.length);
     return (view === "review" || view === "publish") && Boolean(state.montage?.output_url);
   }
 
   const isEditor = activeView === "montage";
   const selectedClip = selectedClipIndex >= 0 ? workspace.montage?.clips[selectedClipIndex] : undefined;
-  const clipDraftKey = selectedClip ? `${task.current_timeline_version_id}:${selectedClip.id}` : undefined;
+  const clipDraftKey = selectedClip ? `${task.id}:${selectedClip.id}` : undefined;
   const savedClipDraft = selectedClip ? createVideoClipDraft(selectedClip) : undefined;
   const clipDraft = clipDraftKey && savedClipDraft ? clipDrafts[clipDraftKey] ?? savedClipDraft : undefined;
   const clipDraftChanged = Boolean(clipDraft && savedClipDraft && (
@@ -2110,9 +2131,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     />
     : undefined;
   const inspector = isEditor
-    ? selectedOverlay ? <GraphicOverlayEditor key={`${task.current_timeline_version_id}:${selectedOverlay.id}`} taskId={task.id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedAudioTrack ? <AudioTimelineInspector key={`${task.current_timeline_version_id}:${selectedAudioId}`} track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} key={`${task.current_timeline_version_id}:${selectedClip.id}`} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => { setInserting(false); void showReplacementCandidates(selectedClip.id); }} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onAddSegment={() => { setReplacementClipId(null); void showInsertCandidates(selectedClip.id); }} inserting={inserting} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
+    ? selectedOverlay ? <GraphicOverlayEditor taskId={task.id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
+    : selectedAudioTrack ? <AudioTimelineInspector track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
+    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} workspace={workspace} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => { setInserting(false); void showReplacementCandidates(selectedClip.id); }} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onAddSegment={() => { setReplacementClipId(null); void showInsertCandidates(selectedClip.id); }} inserting={inserting} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} workspace={workspace} />
@@ -2194,9 +2215,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>故事板与连续制作</h2><p>请在连续制作中确认文案和要求，再由同一任务推进故事板和成片；排队不表示产物已生成。</p></div></section> : null}
-        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /> : null}
+        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks sharedTimeScale onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage?.output_url ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} key={`${task.current_timeline_version_id}:${workspace.cover_asset?.id ?? "no-cover"}`} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
