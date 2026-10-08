@@ -31,9 +31,9 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43源码已结案；任务44修复真实历史版本裁切 | 仅任务44具名直接消费者；不写API/actions/共享文档 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44源码已结案保留，真实修复待B45 | 无新增源码/服务权；具体缺陷另具名交回 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41已结案；任务45准备历史修复补验 | 仅新ui45证据与隔离准备；GUI等待具名准确候选START，不写产品 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41已结案；任务45准确候选历史修复补验 | 仅新ui45隔离环境/自有GUI与证据，按本Dispatch START及20分钟绝对窗口；不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
@@ -46,6 +46,8 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 **任务45 / B（MAIN-UI-HISTORY-ACCEPTANCE-20261008-45）**：承接任务44的真实可见补验，唯一新根`/tmp/main-acceptance-20261008/ui45/`，不写产品/测试/Git/共享文档/远端。先只做隔离准备，主控尚未冻结修复候选；可复用ui41具名env/服务/PNG方法及已安装Node/venv/Web依赖，禁止新框架/安装/模型/媒体/资源探针。仅只读ui41的`db/fixture-no-narration-v3.sqlite3`（最终V4）及0600合成`owner-token`、合法`library/source.mp4`，在新DB合法备份/复制作为初始测试基线，旧DB/hash/证据保留；无个人素材、真实DB、密钥或登录钥匙串访问权。新HOME/XDG/config/cache/tmp/output/models/agent全隔离，Key为空，生产定时OFF，0job，model/Pi不可用如实显示。API4572/Web3172仅loopback，自己的新Chrome profile/PID/window；冻结准确组合SHA并本Dispatch收到START_GUI后才可启动，最长20分钟绝对租约不续期，所有PID/PGID/端口身份及退出沿ui41已证办法。
 
 任务45优先在实际1024窗口重现E-VERSION并核修复：历史标题、真实V1/V4列表及详情截图可读，关闭/重开与正文滚动、当前版本和任务/对象/草稿/播放位置保持，退出不写timeline或触发制作。可补1280亮暗同一路径及相关播放器可见/真实暂停/定位证据，不重跑配置保存或锁定确认。原生聚焦/尺寸/键盘已知能力限制不重试、不绕过；普通一次Chrome启动尺寸用实际外框/PNG核验，无法取得指定尺寸保留类别。用户若明确愿意协助手动，可由主控逐步提示Esc/Tab/滚动/拖动，B只设置明确当前卡片并只读回看，不能代替用户键盘动作或自动扩大尺寸矩阵；未得到用户配合不停止独立历史验收。可在自有设置页仅展开开发“1 Issue”读取实际内容，具体缺陷报主控，不修改配置或修代码。开始制作/重出/字幕检查重媒体/Keychain写入/供应商调用一律禁止。结束报告实际PASS/FAIL/UNVERIFIED及沿用项，证明自己的全部进程/端口释放；PREPARED不能算补验完成，源码变更先停止旧自有服务、保留证据后由主控重新指定候选。
+
+任务44结算及任务45冻结：主控已审UI最终`400c3ee512a037d06b1621d1d24238143459552d`（父e7cbf3e）5文件80+/57-及真实首因、两个专项/必要刷新复验和类型结果，接受succeeded并retain。准确机械组合`94bf3671cb6efcd540e09f83f818a34f363c75e1`（父3d7d7e1）在`/tmp/main-controller-20261008/ui-v51/integration`，无冲突，API/actions/lib相对PR96 a3差额零，diffcheck通过，准确组合历史两专项通过。上述任务44原写权收回。B45 `ctx_7aa9332cf936`的新PREPARED已审：仅ui41具名合成库mode=ro备份，V4/4版本/2镜头/确认文案、0job/scheduled、旧库hash不改、token0600、色卡hash相等，均不证明GUI。具名START_GUI只使用上述94bf367完整archive，4572/3172自有服务/Chrome、最多20分钟绝对租约不续期，沿45边界执行；用户已明确愿意5分钟逐步手动协助，由主控发单步并等实际回报后B只读核验，不能把沉默当完成。PR97新head CI待实际运行；不借旧3d7全绿当新候选通过，整体RETIRED仍未成立。
 
 本轮变更`MAIN-DESIGN-IMPLEMENT-20261008-38`，主控Run沿用`run_e3cb6568939f`。绑定当前main准确代码对象`3fa9033608abad72ec30d68e984bf2f92e74d85d`、[DESIGN](../DESIGN.md)§2/3/4/5/7、实际领域状态与对应API。新分支只机械取得该对象，既有分支和报告保留。PR96 `a3e9c7b9dd51927f605272fda8bd6410bd707896`尚未批准合入；UI先基于main实施，主控随后在独立组合候选纳入PR96差额，特别核对CreationTaskWorkspace及设置保存行为。不能将组合候选当main已合入或把本地78个共享记录提交整体push。
 
