@@ -363,10 +363,13 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
         scheduler.close()
 
 
-def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_path, monkeypatch):
+@pytest.mark.parametrize("publication_state", ["normal", "crash", "missing_input_version"])
+def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_path, monkeypatch, publication_state):
     """Real main/repository/permit completion; explicit media/quality substitutes."""
     repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
     try:
+        monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
+            cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5))
         monkeypatch.setattr(main_module, "production_repo", repo)
         monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
         monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
@@ -392,6 +395,12 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", synthetic_media)
         monkeypatch.setattr(main_module, "_validate_rendered_media", synthetic_validate)
         monkeypatch.setattr(main_module, "_start_creation_task_quality_check", lambda w, t: quality_requests.append((w, t)))
+        if publication_state == "missing_input_version":
+            task = repo.get_creation_task("local", task_id)
+            task.current_timeline_version_id = None
+            with repo._connect() as conn:
+                conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                    (json.dumps(asdict(task), default=str), "local", task_id))
         job = execution.start("local", task_id, script_id, digest, actor=actor)
         request_id = submit_creation_stage(execution, scheduler, job, actor)
         grant = scheduler.pick_and_grant()
@@ -399,9 +408,28 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         executor = CreationJobUnitExecutor(repo,
             render_action=lambda w, t, context: main_module._render_creation_task_montage_for_workspace(w, t, render_context=context),
             render_is_valid=lambda w, t, context: main_module._creation_render_is_valid(w, t, render_context=context))
+        if publication_state == "crash":
+            checkpoint = executor._checkpoint
+
+            def crash(conn, current, **kwargs):
+                if kwargs["status"] == "succeeded":
+                    raise RuntimeError("crash after inner publication")
+                return checkpoint(conn, current, **kwargs)
+
+            executor._checkpoint = crash
+            with pytest.raises(RuntimeError, match="crash after inner publication"):
+                executor.execute(grant, scheduler)
+            assert repo.get_job_run("local", job.id).status == "running"
+            scheduler.assert_grant(grant)
+            executor._checkpoint = checkpoint
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         finished = repo.get_job_run("local", job.id)
+        if publication_state == "missing_input_version":
+            assert finished.status == "failed"
+            assert "完整性与媒体校验" in finished.failure_reason
+            assert renders == [request_id] and media_checks == []
+            return
         assert finished.status == "succeeded", finished.failure_reason
         published_task = repo.get_creation_task("local", task_id)
         version = repo.get_timeline_version("local", published_task.current_timeline_version_id)
@@ -412,8 +440,10 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert len(tracks) == 1 and tracks[0].status == "valid"
         inner = [j for j in repo.list_job_runs("local", task_id) if j.kind == "creation_task_montage_render"]
         assert len(inner) == 1 and inner[0].status == "succeeded"
-        assert renders == [request_id] and media_checks == [request_id]
-        assert quality_requests == [("local", task_id)]
+        assert renders == [request_id]
+        validations = 2 if publication_state == "crash" else 1
+        assert media_checks == [request_id] * validations
+        assert quality_requests == [("local", task_id)] * validations
         execution.render_is_valid = lambda w, t: main_module._creation_render_is_valid(w, t, verify_media=False)
         assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
         assert submit_creation_stage(execution, scheduler, repo.get_job_run("local", job.id), actor) is None
@@ -770,6 +800,11 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
                      "VALUES (?,?,?,?,?)",
                      (montage.id, task.workspace_id, task_id,
                       json.dumps(creation_task_montage_plan_to_payload(montage)), datetime.now(timezone.utc).isoformat()))
+    # The real montage stage persists its input version before requesting render.
+    # Recovery must seal that version, not an absent timeline identifier.
+    repo.create_timeline_version(TimelineVersion(
+        "timeline_render_input", task.workspace_id, task_id, None, 1,
+        {"montage": creation_task_montage_plan_to_payload(montage)}, None))
     execution = _execution(repo)
     actor = CreationExecutionActor(task.workspace_id, "member-a")
     job = execution.start(task.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
@@ -1203,33 +1238,69 @@ def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypa
     assert attempts == ["called", "called"]
 
 
-def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path, monkeypatch):
+def _render_validity_fixture(tmp_path, monkeypatch):
     store = ArtifactStore(tmp_path / "artifacts")
     published = store.publish_bytes("task/preview.mp4", b"invalid media")
     task = SimpleNamespace(current_timeline_version_id="version_1", confirmed_script_id="script_1")
-    plan = {"status": "rendered", "script_id": "script_1", "output_path": published.logical_ref,
-            "aspect_ratio": "9:16", "duration_seconds": 1.0}
+    plan = creation_task_montage_plan_to_payload(CreationTaskMontagePlan(
+        id="montage_validity", workspace_id="workspace_a", task_id="task_1",
+        script_id="script_1", script_title="fixture", status="rendered",
+        cues=[], clips=[], duration_seconds=1, low_confidence_clip_count=0,
+        output_path=published.logical_ref))
     record = SimpleNamespace(logical_ref=published.logical_ref, kind="rendered_video",
                              producer_job_id="render_1", sha256=published.sha256,
                              size_bytes=published.size_bytes)
-    current_version = SimpleNamespace(task_id="task_1", snapshot={"output_refs": [published.logical_ref]})
+    current_version = SimpleNamespace(task_id="task_1", snapshot={
+        "output_refs": [published.logical_ref], "transform_run_id": "transform_render_1"})
+    transform = SimpleNamespace(task_id="task_1", job_id="render_1", status="succeeded",
+                                output_refs=[published.logical_ref], input_digest="render-input")
     repository = SimpleNamespace(
         get_creation_task=lambda *_: task,
         get_creation_task_montage_plan=lambda *_: plan,
         get_timeline_version=lambda *_: current_version,
         list_artifact_records=lambda *_: [record],
-        get_job_run=lambda *_: SimpleNamespace(status="succeeded"),
+        get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
+            output_refs=[published.logical_ref], input_digest="render-input"),
+        get_transform_run=lambda *_: transform,
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "artifact_store", store)
+    monkeypatch.setattr(main_module, "_validate_montage_material_use", lambda *_: None)
+    return store, published, current_version, transform
+
+
+def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path, monkeypatch):
+    store, published, current_version, transform = _render_validity_fixture(tmp_path, monkeypatch)
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
     monkeypatch.setattr(main_module, "_validate_rendered_media", lambda *_args, **_kwargs: None)
     assert main_module._creation_render_is_valid("workspace_a", "task_1")
+    transform.status = "failed"
+    assert not main_module._creation_render_is_valid("workspace_a", "task_1")
+    transform.status = "succeeded"
     current_version.snapshot["output_refs"] = []
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
     current_version.snapshot["output_refs"] = [published.logical_ref]
     store.resolve_file(published.logical_ref).write_bytes(b"corrupt")
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
+
+
+def test_render_validity_requires_lineage_without_media(tmp_path, monkeypatch):
+    store, published, current_version, transform = _render_validity_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "_validate_rendered_media", lambda *_args, **_kwargs: pytest.fail("metadata-only validation must not probe"))
+    def valid():
+        return main_module._creation_render_is_valid("workspace_a", "task_1", verify_media=False)
+    assert valid()
+    current_version.snapshot.pop("transform_run_id")
+    assert not valid()
+    current_version.snapshot["transform_run_id"] = "transform_render_1"
+    transform.status = "failed"
+    assert not valid()
+    transform.status = "succeeded"
+    current_version.snapshot["output_refs"] = []
+    assert not valid()
+    current_version.snapshot["output_refs"] = [published.logical_ref]
+    store.resolve_file(published.logical_ref).write_bytes(b"x" * published.size_bytes)
+    assert not valid()
 
 
 def test_concurrent_duplicate_start_returns_one_job(tmp_path):

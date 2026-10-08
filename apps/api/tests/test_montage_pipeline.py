@@ -2496,6 +2496,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
 def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     tmp_path, monkeypatch, visual_only
 ):
+    # This existing test uses a marker-byte renderer, not the quality/media path.
+    monkeypatch.setattr(main_module, "_start_creation_task_quality_check", lambda *_: None)
     runtime_settings = main_module.settings
     workspace_id = "workspace_a"
     production = ProductionRepository(
@@ -2783,14 +2785,16 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     restored = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
-    assert restored.status == "rendered"
-    assert restored.output_path == montage.output_path
-    assert restored.subtitle_path == montage.subtitle_path
+    # No registered video, successful producer or sealed input exists in this
+    # fixture. Undo restores the draft and tracks, not a fabricated output.
+    assert restored.status == "ready"
+    assert restored.output_path is None
+    assert restored.subtitle_path is None
     restored_workspace = TestClient(main_module.app).get(
         f"/api/creation-tasks/{task.id}"
     ).json()
-    assert restored_workspace["task"]["stage"] == "review"
-    assert restored_workspace["task"]["output_ready"] is True
+    assert restored_workspace["task"]["stage"] == "montage"
+    assert restored_workspace["task"]["output_ready"] is False
     assert restored_workspace["task"]["can_undo"] is False
     assert {track["language"] for track in restored_workspace["subtitle_tracks"]} == {"zh-CN", "en-US"}
     assert next(track for track in restored_workspace["subtitle_tracks"] if track["language"] == "zh-CN")["cues"][0]["line_breaks"] == [
@@ -4803,6 +4807,28 @@ def test_person_preview_respects_locked_clip_before_generation(person_render_edi
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
 
+def _save_fixture_narration_duration(state, duration_seconds):
+    """Match the persisted source fact to the media authored by this test."""
+    reference = state.montage.narration_audio_path
+    record = state.production.get_narration_artifact(
+        state.workspace_id, reference.removeprefix("narration://artifact/"))
+    state.production.save_narration_artifact(replace(record, duration_seconds=duration_seconds))
+
+
+def test_audio_draft_uses_registered_duration_without_probe(person_render_edit_state, monkeypatch):
+    state = person_render_edit_state
+    service = main_module._task_audio()
+    timeline = main_module._effective_audio_timeline(state.montage)
+    monkeypatch.setattr("app.task_audio.probe_audio_source", lambda *_: pytest.fail("draft must not probe media"))
+    with pytest.raises(ValueError, match="音频裁剪区间超出"):
+        service.validate(state.workspace_id, state.task.id, timeline, 8, draft_only=True)
+    _save_fixture_narration_duration(state, 8)
+    service.validate(state.workspace_id, state.task.id, timeline, 8, draft_only=True)
+    _save_fixture_narration_duration(state, 4)
+    with pytest.raises(ValueError, match="音频裁剪区间超出"):
+        service.validate(state.workspace_id, state.task.id, timeline, 8, draft_only=True)
+
+
 @pytest.mark.parametrize("source_end", [4, 6])
 def test_extract_original_audio_real_media_preview_confirm_undo(person_render_edit_state, source_end):
     import subprocess
@@ -4821,6 +4847,7 @@ def test_extract_original_audio_real_media_preview_confirm_undo(person_render_ed
         '-c:v','libx264','-c:a','aac','-shortest',str(source)],check=True)
     narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
+    _save_fixture_narration_duration(state, 8)
     state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
@@ -4898,6 +4925,7 @@ def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
     narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
         'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
+    _save_fixture_narration_duration(state, 8)
     state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
