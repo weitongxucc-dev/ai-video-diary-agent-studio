@@ -55,6 +55,8 @@
 
 76.1 主控接受B回报的直接响应差额：人物编辑缓存miss的confirm/exact沿现有执行入口返回HTTP202、queued和已有可信job/request引用；原同步applied响应及合法缓存hit保持。排队不能把proposal标applied、创建目标TimelineVersion或回复已生成；现有Web直接消费者显示已排队并读取该作业真实完成/失败，再更新目标镜头与版本。对应schemas/lib/api/types/CreationTaskWorkspace已在B76所有权内，允许必要响应类型与完成刷新差额；不修改无关普通字段语义、不造另一个状态轮询系统。设备完成、版本提交与请求幂等使用既有事务入口，stale/revoke/cancel拒绝伪成功。该补充只绑定B76，不影响UI77构建目标，无需后者停工或重跑。
 
+76.2 主控核实 HomeCommandComposer.tsx 的 confirmTaskPreview 也是当前确认接口消费者（原无条件回复修改已完成并开启撤销）。B76 所有权扩展到 apps/web/src/components/HomeCommandComposer.tsx 及其既有 __tests__/HomeCommandComposer.test.tsx，仅补 queued 响应显示已排队/等待真实完成、不给本次尚未提交版本开启撤销；同步 applied 行为保持。复用已有 onTaskUpdated 与现有作业视图，不在创作助手新增轮询系统、不修改视觉/共享底座。该必要接口迁移与 B76 同单交付，不另派UI占用同文件；UI77打包不受影响。
+
 ### UI77：WIL-169本机arm64包准备与有界构建
 
 目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
