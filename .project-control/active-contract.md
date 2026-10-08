@@ -35,11 +35,13 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 77：本机arm64桌面包准备与构建 | apps/desktop构建及运行接线；无视觉/API业务写权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 78已交且retain | 保留源码；无新增写入/运行权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76：公开人物局部重生成队列接线 | 指定API/队列及必要Web消费者；无模型/打包权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76已交且retain | 保留源码；无新增写入/运行权 |
 
 ## 当前交付波次：B76 / UI77
+
+本波次B76/UI77/UI78已具名交付并由主控审核结案，三项Task均succeeded；两条原可见终端retain，旧Dispatch与START不提供新增写入/运行权限。人物源码68f687daeff7e56041a1e88d24a5143fc311156c、包源码1b1d78920e92f16c80b9a25cf2530ee75548a5f6、字幕测试修正f5c2d062a59c57480f8cbc96ab9ce6ee3d725011已机械组合，13个人物路径及两项UI差额blob相同；这里只接受具名源码/构建结果，不接受真实模型/GUI/完整产品完成。UI77包不包含B76，后续须重建。PR99旧head的后端15失败有7项测试接口已定向修正，剩余8项未解决，新组合远端CI另行回读。下一具名实施优先处理这8项，再组合包启动/全旅程与真实发布接线；当前没有启动下一任务，资源/模型/账号外发暂停与不自动合main继续有效。
 
 用户于2026-10-08最新批准“抓紧开始”，实施上轮已解释的集成、人物重生成接线、本机包准备及三平台路线核实。两条原可见线程复用；主控不编写产品代码、不新建窗口/内部Agent，不自动合main。共同产品代码基线为clean3db903441af97f359ccf2180f8f2fb4944bd0542（/tmp/main-controller-20261008/ui-v3-integration），当前main共享权威单独读取，不整体merge旧工作树或覆盖旧分支。先核各自clean，保留历史分支，从本地fetch该完整候选建立新具名分支；语义REBASE_ACK后直接完成，不等待第二次START。
 
@@ -55,6 +57,12 @@
 
 76.1 主控接受B回报的直接响应差额：人物编辑缓存miss的confirm/exact沿现有执行入口返回HTTP202、queued和已有可信job/request引用；原同步applied响应及合法缓存hit保持。排队不能把proposal标applied、创建目标TimelineVersion或回复已生成；现有Web直接消费者显示已排队并读取该作业真实完成/失败，再更新目标镜头与版本。对应schemas/lib/api/types/CreationTaskWorkspace已在B76所有权内，允许必要响应类型与完成刷新差额；不修改无关普通字段语义、不造另一个状态轮询系统。设备完成、版本提交与请求幂等使用既有事务入口，stale/revoke/cancel拒绝伪成功。该补充只绑定B76，不影响UI77构建目标，无需后者停工或重跑。
 
+76.2 主控核实 HomeCommandComposer.tsx 的 confirmTaskPreview 也是当前确认接口消费者（原无条件回复修改已完成并开启撤销）。B76 所有权扩展到 apps/web/src/components/HomeCommandComposer.tsx 及其既有 __tests__/HomeCommandComposer.test.tsx，仅补 queued 响应显示已排队/等待真实完成、不给本次尚未提交版本开启撤销；同步 applied 行为保持。复用已有 onTaskUpdated 与现有作业视图，不在创作助手新增轮询系统、不修改视觉/共享底座。该必要接口迁移与 B76 同单交付，不另派UI占用同文件；UI77打包不受影响。
+
+76.3 主控定向审核发现 granted_subprocess.py 的 model_unit 仍只识别 narration:/person_render:；新 person_edit: 必须继承同一真实资源探针与运行预算拒绝边界，不能因新unit名称跳过。B76所有权仅再补 apps/api/app/granted_subprocess.py 的该前缀识别和既有 apps/api/tests/test_host_resource_probes.py 中 test_person_model_child_rejects_non_host_probe_before_exec 的直接参数覆盖。资源预算事实本身已有按creation_person_render正确识别，无须修改HostResourceProbe或新增保护体系；检查在拒绝分支中不得启动真实子进程/探针。原模型暂停和其他所有权不变。
+
+76.4 主控接受同一动作失败/取消后显式重新预览的重试需求：现有repair_action明确让用户修复后重预览，不能被终态幂等键永久挡住。B76沿已有JobRun/事件/设备请求实现新proposal的一次新attempt；旧终态proposal不得复活，活跃的同task/member/base/operation重复confirm或exact仍复用同一作业、不重复生成。只补_submit_person_edit及必要既有仓储事务/直接测试，不新增接口、表、迁移或后台自动重试。明确区分旧提案重复与用户新提案重试；活跃去重/创建使用既有事务边界，避免并发检查后同时创建两作业。至少用原合法假provider证明失败→新预览→排队成功与活跃重复复用；原模型/FFmpeg/探针暂停保持。
+
 ### UI77：WIL-169本机arm64包准备与有界构建
 
 目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
@@ -64,6 +72,14 @@
 构建和测试目录只/tmp/main-acceptance-20261008/desktop77/，源码分支外另archive准确candidate排除dotenv并核blob；源码修改时先提交准确clean差额，再由该候选archive构建。依赖可只读复用，Next/PyInstaller/Electron缓存、输出、HOME/XDG/config/tmp均为新根，secret/用户DB不进入构建。允许本地arm64目录包及DMG/ZIP有界构建、必要ad-hoc签名与包内容/架构/摘要核验，不使用Apple证书、公证、上传、Release、覆盖/Applications或实际启动Electron/API/Web；本波次不触发完整GUI/模型验收。记构建PID/PGID、失败首因与可恢复步骤，必要构建命令60分钟绝对上限，结束释放自有构建组；不为打包运行媒体或Host资源探针。
 
 先对实际缺口做最小接线，已有正确代码保留；不能只交计划作为完成。交源码SHA/净diff（无差额就明确无源码改动）、实际包路径/SHA256/候选输入摘要/包内依赖边界及直接检查、未验启动与完整制作；不可构建须给精确命令/失败/缺依赖，不冒称安装可用。当前共同候选不含B76并行差额，标清后续机械组合需要重建包；本轮已验证构建步骤复用，不要求再重跑视觉矩阵。
+
+### UI78：PR99后端失败分类与字幕测试接口适配
+
+UI77已交具名源码1b1d78920e92f16c80b9a25cf2530ee75548a5f6及arm64包；新单只复用原UI可见终端，保留该分支和产物。以该准确clean候选建立codex/ci78-subtitle-contract-20261008，读本条语义REBASE_ACK后直接完成。B76继续独占main.py/creation_execution.py及montage/person/creation直接测试，UI78不得在这些文件写入；模型/FFmpeg/主机探针及GUI暂停保持。
+
+目标是消除PR99 CI37791344587已经真实出现的7个字幕时间同步测试替身签名失败，并按当前契约分类其余8项，不为测试改变产品行为。唯一写入文件apps/api/tests/test_subtitle_time_sync.py：TaskAudio.validate的测试替身接受真实draft_only关键字，保留原字幕内容/中英关联/预览无写入/撤销/错误与持久性断言，不删测试、不跳过、不松断言、不改生产兜底。剩余创建执行3项、字幕撤销2项及原声/静音3项仅定向只读源码/失败日志，报告实际不变量、测试数据是否过时、必要修复文件，不能笼统称旧测试。确需产品修改交具体首因给主控，避免与B76写同文件。
+
+只跑该现有字幕测试文件，完整隔离HOME/XDG/config/DB/tmp/output，合法现有provider/探针替身；任何用例触发真实媒体/FFmpeg就不得执行该项，准确保留未验。可复用已有pytest依赖，不安装新依赖、不启动服务/模型/GUI或资源探针。报告/tmp/main-acceptance-20261008/ci78/；交准确clean差额、必要检查命令、15项分类与未验媒体范围。无push/PR/Linear/共享文档权，不重跑全仓库/视觉/打包。这是处理真实CI首因，不扩大防御性程序或补无依据的测试。
 
 ### 主控：集成与三平台接入核实
 
