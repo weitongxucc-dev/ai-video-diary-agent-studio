@@ -31,7 +31,7 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 52源码证据已核；55补本地/账号模式边界 | 仅api.ts质量GET和其既有测试；无服务/GUI/模型权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 52/55已核；56修剪辑首屏播放器遮挤 | 仅56剪辑布局/制作详情呈现和直接专项；无服务/GUI/模型权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务53：人物制作许可与预算接线 | 仅53指定API路径；无服务/模型/资源探针权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务54：冻结候选UI剩余矩阵 | 仅54新隔离根/有限本地服务及自有浏览器；不写产品或制作 |
 
@@ -64,6 +64,14 @@ owned：`apps/api/app/creation_execution.py`、`member_permits.py`、`host_resou
 ### UI55：首屏修复的认证模式审查补充
 
 UI52准确61e260579bcdd24245b5f95f20dd5ce814b5ae4c已交付并由主控读diff/report/前后日志：本地初次质量401的真实身份顺序首因明确，13直接专项及类型通过，未GUI验。旧52已结案，不恢复。55继续同一目标，owned仅`apps/web/src/lib/api.ts`的quality GET与`src/lib/__tests__/creation-plan-api.test.ts`；基线61e2605。复用现有`lib/auth/routing.ts:isLocalAuthMode`将新本地身份初始化限定在本地模式；Supabase/SSR/已存无效令牌仍沿既有鉴权路径，不能新增本地owner前置条件或匿名重试。核现有模式消费者、证明无localStorage令牌的supabase质量GET不调用whoami，local首屏仍正确等身份、失败仍显式。仅必要前后专项及类型，reuse52未改组件证据，不跑全量或启动服务/GUI/网络/模型，证据`/tmp/main-acceptance-20261008/ui55/`。主控审后机械组合52+55，B54旧冻结证据不覆盖api blob新差额，需新空profile补验。
+
+### UI56：剪辑首屏播放器优先
+
+主控已读UI52/55完整diff/report/前后日志并机械组合至clean`d9605a092dc582c12c3cb6e33e29f8a4355ffe2e`（1e0c972+b57a2e5+d9605a0）；55已结，不恢复其Dispatch。B54真实`theme-light-stable`/`media-play-stable`及`player-direct-before/after`截图显示连续制作文案/要求大面板占满剪辑首屏，播放器画面/控制不可见，主控实际看图相符；旧scroll返回synthetic未证，不能推成“不能滚动”。这项实际可见FAIL归56，DESIGN§5.5/§4.2已要求播放器/故事板优先，不改变产品能力。
+
+从UI树clean后本地fetch主控d9605a0，新分支`codex/ui-v51-player-20261008`，旧UI分支保留；不整体merge/rebase。owned仅`apps/web/src/components/CreationTaskWorkspace.tsx`编辑阶段制作/作业/质量呈现、同名CSS、`VideoEditor.module.css`和既有`CreationTaskWorkspace.test.tsx`直接布局/连续制作专项。将编辑首屏的完整制作文案要求改为紧凑真实状态/入口，详细核对按需用现有圆角卡片或展开；给播放器及控制/横向故事板实际空间，低高度滚动属于所属正文。保留真实预检错误/阻塞/取消/恢复与render-only入口，明确开始必须仍核对实际文案和要求，开详情不是启动或确认，不改变请求/body/权限/领域/默认/配音字段；不移除开始功能或隐藏真实错误来腾空间。开关详情保留播放位置、镜头、草稿和版本，沿已有HomeCard底座不改其层级/焦点实现。
+
+只做必要组件/类型/样式检查，复用旧未改状态证据，不启动服务/GUI/模型/探针/媒体生成、不安装配置或写api.ts/后端/共享权威。证据`/tmp/main-acceptance-20261008/ui56/`，最小前后证据、准确commit/diff和新GUI需求交主控；B54仍只验1e0c972，不能覆盖新布局与质量API差额。主控审并机械组合后再具名安排准确新候选可见补验，不自动合main。
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
