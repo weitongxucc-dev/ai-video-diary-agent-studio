@@ -1467,6 +1467,24 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
+  it("restores the saved canvas value and shows the real API failure when a direct edit is rejected", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.aspect_ratio = "16:9";
+    mocks.exactEdit.mockRejectedValue(new Error("valid 字幕轨必须有条目、产物和变换证据"));
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", {name:/^视频剪辑：/}));
+    fireEvent.click(screen.getByText("画幅设置"));
+    fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
+    fireEvent.click(screen.getByRole("option", {name:"1:1 方形"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("valid 字幕轨必须有条目、产物和变换证据");
+    fireEvent.click(screen.getByRole("button", {name:/^画幅设置/}));
+    expect(screen.getByRole("button", {name:"成片画幅"})).toHaveTextContent("16:9 横屏");
+    expect(screen.getByLabelText("剪辑成片预览").parentElement).toHaveAttribute("data-editor-aspect-ratio", "16:9");
+    expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", {operation_type:"ChangeCanvas",aspect_ratio:"1:1"});
+    expect(mocks.exactPreview).not.toHaveBeenCalled();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
+
   it("sizes the editor preview and timeline clips from actual montage intervals", () => {
     const initial = subtitleCoverWorkspace();
     initial.montage!.aspect_ratio = "16:9";

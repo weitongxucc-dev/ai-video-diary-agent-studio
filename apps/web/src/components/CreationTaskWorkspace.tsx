@@ -2037,13 +2037,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   async function previewExactEdit(input: CreationTaskExactEditInput) {
-    if (busy !== null) return;
+    if (busy !== null) return false;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
+    let saved = false;
     try {
       if (input.operation_type.startsWith("Delete") || (input.operation_type === "EditGraphicOverlay" && input.overlay_action === "delete")) {
         setEditPreview(await previewCreationTaskExactEdit(task.id, input));
+        saved = true;
       } else {
         await applyCreationTaskExactEdit(task.id, input);
+        saved = true;
         setClipDrafts(current => {
           const next = { ...current };
           if (selectedClipId) delete next[`${task.id}:${selectedClipId}`];
@@ -2054,7 +2057,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
     } catch (cause) {
       setError(errorDetails(cause));
+      return saved;
     } finally { setBusy(null); }
+    return saved;
   }
 
   async function undoTimeline(redo = false) {
@@ -2215,7 +2220,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>故事板与连续制作</h2><p>请在连续制作中确认文案和要求，再由同一任务推进故事板和成片；排队不表示产物已生成。</p></div></section> : null}
-        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>void previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks sharedTimeScale onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /> : null}
+        {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks sharedTimeScale onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /> : null}
 
         {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 

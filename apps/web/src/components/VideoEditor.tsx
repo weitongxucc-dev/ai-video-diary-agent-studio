@@ -25,14 +25,14 @@ export function ClipThumbnail({ clip, taskId, className }: { clip: CreationTaskM
   return <video className={className} aria-hidden muted playsInline preload="metadata" src={sourceUrl(clip, taskId)} onLoadedMetadata={event => { event.currentTarget.currentTime = clip.source_start_seconds; }} />;
 }
 
-function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
+function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>Promise<boolean>;onDraftChange:()=>void}) {
   const [draft,setDraft]=useState(ratio);
   const [fit,setFit]=useState<""|"fill"|"fit">(fitMode);
   const [open,setOpen]=useState(false);
   useEffect(() => { setDraft(ratio); setFit(fitMode); }, [ratio, fitMode]);
   return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
-    <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
-    <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
+    <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
+    <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
     <small>填满：可能裁切 · 完整：可能留边</small>
     </div>
   </HomeCardDialog> : null}</>;
@@ -42,7 +42,7 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   workspace: CreationTaskWorkspace; selectedId: string | null; onSelect: (id: string) => void;
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
-  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>void;
+  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
 }) {
   const montage = workspace.montage!;
   const [time, setTime] = useState(initialTime);

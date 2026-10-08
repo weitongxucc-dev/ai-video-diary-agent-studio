@@ -6884,6 +6884,7 @@ def _clone_subtitle_track(
     model_id: str | None = None,
 ) -> SubtitleTrack:
     now = utc_now()
+    has_new_artifact = artifact_ref is not None and transform_id is not None
     return SubtitleTrack(
         id=track_id or f"subtitle_{timeline_version_id}_{track.language.lower()}",
         workspace_id=track.workspace_id,
@@ -6895,9 +6896,12 @@ def _clone_subtitle_track(
         cues=cues or track.cues,
         generation_method=track.generation_method,
         model_id=model_id if model_id is not None else track.model_id,
-        artifact_ref=artifact_ref or track.artifact_ref,
-        transform_id=transform_id or track.transform_id,
-        status="valid",
+        artifact_ref=artifact_ref if artifact_ref is not None else track.artifact_ref,
+        transform_id=transform_id if transform_id is not None else track.transform_id,
+        status="valid" if has_new_artifact else track.status,
+        failure_reason=None if has_new_artifact else track.failure_reason,
+        impact=None if has_new_artifact else track.impact,
+        repair_action=None if has_new_artifact else track.repair_action,
         created_at=now,
         updated_at=now,
     )

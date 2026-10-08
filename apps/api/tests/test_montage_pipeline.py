@@ -3981,6 +3981,82 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
 
 
+@pytest.mark.parametrize("status", ["unavailable", "failed"])
+def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history(person_render_edit_state, monkeypatch, status):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    base_version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    cue = ProductionSubtitleCue(id="canvas-caption", source_cue_id=None, text="保留的字幕", start_seconds=0, end_seconds=2)
+    unavailable = SubtitleTrack(
+        id="canvas-unavailable", workspace_id=state.workspace_id, task_id=state.task.id,
+        timeline_version_id=base_version.id, language="zh-CN", source_language=None,
+        style={"enabled": True}, cues=[cue], generation_method="timeline", model_id=None,
+        artifact_ref=None, transform_id=None, status=status,
+        failure_reason="字幕服务尚未就绪" if status == "unavailable" else "字幕产物校验失败",
+        impact="字幕文字保留，但不能作为有效输出。", repair_action="检查字幕并重新生成。",
+    )
+    valid = replace(
+        unavailable, id="canvas-valid", language="en-US", source_language="zh-CN",
+        generation_method="translation", artifact_ref="artifacts/valid-caption.srt",
+        transform_id="transform-valid-caption", status="valid", failure_reason=None,
+        impact=None, repair_action=None,
+    )
+    original_tracks = main_module._current_subtitle_tracks
+
+    def tracks_with_unavailable(workspace_id, task, *, current_version=None, montage=None):
+        tracks = original_tracks(workspace_id, task, current_version=current_version, montage=montage)
+        if current_version and current_version.id == base_version.id:
+            return [unavailable, valid]
+        return tracks
+
+    monkeypatch.setattr(main_module, "_current_subtitle_tracks", tracks_with_unavailable)
+    before = state.client.get(base).json()
+    assert [(track["status"], track["failure_reason"], track["impact"], track["repair_action"])
+            for track in before["subtitle_tracks"]] == [
+                (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
+                ("valid", None, None, None),
+            ]
+    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
+        SimpleNamespace(id="canvas-preview", logical_ref="artifacts/canvas.mp4"))
+
+    changed = state.client.post(base + "/edits/exact", json={"operation_type": "ChangeCanvas", "aspect_ratio": "1:1"})
+    assert changed.status_code == 200, changed.text
+    after = state.client.get(base).json()
+    assert after["task"]["current_timeline_version_id"] != before["task"]["current_timeline_version_id"]
+    assert after["montage"]["aspect_ratio"] == "1:1"
+    assert [(track["status"], track["failure_reason"], track["impact"], track["repair_action"])
+            for track in after["subtitle_tracks"]] == [
+                (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
+                ("valid", None, None, None),
+            ]
+
+    undone = state.client.post(base + "/timeline/undo", json={})
+    assert undone.status_code == 200, undone.text
+    restored = state.client.get(base).json()
+    assert restored["montage"]["aspect_ratio"] == before["montage"]["aspect_ratio"]
+    assert [(track["status"], track["failure_reason"], track["impact"], track["repair_action"])
+            for track in restored["subtitle_tracks"]] == [
+                (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
+                ("valid", None, None, None),
+            ]
+    redone = state.client.post(base + "/timeline/redo", json={})
+    assert redone.status_code == 200, redone.text
+    redone_workspace = state.client.get(base).json()
+    assert redone_workspace["montage"]["aspect_ratio"] == "1:1"
+    assert [(track["status"], track["failure_reason"], track["impact"], track["repair_action"])
+            for track in redone_workspace["subtitle_tracks"]] == [
+                (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
+                ("valid", None, None, None),
+            ]
+
+    newly_generated = main_module._clone_subtitle_track(
+        unavailable, timeline_version_id="timeline_generated-caption",
+        artifact_ref="artifacts/regenerated-caption.srt", transform_id="transform-regenerated-caption",
+    )
+    assert newly_generated.status == "valid"
+    assert newly_generated.failure_reason is newly_generated.impact is newly_generated.repair_action is None
+
+
 def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_edit_state,monkeypatch):
     state=person_render_edit_state
     base=f'/api/creation-tasks/{state.task.id}'
