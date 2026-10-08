@@ -35,11 +35,13 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 82：发布候选实际接线及审查修正 | 80保留路径加80.2/80.3；见82 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 83：发布持久身份及恢复的直接审查修正 | 仅routes.py、queue.py及既有两项发布测试；82已交源码，无新增真实运行权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 81：本机组合包启动验收 | 仅下方81桌面路径；main.py仍由80独占 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 81已结案并retain；启动/重开有证，必要GUI受工具阻断 | 源码5291d613及包/报告保留；旧运行权收回，无新增写权 |
 
 ## 当前交付波次：B79 / UI80（2026-10-09）
+
+当前续单为UI83（task_fdd1618a267f / ctx_0287fed00361），准确82源码c0cffecf已交；83只复用CreationExecutionActor.identity_payload修持久账号身份、恢复SchedulePolicy缺失import及实际Ruff失败，复用既有queued/unknown测试。已语义ACK，无新业务范围、共享接口或真实账号权限。B81以failed结案，具体验收阻断及实际包启动证据见/tmp/main-acceptance-20261009/desktop81/report.md，不宣称GUI整体通过；原终端retain，所有自有进程已释放。79/80/81/82的正文保留其具名授权来历，已结案Dispatch不取得新START。
 
 用户在最新状态评估后批准“抓紧开始”。本节取代76/77/78的当前施工入口；它们已结案、源码和证据保留，不复活旧Dispatch。基线为准确clean PR99 head `0ed7f38fae0b9451e2adc1ae1302c24f78c4bfe1`（集成树 `/tmp/main-controller-20261008/ui-v3-integration`）；新权威读取本main合同。两条原可见终端复用，不新增窗口/内部Agent；核各自clean，保留旧分支，从本地fetch该候选建立新具名分支，语义REBASE_ACK后直接实施。主控只管文档/审核/机械集成/PR/Linear，不写产品代码。
 
