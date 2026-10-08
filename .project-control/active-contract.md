@@ -31,11 +31,13 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47已结案；任务49核准确CI三失败 | 仅HomeCardDialog及三个具名直接测试；无服务/GUI权；不得削弱业务/焦点断言 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47/49已结案并保留线程 | 无新增源码/服务/GUI权；主控核PR97新head CI及剩余边界 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48已结案并保留线程 | 全部服务/GUI资源已退出，无新增产品/服务/GUI权 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+任务49结算：主控已核0af2373a84fd1638168fbe89609ac557afc1b6d4/父a512cc4、3测试文件13增10删及完整报告/日志。本地联合修改前2 FAIL/1 PASS（CI焦点未本地复现），修改后3 PASS/91 skipped；等待实际Portal按钮/dialog及关闭焦点条件，严格预览/SSR/父状态/取消不写仍保留，类型与diffcheck通过。接受succeeded并retain。机械组合254bb3c9911e36c6725364e6b8a612a24bfe84ef，patch-id与源码提交相同；较B48所验49ec013只有三测试差额，全部产品blob不变，B48真实GUI可复用，不重开服务。准确新head CI37750067542运行结果以GitHub为准；未宣称通过/合入或整体RETIRED。
 
 任务48结算：主控已读完整短报告、card-comparison及真实首屏/开发菜单/重开PNG，接受准确49ec013补验6 PASS、succeeded并retain；真实首屏和普通刷新无原Hydration入口，历史打开关闭重开、V1/clip2/草稿/暂停8秒及关闭焦点保持，知识/设置显示正常。初次quality读取失败仍单列原未改行为，刷新后尚未检查，不冒称质量通过。61表/旧源hash不变；16:21:56自有API95702/Web95703/lease95704/Chrome96018及组、根进程、4574/3174均退出，主控独立ps/lsof相符，无续约。下面任务48 START仅历史依据，不得恢复。精确CI37748842801已结束Backend/Desktop syntax SUCCESS、Frontend三测试失败，归49；不把GUI6项正证扩为整体矩阵/RETIRED或可合入。
 
