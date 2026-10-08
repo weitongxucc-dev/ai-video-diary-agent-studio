@@ -5873,15 +5873,37 @@ def _linkage_lines(linkage: list[dict[str, object]]) -> list[str]:
 def _person_render_matches_narration(
     render: PersonRender, segment: NarrationSegment, transforms: list[TransformRun]
 ) -> bool:
-    return bool(render.artifact_ref and segment.audio_reference and any(
-        item.transform_type == "person_render"
+    from app.avatar_lipsync import _authorization_failure
+
+    matching = [item for item in transforms
+        if item.transform_type == "person_render"
         and item.status == "succeeded"
         and item.input_digest == render.cache_key
-        and render.artifact_ref in item.output_refs
-        and segment.audio_reference in item.input_refs
+        and render.artifact_ref and render.artifact_ref in item.output_refs
+        and segment.audio_reference and segment.audio_reference in item.input_refs
         and item.parameters.get("language") == segment.language
-        for item in transforms
-    ))
+        and item.parameters.get("presenter_input_facts")]
+    if not matching:
+        return False
+    try:
+        person = production_repo.get_person_profile(
+            render.workspace_id, render.person_profile_id, render.person_version)
+        audio = production_repo.resolve_authorized_narration_audio_reference(
+            render.workspace_id, segment.audio_reference)
+        request = production_repo.resolve_avatar_lipsync_request(
+            workspace_id=render.workspace_id, person_id=person.id, person_version=person.version,
+            voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
+            audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
+            motion=render.motion, expression=render.expression,
+            authorization_id=person.authorization.id, authorization_version=person.authorization.version,
+            model_id=render.model_id)
+        if _authorization_failure(request) is not None:
+            return False
+        input_facts = presenter_input_facts(request)
+    except (KeyError, ValueError, OSError):
+        # Missing or unauthorized current inputs cannot authorize an old output.
+        return False
+    return any(item.parameters["presenter_input_facts"] == input_facts for item in matching)
 
 
 def _person_render_media_path(render: PersonRender) -> Path | None:

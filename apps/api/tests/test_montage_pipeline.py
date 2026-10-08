@@ -4,6 +4,7 @@ from app.subtitle_schedule import subtitle_schedule
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -4568,6 +4569,48 @@ def test_person_reuse_requires_current_audio_lineage(permitted_person_edit_state
     assert len(state.provider.output_cache_keys) == 1
 
 
+@pytest.mark.parametrize("role", ["audio", "visual"])
+def test_person_cache_rejects_same_path_mutation(permitted_person_edit_state, role):
+    state = permitted_person_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    command = {"raw_command": "这一段换成当前人物出镜", "context_stage": "review",
+               "selected_object_refs": ["clip:clip-person-target"]}
+    with state.granted() as context:
+        generated = main_module._generate_creation_task_person_render_record(
+            state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id,
+                person_version=state.old_render.person_version), grant_context=context)
+    preview = state.client.post(base + "/edits/preview", json=command)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()["proposal"]
+    assert proposal["operation"]["payload"]["reuse_person_render_id"] == generated.id
+    transform = next(t for t in state.production.list_transform_runs(state.workspace_id, state.task.id)
+                     if t.input_digest == generated.cache_key and t.status == "succeeded")
+    fact = next(f for f in transform.parameters["presenter_input_facts"] if f["role"] == role)
+    path = Path(fact["path"])
+    stat = path.stat()
+    path.write_bytes(bytes(b ^ 1 for b in path.read_bytes()))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert path.stat().st_size == stat.st_size and path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert path.stat().st_ctime_ns != stat.st_ctime_ns
+    with state.production._connect() as conn:
+        before = tuple(conn.iterdump())
+    root = Path(main_module.settings.video_output_path)
+    outputs = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = list(state.provider.output_cache_keys)
+    rejected = state.client.post(base + f"/edits/{proposal['id']}/confirm")
+    assert rejected.status_code == 409, rejected.text
+    assert "reuse target has changed" in rejected.text
+    with state.production._connect() as conn:
+        assert tuple(conn.iterdump()) == before
+    assert state.provider.output_cache_keys == calls
+    assert {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()} == outputs
+    changed = state.client.post(base + "/edits/preview", json=command)
+    assert changed.status_code == 200, changed.text
+    assert "reuse_person_render_id" not in changed.json()["proposal"]["operation"]["payload"]
+
+
 def test_person_lineage_requires_matching_language_and_success(person_render_edit_state):
     state = person_render_edit_state
     segment = state.production.get_narration_segment(state.workspace_id, state.task.id,
@@ -4576,11 +4619,26 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
     transform = SimpleNamespace(transform_type='person_render', status='succeeded',
         input_digest=render.cache_key, output_refs=[render.artifact_ref],
         input_refs=[segment.audio_reference], parameters={'language': segment.language})
-    assert main_module._person_render_matches_narration(render, segment, [transform])
-    transform.parameters = {'language': 'en'}
     assert not main_module._person_render_matches_narration(render, segment, [transform])
-    transform.parameters = {'language': segment.language}
+    audio = state.production.resolve_authorized_narration_audio_reference(state.workspace_id, segment.audio_reference)
+    person = state.production.get_person_profile(state.workspace_id, render.person_profile_id, render.person_version)
+    visual = state.production.resolve_workspace_media_reference(
+        state.workspace_id, person.avatar_reference, require_registered=True)
+    facts = main_module.presenter_input_facts(SimpleNamespace(audio_path=str(audio), visual_path=str(visual)))
+    transform.parameters['presenter_input_facts'] = facts
+    assert main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': 'en', 'presenter_input_facts': facts}
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+    transform.parameters = {'language': segment.language, 'presenter_input_facts': facts}
     transform.status = 'failed'
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+    transform.status = 'succeeded'
+    voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id,
+                                                          segment.voice_version)
+    state.production.save_authorization(replace(voice.authorization, version='v2', status='revoked'))
+    assert not main_module._person_render_matches_narration(render, segment, [transform])
+    state.production.save_authorization(replace(voice.authorization, version='v3'))
+    audio.unlink()
     assert not main_module._person_render_matches_narration(render, segment, [transform])
 
 
