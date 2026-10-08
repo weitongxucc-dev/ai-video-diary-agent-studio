@@ -31,11 +31,15 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44源码已结案保留，B45历史可读分项通过 | 无新增源码/服务权；具体缺陷另具名交回 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44已结案；任务47修实际侧卡hydration错误 | 仅HomeCardDialog及SideCards直接测试；无服务/GUI/其它产品边界权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45已结案；任务46补未验交互 | 仅新ui46隔离测试/自有GUI和证据；条件START及15分钟绝对窗口，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务47 / UI（MAIN-UI-CARD-HYDRATION-20261008-47）**：B46在准确94bf367真实Chrome读取开发1 Issue正文，`ui46/issue-text.txt`/`issue-readable.json`明确Hydration failed：HomeCardDialog103初始`open=false`隐藏section与服务器VideoEditor_stage div不一致，调用CreationTaskWorkspace2146/TaskPage24。主控已核真实AX错误及准确源码109的document条件Portal，不把浏览器可恢复渲染或用户“可以用”当错误不存在。唯一UI写者基于自身clean400c3ee512a037d06b1621d1d24238143459552d，定向确认根因后修复SSR与首次客户端输出一致、客户端可用后正常Portal。owned仅`apps/web/src/components/HomeCardDialog.tsx`及既有`__tests__/SideCards.test.tsx`；不改业务/API/状态/几何CSS，不另建浮层/依赖或隐藏错误。
+
+保留父卡挂载、历史选择/滚动/草稿/播放器、逐层关闭/焦点和同级替换规则。必要的一次真实SSR→hydrate消费者复现/复验及相关最小已有专项、类型检查即可；无全量/重复已过检查，无服务/GUI/安装/模型/探针/媒体/远端写权。仅新`/tmp/main-acceptance-20261008/ui47/`短报告准确父/commit/diff/首因/验证与未验。既有B46人工滚动/Esc/重开状态正证保留，修改后的首屏/刷新和卡片须主控机械组合再由独立新任务真实验证；当前B46资源已退出，不能热换候选。用户已明确不用继续人工；本单属于已批准UI目标内真实缺陷修复，不新增产品决定。读本段及直接DESIGN §4.2，语义ACK后施工，不等待再次许可。
 
 **任务46 / B（MAIN-UI-INTERACTION-ACCEPTANCE-20261008-46）**：用户最新“可以抓紧吧”确认现有未验交互的继续验收并愿协助3–5分钟，不改变设计或恢复重模型。复用既有B终端的新Dispatch，唯一新写根`/tmp/main-acceptance-20261008/ui46/`，准确冻结94bf3671cb6efcd540e09f83f818a34f363c75e1，来源`/tmp/main-controller-20261008/ui-v51/integration`；按DESIGN §2/4.2/7只补受控历史关闭重开/正文滚动/焦点、三栏拖动收起与记忆、完整播放器可见与普通刷新。原45已退出，绝不重启旧根。无产品/测试/Git/共享文档/Linear/远端写权，UI/A均无新增权。
 
