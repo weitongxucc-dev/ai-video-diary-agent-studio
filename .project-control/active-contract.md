@@ -63,7 +63,9 @@ Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_p
 
 最低验证：假浏览器只验证调用顺序、无确认零上传/发送、陈旧产物/跨空间拒绝、真实结果解析/持久回读与未知结果禁止自动重发；相关Web组件/类型检查及退役消费者不存在检查。若需要查看实际登录前页面/GUI或依赖安装，先给精确动作与路径，由主控在用户授权范围补具名权限；不得因未登录停掉已授权代码实现。无服务/真实浏览器/平台网络/账号操作权，不以组件检查冒称GUI/发布通过。交clean源码、净diff、B所需准确挂载补丁、实际测试与全部未验到 `/tmp/main-acceptance-20261009/publishing80/`，主控审核/集成后另安排具名真实登录和发送。整体发布迁移只在真实目标与旧消费者退役证明完成后接受，源码阶段不关闭WIL45/113/114/115。
 
-## 当前交付波次：B76 / UI77
+80.1 主控已核官方Python Playwright 1.63.0：Python>=3.10，与项目3.11兼容，macOS提供arm64/universal2 wheel，Apache-2.0；官方支持channel=chrome持久独立上下文和PyInstaller。UI80可仅在apps/api/pyproject.toml声明playwright==1.63.0、更新apps/api/uv.lock的必要解算差额；必要的apps/api/pyinstaller.spec只补此真实运行依赖的资源/隐藏导入。根锁、其它依赖版本不顺手升级；核uv sync --locked契约，依赖只下载到新owned staging/venv/cache，不改全局或B复用环境。不要playwright install/下载浏览器，用已装Chrome；本轮不启动浏览器/服务/账号。官方说明与本地兼容核验在主控消息给出，包内driver收集与实际打包仍需后续同候选验证，不能把声明兼容当包通过。
+
+## 已结案波次：B76 / UI77
 
 本波次B76/UI77/UI78已具名交付并由主控审核结案，三项Task均succeeded；两条原可见终端retain，旧Dispatch与START不提供新增写入/运行权限。人物源码68f687daeff7e56041a1e88d24a5143fc311156c、包源码1b1d78920e92f16c80b9a25cf2530ee75548a5f6、字幕测试修正f5c2d062a59c57480f8cbc96ab9ce6ee3d725011已机械组合，13个人物路径及两项UI差额blob相同；这里只接受具名源码/构建结果，不接受真实模型/GUI/完整产品完成。UI77包不包含B76，后续须重建。PR99旧head的后端15失败有7项测试接口已定向修正，剩余8项未解决，新组合远端CI另行回读。下一具名实施优先处理这8项，再组合包启动/全旅程与真实发布接线；当前没有启动下一任务，资源/模型/账号外发暂停与不自动合main继续有效。
 
