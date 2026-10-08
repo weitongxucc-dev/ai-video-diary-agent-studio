@@ -31,7 +31,7 @@ UI与A当前64/65均已语义REBASE_ACK v3权威与共同867c6bf，原分支保�
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 67：v3编辑入口与预览定向收口 | 仅67具名VideoEditor/Publishing消费者；无服务/模型权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 68：画幅真实值与测试收口 | 仅VideoEditor/Publishing直接测试；无服务/模型权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：普通编辑直接持久草稿 | 仅65具名编辑Web/API消费者；无服务/模型权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 66：v3组合候选必要验收 | 新隔离输入准备；准确候选绑定前无服务/GUI权 |
 
@@ -58,6 +58,10 @@ A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤�
 完成现有VideoClipInspector普通字段直接提交：合法源时间、画面/关联倍速、裁切、适配等在选择或输入完成时应用草稿，移除普通预览按钮；切开/复制命令直接提交、删除仍确认。CanvasControls不得以每次版本变化key卸载父卡，保留打开/展开/滚动并同步真实当前值。预览必须按任务比例同时适配实际宽高限制，保持首屏预览/三轨；单独aspectRatio style不能代替实际几何。QuickEditor现lastApplied永久拦截同值失败重试须做最小修正，依既有busy/回调完成事实，不新建兼容或通用防护。补64.1已经批准的Publishing实际状态形状，仅显示不宣称发布接通。
 
 先读DESIGN v5.2普通编辑/父卡/比例条款与此段语义ACK；同一授权目标内直接完成，不等待新START。保留64全部有效成果和用户数据，无服务/GUI/模型/探针/网络/收费/共享文档/远端写权。仅必要直接消费者检查及类型/diff检查，复用64未影响结果，不重跑134项或全矩阵。证据/tmp/main-acceptance-20261008/ui67/；准确clean源码及剩余事实交付，由主控组合A65后B66验证。
+
+### UI68：已交67的最后两项差额
+
+67源码2dd9f50已retain，旧操作权结束；先前消息未在结案前消费。原UI终端从clean 2dd9新分支，仅VideoEditor.tsx的CanvasControls真实fit_mode同步及PublishingWorkspace.test.tsx删除本次20行Lucide类名镜像测试。ratio变化不清空已应用适配；撤销/重做读真实clips，父卡挂载/滚动保持。沿用67用户授权，不重构或扩大范围，不重跑15项/GUI/类型全量；既有直接消费者最小核验与diffcheck即可，无服务/模型/网络/共享权威权。证据复用ui67，交准确净提交，A65/B66继续原任务不暂停。
 
 ### B66：v3同候选必要可见验收
 
