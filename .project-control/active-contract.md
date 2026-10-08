@@ -33,9 +33,15 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47/49已结案；任务50核持续焦点失败 | 仅HomeCardDialog及SideCards直接测试；无服务/GUI/其它写权，不削弱焦点契约 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48已结案并保留线程 | 全部服务/GUI资源已退出，无新增产品/服务/GUI权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48已结案；任务51准备焦点修复补验 | 仅新ui51隔离准备；本Dispatch准确SHA START后一次15分钟GUI，无产品写权 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务51 / B（MAIN-UI-FOCUS-ACCEPTANCE-20261008-51）**：UI50已定位React19.2.6提交恢复覆盖layout清理焦点，产品HomeCardDialog改为提交后passive清理，源码仍待冻结。B用原pipefish可见终端新Dispatch，仅新`/tmp/main-acceptance-20261008/ui51/`准备；mode=ro备份ui48/db/fixture.sqlite3，61表相等/原hash不变，具名ui48合成owner复制0600不打印；只读合法ui45/library/source.mp4与父素材根，其余HOME/XDG/config/cache/tmp/output/models/agent/store全隔离、Key空/Pi offline/定时OFF。准确源码archive必须等UI50接受后的主控组合SHA START，旧48不复活。
+
+既有依赖只读复用，无安装/build/tests/改配置或源依赖；定向核已有CI锁版React19.2.6依赖能否作为本轮Web运行依赖，允许仅新ui51内readonly symlink映射，不修改已有node_modules，不猜运行版本与CI相同。方法和实际可用版本短PREPARED；若锁版完整运行依赖缺失先报事实，不安装或私改权限。无GUI/服务直到本Dispatch START；无产品/Git/远端/共享权威/用户数据/密钥/模型/媒体/探针权。
+
+START后准确组合一次API4575/Web3175/新Chrome profile，自首次启动15分钟固定到期不续；目标仅首屏/普通刷新无hydration、统一历史卡正常打开关闭重开并关闭焦点返回入口、选择/草稿/父状态保持，必要共用嵌套卡顶层关闭。原生AX/PNG，不CDP/JS/合成键盘/绕过focus拒绝，不再人工或重复保存/锁定/制作/完整矩阵。独立版本边界如实记录，Esc锁版组件专项与GUI点击关闭分开报告。结束退出登记自有PID/PGID/新profile并核本根/4575/3175无残余；短报告准确SHA/版本/PNG与PASS/FAIL/UNVERIFIED、释放后真实worker_done。未验矩阵不升级，WIL-205/PR仍不自动完成/合入。
 
 任务50最小核验补充：UI已证本机Web已装React19.3/jsdom30.1.2/Vitest4.1.11与CI锁19.2.6/30.0.1/4.1.10不同，现有根node_modules/.pnpm具备锁版；静态19.2.6 flushMutationEffects显示layout cleanup焦点后提交恢复可覆盖，尚须实证。允许只用已安装锁版包在Node内存startVitest/resolve aliases做原SideCards hydrate单例修改前→必要修复后专项，不安装/修改依赖或配置文件、不建另一安装环境、不启动服务。相关临时runner/日志仅ui50，alias只解决准确锁版测试运行，不进入产品或workflow；准确版本/命令/失败与修复证据回报，不能把静态推断当已复现。原owned与模型暂停、GUI隔离界限不变。
 
