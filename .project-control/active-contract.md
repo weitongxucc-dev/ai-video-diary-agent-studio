@@ -59,7 +59,7 @@ START_GUI冻结候选为`ef4b74c7405842b0f38e6fbf45dd6ae04aa8a0a5`，独立revie
 
 ## 任务36/37实施与验收记录（已结案，操作权收回）
 
-任务42 / UI（MAIN-UI-CI-CONTRACT-20261008-42）：主控在组合ef4b74c实际运行CI必需`apps/web/scripts/modern-desktop-contract-check.mjs`，仅3项失败：旧`--sidebar-width: 220px`、旧`--inspector-width: 320px`以及`Modern Desktop System`旧文档标题。允许同一可见UI线程仅该脚本对已批准v5.1权威与实际运行消费者作最小修正，保留不相关真实业务/桌面/旧路径退役检查；不得删除检查以掩盖新缺陷或添加镜像实现测试。基于自身clean3925e9b，准确单文件提交与一次该检查，报告实际结果，无产品运行/GUI/模型/共享文档/依赖/远端写权。任务38已结案不复活。B41已收到HOLD_GUI，下一精确完整SHA取代ef4启动权后具名START_GUI，未变API与fixture准备沿用；整体RETIRED仍待实际GUI。
+任务42 / UI（MAIN-UI-CI-CONTRACT-20261008-42）：主控在组合ef4b74c实际运行CI必需`apps/web/scripts/modern-desktop-contract-check.mjs`，仅3项失败：旧`--sidebar-width: 220px`、旧`--inspector-width: 320px`以及`Modern Desktop System`旧文档标题。唯一UI写者已提交单文件e89ee271243b0e806ef3e7cc8dea6adedf77fb82，主控审查保留不相关真实业务/桌面/旧路径退役检查，接受succeeded并retain，不授予新增修改。机械组合最终候选`ce9a3a12c58e52e6538ba3ff143eeba3baad5335`，相对ef4只有该检查脚本3行差额，运行Web/API完全相同；主控该必需检查复核通过，未变组件证据沿用。草稿PR97依赖PR96，均未合入。B41先释放旧ef4服务与浏览器，保留初次真实知识页截图/焦点拒绝和已成功原生AX语义操作证据，再按同Dispatch新的具名START_GUI使用ce9完整archive；不能沿用旧SHA启动权。新窗口仍30分钟绝对租约，无模型/媒体/Keychain写权，fixture与241API blobs准备不重造；整体RETIRED仍待实际GUI。
 
 主控已接受两条准确worker_done/outcome failed：本轮失败原因是实际资源与依赖阻断，不能改称实现专项失败或整体成功；全部自有验收资源已释放，线程已worker-retain，Run无待回收Dispatch。已审组合候选`a3e9c7b9dd51927f605272fda8bd6410bd707896`在[草稿PR96](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/pull/96)，main未合入；CI结果以实时workflow为准。两次软件准备内存准入拒绝，0start/job/Grant/model，当前完整成片/Pi修改重出/默认人物仍未完成。以下只保留本轮具体范围及真实证据依据，不授予继续启动或修改权；用户释放资源后需新Dispatch绑定精确候选与有限窗口。
 
