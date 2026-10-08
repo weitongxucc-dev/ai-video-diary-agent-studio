@@ -31,11 +31,13 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44已结案；任务47修实际侧卡hydration错误 | 仅HomeCardDialog及SideCards直接测试；无服务/GUI/其它产品边界权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47已结案并保留线程 | 无新增源码/服务/GUI权；47源码接受，独立GUI归48 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46已结案；任务48准备侧卡hydration补验 | 仅新ui48隔离准备/证据；候选冻结并收到本Dispatch START后才有一次15分钟服务/GUI窗口，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+任务47结算及48冻结：主控已核准确a512cc479068be25f47205a3234d913b22626991/父400c3ee，两owned文件64增3删、真实SSR→hydrate修改前失败及修改后7 PASS/类型通过、clean；接受succeeded并retain，不等于GUI通过。已机械组合为`49ec0130560de78eba8b64a81edc85bc5b065f85`（来源`/tmp/main-controller-20261008/ui-v51/integration`），两文件与UI候选blob一致，API/lib/actions较PR96不变。B48须用此完整archive，收到本Dispatch具名START且语义ACK、备份比较、源码核对、4574/3174空闲后才启动；原94bf与46环境不复活。47修复仅初始clientReady/useEffect及active就绪门控，保留关闭挂载与原栈行为。
 
 **任务48 / B（MAIN-UI-HYDRATION-ACCEPTANCE-20261008-48）**：任务46已准确failed结案并retain，主控接受8 PASS / 1 FAIL / 3 UNVERIFIED与16:08:04全部自有资源释放。用户人工滚动、Esc、重开和“Tab可以用”保留，不扩大为完整键盘循环/实际拖动/完整播放器通过；原任务46全部启动权终止。UI47正修唯一已证hydration缺陷，复用B可见终端新Dispatch，唯一新写根`/tmp/main-acceptance-20261008/ui48/`。
 
