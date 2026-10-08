@@ -15553,18 +15553,51 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
         creation_execution.validate_input(workspace_id, task, script.id, digest)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    narration_artifact = (
+        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
+        if task.narration_cache_key
+        else None
+    )
+    if (narration_artifact is not None
+            and (narration_artifact.task_id != task.id or narration_artifact.script_id != script.id)):
+        narration_artifact = None
+    recorded_narration_ready = (
+        narration_artifact is not None and narration_artifact.source_kind == "recorded"
+    )
+    can_continue = (
+        plan.presenter_share_target == 0
+        if recorded_narration_ready
+        else bool(plan.selected_voice)
+    )
+    if can_continue:
+        continuation_blocker = None
+    elif recorded_narration_ready:
+        continuation_blocker = "当前配音是本人录音，不能满足露脸目标与口型身份；请将露脸目标设为0，或改用与授权声音匹配的生成配音。"
+    elif narration_artifact is not None:
+        continuation_blocker = "当前已有配音产物，但制作要求未选定授权声音版本；请选择授权声音后重新确认。"
+    elif task.narration_cache_key:
+        continuation_blocker = "当前配音产物不可用或不再对应这版文案；请重新采用录音或选择已授权声音。"
+    else:
+        continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
     return {
         "task_id": task.id,
         "script_id": script.id,
         "script_title": script.title,
         "script_sections": [{"title": section.title, "content": section.content} for section in script.sections],
         "plan_id": plan.id,
+        "narration_source": ({
+            "source_kind": narration_artifact.source_kind,
+            "source_artifact_ref": narration_artifact.source_artifact_ref,
+            "duration_seconds": narration_artifact.duration_seconds,
+        } if narration_artifact is not None else None),
         "requirements": {
             "aspect_ratio": plan.aspect_ratio,
             "duration_target_seconds": plan.duration_target_seconds,
             "presenter_share_target": plan.presenter_share_target,
             "lipsync_quality": plan.lipsync_quality,
             "selected_voice": plan.selected_voice.profile_id if plan.selected_voice else None,
+            "can_continue": can_continue,
+            "continuation_blocker": continuation_blocker,
             "template_settings": plan.template_settings,
         },
         "input_digest": digest,

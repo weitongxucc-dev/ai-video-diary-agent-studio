@@ -280,8 +280,10 @@ function queuePreview(): CreationExecutionPreview {
     task_id: "task-1", script_id: "script-1", script_title: "真实文案",
     script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
     plan_id: "plan-1", input_digest: "a".repeat(64),
+    narration_source: null,
     requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
-      presenter_share_target: 20, lipsync_quality: "high", selected_voice: "voice-1", template_settings: {} },
+      presenter_share_target: 20, lipsync_quality: "high", selected_voice: "voice-1",
+      can_continue: true, continuation_blocker: null, template_settings: {} },
   };
 }
 
@@ -528,9 +530,10 @@ describe("CreationTaskWorkspace", () => {
       task_id: "task-1", script_id: "script-1", script_title: "真实文案",
       script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
       plan_id: "plan-1", input_digest: "a".repeat(64),
+      narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
         presenter_share_target: 20, lipsync_quality: "high", selected_voice: "voice-1",
-        template_settings: {} },
+        can_continue: true, continuation_blocker: null, template_settings: {} },
     };
     mocks.previewExecution.mockResolvedValue(preview);
     mocks.getWorkspace.mockResolvedValue(initial);
@@ -638,7 +641,13 @@ describe("CreationTaskWorkspace", () => {
     failed.stages = [{ stage: "narration", status: "completed", at: "2026-10-07T00:00:00Z" },
       { stage: "montage_plan", status: "reused", at: "2026-10-07T00:00:01Z" },
       { stage: "person_render", status: "completed", at: "2026-10-07T00:00:02Z" }];
-    mocks.previewExecution.mockResolvedValue(queuePreview());
+    const recordingPreview: CreationExecutionPreview = {
+      ...queuePreview(),
+      narration_source: { source_kind: "recorded", source_artifact_ref: "artifact:task-1/recording-1", duration_seconds: 4.2 },
+      requirements: { ...queuePreview().requirements, presenter_share_target: 0, selected_voice: null,
+        can_continue: true, continuation_blocker: null },
+    };
+    mocks.previewExecution.mockResolvedValue(recordingPreview);
     mocks.getExecution.mockResolvedValue(failed);
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.resumeExecution.mockResolvedValue(queueStatus("queued"));
@@ -693,14 +702,43 @@ describe("CreationTaskWorkspace", () => {
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
       script_sections: [{ title: "正文", content: "实际内容" }],
       plan_id: "plan-1", input_digest: "b".repeat(64),
+      narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
         presenter_share_target: 0, lipsync_quality: "fast", selected_voice: null,
+        can_continue: false, continuation_blocker: "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。",
         template_settings: {} },
     });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(await screen.findByText("请先在下方选择已授权声音，再开始制作。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "请先选择授权声音" })).toBeDisabled();
+    expect(await screen.findByText("请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂不能开始制作" })).toBeDisabled();
     expect(mocks.startExecution).not.toHaveBeenCalled();
+  });
+
+  it("enables pure-material continuation for a currently adopted recording and shows its true source", async () => {
+    const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running",
+      narration_cache_key: "recorded-narration" });
+    initial.narration = {
+      task: initial.task, script_id: "script-1", audio_reference: "narration://artifact/recorded-narration",
+      duration_seconds: 4.2, sample_rate: 16000, model_id: null, voice_profile_id: null, source_kind: "recorded",
+      source_artifact_ref: "artifact:task-1/recording-1", source_sha256: "a".repeat(64),
+      source_script_digest: "b".repeat(64), language: "zh", pronunciation_version: "",
+      segments: [{ id: "segment-1", source_section_id: "section-1", text: "本人录制的段落", audio_reference: "narration://artifact/recorded-narration",
+        audio_url: null, duration_seconds: 4.2, sample_rate: 16000, model_id: null, voice_profile_id: null,
+        voice_version: null, language: "zh", pronunciation_version: "", status: "ready", source_kind: "recorded",
+        source_artifact_ref: "artifact:task-1/recording-1", source_sha256: "a".repeat(64), source_script_digest: "b".repeat(64) }],
+    };
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.previewExecution.mockResolvedValue({
+      ...queuePreview(), narration_source: { source_kind: "recorded", source_artifact_ref: "artifact:task-1/recording-1", duration_seconds: 4.2 },
+      requirements: { ...queuePreview().requirements, presenter_share_target: 0, selected_voice: null,
+        can_continue: true, continuation_blocker: null },
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
+    expect(screen.getByText(/配音来源：本人录音 · 已采用 · 4\.2 秒/)).toBeInTheDocument();
+    expect(screen.getByText("本人录音 · 已采用")).toBeInTheDocument();
+    expect(screen.getByText("artifact:task-1/recording-1")).toBeInTheDocument();
+    expect(screen.queryByText("未就绪")).not.toBeInTheDocument();
   });
 
   it.each(["local", "delete", "cross-object"])("keeps the real shell single-clip scope %s on its actual confirmation surface", async (scope) => {
@@ -1057,17 +1095,18 @@ describe("CreationTaskWorkspace", () => {
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
       script_sections: [{ title: "正文", content: "实际内容" }],
       plan_id: "plan-1", input_digest: "c".repeat(64),
+      narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
         presenter_share_target: 0, lipsync_quality: "fast", selected_voice: null as string | null,
-        template_settings: {} },
+        can_continue: false, continuation_blocker: "请先选择授权声音。", template_settings: {} },
     };
     mocks.previewExecution.mockResolvedValueOnce(preview).mockResolvedValueOnce({
-      ...preview, requirements: { ...preview.requirements, selected_voice: "voice-1" },
+      ...preview, requirements: { ...preview.requirements, selected_voice: "voice-1", can_continue: true, continuation_blocker: null },
     });
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    expect(await screen.findByRole("button", { name: "请先选择授权声音" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "使用此声音" }));
+    expect(await screen.findByRole("button", { name: "暂不能开始制作" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "使用授权声音生成" }));
 
     await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", { voice_profile_id: "voice-1", voice_version: "v1" }));
     expect(await screen.findByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();

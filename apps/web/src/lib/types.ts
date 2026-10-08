@@ -1488,12 +1488,19 @@ export type CreationExecutionPreview = {
   script_title: string;
   script_sections: { title: string; content: string }[];
   plan_id: string;
+  narration_source: {
+    source_kind: "generated" | "recorded";
+    source_artifact_ref: string | null;
+    duration_seconds: number;
+  } | null;
   requirements: {
     aspect_ratio: string;
     duration_target_seconds: number;
     presenter_share_target: number;
     lipsync_quality: "high" | "fast";
     selected_voice: string | null;
+    can_continue: boolean;
+    continuation_blocker: string | null;
     template_settings: Record<string, unknown>;
   };
   input_digest: string;

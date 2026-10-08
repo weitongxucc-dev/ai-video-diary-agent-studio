@@ -102,6 +102,7 @@ def recording_task(tmp_path, monkeypatch):
         parent_version_id=None, sequence=1, snapshot={"montage": montage_payload},
         created_by_operation_id=None))
     monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "creation_execution", main_module._new_creation_execution())
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(effective_temporary_root_path=tmp_path / "temp"))
     monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
@@ -132,6 +133,13 @@ def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) 
 
 def test_initial_recording_requires_explicit_adoption_then_persists_narration_for_continuation(recording_task, tmp_path):
     repo, task_id, _old_version_id, client = recording_task
+    authorized_voice = repo.get_creation_plan("local", "plan_recording").selected_voice
+    generated_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
+    assert generated_preview.status_code == 200, generated_preview.text
+    assert generated_preview.json()["requirements"]["presenter_share_target"] == repo.get_creation_plan(
+        "local", "plan_recording").presenter_share_target
+    assert generated_preview.json()["requirements"]["can_continue"] is True
+    assert generated_preview.json()["narration_source"]["source_kind"] == "generated"
     _prepare_first_recording_adoption(repo, task_id)
     route = f"/api/creation-tasks/{task_id}/audio/recordings"
     saved_response = client.post(route, files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
@@ -166,6 +174,35 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
         "recorded", "section_1", "真实待制作文案")
     assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
     assert client.get(route).json()["items"][0]["applied"] is True
+
+    execution_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
+    assert execution_preview.status_code == 200, execution_preview.text
+    preview_body = execution_preview.json()
+    assert preview_body["narration_source"] == {
+        "source_kind": "recorded",
+        "source_artifact_ref": saved["source_ref"],
+        "duration_seconds": pytest.approx(1),
+    }
+    assert preview_body["requirements"]["can_continue"] is True
+    assert preview_body["requirements"]["continuation_blocker"] is None
+
+    plan = repo.get_creation_plan("local", task.plan_id)
+    plan.presenter_share_target = 20
+    plan.selected_voice = authorized_voice
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(plan), default=str), "local", plan.id))
+    identity_blocked_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
+    assert identity_blocked_preview.status_code == 200, identity_blocked_preview.text
+    assert identity_blocked_preview.json()["requirements"]["can_continue"] is False
+    assert "当前配音是本人录音" in identity_blocked_preview.json()["requirements"][
+        "continuation_blocker"]
+
+    plan.presenter_share_target = 0
+    plan.selected_voice = None
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(plan), default=str), "local", plan.id))
 
     restarted = ProductionRepository(repo.database_path, repo.video_library_path)
     reloaded = restarted.get_narration_artifact("local", task.narration_cache_key)
@@ -241,6 +278,10 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
             (json.dumps(script_payload), "local", current_script.id),
         )
     assert client.get(route).json()["items"] == []
+    stale_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
+    assert stale_preview.status_code == 200, stale_preview.text
+    assert stale_preview.json()["narration_source"] is None
+    assert stale_preview.json()["requirements"]["can_continue"] is False
 
 
 def test_initial_recording_adoption_rejects_ambiguous_or_stale_script(recording_task):
