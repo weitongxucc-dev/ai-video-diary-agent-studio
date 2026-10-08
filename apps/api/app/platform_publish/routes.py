@@ -40,14 +40,13 @@ def _json_hash(data: object) -> str:
 
 def _actor_fields(actor: object) -> dict[str, str]:
     workspace_id = getattr(actor, "workspace_id", None)
-    member_id = getattr(actor, "member_id", None)
-    if not isinstance(workspace_id, str) or not isinstance(member_id, str) or not member_id:
+    identity_payload = getattr(actor, "identity_payload", None)
+    if not isinstance(workspace_id, str) or not callable(identity_payload):
         raise HTTPException(403, "缺少当前成员的可持久身份")
-    values = {"workspace_id": workspace_id, "member_id": member_id}
-    for key in ("device_id", "user_id"):
-        value = getattr(actor, key, None)
-        if value:
-            values[key] = str(value)
+    values = identity_payload()
+    if not isinstance(values, dict) or not isinstance(values.get("member_id"), str) or not values["member_id"]:
+        raise HTTPException(403, "缺少当前成员的可持久身份")
+    values = {**values, "workspace_id": workspace_id}
     return values
 
 

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.platform_auth import PlatformAuthService
+from app.creation_execution import CreationExecutionActor
 from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity, VerifiedSession
 from app.platform_publish.queue import platform_publish_registration, recover_platform_publish_jobs
@@ -96,11 +97,11 @@ class _DeviceAccess:
     def can_view_device_summary(self, actor): return True
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, actor=None, workspace="ws-1", user_id="member-1"):
     repository = _Repository()
     sessions = _Sessions()
     auth = PlatformAuthService(tmp_path / "metadata.sqlite3", tmp_path / "profiles", session_manager=sessions)
-    auth.verify_current("ws-1", "member-1", "douyin")
+    auth.verify_current(workspace, user_id, "douyin")
     runtime = _Runtime()
     task = SimpleNamespace(id="task-1", output_ready=True, current_timeline_version_id="timeline-7")
 
@@ -110,9 +111,11 @@ def _client(tmp_path):
 
     app = FastAPI()
     app.include_router(build_platform_publish_router(
-        repository, workspace_for=lambda _request: "ws-1",
-        content_reader=lambda _request, _workspace: ("member-1", False),
-        actor_for=lambda _request, workspace: SimpleNamespace(workspace_id=workspace, member_id="member-1"),
+        repository, workspace_for=lambda _request: workspace,
+        content_reader=lambda _request, _workspace: (user_id, False),
+        actor_for=lambda _request, current_workspace: actor or CreationExecutionActor(
+            current_workspace, user_id,
+        ),
         auth_service=auth, task_for_user=lambda _workspace, _task, _user: task,
         publishable_output_for=output, runtime_for=lambda: runtime,
     ))
@@ -159,6 +162,26 @@ def test_confirmed_publish_becomes_one_persistent_job_and_queue_intent(tmp_path)
     assert repeated.json()["id"] == body["id"]
     assert len(repository.jobs) == len(runtime.scheduler.intents) == 1
     assert runtime.wakes == 1
+
+
+def test_confirmed_publish_persists_round_trippable_account_identity(tmp_path):
+    workspace = "00000000-0000-4000-8000-000000000001"
+    device = "00000000-0000-4000-8000-000000000002"
+    user = "00000000-0000-4000-8000-000000000003"
+    actor = CreationExecutionActor.account(workspace, device, user)
+    client, repository, _runtime = _client(
+        tmp_path, actor=actor, workspace=workspace, user_id=user,
+    )
+
+    response = client.post("/api/publishing/tasks/task-1/publish", json=_payload())
+
+    assert response.status_code == 202, response.text
+    prepared = next(event for event in repository.events if event.event_type == "platform_publish_prepared")
+    identity = prepared.payload["identity"]
+    assert identity == {
+        **actor.identity_payload(), "workspace_id": workspace,
+    }
+    assert CreationExecutionActor.from_event(identity["workspace_id"], identity) == actor
 
 
 class _PersistentSessions(_Sessions):
@@ -244,7 +267,9 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     verifier = platform_publish_registration(
         repository, auth, publishable_output_for=output_for,
         verify_identity=lambda actor: "ready",
-        actor_from_event=lambda identity: SimpleNamespace(**identity),
+        actor_from_event=lambda identity: CreationExecutionActor.from_event(
+            identity["workspace_id"], identity,
+        ),
     )
     runtime = build_device_runtime(
         database_path=database, device_lock_path=tmp_path / "device.lock",
@@ -255,8 +280,8 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     app.include_router(build_platform_publish_router(
         repository, workspace_for=lambda _request: workspace,
         content_reader=lambda _request, _workspace: (member, False),
-        actor_for=lambda _request, current_workspace: SimpleNamespace(
-            workspace_id=current_workspace, member_id=member,
+        actor_for=lambda _request, current_workspace: CreationExecutionActor(
+            current_workspace, member,
         ), auth_service=auth,
         task_for_user=lambda ws, current_task_id, user_id: repository.get_creation_task(ws, current_task_id),
         publishable_output_for=output_for, runtime_for=lambda: runtime,
@@ -293,7 +318,9 @@ def test_real_repository_device_runtime_persists_result_and_never_replays_unknow
         before = len([call for call in driver.calls if call[0] == "click"])
         recover_platform_publish_jobs(
             persisted, runtime,
-            actor_from_event=lambda identity: SimpleNamespace(**identity),
+            actor_from_event=lambda identity: CreationExecutionActor.from_event(
+                identity["workspace_id"], identity,
+            ),
             verify_identity=lambda actor: "ready",
         )
         assert runtime.run_once() is False
