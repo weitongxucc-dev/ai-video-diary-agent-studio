@@ -35,11 +35,23 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 88：录音采用后的页面继续入口 | task_238fb365c116 / ctx_29444be61a36；下方88仅页面与预检直接消费者，无实机运行/打包权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 87/88已交源码并retain | 96785d0 / fe04d81已审，当前无新增写入或运行权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 86已审failed并retain | 包启动/Pi创建分项接受，完整制作未通过；所有自有组/端口释放，store锁定；无新增运行/写权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 89：录音新候选入包及真实媒体 | 下方89具名源与隔离运行；无产品源码写权 |
 
-## 当前波次：UI88录音后的页面继续入口；B86真实包验证已结案（2026-10-09）
+## 当前波次：B89新包录音→成片→修改重出（2026-10-09）
+
+UI88 task_238fb365c116 / ctx_29444be61a36已交cleanfe04d8111e3601f5e05c4ad48da0d0f6ba6f94a6，主控复核预检recorded优先、页面按钮与Inspector真实表达，接受隔离专项且retain。87/88与两处唯一权威差额机械组合为clean1767e11d411e40812d3b7fa7990973c5741e0c1b，位置/tmp/main-controller-20261008/ui-v3-integration、分支codex/recorded-narration-delivery-20261009；运行源码逐blob与fe04d81相同，仅两权威文档不同。87/88旧任务结束，以下旧条文不是新写权。
+
+### B89：新录音候选实际ARM64包及一次媒体闭环
+
+复用原B可见终端，保留旧84/86分支和证据，从上述准确1767e11建立codex/recorded-package89-20261009。唯一写入根/tmp/main-acceptance-20261009/creation89/，所有构建、隔离HOME/XDG/userData/DB/config/library/output/cache/tmp/agent/log均在此根；冻结Git输入、排除dotenv，真实用户库/Key/账号不接触。无产品源码写权。因87/88产品源码变化必须沿已验证84路径重建一次ARM64 local.app；可只读复用具名公开已装依赖/缓存，不安装全局、不下载模型/浏览器，不生成DMG/ZIP/签名Release，不覆盖Applications或旧包。
+
+新包启动实际API/Web/Electron，合法本机成员/设备和可信owner归属建立隔离任务，确认一个文案段并明确将本次测试要求设为纯素材0%，不是更改产品默认20%。输入仅86.2已授权两具名本人音视频，保留原件、定向各取最多5秒；可复用86已裁输入但标记为输入，不冒称本次生成。通过本包真实录音保存→明确采用→预检→现有DeviceRuntime/Grant/Worker制作故事板和成片→一个普通可撤销编辑→仅重出→读取/保存当前视频，核当前输入版本、实际文件hash/媒体探测和旧结果失效。不得seed成功Narration/故事板/成片、跳过许可或以TestClient/AST代替实包。准备可用既有repository/API，但可信owner须从真实LocalMember取得并传入确认；页面、HTTP与文件结果分别记录，字幕与本人录音内容匹配/听感未核须保留未验。
+
+不重复86真实Pi创建，不调用Pi/模型/平台，也不读取新旧Key store。重处理串行：录音输入截取单线程每步30秒，实际渲染每步60秒，素材规划10秒。仅本次有限实验复用86的纯素材相关caps：Host CPU75%、保留1.5GiB可用、磁盘至少1GiB、IO128MiB/s；montage额外64MiB/一段两素材/输入4MiB/输出256KiB，render额外512MiB/磁盘16MiB/最长15秒/最高1920px/像素秒31104000/两镜头/8MiB输入输出/一线程。swap总限仅可依据本次启动后的fresh样本加64MiB设置；未知或不足继续真实拒绝，不猜预算、放宽cap或强行Grant。不得跑Qwen或人物模型；Qwen旧5.5GiB准入证据不用于本录音CPU路径，也不能声称模型配音通过。
+
+包启动起固定20分钟租约，构建阶段不计运行租约且不得启动旧包。只登记/停止自有PID/PGID，证明端口释放；若3000被其他应用占用不自行关闭，用户上次批准只针对已退出旧81。可用原生computer工具查看新包和操作一次相关入口；已知焦点/AX拒绝保持具体验收未验，不再要求用户Tab/调窗、不换CDP绕过。无下载、真实账号/登录/平台网络/上传/草稿/发送、收费、Supabase、真实数据迁移或外部写入。交report.md：准确候选/包身份、每步真实结果及首因、普通编辑与输出版本/文件、可见证据与具体未验、全部自有进程释放。精确ACK后直接执行，本机包/制作工作已获用户授权，不等新的START；首个真实缺陷给主控交原写者，不偷偷修改源码。
 
 UI87 task_070705973546 / ctx_dc7706d9c816已交clean96785d0077ba118bdcab812dc176e4bc73a13b0a，接受首次录音保存/显式采用及隔离专项结果，未接受完整页面制作结论。主控实读CreationExecutionPanel仍按selected_voice锁定开始/继续，Inspector仍以缺失模型声音表达录音；源保留，由同一可见线程以下述UI88修复，不重做87、不启动旧Dispatch。
 
