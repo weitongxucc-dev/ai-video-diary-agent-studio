@@ -31,8 +31,8 @@ UI与A当前64/65均已语义REBASE_ACK v3权威与共同867c6bf，原分支保�
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 68：画幅真实值与测试收口 | 仅VideoEditor/Publishing直接测试；无服务/模型权 |
-| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：普通编辑直接持久草稿 | 仅65具名编辑Web/API消费者；无服务/模型权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 69：接续额度中断的持久草稿闭环 | 接管A65已有编辑差额；无服务/模型权 |
+| A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 66：v3组合候选必要验收 | 新隔离输入准备；准确候选绑定前无服务/GUI权 |
 
 ## 当前v3增量：64/65
@@ -62,6 +62,12 @@ A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤�
 ### UI68：已交67的最后两项差额
 
 67源码2dd9f50已retain，旧操作权结束；先前消息未在结案前消费。原UI终端从clean 2dd9新分支，仅VideoEditor.tsx的CanvasControls真实fit_mode同步及PublishingWorkspace.test.tsx删除本次20行Lucide类名镜像测试。ratio变化不清空已应用适配；撤销/重做读真实clips，父卡挂载/滚动保持。沿用67用户授权，不重构或扩大范围，不重跑15项/GUI/类型全量；既有直接消费者最小核验与diffcheck即可，无服务/模型/网络/共享权威权。证据复用ui67，交准确净提交，A65/B66继续原任务不暂停。
+
+### UI69：额度中断后的原目标接续
+
+A65终端明确usage limit，原Dispatch ctx_675e339c161b已abandon/fence，原manta14文件脏树完整保留；patch SHA256 391627b5b51c3f39c680d6761a4b9b64c066dd4b6099b254fcc04a8d843eb6a1。UI68源码24440e4已retain。现唯一实施者转原UI可见终端，新分支从主控v3组合准确52d05b7接续，不建新窗口。机械应用/tmp/main-controller-20261008/draft65-preserved.patch，相关冲突只按已批准语义解决，保留UI64/67/68成果。目标/操作边界沿A65/65.1/65.2，owned转UI69，A原写权失效；读/tmp/main-controller-20261008/draft65-resume.md的具体未完成点，不重做已完成工作。
+
+仅追加VideoEditor.tsx移除68为jsdom加入的ResizeObserver可用性生产回退，必要模拟放已有src/lib/__tests__/setup.ts测试环境；实际桌面浏览器原生具备，不为测试加生产兼容分支。无服务/GUI/模型/探针/媒体/网络/费用/真实数据/共享文档/远端写权。主控仍独占审核/机械集成/PR/Linear。最小直接检查和类型，未改旧通过复用；同一组合GUI归B66。准确clean源码、短报告和实际剩余完成后交付，不将未提交半成品称完成。
 
 ### B66：v3同候选必要可见验收
 
