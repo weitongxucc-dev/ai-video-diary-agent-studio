@@ -67,7 +67,7 @@ it("submits split and copy directly while keeping deletion explicitly confirmabl
   fireEvent.change(screen.getByRole("spinbutton", { name:"镜头分割位置" }), { target:{ value:"1.5" } });
   fireEvent.click(screen.getByRole("button", { name:"切开镜头" }));
   expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"SplitClip", clip_id:"clip-1", split_time_seconds:1.5 });
-  expect(screen.getByRole("button", { name:"预览删除" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name:"删除镜头…" })).toBeInTheDocument();
   expect(onPreview).toHaveBeenCalledTimes(2);
 });
 
@@ -102,4 +102,57 @@ it("disables every fine-edit control for a locked clip", () => {
   expect(screen.getByText("镜头已锁定")).toBeInTheDocument();
   expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toBeDisabled();
   expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toBeDisabled();
+});
+
+it("submits ordinary inspector fields on valid completion without preview buttons", () => {
+  const onPreview = vi.fn();
+  const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
+  render(<VideoClipInspector clip={clip} index={1} count={2} workspace={workspace} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
+  const trim = screen.getByRole("spinbutton", { name:"镜头 2 裁剪起点" });
+  fireEvent.change(trim, { target:{ value:"1.5" } });
+  fireEvent.blur(trim);
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"TrimClip", clip_id:"clip-1", source_start_seconds:1.5 });
+  expect(screen.queryByRole("button", { name:"预览裁剪" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("更多剪辑"));
+  const rate = screen.getByRole("spinbutton", { name:"画面倍速" });
+  fireEvent.change(rate, { target:{ value:"2" } });
+  fireEvent.blur(rate);
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeClipSpeed", clip_id:"clip-1", playback_rate:2 });
+  const linkedRate = screen.getByRole("spinbutton", { name:"关联倍速" });
+  fireEvent.change(linkedRate, { target:{ value:"0.5" } });
+  fireEvent.blur(linkedRate);
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeLinkedSpeed", clip_id:"clip-1", playback_rate:.5 });
+  fireEvent.change(screen.getByRole("combobox", { name:"画面显示方式" }), { target:{ value:"fit" } });
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.5, crop_y:.5 });
+  fireEvent.change(screen.getByRole("combobox", { name:"画面显示方式" }), { target:{ value:"fill" } });
+  fireEvent.click(screen.getByText("裁切位置"));
+  const cropX = screen.getByRole("slider", { name:"裁切水平位置" });
+  fireEvent.change(cropX, { target:{ value:"0.7" } });
+  fireEvent.pointerUp(cropX);
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fill", crop_x:.7, crop_y:.5 });
+  fireEvent.click(screen.getByText("镜头过渡"));
+  const transition = screen.getByRole("spinbutton", { name:"叠化时长（秒）" });
+  fireEvent.change(transition, { target:{ value:"0.4" } });
+  fireEvent.blur(transition);
+  expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"SetClipTransition", clip_id:"clip-1", transition_seconds:.4 });
+  expect(screen.queryByRole("button", { name:"预览速度" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name:"预览变速" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name:"预览画面" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name:"删除镜头…" })).toBeInTheDocument();
+});
+
+it("allows the same QuickEditor value to retry after its busy callback completes", () => {
+  const onPreview = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(createVideoClipDraft(clip));
+    const [busy, setBusy] = useState(false);
+    return <><VideoClipQuickEditor clip={clip} index={0} busy={busy} draft={{ ...draft, start:1.5 }} onDraftStateChange={setDraft} onDraftChange={() => {}} onPreview={input => { onPreview(input); setBusy(true); }} onOpenDetails={() => {}} /><button type="button" onClick={() => setBusy(false)}>完成尝试</button></>;
+  }
+  render(<Harness />);
+  const trim = screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" });
+  fireEvent.blur(trim);
+  expect(onPreview).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name:"完成尝试" }));
+  fireEvent.blur(trim);
+  expect(onPreview).toHaveBeenCalledTimes(2);
 });

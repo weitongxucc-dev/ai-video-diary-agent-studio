@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, Clock3, Film, LoaderCircle, QrCode, RefreshCw, Send, Signal, UserRound } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, CircleDot, Film, LoaderCircle, QrCode, RefreshCw, Send, Signal, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { listCreationTasks } from "@/lib/api";
@@ -15,10 +15,10 @@ const filters: Array<{ id: Filter; label: string }> = [
 ];
 const stageLabels: Record<CreationTask["stage"], string> = { topic: "选题", script: "文案", narration: "配音", montage: "视频剪辑", review: "成片检查" };
 
-function taskState(task: CreationTask): { label: string; tone: string; icon: typeof Clock3 } {
+function taskState(task: CreationTask): { label: string; tone: string; icon: typeof CircleDot } {
   if (task.stage_status === "failed") return { label: "运行失败", tone: styles.stateDanger, icon: AlertCircle };
-  if (task.output_ready) return { label: "成片就绪", tone: styles.stateSuccess, icon: CheckCircle2 };
-  if (task.stage_status === "waiting_for_user") return { label: "需要处理", tone: styles.stateWarning, icon: Clock3 };
+  if (task.output_ready || task.stage_status === "completed") return { label: task.output_ready ? "成片就绪" : "制作已完成", tone: styles.stateSuccess, icon: CheckCircle2 };
+  if (task.stage_status === "waiting_for_user") return { label: "需要处理", tone: styles.stateWarning, icon: CircleDot };
   if (task.stage_status === "running") return { label: "正在制作", tone: styles.stateBlue, icon: LoaderCircle };
   return { label: "尚未开始", tone: styles.stateNeutral, icon: CircleDashed };
 }

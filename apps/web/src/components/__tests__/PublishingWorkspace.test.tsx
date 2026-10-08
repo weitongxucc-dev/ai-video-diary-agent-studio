@@ -110,4 +110,24 @@ describe("PublishingWorkspace", () => {
     expect(screen.getByText("已生成，可检查")).toBeInTheDocument();
     expect(screen.getByText("原因：缺少已授权声音")).toBeInTheDocument();
   });
+
+  it("uses distinct shapes for waiting, running, completed, failed, and not-started task states", async () => {
+    const states = [
+      task,
+      { ...task, id:"running", name:"运行中", stage_status:"running" as const },
+      { ...task, id:"completed", name:"已完成", stage_status:"completed" as const },
+      { ...task, id:"failed", name:"失败", stage_status:"failed" as const },
+      { ...task, id:"not-started", name:"未开始", stage_status:"not_started" as const },
+    ];
+    api.listCreationTasks.mockResolvedValue({ items: states, total_count: states.length });
+    render(<PublishingWorkspace />);
+    await screen.findAllByText("新品讲解视频");
+    const rows = screen.getAllByRole("button").filter(button => button.hasAttribute("data-open-details"));
+    const iconFor = (name: string) => rows.find(row => row.textContent?.includes(name))?.querySelector("svg");
+    expect(iconFor("新品讲解视频")).toHaveClass("lucide-circle-dot");
+    expect(iconFor("运行中")).toHaveClass("lucide-loader-circle");
+    expect(iconFor("已完成")).toHaveClass("lucide-circle-check");
+    expect(iconFor("失败")).toHaveClass("lucide-circle-alert");
+    expect(iconFor("未开始")).toHaveClass("lucide-circle-dashed");
+  });
 });
