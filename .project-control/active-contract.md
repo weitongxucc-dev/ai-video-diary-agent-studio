@@ -62,6 +62,8 @@ A在准备窗口可以合法夹具初始化并由真实HTTP确认文案和读取
 
 任务36/37同候选媒体准备C1：A重出53bae98和B工作台5f06e77均已clean/最小专项通过并机械组合，冻结`91143e8ffc84db64c89c6d4ed431ad7a7d186c86`；主控已审范围和B组件测试组释放。首份61fca准备因内存5779849216<5905580032拒绝，0start/job/Grant/model、API/全部helper/permit已释放，原证据保留。允许A在同software-first根建立独立`source-final`精确archive/清单/新env和fresh-prefixed证据，不覆盖原源码/首因；复用已确认合法owner/script/素材/DB及一次已生成双色媒体，不重复造素材、执行确认业务或OS边界检查。相同profile与4569仅本地连接、自有API组/新20分钟lease、预算所有数值不变；一次fresh swap基线和真实HostResourceProbe（最多原3秒持续窗口）在API启动后核实际准入。先回PREPARED及准确PID/完整decision，再等本Dispatch的START_CREATION36；拒绝即停止/释放，不循环测、不加载模型、不调cap。B和A其它测试/GUI/模型此窗口均暂停。首次完整制作父180秒/各阶段120/10/60秒仍具名START后才可执行一次，编辑重出另有限窗口后续放行。
 
+任务36 CI首因修订C1：PR96/91143e8的Frontend和Desktop syntax通过，Backend实际2失败/1614通过/20跳过；两失败为既有`test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration[False/True]`的重复渲染次数2≠1。A可恢复owned `main.py`仅本次render函数和已有直接专项，定位新增timeline identity对具名无Grant诊断消费者的幂等影响，保持受许可当前版本绑定/CAS/新工作台路径不回退、不复活旧无许可产品入口；最小验证失败的2参数及实际main许可正向消费者，不全量本机测试/服务/模型。新增差额另clean提交并由主控审核组合、更新PR与CI；旧911候选及两次真实准入拒绝/全释放证据保留，本机资源未恢复前无新媒体窗口。
+
 用户于2026-10-08回复本机人物视频与声音均为本人，要求主控直接查找：允许主控定向只读现有素材目录、`legacy-movies/agent.sqlite3`的素材/声音登记元数据，以`mode=ro,uri=True`读取，不访问账号/秘密或修改原库。已定位素材`video-inbox/历史成片_待审核/VID_20260529_122252_preview.mp4`（登记a_roll/approved/rights_confirmed）和默认`acceptance/real-voice-20260824/reference/reference.wav`；允许主控在新`/tmp/main-controller-20261008/creation36/user-media/`仅一次≤30秒、线程1的FFmpeg取前段单帧视觉核验，记录自有PID/退出及原文件stat，不启动模型。人物与真实声音的模型处理/截段须随后具名有限窗口，不扩大A/B当前模型权；纯素材链继续独立推进，用户原件保留。
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
