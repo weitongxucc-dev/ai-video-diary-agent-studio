@@ -37,6 +37,8 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 ## 任务38/39/40：设计v5.1实施与独立准备
 
+任务50最小核验补充：UI已证本机Web已装React19.3/jsdom30.1.2/Vitest4.1.11与CI锁19.2.6/30.0.1/4.1.10不同，现有根node_modules/.pnpm具备锁版；静态19.2.6 flushMutationEffects显示layout cleanup焦点后提交恢复可覆盖，尚须实证。允许只用已安装锁版包在Node内存startVitest/resolve aliases做原SideCards hydrate单例修改前→必要修复后专项，不安装/修改依赖或配置文件、不建另一安装环境、不启动服务。相关临时runner/日志仅ui50，alias只解决准确锁版测试运行，不进入产品或workflow；准确版本/命令/失败与修复证据回报，不能把静态推断当已复现。原owned与模型暂停、GUI隔离界限不变。
+
 **任务50 / UI（MAIN-UI-HYDRATION-FOCUS-20261008-50）**：准确254bb3c的CI37750067542 Frontend554 PASS/1 FAIL，Creation/HomeCommand旧两失败已过，仅新SideCards SSR→hydrate Esc焦点在默认waitFor后仍停留hidden卡片关闭按钮，源`ui49/frontend-ci-254bb3c.log`2323–2431。前单本地焦点未复现，不再假定只是等待；B48正常点击关闭真实GUI正证不覆盖此hydrate/Esc CI路径。唯一UI写者从clean0af2373核精确首因，owned仅HomeCardDialog.tsx与SideCards.test.tsx。定向对照本机与CI已有依赖/Node/jsdom/React版本、hydration手动root及焦点捕获/层清理事实，先最小可复现单例与必要既有卡片用例，不本地全量，不安装/另建环境或改workflow/config。
 
 保留零恢复错误、SSR邻接DOM身份、关卡实际不可见、严格返回触发按钮、挂载/草稿/滚动/播放位置与层级规则。禁止强制focus冒称产品通过、删/跳过断言、延长等待、猜测补防护或盲改业务。测试fixture实际有误只能按真实证据修；若产品首因明确仅HomeCardDialog修必要逻辑，产品blob变化须新准确独立GUI，不能热换48。仅新`ui50/`短报告精确commit/父/diff/真实首因与复现/最小复验/必要类型、是否产品blob变化及CI待核；无服务/GUI/模型/媒体/探针/远端共享文档写。语义ACK后实施，本已批准UI目标缺陷内无需另问用户。
