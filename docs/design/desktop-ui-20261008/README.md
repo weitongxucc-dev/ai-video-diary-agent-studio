@@ -1,29 +1,31 @@
 # 2026-10-08 桌面设计参考资产
 
-本目录对应用户于2026-10-08批准的设计交接包。唯一规范为[DESIGN.md](../../../DESIGN.md)，本目录不定义第二份规则。
+唯一规则归属[DESIGN.md](../../../DESIGN.md)。本目录提供不同职责的参考资产，不维护第二份设计规范。
+
+## 当前入口与适用范围
+
+- [完整圆角与叠加v2](floating-sidecards-v2/index.html)：中间栏、对象详情、配置、字段选择和局部确认的当前参考。依据DESIGN.md第2节、第4.2节及第7节实施。
+- [全页内容原型](index.html)：模块内容、页面组织和集合形态参考；其旧中栏、详情侧栏、配置/选择尺寸和普通确认位置已被v2替代，不能据此施工。
+
+直接用浏览器打开上述HTML即可，资源已内嵌，无需安装或启动服务。主控收录时未执行页面、构建程序或浏览器检查脚本。
 
 ## 来源与保真
 
-- 来源：`智能视频日记_UI设计交接包_20261008.zip`。
-- ZIP SHA256：`eb4e352f3dab9f9c8d290f8129b465370e9215cdf8caf818386caa20070aeb22`。
-- [index.html](index.html)从交接包逐字节收录，SHA256：`190d14ef83e751a3cb74bb65b19e0e2856fba5daf8bdcb205cab3969c626b5e4`。
-- 六张截图从交接包逐字节收录，属于原型参考，不是本次产品验收截图。
-- 内嵌 Lucide 图标的许可保留于[Lucide-LICENSE.txt](Lucide-LICENSE.txt)。
-- 原包中的研究档案、构建程序和早期文档不作为活动权威复制；原始ZIP保留在用户提供的位置。
+同名ZIP曾被用户更新，必须用内容hash区分，不以文件名判断版本。
 
-## 打开与阅读
+| 资产 | 来源ZIP SHA256 | 收录HTML SHA256 |
+| --- | --- | --- |
+| 全页内容 | eb4e352f3dab9f9c8d290f8129b465370e9215cdf8caf818386caa20070aeb22 | 190d14ef83e751a3cb74bb65b19e0e2856fba5daf8bdcb205cab3969c626b5e4 |
+| 侧边浮卡v2 | e44effe5c052e5b0a3b49e8facd45dbffbe3e656b29253e52e030cba00d88d0b | a416b02c341398181a4fefd685ba834aee3bbd0a2efbd8c2dce1f97a85926f1d |
 
-直接用浏览器打开[index.html](index.html)，无需启动服务、安装依赖或运行包内脚本。页面自带样例状态和内嵌交互代码，参考入口映射见DESIGN.md第5.11节。
+HTML与对应截图均从交接包逐字节收录。全页HTML在两份包中相同；v2来自新包的`designs/floating-sidecards-stack/`。Lucide许可分别保留于[全页许可](Lucide-LICENSE.txt)和[v2许可](floating-sidecards-v2/Lucide-LICENSE.txt)。
 
-主控收录时只校验文件和静态引用，没有启动该页面或重新执行原型GUI检查。原型模拟动作、媒体占位和演示身份不证明真实生成、权限、存储或发布成功。
+原包的候选说明、第一版浮卡、研究档案与构建程序不另作为活动规范复制。已被替代的旧详情/确认截图从活动资产退役，通过Git历史追溯。
 
 ## 定向截图
 
-- [知识库](screenshots/knowledge-full.png)
-- [设置](screenshots/settings.png)
-- [镜头详情](screenshots/shot-detail.png)
-- [窄窗资料详情](screenshots/knowledge-detail-1024.png)
-- [修改确认](screenshots/change-confirmation.png)
-- [窄窗模型选择](screenshots/model-menu-1024.png)
+- 全页内容：[知识库](screenshots/knowledge-full.png)、[设置](screenshots/settings.png)。其中出现的旧中栏不作为宽度依据。
+- v2：[三层叠加1440](floating-sidecards-v2/screenshots/stack-1440.png)、[三层叠加1024](floating-sidecards-v2/screenshots/stack-1024.png)。
+- v2：[右侧局部确认](floating-sidecards-v2/screenshots/confirm-right-1440.png)、[镜头编辑1280](floating-sidecards-v2/screenshots/shot-1280.png)。
 
-实施时以DESIGN.md和真实产品消费者为准，不能将截图中的示例数字写入生产。
+这些是原型参考截图，不是本次生产验收。v2主要示范浅色，生产暗色按DESIGN.md语义token映射。媒体占位、演示身份、模拟操作和原包浏览器记录不证明实际模型、存储、权限或发布成功。
