@@ -2119,8 +2119,9 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("变更预览")).toHaveTextContent("团队协作画面");
     expect(screen.getByLabelText("变更预览")).toHaveTextContent("artifact:preview:v1");
     expect(screen.getByLabelText("变更预览")).toHaveTextContent("不会立即调用模型或渲染");
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回详情" }));
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
 
