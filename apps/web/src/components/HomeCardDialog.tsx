@@ -24,13 +24,14 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
   const active = clientReady && open && parent?.active !== false;
   const zIndex = kind === "modal" || kind === "navigation" ? 111 : parent ? parent.zIndex + 10 : kind === "detail" ? 80 : kind === "selection" ? 100 : 90;
   const node = useRef<HTMLElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const close = useRef(onClose); close.current = onClose;
   const [layer, setLayer] = useState<Layer | null>(null);
   const [position, setPosition] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
     if (!active) return;
     const card = node.current!;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const entry: Layer = { id, kind, active: true, zIndex, parentId: parent?.id, node: card, close: () => close.current() };
     // Replace a sibling, never its parent or the parent's scroll/draft state.
     layers.filter(value => value.parentId === entry.parentId && value.id !== id && (entry.parentId || value.kind === kind)).forEach(value => value.close());
@@ -91,9 +92,17 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
       document.removeEventListener("scroll", fieldScroll, true);
       const index = layers.indexOf(entry); if (index !== -1) layers.splice(index, 1);
       if (kind === "confirmation" && parent) parent.node.inert = false;
-      if (card.contains(document.activeElement) || document.activeElement === document.body) previousFocus?.focus();
     };
   }, [id, kind, parent, anchor, active, zIndex]);
+  useEffect(() => {
+    if (!active) return;
+    const card = node.current!;
+    const previousFocus = returnFocus.current;
+    return () => {
+      // React restores pre-commit selection after layout-effect cleanup.
+      if (card.contains(document.activeElement) || document.activeElement === document.body) previousFocus?.focus();
+    };
+  }, [active]);
   useLayoutEffect(() => {
     if (!layer || !active) return;
     const target = kind === "selection" ? node.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]') ?? node.current?.querySelector<HTMLElement>('[role="option"]') : node.current?.querySelector<HTMLElement>('[data-card-cancel]');
