@@ -53,6 +53,8 @@
 
 最小验收：公开入口真正提交持久请求且未许可前provider零调用；队列取得合法专属Grant后假provider完成对应人物片段、版本/映射更新，其他配音/字幕/镜头保持；原真实同源缓存复用不退化；陈旧版本、许可撤销、取消/失败不提交伪成功，重复应用不重复生成。复用A53/A60/A63未变专项，只跑受影响直接用例和必要类型检查，不跑全仓库、不添加像素镜像/防御fallback。可以复用/tmp/manta-wil108-20261007/venv的pytest，但完整HOME/XDG/config/DB/tmp/output隔离；实际Host/进程探针替身只放测试，不改生产判断。证据/tmp/main-acceptance-20261008/person76/；交准确clean源码、净diff、实测命令、当前范围与未验真实模型/GUI。无服务/GUI/重模型或媒体执行权。
 
+76.1 主控接受B回报的直接响应差额：人物编辑缓存miss的confirm/exact沿现有执行入口返回HTTP202、queued和已有可信job/request引用；原同步applied响应及合法缓存hit保持。排队不能把proposal标applied、创建目标TimelineVersion或回复已生成；现有Web直接消费者显示已排队并读取该作业真实完成/失败，再更新目标镜头与版本。对应schemas/lib/api/types/CreationTaskWorkspace已在B76所有权内，允许必要响应类型与完成刷新差额；不修改无关普通字段语义、不造另一个状态轮询系统。设备完成、版本提交与请求幂等使用既有事务入口，stale/revoke/cancel拒绝伪成功。该补充只绑定B76，不影响UI77构建目标，无需后者停工或重跑。
+
 ### UI77：WIL-169本机arm64包准备与有界构建
 
 目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
