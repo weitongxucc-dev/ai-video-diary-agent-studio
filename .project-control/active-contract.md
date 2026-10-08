@@ -125,6 +125,20 @@ UI61仅从cleanb9a86b9继续，在新`codex/ui-v51-toolbar-min-20261008`按5cf78
 
 60/61由原A/UI可见终端实施，文件所有权与B59零产品写权不交叠；读本节语义ACK后可直接执行，不复活53/58。主控保留共享文档、候选审核/集成、PR/Linear权，不编写产品代码。
 
+## 任务62：内容宽工具栏修复的准确候选补验
+
+61已交21a2966c41479024a787a0effc2c542a0bbf3bf9，主控审完整三文件24+/4−及report、3共享直接消费者/类型/diffcheck，接受succeeded/retain并收回写权。它只在editor toolbar父容器依实际宽度换行、窄标题组隐藏辅助状态，不丢动作、不改三栏宽度/卡片/搜索；56px固定页头与必要换行有实际冲突。主控在用户既有完整UI实施授权内采用DESIGN §2最小例外：默认56px，剪辑窄区可随整组动作增高，1024×700播放器/控制/故事板仍首屏。唯一权威提交0fe2cd4，不复制到下层规则；B62须REBASE_ACK这条更新，旧“全页头固定56”解释失效。
+
+59结案failed/retain：19 PASS/4 FAIL/1 UNVERIFIED；搜索/只读共享/父状态/quality正证通过，四个FAIL是同一宽度缺陷，错误槽真实失败未验。18:25:10三组/4578/3178/page退出，主控独立ps/lsof及release-final核一致。旧59租约/操作权结束，不热换。
+
+B62冻结634978ae3a57039778e1f8cd8d07356b340fcb52，来源`/tmp/main-controller-20261008/presenter53-integration`，准确组合53 API与新Web/规范；其Web/规范来自PR97新70e96fe9f357b8addd7f2ebb582e9f493bca3732，UI61三个目标blob一致。A60只改测试不改变该服务候选，本GUI不宣称将来测试head已启动过；后续可基于运行blob等价明确复用正证。
+
+只新`/tmp/main-acceptance-20261008/ui62/`，旧59 mode=ro合成库/0600token、ui45合法色卡只读，其余目录全隔离、Key空/Pi offline/scheduled OFF。不写产品/测试/共享权威/远端，不安装/模型/媒体生成/资源探针。完整archive排除dotenv并核blob/DB、旧库hash保持；新自有isolated嵌入page，每条显式--page，先blank viewport/keypress与4579/3179空闲核验。重读DESIGN §2新例外并语义REBASE_ACK后上述条件满足即START一次API4579/Web3179，首服务20分钟绝对租约不续/自动重启，记录PID/PGID/starttoken。
+
+只补61影响：默认1024×700浅暗、真实拖动导航220/对话尽允许宽后1024及1280浅/暗代表、1440常规和1379断点代表。真实PNG+几何证明共享入口、收起、撤销/重做、录音、历史、参数、搜索、帮助等无互相覆盖且可达；增高页头下播放器画面/原生必要控制/故事板仍首屏。共享设置、历史、录音只打开/关闭不执行，验证既有圆角卡及父clip2/暂停8秒/草稿/V4保持/焦点归还；不开始录制/生成/修改。复用59未改搜索初焦/输入/Tab/Esc和共享实际值/quality与57正证，不重复全24/28矩阵或业务保存。普通轮滚仍未验也不得编造。
+
+只Orca真实控件/鼠标/键盘/viewport/PNG，eval仅只读，不注入事件/响应/CSS、不接CDP/个人Chrome或操作OS窗；不请求用户操作浏览器。业务POST/PATCH/PUT/DELETE0，失败错误槽等无本次实证仍标未验。结束/到期只退出注册自有组/page，实证端口/组释放、旧库/blob不变及产品clean；正确本Dispatch完整report/worker_done。真实FAIL给主控/唯一UI写者，不修改产品、不复活61，模型/预算/E2E/Electron安装仍不在通过范围。
+
 ## 任务38/39/40：设计v5.1实施与独立准备
 
 任务51结算：主控已核ui51完整report、实际closed/reopened PNG/AX与card-comparison，接受准确1e0c972必要GUI5 PASS、可选嵌套关闭1 UNVERIFIED，succeeded并retain。首屏/普通刷新正常，历史V1开关重开、关闭入口焦点及镜头2/草稿/暂停8秒保持；可选嵌套卡已可见但后续window_not_found，结果与焦点未证，不猜产品FAIL或绕过恢复。已装普通React19.2.6包与实际Next15.5.18浏览器19.2.0-canary分别记录，不冒称GUI同CI renderer。61表/旧库hash不变；16:53:32 API23815/Web23816/lease23817/Chrome24159及组、根进程、4575/3175全部退出，主控独立ps/lsof与release.json相符，无续租。任务51以下START只作历史依据，无恢复权。准确1e0c972 CI37752015898 Frontend/Backend/Desktop syntax全部SUCCESS并回读head一致。PR97/WIL-205保留草稿/In Progress及指定尺寸/主题、三栏拖动、完整键盘/播放器/新blob嵌套关闭等未验，不宣布整体RETIRED或自动合入；用户Tab可用反馈已记录。
