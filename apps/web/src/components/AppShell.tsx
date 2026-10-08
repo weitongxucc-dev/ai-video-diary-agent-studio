@@ -390,7 +390,7 @@ export function AppShell({
       </aside>
 
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}${detailsOpen && detailsDocked ? ` ${editorShell.inspectorOpen}` : ""}`}>
+        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}${detailsOpen && detailsDocked ? ` ${editorShell.inspectorOpen}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
         <header className="desktop-toolbar">
           <div className="desktop-toolbar__leading">
             <button aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">

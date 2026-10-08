@@ -15,6 +15,26 @@
 .help-panel-content {display:grid;gap:16px;}
 .help-panel-content >footer {font-size:12px;color:var(--text-3);}
 
+/* Keep editor controls in the toolbar as its actual workspace width changes. */
+.video-editor-shell [data-editor-toolbar-parent] {grid-template-rows:auto minmax(0,1fr);}
+.video-editor-shell [data-editor-toolbar-parent] > .desktop-toolbar {
+  height:auto;
+  min-height:56px;
+  flex-wrap:wrap;
+  align-content:center;
+  row-gap:4px;
+}
+.video-editor-shell [data-editor-toolbar-parent] > .desktop-toolbar > .desktop-toolbar__leading {
+  flex:1 1 260px;
+  min-width:min(100%,240px);
+}
+.video-editor-shell [data-editor-toolbar-parent] > .desktop-toolbar > .desktop-toolbar__actions {
+  flex:0 1 auto;
+  min-width:0;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
 html,
 body {
   min-width: 1024px;
