@@ -288,10 +288,10 @@ describe("AppShell", () => {
       expect(screen.getByLabelText("镜头草稿")).toHaveValue("新草稿");
       expect(screen.getByRole("button", {name:"播放"})).toBeInTheDocument();
     });
-    it("keeps the quick card as confirmation parent while preserving its draft on close", () => {
+    it("keeps the quick card as the proposal parent while preserving its draft on close", () => {
       function ConfirmationSurface() {
         const [confirmationOpen, setConfirmationOpen] = useState(false);
-        return <AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" defaultValue="待保存" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="confirmation" title="确认修改" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button><video /></AppShell>;
+        return <AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" defaultValue="待保存" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="config" title="选择应用到草稿" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button><video /></AppShell>;
       }
       render(<ConfirmationSurface />);
       fireEvent.click(screen.getByRole("button", { name: "编辑镜头参数" }));
@@ -300,9 +300,9 @@ describe("AppShell", () => {
       fireEvent.click(screen.getByRole("button", { name: "确认草稿" }));
       expect(screen.getByRole("dialog", { name: "镜头详情" })).toBeInTheDocument();
       expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
-      expect(screen.getByRole("dialog", { name: "确认修改" })).toHaveAttribute("data-card-kind", "confirmation");
+      expect(screen.getByRole("dialog", { name: "选择应用到草稿" })).toHaveAttribute("data-card-kind", "config");
       fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-      expect(screen.queryByRole("dialog", { name: "确认修改" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "选择应用到草稿" })).not.toBeInTheDocument();
       expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
       expect(screen.getByLabelText("快速草稿")).toHaveValue("保留快速草稿");
     });

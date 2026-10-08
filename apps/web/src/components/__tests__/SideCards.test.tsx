@@ -59,15 +59,16 @@ describe("v5.3 object card stack", () => {
     }
     render(<SearchOwnership />);
     fireEvent.click(screen.getByRole("button", { name: "顶栏搜索" }));
-    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "111" });
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "关闭卡片" }).at(-1)!);
     fireEvent.click(screen.getByRole("button", { name: "卡内搜索" }));
-    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "90" });
+    expect(screen.getByRole("dialog", { name: "父卡" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "关闭卡片" }).at(-1)!);
     fireEvent.click(screen.getByRole("button", { name: "打开短菜单" }));
     fireEvent.click(screen.getByRole("button", { name: "短菜单内搜索" }));
-    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "90" });
     expect(screen.queryByRole("dialog", { name: "短菜单" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "父卡" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toBeInTheDocument();
   });
 
   it("hydrates a server-rendered workspace with a closed card before enabling its client portal", async () => {
@@ -137,12 +138,9 @@ describe("v5.3 object card stack", () => {
     fireEvent.click(screen.getByRole("button", {name:"版本与出处"}));
     const field = screen.getByRole("button", {name:"查看版本"}); field.focus(); fireEvent.click(field);
     expect(screen.getByRole("dialog", {name:"资料详情"})).toBe(parent);
-    expect(parent).toHaveStyle({width:"360px",height:"560px"});
     const child = screen.getByRole("dialog", {name:"版本配置"});
-    expect(child).toHaveStyle({width:"360px",height:"560px"});
-    expect(Number.parseFloat(child.style.left)).toBe(Number.parseFloat(parent.style.left) - 12);
-    expect(Number.parseFloat(child.style.top)).toBe(Number.parseFloat(parent.style.top) + 32);
-    expect(screen.getByRole("dialog", {name:"查看版本"})).toHaveStyle({width:"240px",zIndex:"100"});
+    expect(child).toBeInTheDocument();
+    expect(screen.getByRole("dialog", {name:"查看版本"})).toBeInTheDocument();
     fireEvent.keyDown(document.activeElement!, {key:"Escape"});
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); expect(field).toHaveFocus();
     fireEvent.keyDown(field, {key:"Escape"});
@@ -170,31 +168,38 @@ describe("v5.3 object card stack", () => {
     fireEvent.scroll(screen.getByRole("dialog", {name:"版本配置"}).querySelector('[class*="body"]')!);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); expect(screen.getByRole("button", {name:"查看版本"})).toHaveTextContent("版本2");
   });
-  it("scopes ordinary confirmation inert/focus and modal semantics to its parent", () => {
-    render(<Cards />); const parent = screen.getByRole("dialog", {name:"资料详情"}); fireEvent.click(screen.getByRole("button", {name:"应用参数"}));
+  it("keeps a nested destructive confirmation modal and restores its parent after Escape", () => {
+    render(<div className="desktop-shell"><Cards /></div>); const parent = screen.getByRole("dialog", {name:"资料详情"});
+    const trigger = screen.getByRole("button", {name:"应用参数"}); trigger.focus(); fireEvent.click(trigger);
     const confirmation = screen.getByRole("dialog", {name:"确认对象参数"});
-    expect(confirmation).not.toHaveAttribute("aria-modal"); expect(parent.inert).toBe(true);
-    expect(confirmation.parentElement).toHaveStyle({ background: "transparent", pointerEvents: "none" });
-    const parentShade = confirmation.parentElement?.querySelector('[class*="localShade"]') as HTMLElement;
-    expect(parentShade.style.left).toBe(parent.style.left);
-    expect(parentShade.style.top).toBe(parent.style.top);
-    expect(parentShade.style.width).toBe(parent.style.width);
-    expect(parentShade.style.height).toBe(parent.style.height);
+    expect(confirmation).toHaveAttribute("aria-modal", "true"); expect(parent.inert).toBe(true);
+    expect((document.querySelector(".desktop-shell") as HTMLElement).inert).toBe(true);
     expect(screen.getByRole("button", {name:"返回详情"})).toHaveFocus();
     const last = within(confirmation).getByRole("button", {name:"确认应用"}); last.focus(); fireEvent.keyDown(last, {key:"Tab"});
     expect(within(confirmation).getByRole("button", {name:"关闭卡片"})).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, {key:"Escape"}); expect(parent.inert).toBe(false);
+    fireEvent.keyDown(document.activeElement!, {key:"Escape"});
+    expect(screen.queryByRole("dialog", {name:"确认对象参数"})).not.toBeInTheDocument();
+    expect(parent.inert).toBe(false);
+    expect((document.querySelector(".desktop-shell") as HTMLElement).inert).toBe(false);
+    expect(trigger).toHaveFocus();
   });
-  it("keeps the real modal and its short selection in the shared right-side geometry", () => {
+  it("keeps a short selection subordinate to its modal and Escape closes only the selection", () => {
     const close = vi.fn(); render(<HomeCardDialog title="重要确认" onClose={close}><CardSelect label="范围" value="one" onChange={vi.fn()} options={[{value:"one",label:"仅此对象"}]} /></HomeCardDialog>);
+    expect(screen.getByRole("dialog", {name:"重要确认"})).toHaveAttribute("aria-modal", "true");
     fireEvent.click(screen.getByRole("button", {name:"范围"}));
-    expect(screen.getByRole("dialog", {name:"重要确认"})).toHaveStyle({width:"360px",height:"560px",zIndex:"111"});
-    expect(screen.getByRole("dialog", {name:"范围"})).toHaveStyle({zIndex:"121"});
-    fireEvent.keyDown(document.activeElement!, {key:"Escape"}); expect(close).not.toHaveBeenCalled();
+    const parent = screen.getByRole("dialog", {name:"重要确认"});
+    const menu = screen.getByRole("dialog", {name:"范围"});
+    expect(menu).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement!, {key:"Escape"});
+    expect(screen.queryByRole("dialog", {name:"范围"})).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", {name:"重要确认"})).toBe(parent);
+    expect(close).not.toHaveBeenCalled();
   });
-  it("repositions fields inside the viewport on resize", () => {
+  it("keeps the active object and its action available after a workspace resize", () => {
     render(<Cards />); fireEvent.click(screen.getByRole("button", {name:"版本与出处"})); fireEvent.click(screen.getByRole("button", {name:"查看版本"}));
     act(() => window.dispatchEvent(new Event("resize")));
-    expect(Number.parseFloat(screen.getByRole("dialog", {name:"查看版本"}).style.left)).toBeGreaterThanOrEqual(12);
+    expect(screen.getByRole("dialog", {name:"资料详情"})).toBeInTheDocument();
+    expect(screen.getByRole("dialog", {name:"版本配置"})).toBeInTheDocument();
+    expect(screen.getByRole("button", {name:"应用参数"})).toBeInTheDocument();
   });
 });

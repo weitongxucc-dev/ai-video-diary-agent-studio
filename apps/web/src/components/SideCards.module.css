@@ -101,5 +101,4 @@
 .disclosure { padding: 0; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .selection p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .card > header svg { flex: 0 0 16px; stroke-width: 1.7; }
-.localShade { position: fixed; z-index: 89; border-radius: 14px; background: rgb(23 23 33 / 6%); }
 @media (prefers-reduced-motion: reduce) { .card { transition: none; } }

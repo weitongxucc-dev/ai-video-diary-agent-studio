@@ -75,8 +75,7 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
   useEffect(() => { setClientReady(true); }, []);
   const active = clientReady && open && parent?.active !== false;
   const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
-  const scopedConfirmation = kind === "confirmation" && parent !== null;
-  const blocksApplication = modal && !scopedConfirmation;
+  const blocksApplication = modal;
   const zIndex = parent ? parent.zIndex + 10 : modal ? 111 : kind === "detail" ? 80 : kind === "selection" ? 100 : 90;
   const node = useRef<HTMLElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -136,9 +135,7 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     };
     const shell = document.querySelector<HTMLElement>(".desktop-shell");
     const wasShellInert = shell?.inert ?? false;
-    const blockedLayers = scopedConfirmation && parent
-      ? [parent]
-      : blocksApplication ? layers.filter(value => value.id !== id) : [];
+    const blockedLayers = blocksApplication ? layers.filter(value => value.id !== id) : [];
     const previousLayerInert = new Map(blockedLayers.map(value => [value.node, value.node.inert === true]));
     if (blocksApplication && shell) shell.inert = true;
     previousLayerInert.forEach((_inert, cardNode) => { cardNode.inert = true; });
@@ -174,14 +171,13 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
   }, [layer, kind, active]);
   const childContext = useMemo(() => layer ? { ...layer, active } : null, [layer, active]);
   const card = <ParentCard.Provider value={childContext}>
-    {active && scopedConfirmation && parent ? <div className={styles.localShade} style={{ zIndex: parent.zIndex + 9, pointerEvents: "auto", top: parent.position.top, left: parent.position.left, width: parent.position.width, height: parent.position.height }} /> : null}
-    <section hidden={!active} aria-label={title} aria-modal={blocksApplication ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex, ...(scopedConfirmation ? { pointerEvents: "auto" } : {}) }} data-card-kind={kind}>
+    <section hidden={!active} aria-label={title} aria-modal={blocksApplication ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex }} data-card-kind={kind}>
       <header><h2>{title}</h2><button aria-label="关闭卡片" onClick={onClose} type="button"><X size={16} /></button></header>
       <div className={styles.body}>{layer ? children : null}</div>
       {kind !== "selection" ? <footer>{footer ?? null}</footer> : null}
     </section>
   </ParentCard.Provider>;
-  return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade} style={{ zIndex: zIndex - 1, ...(scopedConfirmation ? { background: "transparent", pointerEvents: "none" } : {}) }}>{card}</div> : card, document.body) : null;
+  return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade} style={{ zIndex: zIndex - 1 }}>{card}</div> : card, document.body) : null;
 }
 
 export function CardSelect({ label, value, options, onChange, disabled = false, name }: {

@@ -706,7 +706,7 @@ export function PreviewVideo({ url, label, muted, pauseOthers }: {
 
 function EditPreviewCard({ preview, busy, compact = false, command, onCancel, onConfirm, kind, chosen = null, onChosen, onSelectionPreview }: {
   preview: CreationTaskEditPreviewResponse; busy: BusyAction | null; compact?: boolean;
-  command: string; onCancel: () => void; onConfirm: () => void; kind: "modal" | "confirmation";
+  command: string; onCancel: () => void; onConfirm: () => void; kind: "modal" | "config" | "confirmation";
   chosen?: number[] | null; onChosen?: (indices: number[]) => void; onSelectionPreview?: (indices: number[]) => void;
 }) {
   const ui = editorUi;
@@ -2149,7 +2149,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     && editPreview.proposal.task_id === task.id && editPreview.proposal.workspace_id === task.workspace_id
     && editPreview.proposal.target_refs.length > 0
     && editPreview.proposal.target_refs.every(ref => ref === selectedEditContext.ref));
-  const inspectorConfirmation = localConfirmation && editPreview ? <EditPreviewCard key={editPreview.proposal.id} preview={editPreview} busy={busy} compact command={editCommand} kind="confirmation" onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} /> : null;
+  const inspectorConfirmation = localConfirmation && editPreview ? <EditPreviewCard key={editPreview.proposal.id} preview={editPreview} busy={busy} compact command={editCommand} kind="config" onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} /> : null;
   const sharingControls = (
     <div className={styles.sharingControls}>
       <div className={styles.taskVisibility}>
