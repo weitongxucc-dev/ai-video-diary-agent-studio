@@ -3,6 +3,7 @@
   padding:0 16px 24px;
   color: var(--text-1);
 }
+.workspaceBody { display: contents; }
 
 .taskHeader,
 .sectionHeading,
@@ -235,6 +236,9 @@
 }
 
 .sectionHeading {margin-bottom:12px;}
+.productionDetails > .workSection { padding: 0; border: 0; background: transparent; }
+.productionDetails .scriptSections { margin-bottom: 12px; }
+.productionDetails .primaryAction { margin-top: 12px; }
 .sectionHeading > button { min-width: max-content; }
 .reviewActions { display: flex; align-items: center; gap: 8px; }
 .secondaryButton { min-height:32px;border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); padding:0 10px; cursor: pointer; }

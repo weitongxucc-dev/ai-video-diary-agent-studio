@@ -23,6 +23,12 @@
   .stageRail button { gap: 4px; padding-inline: 6px; }
 }
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 20px; overflow: auto; }
+.editorBody { flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+.editorBody > .stage { overflow: visible; }
+.productionSummary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 20px; border-bottom: 1px solid var(--border-1); }
+.productionSummary > div { flex: 1; min-width: 180px; }
+.productionSummary strong { font-size: var(--font-size-body); font-weight: 500; }
+.productionSummary p { margin: 2px 0 0; color: var(--text-2); font-size: var(--font-size-meta); overflow-wrap: anywhere; }
 .previewToolbar { display: flex; flex: 0 0 auto; min-height: 52px; align-items: center; gap: 12px; }
 .previewToolbar strong { font-size: var(--font-size-body); font-weight: 500; }
 .previewToolbar > span { color: var(--text-3); font-size: 12px; }

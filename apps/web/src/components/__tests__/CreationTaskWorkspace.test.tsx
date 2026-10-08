@@ -549,6 +549,42 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.generateNarration).not.toHaveBeenCalled();
   });
 
+  it("keeps the editor player and draft mounted while reviewing production details without starting", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.task.stage = "montage";
+    initial.montage!.clips = [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: 1, match_reasons: [],
+      needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false }];
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue(queueStatus(null));
+    mocks.previewExecution.mockResolvedValue(queuePreview());
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const entry = await screen.findByRole("button", { name: "查看制作详情" });
+    expect(screen.queryByRole("region", { name: "连续制作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认以上文案和要求，开始制作" })).not.toBeInTheDocument();
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    player.currentTime = 1.25;
+    fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "未发送的剪辑草稿" } });
+    fireEvent.click(entry);
+    const panel = await screen.findByRole("region", { name: "连续制作" });
+    expect(panel).toHaveTextContent("这段就是实际要读的内容");
+    expect(panel).toHaveTextContent("画幅 9:16 · 目标时长 30 秒 · 露脸目标 20%");
+    expect(within(panel).getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "收起制作详情" }));
+    expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+    expect(player.currentTime).toBe(1.25);
+    expect(screen.getByRole("button", { name: "选择镜头 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("局部修改要求")).toHaveValue("未发送的剪辑草稿");
+    expect(screen.getByText(/版本 6/)).toBeInTheDocument();
+    fireEvent.click(entry);
+    expect(screen.getByRole("region", { name: "连续制作" })).toBe(panel);
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+    expect(mocks.resumeExecution).not.toHaveBeenCalled();
+    expect(mocks.renderMontage).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["narration", "queued"], ["storyboard", "running"], ["video", "queued"],
   ] as const)("uses the same confirmed queue from %s and shows %s without claiming an artifact", async (phase, status) => {
@@ -565,6 +601,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.startExecution.mockResolvedValue(execution);
     mocks.cancelExecution.mockResolvedValue(queueStatus("cancelled"));
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    if (phase === "video") fireEvent.click(await screen.findByRole("button", { name: "查看制作详情" }));
     const panel = await screen.findByRole("region", { name: "连续制作" });
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("这次制作要求");
@@ -593,18 +630,25 @@ describe("CreationTaskWorkspace", () => {
     const failed = queueStatus("failed");
     failed.job!.failure_reason = "输出磁盘写入失败";
     failed.job!.repair_action = "检查输出目录的可用空间后继续制作。";
+    failed.current_stage = "person_render";
     failed.stages = [{ stage: "narration", status: "completed", at: "2026-10-07T00:00:00Z" },
-      { stage: "montage_plan", status: "reused", at: "2026-10-07T00:00:01Z" }];
+      { stage: "montage_plan", status: "reused", at: "2026-10-07T00:00:01Z" },
+      { stage: "person_render", status: "completed", at: "2026-10-07T00:00:02Z" }];
     mocks.previewExecution.mockResolvedValue(queuePreview());
     mocks.getExecution.mockResolvedValue(failed);
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.resumeExecution.mockResolvedValue(queueStatus("queued"));
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByRole("region", { name: "制作状态" })).toHaveTextContent("输出磁盘写入失败");
+    expect(screen.getByRole("region", { name: "制作状态" })).toHaveTextContent("人物口型");
+    fireEvent.click(screen.getByRole("button", { name: "查看制作详情" }));
     const panel = await screen.findByRole("region", { name: "连续制作" });
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("输出磁盘写入失败");
     expect(panel).toHaveTextContent("检查输出目录的可用空间后继续制作。");
     expect(panel).toHaveTextContent("沿用有效结果");
+    expect(panel).toHaveTextContent("人物口型：已完成");
+    expect(panel).not.toHaveTextContent("person_render");
     expect(mocks.resumeExecution).not.toHaveBeenCalled();
     fireEvent.click(within(panel).getByRole("button", { name: "确认以上文案和要求，继续制作" }));
     await waitFor(() => expect(mocks.resumeExecution).toHaveBeenCalledWith("task-1"));
@@ -624,6 +668,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("配音预算未标定 先标定本机配音资源预算，再重试。");
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看制作详情" }));
     expect(screen.getByRole("button", { name: "确认以上文案和要求，继续制作" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "生成成片" })).not.toBeInTheDocument();
     expect(mocks.startExecution).not.toHaveBeenCalled();
@@ -2509,13 +2554,15 @@ describe("CreationTaskWorkspace", () => {
     // 文案/配音侧的连续制作面板：状态仍是「成片产物需要检查」，但现在有出口
     await waitFor(() => expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查"));
 
-    const panel = screen.getByRole("region", { name: "连续制作" });
+    let panel = screen.getByRole("region", { name: "连续制作" });
     expect(panel).toHaveTextContent("仅重新输出当前时间线");
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).not.toHaveTextContent("当前暂不支持已编辑时间线重新输出");
     expect(mocks.resumeExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "查看剪辑与已有产物" }));
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看制作详情" }));
+    panel = screen.getByRole("region", { name: "连续制作" });
     expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查");
     expect(screen.queryByRole("button", { name: "生成成片" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "确认以上文案和要求，开始制作" })).not.toBeInTheDocument();

@@ -2,13 +2,14 @@ import styles from "./ExecutionQueueStatus.module.css";
 
 export type ExecutionQueueStatusProps = {
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | null;
-  currentStage: "narration" | "montage_plan" | "render" | "cover" | null;
+  currentStage: "narration" | "person_render" | "montage_plan" | "render" | "cover" | null;
   waitingReason: string | null;
   statusUpdatedAt: string | null;
 };
 
 const stageLabels: Record<NonNullable<ExecutionQueueStatusProps["currentStage"]>, string> = {
   narration: "生成配音",
+  person_render: "人物口型",
   montage_plan: "安排镜头与人物口型",
   render: "生成成片和字幕",
   cover: "准备封面",
