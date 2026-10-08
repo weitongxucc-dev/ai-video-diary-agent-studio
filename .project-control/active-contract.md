@@ -33,9 +33,11 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47已结案；任务49核准确CI三失败 | 仅HomeCardDialog及三个具名直接测试；无服务/GUI权；不得削弱业务/焦点断言 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46已结案；任务48准备侧卡hydration补验 | 仅新ui48隔离准备/证据；候选冻结并收到本Dispatch START后才有一次15分钟服务/GUI窗口，不写产品 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48已结案并保留线程 | 全部服务/GUI资源已退出，无新增产品/服务/GUI权 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+任务48结算：主控已读完整短报告、card-comparison及真实首屏/开发菜单/重开PNG，接受准确49ec013补验6 PASS、succeeded并retain；真实首屏和普通刷新无原Hydration入口，历史打开关闭重开、V1/clip2/草稿/暂停8秒及关闭焦点保持，知识/设置显示正常。初次quality读取失败仍单列原未改行为，刷新后尚未检查，不冒称质量通过。61表/旧源hash不变；16:21:56自有API95702/Web95703/lease95704/Chrome96018及组、根进程、4574/3174均退出，主控独立ps/lsof相符，无续约。下面任务48 START仅历史依据，不得恢复。精确CI37748842801已结束Backend/Desktop syntax SUCCESS、Frontend三测试失败，归49；不把GUI6项正证扩为整体矩阵/RETIRED或可合入。
 
 **任务49 / UI（MAIN-UI-HYDRATION-CI-20261008-49）**：准确49ec013的CI37748842801 Frontend ESLint通过、Vitest552 PASS/3 FAIL；实际日志`ui47/frontend-ci.log`定位CreationTaskWorkspace“uses typed operations for replace, reorder, lock, confirmation, and undo”找不到取消、HomeCommandComposer“asks the assistant before creating anything, then confirms the real preflight”找不到制作方案dialog、新SideCards SSR→hydrate用例Esc后焦点仍在关闭卡片而非查看历史。不能猜全部只是测试时序或关闭失败；B48准确真实GUI分项正证保留，正在释放，不热换其源码。
 
