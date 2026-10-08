@@ -459,12 +459,10 @@ def _profile() -> ProductionProfile:
     )
 
 
-@pytest.fixture
-def person_render_edit_state(tmp_path, monkeypatch):
+def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     # Route fixtures use placeholder media; preview encoding is not a media test.
     monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
         SimpleNamespace(id="fixture-visual-preview", logical_ref="artifacts/fixture-visual-preview.mp4"))
-    workspace_id = "workspace_a"
     output_root = tmp_path / "output"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
@@ -828,6 +826,122 @@ def person_render_edit_state(tmp_path, monkeypatch):
         provider=provider,
         client=TestClient(main_module.app),
     )
+
+
+@pytest.fixture
+def person_render_edit_state(tmp_path, monkeypatch):
+    return _person_render_edit_state(tmp_path, monkeypatch, "workspace_a")
+
+
+@pytest.fixture
+def permitted_person_edit_state(tmp_path, monkeypatch):
+    """Synthetic media, but a real roster, persisted request, OS lock and Grant."""
+    from contextlib import contextmanager
+    import fcntl
+    import psutil
+    import app.avatar_lipsync as avatar
+    from app.creation_execution import (CreationExecution, CreationJobOwnerVerifier,
+                                       CreationStageGrantContext, CpuRenderLimits, revision_digest)
+    from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent
+    from app.host_resource_probes import HostBudget, HostResourceDecision, HostResourceProbe, MontageBudget, PresenterBudget
+    from app.local_members import LocalMemberService
+    from app.member_permits import MemberDeviceAccess, permit_actor
+    from app.repository import LEGACY_WORKSPACE_ID
+
+    state = _person_render_edit_state(tmp_path, monkeypatch, LEGACY_WORKSPACE_ID)
+    plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan.presenter_share_target = 100
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    members = LocalMemberService(state.production.database_path)
+    actor = permit_actor(members.list_members()[0], state.workspace_id)
+    access = MemberDeviceAccess(members)
+    budget = PresenterBudget(1, 1024**2, 30, 4096, 1, 5, 64*1024**2, 32, .1, 64*1024**2, 4096)
+    owner = CreationJobOwnerVerifier(state.production, presenter_budget=budget,
+        presenter_cpu_render_limits=CpuRenderLimits(4096, 1, 5), montage_budget=MontageBudget(1, 4, 100000, 100000, 5, 1),
+        presenter_models={"fast": state.provider.model_id}, resolve_presenter_output=main_module._person_render_media_path,
+        verify_identity=access.verify_identity)
+    resources = HostResourceProbe(state.production.database_path, disk_paths=(tmp_path,),
+        budget=HostBudget(75, 1, 1, 1, 1024**2, 1024**2, presenter=budget, montage=owner.montage_budget))
+    # Explicit resource/timing fixtures; never sample this host or decode placeholder media.
+    resources._sample = lambda declared, **options: HostResourceDecision(True, declared, {"fixture": {}}, None)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1024**3))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(avatar, "_probe_avatar_output", lambda *args, **kwargs: None)
+    def fake_person_render(*, request, output_path, grant_context):
+        grant_context.check()
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        grant_context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'new-person-render')", str(output)],
+                          output_paths=(output,))
+        state.provider.output_cache_keys.append(output.stem)
+        state.provider.languages.append(request.language)
+        from app.creation_execution import presenter_input_facts
+        state.provider.base_cache_keys.append(avatar_lipsync_cache_key(request, input_facts=presenter_input_facts(request)))
+        return AvatarAndLipSyncResult("succeeded", output.stem, str(output.resolve()), 4,
+                                     '{"engine":"synthetic-provider; no media decoding"}', None, None, None)
+    state.provider.render = fake_person_render
+    state.provider.languages = []
+    state.provider.base_cache_keys = []
+    state.releases = []
+
+    @contextmanager
+    def granted(stage="person_render"):
+        current = state.production.get_creation_task(state.workspace_id, state.task.id)
+        plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+        script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
+        def forbidden(*args):
+            pytest.fail("diagnostic must not run ungranted creation actions")
+        execution = CreationExecution(state.production, run_narration=forbidden, run_montage_plan=forbidden,
+                                      run_render=forbidden, render_is_valid=forbidden)
+        job = execution.start(state.workspace_id, current.id, script.id, revision_digest(script, plan), actor=actor)
+        key, _ = owner.stage_facts(current, script, plan, stage)
+        scheduler = DeviceScheduler(state.production.database_path, tmp_path / "device.lock",
+                                    owners=owner, resources=resources, processes=HostProcessProbe())
+        grant = None
+        succeeded = False
+        try:
+            scheduler.submit(SubmissionIntent(state.workspace_id, "creation_job", job.id, job.input_digest, key, SchedulePolicy()), actor)
+            grant = scheduler.pick_and_grant()
+            assert grant is not None and grant.unit_key == key
+            yield CreationStageGrantContext(scheduler, grant, time.monotonic()+5, 4096, 1)
+            succeeded = True
+        finally:
+            if grant is not None:
+                with state.production._connect() as conn:
+                    children = json.loads(conn.execute("SELECT children_json FROM device_permit WHERE id=1").fetchone()[0])
+                if succeeded:
+                    scheduler.complete_unit(grant, checkpoint_database_path=state.production.database_path,
+                                            checkpoint_write=lambda conn, current: None)
+                else:
+                    scheduler.fail_unit(grant, reason="diagnostic_failed", failure_write=lambda conn, current: None)
+                scheduler.assert_released(grant)
+                with (tmp_path / "device.lock").open("r") as handle:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                with state.production._connect() as conn:
+                    permit = dict(conn.execute("SELECT state,generation,request_id FROM device_permit WHERE id=1").fetchone())
+                ledger = json.loads(scheduler.ledger_path.read_text())
+                assert permit["state"] == ledger["state"] == "free"
+                state.releases.append({"children": children, "lock": "EX|NB reacquired", "permit": permit, "ledger": ledger})
+            scheduler.close()
+    state.granted = granted
+    yield state
+    (tmp_path / "release-evidence.json").write_text(json.dumps(state.releases, indent=2))
+
+
+def _assert_unpermitted_person_confirm(state, proposal):
+    with state.production._connect() as conn:
+        before = tuple(conn.iterdump())
+    root = Path(main_module.settings.video_output_path)
+    outputs = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = list(state.provider.output_cache_keys)
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal['id']}/confirm")
+    assert response.status_code == 409 and "专属设备许可" in response.text, response.text
+    assert state.provider.output_cache_keys == calls
+    with state.production._connect() as conn:
+        assert tuple(conn.iterdump()) == before
+    assert {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()} == outputs
 
 
 def test_trim_person_preview_accepts_legacy_and_synthetic_sources_but_checks_render_owner(person_render_edit_state):
@@ -2780,10 +2894,10 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
 
 
 def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render(
-    person_render_edit_state,
+    permitted_person_edit_state,
     monkeypatch,
 ):
-    state = person_render_edit_state
+    state = permitted_person_edit_state
     production = state.production
     workspace_response = state.client.get(
         f"/api/creation-tasks/{state.task.id}"
@@ -2822,25 +2936,34 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     assert preview_payload["proposal"]["invalidated_refs"] == old_output_refs
     assert len(production.list_timeline_versions(state.workspace_id, state.task.id)) == 1
 
-    confirm = state.client.post(
-        f"/api/creation-tasks/{state.task.id}/edits/"
-        f"{preview_payload['proposal']['id']}/confirm"
-    )
-
-    assert confirm.status_code == 200, confirm.text
-    operation = confirm.json()["operation"]
-    assert operation["operation_type"] == "RegeneratePersonRender"
-    new_render_id = operation["payload"]["person_render_id"]
+    # Public regeneration still lacks a queued permit: reject without any generation writes.
+    _assert_unpermitted_person_confirm(state, preview_payload['proposal'])
+    # Internal generation consumes an actual original-owner Grant. It is not public edit completion.
+    with state.granted() as context:
+        generated = main_module._generate_creation_task_person_render_record(
+            state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id, person_version=state.old_render.person_version),
+            regeneration_token=preview_payload['proposal']['id'], grant_context=context)
+    new_render_id = generated.id
     assert new_render_id != state.old_render.id
+    # The existing same-audio reuse path retains target-only replacement and undo coverage.
+    reuse = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这一段换成当前人物出镜", "context_stage": "review",
+        "selected_object_refs": ["clip:clip-person-target"], "playhead_ms": 500})
+    assert reuse.status_code == 200, reuse.text
+    assert reuse.json()['proposal']['operation']['payload']['reuse_person_render_id'] == new_render_id
+    confirm = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{reuse.json()['proposal']['id']}/confirm")
+    assert confirm.status_code == 200, confirm.text
+    operation = confirm.json()['operation']
+    assert operation['operation_type'] == 'ChangePersonSegment'
+    assert operation['payload']['person_render_id'] == new_render_id
     renders = production.list_person_renders(state.workspace_id, state.task.id)
-    assert {render.id for render in renders} == {
-        state.old_render.id,
-        new_render_id,
-    }
+    assert {render.id for render in renders} == {state.old_render.id, new_render_id}
     new_render = next(render for render in renders if render.id == new_render_id)
     expected_cache_key = hashlib.sha256(
         (
-            f"{state.old_render.cache_key}\n"
+            f"{state.provider.base_cache_keys[0]}\n"
             f"regenerate:{preview_payload['proposal']['id']}"
         ).encode("utf-8")
     ).hexdigest()
@@ -2888,6 +3011,8 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         state.workspace_id, state.task.id
     )} == {state.old_render.id, new_render_id}
 
+    # Retain the existing fake-renderer diagnostic; it proves cache/edit lineage only,
+    # never a permitted device render, media output, or public re-output capability.
     def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"rerendered-video")
@@ -3054,8 +3179,8 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
 
 
 @pytest.mark.parametrize("target,expected_calls", [(0, 0), (100, 1)])
-def test_initial_montage_generates_face_only_for_selected_share(person_render_edit_state, monkeypatch, target, expected_calls):
-    state = person_render_edit_state
+def test_initial_montage_generates_face_only_for_selected_share(permitted_person_edit_state, monkeypatch, target, expected_calls):
+    state = permitted_person_edit_state
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     task.stage = "montage"
     task.stage_status = "not_started"
@@ -3065,18 +3190,18 @@ def test_initial_montage_generates_face_only_for_selected_share(person_render_ed
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
-    calls = []
-    def fake_generate(_workspace, _task, payload):
-        calls.append(payload.narration_segment_id)
-        return SimpleNamespace(id="render-selected", status="ready", duration_seconds=30.0)
-    monkeypatch.setattr(main_module, "_generate_creation_task_person_render_record", fake_generate)
-    monkeypatch.setattr(main_module, "_person_render_media_path", lambda _: Path("/tmp/test-render.mp4"))
     _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, task.id, "plan")
-    # Existing planning diagnostic with fixture providers, not the public/device path.
-    response = main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id)
+    if target:
+        with state.granted() as context:
+            main_module._person_stage_with_grant(state.workspace_id, task.id, context)
+        with state.granted("montage_plan") as context:
+            response = main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id, grant_context=context)
+    else:
+        # Pure metadata diagnostic remains available; no person provider is involved.
+        response = main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id)
     assert response.task_id == task.id
     body = response.model_dump()
-    assert len(calls) == expected_calls
+    assert len(state.provider.output_cache_keys) == expected_calls
     assert body["presenter_share_target"] == target
     assert body["presenter_share_actual"] == target
     assert all(bool(clip["person_render_id"]) == bool(target) for clip in body["clips"])
@@ -4372,25 +4497,26 @@ def test_person_preview_rejects_partial_or_negated_request(person_render_edit_st
     assert state.provider.output_cache_keys == []
 
 
-def test_person_generation_reads_narration_language(person_render_edit_state, monkeypatch):
-    state = person_render_edit_state
-    original_get = state.production.get_narration_segment
-    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
-    captured = []
-    class RequestCaptured(Exception):
-        pass
-    def capture(**kwargs):
-        captured.append(kwargs['language'])
-        raise RequestCaptured()
-    monkeypatch.setattr(state.production, 'resolve_avatar_lipsync_request', capture)
-    with pytest.raises(RequestCaptured):
+def test_person_generation_reads_narration_language(permitted_person_edit_state, monkeypatch):
+    state = permitted_person_edit_state
+    segment = state.production.get_narration_segment(state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id)
+    voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id, segment.voice_version)
+    state.production.save_versioned_voice_profile(replace(voice, version='v2', language='en'))
+    state.production.save_narration_segments(state.workspace_id, state.task.id, segment.script_id,
+                                            [replace(segment, voice_version='v2', language='en')])
+    plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan.selected_voice = replace(plan.selected_voice, version='v2', language='en')
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    state.provider.supported_languages = ('zh', 'en')
+    with state.granted() as context:
         main_module._generate_creation_task_person_render_record(state.workspace_id, state.task.id,
             main_module.CreationTaskPersonRenderRequest(
                 narration_segment_id=state.montage.cues[0].narration_segment_id,
                 person_profile_id=state.old_render.person_profile_id,
-                person_version=state.old_render.person_version, motion='natural', expression='neutral'))
-    assert captured == ['en']
-    assert state.provider.output_cache_keys == []
+                person_version=state.old_render.person_version, motion='natural', expression='neutral'), grant_context=context)
+    assert state.provider.languages == ['en']
+    assert len(state.provider.output_cache_keys) == 1
 
 
 def test_person_preview_rejects_unsupported_narration_language(person_render_edit_state, monkeypatch):
@@ -4407,8 +4533,8 @@ def test_person_preview_rejects_unsupported_narration_language(person_render_edi
     assert state.provider.output_cache_keys == []
 
 
-def test_person_reuse_requires_current_audio_lineage(person_render_edit_state, monkeypatch):
-    state = person_render_edit_state
+def test_person_reuse_requires_current_audio_lineage(permitted_person_edit_state, monkeypatch):
+    state = permitted_person_edit_state
     base = f'/api/creation-tasks/{state.task.id}'
     command = {'raw_command': '这一段换成当前人物出镜', 'context_stage': 'review',
                'selected_object_refs': ['clip:clip-person-target']}
@@ -4416,12 +4542,13 @@ def test_person_reuse_requires_current_audio_lineage(person_render_edit_state, m
     legacy = state.client.post(base + '/edits/preview', json=command)
     assert legacy.status_code == 200, legacy.text
     assert 'reuse_person_render_id' not in legacy.json()['proposal']['operation']['payload']
-    generated = main_module._generate_creation_task_person_render_record(
-        state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
-            narration_segment_id=state.montage.cues[0].narration_segment_id,
-            person_profile_id=state.old_render.person_profile_id,
-            person_version=state.old_render.person_version, motion='natural', expression='neutral'),
-        regeneration_token='lineage-test')
+    with state.granted() as context:
+        generated = main_module._generate_creation_task_person_render_record(
+            state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id,
+                person_version=state.old_render.person_version, motion='natural', expression='neutral'),
+            regeneration_token='lineage-test', grant_context=context)
     preview = state.client.post(base + '/edits/preview', json=command)
     assert preview.status_code == 200, preview.text
     proposal = preview.json()['proposal']
@@ -4458,8 +4585,8 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
 
 
 @pytest.mark.parametrize('start', [0,1])
-def test_person_replacement_maps_narration_instead_of_broll_source(person_render_edit_state, start):
-    state=person_render_edit_state
+def test_person_replacement_maps_narration_instead_of_broll_source(permitted_person_edit_state, start):
+    state=permitted_person_edit_state
     target=state.montage.clips[0]
     target.person_render_id=None
     target.role='b_roll'
@@ -4480,6 +4607,19 @@ def test_person_replacement_maps_narration_instead_of_broll_source(person_render
     proposal=preview.json()['proposal']
     assert proposal['operation']['payload']['source_start_seconds']==start
     assert proposal['operation']['payload']['source_end_seconds']==4
+    _assert_unpermitted_person_confirm(state, proposal)
+    with state.granted() as context:
+        generated = main_module._generate_creation_task_person_render_record(
+            state.workspace_id, state.task.id, main_module.CreationTaskPersonRenderRequest(
+                narration_segment_id=state.montage.cues[0].narration_segment_id,
+                person_profile_id=state.old_render.person_profile_id,
+                person_version=state.old_render.person_version), grant_context=context)
+    reuse=state.client.post(base+'/edits/preview',json={
+        'raw_command':'这一段换成当前人物出镜','context_stage':'review',
+        'selected_object_refs':['clip:clip-person-target']})
+    assert reuse.status_code==200,reuse.text
+    proposal=reuse.json()['proposal']
+    assert proposal['operation']['payload']['reuse_person_render_id']==generated.id
     confirmed=state.client.post(base+f"/edits/{proposal['id']}/confirm")
     assert confirmed.status_code==200,confirmed.text
     after=state.client.get(base).json()
