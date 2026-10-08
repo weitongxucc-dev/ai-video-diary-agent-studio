@@ -1910,7 +1910,8 @@ describe("CreationTaskWorkspace", () => {
       await waitFor(() => expect(mocks.exactPreview).toHaveBeenCalledWith("task-1", operation));
       expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
       expect(mocks.exactEdit).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+      fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+      expect(mocks.exactEdit).not.toHaveBeenCalled();
     }
 
     mocks.exactPreview.mockResolvedValue(exactPreview(task, "ReplaceClip"));
@@ -1922,7 +1923,8 @@ describe("CreationTaskWorkspace", () => {
     }));
     expect(mocks.exactEdit).not.toHaveBeenCalled();
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled());
 
     // WIL-90：主轨 Insert —— clip_id 是锚点镜头，插在它之后。后端对每个操作都要求
@@ -1940,7 +1942,8 @@ describe("CreationTaskWorkspace", () => {
     expect(insertCall?.clip_id).toBe("clip-1");
     expect(insertCall).not.toHaveProperty("duration_seconds");
     expect(mocks.exactEdit).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(mocks.undoTimeline).toHaveBeenCalledWith("task-1"));

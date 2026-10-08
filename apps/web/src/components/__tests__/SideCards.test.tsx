@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
@@ -57,16 +57,16 @@ describe("v5.1 object card stack", () => {
       expect(player.currentTime).toBe(1.25);
       const trigger = within(container).getByRole("button", { name: "查看历史" });
       trigger.focus(); fireEvent.click(trigger);
-      const card = screen.getByRole("dialog", { name: "历史版本" });
+      const card = await screen.findByRole("dialog", { name: "历史版本" });
       expect(container).not.toContainElement(card);
       const body = screen.getByLabelText("历史草稿").parentElement!;
       body.scrollTop = 120;
       fireEvent.change(screen.getByLabelText("历史草稿"), { target: { value: "保留历史选择草稿" } });
       fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-      expect(screen.queryByRole("dialog", { name: "历史版本" })).not.toBeInTheDocument();
-      expect(trigger).toHaveFocus();
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史版本" })).not.toBeInTheDocument());
+      await waitFor(() => expect(trigger).toHaveFocus());
       fireEvent.click(trigger);
-      expect(screen.getByRole("dialog", { name: "历史版本" })).toBe(card);
+      expect(await screen.findByRole("dialog", { name: "历史版本" })).toBe(card);
       expect(screen.getByLabelText("历史草稿")).toHaveValue("保留历史选择草稿");
       expect(body.scrollTop).toBe(120);
       expect(within(container).getByLabelText("当前播放器")).toBe(player);

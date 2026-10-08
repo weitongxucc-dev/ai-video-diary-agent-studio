@@ -46,14 +46,14 @@ describe("HomeCommandComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.ask).toHaveBeenCalledWith("介绍产品", expect.any(String)));
     expect(mocks.confirm).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "制作方案" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "制作方案" })).toBeVisible();
     expect(await screen.findByRole("region", { name: "制作方案" })).toHaveTextContent("镜头 4");
 
     fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
     expect(screen.queryByRole("dialog", { name: "制作方案" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看方案" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建任务" }));
     await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith({
       goal: "介绍产品", name: "产品视频", target_count: 1, language: "zh-CN",
       aspect_ratio: "9:16", duration_target_seconds: 60, presenter_share_target: 20, lipsync_quality: "high", preflight_fingerprint: "a".repeat(64),
