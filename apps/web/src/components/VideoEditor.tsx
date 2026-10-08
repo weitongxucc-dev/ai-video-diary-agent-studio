@@ -25,11 +25,11 @@ export function ClipThumbnail({ clip, taskId, className }: { clip: CreationTaskM
   return <video className={className} aria-hidden muted playsInline preload="metadata" src={sourceUrl(clip, taskId)} onLoadedMetadata={event => { event.currentTarget.currentTime = clip.source_start_seconds; }} />;
 }
 
-function CanvasControls({ ratio, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
+function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
   const [draft,setDraft]=useState(ratio);
-  const [fit,setFit]=useState<""|"fill"|"fit">("");
+  const [fit,setFit]=useState<""|"fill"|"fit">(fitMode);
   const [open,setOpen]=useState(false);
-  useEffect(() => { setDraft(ratio); setFit(""); }, [ratio]);
+  useEffect(() => { setDraft(ratio); setFit(fitMode); }, [ratio, fitMode]);
   return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
     <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
     <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
@@ -50,6 +50,11 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   const [muted, setMuted] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   const previewRatio = montage.aspect_ratio === "16:9" ? 16 / 9 : montage.aspect_ratio === "1:1" ? 1 : 9 / 16;
+  const canvasFitMode = montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fit")
+    ? "fit"
+    : montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fill")
+      ? "fill"
+      : "";
   const playerViewport = useRef<HTMLDivElement>(null);
   const [playerSize, setPlayerSize] = useState<{ width: number; height: number } | null>(null);
   const selected = montage.clips.find(clip => clip.id === selectedId);
@@ -62,6 +67,10 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
       const next = { width: fittedWidth, height: fittedWidth / previewRatio };
       setPlayerSize(previous => previous && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 ? previous : next);
     };
+    if (typeof ResizeObserver === "undefined") {
+      resize();
+      return;
+    }
     const observer = new ResizeObserver(resize);
     observer.observe(viewport);
     resize();
@@ -70,7 +79,7 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
   return <div className={ui.stage}>
-    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={montage.aspect_ratio ?? "9:16"} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
+    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={montage.aspect_ratio ?? "9:16"} fitMode={canvasFitMode} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={montage.aspect_ratio ?? "9:16"} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
       {montage.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
