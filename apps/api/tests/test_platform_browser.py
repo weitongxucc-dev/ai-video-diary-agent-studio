@@ -1,93 +1,89 @@
-"""platform_browser 最小测试：发布桩必抛错、错误分类、适配器结构、mock driver 走通存草稿。
-
-不真跑浏览器、不用真实账号（红线）。真实 URL/选择器未验证，逻辑用 mock driver 验证。
-"""
+"""Adapter contracts use a fake driver; no live account or platform session."""
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 
 from app.platform_browser import (
-    ChannelsAdapter,
-    DouyinAdapter,
-    PublishNotAvailable,
-    XiaohongshuAdapter,
+    BrowserUnavailable, ChannelsAdapter, DouyinAdapter, LoginRequired,
+    PublishConfirm, PublishOutcomeUnknown, XiaohongshuAdapter,
     needs_human_intervention,
 )
 
 
-class _MockDriver:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-        self._draft_text = "draft-box-id-1"
+class FakeDriver:
+    def __init__(self, *, account="creator-001", receipt="item-123"):
+        self.calls = []
+        self.account = account
+        self.receipt = receipt
 
-    async def goto(self, url: str) -> None:
-        self.calls.append(f"goto:{url}")
-
-    async def upload(self, selector: str, path: str) -> None:
-        self.calls.append(f"upload:{selector}:{path}")
-
-    async def fill(self, selector: str, value: str) -> None:
-        self.calls.append(f"fill:{selector}:{value}")
-
-    async def click(self, selector: str) -> None:
-        self.calls.append(f"click:{selector}")
-
-    async def read_text(self, selector: str) -> str:
-        self.calls.append(f"read:{selector}")
-        return self._draft_text
+    async def goto(self, url): self.calls.append(("goto", url))
+    async def upload(self, selector, path): self.calls.append(("upload", selector, path))
+    async def fill(self, selector, value): self.calls.append(("fill", selector, value))
+    async def click(self, selector): self.calls.append(("click", selector))
+    async def read_text(self, selector):
+        self.calls.append(("read", selector))
+        if selector == "[data-e2e='creator-avatar']": return "avatar"
+        if selector == "[data-e2e='creator-name']": return self.account
+        if selector == "[data-e2e='publish-result-id']": return self.receipt
+        return ""
 
 
-ALL_ADAPTERS = (DouyinAdapter, XiaohongshuAdapter, ChannelsAdapter)
+def confirmed(**changes):
+    values = dict(account_ref="creator-001", title="已确认标题", description="已确认说明",
+                  topics=("记录",), content_digest="a" * 64, confirmed=True)
+    values.update(changes)
+    return PublishConfirm(**values)
 
 
-@pytest.mark.parametrize("cls", ALL_ADAPTERS)
-def test_publish_is_a_stub_that_raises(cls):
-    adapter = cls()
-    with pytest.raises(PublishNotAvailable) as exc:
-        import asyncio
-        asyncio.run(adapter.publish(None))
-    assert "发布功能未开放" in str(exc.value)
-    assert "需用户授权" in str(exc.value)
-
-
-def test_needs_human_intervention_classification():
-    assert needs_human_intervention("captcha") is True
-    assert needs_human_intervention("risk_control") is True
-    assert needs_human_intervention("rate_limit") is True
-    assert needs_human_intervention("network") is False
-
-
-def test_save_draft_without_driver_refuses_honestly():
-    adapter = DouyinAdapter()  # 无 driver → 不冒充成功
-    import asyncio
-    with pytest.raises(RuntimeError) as exc:
-        asyncio.run(adapter.save_draft())
-    assert "浏览器" in str(exc.value)
-
-
-def test_save_draft_flow_with_mock_driver_is_mocked():
-    driver = _MockDriver()
+def test_platform_publish_requires_explicit_confirmation_before_any_browser_write():
+    driver = FakeDriver()
     adapter = DouyinAdapter(driver)
-    import asyncio
-
-    async def run():
-        await adapter.login()
-        await adapter.upload_video("/tmp/video.mp4")
-        await adapter.fill_copywriting("标题", "描述", ("话题1", "话题2"))
-        return await adapter.save_draft()
-
-    receipt = asyncio.run(run())
-    assert receipt.mocked is True  # 明确 mock，不冒充「已打通平台」
-    assert receipt.platform == "douyin"
-    # 公共流程按序执行：登录→上传→填文案→存草稿
-    assert driver.calls[0].startswith("goto:")
-    assert any(c.startswith("upload:") for c in driver.calls)
-    assert any(c.startswith("fill:") for c in driver.calls)
-    assert any(c.startswith("click:") for c in driver.calls)
+    with pytest.raises(PermissionError):
+        asyncio.run(adapter.publish(confirmed(confirmed=False), "/private/final.mp4"))
+    assert driver.calls == []
 
 
-def test_each_adapter_declares_platform():
-    assert DouyinAdapter.platform == "douyin"
+def test_publish_rechecks_current_account_and_persists_pre_submit_boundary():
+    driver = FakeDriver()
+    adapter = DouyinAdapter(driver)
+    boundaries = []
+    result = asyncio.run(adapter.publish(confirmed(), "/private/final.mp4",
+                                         lambda: boundaries.append("submission_started")))
+    assert result.platform == "douyin" and result.publish_id == "item-123"
+    assert result.account_ref == "creator-001"
+    assert boundaries == ["submission_started"]
+    labels = [call[0] for call in driver.calls]
+    assert labels.index("upload") < labels.index("fill") < labels.index("click")
+    assert labels.index("read") < labels.index("upload")
+
+
+def test_mismatched_account_blocks_upload():
+    driver = FakeDriver(account="different-account")
+    adapter = DouyinAdapter(driver)
+    with pytest.raises(LoginRequired):
+        asyncio.run(adapter.publish(confirmed(), "/private/final.mp4"))
+    assert not any(call[0] in {"upload", "fill", "click"} for call in driver.calls)
+
+
+def test_missing_remote_receipt_is_unknown_and_never_success():
+    driver = FakeDriver(receipt="")
+    adapter = DouyinAdapter(driver)
+    with pytest.raises(PublishOutcomeUnknown):
+        asyncio.run(adapter.publish(confirmed(), "/private/final.mp4"))
+
+
+def test_no_driver_and_nonintegrated_adapters_do_not_fall_back_to_mock():
+    with pytest.raises(BrowserUnavailable):
+        asyncio.run(DouyinAdapter().login())
     assert XiaohongshuAdapter.platform == "xiaohongshu"
     assert ChannelsAdapter.platform == "wechat"
+
+
+def test_human_challenges_are_not_bypassed():
+    assert needs_human_intervention("captcha")
+    assert needs_human_intervention("risk_control")
+    assert needs_human_intervention("rate_limit")
+    assert not needs_human_intervention("navigation")

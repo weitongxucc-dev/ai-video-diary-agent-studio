@@ -1,114 +1,91 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { StrictMode } from "react";
 
-const api = vi.hoisted(() => ({ listCreationTasks: vi.fn() }));
-vi.mock("@/lib/api", () => api);
-vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</>,
+const api = vi.hoisted(() => ({
+  listCreationTasks: vi.fn(), listPublishingPlatforms: vi.fn(), listPublishingAccounts: vi.fn(),
+  connectPublishingAccount: vi.fn(), verifyPublishingAccount: vi.fn(),
+  createPlatformPublishJob: vi.fn(), listPlatformPublishJobs: vi.fn(),
 }));
+vi.mock("@/lib/api", () => api);
+vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 
 import { PublishingWorkspace } from "@/components/PublishingWorkspace";
+import type { PlatformBrowserAccount, PlatformPublishJob } from "@/lib/types";
 
 const task = {
-  id: "task-1", workspace_id: "local", plan_id: "plan-1", name: "新品讲解视频", scenario: "产品介绍",
-  stage: "narration" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const,
-  progress: 45, recovery_point: "script_confirmed", selected_topic_id: "topic-1", confirmed_script_id: "script-1",
-  narration_cache_key: null, montage_plan_id: null, output_ready: false,
-  stage_reason: "缺少已授权声音", stage_impact: "暂时不能生成配音", stage_repair_action: "登记声音档案后重试", stage_retryable: true,
+  id: "task-1", workspace_id: "local", plan_id: "plan-1", visibility: "private" as const,
+  name: "新品讲解视频", scenario: "产品介绍", stage: "review" as const,
+  stage_status: "completed" as const, status: "completed" as const, progress: 100,
+  recovery_point: "review", selected_topic_id: "topic-1", confirmed_script_id: "script-1",
+  narration_cache_key: null, montage_plan_id: "montage-1", current_timeline_version_id: "timeline-v4",
+  timeline_sequence: 4, can_undo: true, output_ready: true, stage_reason: null,
+  stage_impact: null, stage_repair_action: null, stage_retryable: null,
   created_at: "2026-08-30T08:00:00Z", updated_at: "2026-08-30T08:30:00Z",
 };
-const secondTask = { ...task, id: "task-2", name: "会员日复盘视频", updated_at: "2026-08-30T09:00:00Z" };
+const platforms = { items: [
+  { platform: "douyin", label: "抖音", browser_connect: true, browser_publish: true, verified: false, status: "candidate_unverified", requirement: "创作者页面仍待验收" },
+  { platform: "wechat", label: "微信视频号", browser_connect: false, browser_publish: false, verified: false, status: "not_connected", requirement: "尚未接通" },
+  { platform: "xiaohongshu", label: "小红书", browser_connect: false, browser_publish: false, verified: false, status: "not_connected", requirement: "尚未接通" },
+] };
 
 afterEach(() => vi.clearAllMocks());
 
+function setup({ accounts = { items: [] }, jobs = { items: [] } }: {
+  accounts?: { items: PlatformBrowserAccount[] };
+  jobs?: { items: PlatformPublishJob[] };
+} = {}) {
+  api.listCreationTasks.mockResolvedValue({ items: [task], total_count: 1 });
+  api.listPublishingPlatforms.mockResolvedValue(platforms);
+  api.listPublishingAccounts.mockResolvedValue(accounts);
+  api.listPlatformPublishJobs.mockResolvedValue(jobs);
+  render(<PublishingWorkspace />);
+}
+
 describe("PublishingWorkspace", () => {
-  it("renders real task progress with blocker reason and repair instead of invented publication metrics", async () => {
-    api.listCreationTasks.mockResolvedValue({ items: [task], total_count: 1 });
-    render(<PublishingWorkspace />);
-    expect((await screen.findAllByText("新品讲解视频")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("需要处理").length).toBeGreaterThan(0);
-    expect(screen.getByText("暂时不能生成配音")).toBeInTheDocument();
-    expect(screen.getByText("原因：缺少已授权声音")).toBeInTheDocument();
-    expect(screen.getByText("处理方式：登记声音档案后重试")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /打开任务/ })).toHaveAttribute("href", "/tasks/task-1");
-    expect(screen.getByText(/暂不支持发布/)).toBeInTheDocument();
+  it("states that only Douyin is a candidate and keeps the other platforms disconnected", async () => {
+    setup();
+    expect(await screen.findByText("候选接入，未完成真实验收")).toBeInTheDocument();
+    expect(screen.getByText("微信视频号")).toBeInTheDocument();
+    expect(screen.getByText("小红书")).toBeInTheDocument();
+    expect(screen.getByText("本机尚未完成真实抖音页面控件验收；不会把候选选择器、登录窗口或本地排队描述为平台已发布。")).toBeInTheDocument();
     expect(screen.queryByText("已发布", { exact: true })).not.toBeInTheDocument();
   });
 
-  it("filters by real output readiness", async () => {
-    api.listCreationTasks.mockResolvedValue({ items: [task], total_count: 1 });
-    render(<PublishingWorkspace />);
-    await screen.findAllByText("新品讲解视频");
-    fireEvent.click(screen.getByRole("button", { name: "成片就绪" }));
-    expect(screen.getByText("当前筛选下没有记录")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /打开任务/ })).not.toBeInTheDocument();
-    expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument();
+  it("opens the isolated browser via an explicit action and does not simulate account completion", async () => {
+    api.connectPublishingAccount.mockResolvedValue({ platform: "douyin", state: "waiting_for_user_login", detail: "请在专用浏览器登录后回来核验。" });
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "打开专用浏览器" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("请在专用浏览器登录后回来核验。");
+    expect(api.connectPublishingAccount).toHaveBeenCalledWith("douyin");
+    expect(screen.queryByText(/openid_mock/)).not.toBeInTheDocument();
   });
 
-  it("keeps old records visible but marked stale when a refresh fails", async () => {
-    api.listCreationTasks.mockResolvedValueOnce({ items: [task], total_count: 1 })
-      .mockRejectedValueOnce(new Error("本地服务未响应"));
-    render(<PublishingWorkspace />);
-    await screen.findAllByText("新品讲解视频");
-    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    expect(await screen.findByRole("status")).toBeInTheDocument();
-    expect(screen.getByText("读取失败，以下统计和记录可能不是最新")).toBeInTheDocument();
-    expect(screen.getByText(/本地服务未响应/)).toBeInTheDocument();
-    expect(screen.getAllByText("新品讲解视频").length).toBeGreaterThan(0);
-    expect(screen.getByText("详情可能不是最新")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重新读取" })).toBeInTheDocument();
+  it("shows the exact account, current version and copy before creating a durable job", async () => {
+    const accounts: { items: PlatformBrowserAccount[] } = { items: [{ workspace_id: "local", user_id: "member-1", platform: "douyin", account_ref: "creator-001", verified_at: "2026-10-09T00:00:00Z" }] };
+    api.createPlatformPublishJob.mockResolvedValue({ id: "publish-1", task_id: "task-1", status: "queued", progress: 0, queue_state: "waiting", queue_wait_reason: null, failure_reason: null, impact: null, repair_action: null, events: [] });
+    setup({ accounts });
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "确认过的标题" } });
+    fireEvent.change(screen.getByLabelText("发布描述"), { target: { value: "完整确认文案" } });
+    fireEvent.change(screen.getByLabelText("话题（逗号或换行分隔）"), { target: { value: "家庭,记录" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("账号：creator-001");
+    expect(screen.getByRole("dialog")).toHaveTextContent("新品讲解视频 · 当前版本 V4");
+    expect(screen.getByRole("dialog")).toHaveTextContent("完整确认文案");
+    fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
+    await waitFor(() => expect(api.createPlatformPublishJob).toHaveBeenCalledTimes(1));
+    expect(api.createPlatformPublishJob).toHaveBeenCalledWith("task-1", expect.objectContaining({
+      platform: "douyin", account_ref: "creator-001", timeline_version_id: "timeline-v4",
+      title: "确认过的标题", description: "完整确认文案", topics: ["家庭", "记录"], confirmed: true,
+    }));
+    expect(await screen.findByText(/发布作业 publish-1 已写入本机队列/)).toBeInTheDocument();
+    expect(screen.queryByText("已发布", { exact: true })).not.toBeInTheDocument();
   });
 
-  it("recovers after a failed refresh and replaces the stale records", async () => {
-    api.listCreationTasks.mockResolvedValueOnce({ items: [task], total_count: 1 })
-      .mockRejectedValueOnce(new Error("本地服务未响应"))
-      .mockResolvedValueOnce({ items: [secondTask], total_count: 1 });
-    render(<PublishingWorkspace />);
-    await screen.findAllByText("新品讲解视频");
-    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    await screen.findByRole("status");
-    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText("会员日复盘视频")).length).toBeGreaterThan(0);
-    await waitFor(() => expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument());
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.queryByText("详情可能不是最新")).not.toBeInTheDocument();
+  it("renders unknown publication outcomes as blocked from automatic retry", async () => {
+    const jobs: { items: PlatformPublishJob[] } = { items: [{ id: "publish-unknown", task_id: "task-1", status: "interrupted", progress: 0, queue_state: "failed", queue_wait_reason: null, failure_reason: "publish_outcome_unknown", impact: "平台动作可能已经提交；系统不会自动重发。", repair_action: "先在平台账号后台核对结果。", events: [{ type: "platform_publish_unknown", payload: {}, created_at: "2026-10-09T00:00:00Z" }] }] };
+    setup({ jobs });
+    expect(await screen.findByText("结果待核对（不会自动重发）")).toBeInTheDocument();
+    expect(screen.getByText("平台动作可能已经提交；系统不会自动重发。")).toBeInTheDocument();
+    expect(screen.getByText("处理：先在平台账号后台核对结果。")).toBeInTheDocument();
   });
-
-  it("falls back to the next record when the selected task disappears after refresh", async () => {
-    api.listCreationTasks.mockResolvedValueOnce({ items: [task, secondTask], total_count: 2 })
-      .mockResolvedValueOnce({ items: [secondTask], total_count: 1 });
-    render(<PublishingWorkspace />);
-    await screen.findAllByText("会员日复盘视频");
-    expect(screen.getByRole("link", { name: /打开任务/ })).toHaveAttribute("href", "/tasks/task-1");
-    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
-    await waitFor(() => expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument());
-    expect(screen.getAllByText("会员日复盘视频").length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: /打开任务/ })).toHaveAttribute("href", "/tasks/task-2");
-  });
-
-  it("discards an outdated refresh response so it cannot overwrite newer state", async () => {
-    let resolveOutdated!: (response: { items: typeof task[]; total_count: number }) => void;
-    api.listCreationTasks
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveOutdated = resolve; }))
-      .mockImplementationOnce(() => Promise.resolve({ items: [secondTask], total_count: 1 }));
-    render(<StrictMode><PublishingWorkspace /></StrictMode>);
-    expect((await screen.findAllByText("会员日复盘视频")).length).toBeGreaterThan(0);
-    await act(async () => { resolveOutdated({ items: [task], total_count: 1 }); });
-    expect(screen.queryByText("新品讲解视频")).not.toBeInTheDocument();
-    expect(screen.getAllByText("会员日复盘视频").length).toBeGreaterThan(0);
-  });
-
-  it("keeps failed state primary when an output is ready and points to repair first", async () => {
-    const failedWithOutput = { ...task, stage_status: "failed" as const, output_ready: true, stage_repair_action: "重新运行成片检查" };
-    api.listCreationTasks.mockResolvedValue({ items: [failedWithOutput], total_count: 1 });
-    render(<PublishingWorkspace />);
-    expect((await screen.findAllByText("新品讲解视频")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("运行失败").length).toBeGreaterThan(1);
-    expect(screen.getByText(/重新运行成片检查；已有成片可先检查保存/)).toBeInTheDocument();
-    expect(screen.queryByText(/检查并保存本地成片/)).not.toBeInTheDocument();
-    expect(screen.getByText("已生成，可检查")).toBeInTheDocument();
-    expect(screen.getByText("原因：缺少已授权声音")).toBeInTheDocument();
-  });
-
 });
