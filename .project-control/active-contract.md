@@ -35,11 +35,19 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 87：首次录音采用 | task_070705973546 / ctx_dc7706d9c816；仅下方87录音直接源码；无实机运行/打包权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 88：录音采用后的页面继续入口 | 87已交96785d0，源码分项保留；下方88续单仅页面与预检直接消费者，无实机运行/打包权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 86已审failed并retain | 包启动/Pi创建分项接受，完整制作未通过；所有自有组/端口释放，store锁定；无新增运行/写权 |
 
-## 当前波次：UI87首次录音采用；B86真实包验证已结案（2026-10-09）
+## 当前波次：UI88录音后的页面继续入口；B86真实包验证已结案（2026-10-09）
+
+UI87 task_070705973546 / ctx_dc7706d9c816已交clean96785d0077ba118bdcab812dc176e4bc73a13b0a，接受首次录音保存/显式采用及隔离专项结果，未接受完整页面制作结论。主控实读CreationExecutionPanel仍按selected_voice锁定开始/继续，Inspector仍以缺失模型声音表达录音；源保留，由同一可见线程以下述UI88修复，不重做87、不启动旧Dispatch。
+
+### UI88：有效录音的开始／继续与详情消费者
+
+从clean96785d0建立具名续分支，保留旧提交和报告。唯一写权为apps/web/src/components/CreationTaskWorkspace.tsx、apps/web/src/lib/types.ts、apps/api/app/main.py的execution/preview响应和直接既有专项测试。既有有效recorded Narration与纯素材条件必须在预检和页面一致表达；开始/继续按钮不得仅因selected_voice为空禁用，Inspector显示真实本人录音来源，不伪造voice_id或模型授权。失效来源或人物依赖不放宽，用户默认20%人物目标不修改。共享产品§10/领域§5.4语义不变，沿现有Narration和execution事实源，不新增框架或收费工作。
+
+主控07:42审查消息msg_87d9669653d4和07:46 msg_11dfdd849479未落实于87源码，本单必读并明确ACK。先核现有diff，再直接完成这一已授权首次录音纵向的必要消费者；只补页面开始/继续和真实预检录音表达的最小专项，复用87未影响证据，不运行全量检查、服务、GUI、资源采样、模型、FFmpeg或打包，不访问真实库/Key/平台。报告和证据只写/tmp/main-acceptance-20261009/recording88/；交clean提交、直接差额与检查、明确实包/真实媒体未验。最终冻结后由主控组合并安排新包。
 
 B86 task_84f88d406229 / ctx_37688cc35760已按真实完整制作未达failed结算并retain，报告creation86/report.md。主控复核实际首页、两轮国内Pi工具预检与新任务可信归属回读；配音队列resource_busy/Grant0，包内数值首因未知，独立资源快照低于门槛；原夹具缺owner作为准备限制保留。首次录音409交UI87，实际成片/编辑重出/原生保存未验。主控独立核5组及3端口释放、87具名文件扫描无Key且成员凭证仅预期localStorage、新store锁定。86以下为已结束范围说明，不得复活START/租约；当前仅UI87具名施工，最终新候选冻结后再绑定最新包补验。
 
