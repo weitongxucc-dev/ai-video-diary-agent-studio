@@ -4,10 +4,16 @@ import {
   AlertCircle,
   Check,
   ChevronRight,
-  Clock3,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  CircleMinus,
   Film,
   FolderPlus,
   FolderSearch,
+  Grid2X2,
+  List,
   LoaderCircle,
   Play,
   RefreshCw,
@@ -225,6 +231,7 @@ export function MaterialLibraryWorkspace({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
   const [intake, setIntake] = useState<IntakeStatus | null>(null);
@@ -1582,6 +1589,10 @@ export function MaterialLibraryWorkspace({
               </Link>
             </span>
           ) : null}
+          <div className="library-view-toggle" role="group" aria-label="列表显示方式">
+            <button aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></button>
+            <button aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></button>
+          </div>
           <span className="library-count">
             已载入 {assets.length} / {totalCount}
           </span>
@@ -1604,8 +1615,14 @@ export function MaterialLibraryWorkspace({
         ) : null}
 
         {visible.length ? (
-          <div className="library-grid">
-            {visible.map((asset) => (
+          <div className={`library-grid${viewMode === "list" ? " is-list" : ""}`}>
+          {visible.map((asset) => {
+            const AssetStateIcon = asset.review_status === "approved" ? ShieldCheck
+              : asset.review_status === "rejected" ? CircleDot
+                : asset.analysis_status === "ready" ? CircleCheck
+                  : asset.analysis_status === "blocked" ? CircleMinus
+                    : asset.analysis_status === "failed" ? CircleAlert : CircleDashed;
+            return (
               <button
                 className={`library-card${selected?.id === asset.id ? " is-selected" : ""}`}
                 key={asset.id}
@@ -1639,13 +1656,7 @@ export function MaterialLibraryWorkspace({
                   <i
                     className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}
                   >
-                    {asset.review_status === "approved" ? (
-                      <ShieldCheck size={13} />
-                    ) : asset.analysis_status === "ready" ? (
-                      <Sparkles size={13} />
-                    ) : (
-                      <Clock3 size={13} />
-                    )}
+                    <AssetStateIcon size={13} />
                   </i>
                 </span>
                 <span className="library-card__copy">
@@ -1658,7 +1669,8 @@ export function MaterialLibraryWorkspace({
                   ) : null}
                 </span>
               </button>
-            ))}
+            );
+          })}
           </div>
         ) : (
           <div className="library-empty">

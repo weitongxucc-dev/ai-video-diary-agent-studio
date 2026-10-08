@@ -9,7 +9,7 @@ import {
   BookOpen,
   ChevronDown,
   CircleHelp,
-  CircleAlert, CircleCheck, Clock, LoaderCircle,
+  CircleAlert, CircleCheck, CircleDashed, CircleDot, LoaderCircle,
   Clapperboard,
   Columns2,
   FileStack,
@@ -355,7 +355,7 @@ export function AppShell({
               const taskState = creationTaskState(task);
               return (
                 <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className="desktop-creation-task" title={`${displayTaskName(task.name)} · ${taskState.label}`} href={creationTaskHref(task)} key={task.id}>
-                  <span className={`desktop-task-status status-${taskState.tone}`} aria-hidden="true">{taskState.tone === "running" ? <LoaderCircle size={15} /> : taskState.tone === "success" ? <CircleCheck size={15} /> : taskState.tone === "idle" ? <Clock size={15} /> : <CircleAlert size={15} />}</span>
+                  <span className={`desktop-task-status status-${taskState.tone}`} aria-hidden="true">{taskState.tone === "running" ? <LoaderCircle className="is-spinning" size={15} /> : taskState.tone === "success" ? <CircleCheck size={15} /> : task.stage_status === "not_started" ? <CircleDashed size={15} /> : task.stage_status === "waiting_for_user" ? <CircleDot size={15} /> : <CircleAlert size={15} />}</span>
                   <span className="desktop-creation-task__copy">
                     <strong>{displayTaskName(task.name)}</strong>
                     <small>{taskState.label}</small>

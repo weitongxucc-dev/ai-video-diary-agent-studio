@@ -61,6 +61,9 @@ beforeEach(() => {
 describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
     render(<KnowledgePage />);
+    const listModes = screen.getByRole("group", { name:"资料列表显示方式" });
+    fireEvent.click(within(listModes).getByRole("button", { name:"对象列表" }));
+    expect(within(listModes).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
     expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
@@ -74,6 +77,10 @@ describe("KnowledgePage", () => {
     expect(detail).toHaveTextContent("内部使用");
     expect(screen.queryByRole("button", { name: /产品知识/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name:"文案库" }));
+    const scriptModes = screen.getByRole("group", { name:"文案列表显示方式" });
+    fireEvent.click(within(scriptModes).getByRole("button", { name:"对象列表" }));
+    expect(within(scriptModes).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows parsed parameters with their locators and the saved versions", async () => {

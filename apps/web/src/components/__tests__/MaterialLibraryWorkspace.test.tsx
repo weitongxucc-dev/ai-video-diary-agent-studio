@@ -47,6 +47,16 @@ beforeEach(() => {
   vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ items: [], total_count: 0 });
 });
+it("switches the material collection between cover grid and object rows", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const collection = screen.getByRole("group", { name:"列表显示方式" });
+  const results = document.querySelector(".library-grid") as HTMLElement;
+  expect(within(collection).getByRole("button", { name:"封面网格" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(within(collection).getByRole("button", { name:"对象列表" }));
+  expect(results).toHaveClass("is-list");
+  expect(within(collection).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
+});
+
 it("persists the selected restriction and removes obsolete proof displays", async () => {
   vi.mocked(updateMaterialUseState).mockResolvedValue({...asset,use_state:"reference_only"});
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);

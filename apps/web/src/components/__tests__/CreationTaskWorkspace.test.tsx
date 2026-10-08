@@ -1452,7 +1452,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
-  it("previews whole-video canvas changes and invalidates the proposal when the draft changes", async () => {
+  it("submits canvas ratio and fit changes directly from their selectors", async () => {
     const initial=subtitleCoverWorkspace();
     mocks.exactPreview.mockResolvedValue(exactPreview(initial.task,"ChangeCanvas"));
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
@@ -1460,15 +1460,32 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByText("画幅设置"));
     fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
     fireEvent.click(screen.getByRole("option", {name:"16:9 横屏"}));
+    await waitFor(()=>expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9"}));
     fireEvent.click(screen.getByRole("button", {name:"整片画面适配"}));
     fireEvent.click(screen.getByRole("option", {name:"完整画面"}));
-    fireEvent.click(screen.getByRole("button",{name:"预览画幅"}));
     await waitFor(()=>expect(mocks.exactPreview).toHaveBeenCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9",fit_mode:"fit"}));
-    expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"预览画幅"})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
     fireEvent.click(screen.getByRole("option", {name:"1:1 方形"}));
-    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    await waitFor(()=>expect(mocks.exactPreview).toHaveBeenLastCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"1:1",fit_mode:"fit"}));
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
+
+  it("sizes the editor preview and timeline clips from actual montage intervals", () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.aspect_ratio = "16:9";
+    initial.montage!.duration_seconds = 10;
+    const clip = { id:"clip-1", cue_id:"cue-1", asset_id:"asset-1", segment_id:"segment-1", source_reference:"workspace://clip.mp4", source_start_seconds:0, source_end_seconds:2, timeline_start_seconds:2, timeline_end_seconds:4, match_score:.9, match_reasons:[], needs_confirmation:false, role:"b_roll" as const, locked:false, manually_selected:false };
+    initial.montage!.clips = [clip, { ...clip, id:"clip-2", timeline_start_seconds:5, timeline_end_seconds:10 }];
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name:/^视频剪辑：/ }));
+    const player = screen.getByLabelText("剪辑成片预览").parentElement;
+    expect(player).toHaveAttribute("data-editor-aspect-ratio", "16:9");
+    expect(player).toHaveStyle({ aspectRatio:"16 / 9" });
+    const timeline = screen.getByLabelText("配音与字幕时间范围");
+    const clips = within(timeline).getAllByRole("button", { name:/^定位镜头/ });
+    expect(clips[0]).toHaveStyle({ left:"20%", width:"20%" });
+    expect(clips[1]).toHaveStyle({ left:"50%", width:"50%" });
   });
 
   it("previews real subtitle style images before confirmation in English-only tasks", async () => {

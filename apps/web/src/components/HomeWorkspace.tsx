@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Clock3, PlayCircle } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, CircleDot, Clock3, LoaderCircle, PlayCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
@@ -121,7 +121,11 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
   const [selectedFilter, setSelectedFilter] = useState<HomeMaterialFilterIntent | null>(null);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const selectedTaskState = selectedTask ? creationTaskStatusPresentation(selectedTask.stage_status, selectedTask.stage) : null;
-  const readyTasks = tasks.filter((task) => task.output_ready);
+  const pendingTasks = tasks.filter((task) => task.stage_status === "not_started" || task.stage_status === "waiting_for_user" || task.stage_status === "failed");
+  const runningTasks = tasks.filter((task) => task.stage_status === "running");
+  const completedTasks = tasks.filter((task) => task.stage_status === "completed")
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+  const readyOutputTasks = tasks.filter((task) => task.output_ready && task.stage_status !== "completed");
   const example = dashboard ? summarizeExample(dashboard) : null;
   const home = live?.data ?? null;
   // 整机计数按服务端给的 key 口径显示；没有真实载体的项由 unknown 说明原因，
@@ -162,21 +166,37 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
     <header className={styles.heading}><div><h1>工作空间总览</h1><p>{dashboard?.scopeLabel ?? "当前工作区 · 数据按已接入来源展示"}</p></div>{dashboard ? <span className={styles.exampleBadge}>示例数据 · 不连接真实服务</span> : null}</header>
     {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div>
       : !foundation.readiness.ready ? <div className={styles.readiness}><strong>{readinessLabel(foundation.readiness.blockers[0]?.code)}</strong><Link href="/health">查看原因</Link></div> : null}
+    {!dashboard ? <section className={styles.taskGroups} aria-label="创作任务状态分组">
+      <div className={styles.taskGroupsHeading}><h2>创作任务</h2><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>
+      {home ? <details className={styles.metaDetails}><summary>整机任务与处理阶段</summary><p>整机状态：处理中 {home.device_queue.running ?? "未知"} · 排队 {home.device_queue.queued ?? "未知"}{Object.keys(home.device_queue.counts).length
+        ? ` · ${Object.entries(home.device_queue.counts).map(([key, value]) => `${runtimeStateLabel(key)} ${value}`).join(" · ")}`
+        : " · 状态分布未读到"} · {scopeLabel(home.device_queue.meta.scope)} · 更新于 {new Date(home.device_queue.meta.as_of).toLocaleString("zh-CN")}</p></details> : null}
+      {([
+        { key: "pending", title: "待处理", items: pendingTasks, empty: "没有待处理任务" },
+        { key: "running", title: "进行中", items: runningTasks, empty: "没有进行中的任务" },
+        { key: "completed", title: "最近完成", items: completedTasks, empty: "还没有已完成任务" },
+      ] as const).map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.key}>
+        <h3>{group.title}<span>{group.items.length}</span></h3>
+        {group.items.length ? group.items.slice(0, 3).map(task => {
+          const state = creationTaskStatusPresentation(task.stage_status, task.stage);
+          const StatusIcon = task.stage_status === "not_started" ? CircleDashed : task.stage_status === "waiting_for_user" ? CircleDot : task.stage_status === "running" ? LoaderCircle : task.stage_status === "completed" ? CheckCircle2 : AlertCircle;
+          return <button className={styles.taskRow} key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button">
+            <StatusIcon aria-hidden className={`${styles.taskStatusIcon}${task.stage_status === "running" ? " is-spinning" : ""}`} data-status={task.stage_status} size={16} />
+            <span><strong>{taskName(task.name)}</strong><small>{state.stageLabel} · {state.label}{task.output_ready ? " · 本地成片可查看" : ""}</small></span><ArrowRight aria-hidden size={14} />
+          </button>;
+        }) : <p className={styles.taskGroupEmpty}>{group.empty}</p>}
+      </section>)}
+    </section> : null}
     <div className={styles.dashboard}>
       <section aria-label="工作空间七项概览" className={styles.metrics}>{countLabels.map((label, index) => <div className={styles.metric} key={label}><strong>{countValue(index)}</strong><small>{label}</small></div>)}</section>
       {home ? <details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map((entry) => <div key={entry.key}><dt>{entry.label}</dt><dd>{scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details> : null}
       <section className={styles.card}><div className={styles.cardHeading}><div><h2>素材接收趋势</h2><small>{dashboard ? "示例素材接收日" : home ? `按接收日统计 · 近 ${home.trend.days} 天 · ${scopeLabel(home.trend.meta.scope)} · ${sourceLabel(home.trend.meta.source)} · 更新于 ${new Date(home.trend.meta.as_of).toLocaleString("zh-CN")}` : "尚无接收日聚合数据"}</small></div><div aria-label="趋势范围" className={styles.range}><button aria-pressed={range === 7} onClick={() => { setRange(7); live?.onDays(7); }} type="button">7 天</button><button aria-pressed={range === 30} onClick={() => { setRange(30); live?.onDays(30); }} type="button">30 天</button></div></div>{example ? <TrendChart values={range === 7 ? example.sevenDays : example.thirtyDays} /> : home ? (home.trend.points.length ? <TrendChart values={home.trend.points} /> : <div className={styles.cardEmpty}>这段时间没有素材接收记录</div>) : <div className={styles.cardEmpty}>接入按日素材统计后显示趋势</div>}</section>
       <section className={styles.card}><h2>素材行业分布</h2>{example?.industries.length ? <div className={styles.donutLayout}><IndustryDonut items={example.industries} onSelect={setSelectedFilter} selected={selectedFilter} /><div className={styles.legend}>{example.industries.map((item) => <button aria-pressed={selectedFilter?.kind === "industry" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "industry", key: item.label, label: item.label })} type="button"><i />{item.label}<strong>{item.count}</strong></button>)}</div></div> : <div className={styles.cardEmpty}>{dashboard ? "示例范围没有可见素材" : "素材尚无可信行业分类"}</div>}</section>
-      <section className={styles.card}><div className={styles.cardHeading}><div><h2>任务与处理阶段</h2><small>{dashboard ? "整机队列 · 示例" : home
-            ? `整机状态：处理中 ${home.device_queue.running ?? "未知"} · 排队 ${home.device_queue.queued ?? "未知"}`
-              + (Object.keys(home.device_queue.counts).length
-                ? ` · ${Object.entries(home.device_queue.counts).map(([key, value]) => `${runtimeStateLabel(key)} ${value}`).join(" · ")}`
-                : " · 状态分布未读到")
-              + ` · ${scopeLabel(home.device_queue.meta.scope)} · 更新于 ${new Date(home.device_queue.meta.as_of).toLocaleString("zh-CN")}`
-            : "当前工作区任务；整机队列待接入"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard ? dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>) : home ? <div className={styles.cardEmpty}>没有本人正在处理的任务</div> : tasks.length ? tasks.slice(0, 5).map((task) => { const state = creationTaskStatusPresentation(task.stage_status, task.stage); return <button className={styles.queueRow} key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button"><span className={styles.queueDot} /><div><strong>{taskName(task.name)}</strong><small>{state.stageLabel} · {state.label}</small></div><ArrowRight size={14} /></button>; }) : <div className={styles.cardEmpty}>还没有创作任务。可以在左侧告诉助手要做什么。</div>}</section>
+      {dashboard ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>任务与处理阶段</h2><small>{"整机队列 · 示例"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>)}</section> : null}
       <section className={styles.card}><div className={styles.cardHeading}><div><h2>内容标签词云</h2><small>{dashboard ? "按示例可见素材去重计数" : realTags.length ? "按素材去重计数 · 点击进入素材库" : insights === undefined ? "标签统计未载入" : insights === null ? "标签统计读取失败，请刷新重试" : "当前工作区还没有素材标签"}</small></div></div>{example?.tags.length ? <div className={styles.cloudField}>{example.tags.map((item) => <button aria-pressed={selectedFilter?.kind === "tag" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "tag", key: item.label, label: item.label })} style={{ fontSize: 12 + Math.min(12, item.count * 2) }} type="button">{item.label}<sup>{item.count}</sup></button>)}</div> : realTags.length ? <div className={styles.cloudField}>{realTags.map((item) => <Link className={styles.cloudLink} href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} style={{ fontSize: 12 + Math.min(12, item.asset_count * 2) }}>{item.tag}<sup>{item.asset_count}</sup></Link>)}</div> : <div className={styles.cardEmpty}>{dashboard ? "示例范围没有可见素材标签" : insights === null ? "标签统计读取失败，请刷新重试" : insights === undefined ? "标签统计未载入" : "当前工作区还没有素材标签"}</div>}</section>
-      <section className={styles.card}>{home ? null : <><h2>近期作品</h2>{dashboard ? dashboard.works.map((item) => <div className={styles.workRow} key={item.id}><span><PlayCircle size={16} /></span><div><strong>{item.title}</strong><small>{item.status}</small></div></div>) : readyTasks.length ? <><small>当前工作区的本地成片，未代表平台发布</small>{readyTasks.slice(0, 3).map((task) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(task.id)} key={task.id}><span><PlayCircle size={16} /></span><div><strong>{taskName(task.name)}</strong><small>本地成片可查看</small></div></Link>)}</> : <div className={styles.cardEmpty}>还没有可查看的本地成片</div>}</>}</section>
+      {dashboard ? <section className={styles.card}><h2>近期作品</h2>{dashboard.works.map((item) => <div className={styles.workRow} key={item.id}><span><PlayCircle size={16} /></span><div><strong>{item.title}</strong><small>{item.status}</small></div></div>)}</section> : null}
     </div>
+    {!dashboard ? <section className={styles.card}><h2>本地成片</h2>{readyOutputTasks.length ? <><small>当前工作区的本地成片，未代表平台发布</small>{readyOutputTasks.slice(0, 3).map((task) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(task.id)} key={task.id}><span><PlayCircle size={16} /></span><div><strong>{taskName(task.name)}</strong><small>本地成片可查看</small></div></Link>)}</> : <div className={styles.cardEmpty}>还没有可查看的本地成片</div>}</section> : null}
     {home ? <>
       <section className={styles.card}><h2>存储</h2><dl className={styles.homeFacts}>
         <div><dt>已用</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.used_bytes) : "未知"}</dd></div>

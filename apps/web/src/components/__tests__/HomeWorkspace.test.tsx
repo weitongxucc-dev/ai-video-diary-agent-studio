@@ -30,7 +30,7 @@ const sample: HomeDashboardExample = {
 
 beforeEach(() => routerPush.mockReset());
 describe("HomeWorkspace", () => {
-  it("keeps the v4 dashboard structure without inventing unavailable production aggregates", () => {
+  it("groups real tasks before secondary metrics without inventing unavailable aggregates", () => {
     render(<HomeWorkspace foundation={null} tasks={[task]} />);
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("可见素材");
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("作品");
@@ -40,7 +40,9 @@ describe("HomeWorkspace", () => {
     expect(screen.getByText("尚无接收日聚合数据")).toBeInTheDocument();
     expect(screen.getByText("素材尚无可信行业分类")).toBeInTheDocument();
     expect(screen.getAllByText("标签统计未载入")).toHaveLength(2);
-    expect(screen.getByText("当前工作区任务；整机队列待接入")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "待处理" })).toHaveTextContent("设备演示");
+    expect(screen.getByRole("region", { name: "进行中" })).toHaveTextContent("没有进行中的任务");
+    expect(screen.getByRole("region", { name: "最近完成" })).toHaveTextContent("还没有已完成任务");
     expect(screen.getByText("还没有可查看的本地成片")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /设备演示/ }));
     expect(screen.getByRole("dialog", { name: "任务卡片" })).toHaveTextContent("需要确认镜头");
@@ -244,7 +246,7 @@ describe("HomeWorkspace", () => {
     // unknown.key 是技术键，界面上给中文说法。
     expect(unknown).toHaveTextContent("素材行业分布");
     // 整机状态：处理中与排队分开显示，技术状态键不铺到界面。
-    const stage = screen.getByRole("heading", { name: "任务与处理阶段" }).closest("section") as HTMLElement;
+    const stage = screen.getByText("整机任务与处理阶段").closest("details") as HTMLElement;
     expect(stage).toHaveTextContent("处理中 2 · 排队 3");
     expect(stage).toHaveTextContent("素材待确认 1");
     // 历史完成数单列，不混进处理中/排队。
