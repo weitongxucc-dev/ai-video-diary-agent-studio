@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 80：抖音发布纵向接线 | 仅下方80具名路径 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 79：后端8项失败修复 | 仅下方79具名路径；main.py唯一写者 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 79已交，主控审核 | 无新增写权；main.py交80.2 |
 
 ## 当前交付波次：B79 / UI80（2026-10-09）
 
@@ -64,6 +64,10 @@ Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_p
 最低验证：假浏览器只验证调用顺序、无确认零上传/发送、陈旧产物/跨空间拒绝、真实结果解析/持久回读与未知结果禁止自动重发；相关Web组件/类型检查及退役消费者不存在检查。若需要查看实际登录前页面/GUI或依赖安装，先给精确动作与路径，由主控在用户授权范围补具名权限；不得因未登录停掉已授权代码实现。无服务/真实浏览器/平台网络/账号操作权，不以组件检查冒称GUI/发布通过。交clean源码、净diff、B所需准确挂载补丁、实际测试与全部未验到 `/tmp/main-acceptance-20261009/publishing80/`，主控审核/集成后另安排具名真实登录和发送。整体发布迁移只在真实目标与旧消费者退役证明完成后接受，源码阶段不关闭WIL45/113/114/115。
 
 80.1 主控已核官方Python Playwright 1.63.0：Python>=3.10，与项目3.11兼容，macOS提供arm64/universal2 wheel，Apache-2.0；官方支持channel=chrome持久独立上下文和PyInstaller。UI80可仅在apps/api/pyproject.toml声明playwright==1.63.0、更新apps/api/uv.lock的必要解算差额；必要的apps/api/pyinstaller.spec只补此真实运行依赖的资源/隐藏导入。根锁、其它依赖版本不顺手升级；核uv sync --locked契约，依赖只下载到新owned staging/venv/cache，不改全局或B复用环境。不要playwright install/下载浏览器，用已装Chrome；本轮不启动浏览器/服务/账号。官方说明与本地兼容核验在主控消息给出，包内driver收集与实际打包仍需后续同候选验证，不能把声明兼容当包通过。
+
+80.2 B79已具名交付clean8fc8427，仅两测试文件；main.py产品blob与0ed7f38相同，其写权在本条收回。UI80成为main.py局部唯一写者，仅发布模块import、router依赖注入、_build_device_components中的platform_publish OwnerRegistration及相关真实状态/产物/成员回调；不修改79渲染/音频消费者。UI80读本条ACK后可以直接落实自身入口，不再等待B应用补丁，主控仍独立审核最终diff。B79源码保留，不整体rebase正在修改的UI分支；主控组合两项源码时再机械保留79测试差额。
+
+80.3 主控核实现有HostResourceProbe._SUPPORTED_KINDS只含material_hash/material_probe_meta，发布浏览器kind会被拒绝。UI80增补唯一写权 apps/api/app/host_resource_probes.py 和既有tests/test_host_resource_probes.py：将platform_publish作为明确的浏览器/网络I/O控制单元接入现有主机CPU/内存/磁盘/IO预算、可信Grant及子进程归属/退出路径，声明真实输入大小和有限操作期限；不冒充material或creation、不跳过资源核验、不增加另一套采样/调度框架。优先复用既有通用准入与进程跟踪；若证据表明通用预算无法涵盖实际浏览器开销，提交准确不变量与最小额外字段，不伪造标定或直接猜生产预算。本轮只能假资源/假driver验证，无真实Host采样、Chrome/FFmpeg/模型执行；未知预算/资源继续明确不可用，源码接通不等于实机准入通过。此新增已是已授权发布纵向的必要接线，不扩展真实账号/外发权；UI只重读80.2/80.3 ACK后继续，B79不受资源实现补充影响。
 
 ## 已结案波次：B76 / UI77
 
