@@ -35,11 +35,13 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 78：PR99失败分类与字幕测试接口适配 | 仅既有subtitle_time_sync测试；其余失败只读，避开B76 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 78已交且retain | 保留源码；无新增写入/运行权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76：公开人物局部重生成队列接线 | 指定API/队列及必要Web消费者；无模型/打包权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76已交且retain | 保留源码；无新增写入/运行权 |
 
 ## 当前交付波次：B76 / UI77
+
+本波次B76/UI77/UI78已具名交付并由主控审核结案，三项Task均succeeded；两条原可见终端retain，旧Dispatch与START不提供新增写入/运行权限。人物源码68f687daeff7e56041a1e88d24a5143fc311156c、包源码1b1d78920e92f16c80b9a25cf2530ee75548a5f6、字幕测试修正f5c2d062a59c57480f8cbc96ab9ce6ee3d725011已机械组合，13个人物路径及两项UI差额blob相同；这里只接受具名源码/构建结果，不接受真实模型/GUI/完整产品完成。UI77包不包含B76，后续须重建。PR99旧head的后端15失败有7项测试接口已定向修正，剩余8项未解决，新组合远端CI另行回读。下一具名实施优先处理这8项，再组合包启动/全旅程与真实发布接线；当前没有启动下一任务，资源/模型/账号外发暂停与不自动合main继续有效。
 
 用户于2026-10-08最新批准“抓紧开始”，实施上轮已解释的集成、人物重生成接线、本机包准备及三平台路线核实。两条原可见线程复用；主控不编写产品代码、不新建窗口/内部Agent，不自动合main。共同产品代码基线为clean3db903441af97f359ccf2180f8f2fb4944bd0542（/tmp/main-controller-20261008/ui-v3-integration），当前main共享权威单独读取，不整体merge旧工作树或覆盖旧分支。先核各自clean，保留历史分支，从本地fetch该完整候选建立新具名分支；语义REBASE_ACK后直接完成，不等待第二次START。
 
