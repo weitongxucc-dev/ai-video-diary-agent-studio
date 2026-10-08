@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 80：抖音发布纵向接线 | 仅下方80具名路径 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 82：发布候选实际接线及审查修正 | 80保留路径加80.2/80.3；见82 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 81：本机组合包启动验收 | 仅下方81桌面路径；main.py仍由80独占 |
 
@@ -70,6 +70,16 @@ Owned：apps/api/app/platform_browser/、platform_auth/、必要新的platform_p
 80.2 B79已具名交付clean8fc8427，仅两测试文件；main.py产品blob与0ed7f38相同，其写权在本条收回。UI80成为main.py局部唯一写者，仅发布模块import、router依赖注入、_build_device_components中的platform_publish OwnerRegistration及相关真实状态/产物/成员回调；不修改79渲染/音频消费者。UI80读本条ACK后可以直接落实自身入口，不再等待B应用补丁，主控仍独立审核最终diff。B79源码保留，不整体rebase正在修改的UI分支；主控组合两项源码时再机械保留79测试差额。
 
 80.3 主控核实现有HostResourceProbe._SUPPORTED_KINDS只含material_hash/material_probe_meta，发布浏览器kind会被拒绝。UI80增补唯一写权 apps/api/app/host_resource_probes.py 和既有tests/test_host_resource_probes.py：将platform_publish作为明确的浏览器/网络I/O控制单元接入现有主机CPU/内存/磁盘/IO预算、可信Grant及子进程归属/退出路径，声明真实输入大小和有限操作期限；不冒充material或creation、不跳过资源核验、不增加另一套采样/调度框架。优先复用既有通用准入与进程跟踪；若证据表明通用预算无法涵盖实际浏览器开销，提交准确不变量与最小额外字段，不伪造标定或直接猜生产预算。本轮只能假资源/假driver验证，无真实Host采样、Chrome/FFmpeg/模型执行；未知预算/资源继续明确不可用，源码接通不等于实机准入通过。此新增已是已授权发布纵向的必要接线，不扩展真实账号/外发权；UI只重读80.2/80.3 ACK后继续，B79不受资源实现补充影响。
+
+### UI82：发布候选接入实际应用并修正直接审查缺陷
+
+80已以failed交136ea6393a85604c92ca3a3f82fcfd1f3f825219，只接受源码保留与未接线事实，不接受发布闭环。报告仍采用旧所有权，未落实已授权80.2/80.3；原Dispatch结束，改为本续单。复用原UI终端，保留clean候选建立publishing82分支，不回退0ed7f38、不重做已正确模块。明确唯一写权：80原路径、API main.py的发布import/router注入/产物成员回调/OwnerRegistration/恢复关闭直接消费者、host_resource_probes.py与其既有测试、必要pyinstaller.spec的Playwright资源差额；B81仅桌面，不与这些写权冲突。
+
+完成结果：将80精确main-patch实际实施，修正直接传尚未定义的_platform_publish_task_for_user造成的导入NameError（用现有延迟注入或正确落位）；沿既有HostResourceProbe通用预算接platform_publish的真实size与有限操作deadline，不能用material伪装或猜生产标定；证明真实main入口可导入、router已注册，并用隔离完整repository/DeviceRuntime与合法假资源/浏览器走到持久成功或未知结果。只测试独立模块或apply-check不足以证明接线。
+
+修正两项当前真实缺陷：creator-name昵称不能作为稳定账号标识；任意非空publish-result-id文本不能直接判已发布，应核可解释成功状态和平台ID。无真实平台证据的选择器仍明确候选，不能伪造验证。现有_content_reader支持已验证本地成员令牌，AppShell已有whoami引导、_request_permit_actor支持本地成员；沿这些路径支持当前local包，不伪造用户、不放宽跨空间或启用Supabase。确有契约缺口再报准确条款。
+
+普通业务/授权/输出版本不变。继续遵守80的退役目标、假provider边界、无产品收费和无真实平台/模型/资源运行权限。新报告/tmp/main-acceptance-20261009/publishing82/report.md：准确源码/diff、main实际入口与同一候选最低验证、旧mock消费者不存在、会话/自有进程释放及未验真实平台。旧80源与报告不覆盖。主控负责独立审核和PR，不直接写产品代码。先读本条语义ACK再直接施工；相关有限补充已获授权，不再按80旧正文等主控写main.py。
 
 ### B81：本机组合包启动与关闭重开
 
