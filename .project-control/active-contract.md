@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 77：本机arm64桌面包准备与构建 | apps/desktop构建及运行接线；无视觉/API业务写权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 78：PR99失败分类与字幕测试接口适配 | 仅既有subtitle_time_sync测试；其余失败只读，避开B76 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76：公开人物局部重生成队列接线 | 指定API/队列及必要Web消费者；无模型/打包权 |
 
@@ -66,6 +66,14 @@
 构建和测试目录只/tmp/main-acceptance-20261008/desktop77/，源码分支外另archive准确candidate排除dotenv并核blob；源码修改时先提交准确clean差额，再由该候选archive构建。依赖可只读复用，Next/PyInstaller/Electron缓存、输出、HOME/XDG/config/tmp均为新根，secret/用户DB不进入构建。允许本地arm64目录包及DMG/ZIP有界构建、必要ad-hoc签名与包内容/架构/摘要核验，不使用Apple证书、公证、上传、Release、覆盖/Applications或实际启动Electron/API/Web；本波次不触发完整GUI/模型验收。记构建PID/PGID、失败首因与可恢复步骤，必要构建命令60分钟绝对上限，结束释放自有构建组；不为打包运行媒体或Host资源探针。
 
 先对实际缺口做最小接线，已有正确代码保留；不能只交计划作为完成。交源码SHA/净diff（无差额就明确无源码改动）、实际包路径/SHA256/候选输入摘要/包内依赖边界及直接检查、未验启动与完整制作；不可构建须给精确命令/失败/缺依赖，不冒称安装可用。当前共同候选不含B76并行差额，标清后续机械组合需要重建包；本轮已验证构建步骤复用，不要求再重跑视觉矩阵。
+
+### UI78：PR99后端失败分类与字幕测试接口适配
+
+UI77已交具名源码1b1d78920e92f16c80b9a25cf2530ee75548a5f6及arm64包；新单只复用原UI可见终端，保留该分支和产物。以该准确clean候选建立codex/ci78-subtitle-contract-20261008，读本条语义REBASE_ACK后直接完成。B76继续独占main.py/creation_execution.py及montage/person/creation直接测试，UI78不得在这些文件写入；模型/FFmpeg/主机探针及GUI暂停保持。
+
+目标是消除PR99 CI37791344587已经真实出现的7个字幕时间同步测试替身签名失败，并按当前契约分类其余8项，不为测试改变产品行为。唯一写入文件apps/api/tests/test_subtitle_time_sync.py：TaskAudio.validate的测试替身接受真实draft_only关键字，保留原字幕内容/中英关联/预览无写入/撤销/错误与持久性断言，不删测试、不跳过、不松断言、不改生产兜底。剩余创建执行3项、字幕撤销2项及原声/静音3项仅定向只读源码/失败日志，报告实际不变量、测试数据是否过时、必要修复文件，不能笼统称旧测试。确需产品修改交具体首因给主控，避免与B76写同文件。
+
+只跑该现有字幕测试文件，完整隔离HOME/XDG/config/DB/tmp/output，合法现有provider/探针替身；任何用例触发真实媒体/FFmpeg就不得执行该项，准确保留未验。可复用已有pytest依赖，不安装新依赖、不启动服务/模型/GUI或资源探针。报告/tmp/main-acceptance-20261008/ci78/；交准确clean差额、必要检查命令、15项分类与未验媒体范围。无push/PR/Linear/共享文档权，不重跑全仓库/视觉/打包。这是处理真实CI首因，不扩大防御性程序或补无依据的测试。
 
 ### 主控：集成与三平台接入核实
 
