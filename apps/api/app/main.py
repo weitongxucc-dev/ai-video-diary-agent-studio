@@ -11154,7 +11154,8 @@ def _render_creation_task_montage_for_workspace(
     ):
         plan_input.pop(transient_key, None)
     plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
-    plan_input["timeline_version_id"] = task.current_timeline_version_id
+    if render_context is not None:
+        plan_input["timeline_version_id"] = task.current_timeline_version_id
     plan_input["subtitles_visible"] = subtitles_visible
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure") for clip in plan.clips):
         try:
