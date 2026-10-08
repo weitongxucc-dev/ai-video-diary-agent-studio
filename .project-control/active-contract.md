@@ -139,6 +139,18 @@ B62冻结634978ae3a57039778e1f8cd8d07356b340fcb52，来源`/tmp/main-controller-
 
 只Orca真实控件/鼠标/键盘/viewport/PNG，eval仅只读，不注入事件/响应/CSS、不接CDP/个人Chrome或操作OS窗；不请求用户操作浏览器。业务POST/PATCH/PUT/DELETE0，失败错误槽等无本次实证仍标未验。结束/到期只退出注册自有组/page，实证端口/组释放、旧库/blob不变及产品clean；正确本Dispatch完整report/worker_done。真实FAIL给主控/唯一UI写者，不修改产品、不复活61，模型/预算/E2E/Electron安装仍不在通过范围。
 
+## 任务63：公开人物缓存消费者的同源核验缺口
+
+60源7b479ecd6ec74345a1792b6e81e8f4f3ff237ed9（父99b3660）已提交单测试文件，主控已读完整250行净diff与7 PASS/共享fixture1 PASS日志；报告/正确worker_done尚待结算，不复活60写权。其保留无许可公开409/零生成写与真实Grant的内部正向、缓存目标映射/撤销；公开需要新生成的编辑仍未接队列，另记录WIL141，不把本测试单算产品接线。A60新增证据及主控源码确认：main `_person_render_matches_narration`仅核逻辑audio_reference/language/成功谱系，公开预览与confirm缓存分支尚未核53封存的presenter_input_facts，仍可把同路径已变内容当当前。这是53既有“缓存仍核同源”目标的具名直接消费者遗漏，须收口而非带已知缺口放行。
+
+A63在60报告/worker_done被主控接受retain后，原manta可见终端新Dispatch实施；从clean7b479ec创建`codex/presenter-cache-consumer-20261008`，原分支保留。owned只`apps/api/app/main.py`的 `_person_render_matches_narration`与两条预览/confirm直接调用及当前授权输入解析所需局部代码，`tests/test_montage_pipeline.py`对应语言/谱系/缓存与60直接case。53已有`presenter_input_facts`/输入解析/transform参数契约只读复用，不另造事实源/校验算法、hash扫描或schema/迁移。必要其他文件先给准确原因待主控，不改生成预算、队列、默认20%、Web或公开编辑新生成接线。
+
+目标：公开人物缓存只有当前授权人物版本、当前真实配音文件及成功transform封存事实全部匹配才复用。未封存/缺失/失效/同引用音频或人物文件变更（含同长度并恢复mtime）不复用旧ready结果，preview不得给陈旧reuse id，已预览后变更的confirm拒绝并保持DB/provider/输出零写；无变化且正确封存的合法结果仍能公开复用，映射、其他镜头、撤销保持。当前授权解析失败是明确不可复用/拒绝，不增加任意吞错/静默兼容；ctime仅本地变更信号，不称内容哈希保证。
+
+先最小现有消费者复现旧缺口，再修局部共享matcher并仅最小正负验证；允许完整隔离env下已有pytest fixture导入main、真实SQLite/唯一原队列Grant与轻量合成provider/原事实文件修改，禁止真实配置/用户媒体/秘密/服务/GUI/模型/FFmpeg/主机探针/外部调用/依赖安装。新证据仅`/tmp/main-acceptance-20261008/presenter63/`，有真实held才证OS锁/Grant/子组释放，无held不能造释放证据。不重复未改7/20/全1636检查。报告精确源码、前后正负/生产blob范围/释放/未覆盖公开新生成及真实模型，clean净提交后正确本Dispatch worker_done。
+
+62已交11 PASS/0 FAIL/1 UNVERIFIED，主控读完整报告、1024默认与最窄加宽暗色PNG/几何，接受succeeded/retain；18:40:39三组/4579/3179/page释放与主控ps/lsof一致，全部旧62启动权结束。63只API缓存直接消费者，不把62页面说成已运行未来API head；若不影响Web/普通GET且运行blob范围明确，可复用62正证，人物缓存产品实测仍无模型/资源窗口。本轮不新增GUI或向用户请求普通操作。
+
 ## 任务38/39/40：设计v5.1实施与独立准备
 
 任务51结算：主控已核ui51完整report、实际closed/reopened PNG/AX与card-comparison，接受准确1e0c972必要GUI5 PASS、可选嵌套关闭1 UNVERIFIED，succeeded并retain。首屏/普通刷新正常，历史V1开关重开、关闭入口焦点及镜头2/草稿/暂停8秒保持；可选嵌套卡已可见但后续window_not_found，结果与焦点未证，不猜产品FAIL或绕过恢复。已装普通React19.2.6包与实际Next15.5.18浏览器19.2.0-canary分别记录，不冒称GUI同CI renderer。61表/旧库hash不变；16:53:32 API23815/Web23816/lease23817/Chrome24159及组、根进程、4575/3175全部退出，主控独立ps/lsof与release.json相符，无续租。任务51以下START只作历史依据，无恢复权。准确1e0c972 CI37752015898 Frontend/Backend/Desktop syntax全部SUCCESS并回读head一致。PR97/WIL-205保留草稿/In Progress及指定尺寸/主题、三栏拖动、完整键盘/播放器/新blob嵌套关闭等未验，不宣布整体RETIRED或自动合入；用户Tab可用反馈已记录。
