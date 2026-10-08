@@ -53,6 +53,8 @@ B86复用pipefish终端，唯一运行负责人，证据与新HOME/XDG/DB/config
 
 86.1 主控仅将已授权validation Key从具名条目读到RAM，按现有workspace_settings原生store保存至本新根 `config/b86.keychain-db` 的local/llm_api_key，配国内cn/M3非秘密设置；不枚举其它条目、不落明文、不传秘密给B。创建新临时store若产生search list副作用立即原样恢复，前后默认与列表须相同。主控核新环境和store后给B非秘密回执，B只让实际包API读取此路径。结束主控锁定该store并RAM扫描本轮具名日志/配置不得含Key。此配置API准备不是GUI保存验收。
 
+86.2 用户此前明确授权本人素材使用，本次只读复用两件原件：`/Volumes/Dujiangyan-VM/AI视频日记/acceptance/real-voice-20260824/reference/reference.wav` 与 `/Volumes/Dujiangyan-VM/AI视频日记/video-inbox/历史成片_待审核/VID_20260529_122252_preview.mp4`。B可复制到新creation86并以单线程FFmpeg有界截取≤5秒（单步≤30秒），保留源stat/原件。经真实已有录音替换/素材登记路径作为独立轻量成片输入，验证剪辑→渲染→修改重出/保存；它是导入已有媒体，不是本轮Qwen生成或人物口型通过，不能替代原真实配音缺口。不得为导入伪造TTS成功/有效版本、原件权属或媒体内容；缺少真实入口时准确报首因，由主控安排必要实现。
+
 ## 已结案交付波次：B79 / UI80（2026-10-09；以下仅为源码与证据索引）
 
 UI83/85与B84均已审核结案并retain；当前没有运行中的施工或验收Dispatch，旧启动权结束。发布与桌面差额已组合至草稿PR100准确30d3760；最终CI与最新范围以该PR和Linear回执为准。84包准确91a6279，30d3760仅两测试文件差额，包内产品输入相同；实际包/驱动/HTTP与释放证据见/tmp/main-acceptance-20261009/desktop84/report.md。B81的具体验收阻断及首页/重开证据保留于desktop81/report.md，不宣称GUI整体通过。此段为已结案证据；资源/模型暂停已由上方86替代，具名账号外发边界仍保持，不从已结案正文复活START。
