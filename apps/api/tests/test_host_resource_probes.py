@@ -827,3 +827,49 @@ def test_narration_admission_requires_complete_window_without_blocking(tmp_path,
         assert probe._sample(resources).reason == "io_window_incomplete"
     assert probe._sample(resources).verdict is True
     assert intervals == [0.1] * 6  # A 30s backoff must require a new complete 3s observation.
+
+
+def test_presenter_probe_keeps_dedicated_caps_unknown_and_measured_floor(tmp_path, monkeypatch):
+    import app.host_resource_probes as probes
+    from app.host_resource_probes import PresenterBudget
+    presenter = PresenterBudget(1, 1024, 15, 4096, 1, 5, 8192, 8, .1, 8192, 4096)
+    resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
+        "section_count": 1, "input_bytes": 1024, "duration_seconds": 15,
+        "max_output_bytes": 4096, "threads": 1, "timeout_seconds": 5}
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    assert probe._sample(resources).reason == "stage_budget_unavailable"
+    probe.budget = replace(probe.budget, presenter=presenter)
+    over = probe._sample({**resources, "input_bytes": 1025})
+    assert over.verdict is False and over.checks["input_bytes"] == {"actual": 1025, "maximum": 1024, "passed": False}
+    assert probe._sample({**resources, "duration_seconds": None}).verdict is None
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: 75)
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **kwargs: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=100+8192))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=50))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=200+4096+4096))
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **kwargs: [])
+    ticks = iter([10., 13.])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    decision = probe._sample(resources)
+    assert decision.verdict is True
+    assert decision.checks["available_memory_bytes"]["minimum"] == 100+8192
+    assert decision.checks[f"disk_free_bytes:{tmp_path}"]["minimum"] == 200+4096+4096
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **kwargs: None)
+    unknown = probe._sample(resources)
+    assert unknown.verdict is None and unknown.reason == "disk_io_before_unavailable"
+    # A calibrated pure-material budget never stands in for the presenter combination budget.
+    composition = {"kind": "creation_presenter_render", "execution_mode": "cpu_ffmpeg"}
+    assert probe._sample(composition).reason == "render_budget_or_execution_mode_unavailable"
+
+
+def test_person_model_child_rejects_non_host_probe_before_exec(tmp_path):
+    grant = Grant("request", "local", "creation_job", "job", "person_render:input", "digest", 1, 1, "token", tmp_path / "db")
+    scheduler = RecordingScheduler()
+    scheduler.assert_grant = lambda current: None
+    scheduler.resources = SimpleNamespace(scene_runtime_limits=lambda grant: None)
+    marker = tmp_path / "must-not-exec"
+    from app.device_scheduler import RecoveryBlocked
+    with pytest.raises(RecoveryBlocked, match="真实资源探针"):
+        run_granted_command(scheduler, grant, [sys.executable, "-c", f"open({str(marker)!r},'w').close()"],
+            timeout_seconds=1, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert not marker.exists() and not scheduler.children

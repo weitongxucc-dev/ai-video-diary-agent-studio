@@ -185,7 +185,7 @@ def run_granted_command(
     scene_unit = (isinstance(grant, Grant) and grant.owner_type == "material_asset"
                   and grant.unit_key.startswith("scene-window:v1:"))
     model_unit = (isinstance(grant, Grant) and grant.owner_type == "creation_job"
-                  and grant.unit_key.startswith("narration:"))
+                  and grant.unit_key.startswith(("narration:", "person_render:")))
     if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None

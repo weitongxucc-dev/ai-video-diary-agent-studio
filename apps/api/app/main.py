@@ -71,7 +71,7 @@ from app.member_permits import (
     DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
     build_host_probes, cpu_render_budget_from_env, creation_job_registration, find_member,
     host_budget_from_env, permit_actor, resolve_member_token,
-    creation_stage_budgets_from_env,
+    creation_stage_budgets_from_env, presenter_budgets_from_env,
 )
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -88,6 +88,7 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
+    presenter_inputs, presenter_input_facts, current_presenter_render,
     CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
     CreationJobUnitExecutor, ExecutionStartRequest,
     revision_digest, submit_creation_stage,
@@ -5938,7 +5939,13 @@ def _generate_creation_task_person_render_record(
     payload: CreationTaskPersonRenderRequest,
     *,
     regeneration_token: str | None = None,
+    grant_context: CreationStageGrantContext | None = None,
 ) -> PersonRender:
+    from app.device_scheduler import RecoveryBlocked
+    from app.granted_subprocess import GrantedCommandError
+    if grant_context is None:
+        raise HTTPException(status_code=409, detail="人物制作必须通过已确认任务的继续制作入口取得专属设备许可")
+    grant_context.check()
     task = _creation_task_or_404(workspace_id, task_id)
     quality = payload.lipsync_quality or production_repo.get_creation_plan(workspace_id, task.plan_id).lipsync_quality
     provider = _lipsync_provider(quality)
@@ -5946,7 +5953,7 @@ def _generate_creation_task_person_render_record(
         raise _capability_unavailable(
             "avatar_lipsync",
             message=provider.message,
-            impact="人物片段未生成，当前任务继续使用原始素材。",
+            impact="人物片段未生成，当前任务等待人物制作完成，尚未生成成片。",
             repair_action="配置本地人物口型运行环境后重试。",
         )
     try:
@@ -5978,7 +5985,8 @@ def _generate_creation_task_person_render_record(
             authorization_version=person.authorization.version,
             model_id=provider.model_id,
         )
-        base_cache_key = avatar_lipsync_cache_key(render_request)
+        input_facts = presenter_input_facts(render_request)
+        base_cache_key = avatar_lipsync_cache_key(render_request, input_facts=input_facts)
         cache_key = (
             hashlib.sha256(
                 f"{base_cache_key}\nregenerate:{regeneration_token}".encode("utf-8")
@@ -6044,7 +6052,10 @@ def _generate_creation_task_person_render_record(
             input_digest=cache_key,
         )
 
+        boundary_failure = []
+
         def person_render_job(context) -> JobResult:
+            grant_context.check()
             current = production_repo.get_person_render(
                 context.workspace_id, task_id, render.id
             )
@@ -6060,7 +6071,7 @@ def _generate_creation_task_person_render_record(
                     result = AvatarAndLipSyncService(
                         settings.video_output_path,
                         provider,
-                    ).render(render_request, output_cache_key=cache_key)
+                    ).render(render_request, output_cache_key=cache_key, grant_context=grant_context)
                     if result.status != "succeeded" or not result.artifact_path:
                         failed = production_repo.finish_person_render(
                             context.workspace_id,
@@ -6069,18 +6080,21 @@ def _generate_creation_task_person_render_record(
                             status="failed",
                             failure_reason=result.failure_code or "person_render_failed",
                             impact=result.failure_impact
-                            or "人物片段未生成，当前任务继续使用原始素材。",
+                            or "人物片段未生成，当前任务等待人物制作完成，尚未生成成片。",
                             repair_action=result.remediation_action
                             or "检查人物口型运行环境后重试。",
                         )
                         raise JobFailure(
                             failed.failure_reason or "person_render_failed",
-                            failed.impact or "人物片段未生成，当前任务继续使用原始素材。",
+                            failed.impact or "人物片段未生成，当前任务等待人物制作完成，尚未生成成片。",
                             failed.repair_action or "检查人物口型运行环境后重试。",
                         )
                     source = Path(result.artifact_path)
                     duration_seconds = result.duration_seconds
                     alignment_evidence = result.alignment_evidence
+                grant_context.check()
+                if source.stat().st_size > grant_context.max_output_bytes:
+                    raise ValueError("人物输出超过专属预算")
                 logical_ref = (
                     f"artifacts/{task_id}/{context.job_id}/person-render.mp4"
                 )
@@ -6131,6 +6145,7 @@ def _generate_creation_task_person_render_record(
                                 "motion": payload.motion,
                                 "expression": payload.expression,
                                 "language": segment.language,
+                                "presenter_input_facts": input_facts,
                             },
                             status="succeeded",
                             started_at=running_job.started_at or utc_now(),
@@ -6157,6 +6172,7 @@ def _generate_creation_task_person_render_record(
                                 created_by_transform_id=transform.id,
                             )
                         )
+                grant_context.check()
                 if claimed:
                     current = production_repo.finish_person_render(
                         context.workspace_id,
@@ -6171,6 +6187,14 @@ def _generate_creation_task_person_render_record(
                     context.workspace_id, task_id, current.id, logical_ref
                 )
                 return JobResult((logical_ref,))
+            except (RecoveryBlocked, PermissionError, GrantedCommandError) as exc:
+                boundary_failure.append(exc)
+                if production_repo.get_person_render(context.workspace_id, task_id, current.id).status == "running":
+                    production_repo.finish_person_render(context.workspace_id, task_id, current.id,
+                        status="failed", failure_reason="permit_execution_interrupted",
+                        impact="人物片段未完成，当前配音及已完成片段保留。",
+                        repair_action="重新核验许可、输入与专属预算后继续制作。")
+                raise
             except JobFailure:
                 raise
             except (FileNotFoundError, MediaAuthorityError, OSError, ValueError) as exc:
@@ -6194,6 +6218,9 @@ def _generate_creation_task_person_render_record(
                 ) from exc
 
         completed_job = video_job_runner.run(job, person_render_job)
+        if boundary_failure:
+            raise boundary_failure[0]
+        grant_context.check()
         completed = production_repo.get_person_render(workspace_id, task_id, render.id)
         if completed_job.status != "succeeded":
             raise _topic_failure_response(
@@ -6269,8 +6296,8 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
     creation_plan = _creation_plan_for_task_or_404(workspace_id, task)
     if grant_context is not None:
         grant_context.check()
-        if creation_plan.presenter_share_target:
-            raise HTTPException(status_code=503, detail="人物口型组合尚无受许可执行预算；当前仅支持纯素材故事板")
+    elif creation_plan.presenter_share_target:
+        raise HTTPException(status_code=409, detail="人物故事板必须通过当前任务的受许可连续制作入口")
     if task.confirmed_script_id is None or task.narration_cache_key is None:
         raise HTTPException(status_code=409, detail="confirmed script or narration missing")
     try:
@@ -6341,15 +6368,13 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
             segment = segments_by_section[section_id]
             selected_voice = creation_plan.selected_voice
             assert selected_voice is not None
-            render = _generate_creation_task_person_render_record(
-                workspace_id, task.id,
-                CreationTaskPersonRenderRequest(
-                    narration_segment_id=segment.id,
-                    person_profile_id=selected_voice.person_profile_id,
-                    person_version=selected_voice.person_version,
-                ),
-            )
-            if render.status != "ready" or _person_render_media_path(render) is None:
+            if grant_context is None:
+                raise HTTPException(status_code=409, detail="人物故事板必须通过当前任务的受许可连续制作入口")
+            inputs = dict((item.id, request) for item, request in presenter_inputs(
+                production_repo, task, script, creation_plan, _presenter_model_ids()))
+            render = current_presenter_render(production_repo, task, segment, inputs[segment.id], _person_render_media_path)
+            grant_context.check()
+            if render is None or _person_render_media_path(render) is None:
                 raise ValueError("露脸段落的口型视频没有完成，请重试故事板")
             for clip in montage.clips:
                 cue = next(item for item in montage.cues if item.id == clip.cue_id)
@@ -15063,8 +15088,8 @@ def _recover_creation_executions() -> None:
             continue
         try:
             submit_creation_stage(creation_execution, runtime.scheduler, job, original)
-        except PermissionError:
-            logger.warning("制作作业 %s 的当前许可未就绪，保留待处理", job.id)
+        except (PermissionError, ValueError) as exc:
+            logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
     runtime.wake()
 
 
@@ -15188,7 +15213,7 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
     current_stage = None
     if job and events:
         latest_stage_event = events[-1]
-        if (latest_stage_event["stage"] in {"narration", "montage_plan", "render", "cover"}
+        if (latest_stage_event["stage"] in {"narration", "person_render", "montage_plan", "render", "cover"}
                 and latest_stage_event["status"] in {"running", "failed", "pending"}):
             current_stage = latest_stage_event["stage"]
     waiting_reason = None
@@ -15207,7 +15232,7 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
                 ).fetchone()
             if row is not None:
                 queued_stage = row["unit_key"].split(":", 1)[0]
-                if queued_stage in {"narration", "montage_plan", "render"}:
+                if queued_stage in {"narration", "person_render", "montage_plan", "render"}:
                     current_stage = queued_stage
                 waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
                 if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
@@ -15469,6 +15494,30 @@ def _narration_stage_with_grant(workspace_id: str, task_id: str, context: Creati
     return _generate_creation_task_narration_for_workspace(workspace_id, task_id, grant_context=context)
 
 
+def _presenter_model_ids():
+    return {quality: _lipsync_provider(quality).model_id for quality in ("fast", "high")}
+
+
+def _person_stage_with_grant(workspace_id: str, task_id: str, context: CreationStageGrantContext):
+    context.check()
+    task = _creation_task_or_404(workspace_id, task_id)
+    script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+    plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
+    total_output_bytes = 0
+    for segment, request in presenter_inputs(production_repo, task, script, plan, _presenter_model_ids()):
+        context.check()
+        render = current_presenter_render(production_repo, task, segment, request, _person_render_media_path)
+        if render is None:
+            render = _generate_creation_task_person_render_record(workspace_id, task.id,
+                CreationTaskPersonRenderRequest(narration_segment_id=segment.id,
+                    person_profile_id=request.person.id, person_version=request.person.version),
+                grant_context=context)
+        total_output_bytes += _person_render_media_path(render).stat().st_size
+        if total_output_bytes > context.max_output_bytes:
+            raise ValueError("人物阶段累计输出超过专属预算")
+        context.check()
+
+
 def _montage_stage_with_grant(workspace_id: str, task_id: str, context: CreationStageGrantContext):
     return _create_creation_task_montage_plan_for_workspace(workspace_id, task_id, grant_context=context)
 
@@ -15497,7 +15546,9 @@ def _build_device_components(*, repository: ProductionRepository):
     cpu_render_budget = cpu_render_budget_from_env()
     budget = host_budget_from_env(cpu_render=cpu_render_budget)
     narration_budget, montage_budget = creation_stage_budgets_from_env()
-    budget = replace(budget, narration=narration_budget, montage=montage_budget)
+    presenter_budget, presenter_cpu_render_budget = presenter_budgets_from_env()
+    budget = replace(budget, narration=narration_budget, montage=montage_budget,
+                     presenter=presenter_budget, presenter_cpu_render=presenter_cpu_render_budget)
     registrations = {
         "creation_job": creation_job_registration(
             repository,
@@ -15506,7 +15557,10 @@ def _build_device_components(*, repository: ProductionRepository):
             cpu_render_budget=cpu_render_budget,
             verify_identity=_verify_creation_identity,
             narration_budget=narration_budget, montage_budget=montage_budget,
-            stage_actions={"narration": _narration_stage_with_grant, "montage_plan": _montage_stage_with_grant},
+            presenter_budget=presenter_budget, presenter_cpu_render_budget=presenter_cpu_render_budget,
+            presenter_models=_presenter_model_ids(), resolve_presenter_output=_person_render_media_path,
+            stage_actions={"narration": _narration_stage_with_grant, "person_render": _person_stage_with_grant,
+                           "montage_plan": _montage_stage_with_grant},
         ),
     }
     material_service = None

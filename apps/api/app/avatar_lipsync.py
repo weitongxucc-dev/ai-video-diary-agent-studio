@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -216,6 +217,7 @@ class AvatarAndLipSyncProvider(Protocol):
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult: ...
 
 
@@ -241,6 +243,7 @@ class UnavailableAvatarAndLipSyncProvider:
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         return _failure(
             status="unavailable",
@@ -291,6 +294,7 @@ class SubprocessAvatarAndLipSyncProvider:
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         cache_key = avatar_lipsync_cache_key(request)
         output = Path(output_path).expanduser().resolve()
@@ -329,7 +333,7 @@ class SubprocessAvatarAndLipSyncProvider:
                 encoding="utf-8",
             )
             try:
-                self._runner(
+                command = (
                     [
                         str(self.runtime_path),
                         str(self.worker_path),
@@ -341,7 +345,13 @@ class SubprocessAvatarAndLipSyncProvider:
                         str(self.runtime_root.resolve()),
                     ]
                 )
+                if grant_context is None:
+                    self._runner(command)
+                else:
+                    self._run_command(command, grant_context=grant_context, output_paths=(output,))
             except (OSError, subprocess.SubprocessError) as exc:
+                if grant_context is not None and isinstance(exc, PermissionError):
+                    raise
                 return _failure(
                     status="failed",
                     cache_key=cache_key,
@@ -368,16 +378,30 @@ class SubprocessAvatarAndLipSyncProvider:
                     action=f"检查人物口型服务响应格式后重试：{exc}",
                 )
         return _parse_avatar_result(
-            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key
+            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key, grant_context=grant_context
         )
 
-    def _run_command(self, command: list[str]) -> None:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        if grant_context is None:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
+        else:
+            grant_context.check()
+            with TemporaryDirectory(prefix="avatar_granted_runtime_") as temporary:
+                root = Path(temporary)
+                for name in ("home", "config", "cache", "tmp"):
+                    (root / name).mkdir()
+                environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": str(root / "home"), "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_CACHE_HOME": str(root / "cache"), "HF_HOME": str(root / "cache"),
+                    "TMPDIR": str(root / "tmp"), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+                    "PYTHONDONTWRITEBYTECODE": "1", "OMP_NUM_THREADS": str(grant_context.threads),
+                    "OPENBLAS_NUM_THREADS": str(grant_context.threads), "VECLIB_MAXIMUM_THREADS": str(grant_context.threads)}
+                completed = grant_context.run(command, env=environment, output_paths=output_paths)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
-            if len(detail) > 4000:
-                detail = detail[-4000:]
-            raise subprocess.SubprocessError(detail or f"exit {completed.returncode}")
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
+            raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
 
 
 class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
@@ -413,11 +437,11 @@ class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
     def message(self) -> str:
         return "高精度口型已就绪；处理时间较长。" if self.ready else "高精度口型环境不完整，请检查外接盘模型与运行依赖。"
 
-    def _run_command(self, command: list[str]) -> None:
-        completed = subprocess.run(
-            [*command, "--pose-root", str(self.pose_root.resolve())],
-            check=False, capture_output=True, text=True, timeout=6 * 60 * 60,
-        )
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        command = [*command, "--pose-root", str(self.pose_root.resolve())]
+        if grant_context is not None:
+            return super()._run_command(command, grant_context=grant_context, output_paths=output_paths)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=6 * 60 * 60)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
@@ -433,7 +457,10 @@ class AvatarAndLipSyncService:
         request: AvatarAndLipSyncRequest,
         *,
         output_cache_key: str | None = None,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
+        if grant_context is not None:
+            grant_context.check()
         cache_key = output_cache_key or avatar_lipsync_cache_key(request)
         failure = _authorization_failure(request)
         if failure is not None:
@@ -489,7 +516,7 @@ class AvatarAndLipSyncService:
             / _safe_component(request.workspace_id)
             / f"{cache_key}.mp4"
         )
-        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path))
+        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path), grant_context=grant_context)
         if reusable is not None:
             duration_seconds, alignment_evidence = reusable
             return AvatarAndLipSyncResult(
@@ -502,7 +529,17 @@ class AvatarAndLipSyncService:
                 failure_impact=None,
                 remediation_action=None,
             )
-        result = self.provider.render(request=request, output_path=output)
+        from app.device_scheduler import RecoveryBlocked
+        from app.granted_subprocess import GrantedCommandError
+        try:
+            result = (self.provider.render(request=request, output_path=output) if grant_context is None else
+                      self.provider.render(request=request, output_path=output, grant_context=grant_context))
+        except (RecoveryBlocked, PermissionError, GrantedCommandError) as exc:
+            if getattr(exc, "command_diagnostics", {}).get("group_released") is True:
+                output.unlink(missing_ok=True)
+            raise
+        if grant_context is not None:
+            grant_context.check()
         if result.status != "succeeded":
             # A failed attempt is not a reusable cache entry, even when it left
             # behind a playable but incomplete file. This path is generated
@@ -724,7 +761,7 @@ class AvatarPreviewService:
         return repository.save_media_preview_run(completed)
 
 
-def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest) -> str:
+def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest, *, input_facts=None) -> str:
     payload = {
         "person": {
             "id": request.person.id,
@@ -744,6 +781,8 @@ def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest) -> str:
         "authorization": _authorization_cache_identity(request.authorization),
         "model_id": request.model_id,
     }
+    if input_facts is not None:
+        payload["input_facts"] = input_facts
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -799,7 +838,7 @@ def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
 
 
 def _parse_avatar_result(
-    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str
+    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str, grant_context=None
 ) -> AvatarAndLipSyncResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         return _failure(
@@ -851,7 +890,7 @@ def _parse_avatar_result(
             impact="人物口型服务没有生成视频，当前视频不能进入后续剪辑。",
             action="检查输出目录权限和供应商任务结果后重试。",
         )
-    media = _probe_avatar_output(expected_output, audio_path=audio_path)
+    media = _probe_avatar_output(expected_output, audio_path=audio_path, grant_context=grant_context)
     if media is None:
         return _failure(
             status="failed",
@@ -992,11 +1031,20 @@ def avatar_lipsync_provider_from_settings(
     )
 
 
-def _probe_avatar_output(path: Path, *, audio_path: Path | None = None) -> tuple[float, str] | None:
+def _probe_avatar_output(path: Path, *, audio_path: Path | None = None, grant_context=None) -> tuple[float, str] | None:
     if not path.is_file() or path.stat().st_size == 0:
         return None
     try:
-        expected_duration = probe_media_duration(audio_path) if audio_path is not None else None
-        return probe_avatar_media(path, expected_duration=expected_duration)
+        def granted_probe(command, **_options):
+            result = grant_context.run(command)
+            return subprocess.CompletedProcess(command, result.returncode,
+                result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace"))
+        options = {} if grant_context is None else {"runner": granted_probe}
+        if grant_context is not None:
+            grant_context.check()
+            if path.stat().st_size > grant_context.max_output_bytes:
+                raise ValueError("人物输出超过专属预算")
+        expected_duration = probe_media_duration(audio_path, **options) if audio_path is not None else None
+        return probe_avatar_media(path, expected_duration=expected_duration, **options)
     except MediaTimingError:
         return None

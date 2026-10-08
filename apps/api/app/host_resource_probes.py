@@ -136,6 +136,31 @@ class NarrationBudget:
 
 
 @dataclass(frozen=True)
+class PresenterBudget:
+    max_section_count: int
+    max_input_bytes: int
+    max_duration_seconds: float
+    max_output_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            if name in {"max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"}:
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Presenter timing limits must be explicitly positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Presenter limits must be explicit positive integers")
+        if self.additional_memory_bytes < self.max_process_rss_bytes or self.runtime_sample_seconds > 0.25:
+            raise ValueError("Presenter monitor needs reserved process memory and bounded sampling")
+
+
+@dataclass(frozen=True)
 class MontageBudget:
     max_section_count: int
     max_asset_count: int
@@ -166,6 +191,8 @@ class HostBudget:
     scene_window: SceneWindowBudget | None = None
     narration: NarrationBudget | None = None
     montage: MontageBudget | None = None
+    presenter: PresenterBudget | None = None
+    presenter_cpu_render: CpuRenderBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -525,8 +552,9 @@ class HostResourceProbe:
             return HostResourceDecision(verdict, dict(resources), checks, reason, interval)
 
         kind, size = resources.get("kind"), resources.get("size_bytes")
-        render = self.budget.cpu_render if kind == "creation_render" else None
-        if kind == "creation_render":
+        render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
+                  else self.budget.cpu_render if kind == "creation_render" else None)
+        if kind in {"creation_render", "creation_presenter_render"}:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 return decision(None, "render_budget_or_execution_mode_unavailable")
             numeric_fields = ("duration_seconds", "timeout_seconds")
@@ -558,8 +586,9 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
-        elif kind in {"creation_narration", "creation_montage_plan"}:
-            stage = self.budget.narration if kind == "creation_narration" else self.budget.montage
+        elif kind in {"creation_narration", "creation_person_render", "creation_montage_plan"}:
+            stage = (self.budget.presenter if kind == "creation_person_render" else
+                     self.budget.narration if kind == "creation_narration" else self.budget.montage)
             if stage is None:
                 return decision(None, "stage_budget_unavailable")
             bounds = ({"text_chars": stage.max_text_chars, "section_count": stage.max_section_count,
@@ -567,10 +596,15 @@ class HostResourceProbe:
                        "max_output_bytes": stage.max_output_bytes, "threads": stage.max_threads,
                        "timeout_seconds": stage.max_timeout_seconds}
                       if kind == "creation_narration" else
+                      {"section_count": stage.max_section_count, "input_bytes": stage.max_input_bytes,
+                       "duration_seconds": stage.max_duration_seconds, "max_output_bytes": stage.max_output_bytes,
+                       "threads": stage.max_threads, "timeout_seconds": stage.max_timeout_seconds}
+                      if kind == "creation_person_render" else
                       {"section_count": stage.max_section_count, "asset_count": stage.max_asset_count,
                        "input_bytes": stage.max_input_bytes, "max_output_bytes": stage.max_output_bytes,
                        "timeout_seconds": stage.max_timeout_seconds})
-            expected_mode = "isolated_qwen3_tts" if kind == "creation_narration" else "metadata_only"
+            expected_mode = ("isolated_avatar_lipsync" if kind == "creation_person_render" else
+                             "isolated_qwen3_tts" if kind == "creation_narration" else "metadata_only")
             if resources.get("execution_mode") != expected_mode:
                 return decision(None, "stage_execution_mode_unavailable")
             for name, limit in bounds.items():
@@ -583,7 +617,7 @@ class HostResourceProbe:
                     return decision(False, "declared_resources_exceed_budget")
             required_memory = self.budget.min_available_memory_bytes + stage.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
-            if kind == "creation_narration":
+            if kind in {"creation_narration", "creation_person_render"}:
                 required_disk += stage.additional_disk_bytes
         elif kind in self._SUPPORTED_KINDS:
             if type(size) is not int or size < 0:
@@ -639,7 +673,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind == "creation_narration"
+            sustained = kind in {"creation_narration", "creation_person_render"}
             before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
@@ -724,7 +758,8 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if resources is not None and resources.get("kind") == "creation_narration" and self.budget.narration is not None:
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render"}
+                and (self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
             key = (grant.request_id, grant.generation)
             if key != self._running_io_key:
                 self._running_io.clear()
@@ -741,8 +776,9 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
-        if resources.get("kind") == "creation_narration":
-            narration = self.budget.narration
+        if resources.get("kind") in {"creation_narration", "creation_person_render"}:
+            narration = (self.budget.presenter if resources["kind"] == "creation_person_render"
+                         else self.budget.narration)
             if narration is None:
                 raise RecoveryBlocked("配音进程预算尚未标定")
             return SceneRuntimeLimits(
@@ -773,9 +809,11 @@ class HostResourceProbe:
             # The scheduler first proves every registered child group exited.
             # MLX exists only inside that group, never the API process.
             return True
+        if resources.get("kind") == "creation_person_render" and resources.get("execution_mode") == "isolated_avatar_lipsync":
+            return True  # Resident model allocations live only in the proven-exited child group.
         if resources.get("kind") == "creation_montage_plan" and resources.get("execution_mode") == "metadata_only":
             return True
-        if (resources.get("kind") == "creation_render"
+        if (resources.get("kind") in {"creation_render", "creation_presenter_render"}
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
         if resources.get("kind") == "material_scene_window":

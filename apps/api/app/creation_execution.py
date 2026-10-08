@@ -18,8 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
-from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, admit_resource, sample_host_capacity
-from app.montage import creation_task_montage_plan_from_payload
+from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity
+from app.montage import creation_task_montage_plan_from_payload, select_presenter_sections
+from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
@@ -27,6 +28,7 @@ from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 
 KIND = "creation_task_execution"
 STAGES = ("narration", "montage_plan", "render")
+DEVICE_STAGES = ("narration", "person_render", "montage_plan", "render")
 DEVICE_OWNER_TYPE = "creation_job"
 
 
@@ -120,9 +122,104 @@ class CpuRenderLimits:
             raise ValueError("CPU 成片必须显式配置正数输出、线程和总时限")
 
 
+def presenter_inputs(repository, task, script, plan, models):
+    """Re-read current authorized person and narration inputs, also on cache reuse."""
+    if not plan.presenter_share_target:
+        return []
+    if plan.selected_voice is None or plan.lipsync_quality not in models:
+        raise ValueError("人物模型或授权人物版本不可用")
+    segments = {item.source_section_id: item for item in repository.list_narration_segments(
+        task.workspace_id, task.id, script.id)}
+    if any(section.id not in segments or segments[section.id].status != "ready"
+           or not segments[section.id].duration_seconds for section in script.sections):
+        raise ValueError("人物制作缺少当前文案的可用配音分段")
+    selected = select_presenter_sections(
+        [(section.id, segments[section.id].duration_seconds) for section in script.sections],
+        plan.presenter_share_target)
+    person = repository.get_person_profile(task.workspace_id, plan.selected_voice.person_profile_id,
+                                           plan.selected_voice.person_version)
+    inputs = []
+    for section_id in selected:
+        segment = segments[section_id]
+        if (segment.voice_profile_id, segment.voice_version) != (plan.selected_voice.profile_id, plan.selected_voice.version):
+            raise ValueError("人物配音版本与当前方案不一致")
+        audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+        request = repository.resolve_avatar_lipsync_request(
+            workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
+            voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
+            audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
+            motion="natural", expression="neutral", authorization_id=person.authorization.id,
+            authorization_version=person.authorization.version, model_id=models[plan.lipsync_quality])
+        if _authorization_failure(request) is not None:
+            raise PermissionError("人物或声音授权已失效，不能生成或复用")
+        inputs.append((segment, request))
+    return inputs
+
+
+def presenter_input_facts(request):
+    """Local mutation facts sealed with the output's existing transform record."""
+    facts = []
+    for role, value in (("audio", request.audio_path), ("visual", request.visual_path)):
+        path = Path(value).resolve()
+        if not path.is_file():
+            raise ValueError("人物输入文件缺失，不能生成或复用")
+        stat = path.stat()
+        if stat.st_size <= 0:
+            raise ValueError("人物输入文件为空，不能生成或复用")
+        facts.append({"role": role, "path": str(path), "size_bytes": stat.st_size,
+                      "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+                      "inode": stat.st_ino, "device": stat.st_dev})
+    return facts
+
+
+def current_presenter_render(repository, task, segment, request, resolve_output):
+    input_facts = presenter_input_facts(request)
+    key = avatar_lipsync_cache_key(request, input_facts=input_facts)
+    render = next((item for item in repository.list_person_renders(task.workspace_id, task.id)
+                   if item.cache_key == key and item.narration_segment_id == segment.id
+                   and item.person_profile_id == request.person.id and item.person_version == request.person.version
+                   and item.voice_profile_id == segment.voice_profile_id and item.voice_version == segment.voice_version
+                   and item.model_id == request.model_id and item.status == "ready"), None)
+    if render is None or not render.artifact_ref or not render.alignment_evidence or not render.duration_seconds:
+        return None
+    if render.duration_seconds + .001 < segment.duration_seconds:
+        return None
+    transforms = repository.list_transform_runs(task.workspace_id, task.id)
+    if not any(item.transform_type == "person_render" and item.status == "succeeded"
+               and item.input_digest == key and render.artifact_ref in item.output_refs
+               and segment.audio_reference in item.input_refs
+               and item.parameters.get("language") == segment.language
+               and item.parameters.get("presenter_input_facts") == input_facts for item in transforms):
+        return None
+    path = resolve_output(render)
+    if path is None or not path.is_file() or path.stat().st_size <= 0:
+        return None
+    return render
+
+
+def presenter_stage_facts(repository, task, script, plan, budget, models):
+    if budget is None:
+        raise ValueError("人物制作预算尚未标定，请配置 DEVICE_PRESENTER_* 标定值")
+    inputs = presenter_inputs(repository, task, script, plan, models)
+    if not inputs:
+        raise ValueError("当前方案没有待制作的人物段落")
+    files = {fact["path"]: fact for _, item in inputs for fact in presenter_input_facts(item)}
+    facts = [files[path] for path in sorted(files)]
+    resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
+                 "section_count": len(inputs), "input_bytes": sum(item["size_bytes"] for item in facts),
+                 "duration_seconds": sum(item.duration_seconds for item, _ in inputs),
+                 "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
+                 "timeout_seconds": budget.max_timeout_seconds}
+    manifest = {"inputs": [[asdict(segment), asdict(request)] for segment, request in inputs],
+                "files": facts, "resources": resources}
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    return f"person_render:{digest}", resources
+
+
 def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      creation_plan: CreationPlan, limits: CpuRenderLimits,
-                     *, request: WorkRequest | None = None) -> tuple[str, dict[str, object]]:
+                     *, request: WorkRequest | None = None, presenter_limits=None,
+                     presenter_models=None, resolve_presenter_output=None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
         raise ValueError("当前任务缺少已确认故事板或配音")
@@ -140,8 +237,15 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             or not montage.clips or any(clip.needs_confirmation for clip in montage.clips)
             or not math.isfinite(montage.duration_seconds) or montage.duration_seconds <= 0):
         raise ValueError("当前故事板尚未确认或与文案不一致")
-    if montage.presenter_share_target or any(clip.person_render_id for clip in montage.clips):
-        raise ValueError("人物口型组合尚无 CPU 成片许可预算")
+    presenter = bool(montage.presenter_share_target or any(clip.person_render_id for clip in montage.clips))
+    person_inputs = {}
+    if presenter:
+        if presenter_limits is None or resolve_presenter_output is None:
+            raise ValueError("人物组合 CPU 成片专属预算尚未标定")
+        limits = presenter_limits
+        script = repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+        person_inputs = {segment.id: (segment, item) for segment, item in
+                         presenter_inputs(repository, task, script, creation_plan, presenter_models or {})}
     if montage.audio_timeline is not None:
         raise ValueError("当前有效音轨组合尚未接入 CPU 成片预算")
     if montage.graphic_overlays:
@@ -198,7 +302,19 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, narration_reference)
     sources = [audio]
     for clip in montage.clips:
-        source = repository.resolve_clip_media_reference(task.workspace_id, clip.asset_id, clip.source_path)
+        if clip.person_render_id:
+            cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
+            if cue is None or cue.narration_segment_id not in person_inputs:
+                raise ValueError("人物镜头不属于当前配音与露脸选择")
+            segment, item = person_inputs[cue.narration_segment_id]
+            render = current_presenter_render(repository, task, segment, item, resolve_presenter_output)
+            if (render is None or render.id != clip.person_render_id
+                    or clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}"
+                    or clip.source_end_seconds > render.duration_seconds + .001):
+                raise ValueError("人物镜头版本、授权或输出已失效")
+            source = resolve_presenter_output(render)
+        else:
+            source = repository.resolve_clip_media_reference(task.workspace_id, clip.asset_id, clip.source_path)
         if not source.is_file() or source.stat().st_size <= 0:
             raise ValueError("当前镜头源文件不可用")
         sources.append(source)
@@ -234,7 +350,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     # the input media, and the byte total is the already-measured source set.
     output_width, output_height = canvas_size(montage.aspect_ratio)
     resources = {
-        "kind": "creation_render", "execution_mode": "cpu_ffmpeg",
+        "kind": "creation_presenter_render" if presenter else "creation_render", "execution_mode": "cpu_ffmpeg",
         "duration_seconds": montage.duration_seconds,
         "timeout_seconds": limits.timeout_seconds,
         "width_px": output_width, "height_px": output_height,
@@ -271,8 +387,6 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
     else:
         if montage_budget is None:
             raise ValueError("故事板预算尚未标定，请配置 DEVICE_MONTAGE_* 标定值")
-        if plan.presenter_share_target:
-            raise ValueError("人物口型组合尚无已标定许可，本次仅支持纯素材故事板")
         if not task.narration_cache_key:
             raise ValueError("故事板缺少当前配音")
         narration = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
@@ -296,12 +410,54 @@ class CreationJobOwnerVerifier:
     def __init__(self, repository, *, cpu_render_limits: CpuRenderLimits | None = None,
                  verify_identity: Callable[[CreationExecutionActor], str] | None = None,
                  narration_budget: NarrationBudget | None = None,
-                 montage_budget: MontageBudget | None = None) -> None:
+                 montage_budget: MontageBudget | None = None,
+                 presenter_budget: PresenterBudget | None = None,
+                 presenter_cpu_render_limits: CpuRenderLimits | None = None,
+                 presenter_models: dict | None = None, resolve_presenter_output=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
         self.narration_budget = narration_budget
         self.montage_budget = montage_budget
+        self.presenter_budget = presenter_budget
+        self.presenter_cpu_render_limits = presenter_cpu_render_limits
+        self.presenter_models = presenter_models or {}
+        self.resolve_presenter_output = resolve_presenter_output
+
+    def render_facts(self, conn, task, plan, *, request=None):
+        # Person composition never inherits the pure-material caps.
+        limits = self.presenter_cpu_render_limits if plan.presenter_share_target else self.cpu_render_limits
+        if limits is None:
+            raise ValueError("人物组合 CPU 成片专属预算尚未标定" if plan.presenter_share_target else "CPU 成片资源预算尚未配置")
+        return cpu_render_facts(self.repository, conn, task, plan, limits, request=request,
+            presenter_limits=self.presenter_cpu_render_limits, presenter_models=self.presenter_models,
+            resolve_presenter_output=self.resolve_presenter_output)
+
+    def stage_facts(self, task, script, plan, stage):
+        if stage == "person_render":
+            return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models)
+        key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
+                                             self.narration_budget, self.montage_budget)
+        if stage == "montage_plan" and plan.presenter_share_target:
+            inputs = presenter_inputs(self.repository, task, script, plan, self.presenter_models)
+            renders = [current_presenter_render(self.repository, task, segment, request,
+                        self.resolve_presenter_output) for segment, request in inputs]
+            if any(item is None for item in renders):
+                raise ValueError("人物段落尚未在专属许可下完成")
+            manifest = []
+            for item, (_, request) in zip(renders, inputs, strict=True):
+                stat = self.resolve_presenter_output(item).stat()
+                manifest.append([asdict(item), asdict(request),
+                                 [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]])
+            key = "montage_plan:" + hashlib.sha256(json.dumps([key, manifest], sort_keys=True, default=str).encode()).hexdigest()
+        return key, resources
+
+    def person_valid(self, task):
+        script = self.repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+        plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
+        inputs = presenter_inputs(self.repository, task, script, plan, self.presenter_models)
+        return all(current_presenter_render(self.repository, task, segment, request,
+                   self.resolve_presenter_output) is not None for segment, request in inputs)
 
     def _facts(self, conn: sqlite3.Connection, workspace_id: str, job_id: str):
         row = conn.execute(
@@ -353,17 +509,15 @@ class CreationJobOwnerVerifier:
             if self.verify_identity is not None and self.verify_identity(original) != "ready":
                 raise PermissionError("制作许可身份失效或事实源不可用")
             if verdict == "ready" and stage == "render":
-                if self.cpu_render_limits is None:
-                    raise PermissionError("CPU 成片资源预算尚未配置")
-                key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits)
+                key, resources = self.render_facts(conn, task, plan)
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
             elif verdict == "ready" and (
                 (stage == "narration" and self.narration_budget is not None)
                 or (stage == "montage_plan" and self.montage_budget is not None)
+                or stage == "person_render"
             ):
-                key, resources = creation_stage_facts(
-                    self.repository, task, script, plan, stage, self.narration_budget, self.montage_budget)
+                key, resources = self.stage_facts(task, script, plan, stage)
                 if key != intent.unit_key:
                     raise PermissionError("制作阶段输入已变化，请重新安排")
             else:
@@ -385,7 +539,7 @@ class CreationJobOwnerVerifier:
                 or job.workspace_id != task.workspace_id or script.workspace_id != job.workspace_id
                 or plan.workspace_id != job.workspace_id or script.task_id != job.task_id):
             return "unauthorized"
-        if (job.kind != KIND or stage not in STAGES or job.status not in {"queued", "interrupted", "running"}
+        if (job.kind != KIND or stage not in DEVICE_STAGES or job.status not in {"queued", "interrupted", "running"}
                 or event.get("input_digest") != job.input_digest
                 or event.get("script_id") != script.id or event.get("plan_id") != task.plan_id
                 or task.confirmed_script_id != script.id or script.selection_status != "confirmed"
@@ -418,13 +572,11 @@ class CreationJobOwnerVerifier:
                 return identity
         try:
             if stage == "render":
-                if self.cpu_render_limits is None:
-                    return "dependency"
-                key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits,
-                                                  request=request)
+                key, resources = self.render_facts(conn, task, plan, request=request)
             else:
-                key, resources = creation_stage_facts(
-                    self.repository, task, script, plan, stage, self.narration_budget, self.montage_budget)
+                key, resources = self.stage_facts(task, script, plan, stage)
+        except PermissionError:
+            return "unauthorized"
         except (KeyError, OSError, ValueError):
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
@@ -473,23 +625,23 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
     owner = scheduler.owners
     if hasattr(owner, "registrations"):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-    if upstream_stage_valid(repository, task, "narration") and upstream_stage_valid(repository, task, "montage_plan"):
-        limits = getattr(owner, "cpu_render_limits", None)
-        if limits is None:
-            raise ValueError("CPU 成片资源预算尚未配置")
-        creation_plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
-        with repository._connect() as conn:
-            stage, _resources = cpu_render_facts(repository, conn, task, creation_plan, limits)
+    plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
+    script = repository.get_creation_task_script(job.workspace_id, task.confirmed_script_id)
+    if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
+        raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
+    if not upstream_stage_valid(repository, task, "narration"):
+        stage = "narration"
+    elif plan.presenter_share_target and not owner.person_valid(task):
+        stage = "person_render"
+    elif not upstream_stage_valid(repository, task, "montage_plan"):
+        stage = "montage_plan"
     else:
-        stage = next((item for item in STAGES[:2] if not upstream_stage_valid(repository, task, item)), None)
-        if stage is None:
-            raise ValueError("制作作业没有可执行阶段")
-        budget = owner.narration_budget if stage == "narration" else owner.montage_budget
-        if budget is not None:
-            script = repository.get_creation_task_script(job.workspace_id, task.confirmed_script_id)
-            plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
-            stage, _resources = creation_stage_facts(
-                repository, task, script, plan, stage, owner.narration_budget, owner.montage_budget)
+        stage = "render"
+    if stage == "render":
+        with repository._connect() as conn:
+            stage, _resources = owner.render_facts(conn, task, plan)
+    elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
+        stage, _resources = owner.stage_facts(task, script, plan, stage)
     return SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
                             job.input_digest, stage, SchedulePolicy())
 
@@ -629,17 +781,31 @@ class CreationJobUnitExecutor:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
                                  (job.workspace_id, job.id))
             job = self.repository.claim_job_run(job.workspace_id, job.id)
+            if stage == "person_render":
+                self.repository.append_task_event(TaskEvent(
+                    id=f"event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}",
+                    workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+                    event_type="creation_execution_stage", payload={"stage": stage, "status": "running"},
+                    created_at=datetime.now(timezone.utc)))
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id)
-            if not upstream_stage_valid(self.repository, current_task, stage):
+            owner = scheduler.owners
+            if hasattr(owner, "registrations"):
+                owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+            def valid(current):
+                return (owner.person_valid(current) if stage == "person_render"
+                        else upstream_stage_valid(self.repository, current, stage))
+            if not valid(current_task):
                 self.stage_actions[stage](job.workspace_id, job.task_id, context)
             context.check()
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
-            if not upstream_stage_valid(self.repository, task, stage):
+            if not valid(task):
                 raise ValueError("制作阶段未产生匹配当前文案的可用结果")
             original = CreationExecutionActor.from_event(job.workspace_id,
                 self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start").payload)
             next_intent = next_creation_intent(self.repository, scheduler, job)
-            output = task.narration_cache_key if stage == "narration" else task.montage_plan_id
+            output = (task.narration_cache_key if stage == "narration" else
+                      ",".join(item.id for item in self.repository.list_person_renders(task.workspace_id, task.id)
+                               if item.status == "ready") if stage == "person_render" else task.montage_plan_id)
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
                     status="queued", output=output, stage=stage), next_intent=next_intent, actor=original)
@@ -708,7 +874,7 @@ class CreationJobUnitExecutor:
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
 
-        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.split(":", 1)[0] in STAGES[:2]:
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.split(":", 1)[0] in DEVICE_STAGES[:-1]:
             return self._execute_upstream(grant, scheduler, grant.unit_key.split(":", 1)[0])
         if grant.owner_type != DEVICE_OWNER_TYPE or not grant.unit_key.startswith("render:"):
             raise PermissionError("制作执行器只接受已确认的 CPU 成片单元")
@@ -734,7 +900,7 @@ class CreationJobUnitExecutor:
         if row is None or permit is None or not permit["granted_at_utc"]:
             raise PermissionError("CPU 成片许可事实不完整")
         resources = json.loads(row["resources_json"])
-        if resources.get("kind") != "creation_render" or resources.get("execution_mode") != "cpu_ffmpeg":
+        if resources.get("kind") not in {"creation_render", "creation_presenter_render"} or resources.get("execution_mode") != "cpu_ffmpeg":
             raise PermissionError("CPU 成片资源事实不匹配")
         elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
         deadline = time.monotonic() + float(resources["timeout_seconds"]) - elapsed
