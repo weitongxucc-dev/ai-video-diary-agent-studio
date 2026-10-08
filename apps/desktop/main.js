@@ -9,6 +9,19 @@ const { pipeline } = require('stream/promises');
 const { autoUpdater } = require('electron-updater');
 const { loadOrCreateIdentity } = require('./device-identity');
 
+// Chromium's explicit profile directory must also govern Electron's own
+// dotenv, device identity and logs before any of them are read or created.
+const explicitUserDataPath = app.commandLine.getSwitchValue('user-data-dir');
+if (explicitUserDataPath) {
+  if (!path.isAbsolute(explicitUserDataPath)) {
+    throw new Error('--user-data-dir must be an absolute path.');
+  }
+  fs.mkdirSync(explicitUserDataPath, { recursive: true });
+  app.setPath('userData', explicitUserDataPath);
+  app.setPath('sessionData', explicitUserDataPath);
+  app.setAppLogsPath(path.join(explicitUserDataPath, 'logs'));
+}
+
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
 let apiProcess = null;

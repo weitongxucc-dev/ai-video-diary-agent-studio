@@ -96,17 +96,20 @@ async function startExternalFixture(port) {
   return child;
 }
 
-function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events') {
+function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '') {
   const events = new Map();
   const handlers = new Map();
   const dialogs = [];
   const windows = [];
   let saveDialogResult = { canceled: true };
+  const paths = { logs: logsPath, userData: path.join(path.dirname(logsPath), 'user-data') };
   const app = {
     isPackaged: packaged,
+    commandLine: { getSwitchValue: (name) => name === 'user-data-dir' ? userDataPath : '' },
+    setPath: (name, value) => { paths[name] = value; },
+    setAppLogsPath: (value) => { paths.logs = value; },
     whenReady: () => Promise.resolve(),
-    getPath: (name) => name === 'logs' ? logsPath
-      : name === 'userData' ? path.join(path.dirname(logsPath), 'user-data') : os.tmpdir(),
+    getPath: (name) => paths[name] || os.tmpdir(),
     getVersion: () => 'test',
     requestSingleInstanceLock: () => true,
     on(event, callback) {
@@ -208,14 +211,14 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
   };
 }
 
-async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events' }) {
+async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '' }) {
   const mainPath = path.join(resourcesPath, 'app', 'main.js');
   const originalLoad = Module._load;
   const originalResourcesPath = process.resourcesPath;
   const originalNodeEnv = process.env.NODE_ENV;
   const stdoutErrorListeners = new Set(process.stdout.listeners('error'));
   const stderrErrorListeners = new Set(process.stderr.listeners('error'));
-  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode);
+  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode, userDataPath);
   const restoreProcessErrorListeners = () => {
     for (const listener of process.stdout.listeners('error')) {
       if (!stdoutErrorListeners.has(listener)) process.stdout.removeListener('error', listener);
@@ -456,6 +459,34 @@ async function cleanupRuntime({ resources, runtime, status, previousWorkerMarker
   }
 }
 
+async function assertIsolatedUserData() {
+  const resources = createResources();
+  await assert.rejects(
+    loadMain({ resourcesPath: resources, development: false, userDataPath: 'relative-profile' }),
+    /--user-data-dir must be an absolute path/,
+  );
+  const userDataPath = path.join(resources, 'isolated-profile');
+  const runtime = await loadMain({ resourcesPath: resources, development: false, userDataPath });
+  try {
+    await waitFor(() => runtime.windows.length === 1, 'isolated BrowserWindow creation');
+    const status = await runtime.handlers.get('get-service-status')();
+    assert.equal(runtime.app.getPath('userData'), userDataPath);
+    assert.equal(runtime.app.getPath('sessionData'), userDataPath);
+    assert.equal(runtime.app.getPath('logs'), path.join(userDataPath, 'logs'));
+    assert.equal(fs.readFileSync(path.join(userDataPath, '.env'), 'utf8'), '');
+    assert.equal(fs.existsSync(path.join(userDataPath, 'device-identity.generated.json')), true);
+    assert.equal(fs.existsSync(path.join(userDataPath, 'logs', 'desktop-runtime.jsonl')), true);
+    assert.equal(fs.existsSync(path.join(resources, 'user-data')), false, 'default userData must remain untouched');
+    assert.equal(fs.existsSync(path.join(resources, 'logs')), false, 'default logs must remain untouched');
+    await cleanupRuntime({ resources, runtime, status });
+  } finally {
+    if (fs.existsSync(resources)) {
+      runtime.app.quit();
+      runtime.restore();
+    }
+  }
+}
+
 async function assertRuntimeExit(name) {
   const test = await startPackaged();
   try {
@@ -606,6 +637,7 @@ async function assertNativeRenderedVideoSaveBoundary() {
 }
 
 async function main() {
+  await assertIsolatedUserData();
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable');
   await assertBuildIdentityMetadataFailure('invalid', 'build identity metadata is invalid');
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable', { development: true, packaged: true });
@@ -624,7 +656,8 @@ async function main() {
 }
 
 const runner = process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
-  : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary : main;
+  : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary
+    : process.argv.includes('--isolated-user-data') ? assertIsolatedUserData : main;
 
 runner().catch((error) => {
   console.error('desktop lifecycle smoke: FAIL');
