@@ -31,11 +31,13 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38源码阶段已结案并保留线程；整体GUI待B41 | 已提交3925e9b；停止新增修改，具体GUI缺陷另具名交回；不写API/actions/共享文档 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43源码已结案；任务44修复真实历史版本裁切 | 仅任务44具名直接消费者；不写API/actions/共享文档 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40准备已结案；任务41同候选UI验收 | 仅新/tmp隔离环境和验收证据；冻结候选后具名START_GUI，不写产品 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40准备已结案；任务41资源已释放，收尾报告 | 仅既有/tmp证据与报告；任务41启动权已到期，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务44 / UI（MAIN-UI-HISTORY-VISIBLE-20261008-44）**：任务41最终PNG `final-history-v1.png` / `final-history-current.png` 确认在实际外窗1024×841（截图推断内容约1024×754）打开历史版本后，面板被压成细条、标题与版本正文不可读；AX读取/切换V1/V4不能当可见通过。由唯一UI写者在自身干净`e7cbf3e702ffdb6339222464e3f84de651dcbf1f`继续本次已授权v5.1迁移，准确组合候选`3d7d7e1d4e02496221808dba99ec1e3c664ab0ed`运行Web与该来源一致。先证明直接父布局/消费者首因，修复历史列表和详情的可读性、关闭入口及有限正文滚动，服从DESIGN §4.2统一圆角卡和剪辑预览优先，不通过隐藏历史、删除版本、放宽断言或假数据解决。owned仅`CreationTaskWorkspace.tsx`/同名CSS/直接测试、`TimelineVersionHistory.tsx`/同名CSS/直接测试；必要`VideoEditor.module.css`父布局仅在首因证据明确后处理，不批量改其他页面。保持真实只读API、当前时间线/对象/播放位置/草稿不因历史查看改变；复用HomeCardDialog，不另建浮层机制。必要最小已有消费者检查及改动所需类型检查，不增加镜像CSS测试，不重跑全量。只写新`/tmp/main-acceptance-20261008/ui44/`报告，无服务/GUI/媒体/模型/探针/安装/远端写权；源码通过后主控机械组合，B另具名有限窗口补这个失败路径，不复活任务41启动权。读取本段与DESIGN指定章节，语义REBASE_ACK后施工；准确commit/父/diff/首因/检查/未验返回主控。设置截图开发模式“1 Issue”尚无对应内容，仅保留待查，不从本任务获得任意修复权。
 
 本轮变更`MAIN-DESIGN-IMPLEMENT-20261008-38`，主控Run沿用`run_e3cb6568939f`。绑定当前main准确代码对象`3fa9033608abad72ec30d68e984bf2f92e74d85d`、[DESIGN](../DESIGN.md)§2/3/4/5/7、实际领域状态与对应API。新分支只机械取得该对象，既有分支和报告保留。PR96 `a3e9c7b9dd51927f605272fda8bd6410bd707896`尚未批准合入；UI先基于main实施，主控随后在独立组合候选纳入PR96差额，特别核对CreationTaskWorkspace及设置保存行为。不能将组合候选当main已合入或把本地78个共享记录提交整体push。
 
