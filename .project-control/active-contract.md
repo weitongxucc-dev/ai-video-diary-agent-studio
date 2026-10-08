@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 85已审核结案并retain | clean8fc9bde仅两测试文件，机械组合30d3760；无新增写/运行权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 87：首次录音采用 | task_070705973546 / ctx_dc7706d9c816；仅下方87录音直接源码；无实机运行/打包权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 86：实际包真实制作 | task_84f88d406229 / ctx_37688cc35760已ACK；仅下方86隔离运行，零产品代码写权；84旧启动权结束 |
 
@@ -54,6 +54,16 @@ B86复用pipefish终端，唯一运行负责人，证据与新HOME/XDG/DB/config
 86.1 主控仅将已授权validation Key从具名条目读到RAM，按现有workspace_settings原生store保存至本新根 `config/b86.keychain-db` 的local/llm_api_key，配国内cn/M3非秘密设置；不枚举其它条目、不落明文、不传秘密给B。创建新临时store若产生search list副作用立即原样恢复，前后默认与列表须相同。主控核新环境和store后给B非秘密回执，B只让实际包API读取此路径。结束主控锁定该store并RAM扫描本轮具名日志/配置不得含Key。此配置API准备不是GUI保存验收。
 
 86.2 用户此前明确授权本人素材使用，本次只读复用两件原件：`/Volumes/Dujiangyan-VM/AI视频日记/acceptance/real-voice-20260824/reference/reference.wav` 与 `/Volumes/Dujiangyan-VM/AI视频日记/video-inbox/历史成片_待审核/VID_20260529_122252_preview.mp4`。B可复制到新creation86并以单线程FFmpeg有界截取≤5秒（单步≤30秒），保留源stat/原件。经真实已有录音替换/素材登记路径作为独立轻量成片输入，验证剪辑→渲染→修改重出/保存；它是导入已有媒体，不是本轮Qwen生成或人物口型通过，不能替代原真实配音缺口。不得为导入伪造TTS成功/有效版本、原件权属或媒体内容；缺少真实入口时准确报首因，由主控安排必要实现。
+
+86.3 用户批准“允许退出旧测试版”，主控按具名desktop81/PID82431核身份，用NSRunningApplication.terminate正常退出；已正向核82431/82730退出与3000实际bind可用，原用户数据保留。B可先释放本单首启动86865及API自有组后同包/DB/store重开，父deadline仍首次启动07:38:51，不另起20分钟。其他用户进程仍不得停止。证据old-app-normal-quit.json；此原生应用退出不冒称GUI快捷键验收。
+
+### UI87：首次任务录音采用到连续制作的实际缺口
+
+B86实证：首次无故事板任务POST audio/recordings409，但montage也要求Narration，已有本人音频不能走完整链。本单是产品§10电脑录音/§14真实制作的必要差额，原UI终端复用，准确30d3760新干净分支，先核是否已有真实首次采用路径；有则修接线，无则在当前任务事实源内补最小首次录音采用，不造第二条制作路径。先交精确数据/状态/入口方案checkpoint，主控处理需要的共享领域语义；不等待用户重复批准实施目标。
+
+唯一产品写权：main.py录音保存/明确采用/配音完成到连续制作的直接调用，task_audio.py、narration.py、production.py、creation_execution.py及schemas.py中确有必要的直接消费者；Web CreationTaskWorkspace.tsx、AudioTimelineEditor.tsx与lib/api.ts/types.ts的录音专用差额，直接既有录音/制作测试。保留已正确的生成配音、人物许可、队列、撤销/版本、发布和DESIGN，不重构公共层。本人录音是实际task_recording Artifact/Transform输入，只经用户明确采用绑定当前Script/段落；保存不等于采用。真实时长/hash/版本/同任务归属必须可追溯，变化只使相关依赖失效，不把recording伪标为Qwen结果/声音克隆样本，不把正常当前录音强制依赖一个尚不存在的故事板。段落对齐无法确定时说明限制，不猜文字时间轴或自动拆录音。任何新增预算/授权/领域对象先报主控，不恢复未知预算或无Grant生成路径。
+
+证据/tmp/main-acceptance-20261009/recording87/；只做最小相关测试/源码检查，现有缓存依赖复用、不下载/安装/全量测试或打包/服务/GUI/模型。B86独占真实包运行/媒体，UI只用测试隔离输入，不抢文件或实机资源。先语义ACK，再落实真实入口、实际DB回读与新合法单段录音的连续制作衔接，交clean候选/diff/必要证据及未验；最终包与真实媒体验证由主控审核后另绑定，不用旧84包验新差额。UI无push/PR/Linear/共享权威写权。
 
 ## 已结案交付波次：B79 / UI80（2026-10-09；以下仅为源码与证据索引）
 
