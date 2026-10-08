@@ -66,7 +66,7 @@ from app.visual_effects import VisualEditRequest, VisualEffects, publish_color_p
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
-from app.device_scheduler import SessionHeartbeat
+from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy
 from app.member_permits import (
     DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
     build_host_probes, cpu_render_budget_from_env, creation_job_registration, find_member,
@@ -91,7 +91,7 @@ from app.creation_execution import (
     presenter_inputs, presenter_input_facts, current_presenter_render,
     CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
     CreationJobUnitExecutor, ExecutionStartRequest,
-    revision_digest, submit_creation_stage,
+    revision_digest, submit_creation_stage, PERSON_EDIT_KIND, person_edit_digest,
 )
 from app.creator_profile import (
     get_or_create_profile,
@@ -266,6 +266,7 @@ from app.schemas import (
     CreationTaskQualityCheckRequest,
     CreationTaskQualityCheckResponse,
     CreationTaskEditConfirmResponse,
+    CreationTaskEditQueuedResponse,
     CreationTaskEditPreviewRequest,
     CreationTaskAssistantTurnRequest,
     CreationTaskAssistantTurnResponse,
@@ -6703,6 +6704,7 @@ def _persist_typed_montage_edit(
     narration_artifact: NarrationArtifactRecord | None = None,
     subtitle_source_version: TimelineVersion | None = None,
     edited_subtitle_tracks: list[SubtitleTrack] | None = None,
+    connection=None,
 ) -> CreationTaskEditConfirmResponse:
     try:
         dissolve_frames(updated_plan.clips)
@@ -6804,10 +6806,13 @@ def _persist_typed_montage_edit(
                 narration_artifact=narration_artifact,
                 subtitle_tracks=carried_tracks,
                 cover_asset=carried_cover,
+                connection=connection,
             )
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if connection is not None:
+        return persisted_operation
     persisted_plan = creation_task_montage_plan_from_payload(
         production_repo.get_creation_task_montage_plan(workspace_id, task.id)
     )
@@ -8375,9 +8380,260 @@ def preview_creation_task_edit(
     return _edit_preview_response(intent, proposal)
 
 
+def _submit_person_edit(workspace_id, task, proposal, request):
+    actor = _require_permit_actor(request, workspace_id)
+    runtime = _creation_runtime()
+    owner = runtime.registrations["creation_job"].owner
+    script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+    plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
+    digest = person_edit_digest(proposal.operation)
+    # Repeated exact requests compile fresh proposals, but bind the same target
+    # and base version to the same durable job rather than generating twice.
+    candidate = JobRun(id=f"job_{uuid4().hex}", workspace_id=workspace_id, task_id=task.id,
+        kind=PERSON_EDIT_KIND, input_digest=digest,
+        idempotency_key=f"person-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}")
+    event_payload = {**actor.identity_payload(), "script_id": script.id, "plan_id": plan.id,
+        "revision_digest": revision_digest(script, plan), "input_digest": digest,
+        "edit_proposal_id": proposal.id}
+    job = None
+    try:
+        key, _ = owner.edit_facts(candidate, task, event_payload, plan)
+        # Hold the existing SQLite write transaction across active dedup and
+        # job/event creation. A fresh proposal may retry a finished failure;
+        # the same old proposal cannot resurrect it or attach to a new job.
+        with production_repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?",
+                (workspace_id, candidate.idempotency_key)).fetchone()
+            if prior is not None and prior["status"] not in {"queued", "running", "interrupted"}:
+                raise ValueError("这次人物编辑已结束，请查看作业结果后重新预览")
+            active = conn.execute(
+                "SELECT j.* FROM job_runs j JOIN task_events e ON e.job_id=j.id AND e.workspace_id=j.workspace_id "
+                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.input_digest=? "
+                "AND j.status IN ('queued','running','interrupted') AND e.event_type='person_edit_requested' "
+                "AND json_extract(e.payload_json,'$.member_id')=? ORDER BY j.created_at DESC LIMIT 1",
+                (workspace_id, task.id, PERSON_EDIT_KIND, digest, actor.member_id)).fetchone()
+            if active is not None:
+                job = production_repo._job_run_from_row(active)
+            else:
+                job = production_repo.create_job_run(candidate, connection=conn)
+                production_repo.append_task_event(TaskEvent(
+                    id=f"event_{job.id}_start", workspace_id=workspace_id, task_id=task.id,
+                    job_id=job.id, event_type="person_edit_requested", payload=event_payload,
+                    created_at=job.created_at), connection=conn)
+        queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, "creation_job", job.id,
+            digest, key, SchedulePolicy()), actor)
+    except (PermissionError, KeyError, StopIteration, ValueError) as exc:
+        if job is not None:
+            with production_repo._connect() as conn:
+                conn.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,"
+                    "finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status='queued'",
+                    (str(exc), "人物编辑未安排成功，当前版本保持不变。", "修复原因后重新预览人物修改。",
+                     utc_now().isoformat(), utc_now().isoformat(), workspace_id, job.id))
+        raise HTTPException(status_code=403 if isinstance(exc, PermissionError) else 409, detail=str(exc)) from exc
+    runtime.wake()
+    return JSONResponse(status_code=202, content=CreationTaskEditQueuedResponse(
+        job_id=job.id, request_id=queued.id).model_dump())
+
+
+def _person_edit_stage_with_grant(workspace_id, task_id, context, proposal_id):
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
+    generated = _apply_person_segment_edit(workspace_id, task, proposal, grant_context=context)
+
+    def commit(connection):
+        current = production_repo.get_creation_task(workspace_id, task_id)
+        return _apply_person_segment_edit(workspace_id, current, proposal,
+            grant_context=context, generated_render=generated, connection=connection)
+    return commit
+
+
+def _apply_person_segment_edit(workspace_id, task, proposal, request=None, *,
+                               grant_context=None, generated_render=None, connection=None):
+    operation_type = proposal.operation["operation_type"]
+    operation_payload = proposal.operation["payload"]
+    planned_quality = production_repo.get_creation_plan(workspace_id, task.plan_id).lipsync_quality
+    chosen_quality = operation_payload.get("lipsync_quality", planned_quality)
+    if chosen_quality != planned_quality:
+        raise HTTPException(status_code=409, detail="口型档位与当前任务方案不一致，请重新预览")
+    person_provider = _lipsync_provider(chosen_quality)
+    required_strings = {
+        key: operation_payload.get(key)
+        for key in (
+            "clip_id",
+            "cue_id",
+            "narration_segment_id",
+            "person_profile_id",
+            "person_version",
+            "expected_asset_id",
+            "expected_segment_id",
+            "motion",
+            "expression",
+            "base_version_id",
+        )
+    }
+    if any(
+        not isinstance(value, str) or not value
+        for value in required_strings.values()
+    ):
+        raise HTTPException(status_code=409, detail="invalid person segment edit operation")
+    if task.current_timeline_version_id != required_strings["base_version_id"]:
+        raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+    try:
+        base_version = production_repo.get_timeline_version(
+            workspace_id, required_strings["base_version_id"]
+        )
+        montage = creation_task_montage_plan_from_payload(
+            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
+        )
+        clip = next(
+            item for item in montage.clips if item.id == required_strings["clip_id"]
+        )
+        cue = next(item for item in montage.cues if item.id == required_strings["cue_id"])
+        segment = production_repo.get_narration_segment(
+            workspace_id,
+            task.id,
+            required_strings["narration_segment_id"],
+        )
+    except (KeyError, StopIteration) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="person segment edit base no longer exists",
+        ) from exc
+    if (
+        clip.asset_id != required_strings["expected_asset_id"]
+        or clip.segment_id != required_strings["expected_segment_id"]
+        or clip.person_render_id != operation_payload.get("expected_person_render_id")
+        or cue.narration_segment_id != required_strings["narration_segment_id"]
+    ):
+        raise HTTPException(status_code=409, detail="person segment edit target has changed")
+    if operation_type == "RegeneratePersonRender" and clip.person_render_id is None:
+        raise HTTPException(status_code=409, detail="person render no longer exists")
+    if segment.audio_reference != operation_payload.get("expected_audio_reference"):
+        raise HTTPException(status_code=409, detail="配音已改变，请重新预览人物口型修改。")
+    try:
+        source_start, source_end = _person_source_range(workspace_id, task, montage, clip, segment)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if (source_start, source_end) != (operation_payload.get("source_start_seconds"), operation_payload.get("source_end_seconds")):
+        raise HTTPException(status_code=409, detail="配音时轴已改变，请重新预览人物修改。")
+    reuse_person_render_id = operation_payload.get("reuse_person_render_id")
+    if generated_render is not None:
+        render = generated_render
+    elif reuse_person_render_id is not None:
+        if (
+            operation_type != "ChangePersonSegment"
+            or not isinstance(reuse_person_render_id, str)
+            or not reuse_person_render_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="invalid person render reuse operation",
+            )
+        try:
+            render = production_repo.get_person_render(
+                workspace_id,
+                task.id,
+                reuse_person_render_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="person render reuse target no longer exists",
+            ) from exc
+        if (
+            render.status != "ready"
+            or render.person_profile_id != required_strings["person_profile_id"]
+            or render.person_version != required_strings["person_version"]
+            or render.narration_segment_id
+            != required_strings["narration_segment_id"]
+            or render.voice_profile_id != segment.voice_profile_id
+            or render.voice_version != segment.voice_version
+            or render.model_id != person_provider.model_id
+            or not _person_render_matches_narration(
+                render, segment, production_repo.list_transform_runs(workspace_id, task.id)
+            )
+            or render.motion != required_strings["motion"]
+            or render.expression != required_strings["expression"]
+            or _person_render_media_path(render) is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="person render reuse target has changed",
+            )
+    else:
+        if grant_context is None:
+            return _submit_person_edit(workspace_id, task, proposal, request)
+        render = _generate_creation_task_person_render_record(
+            workspace_id,
+            task.id,
+            CreationTaskPersonRenderRequest(
+                narration_segment_id=required_strings["narration_segment_id"],
+                person_profile_id=required_strings["person_profile_id"],
+                person_version=required_strings["person_version"],
+                motion=required_strings["motion"],
+                expression=required_strings["expression"],
+                lipsync_quality=chosen_quality,
+            ),
+            grant_context=grant_context,
+            regeneration_token=(
+                proposal.id
+                if operation_type == "RegeneratePersonRender"
+                else None
+            ),
+        )
+        return render
+    if grant_context is not None:
+        grant_context.check()
+    if render.status != "ready" or _person_render_media_path(render) is None:
+        raise _topic_failure_response(
+            status_code=503,
+            error=render.failure_reason or "person_render_failed",
+            reason=render.failure_reason or "人物口型片段没有生成可信输出。",
+            impact=render.impact or "当前时间线和成片保持不变。",
+            repair_action=render.repair_action or "检查人物口型运行环境后重试。",
+            retryable=True,
+        )
+    if source_end > (render.duration_seconds or 0) + 1 / 30:
+        raise HTTPException(status_code=409, detail="人物口型输出不足以覆盖所选配音范围。")
+    clip.source_start_seconds = source_start
+    clip.source_end_seconds = min(source_end, render.duration_seconds)
+    clip.person_render_id = render.id
+    clip.match_reasons = [
+        f"人物 {render.person_profile_id} · {render.person_version}",
+        (
+            "口型已按当前配音分段重新生成"
+            if operation_type == "RegeneratePersonRender"
+            else "口型使用当前配音分段生成"
+        ),
+    ]
+    clip.role = "a_roll"
+    clip.manually_selected = True
+    montage, _ = _prepare_changed_montage(
+        montage,
+        message=(
+            "所选人物片段已重新对口型；配音、字幕和其他镜头保持不变，可以重新渲染。"
+            if operation_type == "RegeneratePersonRender"
+            else "人物口型片段已写入当前版本；配音、字幕和其他镜头保持不变，可以重新渲染。"
+        ),
+    )
+    applied_payload = dict(operation_payload)
+    applied_payload["person_render_id"] = render.id
+    return _persist_typed_montage_edit(
+        workspace_id=workspace_id,
+        task=task,
+        proposal=proposal,
+        base_version=base_version,
+        updated_plan=montage,
+        operation_type=operation_type,
+        operation_payload=applied_payload,
+        connection=connection,
+    )
+
+
 @app.post(
     "/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm",
-    response_model=CreationTaskEditConfirmResponse,
+    response_model=CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse,
 )
 def confirm_creation_task_edit(
     task_id: str,
@@ -9004,177 +9260,8 @@ def confirm_creation_task_edit(
             cover_asset=carried_cover,
             updated_plan=montage,
         )
-    if operation_type in {"ChangePersonSegment", "RegeneratePersonRender"} and isinstance(
-        operation_payload, dict
-    ):
-        planned_quality = production_repo.get_creation_plan(workspace_id, task.plan_id).lipsync_quality
-        chosen_quality = operation_payload.get("lipsync_quality", planned_quality)
-        if chosen_quality != planned_quality:
-            raise HTTPException(status_code=409, detail="口型档位与当前任务方案不一致，请重新预览")
-        person_provider = _lipsync_provider(chosen_quality)
-        required_strings = {
-            key: operation_payload.get(key)
-            for key in (
-                "clip_id",
-                "cue_id",
-                "narration_segment_id",
-                "person_profile_id",
-                "person_version",
-                "expected_asset_id",
-                "expected_segment_id",
-                "motion",
-                "expression",
-                "base_version_id",
-            )
-        }
-        if any(
-            not isinstance(value, str) or not value
-            for value in required_strings.values()
-        ):
-            raise HTTPException(status_code=409, detail="invalid person segment edit operation")
-        if task.current_timeline_version_id != required_strings["base_version_id"]:
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
-        try:
-            base_version = production_repo.get_timeline_version(
-                workspace_id, required_strings["base_version_id"]
-            )
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
-            clip = next(
-                item for item in montage.clips if item.id == required_strings["clip_id"]
-            )
-            cue = next(item for item in montage.cues if item.id == required_strings["cue_id"])
-            segment = production_repo.get_narration_segment(
-                workspace_id,
-                task.id,
-                required_strings["narration_segment_id"],
-            )
-        except (KeyError, StopIteration) as exc:
-            raise HTTPException(
-                status_code=409,
-                detail="person segment edit base no longer exists",
-            ) from exc
-        if (
-            clip.asset_id != required_strings["expected_asset_id"]
-            or clip.segment_id != required_strings["expected_segment_id"]
-            or clip.person_render_id != operation_payload.get("expected_person_render_id")
-            or cue.narration_segment_id != required_strings["narration_segment_id"]
-        ):
-            raise HTTPException(status_code=409, detail="person segment edit target has changed")
-        if operation_type == "RegeneratePersonRender" and clip.person_render_id is None:
-            raise HTTPException(status_code=409, detail="person render no longer exists")
-        if segment.audio_reference != operation_payload.get("expected_audio_reference"):
-            raise HTTPException(status_code=409, detail="配音已改变，请重新预览人物口型修改。")
-        try:
-            source_start, source_end = _person_source_range(workspace_id, task, montage, clip, segment)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if (source_start, source_end) != (operation_payload.get("source_start_seconds"), operation_payload.get("source_end_seconds")):
-            raise HTTPException(status_code=409, detail="配音时轴已改变，请重新预览人物修改。")
-        reuse_person_render_id = operation_payload.get("reuse_person_render_id")
-        if reuse_person_render_id is not None:
-            if (
-                operation_type != "ChangePersonSegment"
-                or not isinstance(reuse_person_render_id, str)
-                or not reuse_person_render_id
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="invalid person render reuse operation",
-                )
-            try:
-                render = production_repo.get_person_render(
-                    workspace_id,
-                    task.id,
-                    reuse_person_render_id,
-                )
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail="person render reuse target no longer exists",
-                ) from exc
-            if (
-                render.status != "ready"
-                or render.person_profile_id != required_strings["person_profile_id"]
-                or render.person_version != required_strings["person_version"]
-                or render.narration_segment_id
-                != required_strings["narration_segment_id"]
-                or render.voice_profile_id != segment.voice_profile_id
-                or render.voice_version != segment.voice_version
-                or render.model_id != person_provider.model_id
-                or not _person_render_matches_narration(
-                    render, segment, production_repo.list_transform_runs(workspace_id, task.id)
-                )
-                or render.motion != required_strings["motion"]
-                or render.expression != required_strings["expression"]
-                or _person_render_media_path(render) is None
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="person render reuse target has changed",
-                )
-        else:
-            render = _generate_creation_task_person_render_record(
-                workspace_id,
-                task.id,
-                CreationTaskPersonRenderRequest(
-                    narration_segment_id=required_strings["narration_segment_id"],
-                    person_profile_id=required_strings["person_profile_id"],
-                    person_version=required_strings["person_version"],
-                    motion=required_strings["motion"],
-                    expression=required_strings["expression"],
-                    lipsync_quality=chosen_quality,
-                ),
-                regeneration_token=(
-                    proposal.id
-                    if operation_type == "RegeneratePersonRender"
-                    else None
-                ),
-            )
-        if render.status != "ready" or _person_render_media_path(render) is None:
-            raise _topic_failure_response(
-                status_code=503,
-                error=render.failure_reason or "person_render_failed",
-                reason=render.failure_reason or "人物口型片段没有生成可信输出。",
-                impact=render.impact or "当前时间线和成片保持不变。",
-                repair_action=render.repair_action or "检查人物口型运行环境后重试。",
-                retryable=True,
-            )
-        if source_end > (render.duration_seconds or 0) + 1 / 30:
-            raise HTTPException(status_code=409, detail="人物口型输出不足以覆盖所选配音范围。")
-        clip.source_start_seconds = source_start
-        clip.source_end_seconds = min(source_end, render.duration_seconds)
-        clip.person_render_id = render.id
-        clip.match_reasons = [
-            f"人物 {render.person_profile_id} · {render.person_version}",
-            (
-                "口型已按当前配音分段重新生成"
-                if operation_type == "RegeneratePersonRender"
-                else "口型使用当前配音分段生成"
-            ),
-        ]
-        clip.role = "a_roll"
-        clip.manually_selected = True
-        montage, _ = _prepare_changed_montage(
-            montage,
-            message=(
-                "所选人物片段已重新对口型；配音、字幕和其他镜头保持不变，可以重新渲染。"
-                if operation_type == "RegeneratePersonRender"
-                else "人物口型片段已写入当前版本；配音、字幕和其他镜头保持不变，可以重新渲染。"
-            ),
-        )
-        applied_payload = dict(operation_payload)
-        applied_payload["person_render_id"] = render.id
-        return _persist_typed_montage_edit(
-            workspace_id=workspace_id,
-            task=task,
-            proposal=proposal,
-            base_version=base_version,
-            updated_plan=montage,
-            operation_type=operation_type,
-            operation_payload=applied_payload,
-        )
+    if operation_type in {"ChangePersonSegment", "RegeneratePersonRender"} and isinstance(operation_payload, dict):
+        return _apply_person_segment_edit(workspace_id, task, proposal, request)
     if operation_type == "UpdateSubtitleCue" and isinstance(operation_payload, dict):
         cue_id = operation_payload.get("cue_id")
         text = operation_payload.get("text")
@@ -9613,7 +9700,7 @@ def preview_creation_task_exact_edit(
 
 @app.post(
     "/api/creation-tasks/{task_id}/edits/exact",
-    response_model=CreationTaskEditConfirmResponse,
+    response_model=CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse,
 )
 def apply_creation_task_exact_edit(
     task_id: str,
@@ -9632,7 +9719,7 @@ def apply_creation_task_exact_edit(
                 raw_command=(
                     "这里只重做口型，其他都不要动"
                     if payload.operation_type == "RegeneratePersonRender"
-                    else "这一段换成当前人物出镜并匹配口型"
+                    else "这一段换成当前人物出镜"
                 ),
                 context_stage="review" if task.stage == "review" else "montage",
                 selected_object_refs=[f"clip:{payload.clip_id}"],
@@ -15478,7 +15565,13 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
         job = _creation_job_for_request(workspace_id, request_id)
         if job is not None:
             try:
-                creation_execution.cancel(workspace_id, job.task_id, member_id=actor.member_id)
+                if job.kind == PERSON_EDIT_KIND:
+                    if job.status in {"queued", "interrupted", "running"}:
+                        production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
+                            failure_reason="user_cancelled", impact="目标镜头和当前版本保持不变。",
+                            repair_action="需要时重新预览人物修改。")
+                else:
+                    creation_execution.cancel(workspace_id, job.task_id, member_id=actor.member_id)
             except PermissionError as exc:
                 raise HTTPException(status_code=403, detail=str(exc)) from exc
             except ValueError as exc:
@@ -15582,7 +15675,7 @@ def _build_device_components(*, repository: ProductionRepository):
             presenter_budget=presenter_budget, presenter_cpu_render_budget=presenter_cpu_render_budget,
             presenter_models=_presenter_model_ids(), resolve_presenter_output=_person_render_media_path,
             stage_actions={"narration": _narration_stage_with_grant, "person_render": _person_stage_with_grant,
-                           "montage_plan": _montage_stage_with_grant},
+                           "montage_plan": _montage_stage_with_grant, "person_edit": _person_edit_stage_with_grant},
         ),
     }
     material_service = None

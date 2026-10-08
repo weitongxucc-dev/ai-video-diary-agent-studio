@@ -926,8 +926,21 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
                 assert permit["state"] == ledger["state"] == "free"
                 state.releases.append({"children": children, "lock": "EX|NB reacquired", "permit": permit, "ledger": ledger})
             scheduler.close()
+    from app.device_runtime import DeviceRuntime, OwnerRegistration
+    from app.creation_execution import CreationJobUnitExecutor
+    def forbidden(*args):
+        pytest.fail("local person edit must not start full creation")
+    executor = CreationJobUnitExecutor(state.production, render_action=forbidden,
+        render_is_valid=forbidden, stage_actions={"person_edit": main_module._person_edit_stage_with_grant})
+    scheduler = DeviceScheduler(state.production.database_path, tmp_path / "device.lock",
+        owners=owner, resources=resources, processes=HostProcessProbe())
+    state.runtime = DeviceRuntime(scheduler, {"creation_job": OwnerRegistration(owner, executor)}, poll_interval_seconds=1)
+    state.owner, state.actor, state.members = owner, actor, members
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "_creation_runtime", lambda: state.runtime)
     state.granted = granted
     yield state
+    assert state.runtime.stop(1)
     (tmp_path / "release-evidence.json").write_text(json.dumps(state.releases, indent=2))
 
 
@@ -937,8 +950,13 @@ def _assert_unpermitted_person_confirm(state, proposal):
     root = Path(main_module.settings.video_output_path)
     outputs = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     calls = list(state.provider.output_cache_keys)
-    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal['id']}/confirm")
-    assert response.status_code == 409 and "专属设备许可" in response.text, response.text
+    budget = state.owner.presenter_budget
+    state.owner.presenter_budget = None
+    try:
+        response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal['id']}/confirm")
+        assert response.status_code == 409 and "预算尚未标定" in response.text, response.text
+    finally:
+        state.owner.presenter_budget = budget
     assert state.provider.output_cache_keys == calls
     with state.production._connect() as conn:
         assert tuple(conn.iterdump()) == before
@@ -2937,7 +2955,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     assert preview_payload["proposal"]["invalidated_refs"] == old_output_refs
     assert len(production.list_timeline_versions(state.workspace_id, state.task.id)) == 1
 
-    # Public regeneration still lacks a queued permit: reject without any generation writes.
+    # An uncalibrated dedicated budget still rejects before queue or generation writes.
     _assert_unpermitted_person_confirm(state, preview_payload['proposal'])
     # Internal generation consumes an actual original-owner Grant. It is not public edit completion.
     with state.granted() as context:
@@ -5397,3 +5415,202 @@ def test_v3_natural_proposal_applies_once_without_media(person_render_edit_state
     version = state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id
     assert state.client.post(url).status_code == 409
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == version
+
+
+def _queued_person_edit(state, *, exact=False, change=False):
+    base = f"/api/creation-tasks/{state.task.id}"
+    assert state.client.get(base).status_code == 200
+    if exact:
+        response = state.client.post(base + "/edits/exact", json={
+            "operation_type": "ChangePersonSegment" if change else "RegeneratePersonRender",
+            "clip_id": "clip-person-target"})
+        proposal = state.production.get_task_event(state.workspace_id,
+            f"event_{response.json()['job_id']}_start").payload["edit_proposal_id"] if response.status_code == 202 else None
+    else:
+        preview = state.client.post(base + "/edits/preview", json={
+            "raw_command": "这一段换成当前人物出镜" if change else "这里只重做口型，其他都不要动",
+            "context_stage": "review", "selected_object_refs": ["clip:clip-person-target"]})
+        assert preview.status_code == 200, preview.text
+        proposal = preview.json()["proposal"]["id"]
+        response = state.client.post(base + f"/edits/{proposal}/confirm")
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "queued"
+    assert set(response.json()) == {"status", "job_id", "request_id"}
+    assert state.provider.output_cache_keys == []
+    return response.json(), proposal
+
+
+def _revoke_person_edit_authorization(state):
+    person = state.production.get_person_profile(state.workspace_id,
+        state.old_render.person_profile_id, state.old_render.person_version)
+    state.production.save_authorization(replace(person.authorization, version="v2-revoked", status="revoked"))
+
+
+def _person_edit_versions(state):
+    return state.production.list_timeline_versions(state.workspace_id, state.task.id)
+
+
+@pytest.mark.parametrize("exact,change", [(False, False), (True, False), (True, True)])
+def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edit_state, exact, change):
+    state = permitted_person_edit_state
+    assert state.client.get(f"/api/creation-tasks/{state.task.id}").status_code == 200
+    base_version = main_module._ensure_montage_base_version(state.workspace_id,
+        state.production.get_creation_task(state.workspace_id, state.task.id), state.montage).id
+    track = state.production.create_subtitle_track(SubtitleTrack(
+        id="retained-person-caption", workspace_id=state.workspace_id, task_id=state.task.id,
+        timeline_version_id=base_version, language="zh-CN", source_language=None,
+        style={"font_size": 40}, cues=[ProductionSubtitleCue(id="caption", source_cue_id=None,
+            text="保留当前字幕", start_seconds=0, end_seconds=4)],
+        generation_method="timeline", model_id=None, artifact_ref=None, transform_id=None, status="unavailable",
+        failure_reason="合成字幕尚无产物", impact="保留字幕文字与时间", repair_action="后续核验字幕产物"))
+    narration_before = state.production.list_narration_segments(state.workspace_id, state.task.id)
+    queued, proposal_id = _queued_person_edit(state, exact=exact, change=change)
+    assert len(_person_edit_versions(state)) == 1
+    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    duplicate = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal_id}/confirm")
+    assert duplicate.status_code == 202 and duplicate.json() == queued
+    assert state.runtime.run_once()
+    job = state.production.get_job_run(state.workspace_id, queued["job_id"])
+    assert job.status == "succeeded"
+    assert len(state.provider.output_cache_keys) == 1
+    assert len(_person_edit_versions(state)) == 2
+    plan = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
+    assert plan.clips[0].person_render_id != state.old_render.id
+    assert asdict(plan.clips[1]) == asdict(state.montage.clips[1])
+    assert [asdict(cue) for cue in plan.cues] == [asdict(cue) for cue in state.montage.cues]
+    assert plan.narration_audio_path == state.montage.narration_audio_path
+    assert state.production.list_narration_segments(state.workspace_id, state.task.id) == narration_before
+    tracks = state.production.list_subtitle_tracks(state.workspace_id, state.task.id,
+        timeline_version_id=state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id)
+    assert len(tracks) == 1
+    assert tracks[0].cues == track.cues and tracks[0].style == track.style
+    assert (tracks[0].status, tracks[0].artifact_ref, tracks[0].transform_id) == (track.status, track.artifact_ref, track.transform_id)
+    assert (tracks[0].failure_reason, tracks[0].impact, tracks[0].repair_action) == (track.failure_reason, track.impact, track.repair_action)
+    assert Path(main_module._person_render_media_path(state.old_render)).read_bytes() == b"old-person-render"
+    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "confirmed"
+    duplicate = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal_id}/confirm")
+    assert duplicate.status_code == 409
+    assert not state.runtime.run_once()
+    assert len(state.provider.output_cache_keys) == 1
+    with state.production._connect() as conn:
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] == "done"
+
+
+@pytest.mark.parametrize("block", ["stale", "revoke", "cancel"])
+def test_person_edit_blocked_before_grant_never_calls_provider(permitted_person_edit_state, block):
+    state = permitted_person_edit_state
+    queued, proposal_id = _queued_person_edit(state)
+    if block == "stale":
+        result = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact",
+            json={"operation_type": "SetClipLock", "clip_id": state.montage.clips[1].id, "locked": True})
+        assert result.status_code == 200, result.text
+    elif block == "revoke":
+        _revoke_person_edit_authorization(state)
+    else:
+        result = state.client.post(f"/api/device/queue/{queued['request_id']}/cancel")
+        assert result.status_code == 200, result.text
+    before = [asdict(version) for version in _person_edit_versions(state)]
+    assert not state.runtime.run_once()
+    assert state.provider.output_cache_keys == []
+    assert [asdict(version) for version in _person_edit_versions(state)] == before
+    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status != "succeeded"
+    with state.production._connect() as conn:
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] in {"blocked", "cancelled"}
+
+
+@pytest.mark.parametrize("block", ["failed", "stale", "revoke", "cancel"])
+def test_person_edit_loses_permission_or_fails_without_committing_version(permitted_person_edit_state, monkeypatch, block):
+    state = permitted_person_edit_state
+    queued, proposal_id = _queued_person_edit(state)
+    before = [asdict(version) for version in _person_edit_versions(state)]
+    original = state.provider.render
+    def interrupted(**kwargs):
+        kwargs["grant_context"].check()
+        if block == "failed":
+            raise RuntimeError("synthetic provider failed")
+        if block == "stale":
+            result = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact",
+                json={"operation_type": "SetClipLock", "clip_id": state.montage.clips[1].id, "locked": True})
+            assert result.status_code == 200
+        elif block == "revoke":
+            _revoke_person_edit_authorization(state)
+        else:
+            result = state.client.post(f"/api/device/queue/{queued['request_id']}/cancel")
+            assert result.status_code == 200, result.text
+        return original(**kwargs)
+    monkeypatch.setattr(state.provider, "render", interrupted)
+    assert state.runtime.run_once()
+    job = state.production.get_job_run(state.workspace_id, queued["job_id"])
+    assert job.status == ("cancelled" if block == "cancel" else "failed")
+    assert job.failure_reason
+    versions = _person_edit_versions(state)
+    assert len(versions) == len(before) + (1 if block == "stale" else 0)
+    plan = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
+    assert plan.clips[0].person_render_id == state.old_render.id
+    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    with state.production._connect() as conn:
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] in {"failed", "cancelled"}
+
+
+def test_person_edit_publication_rolls_back_with_failed_job(permitted_person_edit_state, monkeypatch):
+    state = permitted_person_edit_state
+    queued, proposal_id = _queued_person_edit(state)
+    before = [asdict(version) for version in _person_edit_versions(state)]
+    original = state.production.confirm_edit_proposal
+    def fail_after_write(*args, **kwargs):
+        original(*args, **kwargs)
+        assert kwargs["connection"] is not None
+        raise RuntimeError("synthetic checkpoint publication failed")
+    monkeypatch.setattr(state.production, "confirm_edit_proposal", fail_after_write)
+    assert state.runtime.run_once()
+    assert len(state.provider.output_cache_keys) == 1
+    assert [asdict(version) for version in _person_edit_versions(state)] == before
+    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    with state.production._connect() as conn:
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] == "failed"
+
+
+def test_failed_person_edit_requires_new_preview_and_reuses_concurrent_active_request(permitted_person_edit_state, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    state = permitted_person_edit_state
+    queued, proposal_id = _queued_person_edit(state)
+    original = state.provider.render
+    def failed(**kwargs):
+        kwargs["grant_context"].check()
+        raise RuntimeError("synthetic provider failed once")
+    monkeypatch.setattr(state.provider, "render", failed)
+    assert state.runtime.run_once()
+    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    assert len(_person_edit_versions(state)) == 1
+    base = f"/api/creation-tasks/{state.task.id}"
+    assert state.client.post(base + f"/edits/{proposal_id}/confirm").status_code == 409
+    monkeypatch.setattr(state.provider, "render", original)
+    # Two explicit fresh exact previews, released simultaneously, still create
+    # only one active job/event/request under the existing SQLite transaction.
+    def retry():
+        return state.client.post(base + "/edits/exact", json={
+            "operation_type": "RegeneratePersonRender", "clip_id": "clip-person-target"})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: retry(), range(2)))
+    assert all(item.status_code == 202 for item in responses), [item.text for item in responses]
+    assert responses[0].json() == responses[1].json()
+    retried = responses[0].json()
+    assert retried["job_id"] != queued["job_id"]
+    assert state.provider.output_cache_keys == []
+    # Repeating the failed old proposal cannot join or revive the new attempt.
+    assert state.client.post(base + f"/edits/{proposal_id}/confirm").status_code == 409
+    with state.production._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM job_runs WHERE kind='creation_task_person_edit'").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM task_events WHERE event_type='person_edit_requested'").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 2
+    assert state.runtime.run_once()
+    assert state.production.get_job_run(state.workspace_id, retried["job_id"]).status == "succeeded"
+    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    assert len(_person_edit_versions(state)) == 2
+    assert len(state.provider.output_cache_keys) == 1
+    assert not state.runtime.run_once()

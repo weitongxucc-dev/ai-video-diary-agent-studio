@@ -10,6 +10,7 @@ import re
 import sqlite3
 import subprocess
 import wave
+from contextlib import nullcontext
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -5609,9 +5610,9 @@ class ProductionRepository:
             ).fetchall()
         return [self._timeline_version_from_row(row) for row in rows]
 
-    def create_job_run(self, run: JobRun) -> JobRun:
+    def create_job_run(self, run: JobRun, *, connection: sqlite3.Connection | None = None) -> JobRun:
         _validate_new_job_run(run)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, run.workspace_id, run.task_id)
             existing = conn.execute(
                 """
@@ -5656,7 +5657,7 @@ class ProductionRepository:
                         raise ValueError("幂等键已绑定到不同的任务输入") from exc
                     return persisted
                 raise ValueError("任务运行记录 ID 已存在") from exc
-        return self.get_job_run(run.workspace_id, run.id)
+        return run if connection is not None else self.get_job_run(run.workspace_id, run.id)
 
     def get_job_run(self, workspace_id: str, job_id: str) -> JobRun:
         with self._connect() as conn:
@@ -5938,9 +5939,9 @@ class ProductionRepository:
             ).fetchall()
         return [self._artifact_record_from_row(row) for row in rows]
 
-    def append_task_event(self, event: TaskEvent) -> TaskEvent:
+    def append_task_event(self, event: TaskEvent, *, connection: sqlite3.Connection | None = None) -> TaskEvent:
         _validate_task_event(event)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, event.workspace_id, event.task_id)
             if event.job_id is not None:
                 job = conn.execute(
@@ -5989,7 +5990,7 @@ class ProductionRepository:
                         raise ValueError("任务事件 ID 已存在，且领域字段不一致") from exc
                     return persisted
                 raise ValueError("任务事件 ID 已存在") from exc
-        return self.get_task_event(event.workspace_id, event.id)
+        return event if connection is not None else self.get_task_event(event.workspace_id, event.id)
 
     def get_task_event(self, workspace_id: str, event_id: str) -> TaskEvent:
         with self._connect() as conn:
@@ -6870,8 +6871,9 @@ class ProductionRepository:
         narration_artifact: NarrationArtifactRecord | None = None,
         subtitle_tracks: list[SubtitleTrack] | None = None,
         cover_asset: CoverAsset | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
-        """Atomically confirm one proposal and persist its applied domain facts."""
+        """Confirm applied facts; a supplied permit transaction owns the commit."""
         _validate_edit_operation(operation)
         _validate_timeline_version(result_version)
         if operation.status != "applied":
@@ -6941,7 +6943,7 @@ class ProductionRepository:
                 raise ValueError("确认编辑后的混剪计划状态与操作类型不一致")
             _json_object(montage_payload)
 
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             task = self._require_creation_task(conn, workspace_id, task_id)
             proposal_row = conn.execute(
                 """
@@ -7182,6 +7184,8 @@ class ProductionRepository:
                 ),
             )
 
+        if connection is not None:
+            return replace(proposal, status="confirmed", updated_at=now), operation, result_version, task
         return (
             self.get_edit_proposal(workspace_id, proposal_id),
             self.get_edit_operation(workspace_id, operation.id),

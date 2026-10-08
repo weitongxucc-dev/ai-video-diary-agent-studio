@@ -28,6 +28,7 @@ import type {
   CreationTaskMontage,
   CreationTaskExactEditInput,
   CreationTaskEditConfirmResponse,
+  CreationTaskEditResult,
   CreationTaskEditPreviewResponse,
   CreationTaskAssistantTurnResponse,
   CreationTaskAssistantHistory,
@@ -749,8 +750,8 @@ export function createCreationTaskMontagePlan(taskId: string): Promise<CreationT
 export function applyCreationTaskExactEdit(
   taskId: string,
   input: CreationTaskExactEditInput,
-): Promise<CreationTaskEditConfirmResponse> {
-  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+): Promise<CreationTaskEditResult> {
+  return creationPlanRequest<CreationTaskEditResult>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`,
     { method: "POST", body: JSON.stringify(input) },
   );
@@ -838,8 +839,8 @@ export function previewCompoundSelection(taskId:string,proposalId:string,selecti
 export function confirmCreationTaskEdit(
   taskId: string,
   proposalId: string,
-): Promise<CreationTaskEditConfirmResponse> {
-  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+): Promise<CreationTaskEditResult> {
+  return creationPlanRequest<CreationTaskEditResult>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`,
     { method: "POST", body: JSON.stringify({}) },
   );

@@ -133,12 +133,15 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setPending("confirm");
     setError(null);
     try {
-      await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
+      const result = await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
       if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
       setTaskPreview(null);
       setTaskPreviewOpen(false);
-      setUndoReady(true);
-      setTurns((current) => [...current, { command: "确认修改", reply: "修改已完成。" }].slice(-8));
+      const queued = "status" in result;
+      setUndoReady(!queued);
+      setTurns((current) => [...current, { command: "确认修改", reply: queued
+        ? "人物修改已排队，等待设备许可和实际完成；当前版本保持不变，请查看任务作业进度。"
+        : "修改已完成。" }].slice(-8));
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current) {

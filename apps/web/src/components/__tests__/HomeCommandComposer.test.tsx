@@ -182,6 +182,32 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask).not.toHaveBeenCalled();
   });
 
+  it("keeps a queued person proposal pending without enabling an uncommitted undo", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "产品介绍" } as CreationTask;
+    const onTaskUpdated = vi.fn();
+    mocks.editAsk.mockResolvedValue({
+      reply: "人物修改待确认。", provider: "minimax", model: "MiniMax-M3",
+      edit_preview: { proposal: {
+        id: "proposal-person", summary: "重做所选人物口型", invalidated_refs: [], external_effects: [],
+        preview: { before: { label: "原镜头", detail: "当前版本" }, after: { label: "人物口型", detail: "待生成" } },
+      } },
+    });
+    mocks.confirmEdit.mockResolvedValue({ status: "queued", job_id: "person-job", request_id: "device-request" });
+    render(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={task} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "制作指令" }), { target: { value: "这里只重做口型，其他都不要动" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改预览" });
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    expect(await screen.findByText("人物修改已排队，等待设备许可和实际完成；当前版本保持不变，请查看任务作业进度。")).toBeInTheDocument();
+    expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-person");
+    expect(onTaskUpdated).toHaveBeenCalledOnce();
+    expect(screen.queryByText("修改已完成。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    expect(mocks.undoEdit).not.toHaveBeenCalled();
+  });
+
   it("does not show an old task reply after switching tasks", async () => {
     configuredModel();
     let finish: (value: unknown) => void = () => undefined;

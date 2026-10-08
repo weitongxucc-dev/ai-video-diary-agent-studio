@@ -1334,6 +1334,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [error, setError] = useState<ReturnType<typeof errorDetails> | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingPersonEditJobId, setPendingPersonEditJobId] = useState<string | null>(null);
   // 共享/收回只用接口回读的值：保存失败就保持原样，不显示成已保存。
   async function changeTaskVisibility(next: "private" | "shared") {
     setVisibilityBusy(true);
@@ -1926,13 +1927,24 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  async function personEditSettled(status: string) {
+    await refresh(true);
+    setPendingPersonEditJobId(null);
+    setNotice(status === "succeeded" ? "人物修改已完成，目标镜头和当前版本已更新；成片尚未重新生成。"
+      : "人物修改未完成，当前版本保持不变；请查看作业原因。");
+  }
+
   async function confirmEdit() {
     if (!editPreview) return;
     setBusy("edit-confirm");
     setError(null);
     setNotice(null);
     try {
-      await confirmCreationTaskEdit(task.id, editPreview.proposal.id);
+      const result = await confirmCreationTaskEdit(task.id, editPreview.proposal.id);
+      if ("status" in result) {
+        setPendingPersonEditJobId(result.job_id);
+        setNotice("人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。");
+      }
       invalidateEditPreview();
       setEditCommand("");
       await refresh(true);
@@ -2045,7 +2057,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setEditPreview(await previewCreationTaskExactEdit(task.id, input));
         saved = true;
       } else {
-        await applyCreationTaskExactEdit(task.id, input);
+        const result = await applyCreationTaskExactEdit(task.id, input);
+        if ("status" in result) {
+          setPendingPersonEditJobId(result.job_id);
+          setNotice("人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。");
+          await refresh(true);
+          return false;
+        }
         saved = true;
         setClipDrafts(current => {
           const next = { ...current };
@@ -2203,7 +2221,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
         {error && (isEditor || activeView === "subtitle_cover" || activeView === "review") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
         {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span>{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(async () => { const preview = await previewCreationExecution(task.id); setExecutionPreview(preview); return getCreationExecution(task.id); })} type="button">重新核对文案和制作要求</button> : null}</div> : null}
-        {!isEditor ? <JobProgressPanel key={task.id} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
+        {!isEditor ? <JobProgressPanel key={task.id} pendingPersonEditJobId={pendingPersonEditJobId} onPersonEditSettled={personEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
         {task.confirmed_script_id && (executionPreview || execution?.job) && (["script", "narration", "montage", "review"].includes(activeView)) ? <CreationExecutionPanel compact={isEditor && Boolean(workspace.montage)} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {execution?.job && !["script", "narration", "montage", "review"].includes(activeView) ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? execution.video_ready ? "成片已生成" : "成片产物需要检查" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
 
@@ -2226,7 +2244,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
-        {isEditor ? <JobProgressPanel key={task.id} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
+        {isEditor ? <JobProgressPanel key={task.id} pendingPersonEditJobId={pendingPersonEditJobId} onPersonEditSettled={personEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
@@ -2264,6 +2282,7 @@ function jobKindLabel(kind: string): string {
   if (kind === "creation_task_montage_render") return "成片输出";
   if (kind === "creation_task_execution") return "整条制作";
   if (kind === "person_render") return "人物形象生成";
+  if (kind === "creation_task_person_edit") return "局部人物修改";
   if (kind === "material_analysis") return "素材分析";
   return "其他作业";
 }
@@ -2273,7 +2292,14 @@ function jobKindLabel(kind: string): string {
  * 作业还在排队或执行时按固定间隔重新读取，结束后停止；切换任务时丢弃旧结果。
  * 读不到就明说并给出重试，不静默当成没有作业。
  */
-function JobProgressPanel({ taskId, refreshToken }: { taskId: string; refreshToken: string }) {
+function JobProgressPanel({ taskId, refreshToken, pendingPersonEditJobId, onPersonEditSettled }: {
+  taskId: string;
+  refreshToken: string;
+  pendingPersonEditJobId: string | null;
+  onPersonEditSettled: (status: string) => Promise<void>;
+}) {
+  const settledCallback = useRef(onPersonEditSettled);
+  settledCallback.current = onPersonEditSettled;
   const [progress, setProgress] = useState<TaskJobProgress | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -2288,9 +2314,14 @@ function JobProgressPanel({ taskId, refreshToken }: { taskId: string; refreshTok
         if (!active) return;
         setProgress(result);
         setReadError(null);
+        const edit = result.items.find(item => item.id === pendingPersonEditJobId);
+        if (edit && ["succeeded", "failed", "cancelled"].includes(edit.status)) {
+          await settledCallback.current(edit.status);
+          if (!active) return;
+        }
         // 只有还在排队或执行的作业才继续读；结束或失败后停止轮询。
         const status = result.current?.status;
-        if (status === "queued" || status === "running") {
+        if (status === "queued" || status === "running" || edit?.status === "queued" || edit?.status === "running" || edit?.status === "interrupted") {
           timer = window.setTimeout(() => void read(), 2500);
         }
       } catch (cause) {
@@ -2301,7 +2332,7 @@ function JobProgressPanel({ taskId, refreshToken }: { taskId: string; refreshTok
     void read();
     return () => { active = false; window.clearTimeout(timer); };
     // 开始/重试制作后作业事实会变，重新读一次；空态不会一直轮询。
-  }, [taskId, refreshToken, retryTick]);
+  }, [taskId, refreshToken, retryTick, pendingPersonEditJobId]);
   if (readError && !progress) return <div role="alert" className={styles.blocker}>
     <AlertCircle size={17} />
     <span>作业进度暂时读不到：{readError}</span>

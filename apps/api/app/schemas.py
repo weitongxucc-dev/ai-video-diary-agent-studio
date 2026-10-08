@@ -1634,6 +1634,12 @@ class CreationTaskEditConfirmResponse(BaseModel):
     narration: CreationTaskNarrationResponse | None = None
 
 
+class CreationTaskEditQueuedResponse(BaseModel):
+    status: Literal["queued"] = "queued"
+    job_id: str
+    request_id: str
+
+
 class CreationPlanPreviewResponse(BaseModel):
     template_id: str | None = None
     template_version: int | None = None

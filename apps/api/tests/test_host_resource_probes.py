@@ -862,8 +862,9 @@ def test_presenter_probe_keeps_dedicated_caps_unknown_and_measured_floor(tmp_pat
     assert probe._sample(composition).reason == "render_budget_or_execution_mode_unavailable"
 
 
-def test_person_model_child_rejects_non_host_probe_before_exec(tmp_path):
-    grant = Grant("request", "local", "creation_job", "job", "person_render:input", "digest", 1, 1, "token", tmp_path / "db")
+@pytest.mark.parametrize("unit_key", ["person_render:input", "person_edit:input"])
+def test_person_model_child_rejects_non_host_probe_before_exec(tmp_path, unit_key):
+    grant = Grant("request", "local", "creation_job", "job", unit_key, "digest", 1, 1, "token", tmp_path / "db")
     scheduler = RecordingScheduler()
     scheduler.assert_grant = lambda current: None
     scheduler.resources = SimpleNamespace(scene_runtime_limits=lambda grant: None)

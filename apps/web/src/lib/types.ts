@@ -1665,6 +1665,14 @@ export type CreationTaskEditConfirmResponse = {
   narration?: CreationTaskNarration | null;
 };
 
+export type CreationTaskEditQueuedResponse = {
+  status: "queued";
+  job_id: string;
+  request_id: string;
+};
+export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
+
+
 export type CreationPlanPreview = CreationPlanInput & {
   template_settings?: VideoTemplateSettings;
   name: string;

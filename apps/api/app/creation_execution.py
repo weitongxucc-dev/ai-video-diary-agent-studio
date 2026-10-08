@@ -27,6 +27,7 @@ from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 
 
 KIND = "creation_task_execution"
+PERSON_EDIT_KIND = "creation_task_person_edit"
 STAGES = ("narration", "montage_plan", "render")
 DEVICE_STAGES = ("narration", "person_render", "montage_plan", "render")
 DEVICE_OWNER_TYPE = "creation_job"
@@ -214,6 +215,52 @@ def presenter_stage_facts(repository, task, script, plan, budget, models):
                 "files": facts, "resources": resources}
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
     return f"person_render:{digest}", resources
+
+
+def person_edit_digest(operation):
+    return hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+
+
+def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
+    """Seal one selected person segment, never the whole presenter stage."""
+    if budget is None:
+        raise ValueError("人物制作预算尚未标定，请配置 DEVICE_PRESENTER_* 标定值")
+    operation = proposal.operation
+    payload = operation["payload"]
+    if (proposal.task_id != task.id or proposal.status != "proposed"
+            or operation["operation_type"] not in {"ChangePersonSegment", "RegeneratePersonRender"}
+            or task.current_timeline_version_id != payload["base_version_id"]):
+        raise ValueError("人物编辑提案或时间线已变化，请重新预览")
+    montage = creation_task_montage_plan_from_payload(repository.get_creation_task_montage_plan(task.workspace_id, task.id))
+    clip = next(item for item in montage.clips if item.id == payload["clip_id"])
+    cue = next(item for item in montage.cues if item.id == payload["cue_id"])
+    segment = repository.get_narration_segment(task.workspace_id, task.id, payload["narration_segment_id"])
+    if (clip.asset_id != payload["expected_asset_id"] or clip.segment_id != payload["expected_segment_id"]
+            or clip.person_render_id != payload["expected_person_render_id"]
+            or cue.narration_segment_id != segment.id or segment.script_id != task.confirmed_script_id
+            or segment.status != "ready" or segment.audio_reference != payload["expected_audio_reference"]
+            or payload.get("lipsync_quality", plan.lipsync_quality) != plan.lipsync_quality):
+        raise ValueError("人物编辑对象或配音已变化，请重新预览")
+    person = repository.get_person_profile(task.workspace_id, payload["person_profile_id"], payload["person_version"])
+    audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+    request = repository.resolve_avatar_lipsync_request(
+        workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
+        voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
+        audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
+        motion=payload["motion"], expression=payload["expression"],
+        authorization_id=person.authorization.id, authorization_version=person.authorization.version,
+        model_id=models[plan.lipsync_quality])
+    if _authorization_failure(request) is not None:
+        raise PermissionError("人物或声音授权已失效，不能生成或复用")
+    files = presenter_input_facts(request)
+    resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
+                 "section_count": 1, "input_bytes": sum(item["size_bytes"] for item in files),
+                 "duration_seconds": segment.duration_seconds,
+                 "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
+                 "timeout_seconds": budget.max_timeout_seconds}
+    manifest = [operation, asdict(segment), asdict(request), files, resources]
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    return f"person_edit:{digest}", resources
 
 
 def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
@@ -452,6 +499,11 @@ class CreationJobOwnerVerifier:
             key = "montage_plan:" + hashlib.sha256(json.dumps([key, manifest], sort_keys=True, default=str).encode()).hexdigest()
         return key, resources
 
+    def edit_facts(self, job, task, event, plan):
+        proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+        return person_edit_stage_facts(self.repository, task, proposal, plan,
+                                      self.presenter_budget, self.presenter_models)
+
     def person_valid(self, task):
         script = self.repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
         plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
@@ -508,7 +560,11 @@ class CreationJobOwnerVerifier:
                 raise PermissionError("制作作业原身份不匹配")
             if self.verify_identity is not None and self.verify_identity(original) != "ready":
                 raise PermissionError("制作许可身份失效或事实源不可用")
-            if verdict == "ready" and stage == "render":
+            if verdict == "ready" and job.kind == PERSON_EDIT_KIND:
+                key, resources = self.edit_facts(job, task, event, plan)
+                if intent.unit_key != key:
+                    raise PermissionError("人物编辑输入已变化，请重新安排")
+            elif verdict == "ready" and stage == "render":
                 key, resources = self.render_facts(conn, task, plan)
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
@@ -533,12 +589,21 @@ class CreationJobOwnerVerifier:
             resources=resources,
         )
 
-    @staticmethod
-    def _check_facts(job, task, event, script, plan, stage: str, member_id: str | None) -> str:
+    def _check_facts(self, job, task, event, script, plan, stage: str, member_id: str | None) -> str:
         if (not member_id or event.get("member_id") != member_id
                 or job.workspace_id != task.workspace_id or script.workspace_id != job.workspace_id
                 or plan.workspace_id != job.workspace_id or script.task_id != job.task_id):
             return "unauthorized"
+        if job.kind == PERSON_EDIT_KIND:
+            if (stage != "person_edit" or job.status not in {"queued", "interrupted", "running"}
+                    or event.get("input_digest") != job.input_digest
+                    or event.get("script_id") != script.id or event.get("plan_id") != task.plan_id
+                    or task.confirmed_script_id != script.id or script.selection_status != "confirmed"
+                    or plan.creation_task_id != task.id or plan.status != "confirmed"
+                    or event.get("revision_digest") != revision_digest(script, plan)):
+                return "stale"
+            proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+            return "ready" if person_edit_digest(proposal.operation) == job.input_digest else "stale"
         if (job.kind != KIND or stage not in DEVICE_STAGES or job.status not in {"queued", "interrupted", "running"}
                 or event.get("input_digest") != job.input_digest
                 or event.get("script_id") != script.id or event.get("plan_id") != task.plan_id
@@ -571,13 +636,15 @@ class CreationJobOwnerVerifier:
             if identity != "ready":
                 return identity
         try:
-            if stage == "render":
+            if job.kind == PERSON_EDIT_KIND:
+                key, resources = self.edit_facts(job, task, event, plan)
+            elif stage == "render":
                 key, resources = self.render_facts(conn, task, plan, request=request)
             else:
                 key, resources = self.stage_facts(task, script, plan, stage)
         except PermissionError:
             return "unauthorized"
-        except (KeyError, OSError, ValueError):
+        except (KeyError, StopIteration, OSError, ValueError):
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
 
@@ -871,9 +938,85 @@ class CreationJobUnitExecutor:
             with self._cancellation_lock:
                 self._cancellations.pop(grant.request_id, None)
 
+    def _person_edit_checkpoint(self, conn, grant, status, *, commit=None, reason=None):
+        row = conn.execute("SELECT task_id,status FROM job_runs WHERE workspace_id=? AND id=? AND kind=?",
+                           (grant.workspace_id, grant.owner_id, PERSON_EDIT_KIND)).fetchone()
+        if row is None or row["status"] not in {"running", "cancelled"}:
+            raise ValueError("人物编辑作业不在可提交状态")
+        if row["status"] == "cancelled" and status != "cancelled":
+            raise ValueError("已取消的人物编辑不能提交版本")
+        operation = commit(conn) if status == "succeeded" else None
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("UPDATE job_runs SET status=?,progress=?,failure_reason=?,impact=?,repair_action=?,"
+                     "finished_at=?,updated_at=? WHERE workspace_id=? AND id=?",
+                     (status, 100 if status == "succeeded" else 0, reason,
+                      None if status == "succeeded" else "目标镜头和当前时间线保持不变。",
+                      None if status == "succeeded" else "修复原因后重新预览人物修改。",
+                      now, now, grant.workspace_id, grant.owner_id))
+        event_id = f"event_{grant.owner_id}_person_edit_{status}"
+        payload = {"status": status}
+        if operation is not None:
+            payload.update(operation_id=operation.id, result_version_id=operation.result_version_id)
+        if reason:
+            payload["reason"] = reason
+        conn.execute("INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) "
+                     "VALUES (?,?,?,?,?,?,?)", (event_id, grant.workspace_id, row["task_id"], grant.owner_id,
+                     "person_edit_finished", json.dumps(payload, ensure_ascii=False), now))
+        return event_id
+
+    def _execute_person_edit(self, grant, scheduler):
+        from app.granted_subprocess import GrantedCommandCancelled
+        token = set_workspace_context(grant.workspace_id)
+        cancellation = threading.Event()
+        with self._cancellation_lock:
+            self._cancellations[grant.request_id] = cancellation
+        try:
+            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+            with self.repository._connect() as conn:
+                row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+                permit = conn.execute("SELECT granted_at_utc FROM device_permit WHERE id=1").fetchone()
+            resources = json.loads(row["resources_json"])
+            if resources.get("kind") != "creation_person_render" or not permit["granted_at_utc"]:
+                raise PermissionError("人物编辑缺少专属资源许可")
+            elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
+            context = CreationStageGrantContext(scheduler, grant,
+                time.monotonic() + resources["timeout_seconds"] - elapsed,
+                resources["max_output_bytes"], resources["threads"], cancellation)
+            if job.status == "running":
+                with self.repository._connect() as conn:
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
+                                 (job.workspace_id, job.id))
+            if job.status != "cancelled":
+                job = self.repository.claim_job_run(job.workspace_id, job.id)
+            context.check()
+            event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
+            commit = self.stage_actions["person_edit"](job.workspace_id, job.task_id, context, event.payload["edit_proposal_id"])
+            context.check()
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "succeeded", commit=commit))
+        except RecoveryBlocked:
+            raise  # Unknown child/permit ownership must retain the original recovery gate.
+        except Exception as exc:
+            cancelled = (isinstance(exc, GrantedCommandCancelled) or cancellation.is_set()
+                         or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == "cancelled")
+            if cancelled:
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                    checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "cancelled", reason="user_cancelled"),
+                    cancelled=True)
+            else:
+                reason = str(exc)
+                scheduler.fail_unit(grant, reason="person_edit_failed",
+                    failure_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "failed", reason=reason))
+        finally:
+            reset_workspace_context(token)
+            with self._cancellation_lock:
+                self._cancellations.pop(grant.request_id, None)
+
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
 
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("person_edit:"):
+            return self._execute_person_edit(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.split(":", 1)[0] in DEVICE_STAGES[:-1]:
             return self._execute_upstream(grant, scheduler, grant.unit_key.split(":", 1)[0])
         if grant.owner_type != DEVICE_OWNER_TYPE or not grant.unit_key.startswith("render:"):

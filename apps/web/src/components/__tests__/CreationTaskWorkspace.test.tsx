@@ -758,6 +758,59 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: scope === "delete" ? "确认删除" : "应用到草稿" }));
     await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-ReplaceClip"));
   });
+  it.each(["succeeded", "failed", "cancelled"])("keeps a queued person edit unapplied until persisted job %s is read", async (status) => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+      match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    const preview = exactPreview(initial.task, "ReplaceClip");
+    Object.assign(preview.proposal.operation, { operation_type: "ChangePersonSegment", payload: { clip_id: "clip-1" } });
+    preview.proposal.target_refs = ["clip:clip-1"];
+    mocks.askAssistant.mockResolvedValue({ reply: "人物修改待确认。", provider: "minimax", model: "MiniMax-M3", edit_preview: preview });
+    mocks.getWorkspace.mockResolvedValue(initial);
+    let submitted = false;
+    let readTerminal: (value: unknown) => void = () => {};
+    const terminal = new Promise(resolve => { readTerminal = resolve; });
+    mocks.getJobProgress.mockImplementation(() => submitted ? terminal : Promise.resolve({ task_id: "task-1", current: null, items: [], total_count: 0 }));
+    mocks.confirmEdit.mockImplementation(async () => {
+      submitted = true;
+      return { status: "queued", job_id: "person-edit-job", request_id: "device-request" };
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "这一段换成当前人物出镜" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改提案" });
+    fireEvent.click(screen.getByRole("button", { name: "应用到草稿" }));
+    expect(await screen.findByText("人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。")).toBeInTheDocument();
+    expect(screen.queryByText(/人物修改已完成/)).not.toBeInTheDocument();
+    expect(screen.getByText(/版本 6$/)).toBeInTheDocument();
+    const refreshCount = mocks.getWorkspace.mock.calls.length;
+    const finalState = status === "succeeded" ? { ...initial, task: { ...initial.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 } } : initial;
+    mocks.getWorkspace.mockResolvedValue(finalState);
+    const job = { id: "person-edit-job", kind: "creation_task_person_edit", status,
+      progress: status === "succeeded" ? 100 : 0, attempt: 1, started_at: initial.task.created_at,
+      finished_at: initial.task.updated_at, updated_at: initial.task.updated_at, elapsed_seconds: 1,
+      failure_reason: status === "succeeded" ? null : "人物授权已失效", impact: "旧版本保持不变",
+      repair_action: "修复授权后重新预览", wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null };
+    await act(async () => { readTerminal({ task_id: "task-1", current: job, items: [job], total_count: 1 }); });
+    await waitFor(() => expect(mocks.getWorkspace.mock.calls.length).toBeGreaterThan(refreshCount));
+    expect(screen.getByText(status === "succeeded" ? /版本 7$/ : /版本 6$/)).toBeInTheDocument();
+    if (status === "succeeded") expect(await screen.findByText("人物修改已完成，目标镜头和当前版本已更新；成片尚未重新生成。")).toBeInTheDocument();
+    else {
+      expect(await screen.findByText("人物修改未完成，当前版本保持不变；请查看作业原因。")).toBeInTheDocument();
+      expect(screen.getByLabelText("作业进度")).toHaveTextContent("人物授权已失效");
+      expect(screen.queryByText(/人物修改已完成/)).not.toBeInTheDocument();
+    }
+    expect(mocks.generatePersonRender).not.toHaveBeenCalled();
+    expect(mocks.renderMontage).not.toHaveBeenCalled();
+  });
   it("selects the playhead clip, keeps its position and discards a late preview for another clip", async () => {
     const initial = subtitleCoverWorkspace();
     const clip = {
